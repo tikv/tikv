@@ -1498,29 +1498,20 @@ impl Peer {
                 self.preprocessed_region = Some(new_region.clone());
             } else {
                 let raft = &ctx.global.engines.raft;
-                if let Some(state) = load_last_peer_state(raft, new_region.get_id()) {
-                    // The peer has been created or destroyed.
-                    info!(
-                        "{} avoid write region meta for region {:?}, peer state {:?}",
-                        self.tag(),
-                        new_region,
-                        state,
-                    );
-                    continue;
-                }
-                // The new region may restore snapshot in the same batch, so we should check
-                // raft_wb too.
-                if ctx
-                    .raft_wb
-                    .get_state(new_meta.id, KV_ENGINE_META_KEY)
-                    .is_some()
+                // The peer has been created or destroyed.
+                if load_last_peer_state(raft, new_region.id).is_some()
+                    || ctx.global.destroying.contains(&new_region.id)
+                    // The new region may restore snapshot in the same batch, so we should check
+                    // raft_wb too.
+                    || ctx
+                        .raft_wb
+                        .get_state(new_region.id, KV_ENGINE_META_KEY)
+                        .is_some()
                 {
-                    // The region has already been created and initialized, so skip to write
-                    // initial state and add dependent.
                     info!(
                         "{} avoid write region meta for region {:?}",
                         self.tag(),
-                        new_region
+                        new_region,
                     );
                     continue;
                 }

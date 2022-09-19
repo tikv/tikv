@@ -132,6 +132,7 @@ impl RaftBatchSystem {
             gc_scheduler,
             coprocessor_host,
             importer,
+            destroying: HashSet::default(),
         };
         let mut region_peers = self.load_peers(&ctx, &mut store_meta)?;
         for peer_fsm in &region_peers {
@@ -309,10 +310,6 @@ pub struct StoreMeta {
     /// dropped if there is no such Region in this store now. So the messages are recorded temporarily and
     /// will be handled later.
     pub pending_msgs: RingQueue<RaftMessage>,
-    /// Saves destroying regions in one loop. It's used to solve the race between peer gc and split,
-    /// i.e., split won't create a destroying region if they are in the same loop with checking
-    /// it.
-    pub destroying: HashSet<u64>,
 }
 
 impl StoreMeta {
@@ -324,7 +321,6 @@ impl StoreMeta {
             cop_host,
             readers: Arc::new(dashmap::DashMap::new()),
             pending_msgs: RingQueue::with_capacity(vote_capacity),
-            destroying: HashSet::default(),
         }
     }
 
@@ -359,6 +355,10 @@ pub(crate) struct GlobalContext {
     pub(crate) gc_scheduler: Scheduler<GcTask>,
     pub(crate) coprocessor_host: CoprocessorHost<kvengine::Engine>,
     pub(crate) importer: Arc<SstImporter>,
+    /// Saves destroying regions in one loop. It's used to solve the race between peer gc and split,
+    /// i.e., split won't create a destroying region if they are in the same loop with checking
+    /// it.
+    pub(crate) destroying: HashSet<u64>,
 }
 
 pub(crate) struct RaftContext {
@@ -1017,7 +1017,7 @@ impl<'a> StoreMsgHandler<'a> {
             } else if load_last_peer_state(&self.ctx.global.engines.raft, new_region_id)
                 .map(|state| state.get_state() == PeerState::Tombstone)
                 .unwrap_or(false)
-                || self.ctx.store_meta.destroying.contains(&new_region_id)
+                || self.ctx.global.destroying.contains(&new_region_id)
             {
                 // The peer has been destroyed.
                 info!("{} region {} avoid created by split", tag, new_region_id);
@@ -1343,7 +1343,7 @@ impl<'a> StoreMsgHandler<'a> {
         peer_fsm.stop();
         self.ctx.peers.remove(&region_id);
         self.ctx.global.engines.kv.remove_shard(region_id);
-        self.ctx.store_meta.destroying.insert(region_id);
+        self.ctx.global.destroying.insert(region_id);
     }
 
     fn on_snapshot_ready(&mut self, region_id: u64) -> Option<u64> {
