@@ -80,6 +80,7 @@ coprocessor_plugin_api = { path = "components/coprocessor_plugin_api" }
 crc32fast = "1.2"
 crc64fast = "0.1"
 crossbeam = "0.8"
+dashmap = "5"
 encryption_export = { path = "components/encryption/export", default-features = false }
 engine_panic = { path = "components/engine_panic", default-features = false }
 engine_rocks = { path = "components/engine_rocks", default-features = false }
@@ -146,8 +147,10 @@ serde_ignored = "0.1"
 serde_json = { version = "1.0", features = ["preserve_order"] }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+smallvec = "1.4"
 sst_importer = { path = "components/sst_importer", default-features = false }
 strum = { version = "0.20", features = ["derive"] }
+sync_wrapper = "0.1.1"
 sysinfo = "0.16"
 tempfile = "3.0"
 thiserror = "1.0"
@@ -298,7 +301,7 @@ opt-level = 1
 
 [profile.dev]
 opt-level = 0
-debug = 0
+debug = 2
 codegen-units = 4
 lto = false
 incremental = true
@@ -324,7 +327,7 @@ codegen-units = 4
 
 [profile.test]
 opt-level = 0
-debug = 0
+debug = 2
 codegen-units = 16
 lto = false
 incremental = true
