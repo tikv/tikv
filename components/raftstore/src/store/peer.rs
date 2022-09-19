@@ -51,9 +51,7 @@ use raft::{
     SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT,
 };
 use raft_proto::ConfChangeI;
-use rand::{
-    seq::SliceRandom, Rng, thread_rng,
-};
+use rand::{seq::SliceRandom, thread_rng, Rng};
 use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
@@ -1610,9 +1608,8 @@ where
     ) {
         let mut now = None;
         let std_now = Instant::now();
-        // let zone_info = Arc::clone(&ctx.zone_info.read().unwrap());
-        let zone_info = ctx.zone_info.load();
-        let leader_az = zone_info.get(&self.peer.store_id);
+        let leader_az = ctx.zone_info.get(&self.peer.store_id);
+
         for mut msg in msgs {
             let msg_type = msg.get_message().get_msg_type();
             if msg_type == MessageType::MsgSnapshot {
@@ -1666,7 +1663,7 @@ where
                 }
             }
 
-            let to_az = zone_info.get(&to_store_id);
+            let to_az = ctx.zone_info.get(&to_store_id);
             let mut is_cross_az: bool = true;
             if to_az.is_some() && leader_az.is_some() && to_az.unwrap() == leader_az.unwrap() {
                 is_cross_az = false;
@@ -1709,14 +1706,15 @@ where
         // let mut next_idx = 0;
         // for idx in group {
         //     let peer_id = msgs[*idx].get_to();
-        //     let is_voter = self.raft_group.raft.prs().conf().voters().contains(peer_id);
+        //     let is_voter =
+        // self.raft_group.raft.prs().conf().voters().contains(peer_id);
         //     if self.raft_group.raft.is_recent_active(peer_id)
-        //         && self.raft_group.raft.get_next_idx(peer_id).unwrap() > next_idx
-        //         && is_voter
+        //         && self.raft_group.raft.get_next_idx(peer_id).unwrap() >
+        // next_idx         && is_voter
         //     {
         //         agent_id = Some(peer_id);
-        //         next_idx = self.raft_group.raft.get_next_idx(peer_id).unwrap();
-        //     }
+        //         next_idx =
+        // self.raft_group.raft.get_next_idx(peer_id).unwrap();     }
         // }
         // agent_id
     }
@@ -1725,7 +1723,7 @@ where
         &self,
         group: &Vec<usize>,
         msgs: &mut [eraftpb::Message],
-        skip: &mut Vec<bool>,
+        skip: &mut [bool],
     ) {
         // If no appropriate agent, do not use follower replication.
         if let Some(agent_id) = self.assign_zone_agent(group, msgs) {
@@ -1771,10 +1769,8 @@ where
         if self.follower_repl() && self.is_leader() {
             // Group MsgAppend by AZ.
             let mut msg_append_group: HashMap<String, Vec<usize>> = HashMap::default();
-            // let zone_info = Arc::clone(&ctx.zone_info.read().unwrap());
-            let zone_info = ctx.zone_info.load();
             let leader_store_id = self.peer.get_store_id();
-            let leader_zone = zone_info.get(&leader_store_id);
+            let leader_zone = ctx.zone_info.get(&leader_store_id);
             // Record message that should be discarded after merge_msg_append.
             let mut skip = vec![false; msgs.len()];
 
@@ -1787,7 +1783,7 @@ where
                     if let Some(to_peer) = self.get_peer_from_cache(msg.get_to()) {
                         let to_peer_store_id = to_peer.get_store_id();
                         // Leader and to_peer is not in the same zone.
-                        if let Some(to_peer_zone) = zone_info.get(&to_peer_store_id)
+                        if let Some(to_peer_zone) = ctx.zone_info.get(&to_peer_store_id)
                             && leader_zone.is_some() && to_peer_zone != leader_zone.unwrap()
                         {
                             if let Some(v) = msg_append_group.get_mut(to_peer_zone) {
@@ -1808,12 +1804,10 @@ where
             }
 
             // Filter unnecessary MsgAppend and build raft messages.
-            let mut pos: usize = 0;
-            for msg in msgs {
+            for (pos, msg) in msgs.into_iter().enumerate() {
                 if !skip[pos] && let Some(m) = self.build_raft_message(msg, ctx.self_disk_usage) {
                     raft_msgs.push(m);
                 }
-                pos += 1;
             }
         } else {
             for msg in msgs {

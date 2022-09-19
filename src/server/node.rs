@@ -7,8 +7,6 @@ use std::{
 };
 
 use api_version::{api_v2::TIDB_RANGES_COMPLEMENT, KvFormat};
-use arc_swap::ArcSwap;
-use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{Engines, Iterable, KvEngine, RaftEngine, DATA_CFS, DATA_KEY_PREFIX_LEN};
 use grpcio_health::HealthService;
@@ -96,8 +94,7 @@ pub struct Node<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {
     state: Arc<Mutex<GlobalReplicationState>>,
     bg_worker: Worker,
     health_service: Option<HealthService>,
-    // Store zone information for follower replication.
-    zone_info: ArcSwap<HashMap<u64, String>>,
+
     zone_label_key: String,
 }
 
@@ -155,8 +152,6 @@ where
         }
         store.set_labels(labels.into());
 
-        let zone_info = ArcSwap::from(Arc::new(HashMap::default()));
-
         Node {
             cluster_id: cfg.cluster_id,
             store,
@@ -168,7 +163,6 @@ where
             state,
             bg_worker,
             health_service,
-            zone_info,
             zone_label_key,
         }
     }
@@ -501,8 +495,6 @@ where
         let cfg = self.store_cfg.clone();
         let pd_client = Arc::clone(&self.pd_client);
         let store = self.store.clone();
-        let g = self.zone_info.load();
-        let zone_info = ArcSwap::from(Arc::clone(&*g));
 
         self.system.spawn(
             store,
@@ -513,7 +505,6 @@ where
             snap_mgr,
             pd_worker,
             store_meta,
-            zone_info,
             coprocessor_host,
             importer,
             split_check_scheduler,
