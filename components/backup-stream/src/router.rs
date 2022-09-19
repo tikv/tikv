@@ -1398,8 +1398,18 @@ impl DataFile {
         for mut event in events.events {
             let encoded = EventEncoder::encode_event(&event.key, &event.value);
             let mut size = 0;
-            for slice in encoded {
+            for (i, slice) in encoded.iter().enumerate() {
                 let slice = slice.as_ref();
+                self.inner.write_all(slice).await?;
+                self.sha256.update(slice).map_err(|err| {
+                    Error::Other(box_err!("openssl hasher failed to update: {}", err))
+                })?;
+                size += slice.len();
+                let slice: &[u8] = if i == 0 {
+                    event.key.as_ref()
+                } else {
+                    event.value.as_ref()
+                };
                 self.inner.write_all(slice).await?;
                 self.sha256.update(slice).map_err(|err| {
                     Error::Other(box_err!("openssl hasher failed to update: {}", err))
@@ -1513,7 +1523,7 @@ mod tests {
     use futures_io::AsyncRead;
     use kvproto::brpb::{Local, Noop, StorageBackend, StreamBackupTaskInfo};
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
-    use tokio::{fs::File, sync::Mutex};
+    use tokio::fs::File;
     use txn_types::{Write, WriteType};
 
     use super::*;

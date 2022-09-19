@@ -1052,9 +1052,12 @@ mod tests {
         let mut len = 0;
         for kv in kvs {
             let encoded = EventEncoder::encode_event(&kv.0, &kv.1);
-            for slice in encoded {
+            for (i, slice) in encoded.iter().enumerate() {
                 len += buff.write(slice.as_ref()).unwrap();
                 sha256.update(slice.as_ref()).unwrap();
+                let slice = if i == 0 { kv.0.as_ref() } else { kv.1.as_ref() };
+                len += buff.write(slice).unwrap();
+                sha256.update(slice).unwrap();
             }
         }
 
