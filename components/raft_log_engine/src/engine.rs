@@ -350,28 +350,13 @@ const APPLY_STATE_KEY: &[u8] = &[0x04];
 const SEQNO_RELATION_KEY: &[u8] = &[0x05];
 const RECOVER_FROM_RAFT_DB_KEY: &[u8] = &[0x06];
 const SNAPSHOT_APPLY_STATE_KEY: &[u8] = &[0x07];
-const PENDING_REGION_STATE_KEY: &[u8] = &[0x08];
-const FLUSHED_SEQNO_KEY: &[u8] = &[0x09];
-const SNAPSHOT_REGION_STATE_KEY: &[u8] = &[0x0a];
+const FLUSHED_SEQNO_KEY: &[u8] = &[0x08];
+const SNAPSHOT_REGION_STATE_KEY: &[u8] = &[0x09];
 
 fn raft_seqno_relation_key(seqno: u64) -> Vec<u8> {
     let mut key = Vec::with_capacity(SEQNO_RELATION_KEY.len() + 8);
     key.extend_from_slice(SEQNO_RELATION_KEY);
     key.extend_from_slice(&seqno.to_be_bytes());
-    key
-}
-
-fn region_local_state_key(applied_index: u64) -> Vec<u8> {
-    let mut key = Vec::with_capacity(REGION_STATE_KEY.len() + 8);
-    key.extend_from_slice(REGION_STATE_KEY);
-    key.extend_from_slice(&applied_index.to_be_bytes());
-    key
-}
-
-fn pending_region_local_state_key(applied_index: u64) -> Vec<u8> {
-    let mut key = Vec::with_capacity(PENDING_REGION_STATE_KEY.len() + 8);
-    key.extend_from_slice(PENDING_REGION_STATE_KEY);
-    key.extend_from_slice(&applied_index.to_be_bytes());
     key
 }
 
@@ -412,31 +397,6 @@ impl RaftLogBatchTrait for RaftLogBatch {
                 relation,
             )
             .map_err(transfer_error)
-    }
-
-    fn put_pending_region_state(
-        &mut self,
-        raft_group_id: u64,
-        applied_index: u64,
-        state: &RegionLocalState,
-    ) -> Result<()> {
-        self.0
-            .put_message(
-                raft_group_id,
-                pending_region_local_state_key(applied_index),
-                state,
-            )
-            .map_err(transfer_error)
-    }
-
-    fn delete_pending_region_state(
-        &mut self,
-        raft_group_id: u64,
-        applied_index: u64,
-    ) -> Result<()> {
-        self.0
-            .delete(raft_group_id, pending_region_local_state_key(applied_index));
-        Ok(())
     }
 
     fn persist_size(&self) -> usize {
@@ -530,16 +490,6 @@ impl RaftEngineReadOnly for RaftLogEngine {
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
         self.0
             .get_message(raft_group_id, RAFT_LOG_STATE_KEY)
-            .map_err(transfer_error)
-    }
-
-    fn get_pending_region_state(
-        &self,
-        raft_group_id: u64,
-        applied_index: u64,
-    ) -> Result<Option<kvproto::raft_serverpb::RegionLocalState>> {
-        self.0
-            .get_message(raft_group_id, &region_local_state_key(applied_index))
             .map_err(transfer_error)
     }
 

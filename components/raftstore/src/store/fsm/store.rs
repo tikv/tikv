@@ -1253,9 +1253,10 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                             "snap_apply_state" => ?snap_apply_state,
                         );
                     } else {
-                        let region_state = raft_engine
-                            .get_region_state(region_id)?
-                            .unwrap_or_else(|| panic!("region_id: {}", region_id));
+                        let region_state =
+                            raft_engine.get_region_state(region_id)?.unwrap_or_else(|| {
+                                panic!("region state not found, region_id: {}", region_id)
+                            });
                         kv_wb.put_msg_cf(
                             CF_RAFT,
                             &keys::region_state_key(region_id),

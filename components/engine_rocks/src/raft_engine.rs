@@ -26,15 +26,6 @@ impl RaftEngineReadOnly for RocksEngine {
         self.get_msg_cf(CF_DEFAULT, &key)
     }
 
-    fn get_pending_region_state(
-        &self,
-        raft_group_id: u64,
-        applied_index: u64,
-    ) -> Result<Option<RegionLocalState>> {
-        let key = keys::pending_region_state_key(raft_group_id, applied_index);
-        self.get_msg_cf(CF_DEFAULT, &key)
-    }
-
     fn get_seqno_relation(
         &self,
         raft_group_id: u64,
@@ -485,29 +476,6 @@ impl RaftLogBatch for RocksWriteBatchVec {
             &keys::sequence_number_relation_key(raft_group_id, relation.sequence_number),
             relation,
         )
-    }
-
-    fn put_pending_region_state(
-        &mut self,
-        raft_group_id: u64,
-        applied_index: u64,
-        state: &RegionLocalState,
-    ) -> Result<()> {
-        self.put_msg(
-            &keys::pending_region_state_key(raft_group_id, applied_index),
-            state,
-        )
-    }
-
-    fn delete_pending_region_state(
-        &mut self,
-        raft_group_id: u64,
-        applied_index: u64,
-    ) -> Result<()> {
-        self.delete(&keys::pending_region_state_key(
-            raft_group_id,
-            applied_index,
-        ))
     }
 
     fn persist_size(&self) -> usize {

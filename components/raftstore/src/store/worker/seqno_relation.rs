@@ -17,7 +17,7 @@ use kvproto::{
 };
 use tikv_util::{
     debug, error, info,
-    sequence_number::{SequenceNumber, SequenceNumberWindow, SYNCED_MAX_SEQUENCE_NUMBER},
+    sequence_number::{SequenceNumberWindow, SYNCED_MAX_SEQUENCE_NUMBER},
     worker::{Runnable, Scheduler},
 };
 
@@ -80,12 +80,6 @@ impl<S: Snapshot> fmt::Display for Task<S> {
     }
 }
 
-struct SeqnoRelation {
-    region_id: u64,
-    seqno: SequenceNumber,
-    apply_state: RaftApplyState,
-}
-
 pub struct Runner<EK: KvEngine, ER: RaftEngine> {
     store_id: Option<u64>,
     store_meta: Arc<Mutex<StoreMeta>>,
@@ -93,7 +87,7 @@ pub struct Runner<EK: KvEngine, ER: RaftEngine> {
     engines: Engines<EK, ER>,
     raft_wb: ER::LogBatch,
     seqno_window: SequenceNumberWindow,
-    inflight_seqno_relations: HashMap<u64, SeqnoRelation>,
+    inflight_seqno_relations: HashMap<u64, RegionSequenceNumberRelation>,
     last_persisted_seqno: u64,
     flushed_seqno: FlushedSeqno,
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
@@ -111,7 +105,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             store_id: None,
             store_meta,
             router,
-            raft_wb: engines.raft.log_batch(RAFT_WB_MAX_KEYS),
+            raft_wb: engines.raft.log_batch(RAFT_WB_DEFAULT_SIZE),
             flushed_seqno: FlushedSeqno::new(DATA_CFS, engines.kv.get_latest_sequence_number()),
             engines,
             seqno_window: SequenceNumberWindow::default(),
@@ -122,46 +116,76 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         }
     }
 
+    fn consume_raft_wb(&mut self, sync: bool) {
+        if self.raft_wb.is_empty() {
+            return;
+        }
+        SEQNO_RELATIONS_WRITE_SIZE_HISTOGRAM.observe(self.raft_wb.persist_size() as f64);
+        let _timer = SEQNO_RELATIONS_WRITE_DURATION_HISTOGRAM.start_timer();
+        self.engines
+            .raft
+            .consume_and_shrink(
+                &mut self.raft_wb,
+                sync,
+                RAFT_WB_SHRINK_SIZE,
+                RAFT_WB_DEFAULT_SIZE,
+            )
+            .unwrap();
+    }
+
     fn on_apply_res(&mut self, apply_res: &[ApplyRes<EK::Snapshot>]) {
         let mut sync_relations = HashMap::default();
         for res in apply_res {
             for seqno in &res.write_seqno {
-                let relation = SeqnoRelation {
-                    region_id: res.region_id,
-                    seqno: *seqno,
-                    apply_state: res.apply_state.clone(),
-                };
-                let relations = match seqno.number.cmp(&self.last_persisted_seqno) {
-                    cmp::Ordering::Less | cmp::Ordering::Equal => &mut sync_relations,
-                    cmp::Ordering::Greater => &mut self.inflight_seqno_relations,
-                };
-                match relations.entry(res.region_id) {
-                    HashMapEntry::Occupied(mut e) => {
-                        if e.get().seqno < relation.seqno {
-                            *e.get_mut() = relation;
-                        }
-                    }
-                    HashMapEntry::Vacant(e) => {
-                        e.insert(relation);
-                    }
-                }
                 self.seqno_window.push(*seqno);
             }
-            if let Some(region_state) =
-                self.handle_exec_res(res.region_id, &res.apply_state, res.exec_res.iter())
-            {
+            let seqno = res.write_seqno.iter().max().unwrap();
+            let mut relation = RegionSequenceNumberRelation::default();
+            relation.set_region_id(res.region_id);
+            relation.set_sequence_number(seqno.number);
+            relation.set_apply_state(res.apply_state.clone());
+
+            if let Some(region_state) = self.handle_exec_res(
+                res.region_id,
+                seqno.number,
+                res.exec_res.iter(),
+                &mut sync_relations,
+            ) {
                 info!("region state changed"; "region_id" => res.region_id, "region_state" => ?region_state, "apply_state" => ?res.apply_state);
+                relation.set_region_state(region_state);
             }
+            self.handle_relation(relation, &mut sync_relations);
         }
         if !sync_relations.is_empty() {
             self.handle_sync_relations(sync_relations);
         }
 
-        self.engines.raft.sync().unwrap();
+        self.consume_raft_wb(true);
         SYNCED_MAX_SEQUENCE_NUMBER.store(self.seqno_window.committed_seqno(), Ordering::SeqCst);
 
         SEQNO_UNCOMMITTED_COUNT.set(self.seqno_window.pending_count() as i64);
         debug!("pending seqno count"; "count" => self.seqno_window.pending_count());
+    }
+
+    fn handle_relation(
+        &mut self,
+        relation: RegionSequenceNumberRelation,
+        sync_relations: &mut HashMap<u64, RegionSequenceNumberRelation>,
+    ) {
+        let relations = match relation.sequence_number.cmp(&self.last_persisted_seqno) {
+            cmp::Ordering::Less | cmp::Ordering::Equal => sync_relations,
+            cmp::Ordering::Greater => &mut self.inflight_seqno_relations,
+        };
+        match relations.entry(relation.region_id) {
+            HashMapEntry::Occupied(mut e) => {
+                if e.get().sequence_number < relation.sequence_number {
+                    *e.get_mut() = relation;
+                }
+            }
+            HashMapEntry::Vacant(e) => {
+                e.insert(relation);
+            }
+        }
     }
 
     fn on_memtable_sealed(&mut self, seqno: u64) {
@@ -183,15 +207,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         if let Some(min) = min_flushed {
             gc_seqno_relations(min, &self.engines.raft, &mut self.raft_wb).unwrap();
             if !self.raft_wb.is_empty() {
-                self.engines
-                    .raft
-                    .consume_and_shrink(
-                        &mut self.raft_wb,
-                        true,
-                        RAFT_WB_SHRINK_SIZE,
-                        RAFT_WB_DEFAULT_SIZE,
-                    )
-                    .unwrap();
+                self.consume_raft_wb(true);
             }
             if let Err(e) = self
                 .raftlog_gc_scheduler
@@ -202,47 +218,22 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         }
     }
 
-    fn handle_sync_relations(&mut self, relations: HashMap<u64, SeqnoRelation>) {
-        let mut relation = RegionSequenceNumberRelation::default();
+    fn handle_sync_relations(&mut self, relations: HashMap<u64, RegionSequenceNumberRelation>) {
         let mut count = 0;
         let size = relations.len();
-        for (region_id, r) in relations {
-            assert!(r.seqno.number <= self.last_persisted_seqno);
-            self.seqno_window.push(r.seqno);
-            relation.set_region_id(r.region_id);
-            relation.set_apply_state(r.apply_state);
-            relation.set_sequence_number(r.seqno.number);
+        for (region_id, relation) in relations {
+            assert!(relation.sequence_number <= self.last_persisted_seqno);
             info!("save seqno relation to raftdb"; "region_id" => region_id, "relation" => ?relation);
             self.raft_wb
                 .put_seqno_relation(region_id, &relation)
                 .unwrap();
             count += 1;
             if count % RAFT_WB_MAX_KEYS == 0 || count == size - 1 {
-                SEQNO_RELATIONS_WRITE_SIZE_HISTOGRAM.observe(self.raft_wb.persist_size() as f64);
-                let _timer = SEQNO_RELATIONS_WRITE_DURATION_HISTOGRAM.start_timer();
-                self.engines
-                    .raft
-                    .consume_and_shrink(
-                        &mut self.raft_wb,
-                        false,
-                        RAFT_WB_SHRINK_SIZE,
-                        RAFT_WB_DEFAULT_SIZE,
-                    )
-                    .unwrap();
+                self.consume_raft_wb(false);
             }
         }
         if !self.raft_wb.is_empty() {
-            SEQNO_RELATIONS_WRITE_SIZE_HISTOGRAM.observe(self.raft_wb.persist_size() as f64);
-            let _timer = SEQNO_RELATIONS_WRITE_DURATION_HISTOGRAM.start_timer();
-            self.engines
-                .raft
-                .consume_and_shrink(
-                    &mut self.raft_wb,
-                    false,
-                    RAFT_WB_SHRINK_SIZE,
-                    RAFT_WB_DEFAULT_SIZE,
-                )
-                .unwrap();
+            self.consume_raft_wb(false);
         }
         SEQNO_RELATIONS_KEYS_FLOW.inc_by(count as u64);
     }
@@ -250,8 +241,9 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
     fn handle_exec_res<'a>(
         &mut self,
         region_id: u64,
-        apply_state: &RaftApplyState,
+        seqno: u64,
         exec_res: impl Iterator<Item = &'a ExecResult<EK::Snapshot>>,
+        sync_relations: &mut HashMap<u64, RegionSequenceNumberRelation>,
     ) -> Option<RegionLocalState> {
         let mut region_state = None;
         for res in exec_res {
@@ -274,11 +266,8 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                         self.handle_destroy_region(cp.region.clone());
                     } else {
                         state.set_state(PeerState::Normal);
-                        self.raft_wb
-                            .put_pending_region_state(region_id, apply_state.applied_index, &state)
-                            .unwrap();
+                        region_state = Some(state);
                     };
-                    region_state = Some(state);
                 }
                 ExecResult::SplitRegion {
                     regions,
@@ -286,11 +275,6 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                     ..
                 } => {
                     for region in regions {
-                        let applied_index = if region.get_id() == region_id {
-                            apply_state.applied_index
-                        } else {
-                            0
-                        };
                         let mut state = RegionLocalState::default();
                         state.set_region(region.clone());
                         state.set_state(PeerState::Normal);
@@ -302,10 +286,6 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                                 .put_region_state(region.get_id(), &state)
                                 .unwrap();
                             write_initial_apply_state_raft(&mut self.raft_wb, region.get_id())
-                                .unwrap();
-                        } else {
-                            self.raft_wb
-                                .put_pending_region_state(region.get_id(), applied_index, &state)
                                 .unwrap();
                         }
                         if region.get_id() == region_id {
@@ -321,13 +301,6 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                     state.set_region(region.clone());
                     state.set_state(PeerState::Merging);
                     state.set_merge_state(merge_state.clone());
-                    self.raft_wb
-                        .put_pending_region_state(
-                            region.get_id(),
-                            apply_state.applied_index,
-                            &state,
-                        )
-                        .unwrap();
                     region_state = Some(state);
                 }
                 ExecResult::CommitMerge {
@@ -335,39 +308,30 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                     region,
                     source,
                 } => {
-                    let mut state = RegionLocalState::default();
-                    state.set_region(region.clone());
-                    state.set_state(PeerState::Normal);
-                    self.raft_wb
-                        .put_pending_region_state(
-                            region.get_id(),
-                            apply_state.applied_index,
-                            &state,
-                        )
-                        .unwrap();
-                    region_state = Some(state);
+                    let mut target_state = RegionLocalState::default();
+                    target_state.set_region(region.clone());
+                    target_state.set_state(PeerState::Normal);
+                    region_state = Some(target_state);
                     // Write source state
-                    let mut state = RegionLocalState::default();
+                    let mut relation = RegionSequenceNumberRelation::default();
+                    relation.set_region_id(source.get_id());
+                    relation.set_sequence_number(seqno);
+                    let mut apply_state = RaftApplyState::default();
+                    apply_state.set_applied_index(*index);
+                    relation.set_apply_state(apply_state);
+                    let mut source_state = RegionLocalState::default();
                     let mut merging_state = MergeState::default();
                     merging_state.set_target(region.clone());
-                    state.set_region(source.clone());
-                    state.set_state(PeerState::Tombstone);
-                    state.set_merge_state(merging_state);
-                    self.raft_wb
-                        .put_pending_region_state(source.get_id(), *index, &state)
-                        .unwrap();
+                    source_state.set_region(source.clone());
+                    source_state.set_state(PeerState::Tombstone);
+                    source_state.set_merge_state(merging_state);
+                    relation.set_region_state(source_state);
+                    self.handle_relation(relation, sync_relations);
                 }
                 ExecResult::RollbackMerge { region, .. } => {
                     let mut state = RegionLocalState::default();
                     state.set_region(region.clone());
                     state.set_state(PeerState::Normal);
-                    self.raft_wb
-                        .put_pending_region_state(
-                            region.get_id(),
-                            apply_state.applied_index,
-                            &state,
-                        )
-                        .unwrap();
                     region_state = Some(state);
                 }
                 ExecResult::DeleteRange { .. }
@@ -377,18 +341,6 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                 | ExecResult::CompactLog { .. }
                 | ExecResult::ComputeHash { .. } => (),
             }
-        }
-        let _timer = SEQNO_RELATIONS_WRITE_DURATION_HISTOGRAM.start_timer();
-        if !self.raft_wb.is_empty() {
-            self.engines
-                .raft
-                .consume_and_shrink(
-                    &mut self.raft_wb,
-                    false,
-                    RAFT_WB_SHRINK_SIZE,
-                    RAFT_WB_DEFAULT_SIZE,
-                )
-                .unwrap();
         }
         region_state
     }
@@ -407,15 +359,9 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         let region_id = region.get_id();
         self.inflight_seqno_relations.remove(&region_id);
         raft_engine
-            .scan_seqno_relations(region_id, None, None, |seqno, relation| {
+            .scan_seqno_relations(region_id, None, None, |seqno, _| {
                 self.raft_wb
                     .delete_seqno_relation(region_id, seqno)
-                    .unwrap();
-                self.raft_wb
-                    .delete_pending_region_state(
-                        region_id,
-                        relation.get_apply_state().get_applied_index(),
-                    )
                     .unwrap();
                 true
             })
@@ -425,15 +371,6 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         region_state.set_state(PeerState::Tombstone);
         self.raft_wb
             .put_region_state(region_id, &region_state)
-            .unwrap();
-        self.engines
-            .raft
-            .consume_and_shrink(
-                &mut self.raft_wb,
-                true,
-                RAFT_WB_SHRINK_SIZE,
-                RAFT_WB_DEFAULT_SIZE,
-            )
             .unwrap();
         info!("handle destroy region"; "region_id" => region_id);
     }
@@ -477,6 +414,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runnable for Runner<EK, ER> {
             } => {
                 let region_id = region.get_id();
                 self.handle_destroy_region(region);
+                self.consume_raft_wb(true);
                 let _ = self.router.force_send(
                     region_id,
                     PeerMsg::ApplyRes {

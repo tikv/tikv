@@ -22,12 +22,6 @@ pub trait RaftEngineReadOnly: Sync + Send + 'static {
     fn get_region_state(&self, raft_group_id: u64) -> Result<Option<RegionLocalState>>;
     fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>>;
 
-    fn get_pending_region_state(
-        &self,
-        raft_group_id: u64,
-        applied_index: u64,
-    ) -> Result<Option<RegionLocalState>>;
-
     fn get_seqno_relation(
         &self,
         raft_group_id: u64,
@@ -222,16 +216,6 @@ pub trait RaftLogBatch: Send {
     ) -> Result<()>;
 
     fn delete_region_apply_snapshot_state(&mut self, raft_group_id: u64) -> Result<()>;
-
-    fn put_pending_region_state(
-        &mut self,
-        raft_group_id: u64,
-        applied_index: u64,
-        state: &RegionLocalState,
-    ) -> Result<()>;
-
-    fn delete_pending_region_state(&mut self, raft_group_id: u64, applied_index: u64)
-    -> Result<()>;
 
     /// The data size of this RaftLogBatch.
     fn persist_size(&self) -> usize;

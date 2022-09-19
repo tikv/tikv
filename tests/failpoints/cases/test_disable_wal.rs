@@ -14,7 +14,7 @@ use tikv_util::{keybuilder::KeyBuilder, HandyRwLock};
 use txn_types::Key;
 
 #[test]
-fn test_disable_wal_recovery() {
+fn test_disable_wal_recovery_basic() {
     let mut cluster = new_server_cluster(0, 1);
     // Initialize the cluster.
     cluster.pd_client.disable_default_operator();
@@ -80,7 +80,10 @@ fn test_disable_wal_recovery() {
     ctx.set_region_epoch(region.get_region_epoch().clone());
     must_kv_commit(&client, ctx.clone(), vec![b"k4".to_vec()], 60, 70, 70);
     cluster.must_split(&region, b"k3");
+    let schedule_merge_fp = "on_schedule_merge";
+    fail::cfg(schedule_merge_fp, "return()").unwrap();
     cluster.must_try_merge(cluster.get_region_id(b"k1"), cluster.get_region_id(b"k3"));
+    println!("try merge");
     cluster.get_engine(1).flush_cfs(true).unwrap();
     cluster.stop_node(1);
     cluster.run_node(1).unwrap();

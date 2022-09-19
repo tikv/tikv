@@ -66,14 +66,6 @@ impl RaftEngineReadOnly for PanicEngine {
         panic!()
     }
 
-    fn get_pending_region_state(
-        &self,
-        raft_group_id: u64,
-        applied_index: u64,
-    ) -> Result<Option<RegionLocalState>> {
-        panic!()
-    }
-
     fn get_flushed_seqno(&self) -> Result<Option<FlushedSeqno>> {
         panic!()
     }
@@ -257,23 +249,6 @@ impl RaftLogBatch for PanicWriteBatch {
         &mut self,
         raft_group_id: u64,
         relation: &RegionSequenceNumberRelation,
-    ) -> Result<()> {
-        panic!()
-    }
-
-    fn put_pending_region_state(
-        &mut self,
-        raft_group_id: u64,
-        applied_index: u64,
-        state: &RegionLocalState,
-    ) -> Result<()> {
-        panic!()
-    }
-
-    fn delete_pending_region_state(
-        &mut self,
-        raft_group_id: u64,
-        applied_index: u64,
     ) -> Result<()> {
         panic!()
     }
