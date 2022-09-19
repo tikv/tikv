@@ -2,7 +2,7 @@
 
 use std::ptr;
 
-use codec::number::NumberCodec;
+use codec::number_v2::NumberCodec;
 
 use super::{
     super::Result,

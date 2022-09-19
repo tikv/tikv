@@ -7,8 +7,10 @@ use std::{
 
 use byteorder::ReadBytesExt;
 
-use super::{BytesSlice, Error, Result};
-use crate::codec::number::{self, NumberEncoder};
+use crate::{
+    number_v1::{self, NumberEncoder},
+    BytesSlice, ErrorInner, Result,
+};
 
 const ENC_GROUP_SIZE: usize = 8;
 const ENC_MARKER: u8 = b'\xff';
@@ -106,10 +108,11 @@ fn encode_order_bytes(bs: &[u8], desc: bool) -> Vec<u8> {
 pub fn encoded_compact_len(mut encoded: &[u8]) -> usize {
     let last_encoded = encoded.as_ptr() as usize;
     let total_len = encoded.len();
-    let vn = match number::decode_var_i64(&mut encoded) {
+    let vn = match number_v1::decode_var_i64(&mut encoded) {
         Ok(vn) => vn as usize,
-        Err(e) => {
-            debug!("failed to decode bytes' length: {:?}", e);
+        Err(_) => {
+            // TODO: add it back
+            // debug!("failed to decode bytes' length: {:?}", e);
             return total_len;
         }
     };
@@ -119,15 +122,15 @@ pub fn encoded_compact_len(mut encoded: &[u8]) -> usize {
 pub trait CompactBytesFromFileDecoder: BufRead {
     /// Decodes bytes which are encoded by `encode_compact_bytes` before.
     fn decode_compact_bytes(&mut self) -> Result<Vec<u8>> {
-        let mut var_data = Vec::with_capacity(number::MAX_VAR_I64_LEN);
-        while var_data.len() < number::MAX_VAR_U64_LEN {
+        let mut var_data = Vec::with_capacity(number_v1::MAX_VAR_I64_LEN);
+        while var_data.len() < number_v1::MAX_VAR_U64_LEN {
             let b = self.read_u8()?;
             var_data.push(b);
             if b < 0x80 {
                 break;
             }
         }
-        let vn = number::decode_var_i64(&mut var_data.as_slice())? as usize;
+        let vn = number_v1::decode_var_i64(&mut var_data.as_slice())? as usize;
         let mut data = vec![0; vn];
         self.read_exact(&mut data)?;
         Ok(data)
@@ -162,13 +165,13 @@ pub fn encoded_bytes_len(encoded: &[u8], desc: bool) -> usize {
 
 /// Decodes bytes which are encoded by `encode_compact_bytes` before.
 pub fn decode_compact_bytes(data: &mut BytesSlice<'_>) -> Result<Vec<u8>> {
-    let vn = number::decode_var_i64(data)? as usize;
+    let vn = number_v1::decode_var_i64(data)? as usize;
     if data.len() >= vn {
         let bs = data[0..vn].to_vec();
         *data = &data[vn..];
         return Ok(bs);
     }
-    Err(Error::unexpected_eof())
+    Err(ErrorInner::eof().into())
 }
 
 /// Decodes bytes which are encoded by `encode_bytes` before.
@@ -185,7 +188,7 @@ pub fn decode_bytes(data: &mut BytesSlice<'_>, desc: bool) -> Result<Vec<u8>> {
         let chunk = if next_offset <= data.len() {
             &data[offset..next_offset]
         } else {
-            return Err(Error::unexpected_eof());
+            return Err(ErrorInner::eof().into());
         };
         offset = next_offset;
         // the last byte in decode unit is for marker which indicates pad size
@@ -201,7 +204,7 @@ pub fn decode_bytes(data: &mut BytesSlice<'_>, desc: bool) -> Result<Vec<u8>> {
             continue;
         }
         if pad_size > ENC_GROUP_SIZE {
-            return Err(Error::KeyPadding);
+            return Err(ErrorInner::KeyPadding.into());
         }
         // if has padding, split the padding pattern and push rest bytes
         let (bytes, padding) = bytes.split_at(ENC_GROUP_SIZE - pad_size);
@@ -209,7 +212,7 @@ pub fn decode_bytes(data: &mut BytesSlice<'_>, desc: bool) -> Result<Vec<u8>> {
         let pad_byte = if desc { !0 } else { 0 };
         // check the padding pattern whether validate or not
         if padding.iter().any(|x| *x != pad_byte) {
-            return Err(Error::KeyPadding);
+            return Err(ErrorInner::KeyPadding.into());
         }
 
         if desc {
@@ -231,7 +234,7 @@ pub fn decode_bytes_in_place(data: &mut Vec<u8>, desc: bool) -> Result<()> {
     loop {
         let marker_offset = read_offset + ENC_GROUP_SIZE;
         if marker_offset >= data.len() {
-            return Err(Error::unexpected_eof());
+            return Err(ErrorInner::eof().into());
         };
 
         unsafe {
@@ -258,7 +261,7 @@ pub fn decode_bytes_in_place(data: &mut Vec<u8>, desc: bool) -> Result<()> {
 
         if pad_size > 0 {
             if pad_size > ENC_GROUP_SIZE {
-                return Err(Error::KeyPadding);
+                return Err(ErrorInner::KeyPadding.into());
             }
 
             // check the padding pattern whether validate or not
@@ -268,7 +271,7 @@ pub fn decode_bytes_in_place(data: &mut Vec<u8>, desc: bool) -> Result<()> {
                 &ENC_ASC_PADDING[..pad_size]
             };
             if &data[write_offset - pad_size..write_offset] != padding_slice {
-                return Err(Error::KeyPadding);
+                return Err(ErrorInner::KeyPadding.into());
             }
             unsafe {
                 data.set_len(write_offset - pad_size);
@@ -343,7 +346,7 @@ mod tests {
     use std::cmp::Ordering;
 
     use super::*;
-    use crate::codec::{bytes, number};
+    use crate::{byte_v1, number_v1};
 
     #[test]
     fn test_enc_dec_bytes() {
@@ -412,7 +415,7 @@ mod tests {
                 assert_eq!(source, decode_bytes(&mut asc_input, false).unwrap());
                 assert_eq!(
                     asc_input.as_ptr() as usize - asc_offset,
-                    asc.len() - number::U64_SIZE
+                    asc.len() - number_v1::U64_SIZE
                 );
             }
             decode_bytes_in_place(&mut asc, false).unwrap();
@@ -424,7 +427,7 @@ mod tests {
                 assert_eq!(source, decode_bytes(&mut desc_input, true).unwrap());
                 assert_eq!(
                     desc_input.as_ptr() as usize - desc_offset,
-                    desc.len() - number::U64_SIZE
+                    desc.len() - number_v1::U64_SIZE
                 );
             }
             decode_bytes_in_place(&mut desc, true).unwrap();
@@ -594,7 +597,7 @@ mod tests {
 
     #[test]
     fn test_max_encoded_bytes_size() {
-        let n = bytes::ENC_GROUP_SIZE;
+        let n = byte_v1::ENC_GROUP_SIZE;
         let tbl: Vec<(usize, usize)> = vec![(0, n + 1), (n / 2, n + 1), (n, 2 * (n + 1))];
         for (x, y) in tbl {
             assert_eq!(max_encoded_bytes_size(x), y);
@@ -605,7 +608,7 @@ mod tests {
     fn test_compact_codec() {
         let tests = vec!["", "hello", "世界"];
         for &s in &tests {
-            let max_size = s.len() + number::MAX_VAR_I64_LEN;
+            let max_size = s.len() + number_v1::MAX_VAR_I64_LEN;
             let mut buf = Vec::with_capacity(max_size);
             buf.encode_compact_bytes(s.as_bytes()).unwrap();
             assert!(buf.len() <= max_size);
@@ -620,7 +623,7 @@ mod tests {
     fn test_compact_codec_for_file() {
         let tests = vec!["", "hello", "世界"];
         for &s in &tests {
-            let max_size = s.len() + number::MAX_VAR_I64_LEN;
+            let max_size = s.len() + number_v1::MAX_VAR_I64_LEN;
             let mut buf = Vec::with_capacity(max_size);
             buf.encode_compact_bytes(s.as_bytes()).unwrap();
             assert!(buf.len() <= max_size);

@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use codec::number_v1::NumberEncoder;
 use kvproto::{
     coprocessor::{KeyRange, Request},
     kvrpcpb::Context,
@@ -7,7 +8,6 @@ use kvproto::{
 use protobuf::Message;
 use tidb_query_datatype::codec::{datum, Datum};
 use tikv::coprocessor::REQ_TYPE_DAG;
-use tikv_util::codec::number::NumberEncoder;
 use tipb::{
     Aggregation, ByItem, Chunk, ColumnInfo, DagRequest, ExecType, Executor, Expr, ExprType,
     IndexScan, Limit, Selection, TableScan, TopN,

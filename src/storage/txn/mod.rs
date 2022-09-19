@@ -101,7 +101,7 @@ pub enum ErrorInner {
     Engine(#[from] crate::storage::kv::Error),
 
     #[error("{0}")]
-    Codec(#[from] tikv_util::codec::Error),
+    Codec(#[from] codec::Error),
 
     #[error("{0}")]
     ProtoBuf(#[from] protobuf::error::ProtobufError),

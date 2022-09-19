@@ -4,13 +4,14 @@ use std::{
     thread, time,
 };
 
+use codec::byte_v1;
 use engine_traits::{CfName, IterOptions, CF_DEFAULT};
 use futures::executor::block_on;
 use kvproto::kvrpcpb::{Context, KeyRange};
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use tikv::storage::{kv::*, CfStatistics};
-use tikv_util::{codec::bytes, HandyRwLock};
+use tikv_util::HandyRwLock;
 use txn_types::{Key, Lock, LockType};
 
 #[test]
@@ -449,7 +450,7 @@ fn assert_seek<E: Engine>(
     );
     let mut statistics = CfStatistics::default();
     cursor.seek(&Key::from_raw(key), &mut statistics).unwrap();
-    assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
+    assert_eq!(cursor.key(&mut statistics), &*byte_v1::encode_bytes(pair.0));
     assert_eq!(cursor.value(&mut statistics), pair.1);
 }
 
@@ -462,7 +463,7 @@ fn assert_near_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pair: (&[u8
         "{}",
         log_wrappers::hex_encode_upper(key)
     );
-    assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
+    assert_eq!(cursor.key(&mut statistics), &*byte_v1::encode_bytes(pair.0));
     assert_eq!(cursor.value(&mut statistics), pair.1);
 }
 
@@ -475,7 +476,7 @@ fn assert_near_reverse_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pai
         "{}",
         log_wrappers::hex_encode_upper(key)
     );
-    assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
+    assert_eq!(cursor.key(&mut statistics), &*byte_v1::encode_bytes(pair.0));
     assert_eq!(cursor.value(&mut statistics), pair.1);
 }
 

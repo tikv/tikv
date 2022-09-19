@@ -2,9 +2,9 @@
 
 use std::collections::BTreeMap;
 
+use codec::number_v1::NumberEncoder;
 use kvproto::coprocessor::KeyRange;
 use tidb_query_datatype::codec::table;
-use tikv_util::codec::number::NumberEncoder;
 use tipb::{self, ColumnInfo};
 
 use super::*;

@@ -25,6 +25,7 @@ nortcheck = []
 [dependencies]
 api_version = { path = "../api_version", default-features = false }
 case_macros = { path = "../case_macros" }
+codec = { path = "../codec", default-features = false }
 collections = { path = "../collections", default-features = false }
 derive_more = "0.99.3"
 encryption = { path = "../encryption", default-features = false }

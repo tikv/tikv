@@ -4,7 +4,7 @@ use std::io::{prelude::*, Cursor};
 use byteorder::ByteOrder;
 use bytes::{Buf, Bytes};
 
-use crate::{codec::Result, Either};
+use crate::Result;
 
 pub trait Iterator {
     fn next(&mut self) -> Result<()>;
@@ -75,15 +75,10 @@ impl Iterator for EventIterator {
 pub struct EventEncoder;
 
 impl EventEncoder {
-    pub fn encode_event<'e>(key: &'e [u8], value: &'e [u8]) -> [impl AsRef<[u8]> + 'e; 4] {
+    pub fn encode_event<'e>(key: &'e [u8], value: &'e [u8]) -> [[u8; 4]; 2] {
         let key_len = (key.len() as u32).to_le_bytes();
         let val_len = (value.len() as u32).to_le_bytes();
-        [
-            Either::Left(key_len),
-            Either::Right(key),
-            Either::Left(val_len),
-            Either::Right(value),
-        ]
+        [key_len, val_len]
     }
 
     #[allow(dead_code)]
@@ -113,8 +108,13 @@ mod tests {
             let val: Vec<u8> = (0..100).map(|_| rng.gen_range(0..255)).collect();
             let e = EventEncoder::encode_event(&key, &val);
             let mut event = vec![];
-            for s in e {
+            for (i, s) in e.iter().enumerate() {
                 event.extend_from_slice(s.as_ref());
+                if i == 0 {
+                    event.extend_from_slice(key.as_ref());
+                } else {
+                    event.extend_from_slice(val.as_ref());
+                }
             }
             let (decoded_key, decoded_val) = EventEncoder::decode_event(&event);
             assert_eq!(key, decoded_key);
@@ -134,8 +134,13 @@ mod tests {
             let key: Vec<u8> = (0..100).map(|_| rng.gen_range(0..255)).collect();
             let val: Vec<u8> = (0..100).map(|_| rng.gen_range(0..255)).collect();
             let e = EventEncoder::encode_event(&key, &val);
-            for s in e {
+            for (i, s) in e.iter().enumerate() {
                 event.extend_from_slice(s.as_ref());
+                if i == 0 {
+                    event.extend_from_slice(key.as_ref());
+                } else {
+                    event.extend_from_slice(val.as_ref());
+                }
             }
             keys.push(key);
             vals.push(val);

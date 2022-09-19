@@ -2,6 +2,7 @@
 
 use std::{error, io::Error as IoError, result};
 
+use codec::Error as CodecError;
 use engine_traits::Error as EngineTraitError;
 use kvproto::{
     brpb::Error as ErrorPb,
@@ -14,7 +15,6 @@ use tikv::storage::{
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
     txn::{Error as TxnError, ErrorInner as TxnErrorInner},
 };
-use tikv_util::codec::Error as CodecError;
 use tokio::sync::AcquireError;
 
 use crate::metrics::*;

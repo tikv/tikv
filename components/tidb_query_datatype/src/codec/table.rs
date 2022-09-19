@@ -2,10 +2,9 @@
 
 use std::{cmp, convert::TryInto, io::Write, sync::Arc, u8};
 
-use codec::prelude::*;
+use codec::{prelude::*, BytesSlice};
 use collections::{HashMap, HashSet};
 use kvproto::coprocessor::KeyRange;
-use tikv_util::codec::BytesSlice;
 use tipb::ColumnInfo;
 
 use super::{

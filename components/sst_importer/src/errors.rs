@@ -4,12 +4,12 @@ use std::{
     error::Error as StdError, io::Error as IoError, num::ParseIntError, path::PathBuf, result,
 };
 
+use codec::Error as CodecError;
 use encryption::Error as EncryptionError;
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use futures::channel::oneshot::Canceled;
 use grpcio::Error as GrpcError;
 use kvproto::{import_sstpb, kvrpcpb::ApiVersion};
-use tikv_util::codec::Error as CodecError;
 use uuid::Error as UuidError;
 
 use crate::{metrics::*, sst_writer::SstWriterType};

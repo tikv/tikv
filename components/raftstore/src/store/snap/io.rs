@@ -8,6 +8,7 @@ use std::{
     usize,
 };
 
+use codec::byte_v1::{BytesEncoder, CompactBytesFromFileDecoder};
 use encryption::{
     from_engine_encryption_method, DataKeyManager, DecrypterReader, EncrypterWriter, Iv,
 };
@@ -16,12 +17,7 @@ use engine_traits::{
     SstCompressionType, SstWriter, SstWriterBuilder, WriteBatch,
 };
 use kvproto::encryptionpb::EncryptionMethod;
-use tikv_util::{
-    box_try,
-    codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder},
-    debug, info,
-    time::Limiter,
-};
+use tikv_util::{box_try, debug, info, time::Limiter};
 
 use super::{CfFile, Error, IO_LIMITER_CHUNK_SIZE};
 

@@ -4,7 +4,7 @@ use std::{intrinsics::unlikely, io::Read};
 
 use crate::{
     buffer::BufferReader,
-    number::{self, NumberCodec, NumberDecoder, NumberEncoder},
+    number_v2::{self, NumberCodec, NumberDecoder, NumberEncoder},
     ErrorInner, Result,
 };
 
@@ -379,7 +379,7 @@ impl MemComparableByteCodec {
                 if std::intrinsics::unlikely(padding_size > 0) {
                     // First check padding size.
                     if std::intrinsics::unlikely(padding_size > MEMCMP_GROUP_SIZE) {
-                        return Err(ErrorInner::bad_padding().into());
+                        return Err(ErrorInner::key_padding().into());
                     }
 
                     // Then check padding content. Use `libc::memcmp` to compare two memory blocks
@@ -396,7 +396,7 @@ impl MemComparableByteCodec {
                         padding_size,
                     );
                     if std::intrinsics::unlikely(cmp_result != 0) {
-                        return Err(ErrorInner::bad_padding().into());
+                        return Err(ErrorInner::key_padding().into());
                     }
 
                     let read_bytes = src_ptr.offset_from(src_ptr_untouched) as usize;
@@ -529,7 +529,7 @@ impl CompactByteEncoder for std::fs::File {
     #[inline]
     fn write_compact_bytes(&mut self, data: &[u8]) -> Result<()> {
         use std::io::Write;
-        let mut buf = [0; number::MAX_VARINT64_LENGTH];
+        let mut buf = [0; number_v2::MAX_VARINT64_LENGTH];
         let written = NumberCodec::encode_var_i64(&mut buf, data.len() as i64);
         self.write_all(&buf[..written])?;
         self.write_all(data)?;
@@ -557,9 +557,9 @@ impl<T: NumberDecoder> CompactByteDecoder for T {
 
 impl<T: Read> CompactByteDecoder for std::io::BufReader<T> {
     fn read_compact_bytes(&mut self) -> Result<Vec<u8>> {
-        let mut buf = [0; number::MAX_VARINT64_LENGTH];
+        let mut buf = [0; number_v2::MAX_VARINT64_LENGTH];
         let mut end = buf.len();
-        for i in 0..number::MAX_VARINT64_LENGTH {
+        for i in 0..number_v2::MAX_VARINT64_LENGTH {
             self.read_exact(&mut buf[i..=i])?;
             if buf[i] < 0x80 {
                 end = i;
@@ -578,7 +578,7 @@ mod tests {
     use rand::prelude::*;
 
     use super::*;
-    use crate::number;
+    use crate::number_v2;
 
     #[test]
     fn test_mem_cmp_encoded_len() {
@@ -711,7 +711,7 @@ mod tests {
         use super::{CompactByteDecoder, CompactByteEncoder};
         let tests = vec!["", "hello", "世界"];
         for &s in &tests {
-            let max_size = s.len() + number::MAX_VARINT64_LENGTH;
+            let max_size = s.len() + number_v2::MAX_VARINT64_LENGTH;
             let mut buf = Vec::with_capacity(max_size);
             buf.write_compact_bytes(s.as_bytes()).unwrap();
             assert!(buf.len() <= max_size);
@@ -1362,7 +1362,7 @@ mod benches {
                 continue;
             }
             if pad_size > ENC_GROUP_SIZE {
-                return Err(ErrorInner::bad_padding().into());
+                return Err(ErrorInner::key_padding().into());
             }
             // if has padding, split the padding pattern and push rest bytes
             let (bytes, padding) = bytes.split_at(ENC_GROUP_SIZE - pad_size);
@@ -1370,7 +1370,7 @@ mod benches {
             let pad_byte = if desc { !0 } else { 0 };
             // check the padding pattern whether validate or not
             if padding.iter().any(|x| *x != pad_byte) {
-                return Err(ErrorInner::bad_padding().into());
+                return Err(ErrorInner::key_padding().into());
             }
 
             if desc {
@@ -1418,7 +1418,7 @@ mod benches {
 
             if pad_size > 0 {
                 if pad_size > ENC_GROUP_SIZE {
-                    return Err(ErrorInner::bad_padding().into());
+                    return Err(ErrorInner::key_padding().into());
                 }
 
                 // check the padding pattern whether validate or not
@@ -1428,7 +1428,7 @@ mod benches {
                     &ENC_ASC_PADDING[..pad_size]
                 };
                 if &data[write_offset - pad_size..write_offset] != padding_slice {
-                    return Err(ErrorInner::bad_padding().into());
+                    return Err(ErrorInner::key_padding().into());
                 }
                 unsafe {
                     data.set_len(write_offset - pad_size);

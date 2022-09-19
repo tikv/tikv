@@ -42,7 +42,7 @@ impl LazyBatchColumn {
     /// Creates a new `LazyBatchColumn::Raw` with specified capacity.
     #[inline]
     pub fn raw_with_capacity(capacity: usize) -> Self {
-        use codec::number::MAX_VARINT64_LENGTH;
+        use codec::number_v2::MAX_VARINT64_LENGTH;
         // We assume that each element *may* has a size of MAX_VAR_INT_LEN + Datum Flag
         // (1 byte).
         LazyBatchColumn::Raw(BufferVec::with_capacity(

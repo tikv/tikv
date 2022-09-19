@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use codec::{number::NumberCodec, prelude::NumberDecoder};
+use codec::{number_v2::NumberCodec, prelude::NumberDecoder};
 use itertools::izip;
 use kvproto::coprocessor::KeyRange;
 use tidb_query_common::{

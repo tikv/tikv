@@ -2,6 +2,7 @@
 
 use std::{cmp, thread, time::Duration};
 
+use codec::number_v1::*;
 use kvproto::{
     coprocessor::{Request, Response},
     kvrpcpb::{Context, IsolationLevel},
@@ -19,7 +20,7 @@ use tikv::{
     server::Config,
     storage::TestEngineBuilder,
 };
-use tikv_util::{codec::number::*, config::ReadableSize};
+use tikv_util::config::ReadableSize;
 use tipb::{
     AnalyzeColumnsReq, AnalyzeReq, AnalyzeType, ChecksumRequest, Chunk, Expr, ExprType,
     ScalarFuncSig, SelectResponse,

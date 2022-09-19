@@ -35,7 +35,7 @@ pub enum ErrorInner {
     Io(#[from] io::Error),
 
     #[error("{0}")]
-    Codec(#[from] tikv_util::codec::Error),
+    Codec(#[from] codec::Error),
 
     #[error("key is locked (backoff or cleanup) {0:?}")]
     KeyIsLocked(kvproto::kvrpcpb::LockInfo),
@@ -318,12 +318,6 @@ impl<T: Into<ErrorInner>> From<T> for Error {
     default fn from(err: T) -> Self {
         let err = err.into();
         err.into()
-    }
-}
-
-impl From<codec::Error> for ErrorInner {
-    fn from(err: codec::Error) -> Self {
-        box_err!("{}", err)
     }
 }
 

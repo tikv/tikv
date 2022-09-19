@@ -10,6 +10,7 @@ use std::{
     sync::Arc,
 };
 
+use codec::stream_event::{EventIterator, Iterator as EIterator};
 use dashmap::DashMap;
 use encryption::{to_engine_encryption_method, DataKeyManager};
 use engine_rocks::{get_env, RocksSstReader};
@@ -25,10 +26,7 @@ use kvproto::{
     import_sstpb::*,
     kvrpcpb::ApiVersion,
 };
-use tikv_util::{
-    codec::stream_event::{EventIterator, Iterator as EIterator},
-    time::{Instant, Limiter},
-};
+use tikv_util::time::{Instant, Limiter};
 use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
@@ -811,6 +809,7 @@ fn is_after_end_bound<K: AsRef<[u8]>>(value: &[u8], bound: &Bound<K>) -> bool {
 mod tests {
     use std::io::{self, BufWriter};
 
+    use codec::stream_event::EventEncoder;
     use engine_traits::{
         collect, EncryptionMethod, Error as TraitError, ExternalSstFileInfo, Iterable, Iterator,
         RefIterable, SstReader, SstWriter, CF_DEFAULT, DATA_CFS,
@@ -820,7 +819,7 @@ mod tests {
     use tempfile::Builder;
     use test_sst_importer::*;
     use test_util::new_test_key_manager;
-    use tikv_util::{codec::stream_event::EventEncoder, stream::block_on_external_io};
+    use tikv_util::stream::block_on_external_io;
     use txn_types::{Value, WriteType};
     use uuid::Uuid;
 
@@ -1053,9 +1052,12 @@ mod tests {
         let mut len = 0;
         for kv in kvs {
             let encoded = EventEncoder::encode_event(&kv.0, &kv.1);
-            for slice in encoded {
+            for (i, slice) in encoded.iter().enumerate() {
                 len += buff.write(slice.as_ref()).unwrap();
                 sha256.update(slice.as_ref()).unwrap();
+                let slice = if i == 0 { kv.0.as_ref() } else { kv.1.as_ref() };
+                len += buff.write(slice).unwrap();
+                sha256.update(slice).unwrap();
             }
         }
 

@@ -81,7 +81,7 @@ use std::{
     str,
 };
 
-use codec::number::{NumberCodec, F64_SIZE, I64_SIZE};
+use codec::number_v2::{NumberCodec, F64_SIZE, I64_SIZE};
 use constants::{JSON_LITERAL_FALSE, JSON_LITERAL_NIL, JSON_LITERAL_TRUE};
 use tikv_util::is_even;
 

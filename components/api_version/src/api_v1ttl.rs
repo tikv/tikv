@@ -1,13 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::Result;
-use tikv_util::{
-    box_err,
-    codec::{
-        number::{self, NumberEncoder},
-        Error,
-    },
+use codec::{
+    number_v1::{self, NumberEncoder},
+    ErrorInner,
 };
+use engine_traits::Result;
+use tikv_util::box_err;
 
 use super::*;
 
@@ -31,10 +29,10 @@ impl KvFormat for ApiV1Ttl {
     fn decode_raw_value(bytes: &[u8]) -> Result<RawValue<&[u8]>> {
         let rest_len = bytes
             .len()
-            .checked_sub(number::U64_SIZE)
-            .ok_or(Error::ValueLength)?;
+            .checked_sub(number_v1::U64_SIZE)
+            .ok_or_else(|| codec::Error::from(ErrorInner::ValueLength))?;
         let mut expire_ts_slice = &bytes[rest_len..];
-        let expire_ts = number::decode_u64(&mut expire_ts_slice)?;
+        let expire_ts = number_v1::decode_u64(&mut expire_ts_slice)?;
         let expire_ts = if expire_ts == 0 {
             None
         } else {
@@ -48,14 +46,14 @@ impl KvFormat for ApiV1Ttl {
     }
 
     fn encode_raw_value(value: RawValue<&[u8]>) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(value.user_value.len() + number::U64_SIZE);
+        let mut buf = Vec::with_capacity(value.user_value.len() + number_v1::U64_SIZE);
         buf.extend_from_slice(value.user_value);
         buf.encode_u64(value.expire_ts.unwrap_or(0)).unwrap();
         buf
     }
 
     fn encode_raw_value_owned(mut value: RawValue<Vec<u8>>) -> Vec<u8> {
-        value.user_value.reserve(number::U64_SIZE);
+        value.user_value.reserve(number_v1::U64_SIZE);
         value
             .user_value
             .encode_u64(value.expire_ts.unwrap_or(0))

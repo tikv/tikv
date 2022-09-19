@@ -415,6 +415,7 @@ dependencies = [
  "async-channel",
  "aws",
  "causal_ts",
+ "codec",
  "collections",
  "concurrency_manager",
  "crc64fast",
@@ -464,6 +465,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
+ "codec",
  "concurrency_manager",
  "crossbeam",
  "crossbeam-channel",
@@ -785,6 +787,7 @@ dependencies = [
  "api_version",
  "bitflags",
  "causal_ts",
+ "codec",
  "collections",
  "concurrency_manager",
  "criterion",
@@ -1487,6 +1490,7 @@ version = "0.0.1"
 dependencies = [
  "api_version",
  "case_macros",
+ "codec",
  "collections",
  "derive_more",
  "encryption",
@@ -1563,6 +1567,7 @@ name = "engine_traits"
 version = "0.0.1"
 dependencies = [
  "case_macros",
+ "codec",
  "error_code",
  "fail",
  "file_system",
@@ -4161,6 +4166,7 @@ dependencies = [
  "bitflags",
  "byteorder",
  "bytes",
+ "codec",
  "collections",
  "concurrency_manager",
  "crc32fast",
@@ -4227,6 +4233,7 @@ name = "raftstore-v2"
 version = "0.1.0"
 dependencies = [
  "batch-system",
+ "codec",
  "collections",
  "crossbeam",
  "engine_test",
@@ -5367,6 +5374,7 @@ name = "sst_importer"
 version = "0.1.0"
 dependencies = [
  "api_version",
+ "codec",
  "crc32fast",
  "dashmap",
  "encryption",
@@ -5698,6 +5706,7 @@ name = "test_coprocessor"
 version = "0.0.1"
 dependencies = [
  "api_version",
+ "codec",
  "collections",
  "concurrency_manager",
  "engine_rocks",
@@ -5857,6 +5866,7 @@ dependencies = [
  "byteorder",
  "causal_ts",
  "cdc",
+ "codec",
  "collections",
  "concurrency_manager",
  "crc64fast",
@@ -6363,6 +6373,7 @@ name = "tikv_kv"
 version = "0.1.0"
 dependencies = [
  "backtrace",
+ "codec",
  "collections",
  "engine_panic",
  "engine_rocks",

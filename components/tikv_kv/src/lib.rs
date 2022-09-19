@@ -669,7 +669,7 @@ pub fn write_modifies(kv_engine: &impl LocalEngine, modifies: Vec<Modify>) -> Re
 pub const TEST_ENGINE_CFS: &[CfName] = &[CF_DEFAULT, "cf"];
 
 pub mod tests {
-    use tikv_util::codec::bytes;
+    use codec::byte_v1;
 
     use super::*;
 
@@ -729,7 +729,7 @@ pub mod tests {
         );
         let mut statistics = CfStatistics::default();
         cursor.seek(&Key::from_raw(key), &mut statistics).unwrap();
-        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
+        assert_eq!(cursor.key(&mut statistics), &*byte_v1::encode_bytes(pair.0));
         assert_eq!(cursor.value(&mut statistics), pair.1);
     }
 
@@ -744,7 +744,7 @@ pub mod tests {
         cursor
             .reverse_seek(&Key::from_raw(key), &mut statistics)
             .unwrap();
-        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
+        assert_eq!(cursor.key(&mut statistics), &*byte_v1::encode_bytes(pair.0));
         assert_eq!(cursor.value(&mut statistics), pair.1);
     }
 
@@ -757,7 +757,7 @@ pub mod tests {
             "{}",
             log_wrappers::hex_encode_upper(key)
         );
-        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
+        assert_eq!(cursor.key(&mut statistics), &*byte_v1::encode_bytes(pair.0));
         assert_eq!(cursor.value(&mut statistics), pair.1);
     }
 
@@ -774,7 +774,7 @@ pub mod tests {
             "{}",
             log_wrappers::hex_encode_upper(key)
         );
-        assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
+        assert_eq!(cursor.key(&mut statistics), &*byte_v1::encode_bytes(pair.0));
         assert_eq!(cursor.value(&mut statistics), pair.1);
     }
 
@@ -950,7 +950,7 @@ pub mod tests {
             if let Some((ref k, ref v)) = $res {
                 assert_eq!(
                     $cursor.key(&mut statistics),
-                    bytes::encode_bytes(k.as_bytes()).as_slice()
+                    byte_v1::encode_bytes(k.as_bytes()).as_slice()
                 );
                 assert_eq!($cursor.value(&mut statistics), v.as_bytes());
             }
@@ -1127,7 +1127,7 @@ pub mod tests {
         iter.seek(&Key::from_raw(b"foo30"), &mut statistics)
             .unwrap();
 
-        assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo4"));
+        assert_eq!(iter.key(&mut statistics), &*byte_v1::encode_bytes(b"foo4"));
         assert_eq!(iter.value(&mut statistics), b"bar4");
         assert_eq!(statistics.seek, 1);
 
@@ -1135,7 +1135,7 @@ pub mod tests {
         iter.near_seek(&Key::from_raw(b"foo55"), &mut statistics)
             .unwrap();
 
-        assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo6"));
+        assert_eq!(iter.key(&mut statistics), &*byte_v1::encode_bytes(b"foo6"));
         assert_eq!(iter.value(&mut statistics), b"bar6");
         assert_eq!(statistics.seek, 0);
         assert_eq!(statistics.next, 1);
@@ -1143,17 +1143,17 @@ pub mod tests {
         let mut statistics = CfStatistics::default();
         iter.prev(&mut statistics);
 
-        assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo4"));
+        assert_eq!(iter.key(&mut statistics), &*byte_v1::encode_bytes(b"foo4"));
         assert_eq!(iter.value(&mut statistics), b"bar4");
         assert_eq!(statistics.prev, 1);
 
         iter.prev(&mut statistics);
-        assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo2"));
+        assert_eq!(iter.key(&mut statistics), &*byte_v1::encode_bytes(b"foo2"));
         assert_eq!(iter.value(&mut statistics), b"bar2");
         assert_eq!(statistics.prev, 2);
 
         iter.prev(&mut statistics);
-        assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo"));
+        assert_eq!(iter.key(&mut statistics), &*byte_v1::encode_bytes(b"foo"));
         assert_eq!(iter.value(&mut statistics), b"bar1");
         assert_eq!(statistics.prev, 3);
     }

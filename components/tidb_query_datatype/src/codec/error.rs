@@ -115,8 +115,8 @@ impl Error {
         self.code() == ERR_TRUNCATE_WRONG_VALUE
     }
 
-    pub fn unexpected_eof() -> Error {
-        tikv_util::codec::Error::unexpected_eof().into()
+    pub fn unexpected_eof() -> codec::Error {
+        codec::ErrorInner::eof().into()
     }
 
     pub fn invalid_time_format(val: impl Display) -> Error {
@@ -174,15 +174,15 @@ impl From<ParseFloatError> for Error {
     }
 }
 
-impl From<tikv_util::codec::Error> for Error {
-    fn from(err: tikv_util::codec::Error) -> Error {
+impl From<codec::Error> for Error {
+    fn from(err: codec::Error) -> Error {
         box_err!("codec:{:?}", err)
     }
 }
 
 impl From<io::Error> for Error {
     fn from(err: io::Error) -> Error {
-        let uerr: tikv_util::codec::Error = err.into();
+        let uerr: codec::Error = err.into();
         uerr.into()
     }
 }
@@ -191,12 +191,6 @@ impl From<RegexpError> for Error {
     fn from(err: RegexpError) -> Error {
         let msg = format!("Got error '{:.64}' from regexp", err);
         Error::Eval(msg, ERR_REGEXP)
-    }
-}
-
-impl From<codec::Error> for Error {
-    fn from(err: codec::Error) -> Error {
-        box_err!("Codec: {}", err)
     }
 }
 

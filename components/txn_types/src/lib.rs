@@ -29,7 +29,7 @@ pub enum ErrorInner {
     #[error("{0}")]
     Io(#[from] io::Error),
     #[error("{0}")]
-    Codec(#[from] tikv_util::codec::Error),
+    Codec(#[from] codec::Error),
     #[error("bad format lock data")]
     BadFormatLock,
     #[error("bad format write data")]

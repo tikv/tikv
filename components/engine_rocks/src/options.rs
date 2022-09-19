@@ -1,9 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use codec::number_v1;
 use rocksdb::{
     ReadOptions as RawReadOptions, TableFilter, TableProperties, WriteOptions as RawWriteOptions,
 };
-use tikv_util::codec::number;
 
 pub struct RocksReadOptions(RawReadOptions);
 
@@ -120,7 +120,7 @@ impl TableFilter for TsFilter {
             // TODO avoid hard code after refactor MvccProperties from
             // tikv/src/raftstore/coprocessor/ into some component about engine.
             if let Some(mut p) = user_props.get("tikv.max_ts") {
-                if let Ok(get_max) = number::decode_u64(&mut p) {
+                if let Ok(get_max) = number_v1::decode_u64(&mut p) {
                     if get_max < hint_min_ts {
                         return false;
                     }
@@ -132,7 +132,7 @@ impl TableFilter for TsFilter {
             // TODO avoid hard code after refactor MvccProperties from
             // tikv/src/raftstore/coprocessor/ into some component about engine.
             if let Some(mut p) = user_props.get("tikv.min_ts") {
-                if let Ok(get_min) = number::decode_u64(&mut p) {
+                if let Ok(get_min) = number_v1::decode_u64(&mut p) {
                     if get_min > hint_max_ts {
                         return false;
                     }

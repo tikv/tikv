@@ -4,16 +4,12 @@ use std::fmt::{self, Debug, Display, Formatter};
 
 use bitflags::bitflags;
 use byteorder::{ByteOrder, NativeEndian};
+use codec::{
+    byte_v1::{self, BytesEncoder},
+    number_v1::{self, NumberEncoder},
+};
 use collections::HashMap;
 use kvproto::kvrpcpb::{self, Assertion};
-use tikv_util::{
-    codec,
-    codec::{
-        bytes,
-        bytes::BytesEncoder,
-        number::{self, NumberEncoder},
-    },
-};
 
 use super::timestamp::TimeStamp;
 
@@ -53,7 +49,7 @@ impl Key {
     #[inline]
     pub fn from_raw(key: &[u8]) -> Key {
         // adding extra length for appending timestamp
-        let len = codec::bytes::max_encoded_bytes_size(key.len()) + codec::number::U64_SIZE;
+        let len = codec::byte_v1::max_encoded_bytes_size(key.len()) + codec::number_v1::U64_SIZE;
         let mut encoded = Vec::with_capacity(len);
         encoded.encode_bytes(key, false).unwrap();
         Key(encoded)
@@ -74,14 +70,14 @@ impl Key {
     #[inline]
     pub fn into_raw(self) -> Result<Vec<u8>, codec::Error> {
         let mut k = self.0;
-        bytes::decode_bytes_in_place(&mut k, false)?;
+        byte_v1::decode_bytes_in_place(&mut k, false)?;
         Ok(k)
     }
 
     /// Gets the raw representation of this key.
     #[inline]
     pub fn to_raw(&self) -> Result<Vec<u8>, codec::Error> {
-        bytes::decode_bytes(&mut self.0.as_slice(), false)
+        byte_v1::decode_bytes(&mut self.0.as_slice(), false)
     }
 
     /// Creates a key from encoded bytes vector.
@@ -94,7 +90,7 @@ impl Key {
     /// slice.
     #[inline]
     pub fn from_encoded_slice(encoded_key: &[u8]) -> Key {
-        let mut k = Vec::with_capacity(encoded_key.len() + number::U64_SIZE);
+        let mut k = Vec::with_capacity(encoded_key.len() + number_v1::U64_SIZE);
         k.extend_from_slice(encoded_key);
         Key(k)
     }
@@ -135,7 +131,7 @@ impl Key {
     #[inline]
     pub fn truncate_ts(mut self) -> Result<Key, codec::Error> {
         let len = self.0.len();
-        if len < number::U64_SIZE {
+        if len < number_v1::U64_SIZE {
             // TODO: IMHO, this should be an assertion failure instead of
             // returning an error. If this happens, it indicates a bug in
             // the caller module, have to make code change to fix it.
@@ -145,9 +141,9 @@ impl Key {
             // functions to convert between `TimestampedKey` and `Key`.
             // `TimestampedKey` is in a higher (MVCC) layer, while `Key` is
             // in the core storage engine layer.
-            Err(codec::Error::KeyLength)
+            Err(codec::ErrorInner::KeyLength.into())
         } else {
-            self.0.truncate(len - number::U64_SIZE);
+            self.0.truncate(len - number_v1::U64_SIZE);
             Ok(self)
         }
     }
@@ -155,13 +151,13 @@ impl Key {
     /// Split a ts encoded key, return the user key and timestamp.
     #[inline]
     pub fn split_on_ts_for(key: &[u8]) -> Result<(&[u8], TimeStamp), codec::Error> {
-        if key.len() < number::U64_SIZE {
-            Err(codec::Error::KeyLength)
+        if key.len() < number_v1::U64_SIZE {
+            Err(codec::ErrorInner::KeyLength.into())
         } else {
-            let pos = key.len() - number::U64_SIZE;
+            let pos = key.len() - number_v1::U64_SIZE;
             let k = &key[..pos];
             let mut ts = &key[pos..];
-            Ok((k, number::decode_u64_desc(&mut ts)?.into()))
+            Ok((k, number_v1::decode_u64_desc(&mut ts)?.into()))
         }
     }
 
@@ -169,21 +165,21 @@ impl Key {
     #[inline]
     pub fn truncate_ts_for(key: &[u8]) -> Result<&[u8], codec::Error> {
         let len = key.len();
-        if len < number::U64_SIZE {
-            return Err(codec::Error::KeyLength);
+        if len < number_v1::U64_SIZE {
+            return Err(codec::ErrorInner::KeyLength.into());
         }
-        Ok(&key[..key.len() - number::U64_SIZE])
+        Ok(&key[..key.len() - number_v1::U64_SIZE])
     }
 
     /// Decode the timestamp from a ts encoded key.
     #[inline]
     pub fn decode_ts_from(key: &[u8]) -> Result<TimeStamp, codec::Error> {
         let len = key.len();
-        if len < number::U64_SIZE {
-            return Err(codec::Error::KeyLength);
+        if len < number_v1::U64_SIZE {
+            return Err(codec::ErrorInner::KeyLength.into());
         }
-        let mut ts = &key[len - number::U64_SIZE..];
-        Ok(number::decode_u64_desc(&mut ts)?.into())
+        let mut ts = &key[len - number_v1::U64_SIZE..];
+        Ok(number_v1::decode_u64_desc(&mut ts)?.into())
     }
 
     /// Whether the user key part of a ts encoded key `ts_encoded_key` equals to
@@ -197,10 +193,10 @@ impl Key {
     #[inline]
     pub fn is_user_key_eq(ts_encoded_key: &[u8], user_key: &[u8]) -> bool {
         let user_key_len = user_key.len();
-        if ts_encoded_key.len() != user_key_len + number::U64_SIZE {
+        if ts_encoded_key.len() != user_key_len + number_v1::U64_SIZE {
             return false;
         }
-        if user_key_len >= number::U64_SIZE {
+        if user_key_len >= number_v1::U64_SIZE {
             // We compare last 8 bytes as u64 first, then compare the rest.
             // TODO: Can we just use == to check the left part and right part? `memcmp`
             // might be smart enough.
@@ -217,7 +213,7 @@ impl Key {
 
     /// Returns whether the encoded key is encoded from `raw_key`.
     pub fn is_encoded_from(&self, raw_key: &[u8]) -> bool {
-        bytes::is_encoded_from(&self.0, raw_key, false)
+        byte_v1::is_encoded_from(&self.0, raw_key, false)
     }
 
     /// TiDB uses the same hash algorithm.

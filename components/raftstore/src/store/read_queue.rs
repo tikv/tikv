@@ -3,6 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::{cmp, collections::VecDeque, mem, u64, usize};
 
+use codec::number_v1::{NumberEncoder, MAX_VAR_U64_LEN};
 use collections::HashMap;
 use kvproto::{
     kvrpcpb::LockInfo,
@@ -10,9 +11,7 @@ use kvproto::{
 };
 use protobuf::Message;
 use tikv_util::{
-    box_err,
-    codec::number::{NumberEncoder, MAX_VAR_U64_LEN},
-    debug, error,
+    box_err, debug, error,
     memory::HeapSize,
     time::{duration_to_sec, monotonic_raw_now},
     MustConsumeVec,
@@ -350,7 +349,7 @@ pub struct ReadIndexContext {
 
 impl ReadIndexContext {
     pub fn parse(bytes: &[u8]) -> Result<ReadIndexContext> {
-        use tikv_util::codec::number::*;
+        use codec::number_v1::*;
 
         if bytes.len() < UUID_LEN {
             return Err(box_err!(

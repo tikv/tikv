@@ -17,6 +17,7 @@ use std::{
 
 use bitflags::bitflags;
 use bytes::Bytes;
+use codec::number_v1::decode_u64;
 use collections::{HashMap, HashSet};
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
 use engine_traits::{
@@ -57,9 +58,7 @@ use rand::seq::SliceRandom;
 use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
-    box_err,
-    codec::number::decode_u64,
-    debug, error, info,
+    box_err, debug, error, info,
     sys::disk::DiskUsage,
     time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, InstantExt, ThreadReadId},
     warn,

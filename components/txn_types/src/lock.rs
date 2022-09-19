@@ -3,11 +3,11 @@
 use std::{borrow::Cow, mem::size_of};
 
 use byteorder::ReadBytesExt;
-use kvproto::kvrpcpb::{IsolationLevel, LockInfo, Op, WriteConflictReason};
-use tikv_util::codec::{
-    bytes::{self, BytesEncoder},
-    number::{self, NumberEncoder, MAX_VAR_I64_LEN, MAX_VAR_U64_LEN},
+use codec::{
+    byte_v1::{self, BytesEncoder},
+    number_v1::{self, NumberEncoder, MAX_VAR_I64_LEN, MAX_VAR_U64_LEN},
 };
+use kvproto::kvrpcpb::{IsolationLevel, LockInfo, Op, WriteConflictReason};
 
 use crate::{
     timestamp::{TimeStamp, TsSet},
@@ -225,12 +225,12 @@ impl Lock {
             return Err(Error::from(ErrorInner::BadFormatLock));
         }
         let lock_type = LockType::from_u8(b.read_u8()?).ok_or(ErrorInner::BadFormatLock)?;
-        let primary = bytes::decode_compact_bytes(&mut b)?;
-        let ts = number::decode_var_u64(&mut b)?.into();
+        let primary = byte_v1::decode_compact_bytes(&mut b)?;
+        let ts = number_v1::decode_var_u64(&mut b)?.into();
         let ttl = if b.is_empty() {
             0
         } else {
-            number::decode_var_u64(&mut b)?
+            number_v1::decode_var_u64(&mut b)?
         };
 
         if b.is_empty() {
@@ -267,23 +267,23 @@ impl Lock {
                     short_value = Some(b[..len as usize].to_vec());
                     b = &b[len as usize..];
                 }
-                FOR_UPDATE_TS_PREFIX => for_update_ts = number::decode_u64(&mut b)?.into(),
-                TXN_SIZE_PREFIX => txn_size = number::decode_u64(&mut b)?,
-                MIN_COMMIT_TS_PREFIX => min_commit_ts = number::decode_u64(&mut b)?.into(),
+                FOR_UPDATE_TS_PREFIX => for_update_ts = number_v1::decode_u64(&mut b)?.into(),
+                TXN_SIZE_PREFIX => txn_size = number_v1::decode_u64(&mut b)?,
+                MIN_COMMIT_TS_PREFIX => min_commit_ts = number_v1::decode_u64(&mut b)?.into(),
                 ASYNC_COMMIT_PREFIX => {
                     use_async_commit = true;
-                    let len = number::decode_var_u64(&mut b)? as _;
+                    let len = number_v1::decode_var_u64(&mut b)? as _;
                     secondaries = (0..len)
-                        .map(|_| bytes::decode_compact_bytes(&mut b).map_err(Into::into))
+                        .map(|_| byte_v1::decode_compact_bytes(&mut b).map_err(Into::into))
                         .collect::<Result<_>>()?;
                 }
                 ROLLBACK_TS_PREFIX => {
-                    let len = number::decode_var_u64(&mut b)? as usize;
+                    let len = number_v1::decode_var_u64(&mut b)? as usize;
                     // Allocate one more place to avoid reallocation when pushing a new timestamp
                     // to it.
                     rollback_ts = Vec::with_capacity(len + 1);
                     for _ in 0..len {
-                        rollback_ts.push(number::decode_u64(&mut b)?.into());
+                        rollback_ts.push(number_v1::decode_u64(&mut b)?.into());
                     }
                 }
                 _ => {

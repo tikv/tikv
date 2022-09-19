@@ -8,18 +8,16 @@ use std::{
     u64,
 };
 
+use codec::{
+    number_v1::{self, NumberEncoder},
+    ErrorInner, Result,
+};
 use engine_traits::{MvccProperties, Range};
 use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
     UserCollectedProperties,
 };
-use tikv_util::{
-    codec::{
-        number::{self, NumberEncoder},
-        Error, Result,
-    },
-    info,
-};
+use tikv_util::info;
 use txn_types::{Key, Write, WriteType};
 
 use crate::{
@@ -112,7 +110,7 @@ impl DecodeProperties for UserProperties {
     fn decode(&self, k: &str) -> Result<&[u8]> {
         match self.0.get(k.as_bytes()) {
             Some(v) => Ok(v.as_slice()),
-            None => Err(Error::KeyNotFound),
+            None => Err(ErrorInner::KeyNotFound.into()),
         }
     }
 }
@@ -125,7 +123,7 @@ impl<'a> DecodeProperties for UserCollectedPropertiesDecoder<'a> {
     fn decode(&self, k: &str) -> Result<&[u8]> {
         match self.0.get(k.as_bytes()) {
             Some(v) => Ok(v),
-            None => Err(Error::KeyNotFound),
+            None => Err(ErrorInner::KeyNotFound.into()),
         }
     }
 }
@@ -184,12 +182,12 @@ impl RangeProperties {
         let mut res = RangeProperties::default();
         let mut buf = props.decode(PROP_RANGE_INDEX)?;
         while !buf.is_empty() {
-            let klen = number::decode_u64(&mut buf)?;
+            let klen = number_v1::decode_u64(&mut buf)?;
             let mut k = vec![0; klen as usize];
             buf.read_exact(&mut k)?;
             let offsets = RangeOffsets {
-                size: number::decode_u64(&mut buf)?,
-                keys: number::decode_u64(&mut buf)?,
+                size: number_v1::decode_u64(&mut buf)?,
+                keys: number_v1::decode_u64(&mut buf)?,
             };
             res.offsets.push((k, offsets));
         }

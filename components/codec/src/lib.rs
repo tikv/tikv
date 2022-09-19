@@ -10,20 +10,36 @@ extern crate test;
 extern crate tikv_alloc;
 
 pub mod buffer;
-pub mod byte;
+pub mod byte_v1;
+pub mod byte_v2;
 mod convert;
-mod error;
-pub mod number;
+pub mod error;
+pub mod number_v1;
+pub mod number_v2;
+pub mod stream_event;
 
 pub mod prelude {
     pub use super::{
         buffer::{BufferReader, BufferWriter},
-        byte::{
+        byte_v2::{
             CompactByteDecoder, CompactByteEncoder, MemComparableByteDecoder,
             MemComparableByteEncoder,
         },
-        number::{NumberDecoder, NumberEncoder},
+        number_v2::{NumberDecoder, NumberEncoder},
     };
 }
 
 pub use self::error::{Error, ErrorInner, Result};
+
+pub type BytesSlice<'a> = &'a [u8];
+
+#[inline]
+pub fn read_slice<'a>(data: &mut BytesSlice<'a>, size: usize) -> Result<BytesSlice<'a>> {
+    if data.len() >= size {
+        let buf = &data[0..size];
+        *data = &data[size..];
+        Ok(buf)
+    } else {
+        Err(ErrorInner::eof().into())
+    }
+}

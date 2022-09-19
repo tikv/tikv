@@ -23,6 +23,7 @@ async-compression = { version = "0.3.14", features = ["tokio", "zstd"] }
 async-trait = { version = "0.1" }
 bytes = "1"
 chrono = "0.4"
+codec = { path = "../codec", default-features = false }
 concurrency_manager = { path = "../concurrency_manager" }
 crossbeam = "0.8"
 crossbeam-channel = "0.5"

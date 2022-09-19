@@ -52,6 +52,7 @@ tracker = { path = "../tracker" }
 txn_types = { path = "../txn_types", default-features = false }
 
 [dev-dependencies]
+codec = { path = "../codec", default-features = false }
 engine_test = { path = "../engine_test", default-features = false }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tempfile = "3.0"
