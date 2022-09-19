@@ -58,7 +58,7 @@ use grpcio_health::HealthService;
 use kvproto::{
     brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
-    kvrpcpb::ApiVersion, logbackuppb::create_log_backup,
+    kvrpcpb::ApiVersion, logbackuppb::create_log_backup, recoverdatapb::create_recover_data,
     resource_usage_agent::create_resource_metering_pub_sub,
 };
 use pd_client::{PdClient, RpcClient};
@@ -82,6 +82,7 @@ use raftstore::{
     RaftRouterCompactedEventSender,
 };
 use security::SecurityManager;
+use snap_recovery::RecoveryService;
 use tikv::{
     config::{ConfigController, DbConfigManger, DbType, LogConfigManager, TikvConfig},
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
@@ -235,6 +236,7 @@ struct TikvServer<ER: RaftEngine> {
     quota_limiter: Arc<QuotaLimiter>,
     causal_ts_provider: Option<Arc<BatchTsoProvider<RpcClient>>>, // used for rawkv apiv2
     tablet_factory: Option<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
+    br_snap_recovery_mode: bool, // use for br snapshot recovery
 }
 
 struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
@@ -279,6 +281,23 @@ where
         );
         let pd_client =
             Self::connect_to_pd_cluster(&mut config, env.clone(), Arc::clone(&security_mgr));
+        // check if TiKV need to run in snapshot recovery mode
+        let is_recovering_marked = pd_client
+            .is_recovering_marked()
+            .expect("failed to get recovery mode from PD");
+
+        if is_recovering_marked {
+            // Run a TiKV server in recovery modeß
+            info!("TiKV running in Snapshot Recovery Mode");
+            snap_recovery::init_cluster::enter_snap_recovery_mode(&mut config);
+            // connect_to_pd_cluster retreived the cluster id from pd
+            let cluster_id = config.server.cluster_id;
+            snap_recovery::init_cluster::start_recovery(
+                config.clone(),
+                cluster_id,
+                pd_client.clone(),
+            );
+        }
 
         // Initialize and check config
         let cfg_controller = Self::init_config(config);
@@ -361,6 +380,7 @@ where
             quota_limiter,
             causal_ts_provider,
             tablet_factory: None,
+            br_snap_recovery_mode: is_recovering_marked,
         }
     }
 
@@ -1193,7 +1213,10 @@ where
         // Backup service.
         let mut backup_worker = Box::new(self.background_worker.lazy_build("backup-endpoint"));
         let backup_scheduler = backup_worker.scheduler();
-        let backup_service = backup::Service::new(backup_scheduler);
+        let backup_service = backup::Service::<RocksEngine, RaftRouter<RocksEngine, ER>>::new(
+            backup_scheduler,
+            self.router.clone(),
+        );
         if servers
             .server
             .register_service(create_backup(backup_service))
@@ -1249,6 +1272,20 @@ where
                 .is_some()
             {
                 fatal!("failed to register log backup service");
+            }
+        }
+
+        // the present tikv in recovery mode, start recovery service
+        if self.br_snap_recovery_mode {
+            let recovery_service =
+                RecoveryService::new(engines.engines.clone(), self.router.clone());
+
+            if servers
+                .server
+                .register_service(create_recover_data(recovery_service))
+                .is_some()
+            {
+                fatal!("failed to register recovery service");
             }
         }
     }
