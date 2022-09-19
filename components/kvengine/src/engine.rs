@@ -135,17 +135,18 @@ impl Engine {
         metas: HashMap<u64, ShardMeta>,
         recoverer: impl RecoverHandler + 'static,
     ) -> Result<()> {
-        let mut parents = HashSet::new();
+        let mut parents = HashMap::new();
         for meta in metas.values() {
             if let Some(parent) = &meta.parent {
-                if !parents.contains(&parent.id) {
-                    parents.insert(parent.id);
+                let id_ver = IDVer::new(parent.id, parent.ver);
+                if !parents.contains_key(&id_ver) {
                     info!("load parent of {}", meta.tag());
-                    let parent_shard = self.load_shard(parent)?;
+                    let parent_shard = self.load_shard(&parent)?;
                     recoverer.recover(self, &parent_shard, parent)?;
-                }
-                if parent.id != meta.id {
-                    self.load_with_parent_mem_tables(meta);
+                    parents.insert(IDVer::new(parent.id, parent.ver), parent_shard);
+                    // Do not keep the parent in the engine as we only use the parent's mem-table
+                    // for children.
+                    self.shards.remove(&parent.id);
                 }
             }
         }
@@ -160,13 +161,15 @@ impl Engine {
             let recoverer = recoverer.clone();
             let token_tx = token_tx.clone();
             token_rx.recv().unwrap();
+            let parent_shard = meta.parent.as_ref().map(|parent_meta| {
+                parents
+                    .get(&IDVer::new(parent_meta.id, parent_meta.ver))
+                    .cloned()
+                    .unwrap()
+            });
             std::thread::spawn(move || {
-                if let Some(parent) = &meta.parent {
-                    if parent.id == meta.id {
-                        engine.load_with_parent_mem_tables(&meta);
-                    }
-                }
                 let shard = engine.load_shard(&meta).unwrap();
+                parent_shard.map(|parent| shard.add_parent_mem_tbls(parent));
                 recoverer.recover(&engine, &shard, &meta).unwrap();
                 token_tx.send(true).unwrap();
             });
@@ -175,22 +178,6 @@ impl Engine {
             token_rx.recv().unwrap();
         }
         Ok(())
-    }
-
-    fn load_with_parent_mem_tables(&self, meta: &ShardMeta) {
-        let parent_id = meta.parent.as_ref().unwrap().id;
-        let parent_data = self.shards.get(&parent_id).unwrap().get_data();
-        let shard = self.load_shard(&meta).unwrap();
-        let shard_data = shard.get_data();
-        let new_data = ShardData::new(
-            shard_data.start.clone(),
-            shard_data.end.clone(),
-            shard_data.del_prefixes.clone(),
-            shard.split_mem_tables(&parent_data.mem_tbls),
-            shard_data.l0_tbls.clone(),
-            shard_data.cfs.clone(),
-        );
-        shard.set_data(new_data);
     }
 
     pub fn set_engine_id(&self, engine_id: u64) {

@@ -346,6 +346,23 @@ impl Shard {
             && (self.get_compaction_priority().is_some()
                 || self.get_data().ready_to_destroy_range())
     }
+
+    pub(crate) fn add_parent_mem_tbls(&self, parent: Arc<Shard>) {
+        let shard_data = self.get_data();
+        let parent_data = parent.get_data();
+        let mem_tbls = self.split_mem_tables(&parent_data.mem_tbls);
+        let mem_tbl_vers: Vec<u64> = mem_tbls.iter().map(|tbl| tbl.get_version()).collect();
+        info!("{} add parent mem-tables {:?}", self.tag(), mem_tbl_vers);
+        let new_data = ShardData::new(
+            shard_data.start.clone(),
+            shard_data.end.clone(),
+            shard_data.del_prefixes.clone(),
+            mem_tbls,
+            shard_data.l0_tbls.clone(),
+            shard_data.cfs.clone(),
+        );
+        self.set_data(new_data);
+    }
 }
 
 #[derive(Clone)]
