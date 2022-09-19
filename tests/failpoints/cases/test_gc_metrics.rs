@@ -69,7 +69,7 @@ fn test_txn_create_compaction_filter() {
 
     gc_runner
         .safe_point(TimeStamp::new(1).into_inner())
-        .gc(&raw_engine);
+        .gc(&raw_engine, false);
     assert_eq!(
         GC_COMPACTION_FILTER_PERFORM
             .with_label_values(&[STAT_TXN_KEYMODE])
@@ -100,22 +100,21 @@ fn test_txn_mvcc_filtered() {
     // GC can't delete keys after the given safe point.
     must_prewrite_put(&mut engine, b"zkey", &value, b"zkey", 100);
     must_commit(&mut engine, b"zkey", 100, 110);
-    gc_runner.safe_point(50).gc(&raw_engine);
+    gc_runner.safe_point(50).gc(&raw_engine, false);
     must_get(&mut engine, b"zkey", 110, &value);
 
     // GC can't delete keys before the safe ponit if they are latest versions.
-    gc_runner.safe_point(200).gc(&raw_engine);
+    gc_runner.safe_point(200).gc(&raw_engine, false);
     must_get(&mut engine, b"zkey", 110, &value);
-
     must_prewrite_put(&mut engine, b"zkey", &value, b"zkey", 120);
     must_commit(&mut engine, b"zkey", 120, 130);
 
     // GC can't delete the latest version before the safe ponit.
-    gc_runner.safe_point(115).gc(&raw_engine);
+    gc_runner.safe_point(115).gc(&raw_engine, false);
     must_get(&mut engine, b"zkey", 110, &value);
 
     // GC a version will also delete the key on default CF.
-    gc_runner.safe_point(200).gc(&raw_engine);
+    gc_runner.safe_point(200).gc(&raw_engine, false);
     assert_eq!(
         MVCC_VERSIONS_HISTOGRAM
             .with_label_values(&[STAT_TXN_KEYMODE])
@@ -169,9 +168,6 @@ fn test_txn_gc_keys_handled() {
     let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, 1);
     let safe_point = Arc::new(AtomicU64::new(500));
 
-<<<<<<< HEAD
-    gc_worker.start_auto_gc(auto_gc_cfg, safe_point).unwrap();
-=======
     let kv_engine = engine.get_rocksdb();
     // Building a tablet factory
     let ops = DbOptions::default();
@@ -188,7 +184,6 @@ fn test_txn_gc_keys_handled() {
             Arc::new(TestTabletFactory::new(path.path(), ops, cf_opts)),
         )
         .unwrap();
->>>>>>> 4869d8714 (*: remove unnecessary db field of GC_Context)
     host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
 
     let db = engine.kv_engine().unwrap().as_inner().clone();
@@ -332,9 +327,6 @@ fn test_raw_gc_keys_handled() {
     let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, store_id);
     let safe_point = Arc::new(AtomicU64::new(500));
 
-<<<<<<< HEAD
-    gc_worker.start_auto_gc(auto_gc_cfg, safe_point).unwrap();
-=======
     let kv_engine = engine.get_rocksdb();
     // Building a tablet factory
     let ops = DbOptions::default();
@@ -352,7 +344,6 @@ fn test_raw_gc_keys_handled() {
             Arc::new(TestTabletFactory::new(path.path(), ops, cf_opts)),
         )
         .unwrap();
->>>>>>> 4869d8714 (*: remove unnecessary db field of GC_Context)
     host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
 
     let db = engine.kv_engine().unwrap().as_inner().clone();

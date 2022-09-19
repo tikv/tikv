@@ -16,16 +16,14 @@ use api_version::{ApiV2, KvFormat};
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{FlowInfo, RocksEngine};
-use engine_traits::{
-    raw_ttl::ttl_current_ts, DeleteStrategy, Error as EngineError, KvEngine, MiscExt, Range,
-    TabletFactory, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
-};
+use engine_traits::{raw_ttl::ttl_current_ts, DeleteStrategy, Error as EngineError, KvEngine, MiscExt, Range, TabletFactory, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE, OpenOptions};
 use file_system::{IoType, WithIoType};
 use futures::executor::block_on;
 use kvproto::{
     kvrpcpb::{Context, LockInfo},
     metapb::Region,
 };
+use libc::dev_t;
 use pd_client::{FeatureGate, PdClient};
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionInfoProvider},
@@ -1278,7 +1276,12 @@ where
         );
 
         info!("initialize compaction filter to perform GC when necessary");
+<<<<<<< HEAD
         self.engine.kv_engine().unwrap().init_compaction_filter(
+=======
+        tablet_factory.open_tablet(0, Some(0), OpenOptions::default());
+        kv_engine.init_compaction_filter(
+>>>>>>> ef526ae61 (*: address comments)
             cfg.self_store_id,
             safe_point.clone(),
             self.config_manager.clone(),
@@ -1443,6 +1446,11 @@ where
             .as_ref()
             .ok_or_else(|| box_err!("applied_lock_collector not supported"))
             .and_then(move |c| c.stop_collecting(max_ts, callback))
+    }
+
+    pub fn set_feature_gate_verion(&self, version: &str)-> Result<()>{
+        self.feature_gate.set_version(version).unwrap();
+        Ok(())
     }
 }
 

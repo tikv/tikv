@@ -11,7 +11,7 @@ use engine_test::{
     ctor::{CfOptions, DbOptions},
     kv::TestTabletFactory,
 };
-use engine_traits::{Peekable, WriteBatch, ALL_CFS};
+use engine_traits::{Peekable, WriteBatch, ALL_CFS, TabletFactory, OpenOptions};
 use grpcio::{ChannelBuilder, Environment};
 use keys::data_key;
 use kvproto::{kvrpcpb::*, metapb::Region, tikvpb::TikvClient};
@@ -32,6 +32,7 @@ use tikv::{
 };
 use tikv_util::HandyRwLock;
 use txn_types::{Key, TimeStamp};
+use pd_client::FeatureGate;
 
 // In theory, raft can propose conf change as long as there is no pending one.
 // Replicas don't apply logs synchronously, so it's possible the old leader is
@@ -335,7 +336,7 @@ fn test_error_in_compaction_filter() {
     fail::cfg(fp, "return").unwrap();
 
     let mut gc_runner = TestGcRunner::new(200);
-    gc_runner.gc(&raw_engine);
+    gc_runner.gc(&raw_engine, false);
 
     match gc_runner.gc_receiver.recv().unwrap() {
         GcTask::OrphanVersions { wb, .. } => assert_eq!(wb.count(), 2),
@@ -356,7 +357,7 @@ fn test_error_in_compaction_filter() {
 fn test_orphan_versions_from_compaction_filter() {
     let (cluster, leader, ctx) = must_new_and_configure_cluster(|cluster| {
         cluster.cfg.gc.enable_compaction_filter = true;
-        cluster.cfg.gc.compaction_filter_skip_version_check = true;
+        cluster.cfg.gc.compaction_filter_skip_version_check = false;
         cluster.pd_client.disable_default_operator();
     });
 
@@ -365,8 +366,12 @@ fn test_orphan_versions_from_compaction_filter() {
     let channel = ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader_store));
     let client = TikvClient::new(channel);
 
-    init_compaction_filter(&cluster, leader_store);
     let engine = cluster.engines.get(&leader_store).unwrap();
+
+    let safe_point = 10;
+    let mut gc_runner = TestGcRunner::new(safe_point);
+
+    init_compaction_filter(&cluster, leader_store, Arc::new(AtomicU64::new(gc_runner.safe_point)));
 
     let pk = b"k1".to_vec();
     let large_value = vec![b'x'; 300];
@@ -387,9 +392,8 @@ fn test_orphan_versions_from_compaction_filter() {
     let fp = "write_compaction_filter_flush_write_batch";
     fail::cfg(fp, "return").unwrap();
 
-    let mut gc_runner = TestGcRunner::new(100);
     gc_runner.gc_scheduler = cluster.sim.rl().get_gc_worker(1).scheduler();
-    gc_runner.gc(&engine.kv);
+    gc_runner.gc(&engine.kv, true);
 
     'IterKeys: for &start_ts in &[10, 20, 30] {
         let key = Key::from_raw(b"k1").append_ts(start_ts.into());
@@ -410,7 +414,7 @@ fn test_orphan_versions_from_compaction_filter() {
 // Call `start_auto_gc` like `cmd/src/server.rs` does. It will combine
 // compaction filter and GC worker so that GC worker can help to process orphan
 // versions on default CF.
-fn init_compaction_filter(cluster: &Cluster<ServerCluster>, store_id: u64) {
+fn init_compaction_filter(cluster: &Cluster<ServerCluster>, store_id: u64, safe_point: Arc<AtomicU64>) {
     #[derive(Clone)]
     struct MockSafePointProvider;
     impl GcSafePointProvider for MockSafePointProvider {
@@ -444,7 +448,18 @@ fn init_compaction_filter(cluster: &Cluster<ServerCluster>, store_id: u64) {
     let sim = cluster.sim.rl();
     let gc_worker = sim.get_gc_worker(store_id);
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
+=======
+    let feature_gate = {
+        let feature_gate = FeatureGate::default();
+        feature_gate.set_version("5.0.0").unwrap();
+        feature_gate
+    };
+
+    gc_worker.set_feature_gate_verion("5.0.0");
+
+>>>>>>> ef526ae61 (*: address comments)
     let kv_engine = cluster.get_engine(store_id);
     // Building a tablet factory
     let ops = DbOptions::default();
@@ -454,7 +469,18 @@ fn init_compaction_filter(cluster: &Cluster<ServerCluster>, store_id: u64) {
         .tempdir()
         .unwrap();
 
+<<<<<<< HEAD
 >>>>>>> 4869d8714 (*: remove unnecessary db field of GC_Context)
+=======
+    let factory = TestTabletFactory::new(path.path(), ops, cf_opts);
+    {
+        let arc_root_db = factory.get_root_db();
+        let mut root_db = arc_root_db.lock().unwrap();
+        root_db.replace(kv_engine.clone());
+    }
+
+    factory.open_tablet(0, Some(0), OpenOptions::default());
+>>>>>>> ef526ae61 (*: address comments)
     gc_worker
         .start_auto_gc(
 <<<<<<< HEAD
@@ -466,9 +492,14 @@ fn init_compaction_filter(cluster: &Cluster<ServerCluster>, store_id: u64) {
 >>>>>>> d05ffa40a (*: address comments and use clean interfaces)
 =======
             AutoGcConfig::new(MockSafePointProvider, MockRegionInfoProvider, 1),
+<<<<<<< HEAD
 >>>>>>> 4869d8714 (*: remove unnecessary db field of GC_Context)
             Arc::new(AtomicU64::new(0)),
             Arc::new(TestTabletFactory::new(path.path(), ops, cf_opts)),
+=======
+            safe_point,
+            Arc::new(factory),
+>>>>>>> ef526ae61 (*: address comments)
         )
         .unwrap();
 }

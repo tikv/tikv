@@ -11,6 +11,7 @@ use std::{
     },
     time::Duration,
 };
+use std::ops::Deref;
 
 use engine_rocks::{
     raw::{
@@ -791,7 +792,7 @@ pub mod test_utils {
         // Put a new key-value pair to ensure compaction can be triggered correctly.
         engine.delete_cf("write", b"znot-exists-key").unwrap();
 
-        TestGcRunner::new(safe_point).gc(&engine);
+        TestGcRunner::new(safe_point).gc(&engine, false);
     }
 
     lazy_static! {
@@ -840,7 +841,7 @@ pub mod test_utils {
             self
         }
 
-        fn prepare_gc(&self, _engine: &RocksEngine) {
+        fn prepare_gc(&self, engine: &RocksEngine) {
             let safe_point = Arc::new(AtomicU64::new(self.safe_point));
             let cfg_tracker = {
                 let mut cfg = GcConfig::default();
@@ -861,6 +862,13 @@ pub mod test_utils {
             let ops = DbOptions::default();
             let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
             let path = Builder::new().prefix("prepare_gc").tempdir().unwrap();
+            let factory = TestTabletFactory::new(path.path(), ops, cf_opts);
+            {
+                let arc_root_db = factory.get_root_db();
+                let mut root_db = arc_root_db.lock().unwrap();
+                //fixme later
+                //root_db.replace(*engine);
+            }
             *gc_context_opt = Some(GcContext {
                 store_id: 1,
                 safe_point,
@@ -869,7 +877,7 @@ pub mod test_utils {
                 gc_scheduler: self.gc_scheduler.clone(),
                 region_info_provider: Arc::new(MockRegionInfoProvider::new(vec![])),
                 callbacks_on_drop: self.callbacks_on_drop.clone(),
-                tablet_factory: Arc::new(TestTabletFactory::new(path.path(), ops, cf_opts)),
+                tablet_factory: Arc::new(factory),
             });
         }
 
@@ -880,9 +888,11 @@ pub mod test_utils {
             callbacks.clear();
         }
 
-        pub fn gc(&mut self, engine: &RocksEngine) {
+        pub fn gc(&mut self, engine: &RocksEngine, gc_context_ready: bool) {
             let _guard = LOCK.lock().unwrap();
-            self.prepare_gc(engine);
+            if !gc_context_ready {
+                self.prepare_gc(engine);
+            }
 
             let db = engine.as_inner();
             let handle = get_cf_handle(db, CF_WRITE).unwrap();
@@ -990,23 +1000,29 @@ pub mod tests {
         // GC can't delete keys after the given safe point.
         must_prewrite_put(&mut engine, b"zkey", &value, b"zkey", 100);
         must_commit(&mut engine, b"zkey", 100, 110);
-        gc_runner.safe_point(50).gc(&raw_engine);
+        gc_runner.safe_point(50).gc(&raw_engine, false);
         must_get(&mut engine, b"zkey", 110, &value);
 
         // GC can't delete keys before the safe ponit if they are latest versions.
-        gc_runner.safe_point(200).gc(&raw_engine);
+        gc_runner.safe_point(200).gc(&raw_engine, false);
         must_get(&mut engine, b"zkey", 110, &value);
+
+        // GC can't delete keys before the safe ponit if they are latest versions.
+        gc_runner.safe_point(200).gc(&raw_engine, false);
+        must_get(&engine, b"zkey", 110, &value);
+>>>>>>> a990ac026 (*: address comments)
 
         must_prewrite_put(&mut engine, b"zkey", &value, b"zkey", 120);
         must_commit(&mut engine, b"zkey", 120, 130);
 
         // GC can't delete the latest version before the safe ponit.
-        gc_runner.safe_point(115).gc(&raw_engine);
+        gc_runner.safe_point(115).gc(&raw_engine, false);
         must_get(&mut engine, b"zkey", 110, &value);
 
         // GC a version will also delete the key on default CF.
-        gc_runner.safe_point(200).gc(&raw_engine);
+        gc_runner.safe_point(200).gc(&raw_engine, false);
         must_get_none(&mut engine, b"zkey", 110);
+
         let default_key = Key::from_encoded_slice(b"zkey").append_ts(100.into());
         let default_key = default_key.into_encoded();
         assert!(raw_engine.get_value(&default_key).unwrap().is_none());
@@ -1021,7 +1037,7 @@ pub mod tests {
         let mut gc_runner = TestGcRunner::new(0);
 
         let mut gc_and_check = |expect_tasks: bool, prefix: &[u8]| {
-            gc_runner.safe_point(500).gc(&raw_engine);
+            gc_runner.safe_point(500).gc(&raw_engine, false);
 
             // Wait up to 1 second, and treat as no task if timeout.
             if let Ok(Some(task)) = gc_runner.gc_receiver.recv_timeout(Duration::new(1, 0)) {
@@ -1104,13 +1120,13 @@ pub mod tests {
                 unreachable!();
             }));
         gc_runner.target_level = Some(6);
-        gc_runner.safe_point(100).gc(&raw_engine);
+        gc_runner.safe_point(100).gc(&raw_engine, false);
 
         // Can perform GC at the bottommost level even if the threshold can't be
         // reached.
         gc_runner.ratio_threshold = Some(10.0);
         gc_runner.target_level = Some(6);
-        gc_runner.safe_point(140).gc(&raw_engine);
+        gc_runner.safe_point(140).gc(&raw_engine, false);
         for commit_ts in &[105, 115, 125] {
             must_get_none(&mut engine, b"zkey", commit_ts);
         }
@@ -1163,7 +1179,7 @@ pub mod tests {
         must_prewrite_put(&mut engine, b"zkey", b"zvalue", b"zkey", 100);
         must_commit(&mut engine, b"zkey", 100, 110);
         gc_runner.target_level = Some(6);
-        gc_runner.safe_point(50).gc(&raw_engine);
+        gc_runner.safe_point(50).gc(&raw_engine, false);
         assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[6], 1);
 
         // So the construction of SST files will be:
@@ -1191,7 +1207,7 @@ pub mod tests {
 
         // Compact the mvcc deletion mark to L6, the stale version shouldn't be exposed.
         gc_runner.target_level = Some(6);
-        gc_runner.safe_point(200).gc(&raw_engine);
+        gc_runner.safe_point(200).gc(&raw_engine, false);
         must_get_none(&mut engine, b"zkey", 200);
     }
 }

@@ -141,6 +141,10 @@ pub mod kv {
                 self.cf_opts.clone(),
             )
         }
+
+        pub fn get_root_db(&self) -> Arc<Mutex<Option<KvTestEngine>>> {
+            self.root_db.clone()
+        }
     }
 
     impl TabletFactory<KvTestEngine> for TestTabletFactory {

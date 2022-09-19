@@ -316,6 +316,7 @@ impl<T: Simulator> Cluster<T> {
     // Bootstrap the store with fixed ID (like 1, 2, .. 5) and
     // initialize first region in all stores, then start the cluster.
     pub fn run(&mut self) {
+
         self.create_engines();
         self.bootstrap_region().unwrap();
         self.start().unwrap();
