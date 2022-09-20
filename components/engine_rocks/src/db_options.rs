@@ -2,7 +2,7 @@
 
 use std::ops::{Deref, DerefMut};
 
-use engine_traits::{DbOptions, DbOptionsExt, Result, TitanDbOptions};
+use engine_traits::{DbOptions, DbOptionsExt, Result, TitanCfOptions};
 use rocksdb::{DBOptions as RawDBOptions, TitanDBOptions as RawTitanDBOptions};
 use tikv_util::box_err;
 
@@ -118,7 +118,7 @@ impl DerefMut for RocksTitanDbOptions {
     }
 }
 
-impl TitanDbOptions for RocksTitanDbOptions {
+impl TitanCfOptions for RocksTitanDbOptions {
     fn new() -> Self {
         RocksTitanDbOptions::from_raw(RawTitanDBOptions::new())
     }

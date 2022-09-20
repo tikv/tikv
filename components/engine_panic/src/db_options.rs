@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{DbOptions, DbOptionsExt, Result, TitanDbOptions};
+use engine_traits::{DbOptions, DbOptionsExt, Result, TitanCfOptions};
 
 use crate::engine::PanicEngine;
 
@@ -51,7 +51,7 @@ impl DbOptions for PanicDbOptions {
 
 pub struct PanicTitanDbOptions;
 
-impl TitanDbOptions for PanicTitanDbOptions {
+impl TitanCfOptions for PanicTitanDbOptions {
     fn new() -> Self {
         panic!()
     }

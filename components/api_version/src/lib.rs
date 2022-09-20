@@ -249,10 +249,13 @@ pub struct RawValue<T: AsRef<[u8]>> {
 impl<T: AsRef<[u8]>> RawValue<T> {
     #[inline]
     pub fn is_valid(&self, current_ts: u64) -> bool {
-        !self.is_delete
-            && self
-                .expire_ts
-                .map_or(true, |expire_ts| expire_ts > current_ts)
+        !self.is_delete & !self.is_ttl_expired(current_ts)
+    }
+
+    #[inline]
+    pub fn is_ttl_expired(&self, current_ts: u64) -> bool {
+        self.expire_ts
+            .map_or(false, |expire_ts| expire_ts <= current_ts)
     }
 }
 
@@ -487,22 +490,25 @@ mod tests {
     #[test]
     fn test_value_valid() {
         let cases = vec![
-            // expire_ts, is_delete, expect_is_valid
-            (None, false, true),
-            (None, true, false),
-            (Some(5), false, false),
-            (Some(5), true, false),
-            (Some(100), false, true),
-            (Some(100), true, false),
+            // expire_ts, is_delete, expect_is_valid, expect_ttl_expired
+            (None, false, true, false),
+            (None, true, false, false),
+            (Some(5), false, false, true),
+            (Some(5), true, false, true),
+            (Some(100), false, true, false),
+            (Some(100), true, false, false),
         ];
 
-        for (idx, (expire_ts, is_delete, expect_is_valid)) in cases.into_iter().enumerate() {
+        for (idx, (expire_ts, is_delete, expect_is_valid, ttl_expired)) in
+            cases.into_iter().enumerate()
+        {
             let raw_value = RawValue {
                 user_value: b"value",
                 expire_ts,
                 is_delete,
             };
             assert_eq!(raw_value.is_valid(10), expect_is_valid, "case {}", idx);
+            assert_eq!(raw_value.is_ttl_expired(10), ttl_expired, "case {}", idx);
         }
     }
 
