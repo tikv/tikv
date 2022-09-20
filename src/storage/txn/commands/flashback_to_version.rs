@@ -74,7 +74,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
             &mut next_write_key,
             self.key_locks,
             self.key_old_writes,
-            self.version,
             self.start_ts,
             self.commit_ts,
         )?;
