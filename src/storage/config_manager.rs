@@ -4,7 +4,7 @@
 
 use std::{convert::TryInto, sync::Arc};
 
-use engine_traits::{CfNamesExt, CfOptionsExt, TabletFactory, CF_DEFAULT};
+use engine_traits::{TabletFactory, CF_DEFAULT};
 use file_system::{get_io_rate_limiter, IoPriority, IoType};
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
 use strum::IntoEnumIterator;
@@ -19,20 +19,26 @@ use crate::{
     storage::{lock_manager::LockManager, txn::flow_controller::FlowController, TxnScheduler},
 };
 
-pub struct StorageConfigManger<E: Engine, L: LockManager> {
-    tablet_factory: Arc<dyn TabletFactory<E::Local> + Send + Sync>,
+pub struct StorageConfigManger<E: Engine, EL: engine_traits::KvEngine, L: LockManager> {
+    tablet_factory: Arc<dyn TabletFactory<EL> + Send + Sync>,
     shared_block_cache: bool,
     ttl_checker_scheduler: Scheduler<TtlCheckerTask>,
     flow_controller: Arc<FlowController>,
     scheduler: TxnScheduler<E, L>,
 }
 
-unsafe impl<E: Engine, L: LockManager> Send for StorageConfigManger<E, L> {}
-unsafe impl<E: Engine, L: LockManager> Sync for StorageConfigManger<E, L> {}
+unsafe impl<E: Engine, EL: engine_traits::KvEngine, L: LockManager> Send
+    for StorageConfigManger<E, EL, L>
+{
+}
+unsafe impl<E: Engine, EL: engine_traits::KvEngine, L: LockManager> Sync
+    for StorageConfigManger<E, EL, L>
+{
+}
 
-impl<E: Engine, L: LockManager> StorageConfigManger<E, L> {
+impl<E: Engine, EL: engine_traits::KvEngine, L: LockManager> StorageConfigManger<E, EL, L> {
     pub fn new(
-        tablet_factory: Arc<dyn TabletFactory<E::Local> + Send + Sync>,
+        tablet_factory: Arc<dyn TabletFactory<EL> + Send + Sync>,
         shared_block_cache: bool,
         ttl_checker_scheduler: Scheduler<TtlCheckerTask>,
         flow_controller: Arc<FlowController>,
@@ -48,7 +54,9 @@ impl<E: Engine, L: LockManager> StorageConfigManger<E, L> {
     }
 }
 
-impl<EK: Engine, L: LockManager> ConfigManager for StorageConfigManger<EK, L> {
+impl<EK: Engine, EL: engine_traits::KvEngine, L: LockManager> ConfigManager
+    for StorageConfigManger<EK, EL, L>
+{
     fn dispatch(&mut self, mut change: ConfigChange) -> CfgResult<()> {
         if let Some(ConfigValue::Module(mut block_cache)) = change.remove("block_cache") {
             if !self.shared_block_cache {
@@ -74,7 +82,7 @@ impl<EK: Engine, L: LockManager> ConfigManager for StorageConfigManger<EK, L> {
                 let enable: bool = v.into();
                 let enable_str = if enable { "true" } else { "false" };
                 self.tablet_factory.for_each_opened_tablet(
-                    &mut |_region_id, _suffix, tablet: &EK::Local| {
+                    &mut |_region_id, _suffix, tablet: &EL| {
                         for cf in tablet.cf_names() {
                             tablet
                                 .set_options_cf(cf, &[("disable_write_stall", enable_str)])
