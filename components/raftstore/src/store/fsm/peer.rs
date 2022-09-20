@@ -931,12 +931,7 @@ where
             // do some sanity check, for follower, leader already apply to last log,
             // case#1 if it is learner during backup and never vote before, vote is 0
             // case#2 if peer is suppose to remove
-            // case#3 follower voted (term+1), however, never append logs (log term does not
-            // move forward)
-            if self.fsm.peer.raft_group.raft.vote == 0
-                || self.fsm.peer.pending_remove
-                || self.fsm.peer.term() > self.fsm.peer.raft_group.raft.raft_log.last_term()
-            {
+            if self.fsm.peer.raft_group.raft.vote == 0 || self.fsm.peer.pending_remove {
                 info!(
                     "this peer is never vote before or pending remove, it should be skip to wait apply"
                 );

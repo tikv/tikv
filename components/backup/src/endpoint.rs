@@ -1682,7 +1682,8 @@ pub mod tests {
             } else {
                 u64::MAX
             };
-            let key = generate_engine_test_key(key_str.clone(), None, cur_api_ver);
+            // engine do not append ts anymore, need write ts encoded key into engine.
+            let key = generate_engine_test_key(key_str.clone(), Some(i.into()), cur_api_ver);
             let value = generate_engine_test_value(value_str.clone(), cur_api_ver, ttl);
             let dst_user_key = convert_test_backup_user_key(key_str, cur_api_ver, dst_api_ver);
             let dst_value = value_str.as_bytes();

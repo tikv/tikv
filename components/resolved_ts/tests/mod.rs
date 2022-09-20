@@ -354,7 +354,7 @@ impl TestSuite {
         let meta = self.cluster.store_metas[&leader.store_id].lock().unwrap();
         Some(
             meta.region_read_progress
-                .get_safe_ts(&region_id)
+                .get_resolved_ts(&region_id)
                 .unwrap()
                 .into(),
         )

@@ -939,6 +939,29 @@ impl RegionReadProgressRegistry {
             .map(|rp| rp.core.lock().unwrap().applied_index)
     }
 
+    // NOTICE: this function is an alias of `get_safe_ts` to distinguish the
+    // semantics.
+    pub fn get_resolved_ts(&self, region_id: &u64) -> Option<u64> {
+        self.registry
+            .lock()
+            .unwrap()
+            .get(region_id)
+            .map(|rp| rp.resolved_ts())
+    }
+
+    // Get the minimum `resolved_ts` which could ensure that there will be no more
+    // locks whose `start_ts` is greater than it.
+    pub fn get_min_resolved_ts(&self) -> u64 {
+        self.registry
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, rrp)| rrp.resolved_ts())
+            .filter(|ts| *ts != 0) // ts == 0 means the peer is uninitialized
+            .min()
+            .unwrap_or(0)
+    }
+
     // Update `safe_ts` with the provided `LeaderInfo` and return the regions that
     // have the same `LeaderInfo`
     pub fn handle_check_leaders<E: KvEngine>(
@@ -1009,7 +1032,7 @@ impl Default for RegionReadProgressRegistry {
 /// `apply index` smaller (require less data)
 //
 /// TODO: the name `RegionReadProgress` is conflict with the leader lease's
-/// `ReadProgress`, shoule change it to another more proper name
+/// `ReadProgress`, should change it to another more proper name
 #[derive(Debug)]
 pub struct RegionReadProgress {
     // `core` used to keep track and update `safe_ts`, it should
@@ -1166,6 +1189,13 @@ impl RegionReadProgress {
     pub fn safe_ts(&self) -> u64 {
         self.safe_ts.load(AtomicOrdering::Acquire)
     }
+
+    // `safe_ts` is calculated from the `resolved_ts`, they are the same thing
+    // internally. So we can use `resolved_ts` as the alias of `safe_ts` here.
+    #[inline(always)]
+    pub fn resolved_ts(&self) -> u64 {
+        self.safe_ts()
+    }
 }
 
 #[derive(Debug)]
@@ -1173,7 +1203,7 @@ struct RegionReadProgressCore {
     tag: String,
     region_id: u64,
     applied_index: u64,
-    // A wraper of `(apply_index, safe_ts)` item, where the `read_state.ts` is the peer's current
+    // A wrapper of `(apply_index, safe_ts)` item, where the `read_state.ts` is the peer's current
     // `safe_ts` and the `read_state.idx` is the smallest `apply_index` required for that `safe_ts`
     read_state: ReadState,
     // The local peer's acknowledge about the leader
@@ -1191,7 +1221,7 @@ struct RegionReadProgressCore {
     discard: bool,
 }
 
-// A helpful wraper of `(apply_index, safe_ts)` item
+// A helpful wrapper of `(apply_index, safe_ts)` item
 #[derive(Clone, Debug, Default)]
 pub struct ReadState {
     pub idx: u64,

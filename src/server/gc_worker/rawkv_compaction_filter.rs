@@ -24,15 +24,15 @@ use txn_types::Key;
 use crate::{
     server::gc_worker::{
         compaction_filter::{
-            CompactionFilterStats, DEFAULT_DELETE_BATCH_COUNT, GC_COMPACTION_FAILURE,
-            GC_COMPACTION_FILTERED, GC_COMPACTION_FILTER_MVCC_DELETION_MET,
-            GC_COMPACTION_FILTER_ORPHAN_VERSIONS, GC_CONTEXT,
+            check_need_gc, CompactionFilterStats, DEFAULT_DELETE_BATCH_COUNT,
+            GC_COMPACTION_FAILURE, GC_COMPACTION_FILTERED, GC_COMPACTION_FILTER_MVCC_DELETION_MET,
+            GC_COMPACTION_FILTER_ORPHAN_VERSIONS, GC_COMPACTION_FILTER_PERFORM,
+            GC_COMPACTION_FILTER_SKIP, GC_CONTEXT,
         },
         GcTask, STAT_RAW_KEYMODE,
     },
     storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM},
 };
-
 pub struct RawCompactionFilterFactory;
 
 impl CompactionFilterFactory for RawCompactionFilterFactory {
@@ -60,6 +60,36 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
             debug!("skip gc in compaction filter because of no safe point");
             return std::ptr::null_mut();
         }
+
+        let ratio_threshold = {
+            let value = &*gc_context.cfg_tracker.value();
+            value.ratio_threshold
+        };
+
+        debug!(
+            "creating rawkv compaction filter";
+            "ratio_threshold" => ratio_threshold,
+        );
+
+        if db.is_stalled_or_stopped() {
+            debug!("skip gc in compaction filter because the DB is stalled");
+            return std::ptr::null_mut();
+        }
+
+        drop(gc_context_option);
+
+        GC_COMPACTION_FILTER_PERFORM
+            .with_label_values(&[STAT_RAW_KEYMODE])
+            .inc();
+
+        if !check_need_gc(safe_point.into(), ratio_threshold, context) {
+            debug!("skip gc in compaction filter because it's not necessary");
+            GC_COMPACTION_FILTER_SKIP
+                .with_label_values(&[STAT_RAW_KEYMODE])
+                .inc();
+            return std::ptr::null_mut();
+        }
+
         let filter = RawCompactionFilter::new(
             db,
             safe_point,
@@ -76,6 +106,7 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
 struct RawCompactionFilter {
     safe_point: u64,
     engine: RocksEngine,
+    is_bottommost_level: bool,
     gc_scheduler: Scheduler<GcTask<RocksEngine>>,
     current_ts: u64,
     mvcc_key_prefix: Vec<u8>,
@@ -145,7 +176,7 @@ impl RawCompactionFilter {
         safe_point: u64,
         gc_scheduler: Scheduler<GcTask<RocksEngine>>,
         ts: u64,
-        _context: &CompactionFilterContext,
+        context: &CompactionFilterContext,
         regions_provider: (u64, Arc<dyn RegionInfoProvider>),
     ) -> Self {
         // Safe point must have been initialized.
@@ -154,6 +185,7 @@ impl RawCompactionFilter {
         RawCompactionFilter {
             safe_point,
             engine,
+            is_bottommost_level: context.is_bottommost_level(),
             gc_scheduler,
             current_ts: ts,
             mvcc_key_prefix: vec![],
@@ -205,7 +237,7 @@ impl RawCompactionFilter {
             let raw_value = ApiV2::decode_raw_value(value)?;
             // If it's the latest version, and it's deleted or expired, it needs to be sent
             // to GcWorker to be processed asynchronously.
-            if !raw_value.is_valid(self.current_ts) {
+            if !raw_value.is_valid(self.current_ts) && self.is_bottommost_level {
                 GC_COMPACTION_FILTER_MVCC_DELETION_MET
                     .with_label_values(&[STAT_RAW_KEYMODE])
                     .inc();
@@ -351,7 +383,6 @@ pub mod tests {
             .unwrap();
         let raw_engine = engine.get_rocksdb();
         let mut gc_runner = TestGcRunner::new(0);
-
         let user_key = b"r\0aaaaaaaaaaa";
 
         let test_raws = vec![
@@ -416,7 +447,6 @@ pub mod tests {
             .unwrap();
         let raw_engine = engine.get_rocksdb();
         let mut gc_runner = TestGcRunner::new(0);
-
         let mut gc_and_check = |expect_tasks: bool, prefix: &[u8]| {
             gc_runner.safe_point(500).gc_raw(&raw_engine);
 
