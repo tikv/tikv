@@ -31,9 +31,10 @@ use engine_rocks::{
         PrepopulateBlockCache,
     },
     util::{FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform},
-    RaftDbLogger, RangePropertiesCollectorFactory, RocksCfOptions, RocksDbOptions, RocksEngine,
-    RocksEventListener, RocksTitanDbOptions, RocksdbLogger, TtlPropertiesCollectorFactory,
-    DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+    RaftDbLogger, RangePropertiesCollectorFactory, RawMvccPropertiesCollectorFactory,
+    RocksCfOptions, RocksDbOptions, RocksEngine, RocksEventListener, RocksTitanDbOptions,
+    RocksdbLogger, TtlPropertiesCollectorFactory, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+    DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{
     CfOptions as _, CfOptionsExt, DbOptions as _, DbOptionsExt, TabletAccessor,
@@ -679,6 +680,10 @@ impl DefaultCfConfig {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
         };
+        cf_opts.add_table_properties_collector_factory(
+            "tikv.rawkv-mvcc-properties-collector",
+            RawMvccPropertiesCollectorFactory::default(),
+        );
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         match api_version {
             ApiVersion::V1 => {
@@ -1849,6 +1854,7 @@ pub struct UnifiedReadPoolConfig {
     pub stack_size: ReadableSize,
     #[online_config(skip)]
     pub max_tasks_per_worker: usize,
+    pub auto_adjust_pool_size: bool,
     // FIXME: Add more configs when they are effective in yatp
 }
 
@@ -1904,6 +1910,7 @@ impl Default for UnifiedReadPoolConfig {
             max_thread_count: concurrency,
             stack_size: ReadableSize::mb(DEFAULT_READPOOL_STACK_SIZE_MB),
             max_tasks_per_worker: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
+            auto_adjust_pool_size: false,
         }
     }
 }
@@ -1919,6 +1926,7 @@ mod unified_read_pool_tests {
             max_thread_count: 2,
             stack_size: ReadableSize::mb(2),
             max_tasks_per_worker: 2000,
+            auto_adjust_pool_size: false,
         };
         cfg.validate().unwrap();
         let cfg = UnifiedReadPoolConfig {
@@ -2257,6 +2265,7 @@ mod readpool_tests {
             max_thread_count: 0,
             stack_size: ReadableSize::mb(0),
             max_tasks_per_worker: 0,
+            auto_adjust_pool_size: false,
         };
         unified.validate().unwrap_err();
         let storage = StorageReadPoolConfig {

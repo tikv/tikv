@@ -391,6 +391,22 @@ impl PdClient for RpcClient {
         Ok(id)
     }
 
+    fn is_recovering_marked(&self) -> Result<bool> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["is_recovering_marked"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::IsSnapshotRecoveringRequest::default();
+        req.set_header(self.header());
+
+        let resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client, option| {
+            client.is_snapshot_recovering_opt(&req, option)
+        })?;
+        check_resp_header(resp.get_header())?;
+
+        Ok(resp.get_marked())
+    }
+
     fn put_store(&self, store: metapb::Store) -> Result<Option<ReplicationStatus>> {
         let _timer = PD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["put_store"])
