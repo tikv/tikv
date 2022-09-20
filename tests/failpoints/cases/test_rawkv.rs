@@ -2,6 +2,7 @@
 
 use std::{sync::Arc, time::Duration};
 
+use causal_ts::CausalTsProvider;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     kvrpcpb::*,

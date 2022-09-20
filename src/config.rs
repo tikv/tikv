@@ -31,9 +31,10 @@ use engine_rocks::{
         PrepopulateBlockCache,
     },
     util::{FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform},
-    RaftDbLogger, RangePropertiesCollectorFactory, RocksCfOptions, RocksDbOptions, RocksEngine,
-    RocksEventListener, RocksTitanDbOptions, RocksdbLogger, TtlPropertiesCollectorFactory,
-    DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+    RaftDbLogger, RangePropertiesCollectorFactory, RawMvccPropertiesCollectorFactory,
+    RocksCfOptions, RocksDbOptions, RocksEngine, RocksEventListener, RocksTitanDbOptions,
+    RocksdbLogger, TtlPropertiesCollectorFactory, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+    DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{
     CfOptions as _, CfOptionsExt, DbOptions as _, DbOptionsExt, TabletAccessor,
@@ -679,6 +680,10 @@ impl DefaultCfConfig {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
         };
+        cf_opts.add_table_properties_collector_factory(
+            "tikv.rawkv-mvcc-properties-collector",
+            RawMvccPropertiesCollectorFactory::default(),
+        );
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         match api_version {
             ApiVersion::V1 => {

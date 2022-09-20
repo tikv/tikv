@@ -82,7 +82,6 @@ pub fn flashback_to_version<S: Snapshot>(
     next_write_key: &mut Option<Key>,
     key_locks: Vec<(Key, Lock)>,
     key_old_writes: Vec<(Key, Option<Write>)>,
-    version: TimeStamp,
     start_ts: TimeStamp,
     commit_ts: TimeStamp,
 ) -> TxnResult<usize> {
@@ -123,10 +122,12 @@ pub fn flashback_to_version<S: Snapshot>(
             // If it's not a short value and it's a `WriteType::Put`, we should put the old
             // value in `CF_DEFAULT` with `self.start_ts` as well.
             if old_write.short_value.is_none() && old_write.write_type == WriteType::Put {
-                if let Some(old_value) = reader.get(&key, version)? {
-                    txn.put_value(key.clone(), start_ts, old_value);
-                    rows += 1;
-                }
+                txn.put_value(
+                    key.clone(),
+                    start_ts,
+                    reader.load_data(&key, old_write.clone())?,
+                );
+                rows += 1;
             }
             Write::new(old_write.write_type, start_ts, old_write.short_value)
         } else {
@@ -198,7 +199,6 @@ pub mod tests {
             &mut Some(key),
             vec![],
             key_old_writes,
-            version,
             start_ts,
             commit_ts,
         )
