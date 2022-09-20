@@ -9,6 +9,8 @@
 //!
 //! Status query is implemented in the root module directly.
 
+use std::{cmp, sync::Arc};
+
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, StatusCmdType};
 use raftstore::{
@@ -83,12 +85,23 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// Query internal states for debugging purpose.
     pub fn on_query_debug_info(&self, ch: DebugInfoChannel) {
         let entry_storage = self.storage().entry_storage();
-        let meta = RegionMeta::new(
+        let mut meta = RegionMeta::new(
             self.storage().region_state(),
             entry_storage.apply_state(),
             GroupState::Ordered,
             self.raft_group().status(),
         );
+        // V2 doesn't persist commit term, so fill it on demand.
+        meta.raft_apply.commit_index = cmp::min(
+            self.raft_group().raft.raft_log.committed,
+            self.raft_group().raft.raft_log.persisted,
+        );
+        meta.raft_apply.commit_term = self
+            .raft_group()
+            .raft
+            .raft_log
+            .term(meta.raft_apply.commit_index)
+            .unwrap();
         ch.set_result(meta);
     }
 }

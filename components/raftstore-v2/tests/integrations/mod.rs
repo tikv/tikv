@@ -77,7 +77,8 @@ impl TestRouter {
         while timer.elapsed() < timeout {
             let (ch, sub) = DebugInfoChannel::pair();
             let msg = PeerMsg::QueryDebugInfo(ch);
-            if self.send(region_id, msg).is_err() {
+            let res = self.send(region_id, msg);
+            if res.is_err() {
                 thread::sleep(Duration::from_millis(10));
                 continue;
             }
@@ -90,6 +91,30 @@ impl TestRouter {
         let (msg, sub) = PeerMsg::raft_command(req);
         self.send(region_id, msg).unwrap();
         block_on(sub.result())
+    }
+
+    fn wait_applied_to_current_term(&self, region_id: u64, timeout: Duration) {
+        let mut now = Instant::now();
+        let deadline = now + timeout;
+        let mut res = None;
+        while now < deadline {
+            res = self.must_query_debug_info(region_id, deadline - now);
+            if let Some(info) = &res {
+                // If term matches and apply to commit index, then it must apply to current
+                // term.
+                if info.raft_apply.applied_index == info.raft_apply.commit_index
+                    && info.raft_apply.commit_term == info.raft_status.hard_state.term
+                {
+                    return;
+                }
+            }
+            thread::sleep(Duration::from_millis(10));
+            now = Instant::now();
+        }
+        panic!(
+            "region {} is not applied to current term, {:?}",
+            region_id, res
+        );
     }
 }
 
@@ -204,6 +229,10 @@ impl TestNode {
 
     fn config(&self) -> &Arc<VersionTrack<Config>> {
         &self.running_state.as_ref().unwrap().cfg
+    }
+
+    fn tablet_factory(&self) -> &Arc<TestTabletFactoryV2> {
+        &self.running_state.as_ref().unwrap().factory
     }
 
     fn stop(&mut self) {
