@@ -11,7 +11,8 @@ use engine_rocks::{
     RocksEventListener,
 };
 use engine_traits::{
-    CompactionJobInfo, Result, TabletAccessor, TabletFactory, CF_DEFAULT, CF_WRITE,
+    CfOptions, CfOptionsExt, CompactionJobInfo, Result, TabletAccessor, TabletFactory, CF_DEFAULT,
+    CF_WRITE,
 };
 use kvproto::kvrpcpb::ApiVersion;
 use raftstore::RegionInfoAccessor;
@@ -143,19 +144,18 @@ impl KvEngineFactory {
             self.inner.region_info_accessor.as_ref(),
             self.inner.api_version,
         );
-        let kv_engine = engine_rocks::raw_util::new_engine_opt(
+        let kv_engine = engine_rocks::util::new_engine_opt(
             tablet_path.to_str().unwrap(),
             kv_db_opts,
             kv_cfs_opts,
         );
-        let kv_engine = match kv_engine {
+        let mut kv_engine = match kv_engine {
             Ok(e) => e,
             Err(e) => {
                 error!("failed to create kv engine"; "path" => %tablet_path.display(), "err" => ?e);
                 return Err(e);
             }
         };
-        let mut kv_engine = RocksEngine::from_db(Arc::new(kv_engine));
         let shared_block_cache = self.inner.block_cache.is_some();
         kv_engine.set_shared_block_cache(shared_block_cache);
         Ok(kv_engine)
@@ -182,12 +182,11 @@ impl KvEngineFactory {
             self.inner.api_version,
         );
         // TODOTODO: call rust-rocks or tirocks to destroy_engine;
-        /*
-        engine_rocks::raw_util::destroy_engine(
-            tablet_path.to_str().unwrap(),
-            kv_db_opts,
-            kv_cfs_opts,
-        )?;*/
+        // engine_rocks::util::destroy_engine(
+        //   tablet_path.to_str().unwrap(),
+        //   kv_db_opts,
+        //   kv_cfs_opts,
+        // )?;
         let _ = std::fs::remove_dir_all(tablet_path);
         Ok(())
     }
@@ -245,8 +244,13 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
     fn destroy_tablet(&self, _id: u64, _suffix: u64) -> engine_traits::Result<()> {
         Ok(())
     }
-    fn clone(&self) -> Box<dyn TabletFactory<RocksEngine> + Send> {
-        Box::new(std::clone::Clone::clone(self))
+
+    fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()> {
+        if let Ok(db) = self.inner.root_db.lock() {
+            let opt = db.as_ref().unwrap().get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
+            opt.set_block_cache_capacity(capacity)?;
+        }
+        Ok(())
     }
 }
 

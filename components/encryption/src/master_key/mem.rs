@@ -38,24 +38,25 @@ impl MemAesGcmBackend {
         Ok(content)
     }
 
-    // On decrypt failure, the rule is to return WrongMasterKey error in case it is possible that
-    // a wrong master key has been used, or other error otherwise.
+    // On decrypt failure, the rule is to return WrongMasterKey error in case it is
+    // possible that a wrong master key has been used, or other error otherwise.
     pub fn decrypt_content(&self, content: &EncryptedContent) -> Result<Vec<u8>> {
         let method = content
             .get_metadata()
             .get(MetadataKey::Method.as_str())
             .ok_or_else(|| {
-                // Missing method in metadata. The metadata of the encrypted content is invalid or
-                // corrupted.
+                // Missing method in metadata. The metadata of the encrypted content is invalid
+                // or corrupted.
                 Error::Other(box_err!(
                     "metadata {} not found",
                     MetadataKey::Method.as_str()
                 ))
             })?;
         if method.as_slice() != MetadataMethod::Aes256Gcm.as_slice() {
-            // Currently we only support aes256-gcm. A different method could mean the encrypted
-            // content is written by a future version of TiKV, and we don't know how to handle it.
-            // Fail immediately instead of fallback to previous key.
+            // Currently we only support aes256-gcm. A different method could mean the
+            // encrypted content is written by a future version of TiKV, and we
+            // don't know how to handle it. Fail immediately instead of fallback
+            // to previous key.
             return Err(Error::Other(box_err!(
                 "encryption method mismatch, expected {:?} vs actual {:?}",
                 MetadataMethod::Aes256Gcm.as_slice(),
@@ -75,7 +76,8 @@ impl MemAesGcmBackend {
             .get_metadata()
             .get(MetadataKey::AesGcmTag.as_str())
             .ok_or_else(|| {
-                // Tag is missing. The metadata of the encrypted content is invalid or corrupted.
+                // Tag is missing. The metadata of the encrypted content is invalid or
+                // corrupted.
                 Error::Other(box_err!("gcm tag not found"))
             })?;
         let gcm_tag = AesGcmTag::from(tag.as_slice());

@@ -11,8 +11,8 @@ const ROWS: usize = 5000;
 
 /// 1 interested column, which is PK (which is in the key).
 ///
-/// This kind of scanner is used in SQLs like `SELECT * FROM .. WHERE index = X`, an index lookup
-/// will be performed so that PK is needed.
+/// This kind of scanner is used in SQLs like `SELECT * FROM .. WHERE index =
+/// X`, an index lookup will be performed so that PK is needed.
 fn bench_index_scan_primary_key<M>(b: &mut criterion::Bencher<'_, M>, input: &Input<M>)
 where
     M: Measurement + 'static,
@@ -27,10 +27,12 @@ where
     );
 }
 
-/// 1 interested column, which is the column of the index itself (which is in the key).
+/// 1 interested column, which is the column of the index itself (which is in
+/// the key).
 ///
-/// This kind of scanner is used in SQLs like `SELECT COUNT(*) FROM .. WHERE index = X` or
-/// `SELECT index FROM .. WHERE index = X`. There is no double read.
+/// This kind of scanner is used in SQLs like `SELECT COUNT(*) FROM .. WHERE
+/// index = X` or `SELECT index FROM .. WHERE index = X`. There is no double
+/// read.
 fn bench_index_scan_index<M>(b: &mut criterion::Bencher<'_, M>, input: &Input<M>)
 where
     M: Measurement + 'static,

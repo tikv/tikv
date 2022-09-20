@@ -17,7 +17,8 @@ fn test_batch_get_memory_lock() {
 
     fail::cfg("raftkv_async_snapshot_err", "return").unwrap();
     let resp = client.kv_batch_get(&req).unwrap();
-    // the injected error should be returned at both places for backward compatibility.
+    // the injected error should be returned at both places for backward
+    // compatibility.
     assert!(!resp.pairs[0].get_error().get_abort().is_empty());
     assert!(!resp.get_error().get_abort().is_empty());
     fail::remove("raftkv_async_snapshot_err");
@@ -34,7 +35,8 @@ fn test_kv_scan_memory_lock() {
 
     fail::cfg("raftkv_async_snapshot_err", "return").unwrap();
     let resp = client.kv_scan(&req).unwrap();
-    // the injected error should be returned at both places for backward compatibility.
+    // the injected error should be returned at both places for backward
+    // compatibility.
     assert!(!resp.pairs[0].get_error().get_abort().is_empty());
     assert!(!resp.get_error().get_abort().is_empty());
     fail::remove("raftkv_async_snapshot_err");
@@ -64,8 +66,8 @@ fn test_scan_lock_push_async_commit() {
         let k1 = b"k1";
         let v1 = b"v1";
 
-        // The following code simulates another case: prewrite is locking the memlock, and then
-        // another scan lock operation request meets the memlock.
+        // The following code simulates another case: prewrite is locking the memlock,
+        // and then another scan lock operation request meets the memlock.
 
         fail::cfg("before-set-lock-in-memory", "pause").unwrap();
         let client1 = client.clone();

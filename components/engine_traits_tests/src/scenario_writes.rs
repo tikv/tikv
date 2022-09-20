@@ -105,7 +105,7 @@ impl WriteScenarioEngine {
         }
     }
 
-    fn get_value(&self, key: &[u8]) -> Result<Option<<KvTestEngine as Peekable>::DBVector>> {
+    fn get_value(&self, key: &[u8]) -> Result<Option<<KvTestEngine as Peekable>::DbVector>> {
         use WriteScenario::*;
         match self.scenario {
             NoCf | DefaultCf | WriteBatchNoCf | WriteBatchDefaultCf => {
@@ -213,8 +213,7 @@ scenario_test! { put_get {
 
 scenario_test! { delete_none {
     let db = write_scenario_engine();
-    let res = db.delete(b"foo");
-    assert!(res.is_ok());
+    db.delete(b"foo").unwrap();
 }}
 
 scenario_test! { delete {

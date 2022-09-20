@@ -256,14 +256,14 @@ mod tests {
     fn test_resolve_store_state_up() {
         let store = new_store(STORE_ADDR, metapb::StoreState::Up);
         let runner = new_runner(store);
-        assert!(runner.get_address(0).is_ok());
+        runner.get_address(0).unwrap();
     }
 
     #[test]
     fn test_resolve_store_state_offline() {
         let store = new_store(STORE_ADDR, metapb::StoreState::Offline);
         let runner = new_runner(store);
-        assert!(runner.get_address(0).is_ok());
+        runner.get_address(0).unwrap();
     }
 
     #[test]

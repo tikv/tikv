@@ -50,7 +50,8 @@ pub enum PerfContextKind {
     RaftstoreStore,
     /// Commands in tikv::storage, the inner str is the command tag.
     Storage(&'static str),
-    /// Coprocessor requests in tikv::coprocessor, the inner str is the request type.
+    /// Coprocessor requests in tikv::coprocessor, the inner str is the request
+    /// type.
     Coprocessor(&'static str),
 }
 

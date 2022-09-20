@@ -1,18 +1,20 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! This `encoder` module is only used for test, so the implementation is very straightforward.
+//! This `encoder` module is only used for test, so the implementation is very
+//! straightforward.
 //!
 //! According to <https://github.com/pingcap/tidb/blob/master/docs/design/2018-07-19-row-format.md>
 //!
 //! The row format is:
-//!
+//! ```
 //! | version | flag | number_of_non_null_columns | number_of_null_columns | non_null_column_ids | null_column_ids | value_offsets | values |
 //! |---------| ---- | -------------------------- | ---------------------- | ------------------- | --------------- | ------------- | ------ |
-//!
+//! ```
 //! length about each field:
 //!
 //! * version: 1 byte
-//! * flag: 1 byte, when there's id greater than 255 or the total size of the values is greater than 65535 , value is 1, otherwise 0
+//! * flag: 1 byte, when there's id greater than 255 or the total size of the
+//!   values is greater than 65535 , value is 1, otherwise 0
 //! * number of non-null values: 2 bytes
 //! * number of null values: 2 bytes
 //! * non-null column ids: when flag == 1 (big), id is 4 bytes, otherwise 1 byte

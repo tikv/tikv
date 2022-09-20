@@ -58,8 +58,8 @@ impl ConcurrencyManager {
         }
     }
 
-    /// Acquires a mutex of the key and returns an RAII guard. When the guard goes
-    /// out of scope, the mutex will be unlocked.
+    /// Acquires a mutex of the key and returns an RAII guard. When the guard
+    /// goes out of scope, the mutex will be unlocked.
     ///
     /// The guard can be used to store Lock in the table. The stored lock
     /// is visible to `read_key_check` and `read_range_check`.
@@ -67,8 +67,8 @@ impl ConcurrencyManager {
         self.lock_table.lock_key(key).await
     }
 
-    /// Acquires mutexes of the keys and returns the RAII guards. The order of the
-    /// guards is the same with the given keys.
+    /// Acquires mutexes of the keys and returns the RAII guards. The order of
+    /// the guards is the same with the given keys.
     ///
     /// The guards can be used to store Lock in the table. The stored lock
     /// is visible to `read_key_check` and `read_range_check`.

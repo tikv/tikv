@@ -22,9 +22,9 @@ fn delete_old_data<E: RaftEngineDebug>(engine: &E, id: u64) {
         ..Default::default()
     };
     engine
-        .clean(id, 0 /*first_index*/, &state, &mut deleter)
+        .clean(id, 0 /* first_index */, &state, &mut deleter)
         .unwrap();
-    engine.consume(&mut deleter, true /*sync*/).unwrap();
+    engine.consume(&mut deleter, true /* sync */).unwrap();
 }
 
 /// Allow lost situation.
@@ -89,7 +89,7 @@ where
         delete_old_data(&cluster.get_raft_engine(*id), *id);
         cluster
             .get_raft_engine(*id)
-            .consume(&mut batch, true /*sync*/)
+            .consume(&mut batch, true /* sync */)
             .unwrap();
     }
     for id in &ids {
@@ -160,7 +160,8 @@ fn test_follower_commit_early_apply() {
     test_early_apply(DataLost::FollowerCommit)
 }
 
-/// Tests whether the cluster can recover from all nodes lost their commit index.
+/// Tests whether the cluster can recover from all nodes lost their commit
+/// index.
 #[test]
 fn test_all_node_crash() {
     test_early_apply(DataLost::AllLost)
@@ -202,7 +203,7 @@ fn test_update_internal_apply_index() {
         delete_old_data(&cluster.get_raft_engine(id), id);
         cluster
             .get_raft_engine(id)
-            .consume(&mut batch, true /*sync*/)
+            .consume(&mut batch, true /* sync */)
             .unwrap();
         cluster.run_node(id).unwrap();
     }

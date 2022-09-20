@@ -82,8 +82,8 @@ impl KmsProvider for AwsKms {
         ENCRYPTION_VENDOR_NAME_AWS_KMS
     }
 
-    // On decrypt failure, the rule is to return WrongMasterKey error in case it is possible that
-    // a wrong master key has been used, or other error otherwise.
+    // On decrypt failure, the rule is to return WrongMasterKey error in case it is
+    // possible that a wrong master key has been used, or other error otherwise.
     async fn decrypt_data_key(&self, data_key: &EncryptedKey) -> Result<Vec<u8>> {
         let decrypt_request = DecryptRequest {
             ciphertext_blob: bytes::Bytes::copy_from_slice(&*data_key),
@@ -125,8 +125,8 @@ impl KmsProvider for AwsKms {
     }
 }
 
-// Rusoto errors Display implementation just gives the cause message and discards the type.
-// This is really bad when the cause message is empty!
+// Rusoto errors Display implementation just gives the cause message and
+// discards the type. This is really bad when the cause message is empty!
 // Use Debug instead: this will show both
 pub struct FixRusotoErrorDisplay<E: std::fmt::Debug + std::error::Error + Send + Sync + 'static>(
     RusotoError<E>,

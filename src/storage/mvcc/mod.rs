@@ -631,9 +631,8 @@ pub mod tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = SnapshotReader::new(start_ts.into(), snapshot, true);
 
-        let ret = reader.get_txn_commit_record(&Key::from_raw(key));
-        assert!(ret.is_ok());
-        match ret.unwrap().info() {
+        let ret = reader.get_txn_commit_record(&Key::from_raw(key)).unwrap();
+        match ret.info() {
             None => {}
             Some((_, write_type)) => {
                 assert_eq!(write_type, WriteType::Rollback);

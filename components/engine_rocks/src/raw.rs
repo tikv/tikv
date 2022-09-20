@@ -7,14 +7,13 @@
 //! crate, but only until the engine interface is completely abstracted.
 
 pub use rocksdb::{
-    new_compaction_filter_raw, run_ldb_tool, run_sst_dump_tool, BlockBasedOptions, CFHandle, Cache,
-    ChecksumType, ColumnFamilyOptions, CompactOptions, CompactionFilter, CompactionFilterContext,
+    new_compaction_filter_raw, run_ldb_tool, run_sst_dump_tool, BlockBasedOptions, Cache,
+    ChecksumType, CompactOptions, CompactionFilter, CompactionFilterContext,
     CompactionFilterDecision, CompactionFilterFactory, CompactionFilterValueType,
     CompactionJobInfo, CompactionOptions, CompactionPriority, DBBottommostLevelCompaction,
-    DBCompactionFilter, DBCompactionStyle, DBCompressionType, DBEntryType, DBInfoLogLevel,
-    DBIterator, DBOptions, DBRateLimiterMode, DBRecoveryMode, DBStatisticsTickerType,
-    DBTitanDBBlobRunMode, Env, EventListener, IngestExternalFileOptions, LRUCacheOptions,
-    MemoryAllocator, PerfContext, PrepopulateBlockCache, Range, ReadOptions, SeekKey,
-    SliceTransform, TableFilter, TablePropertiesCollector, TablePropertiesCollectorFactory,
-    TitanBlobIndex, TitanDBOptions, Writable, WriteOptions, DB,
+    DBCompactionFilter, DBCompactionStyle, DBCompressionType, DBEntryType, DBRateLimiterMode,
+    DBRecoveryMode, DBStatisticsTickerType, DBTitanDBBlobRunMode, Env, EventListener,
+    IngestExternalFileOptions, LRUCacheOptions, MemoryAllocator, PerfContext,
+    PrepopulateBlockCache, Range, SliceTransform, TablePropertiesCollector,
+    TablePropertiesCollectorFactory,
 };

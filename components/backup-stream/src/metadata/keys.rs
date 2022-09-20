@@ -5,10 +5,12 @@ use kvproto::metapb::Region;
 const PREFIX: &str = "/tidb/br-stream";
 const PATH_INFO: &str = "/info";
 const PATH_NEXT_BACKUP_TS: &str = "/checkpoint";
+const PATH_STORAGE_CHECKPOINT: &str = "/storage-checkpoint";
 const PATH_RANGES: &str = "/ranges";
 const PATH_PAUSE: &str = "/pause";
 const PATH_LAST_ERROR: &str = "/last-error";
-// Note: maybe use something like `const_fmt` for concatenating constant strings?
+// Note: maybe use something like `const_fmt` for concatenating constant
+// strings?
 const TASKS_PREFIX: &str = "/tidb/br-stream/info/";
 
 /// A key that associates to some metadata.
@@ -23,6 +25,8 @@ const TASKS_PREFIX: &str = "/tidb/br-stream/info/";
 /// <PREFIX>/checkpoint/<task_name>/<store_id(u64,be)>/<region_id(u64,be)> -> <next_backup_ts(u64,be)>
 /// For the status of tasks:
 /// <PREFIX>/pause/<task_name> -> ""
+/// For the storage checkpoint ts of tasks:
+/// <PREFIX>/storage-checkpoint/<task_name>/<store_id(u64,be)> -> <ts(u64,be)>
 /// ```
 #[derive(Clone)]
 pub struct MetaKey(pub Vec<u8>);
@@ -57,7 +61,8 @@ impl KeyValue {
     }
 
     /// Take the start-key and end-key from a metadata key-value pair.
-    /// example: `KeyValue(<prefix>/ranges/<start-key>, <end-key>) -> (<start-key>, <end-key>)`
+    /// example: `KeyValue(<prefix>/ranges/<start-key>, <end-key>) ->
+    /// (<start-key>, <end-key>)`
     pub fn take_range(&mut self, task_name: &str) -> (Vec<u8>, Vec<u8>) {
         let prefix_len = MetaKey::ranges_prefix_len(task_name);
         (self.take_key()[prefix_len..].to_vec(), self.take_value())
@@ -129,6 +134,17 @@ impl MetaKey {
         )
     }
 
+    /// defines the key of storage checkpoint-ts of task in a store.
+    pub fn storage_checkpoint_of(name: &str, store_id: u64) -> Self {
+        Self(
+            format!(
+                "{}{}/{}/{}",
+                PREFIX, PATH_STORAGE_CHECKPOINT, name, store_id
+            )
+            .into_bytes(),
+        )
+    }
+
     pub fn pause_prefix_len() -> usize {
         Self::pause_prefix().0.len()
     }
@@ -146,7 +162,8 @@ impl MetaKey {
         Self(format!("{}{}/{}/{}", PREFIX, PATH_LAST_ERROR, name, store).into_bytes())
     }
 
-    /// return the key that keeps the range [self, self.next()) contains only `self`.
+    /// return the key that keeps the range [self, self.next()) contains only
+    /// `self`.
     pub fn next(&self) -> Self {
         let mut next = self.clone();
         next.0.push(0);

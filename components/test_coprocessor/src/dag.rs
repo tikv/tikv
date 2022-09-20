@@ -112,7 +112,8 @@ impl DAGSelect {
         col_expr.mut_val().encode_i64(col_offset).unwrap();
         let mut expr = Expr::default();
         let mut expr_ft = col.as_field_type();
-        // Avg will contains two auxiliary columns (sum, count) and the sum should be a `Decimal`
+        // Avg will contains two auxiliary columns (sum, count) and the sum should be a
+        // `Decimal`
         if aggr_t == ExprType::Avg || aggr_t == ExprType::Sum {
             expr_ft.set_tp(0xf6); // FieldTypeTp::NewDecimal
         }
@@ -276,15 +277,15 @@ impl DAGSelect {
     }
 }
 
-pub struct DAGChunkSpliter {
+pub struct DagChunkSpliter {
     chunks: Vec<Chunk>,
     datums: Vec<Datum>,
     col_cnt: usize,
 }
 
-impl DAGChunkSpliter {
-    pub fn new(chunks: Vec<Chunk>, col_cnt: usize) -> DAGChunkSpliter {
-        DAGChunkSpliter {
+impl DagChunkSpliter {
+    pub fn new(chunks: Vec<Chunk>, col_cnt: usize) -> DagChunkSpliter {
+        DagChunkSpliter {
             chunks,
             col_cnt,
             datums: Vec::with_capacity(0),
@@ -292,7 +293,7 @@ impl DAGChunkSpliter {
     }
 }
 
-impl Iterator for DAGChunkSpliter {
+impl Iterator for DagChunkSpliter {
     type Item = Vec<Datum>;
 
     fn next(&mut self) -> Option<Vec<Datum>> {

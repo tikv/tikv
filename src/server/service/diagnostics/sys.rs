@@ -37,7 +37,7 @@ impl NicSnapshot {
 
     fn into_pairs(self, prev: &NicSnapshot) -> Vec<ServerInfoPair> {
         macro_rules! pair {
-            ($label: literal, $value: expr, $old_value: expr) => {{
+            ($label:literal, $value:expr, $old_value:expr) => {{
                 let mut pair = ServerInfoPair::default();
                 pair.set_key($label.to_owned());
                 pair.set_value(format!("{:.2}", ($value - $old_value) as f64));

@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
     result,
     sync::{
-        atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering},
         Arc, RwLock as SyncRwLock,
     },
     time::Duration,
@@ -58,10 +58,55 @@ use crate::{
 
 const FLUSH_FAILURE_BECOME_FATAL_THRESHOLD: usize = 30;
 
-/// FLUSH_LOG_CONCURRENT_BATCH_COUNT specifies the concurrent count to write to storage.
-/// 'Log backup' will produce a large mount of small files during flush interval,
-/// and storage could take mistaken if writing all of these files to storage concurrently.
+/// FLUSH_LOG_CONCURRENT_BATCH_COUNT specifies the concurrent count to write to
+/// storage. 'Log backup' will produce a large mount of small files during flush
+/// interval, and storage could take mistaken if writing all of these files to
+/// storage concurrently.
 const FLUSH_LOG_CONCURRENT_BATCH_COUNT: usize = 128;
+
+#[derive(Clone, Debug)]
+pub enum TaskSelector {
+    ByName(String),
+    ByKey(Vec<u8>),
+    ByRange(Vec<u8>, Vec<u8>),
+    All,
+}
+
+impl TaskSelector {
+    pub fn reference(&self) -> TaskSelectorRef<'_> {
+        match self {
+            TaskSelector::ByName(s) => TaskSelectorRef::ByName(s),
+            TaskSelector::ByKey(k) => TaskSelectorRef::ByKey(&*k),
+            TaskSelector::ByRange(s, e) => TaskSelectorRef::ByRange(&*s, &*e),
+            TaskSelector::All => TaskSelectorRef::All,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum TaskSelectorRef<'a> {
+    ByName(&'a str),
+    ByKey(&'a [u8]),
+    ByRange(&'a [u8], &'a [u8]),
+    All,
+}
+
+impl<'a> TaskSelectorRef<'a> {
+    fn matches<'c, 'd>(
+        self,
+        task_name: &str,
+        mut task_range: impl Iterator<Item = (&'c [u8], &'d [u8])>,
+    ) -> bool {
+        match self {
+            TaskSelectorRef::ByName(name) => task_name == name,
+            TaskSelectorRef::ByKey(k) => task_range.any(|(s, e)| utils::is_in_range(k, (&*s, &*e))),
+            TaskSelectorRef::ByRange(x1, y1) => {
+                task_range.any(|(x2, y2)| utils::is_overlapping((x1, y1), (&*x2, &*y2)))
+            }
+            TaskSelectorRef::All => true,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct ApplyEvent {
@@ -80,10 +125,11 @@ pub struct ApplyEvents {
 }
 
 impl ApplyEvents {
-    /// Convert a [CmdBatch] to a vector of events. Ignoring admin / error commands.
-    /// At the same time, advancing status of the `Resolver` by those keys.
-    /// Note: the resolved ts cannot be advanced if there is no command,
-    ///       maybe we also need to update resolved_ts when flushing?
+    /// Convert a [CmdBatch] to a vector of events. Ignoring admin / error
+    /// commands. At the same time, advancing status of the `Resolver` by
+    /// those keys.
+    /// Note: the resolved ts cannot be advanced if there is no command, maybe
+    /// we also need to update resolved_ts when flushing?
     pub fn from_cmd_batch(cmd: CmdBatch, resolver: &mut TwoPhaseResolver) -> Self {
         let region_id = cmd.region_id;
         let mut result = vec![];
@@ -197,7 +243,8 @@ impl ApplyEvents {
                         <R as Borrow<T>>::borrow(&item).clone(),
                         ApplyEvents {
                             events: {
-                                // assuming the keys in the same region would probably be in one group.
+                                // assuming the keys in the same region would probably be in one
+                                // group.
                                 let mut v = Vec::with_capacity(event_len);
                                 v.push(event);
                                 v
@@ -292,7 +339,8 @@ pub struct RouterInner {
     /// The temporary directory for all tasks.
     prefix: PathBuf,
 
-    /// The handle to Endpoint, we should send `Flush` to endpoint if there are too many temporary files.
+    /// The handle to Endpoint, we should send `Flush` to endpoint if there are
+    /// too many temporary files.
     scheduler: Scheduler<Task>,
     /// The size limit of temporary file per task.
     temp_file_size_limit: u64,
@@ -327,8 +375,9 @@ impl RouterInner {
         }
     }
 
-    /// Find the task for a region. If `end_key` is empty, search from start_key to +inf.
-    /// It simply search for a random possible overlapping range and get its task.
+    /// Find the task for a region. If `end_key` is empty, search from start_key
+    /// to +inf. It simply search for a random possible overlapping range and
+    /// get its task.
     /// FIXME: If a region crosses many tasks, this can only find one of them.
     pub fn find_task_by_range(&self, start_key: &[u8], mut end_key: &[u8]) -> Option<String> {
         let r = self.ranges.rl();
@@ -340,11 +389,13 @@ impl RouterInner {
     }
 
     /// Register some ranges associated to some task.
-    /// Because the observer interface yields encoded data key, the key should be ENCODED DATA KEY too.    
-    /// (i.e. encoded by `Key::from_raw(key).into_encoded()`, [`utils::wrap_key`] could be a shortcut.).    
-    /// We keep ranges in memory to filter kv events not in these ranges.  
+    /// Because the observer interface yields encoded data key, the key should
+    /// be ENCODED DATA KEY too. (i.e. encoded by
+    /// `Key::from_raw(key).into_encoded()`, [`utils::wrap_key`] could be
+    /// a shortcut.). We keep ranges in memory to filter kv events not in
+    /// these ranges.
     fn register_ranges(&self, task_name: &str, ranges: Vec<(Vec<u8>, Vec<u8>)>) {
-        // TODO reigister ranges to filter kv event
+        // TODO register ranges to filter kv event
         // register ranges has two main purpose.
         // 1. filter kv event that no need to backup
         // 2. route kv event to the corresponding file.
@@ -376,7 +427,8 @@ impl RouterInner {
 
         // register task info
         let prefix_path = self.prefix.join(&task_name);
-        let stream_task = StreamTaskInfo::new(prefix_path, task, self.max_flush_interval).await?;
+        let stream_task =
+            StreamTaskInfo::new(prefix_path, task, self.max_flush_interval, ranges.clone()).await?;
         self.tasks
             .lock()
             .await
@@ -403,6 +455,21 @@ impl RouterInner {
     pub fn get_task_by_key(&self, key: &[u8]) -> Option<String> {
         let r = self.ranges.read().unwrap();
         r.get_value_by_point(key).cloned()
+    }
+
+    pub async fn select_task(&self, selector: TaskSelectorRef<'_>) -> Vec<String> {
+        let s = self.tasks.lock().await;
+        s.iter()
+            .filter(|(name, info)| {
+                selector.matches(
+                    name.as_str(),
+                    info.ranges
+                        .iter()
+                        .map(|(s, e)| (s.as_slice(), e.as_slice())),
+                )
+            })
+            .map(|(name, _)| name.to_owned())
+            .collect()
     }
 
     #[cfg(test)]
@@ -434,9 +501,9 @@ impl RouterInner {
         let task_info = self.get_task_info(&task).await?;
         task_info.on_events(events).await?;
 
-        // When this event make the size of temporary files exceeds the size limit, make a flush.
-        // Note that we only flush if the size is less than the limit before the event,
-        // or we may send multiplied flush requests.
+        // When this event make the size of temporary files exceeds the size limit, make
+        // a flush. Note that we only flush if the size is less than the limit before
+        // the event, or we may send multiplied flush requests.
         debug!(
             "backup stream statics size";
             "task" => ?task,
@@ -466,8 +533,8 @@ impl RouterInner {
         futures::future::join_all(tasks).await
     }
 
-    /// flush the specified task, once once success, return the min resolved ts of this flush.
-    /// returns `None` if failed.
+    /// flush the specified task, once once success, return the min resolved ts
+    /// of this flush. returns `None` if failed.
     pub async fn do_flush(
         &self,
         task_name: &str,
@@ -488,7 +555,10 @@ impl RouterInner {
                         // NOTE: Maybe we'd better record all errors and send them to the client?
                         try_send!(
                             self.scheduler,
-                            Task::FatalError(task_name.to_owned(), Box::new(e))
+                            Task::FatalError(
+                                TaskSelector::ByName(task_name.to_owned()),
+                                Box::new(e)
+                            )
                         );
                     }
                     return None;
@@ -501,10 +571,30 @@ impl RouterInner {
         }
     }
 
+    pub async fn update_global_checkpoint(
+        &self,
+        task_name: &str,
+        global_checkpoint: u64,
+        store_id: u64,
+    ) -> Result<bool> {
+        self.get_task_info(task_name)
+            .await?
+            .update_global_checkpoint(global_checkpoint, store_id)
+            .await
+    }
+
     /// tick aims to flush log/meta to extern storage periodically.
     pub async fn tick(&self) {
         for (name, task_info) in self.tasks.lock().await.iter() {
-            // if stream task need flush this time, schedule Task::Flush, or update time justly.
+            if let Err(e) = self
+                .scheduler
+                .schedule(Task::UpdateGlobalCheckpoint(name.to_string()))
+            {
+                error!("backup stream schedule task failed"; "error" => ?e);
+            }
+
+            // if stream task need flush this time, schedule Task::Flush, or update time
+            // justly.
             if task_info.should_flush() && task_info.set_flushing_status_cas(false, true).is_ok() {
                 info!(
                     "backup stream trigger flush task by tick";
@@ -536,14 +626,16 @@ pub enum FormatType {
 }
 
 impl TempFileKey {
-    /// Create the key for an event. The key can be used to find which temporary file the event should be stored.
+    /// Create the key for an event. The key can be used to find which temporary
+    /// file the event should be stored.
     fn of(kv: &ApplyEvent, region_id: u64) -> Self {
         let table_id = if kv.is_meta() {
             // Force table id of meta key be zero.
             0
         } else {
-            // When we cannot extract the table key, use 0 for the table key(perhaps we insert meta key here.).
-            // Can we elide the copy here(or at least, take a slice of key instead of decoding the whole key)?
+            // When we cannot extract the table key, use 0 for the table key(perhaps we
+            // insert meta key here.). Can we elide the copy here(or at least,
+            // take a slice of key instead of decoding the whole key)?
             Key::from_encoded_slice(&kv.key)
                 .into_raw()
                 .ok()
@@ -618,13 +710,17 @@ impl TempFileKey {
     }
 
     /// path_to_log_file specifies the path of record log.
-    /// eg. "v1/20220625/03/t00000071/434098800931373064-f0251bd5-1441-499a-8f53-adc0d1057a73.log"
-    fn path_to_log_file(&self, min_ts: u64, max_ts: u64) -> String {
+    /// ```text
+    /// v1/${date}/${hour}/${store_id}/t00000071/434098800931373064-f0251bd5-1441-499a-8f53-adc0d1057a73.log
+    /// ```
+    fn path_to_log_file(&self, store_id: u64, min_ts: u64, max_ts: u64) -> String {
         format!(
-            "v1/{}/{}/t{:08}/{:012}-{}.log",
-            // We may delete a range of files, so using the max_ts for preventing remove some records wrong.
+            "v1/{}/{}/{}/t{:08}/{:012}-{}.log",
+            // We may delete a range of files, so using the max_ts for preventing remove some
+            // records wrong.
             Self::format_date_time(max_ts, FormatType::Date),
             Self::format_date_time(max_ts, FormatType::Hour),
+            store_id,
             self.table_id,
             min_ts,
             uuid::Uuid::new_v4()
@@ -632,22 +728,25 @@ impl TempFileKey {
     }
 
     /// path_to_schema_file specifies the path of schema log.
-    /// eg. "v1/20220625/03/schema-meta/434055683656384515-cc3cb7a3-e03b-4434-ab6c-907656fddf67.log"
-    fn path_to_schema_file(min_ts: u64, max_ts: u64) -> String {
+    /// ```text
+    /// v1/${date}/${hour}/${store_id}/schema-meta/434055683656384515-cc3cb7a3-e03b-4434-ab6c-907656fddf67.log
+    /// ```
+    fn path_to_schema_file(store_id: u64, min_ts: u64, max_ts: u64) -> String {
         format!(
-            "v1/{}/{}/schema-meta/{:012}-{}.log",
+            "v1/{}/{}/{}/schema-meta/{:012}-{}.log",
             Self::format_date_time(max_ts, FormatType::Date),
             Self::format_date_time(max_ts, FormatType::Hour),
+            store_id,
             min_ts,
             uuid::Uuid::new_v4(),
         )
     }
 
-    fn file_name(&self, min_ts: TimeStamp, max_ts: TimeStamp) -> String {
+    fn file_name(&self, store_id: u64, min_ts: TimeStamp, max_ts: TimeStamp) -> String {
         if self.is_meta {
-            Self::path_to_schema_file(min_ts.into_inner(), max_ts.into_inner())
+            Self::path_to_schema_file(store_id, min_ts.into_inner(), max_ts.into_inner())
         } else {
-            self.path_to_log_file(min_ts.into_inner(), max_ts.into_inner())
+            self.path_to_log_file(store_id, min_ts.into_inner(), max_ts.into_inner())
         }
     }
 }
@@ -656,12 +755,15 @@ pub struct StreamTaskInfo {
     pub(crate) task: StreamTask,
     /// support external storage. eg local/s3.
     pub(crate) storage: Arc<dyn ExternalStorage>,
+    /// The listening range of the task.
+    ranges: Vec<(Vec<u8>, Vec<u8>)>,
     /// The parent directory of temporary files.
     temp_dir: PathBuf,
-    /// The temporary file index. Both meta (m prefixed keys) and data (t prefixed keys).
+    /// The temporary file index. Both meta (m prefixed keys) and data (t
+    /// prefixed keys).
     files: SlotMap<TempFileKey, DataFile>,
     /// flushing_files contains files pending flush.
-    flushing_files: RwLock<Vec<(TempFileKey, Slot<DataFile>)>>,
+    flushing_files: RwLock<Vec<(TempFileKey, Slot<DataFile>, DataFileInfo)>>,
     /// last_flush_ts represents last time this task flushed to storage.
     last_flush_time: AtomicPtr<Instant>,
     /// flush_interval represents the tick interval of flush, setting by users.
@@ -670,14 +772,17 @@ pub struct StreamTaskInfo {
     min_resolved_ts: TimeStamp,
     /// Total size of all temporary files in byte.
     total_size: AtomicUsize,
-    /// This should only be set to `true` by `compare_and_set(current=false, value=ture)`.
-    /// The thread who setting it to `true` takes the responsibility of sending the request to the
-    /// scheduler for flushing the files then.
+    /// This should only be set to `true` by `compare_and_set(current=false,
+    /// value=true)`. The thread who setting it to `true` takes the
+    /// responsibility of sending the request to the scheduler for flushing
+    /// the files then.
     ///
     /// If the request failed, that thread can set it to `false` back then.
     flushing: AtomicBool,
     /// This counts how many times this task has failed to flush.
     flush_fail_count: AtomicUsize,
+    /// global checkpoint ts for this task.
+    global_checkpoint_ts: AtomicU64,
 }
 
 impl Drop for StreamTaskInfo {
@@ -686,6 +791,7 @@ impl Drop for StreamTaskInfo {
             .flushing_files
             .get_mut()
             .drain(..)
+            .map(|(a, b, _)| (a, b))
             .chain(self.files.get_mut().drain())
             .map(|(_, f)| f.into_inner().local_path)
             .map(std::fs::remove_file)
@@ -712,16 +818,19 @@ impl StreamTaskInfo {
         temp_dir: PathBuf,
         task: StreamTask,
         flush_interval: Duration,
+        ranges: Vec<(Vec<u8>, Vec<u8>)>,
     ) -> Result<Self> {
         tokio::fs::create_dir_all(&temp_dir).await?;
         let storage = Arc::from(create_storage(
             task.info.get_storage(),
             BackendConfig::default(),
         )?);
+        let start_ts = task.info.get_start_ts();
         Ok(Self {
             task,
             storage,
             temp_dir,
+            ranges,
             min_resolved_ts: TimeStamp::max(),
             files: SlotMap::default(),
             flushing_files: RwLock::default(),
@@ -730,6 +839,7 @@ impl StreamTaskInfo {
             total_size: AtomicUsize::new(0),
             flushing: AtomicBool::new(false),
             flush_fail_count: AtomicUsize::new(0),
+            global_checkpoint_ts: AtomicU64::new(start_ts),
         })
     }
 
@@ -744,7 +854,8 @@ impl StreamTaskInfo {
         let mut w = self.files.write().await;
         // double check before insert. there may be someone already insert that
         // when we are waiting for the write lock.
-        // slience the lint advising us to use the `Entry` API which may introduce copying.
+        // silence the lint advising us to use the `Entry` API which may introduce
+        // copying.
         #[allow(clippy::map_entry)]
         if !w.contains_key(&key) {
             let path = self.temp_dir.join(key.temp_file_name());
@@ -788,7 +899,7 @@ impl StreamTaskInfo {
     pub async fn generate_metadata(&self, store_id: u64) -> Result<MetadataInfo> {
         let w = self.flushing_files.read().await;
         // Let's flush all files first...
-        futures::future::join_all(w.iter().map(|(_, f)| async move {
+        futures::future::join_all(w.iter().map(|(_, f, _)| async move {
             let file = &mut f.lock().await.inner;
             file.flush().await?;
             file.get_ref().sync_all().await?;
@@ -801,10 +912,8 @@ impl StreamTaskInfo {
 
         let mut metadata = MetadataInfo::with_capacity(w.len());
         metadata.set_store_id(store_id);
-        for (file_key, data_file) in w.iter() {
-            let mut data_file = data_file.lock().await;
-            let file_meta = data_file.generate_metadata(file_key)?;
-            metadata.push(file_meta)
+        for (_, _, file_meta) in w.iter() {
+            metadata.push(file_meta.to_owned())
         }
         Ok(metadata)
     }
@@ -827,8 +936,9 @@ impl StreamTaskInfo {
     }
 
     pub fn should_flush(&self) -> bool {
-        // When it doesn't flush since 0.8x of auto-flush interval, we get ready to start flushing.
-        // So that we will get a buffer for the cost of actual flushing.
+        // When it doesn't flush since 0.8x of auto-flush interval, we get ready to
+        // start flushing. So that we will get a buffer for the cost of actual
+        // flushing.
         self.get_last_flush_time().saturating_elapsed_secs()
             >= self.flush_interval.as_secs_f64() * 0.8
     }
@@ -838,22 +948,28 @@ impl StreamTaskInfo {
     }
 
     /// move need-flushing files to flushing_files.
-    pub async fn move_to_flushing_files(&self) -> &Self {
-        // if flushing_files is not empty, which represents this flush is a retry operation.
+    pub async fn move_to_flushing_files(&self, store_id: u64) -> Result<&Self> {
+        // if flushing_files is not empty, which represents this flush is a retry
+        // operation.
         if !self.flushing_files.read().await.is_empty() {
-            return self;
+            return Ok(self);
         }
 
         let mut w = self.files.write().await;
         let mut fw = self.flushing_files.write().await;
         for (k, v) in w.drain() {
-            fw.push((k, v));
+            // we should generate file metadata(calculate sha256) when moving file.
+            // because sha256 calculation is a unsafe move operation.
+            // we cannot re-calculate it in retry.
+            // TODO refactor move_to_flushing_files and generate_metadata
+            let file_meta = v.lock().await.generate_metadata(&k, store_id)?;
+            fw.push((k, v, file_meta));
         }
-        self
+        Ok(self)
     }
 
     pub async fn clear_flushing_files(&self) {
-        for (_, v) in self.flushing_files.write().await.drain(..) {
+        for (_, v, _) in self.flushing_files.write().await.drain(..) {
             let data_file = v.lock().await;
             debug!("removing data file"; "size" => %data_file.file_size, "name" => %data_file.local_path.display());
             self.total_size
@@ -876,8 +992,7 @@ impl StreamTaskInfo {
         let stat = reader.metadata().await?;
         let reader = UnpinReader(Box::new(limiter.limit(reader.compat())));
         let filepath = &data_file.storage_path;
-        // Once we cannot get the stat of the file, use 4K I/O.
-        let est_len = stat.len().max(4096);
+        let est_len = stat.len();
 
         let ret = storage.write(filepath, reader, est_len).await;
         match ret {
@@ -908,7 +1023,7 @@ impl StreamTaskInfo {
         for batch_files in files.chunks(FLUSH_LOG_CONCURRENT_BATCH_COUNT) {
             let futs = batch_files
                 .iter()
-                .map(|(_, v)| Self::flush_log_file_to(storage.clone(), v));
+                .map(|(_, v, _)| Self::flush_log_file_to(storage.clone(), v));
             futures::future::try_join_all(futs).await?;
         }
 
@@ -937,8 +1052,9 @@ impl StreamTaskInfo {
 
     /// execute the flush: copy local files to external storage.
     /// if success, return the last resolved ts of this flush.
-    /// The caller can try to advance the resolved ts and provide it to the function,
-    /// and we would use max(resolved_ts_provided, resolved_ts_from_file).
+    /// The caller can try to advance the resolved ts and provide it to the
+    /// function, and we would use `max(resolved_ts_provided,
+    /// resolved_ts_from_file)`.
     pub async fn do_flush(
         &self,
         store_id: u64,
@@ -954,8 +1070,8 @@ impl StreamTaskInfo {
 
             // generate meta data and prepare to flush to storage
             let mut metadata_info = self
-                .move_to_flushing_files()
-                .await
+                .move_to_flushing_files(store_id)
+                .await?
                 .generate_metadata(store_id)
                 .await?;
             metadata_info.min_resolved_ts = metadata_info
@@ -1004,6 +1120,43 @@ impl StreamTaskInfo {
         }
 
         result
+    }
+
+    pub async fn flush_global_checkpoint(&self, store_id: u64) -> Result<()> {
+        let filename = format!("v1/global_checkpoint/{}.ts", store_id);
+        let buff = self
+            .global_checkpoint_ts
+            .load(Ordering::SeqCst)
+            .to_le_bytes();
+        self.storage
+            .write(
+                &filename,
+                UnpinReader(Box::new(Cursor::new(buff))),
+                buff.len() as _,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn update_global_checkpoint(
+        &self,
+        global_checkpoint: u64,
+        store_id: u64,
+    ) -> Result<bool> {
+        let last_global_checkpoint = self.global_checkpoint_ts.load(Ordering::SeqCst);
+        if last_global_checkpoint < global_checkpoint {
+            let r = self.global_checkpoint_ts.compare_exchange(
+                last_global_checkpoint,
+                global_checkpoint,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            );
+            if r.is_ok() {
+                self.flush_global_checkpoint(store_id).await?;
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }
 
@@ -1181,8 +1334,8 @@ impl DataFile {
     }
 
     /// generate the metadata in protocol buffer of the file.
-    fn generate_metadata(&mut self, file_key: &TempFileKey) -> Result<DataFileInfo> {
-        self.set_storage_path(file_key.file_name(self.min_ts, self.max_ts));
+    fn generate_metadata(&mut self, file_key: &TempFileKey, store_id: u64) -> Result<DataFileInfo> {
+        self.set_storage_path(file_key.file_name(store_id, self.min_ts, self.max_ts));
 
         let mut meta = DataFileInfo::new();
         meta.set_sha256(
@@ -1237,13 +1390,17 @@ struct TaskRange {
 
 #[cfg(test)]
 mod tests {
-    use std::{ffi::OsStr, time::Duration};
+    use std::{ffi::OsStr, marker::Unpin, time::Duration};
 
+    use external_storage::NoopStorage;
+    use futures::AsyncReadExt;
+    use futures_io::AsyncRead;
     use kvproto::brpb::{Local, Noop, StorageBackend, StreamBackupTaskInfo};
     use tikv_util::{
         codec::number::NumberEncoder,
         worker::{dummy_scheduler, ReceiverWrapper},
     };
+    use tokio::{fs::File, sync::Mutex};
     use txn_types::{Write, WriteType};
 
     use super::*;
@@ -1416,7 +1573,7 @@ mod tests {
     fn check_on_events_result(item: &Vec<(String, Result<()>)>) {
         for (task, r) in item {
             if let Err(err) = r {
-                panic!("task {} failed: {}", task, err);
+                warn!("task {} failed: {}", task, err);
             }
         }
     }
@@ -1452,8 +1609,8 @@ mod tests {
         let end_ts = TimeStamp::physical_now();
         let files = router.tasks.lock().await.get("dummy").unwrap().clone();
         let meta = files
-            .move_to_flushing_files()
-            .await
+            .move_to_flushing_files(1)
+            .await?
             .generate_metadata(1)
             .await?;
         assert_eq!(meta.files.len(), 3, "test file len = {}", meta.files.len());
@@ -1468,6 +1625,25 @@ mod tests {
             start_ts,
             end_ts
         );
+
+        // in some case when flush failed to write files to storage.
+        // we may run `generate_metadata` again with same files.
+        let another_meta = files
+            .move_to_flushing_files(1)
+            .await?
+            .generate_metadata(1)
+            .await?;
+
+        assert_eq!(meta.files.len(), another_meta.files.len());
+        for i in 0..meta.files.len() {
+            let file1 = meta.files.get(i).unwrap();
+            let file2 = another_meta.files.get(i).unwrap();
+            // we have to make sure two times sha256 of file must be the same.
+            assert_eq!(file1.sha256, file2.sha256);
+            assert_eq!(file1.start_key, file2.start_key);
+            assert_eq!(file1.end_key, file2.end_key);
+        }
+
         files.flush_log().await?;
         files.flush_meta(meta).await?;
         files.clear_flushing_files().await;
@@ -1477,7 +1653,7 @@ mod tests {
         assert_eq!(cmds.len(), 1, "test cmds len = {}", cmds.len());
         match &cmds[0] {
             Task::Flush(task) => assert_eq!(task, "dummy", "task = {}", task),
-            _ => panic!("the cmd isn't flush!"),
+            _ => warn!("the cmd isn't flush!"),
         }
 
         let mut meta_count = 0;
@@ -1525,6 +1701,7 @@ mod tests {
             tmp_dir.path().to_path_buf(),
             stream_task,
             Duration::from_secs(300),
+            vec![(vec![], vec![])],
         )
         .await
         .unwrap();
@@ -1711,8 +1888,8 @@ mod tests {
         router
             .get_task_info("cleanup_test")
             .await?
-            .move_to_flushing_files()
-            .await;
+            .move_to_flushing_files(1)
+            .await?;
         write_simple_data(&router).await;
         let mut w = walkdir::WalkDir::new(&tmp).into_iter();
         assert!(w.next().is_some(), "the temp files doesn't created");
@@ -1766,7 +1943,7 @@ mod tests {
         assert!(
             messages.iter().any(|task| {
                 if let Task::FatalError(name, _err) = task {
-                    return name == "flush_failure";
+                    return matches!(name.reference(), TaskSelectorRef::ByName("flush_failure"));
                 }
                 false
             }),
@@ -1794,5 +1971,180 @@ mod tests {
 
         let begin_ts = DataFile::decode_begin_ts(value).unwrap();
         assert_eq!(begin_ts, start_ts);
+    }
+
+    #[test]
+    fn test_selector() {
+        type DummyTask<'a> = (&'a str, &'a [(&'a [u8], &'a [u8])]);
+
+        #[derive(Debug, Clone, Copy)]
+        struct Case<'a /* 'static */> {
+            tasks: &'a [DummyTask<'a>],
+            selector: TaskSelectorRef<'a>,
+            selected: &'a [&'a str],
+        }
+
+        let cases = [
+            Case {
+                tasks: &[("Zhao", &[(b"", b"")]), ("Qian", &[(b"", b"")])],
+                selector: TaskSelectorRef::ByName("Zhao"),
+                selected: &["Zhao"],
+            },
+            Case {
+                tasks: &[
+                    ("Zhao", &[(b"0001", b"1000"), (b"2000", b"")]),
+                    ("Qian", &[(b"0002", b"1000")]),
+                ],
+                selector: TaskSelectorRef::ByKey(b"0001"),
+                selected: &["Zhao"],
+            },
+            Case {
+                tasks: &[
+                    ("Zhao", &[(b"0001", b"1000"), (b"2000", b"")]),
+                    ("Qian", &[(b"0002", b"1000")]),
+                    ("Sun", &[(b"0004", b"1024")]),
+                    ("Li", &[(b"1001", b"2048")]),
+                ],
+                selector: TaskSelectorRef::ByRange(b"1001", b"2000"),
+                selected: &["Sun", "Li"],
+            },
+            Case {
+                tasks: &[
+                    ("Zhao", &[(b"0001", b"1000"), (b"2000", b"")]),
+                    ("Qian", &[(b"0002", b"1000")]),
+                    ("Sun", &[(b"0004", b"1024")]),
+                    ("Li", &[(b"1001", b"2048")]),
+                ],
+                selector: TaskSelectorRef::All,
+                selected: &["Zhao", "Qian", "Sun", "Li"],
+            },
+        ];
+
+        fn run(c: Case<'static>) {
+            assert!(
+                c.tasks
+                    .iter()
+                    .filter(|(name, range)| c.selector.matches(name, range.iter().copied()))
+                    .map(|(name, _)| name)
+                    .collect::<Vec<_>>()
+                    == c.selected.iter().collect::<Vec<_>>(),
+                "case = {:?}",
+                c
+            )
+        }
+
+        for case in cases {
+            run(case)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_update_global_checkpoint() -> Result<()> {
+        // create local storage
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let backend = external_storage_export::make_local_backend(tmp_dir.path());
+
+        // build a StreamTaskInfo
+        let mut task_info = StreamBackupTaskInfo::default();
+        task_info.set_storage(backend);
+        let stream_task = StreamTask {
+            info: task_info,
+            is_paused: false,
+        };
+        let task = StreamTaskInfo::new(
+            tmp_dir.path().to_path_buf(),
+            stream_task,
+            Duration::from_secs(300),
+            vec![(vec![], vec![])],
+        )
+        .await
+        .unwrap();
+        task.global_checkpoint_ts.store(10001, Ordering::SeqCst);
+
+        // test no need to update global checkpoint
+        let store_id = 3;
+        let mut global_checkpoint = 10000;
+        let is_updated = task
+            .update_global_checkpoint(global_checkpoint, store_id)
+            .await?;
+        assert_eq!(is_updated, false);
+        assert_eq!(task.global_checkpoint_ts.load(Ordering::SeqCst), 10001);
+
+        // test update global checkpoint
+        global_checkpoint = 10002;
+        let is_updated = task
+            .update_global_checkpoint(global_checkpoint, store_id)
+            .await?;
+        assert_eq!(is_updated, true);
+        assert_eq!(
+            task.global_checkpoint_ts.load(Ordering::SeqCst),
+            global_checkpoint
+        );
+
+        let filename = format!("v1/global_checkpoint/{}.ts", store_id);
+        let filepath = tmp_dir.as_ref().join(filename);
+        let exist = file_system::file_exists(filepath.clone());
+        assert_eq!(exist, true);
+
+        let buff = file_system::read(filepath).unwrap();
+        assert_eq!(buff.len(), 8);
+        let mut ts = [b'0'; 8];
+        ts.copy_from_slice(&buff);
+        let ts = u64::from_le_bytes(ts);
+        assert_eq!(ts, global_checkpoint);
+        Ok(())
+    }
+
+    struct MockCheckContentStorage {
+        s: NoopStorage,
+    }
+
+    #[async_trait::async_trait]
+    impl ExternalStorage for MockCheckContentStorage {
+        fn name(&self) -> &'static str {
+            self.s.name()
+        }
+
+        fn url(&self) -> io::Result<url::Url> {
+            self.s.url()
+        }
+
+        async fn write(
+            &self,
+            _name: &str,
+            mut reader: UnpinReader,
+            content_length: u64,
+        ) -> io::Result<()> {
+            let mut data = Vec::new();
+            reader.0.read_to_end(&mut data).await?;
+            let data_len: u64 = data.len() as _;
+
+            if data_len == content_length {
+                Ok(())
+            } else {
+                Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "the length of content in reader is not equal with content_length",
+                ))
+            }
+        }
+
+        fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
+            self.s.read(name)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_est_len_in_flush() -> Result<()> {
+        let noop_s = NoopStorage::default();
+        let ms = MockCheckContentStorage { s: noop_s };
+        let file_path = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
+        let mut f = File::create(file_path.clone()).await?;
+        f.write_all("test-data".as_bytes()).await?;
+
+        let data_file = DataFile::new(file_path).await.unwrap();
+        let result = StreamTaskInfo::flush_log_file_to(Arc::new(ms), &Mutex::new(data_file)).await;
+        assert_eq!(result.is_ok(), true);
+        Ok(())
     }
 }

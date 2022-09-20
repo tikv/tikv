@@ -71,7 +71,8 @@ impl Default for RawRecords {
 }
 
 impl RawRecords {
-    /// Keep a maximum of `k` self.records and aggregate the others into returned [RawRecord].
+    /// Keep a maximum of `k` self.records and aggregate the others into
+    /// returned [RawRecord].
     pub fn keep_top_k(&mut self, k: usize) -> RawRecord {
         let mut others = RawRecord::default();
         if self.records.len() <= k {

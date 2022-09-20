@@ -349,7 +349,7 @@ fn test_ttl_iterator_impl<F: KvFormat>() {
     let snapshot = engine.snapshot(SnapContext::default()).unwrap();
     let ttl_snapshot = RawEncodeSnapshot::<_, F>::from_snapshot(snapshot);
     let mut iter = ttl_snapshot
-        .iter(IterOptions::new(None, None, false))
+        .iter(CF_DEFAULT, IterOptions::new(None, None, false))
         .unwrap();
     iter.seek_to_first().unwrap();
     assert_eq!(iter.key(), b"r\0key1");

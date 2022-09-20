@@ -242,9 +242,9 @@ where
 
     /// # Notes
     ///
-    /// For MAX(), MySQL currently compares ENUM and SET columns by their string value rather
-    /// than by the string's relative position in the set. This differs from how ORDER BY
-    /// compares them.
+    /// For MAX(), MySQL currently compares ENUM and SET columns by their string
+    /// value rather than by the string's relative position in the set. This
+    /// differs from how ORDER BY compares them.
     ///
     /// ref: https://dev.mysql.com/doc/refman/5.7/en/aggregate-functions.html#function_max
     #[inline]
@@ -331,9 +331,9 @@ where
 
     /// # Notes
     ///
-    /// For MAX(), MySQL currently compares ENUM and SET columns by their string value rather
-    /// than by the string's relative position in the set. This differs from how ORDER BY
-    /// compares them.
+    /// For MAX(), MySQL currently compares ENUM and SET columns by their string
+    /// value rather than by the string's relative position in the set. This
+    /// differs from how ORDER BY compares them.
     ///
     /// ref: https://dev.mysql.com/doc/refman/5.7/en/aggregate-functions.html#function_max
     #[inline]

@@ -20,8 +20,8 @@ pub struct DiskStat {
 pub trait ThreadInspector {
     type DiskID;
 
-    /// Disk read and write bytes from the backend storage layer. `None` means it's not available
-    /// for the platform.
+    /// Disk read and write bytes from the backend storage layer. `None` means
+    /// it's not available for the platform.
     fn io_stat(&self) -> Result<Option<IoStat>, String> {
         Ok(None)
     }

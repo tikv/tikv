@@ -66,7 +66,8 @@ fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> 
     Ok(Some(base.as_ref().modify(&path_expr_list, values, mt)?))
 }
 
-/// validate the arguments are `(Option<JsonRef>, &[(Option<Bytes>, Option<Json>)])`
+/// validate the arguments are `(Option<JsonRef>, &[(Option<Bytes>,
+/// Option<Json>)])`
 fn json_modify_validator(expr: &tipb::Expr) -> Result<()> {
     let children = expr.get_children();
     assert!(children.len() >= 2);

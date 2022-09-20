@@ -10,7 +10,8 @@ use tikv::storage::{
 /// `MemStore` is a store provider that operates directly over a BTreeMap.
 pub type MemStore = FixtureStore;
 
-/// `RocksStore` is a store provider that operates over a disk-based RocksDB storage.
+/// `RocksStore` is a store provider that operates over a disk-based RocksDB
+/// storage.
 pub type RocksStore = SnapshotStore<Arc<RocksSnapshot>>;
 
 pub trait StoreDescriber {

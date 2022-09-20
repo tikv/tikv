@@ -21,7 +21,8 @@ pub type Callback = Box<dyn Fn(DeadlockResponse) + Send>;
 const CQ_COUNT: usize = 1;
 const CLIENT_PREFIX: &str = "deadlock";
 
-/// Builds the `Environment` of deadlock clients. All clients should use the same instance.
+/// Builds the `Environment` of deadlock clients. All clients should use the
+/// same instance.
 pub fn env() -> Arc<Environment> {
     Arc::new(
         EnvBuilder::new()

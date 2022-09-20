@@ -305,8 +305,9 @@ fn test_unsafe_recovery_already_in_joint_state() {
     assert!(promoted);
 }
 
-// Tests whether unsafe recovery behaves correctly when the failed region is already in the
-// middle of a joint state, once exit, it recovers itself without any further demotions.
+// Tests whether unsafe recovery behaves correctly when the failed region is
+// already in the middle of a joint state, once exit, it recovers itself without
+// any further demotions.
 #[test]
 fn test_unsafe_recovery_early_return_after_exit_joint_state() {
     let mut cluster = new_server_cluster(0, 3);
@@ -789,16 +790,19 @@ fn test_force_leader_trigger_snapshot() {
         find_peer(&region, 3).unwrap().clone(),
     );
     let req = new_admin_request(region.get_id(), region.get_region_epoch(), cmd);
-    // Though it has a force leader now, but the command can't committed because the log is not replicated to all the alive peers.
+    // Though it has a force leader now, but the command can't committed because the
+    // log is not replicated to all the alive peers.
     assert!(
         cluster
             .call_command_on_leader(req, Duration::from_millis(1000))
             .unwrap()
             .get_header()
-            .has_error() // error "there is a pending conf change" indicating no committed log after being the leader
+            .has_error() /* error "there is a pending conf change" indicating no committed log
+                          * after being the leader */
     );
 
-    // Permit snapshot message, snapshot should be applied and advance commit index now.
+    // Permit snapshot message, snapshot should be applied and advance commit index
+    // now.
     cluster.sim.wl().clear_recv_filters(2);
     cluster
         .pd_client
@@ -863,7 +867,8 @@ fn test_force_leader_with_uncommitted_conf_change() {
             * 2,
     ));
     cluster.must_enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
-    // the uncommitted conf-change is committed successfully after being force leader
+    // the uncommitted conf-change is committed successfully after being force
+    // leader
     cluster
         .pd_client
         .must_none_peer(region.get_id(), find_peer(&region, 2).unwrap().clone());
@@ -885,12 +890,13 @@ fn test_force_leader_with_uncommitted_conf_change() {
     assert_eq!(cluster.must_get(b"k4"), Some(b"v4".to_vec()));
 }
 
-// Test the case that none of five nodes fails and force leader on one of the nodes.
-// Note: It still can't defend extreme misuse cases. For example, a group of a,
-// b and c. c is isolated from a, a is the leader. If c has increased its term
-// by 2 somehow (for example false prevote success twice) and force leader is
-// sent to b and break lease constrain, then b will reject a's heartbeat while
-// can vote for c. So c becomes leader and there are two leaders in the group.
+// Test the case that none of five nodes fails and force leader on one of the
+// nodes. Note: It still can't defend extreme misuse cases. For example, a group
+// of a, b and c. c is isolated from a, a is the leader. If c has increased its
+// term by 2 somehow (for example false prevote success twice) and force leader
+// is sent to b and break lease constrain, then b will reject a's heartbeat
+// while can vote for c. So c becomes leader and there are two leaders in the
+// group.
 #[test]
 fn test_force_leader_on_healthy_region() {
     let mut cluster = new_node_cluster(0, 5);
@@ -920,7 +926,8 @@ fn test_force_leader_on_healthy_region() {
     assert_eq!(cluster.must_get(b"k1"), Some(b"v1".to_vec()));
     cluster.must_put(b"k2", b"v2");
 
-    // try to exit force leader, it will be ignored silently as it's not in the force leader state
+    // try to exit force leader, it will be ignored silently as it's not in the
+    // force leader state
     cluster.exit_force_leader(region.get_id(), 1);
 
     cluster.must_put(b"k4", b"v4");
@@ -1147,15 +1154,17 @@ fn test_force_leader_multiple_election_rounds() {
 }
 
 // Tests whether unsafe recovery report sets has_commit_merge correctly.
-// This field is used by PD to issue force leader command in order, so that the recovery process
-// does not break the merge accidentally, when:
-//   *   The source region and the target region lost their quorum.
-//   *   The living peer(s) of the source region does not have prepare merge message replicated.
-//   *   The living peer(s) of the target region has commit merge messages replicated but
-//       uncommitted.
-// If the living peer(s) of the source region in the above example enters force leader state before
-// the peer(s) of the target region, thus proposes a no-op entry (while becoming the leader) which
-// is conflict with part of the catch up logs, there will be data loss.
+// This field is used by PD to issue force leader command in order, so that the
+// recovery process does not break the merge accidentally, when:
+//   * The source region and the target region lost their quorum.
+//   * The living peer(s) of the source region does not have prepare merge
+//     message replicated.
+//   * The living peer(s) of the target region has commit merge messages
+//     replicated but uncommitted.
+// If the living peer(s) of the source region in the above example enters force
+// leader state before the peer(s) of the target region, thus proposes a no-op
+// entry (while becoming the leader) which is conflict with part of the catch up
+// logs, there will be data loss.
 #[test]
 fn test_unsafe_recovery_has_commit_merge() {
     let mut cluster = new_node_cluster(0, 3);
@@ -1178,8 +1187,8 @@ fn test_unsafe_recovery_has_commit_merge() {
     let right_on_store1 = find_peer(&right, 1).unwrap();
     cluster.must_transfer_leader(right.get_id(), right_on_store1.clone());
 
-    // Block the target region from receiving MsgAppendResponse, so that the commit merge message
-    // will only be replicated but not committed.
+    // Block the target region from receiving MsgAppendResponse, so that the commit
+    // merge message will only be replicated but not committed.
     let recv_filter = Box::new(
         RegionPacketFilter::new(right.get_id(), 1)
             .direction(Direction::Recv)
@@ -1236,15 +1245,15 @@ fn test_unsafe_recovery_during_merge() {
     let right_on_store1 = find_peer(&right, 1).unwrap();
     cluster.must_transfer_leader(right.get_id(), right_on_store1.clone());
 
-    // Blocks the replication of prepare merge message, so that the commit merge back fills it
-    // in CatchUpLogs.
+    // Blocks the replication of prepare merge message, so that the commit merge
+    // back fills it in CatchUpLogs.
     let append_filter = Box::new(
         RegionPacketFilter::new(left.get_id(), 2)
             .direction(Direction::Recv)
             .msg_type(MessageType::MsgAppend),
     );
-    // Blocks the target region from receiving MsgAppendResponse, so that the commit merge message
-    // will only be replicated but not committed.
+    // Blocks the target region from receiving MsgAppendResponse, so that the commit
+    // merge message will only be replicated but not committed.
     let commit_filter = Box::new(
         RegionPacketFilter::new(right.get_id(), 1)
             .direction(Direction::Recv)

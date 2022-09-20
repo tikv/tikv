@@ -98,8 +98,9 @@ fn test_raft_storage_get_after_lease() {
 #[test]
 fn test_raft_storage_rollback_before_prewrite() {
     let (_cluster, storage, ctx) = new_raft_storage();
-    let ret = storage.rollback(ctx.clone(), vec![Key::from_raw(b"key")], 10);
-    assert!(ret.is_ok());
+    storage
+        .rollback(ctx.clone(), vec![Key::from_raw(b"key")], 10)
+        .unwrap();
     let ret = storage.prewrite(
         ctx,
         vec![Mutation::make_put(Key::from_raw(b"key"), b"value".to_vec())],

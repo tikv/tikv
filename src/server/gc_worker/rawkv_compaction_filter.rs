@@ -98,8 +98,8 @@ thread_local! {
 }
 
 impl Drop for RawCompactionFilter {
-    // NOTE: it's required that `CompactionFilter` is dropped before the compaction result
-    // becomes installed into the DB instance.
+    // NOTE: it's required that `CompactionFilter` is dropped before the compaction
+    // result becomes installed into the DB instance.
     fn drop(&mut self) {
         self.raw_gc_mvcc_deletions();
 
@@ -181,7 +181,8 @@ impl RawCompactionFilter {
             return Ok(CompactionFilterDecision::Keep);
         }
 
-        // If the key mode is not KeyMode::Raw or value_type is not CompactionFilterValueType::Value, it's needed to be retained.
+        // If the key mode is not KeyMode::Raw or value_type is not
+        // CompactionFilterValueType::Value, it's needed to be retained.
         let key_mode = ApiV2::parse_key_mode(keys::origin_key(key));
         if key_mode != KeyMode::Raw || value_type != CompactionFilterValueType::Value {
             return Ok(CompactionFilterDecision::Keep);
@@ -199,15 +200,19 @@ impl RawCompactionFilter {
 
             self.versions += 1;
             let raw_value = ApiV2::decode_raw_value(value)?;
-            // If it's the latest version, and it's deleted or expired, it needs to be sent to GCWorker to be processed asynchronously.
+            // If it's the latest version, and it's deleted or expired, it needs to be sent
+            // to GcWorker to be processed asynchronously.
             if !raw_value.is_valid(self.current_ts) {
                 self.raw_handle_delete();
                 if self.mvcc_deletions.len() >= DEFAULT_DELETE_BATCH_COUNT {
                     self.raw_gc_mvcc_deletions();
                 }
             }
-            // 1. If it's the latest version, and it's neither deleted nor expired, it's needed to be retained.
-            // 2. If it's the latest version, and it's deleted or expired, while we do async gctask to deleted or expired records, both put records and deleted/expired records are actually kept within the compaction filter.
+            // 1. If it's the latest version, and it's neither deleted nor expired, it's
+            // needed to be retained. 2. If it's the latest version, and it's
+            // deleted or expired, while we do async gctask to deleted or expired records,
+            // both put records and deleted/expired records are actually kept within the
+            // compaction filter.
             Ok(CompactionFilterDecision::Keep)
         } else {
             if commit_ts.into_inner() >= self.safe_point {
@@ -216,7 +221,8 @@ impl RawCompactionFilter {
 
             self.versions += 1;
             self.filtered += 1;
-            // If it's ts < safepoint, and it's not the latest version, it's need to be removed.
+            // If it's ts < safepoint, and it's not the latest version, it's need to be
+            // removed.
             Ok(CompactionFilterDecision::Remove)
         }
     }
@@ -234,8 +240,8 @@ impl RawCompactionFilter {
         }
     }
 
-    // `log_on_error` indicates whether to print an error log on scheduling failures.
-    // It's only enabled for `GcTask::OrphanVersions`.
+    // `log_on_error` indicates whether to print an error log on scheduling
+    // failures. It's only enabled for `GcTask::OrphanVersions`.
     fn schedule_gc_task(&self, task: GcTask<RocksEngine>, log_on_error: bool) {
         match self.gc_scheduler.schedule(task) {
             Ok(_) => {}
@@ -308,7 +314,7 @@ pub mod tests {
 
     use super::*;
     use crate::{
-        config::DbConfig, server::gc_worker::TestGCRunner, storage::kv::TestEngineBuilder,
+        config::DbConfig, server::gc_worker::TestGcRunner, storage::kv::TestEngineBuilder,
     };
 
     pub fn make_key(key: &[u8], ts: u64) -> Vec<u8> {
@@ -328,7 +334,7 @@ pub mod tests {
             .build_with_cfg(&cfg)
             .unwrap();
         let raw_engine = engine.get_rocksdb();
-        let mut gc_runner = TestGCRunner::new(0);
+        let mut gc_runner = TestGcRunner::new(0);
 
         let user_key = b"r\0aaaaaaaaaaa";
 
@@ -363,7 +369,8 @@ pub mod tests {
 
         gc_runner.safe_point(80).gc_raw(&raw_engine);
 
-        // If ts(70) < safepoint(80), and this userkey's latest verion is not deleted or expired, this version will be removed in do_filter.
+        // If ts(70) < safepoint(80), and this userkey's latest version is not deleted
+        // or expired, this version will be removed in do_filter.
         let entry70 = raw_engine
             .get_value_cf(CF_DEFAULT, make_key(b"r\0a", 70).as_slice())
             .unwrap();
@@ -392,7 +399,7 @@ pub mod tests {
             .build()
             .unwrap();
         let raw_engine = engine.get_rocksdb();
-        let mut gc_runner = TestGCRunner::new(0);
+        let mut gc_runner = TestGcRunner::new(0);
 
         let mut gc_and_check = |expect_tasks: bool, prefix: &[u8]| {
             gc_runner.safe_point(500).gc_raw(&raw_engine);
