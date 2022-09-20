@@ -14,7 +14,7 @@
 
 use std::{
     cell::UnsafeCell,
-    fmt,
+    fmt::{self, Debug, Formatter},
     future::Future,
     mem,
     pin::Pin,
@@ -280,6 +280,12 @@ impl CmdResSubscriber {
 }
 
 pub type CmdResChannel = BaseChannel<RaftCmdResponse>;
+
+impl Debug for CmdResChannel {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "CmdResChannel")
+    }
+}
 
 impl CmdResChannel {
     // Valid range is [1, 30]

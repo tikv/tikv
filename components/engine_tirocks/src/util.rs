@@ -5,7 +5,7 @@ use std::{ffi::CStr, path::Path, sync::Arc};
 use engine_traits::{Result, CF_DEFAULT};
 use slog_global::warn;
 use tirocks::{
-    db::{MultiCfBuilder, MultiCfTitanBuilder},
+    db::{MultiCfBuilder, MultiCfTitanBuilder, RawCfHandle},
     env::Env,
     option::RawCfOptions,
     perf_context::PerfLevel,
@@ -44,7 +44,7 @@ fn adjust_dynamic_level_bytes(
 }
 
 fn new_sanitized(
-    path: impl AsRef<Path>,
+    path: &Path,
     db_opt: RocksDbOptions,
     cf_opts: Vec<(&str, RocksCfOptions)>,
 ) -> Result<Db> {
@@ -63,7 +63,7 @@ fn new_sanitized(
     }
 }
 
-pub fn new_engine(path: &str, cfs: &[&str]) -> Result<RocksEngine> {
+pub fn new_engine(path: &Path, cfs: &[&str]) -> Result<RocksEngine> {
     let mut db_opts = RocksDbOptions::default();
     db_opts.set_statistics(&Statistics::default());
     let cf_opts = cfs.iter().map(|name| (*name, Default::default())).collect();
@@ -71,7 +71,7 @@ pub fn new_engine(path: &str, cfs: &[&str]) -> Result<RocksEngine> {
 }
 
 pub fn new_engine_opt(
-    path: &str,
+    path: &Path,
     mut db_opt: RocksDbOptions,
     cf_opts: Vec<(&str, RocksCfOptions)>,
 ) -> Result<RocksEngine> {
@@ -270,6 +270,15 @@ pub fn to_engine_perf_level(level: PerfLevel) -> engine_traits::PerfLevel {
     }
 }
 
+pub fn cf_handle<'a>(db: &'a Db, cf: &str) -> Result<&'a RawCfHandle> {
+    db.cf(cf).ok_or_else(|| {
+        engine_traits::Error::Engine(engine_traits::Status::with_error(
+            engine_traits::Code::InvalidArgument,
+            format!("cf {} not found", cf),
+        ))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use engine_traits::CF_DEFAULT;
@@ -296,11 +305,11 @@ mod tests {
 
     #[test]
     fn test_new_engine_opt() {
-        let path = Builder::new()
+        let temp = Builder::new()
             .prefix("_util_rocksdb_test_check_column_families")
             .tempdir()
             .unwrap();
-        let path_str = path.path().to_str().unwrap();
+        let path = temp.path();
 
         // create db when db not exist
         let mut cfs_opts = vec![(CF_DEFAULT, RocksCfOptions::default())];
@@ -310,8 +319,8 @@ mod tests {
             opts
         };
         cfs_opts.push(("cf_dynamic_level_bytes", build_cf_opt()));
-        let db = new_engine_opt(path_str, RocksDbOptions::default(), cfs_opts).unwrap();
-        column_families_must_eq(path_str, vec![CF_DEFAULT, "cf_dynamic_level_bytes"]);
+        let db = new_engine_opt(path, RocksDbOptions::default(), cfs_opts).unwrap();
+        column_families_must_eq(path, vec![CF_DEFAULT, "cf_dynamic_level_bytes"]);
         check_dynamic_level_bytes(&db);
         drop(db);
 
@@ -321,8 +330,8 @@ mod tests {
             ("cf_dynamic_level_bytes", build_cf_opt()),
             ("cf1", build_cf_opt()),
         ];
-        let db = new_engine_opt(path_str, RocksDbOptions::default(), cfs_opts).unwrap();
-        column_families_must_eq(path_str, vec![CF_DEFAULT, "cf_dynamic_level_bytes", "cf1"]);
+        let db = new_engine_opt(path, RocksDbOptions::default(), cfs_opts).unwrap();
+        column_families_must_eq(path, vec![CF_DEFAULT, "cf_dynamic_level_bytes", "cf1"]);
         check_dynamic_level_bytes(&db);
         for name in &[CF_DEFAULT, "cf_dynamic_level_bytes", "cf1"] {
             let handle = db.cf(name).unwrap();
@@ -338,8 +347,8 @@ mod tests {
             ("cf1", build_cf_opt()),
             (CF_DEFAULT, build_cf_opt()),
         ];
-        let db = new_engine_opt(path_str, RocksDbOptions::default(), cfs_opts).unwrap();
-        column_families_must_eq(path_str, vec![CF_DEFAULT, "cf_dynamic_level_bytes", "cf1"]);
+        let db = new_engine_opt(path, RocksDbOptions::default(), cfs_opts).unwrap();
+        column_families_must_eq(path, vec![CF_DEFAULT, "cf_dynamic_level_bytes", "cf1"]);
         check_dynamic_level_bytes(&db);
         let read_opt = ReadOptions::default();
         for name in &[CF_DEFAULT, "cf_dynamic_level_bytes", "cf1"] {
@@ -353,21 +362,21 @@ mod tests {
 
         // drop cf1.
         let cfs = vec![CF_DEFAULT, "cf_dynamic_level_bytes"];
-        let db = new_engine(path_str, &cfs).unwrap();
-        column_families_must_eq(path_str, cfs);
+        let db = new_engine(path, &cfs).unwrap();
+        column_families_must_eq(path, cfs);
         check_dynamic_level_bytes(&db);
         drop(db);
 
         // drop all cfs.
-        new_engine(path_str, &[CF_DEFAULT]).unwrap();
-        column_families_must_eq(path_str, vec![CF_DEFAULT]);
+        new_engine(path, &[CF_DEFAULT]).unwrap();
+        column_families_must_eq(path, vec![CF_DEFAULT]);
 
         // not specifying default cf should error.
-        new_engine(path_str, &[]).unwrap_err();
-        column_families_must_eq(path_str, vec![CF_DEFAULT]);
+        new_engine(path, &[]).unwrap_err();
+        column_families_must_eq(path, vec![CF_DEFAULT]);
     }
 
-    fn column_families_must_eq(path: &str, excepted: Vec<&str>) {
+    fn column_families_must_eq(path: &Path, excepted: Vec<&str>) {
         let opts = RocksDbOptions::default();
         let cfs_list = Db::list_cfs(&opts, path).unwrap();
 
