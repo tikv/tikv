@@ -333,6 +333,8 @@ where
     /// If this is not supported or any error happens, returns true to do
     /// further check after getting snapshot.
     fn need_gc(&self, start_key: &[u8], end_key: &[u8], safe_point: TimeStamp) -> bool {
+        // todo(SpadeA): multi-rocks db version should handle with this differently
+        // which will be reflected in the imlementation of the v2's RaftKv.
         let props = match self
             .engine
             .get_mvcc_properties_cf(CF_WRITE, safe_point, start_key, end_key)
@@ -367,10 +369,18 @@ where
         MvccTxn::new(TimeStamp::zero(), concurrency_manager)
     }
 
-    fn flush_txn(txn: MvccTxn, limiter: &Limiter, engine: &E) -> Result<()> {
-        let write_size = txn.write_size();
-        let modifies = txn.into_modifies();
-        if !modifies.is_empty() {
+    fn flush_txn(
+        limiter: &Limiter,
+        engine: &E,
+        txns: &mut HashMap<u64, MvccTxn>, // region id -> MvccTxn for this region
+    ) -> Result<()> {
+        let mut modifies = HashMap::default();
+        let mut write_size = 0;
+        for (id, txn) in txns.drain() {
+            write_size += txn.write_size();
+            modifies.insert(id, txn.into_modifies());
+        }
+        if write_size > 0 {
             limiter.blocking_consume(write_size);
             engine.modify_on_kv_engine(modifies)?;
         }
@@ -444,10 +454,11 @@ where
             return Ok((handled_keys, wasted_keys));
         }
 
-        let mut txn = Self::new_txn();
+        let mut txns = HashMap::default();
         let mut gc_info = GcInfo::default();
         let mut keys = keys.into_iter().peekable();
         for region in regions {
+            let mut txn = Self::new_txn();
             let mut reader = self.create_reader(
                 count,
                 &region,
@@ -457,6 +468,7 @@ where
 
             let mut keys_in_region = get_keys_in_region(&mut keys, &region).into_iter();
             let mut next_gc_key = keys_in_region.next();
+
             while let Some(ref key) = next_gc_key {
                 if let Err(e) = self.gc_key(safe_point, key, &mut gc_info, &mut txn, &mut reader) {
                     GC_KEY_FAILURES.inc();
@@ -489,7 +501,10 @@ where
                     next_gc_key = keys_in_region.next();
                     gc_info = GcInfo::default();
                 } else {
-                    Self::flush_txn(txn, &self.limiter, &self.engine)?;
+                    txns.insert(region.id, txn);
+                    Self::flush_txn(&self.limiter, &self.engine, &mut txns)?;
+                    txns.clear();
+
                     reader = self.create_reader(
                         count,
                         &region,
@@ -499,9 +514,11 @@ where
                     txn = Self::new_txn();
                 }
             }
+
+            txns.insert(region.id, txn);
         }
 
-        Self::flush_txn(txn, &self.limiter, &self.engine)?;
+        Self::flush_txn(&self.limiter, &self.engine, &mut txns)?;
         Ok((handled_keys, wasted_keys))
     }
 
@@ -544,7 +561,6 @@ where
             Key::from_raw(&k)
         };
 
-        let mut raw_modifies = MvccRaw::new();
         let (mut handled_keys, mut wasted_keys) = (0, 0);
         let regions = get_regions_for_gc(self.store_id, &keys, regions_provider)?;
 
@@ -552,9 +568,11 @@ where
             return Ok((handled_keys, wasted_keys));
         }
 
+        let mut region_modifies = HashMap::default();
         let mut gc_info = GcInfo::default();
         let mut keys = keys.into_iter().peekable();
         for region in regions {
+            let mut raw_modifies = MvccRaw::new();
             let mut snapshot = self.get_snapshot(self.store_id, &region)?;
 
             let mut keys_in_region = get_keys_in_region(&mut keys, &region).into_iter();
@@ -594,15 +612,19 @@ where
                     next_gc_key = keys_in_region.next();
                     gc_info = GcInfo::default();
                 } else {
+                    region_modifies.insert(region.id, raw_modifies);
                     // Flush writeBatch to engine.
-                    Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine)?;
+                    Self::flush_raw_gc(&self.limiter, &self.engine, &mut region_modifies)?;
                     // After flush, reset raw_modifies.
                     raw_modifies = MvccRaw::new();
+                    region_modifies.clear();
                 }
             }
+
+            region_modifies.insert(region.id, raw_modifies);
         }
 
-        Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine)?;
+        Self::flush_raw_gc(&self.limiter, &self.engine, &mut region_modifies)?;
 
         Ok((handled_keys, wasted_keys))
     }
@@ -682,10 +704,18 @@ where
         gc_info.deleted_versions += 1;
     }
 
-    fn flush_raw_gc(raw_modifies: MvccRaw, limiter: &Limiter, engine: &E) -> Result<()> {
-        let write_size = raw_modifies.write_size();
-        let modifies = raw_modifies.into_modifies();
-        if !modifies.is_empty() {
+    fn flush_raw_gc(
+        limiter: &Limiter,
+        engine: &E,
+        region_modifies: &mut HashMap<u64, MvccRaw>,
+    ) -> Result<()> {
+        let mut modifies = HashMap::default();
+        let mut write_size = 0;
+        for (id, m) in region_modifies.drain() {
+            write_size += m.write_size();
+            modifies.insert(id, m.into_modifies());
+        }
+        if write_size > 0 {
             // rate limiter
             limiter.blocking_consume(write_size);
             engine.modify_on_kv_engine(modifies)?;
@@ -710,7 +740,7 @@ where
         self.flow_info_sender
             .send(FlowInfo::BeforeUnsafeDestroyRange(ctx.region_id))
             .unwrap();
-        let local_storage = self.engine.kv_engine();
+        let local_storage = self.engine.kv_engine().unwrap();
 
         // Convert keys to RocksDB layer form
         // TODO: Logic coupled with raftstore's implementation. Maybe better design is
@@ -1188,7 +1218,6 @@ where
 
     pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider + Clone + 'static>(
         &self,
-        kv_engine: &E::Local,
         cfg: AutoGcConfig<S, R>,
         safe_point: Arc<AtomicU64>, // Store safe point here.
     ) -> Result<()> {
@@ -1198,7 +1227,7 @@ where
         );
 
         info!("initialize compaction filter to perform GC when necessary");
-        kv_engine.init_compaction_filter(
+        self.engine.kv_engine().unwrap().init_compaction_filter(
             cfg.self_store_id,
             safe_point.clone(),
             self.config_manager.clone(),
@@ -1369,7 +1398,10 @@ where
 pub mod test_gc_worker {
     use std::sync::Arc;
 
+    use collections::HashMap;
     use engine_rocks::{RocksEngine, RocksSnapshot};
+    use engine_test::kv::TestTabletFactoryV2;
+    use engine_traits::{KvEngine, OpenOptions, TabletFactory};
     use kvproto::{
         kvrpcpb::Context,
         metapb::{Peer, Region},
@@ -1403,11 +1435,15 @@ pub mod test_gc_worker {
         type Snap = RegionSnapshot<RocksSnapshot>;
         type Local = RocksEngine;
 
-        fn kv_engine(&self) -> RocksEngine {
+        fn kv_engine(&self) -> Option<RocksEngine> {
             self.0.kv_engine()
         }
 
-        fn modify_on_kv_engine(&self, mut modifies: Vec<Modify>) -> kv::Result<()> {
+        fn modify_on_kv_engine(
+            &self,
+            region_modifies: HashMap<u64, Vec<Modify>>,
+        ) -> kv::Result<()> {
+            let mut modifies: Vec<_> = region_modifies.into_values().flatten().collect();
             for modify in &mut modifies {
                 match modify {
                     Modify::Delete(_, ref mut key) => {
@@ -1430,7 +1466,7 @@ pub mod test_gc_worker {
                     }
                 }
             }
-            write_modifies(&self.kv_engine(), modifies)
+            write_modifies(&self.kv_engine().unwrap(), modifies)
         }
 
         fn async_write(
@@ -1483,6 +1519,113 @@ pub mod test_gc_worker {
             Ok(self.0.into())
         }
     }
+
+    #[derive(Clone)]
+    pub struct MultiRocksEngine {
+        // Factory is not a normal way to fetch tablet and is just used in test to ease the test.
+        // Note: at most one tablet is allowed to exist for each region in the cache of factory
+        pub factory: Arc<TestTabletFactoryV2>,
+        pub region_info: HashMap<u64, Region>,
+    }
+
+    impl Engine for MultiRocksEngine {
+        type Snap = RegionSnapshot<RocksSnapshot>;
+        type Local = RocksEngine;
+
+        fn kv_engine(&self) -> Option<Self::Local> {
+            None
+        }
+
+        fn modify_on_kv_engine(
+            &self,
+            region_modifies: HashMap<u64, Vec<Modify>>,
+        ) -> kv::Result<()> {
+            for (region_id, mut modifies) in region_modifies {
+                for modify in &mut modifies {
+                    match modify {
+                        Modify::Delete(_, ref mut key) => {
+                            let bytes = keys::data_key(key.as_encoded());
+                            *key = Key::from_encoded(bytes);
+                        }
+                        Modify::Put(_, ref mut key, _) => {
+                            let bytes = keys::data_key(key.as_encoded());
+                            *key = Key::from_encoded(bytes);
+                        }
+                        Modify::PessimisticLock(ref mut key, _) => {
+                            let bytes = keys::data_key(key.as_encoded());
+                            *key = Key::from_encoded(bytes);
+                        }
+                        Modify::DeleteRange(_, ref mut key1, ref mut key2, _) => {
+                            let bytes = keys::data_key(key1.as_encoded());
+                            *key1 = Key::from_encoded(bytes);
+                            let bytes = keys::data_end_key(key2.as_encoded());
+                            *key2 = Key::from_encoded(bytes);
+                        }
+                    }
+                }
+
+                let tablet = self
+                    .factory
+                    .open_tablet(region_id, None, OpenOptions::default().set_cache_only(true))
+                    .unwrap();
+
+                write_modifies(&tablet, modifies)?;
+            }
+
+            Ok(())
+        }
+
+        fn async_write(
+            &self,
+            ctx: &Context,
+            mut batch: WriteData,
+            callback: EngineCallback<()>,
+        ) -> EngineResult<()> {
+            batch.modifies.iter_mut().for_each(|modify| match modify {
+                Modify::Delete(_, ref mut key) => {
+                    *key = Key::from_encoded(keys::data_key(key.as_encoded()));
+                }
+                Modify::Put(_, ref mut key, _) => {
+                    *key = Key::from_encoded(keys::data_key(key.as_encoded()));
+                }
+                Modify::PessimisticLock(ref mut key, _) => {
+                    *key = Key::from_encoded(keys::data_key(key.as_encoded()));
+                }
+                Modify::DeleteRange(_, ref mut start_key, ref mut end_key, _) => {
+                    *start_key = Key::from_encoded(keys::data_key(start_key.as_encoded()));
+                    *end_key = Key::from_encoded(keys::data_end_key(end_key.as_encoded()));
+                }
+            });
+            let tablet = self
+                .factory
+                .open_tablet(
+                    ctx.region_id,
+                    None,
+                    OpenOptions::default().set_cache_only(true),
+                )
+                .unwrap();
+
+            callback(write_modifies(&tablet, batch.modifies));
+            Ok(())
+        }
+
+        fn async_snapshot(
+            &self,
+            ctx: SnapContext<'_>,
+            callback: EngineCallback<Self::Snap>,
+        ) -> EngineResult<()> {
+            let region_id = ctx.pb_ctx.region_id;
+            let tablet = self
+                .factory
+                .open_tablet(region_id, None, OpenOptions::default().set_cache_only(true))
+                .unwrap();
+            callback(Ok(RegionSnapshot::from_snapshot(
+                Arc::new(tablet.snapshot()),
+                Arc::new(self.region_info.get(&region_id).unwrap().clone()),
+            )));
+            Ok(())
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1497,6 +1640,11 @@ mod tests {
 
     use api_version::{ApiV2, KvFormat, RawValue};
     use engine_rocks::{util::get_cf_handle, RocksEngine};
+    use engine_test::{
+        ctor::{CfOptions, DbOptions},
+        kv::TestTabletFactoryV2,
+    };
+    use engine_traits::{OpenOptions, TabletFactory, ALL_CFS};
     use futures::executor::block_on;
     use kvproto::{
         kvrpcpb::{ApiVersion, Op},
@@ -1511,49 +1659,55 @@ mod tests {
         router::RaftStoreBlackHole,
         store::util::new_peer,
     };
+    use tempfile::Builder;
     use tikv_kv::Snapshot;
     use tikv_util::{codec::number::NumberEncoder, future::paired_future_callback};
     use txn_types::Mutation;
 
-    use super::*;
+    use super::{test_gc_worker::MultiRocksEngine, *};
     use crate::{
         config::DbConfig,
         server::gc_worker::{MockSafePointProvider, PrefixedEngine},
         storage::{
             kv::{metrics::GcKeyMode, Modify, TestEngineBuilder, WriteData},
             lock_manager::DummyLockManager,
-            mvcc::{tests::must_get_none, MAX_TXN_WRITE_SIZE},
+            mvcc::{
+                tests::{must_get_none, must_get_none_on_region, must_get_on_region},
+                MAX_TXN_WRITE_SIZE,
+            },
             txn::{
                 commands,
                 tests::{
-                    must_commit, must_gc, must_prewrite_delete, must_prewrite_put, must_rollback,
+                    must_commit, must_commit_on_region, must_gc, must_prewrite_delete,
+                    must_prewrite_delete_on_region, must_prewrite_put, must_prewrite_put_on_region,
+                    must_rollback,
                 },
             },
             Engine, Storage, TestStorageBuilderApiV1,
         },
     };
 
+    fn init_region(
+        start_key: &[u8],
+        end_key: &[u8],
+        region_id: u64,
+        store_id: Option<u64>,
+    ) -> Region {
+        let start_key = Key::from_encoded(start_key.to_vec());
+        let end_key = Key::from_encoded(end_key.to_vec());
+        let mut region = Region::default();
+        region.set_start_key(start_key.as_encoded().clone());
+        region.set_end_key(end_key.as_encoded().clone());
+        region.id = region_id;
+        if let Some(store_id) = store_id {
+            region.mut_peers().push(Peer::default());
+            region.mut_peers()[0].set_store_id(store_id);
+        }
+        region
+    }
+
     #[test]
     fn test_get_regions_for_gc() {
-        fn init_region(
-            start_key: &[u8],
-            end_key: &[u8],
-            region_id: u64,
-            store_id: Option<u64>,
-        ) -> Region {
-            let start_key = Key::from_encoded(start_key.to_vec());
-            let end_key = Key::from_encoded(end_key.to_vec());
-            let mut region = Region::default();
-            region.set_start_key(start_key.as_encoded().clone());
-            region.set_end_key(end_key.as_encoded().clone());
-            region.id = region_id;
-            if let Some(store_id) = store_id {
-                region.mut_peers().push(Peer::default());
-                region.mut_peers()[0].set_store_id(store_id);
-            }
-            region
-        }
-
         let store_id = 1;
 
         let r1 = init_region(b"", b"k10", 1, None);
@@ -1939,15 +2093,12 @@ mod tests {
 
         let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, 1);
         let safe_point = Arc::new(AtomicU64::new(0));
-        let kv_engine = engine.get_rocksdb();
-        gc_worker
-            .start_auto_gc(&kv_engine, auto_gc_cfg, safe_point)
-            .unwrap();
+        gc_worker.start_auto_gc(auto_gc_cfg, safe_point).unwrap();
         host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
         host.on_region_changed(&r2, RegionChangeEvent::Create, StateRole::Leader);
         host.on_region_changed(&r3, RegionChangeEvent::Create, StateRole::Leader);
 
-        let db = engine.kv_engine().as_inner().clone();
+        let db = engine.kv_engine().unwrap().as_inner().clone();
         let cf = get_cf_handle(&db, CF_WRITE).unwrap();
 
         for i in 0..100 {
@@ -2022,7 +2173,7 @@ mod tests {
         let ri_provider = RegionInfoAccessor::new(&mut host);
         host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
 
-        let db = engine.kv_engine().as_inner().clone();
+        let db = engine.kv_engine().unwrap().as_inner().clone();
         let cf = get_cf_handle(&db, CF_WRITE).unwrap();
         let mut keys = vec![];
         for i in 0..100 {
@@ -2186,7 +2337,7 @@ mod tests {
         let ri_provider = Arc::new(RegionInfoAccessor::new(&mut host));
         host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
 
-        let db = engine.kv_engine().as_inner().clone();
+        let db = engine.kv_engine().unwrap().as_inner().clone();
         let cf = get_cf_handle(&db, CF_WRITE).unwrap();
         // Generate some tombstone
         for i in 10u64..30 {
@@ -2282,7 +2433,7 @@ mod tests {
         let engine = PrefixedEngine(TestEngineBuilder::new().build().unwrap());
         must_prewrite_put(&engine, b"key", b"value", b"key", 10);
         must_commit(&engine, b"key", 10, 20);
-        let db = engine.kv_engine().as_inner().clone();
+        let db = engine.kv_engine().unwrap().as_inner().clone();
         let cf = get_cf_handle(&db, CF_WRITE).unwrap();
         db.flush_cf(cf, true).unwrap();
 
@@ -2409,5 +2560,298 @@ mod tests {
         let ks = get_keys_in_region(&mut iter, &region);
         assert!(iter.peek().is_none());
         assert!(ks.is_empty());
+    }
+
+    // setup engine and prepare some data
+    fn multi_gc_engine_setup(
+        store_id: u64,
+    ) -> (
+        Arc<TestTabletFactoryV2>,
+        MultiRocksEngine,
+        Arc<MockRegionInfoProvider>,
+        GcRunner<MultiRocksEngine, RaftStoreBlackHole>,
+        Vec<Region>,
+    ) {
+        // Building a tablet factory
+        let ops = DbOptions::default();
+        let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
+        let path = Builder::new().prefix("multi-rocks-gc").tempdir().unwrap();
+        let factory = Arc::new(TestTabletFactoryV2::new(path.path(), ops, cf_opts));
+
+        // Note: as the tablet split is not supported yet, we artificially divide the
+        // region to: 1 ["", "k10"], 2 ["k10", "k20"], 3["k20", "30"]
+        let r1 = init_region(b"", b"k10", 1, Some(store_id));
+        let r2 = init_region(b"k10", b"k20", 2, Some(store_id));
+        let r3 = init_region(b"k20", b"", 3, Some(store_id));
+        let _ = factory
+            .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
+            .unwrap();
+        let _ = factory
+            .open_tablet(2, Some(10), OpenOptions::default().set_create_new(true))
+            .unwrap();
+        let _ = factory
+            .open_tablet(3, Some(10), OpenOptions::default().set_create_new(true))
+            .unwrap();
+
+        let mut region_info = HashMap::default();
+        region_info.insert(1, r1.clone());
+        region_info.insert(2, r2.clone());
+        region_info.insert(3, r3.clone());
+        let engine = MultiRocksEngine {
+            factory: factory.clone(),
+            region_info,
+        };
+
+        let (tx, _rx) = mpsc::channel();
+        let feature_gate = FeatureGate::default();
+        feature_gate.set_version("5.0.0").unwrap();
+
+        let ri_provider = Arc::new(MockRegionInfoProvider::new(vec![
+            r1.clone(),
+            r2.clone(),
+            r3.clone(),
+        ]));
+
+        let cfg = GcConfig::default();
+        let gc_runner = GcRunner::new(
+            store_id,
+            engine.clone(),
+            RaftStoreBlackHole,
+            tx,
+            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
+                .0
+                .tracker("gc-woker".to_owned()),
+            cfg,
+        );
+
+        let mut region_id = 0;
+        for i in 0..30 {
+            if i % 10 == 0 {
+                region_id += 1;
+            }
+            let k = format!("k{:02}", i).into_bytes();
+            must_prewrite_put_on_region(&engine, region_id, &k, b"value", &k, 101);
+            must_commit_on_region(&engine, region_id, &k, 101, 102);
+            must_prewrite_delete_on_region(&engine, region_id, &k, &k, 151);
+            must_commit_on_region(&engine, region_id, &k, 151, 152);
+        }
+
+        (factory, engine, ri_provider, gc_runner, vec![r1, r2, r3])
+    }
+
+    #[test]
+    fn test_gc_for_multi_rocksdb() {
+        let store_id = 1;
+
+        let (factory, engine, _ri_provider, mut gc_runner, regions) =
+            multi_gc_engine_setup(store_id);
+
+        gc_runner.gc(regions[0].clone(), 200.into()).unwrap();
+        gc_runner.gc(regions[1].clone(), 200.into()).unwrap();
+        gc_runner.gc(regions[2].clone(), 200.into()).unwrap();
+
+        for region_id in 1..=3 {
+            let db = factory
+                .open_tablet(region_id, None, OpenOptions::default().set_cache_only(true))
+                .unwrap()
+                .as_inner()
+                .clone();
+            let cf = get_cf_handle(&db, CF_WRITE).unwrap();
+            for i in 10 * (region_id - 1)..10 * region_id {
+                let k = format!("k{:02}", i).into_bytes();
+
+                // Stale MVCC-PUTs will be cleaned in write CF's compaction filter.
+                must_get_none_on_region(&engine, region_id, &k, 150);
+
+                // MVCC-DELETIONs is cleaned
+                let mut raw_k = vec![b'z'];
+                let suffix = Key::from_raw(&k).append_ts(152.into());
+                raw_k.extend_from_slice(suffix.as_encoded());
+                assert!(db.get_cf(cf, &raw_k).unwrap().is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn test_gc_keys_for_multi_rocksdb() {
+        let store_id = 1;
+
+        let (factory, engine, ri_provider, mut gc_runner, _regions) =
+            multi_gc_engine_setup(store_id);
+
+        let mut keys = Vec::new();
+        for i in 0..30 {
+            if i % 2 == 0 {
+                continue;
+            }
+
+            let k = format!("k{:02}", i).into_bytes();
+            let key = Key::from_raw(&k);
+            keys.push(key);
+        }
+        let _ = gc_runner
+            .gc_keys(keys, 200.into(), Either::Right(ri_provider))
+            .unwrap();
+
+        for region_id in 1..=3 {
+            let db = factory
+                .open_tablet(region_id, None, OpenOptions::default().set_cache_only(true))
+                .unwrap()
+                .as_inner()
+                .clone();
+            let cf = get_cf_handle(&db, CF_WRITE).unwrap();
+            for i in 10 * (region_id - 1)..10 * region_id {
+                let k = format!("k{:02}", i).into_bytes();
+
+                let mut raw_k = vec![b'z'];
+                let suffix = Key::from_raw(&k).append_ts(152.into());
+                raw_k.extend_from_slice(suffix.as_encoded());
+
+                if i % 2 == 0 {
+                    assert!(db.get_cf(cf, &raw_k).unwrap().is_some());
+                    must_get_on_region(&engine, region_id, &k, 150, b"value");
+                } else {
+                    must_get_none_on_region(&engine, region_id, &k, 150);
+                    assert!(db.get_cf(cf, &raw_k).unwrap().is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_raw_gc_keys_for_multi_rocksdb() {
+        let store_id = 1;
+        // Building a tablet factory
+        let ops = DbOptions::default();
+        let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
+        let path = Builder::new()
+            .prefix("multi-rocks-raw-gc")
+            .tempdir()
+            .unwrap();
+        let factory = Arc::new(TestTabletFactoryV2::new(path.path(), ops, cf_opts));
+
+        // Note: as the tablet split is not supported yet, we artificially divide the
+        // region to: 1 ["", "k10"], 2 ["k10", ""]
+        let r1 = init_region(b"", b"k10", 1, Some(store_id));
+        let r2 = init_region(b"k10", b"", 2, Some(store_id));
+        let _ = factory
+            .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
+            .unwrap();
+        let _ = factory
+            .open_tablet(2, Some(10), OpenOptions::default().set_create_new(true))
+            .unwrap();
+
+        let mut region_info = HashMap::default();
+        region_info.insert(1, r1.clone());
+        region_info.insert(2, r2.clone());
+        let engine = MultiRocksEngine {
+            factory,
+            region_info,
+        };
+
+        let (tx, _rx) = mpsc::channel();
+        let ri_provider = Arc::new(MockRegionInfoProvider::new(vec![r1, r2]));
+
+        let cfg = GcConfig::default();
+        let mut gc_runner = GcRunner::new(
+            store_id,
+            engine.clone(),
+            RaftStoreBlackHole,
+            tx,
+            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
+                .0
+                .tracker("gc-woker".to_owned()),
+            cfg,
+        );
+
+        // region_id -> vec<(key,expir_ts,is_delete,expect_exist)>
+        let mut test_raws = HashMap::default();
+        let mut test_raws_region = Vec::new();
+        let mut test_keys = Vec::new();
+        let mut i = 0;
+        let mut region_id = 1;
+        while i < 20 {
+            if i == 10 {
+                test_raws.insert(region_id, test_raws_region);
+                region_id += 1;
+                test_raws_region = Vec::new();
+            }
+            let k1 = format!("k{:02}", i).into_bytes();
+            let k2 = format!("k{:02}", i + 1).into_bytes();
+            test_keys.push(k1.clone());
+            test_keys.push(k2.clone());
+
+            // All data in engine. (key,expir_ts,is_delete,expect_exist)
+            let test_raw = vec![
+                (k1.clone(), 130, true, true), // ts(130) > safepoint
+                (k1.clone(), 120, true, true), // ts(120) = safepoint
+                (k1.clone(), 100, true, false),
+                (k1.clone(), 50, false, false),
+                (k1.clone(), 10, false, false),
+                (k1, 5, false, false),
+                (k2.clone(), 50, true, false),
+                (k2.clone(), 20, false, false),
+                (k2, 10, false, false),
+            ];
+
+            let modifies = test_raw
+                .clone()
+                .into_iter()
+                .map(|(key, ts, is_delete, _expect_exist)| {
+                    (
+                        ApiV2::encode_raw_key(&key, Some(ts.into())),
+                        ApiV2::encode_raw_value(RawValue {
+                            user_value: &[0; 10][..],
+                            expire_ts: Some(10),
+                            is_delete,
+                        }),
+                    )
+                })
+                .map(|(k, v)| Modify::Put(CF_DEFAULT, k, v))
+                .collect();
+
+            let ctx = Context {
+                region_id,
+                api_version: ApiVersion::V2,
+                ..Default::default()
+            };
+            let batch = WriteData::from_modifies(modifies);
+            engine.write(&ctx, batch).unwrap();
+
+            test_raws_region.extend(test_raw);
+            i += 2;
+        }
+        test_raws.insert(region_id, test_raws_region);
+
+        let to_gc_keys: Vec<Key> = test_keys
+            .into_iter()
+            .map(|key| ApiV2::encode_raw_key(&key, None))
+            .collect();
+
+        gc_runner
+            .raw_gc_keys(to_gc_keys, TimeStamp::new(120), ri_provider)
+            .unwrap();
+
+        assert_eq!(70, gc_runner.mut_stats(GcKeyMode::raw).data.next);
+        assert_eq!(20, gc_runner.mut_stats(GcKeyMode::raw).data.seek);
+
+        for (region_id, test_raws_region) in test_raws {
+            let mut ctx = Context::default();
+            ctx.region_id = region_id;
+            let snap_ctx = SnapContext {
+                pb_ctx: &ctx,
+                ..Default::default()
+            };
+            let snapshot = block_on(async { tikv_kv::snapshot(&engine, snap_ctx).await }).unwrap();
+
+            test_raws_region
+                .clone()
+                .into_iter()
+                .for_each(|(key, ts, _is_delete, expect_exist)| {
+                    let engine_key = ApiV2::encode_raw_key(&key, Some(ts.into()));
+                    let entry = snapshot.get(&Key::from_encoded(engine_key.into_encoded()));
+                    assert_eq!(entry.unwrap().is_some(), expect_exist);
+                });
+        }
     }
 }

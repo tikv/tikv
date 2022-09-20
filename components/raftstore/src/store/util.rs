@@ -14,6 +14,7 @@ use std::{
     u64,
 };
 
+use engine_traits::KvEngine;
 use kvproto::{
     kvrpcpb::{self, KeyRange, LeaderInfo},
     metapb::{self, Peer, PeerRole, Region, RegionEpoch},
@@ -28,9 +29,12 @@ use raft::{
 use raft_proto::ConfChangeI;
 use tikv_util::{box_err, debug, info, time::monotonic_raw_now, Either};
 use time::{Duration, Timespec};
+use txn_types::TimeStamp;
 
 use super::peer_storage;
-use crate::{Error, Result};
+use crate::{coprocessor::CoprocessorHost, Error, Result};
+
+const INVALID_TIMESTAMP: u64 = u64::MAX;
 
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
     region
@@ -927,15 +931,50 @@ impl RegionReadProgressRegistry {
             .map(|rp| rp.safe_ts())
     }
 
+    pub fn get_tracked_index(&self, region_id: &u64) -> Option<u64> {
+        self.registry
+            .lock()
+            .unwrap()
+            .get(region_id)
+            .map(|rp| rp.core.lock().unwrap().applied_index)
+    }
+
+    // NOTICE: this function is an alias of `get_safe_ts` to distinguish the
+    // semantics.
+    pub fn get_resolved_ts(&self, region_id: &u64) -> Option<u64> {
+        self.registry
+            .lock()
+            .unwrap()
+            .get(region_id)
+            .map(|rp| rp.resolved_ts())
+    }
+
+    // Get the minimum `resolved_ts` which could ensure that there will be no more
+    // locks whose `start_ts` is greater than it.
+    pub fn get_min_resolved_ts(&self) -> u64 {
+        self.registry
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, rrp)| rrp.resolved_ts())
+            .filter(|ts| *ts != 0) // ts == 0 means the peer is uninitialized
+            .min()
+            .unwrap_or(0)
+    }
+
     // Update `safe_ts` with the provided `LeaderInfo` and return the regions that
     // have the same `LeaderInfo`
-    pub fn handle_check_leaders(&self, leaders: Vec<LeaderInfo>) -> Vec<u64> {
+    pub fn handle_check_leaders<E: KvEngine>(
+        &self,
+        leaders: Vec<LeaderInfo>,
+        coprocessor: &CoprocessorHost<E>,
+    ) -> Vec<u64> {
         let mut regions = Vec::with_capacity(leaders.len());
         let registry = self.registry.lock().unwrap();
         for leader_info in leaders {
             let region_id = leader_info.get_region_id();
             if let Some(rp) = registry.get(&region_id) {
-                if rp.consume_leader_info(leader_info) {
+                if rp.consume_leader_info(leader_info, coprocessor) {
                     regions.push(region_id);
                 }
             }
@@ -993,7 +1032,7 @@ impl Default for RegionReadProgressRegistry {
 /// `apply index` smaller (require less data)
 //
 /// TODO: the name `RegionReadProgress` is conflict with the leader lease's
-/// `ReadProgress`, shoule change it to another more proper name
+/// `ReadProgress`, should change it to another more proper name
 #[derive(Debug)]
 pub struct RegionReadProgress {
     // `core` used to keep track and update `safe_ts`, it should
@@ -1012,11 +1051,17 @@ impl RegionReadProgress {
         }
     }
 
-    pub fn update_applied(&self, applied: u64) {
+    pub fn update_applied<E: KvEngine>(&self, applied: u64, coprocessor: &CoprocessorHost<E>) {
         let mut core = self.core.lock().unwrap();
         if let Some(ts) = core.update_applied(applied) {
             if !core.pause {
                 self.safe_ts.store(ts, AtomicOrdering::Release);
+                // No need to update leader safe ts here.
+                coprocessor.on_update_safe_ts(
+                    core.region_id,
+                    TimeStamp::new(ts).physical(),
+                    INVALID_TIMESTAMP,
+                )
             }
         }
     }
@@ -1036,18 +1081,34 @@ impl RegionReadProgress {
         }
     }
 
-    pub fn merge_safe_ts(&self, source_safe_ts: u64, merge_index: u64) {
+    pub fn merge_safe_ts<E: KvEngine>(
+        &self,
+        source_safe_ts: u64,
+        merge_index: u64,
+        coprocessor: &CoprocessorHost<E>,
+    ) {
         let mut core = self.core.lock().unwrap();
         if let Some(ts) = core.merge_safe_ts(source_safe_ts, merge_index) {
             if !core.pause {
                 self.safe_ts.store(ts, AtomicOrdering::Release);
+                // After region merge, self safe ts may decrease, so leader safe ts should be
+                // reset.
+                coprocessor.on_update_safe_ts(
+                    core.region_id,
+                    TimeStamp::new(ts).physical(),
+                    TimeStamp::new(ts).physical(),
+                )
             }
         }
     }
 
     // Consume the provided `LeaderInfo` to update `safe_ts` and return whether the
     // provided `LeaderInfo` is same as ours
-    pub fn consume_leader_info(&self, mut leader_info: LeaderInfo) -> bool {
+    pub fn consume_leader_info<E: KvEngine>(
+        &self,
+        mut leader_info: LeaderInfo,
+        coprocessor: &CoprocessorHost<E>,
+    ) -> bool {
         let mut core = self.core.lock().unwrap();
         if leader_info.has_read_state() {
             // It is okay to update `safe_ts` without checking the `LeaderInfo`, the
@@ -1061,6 +1122,9 @@ impl RegionReadProgress {
                     }
                 }
             }
+            let self_phy_ts = TimeStamp::new(self.safe_ts()).physical();
+            let leader_phy_ts = TimeStamp::new(rs.get_safe_ts()).physical();
+            coprocessor.on_update_safe_ts(leader_info.region_id, self_phy_ts, leader_phy_ts)
         }
         // whether the provided `LeaderInfo` is same as ours
         core.leader_info.leader_term == leader_info.term
@@ -1125,6 +1189,13 @@ impl RegionReadProgress {
     pub fn safe_ts(&self) -> u64 {
         self.safe_ts.load(AtomicOrdering::Acquire)
     }
+
+    // `safe_ts` is calculated from the `resolved_ts`, they are the same thing
+    // internally. So we can use `resolved_ts` as the alias of `safe_ts` here.
+    #[inline(always)]
+    pub fn resolved_ts(&self) -> u64 {
+        self.safe_ts()
+    }
 }
 
 #[derive(Debug)]
@@ -1132,7 +1203,7 @@ struct RegionReadProgressCore {
     tag: String,
     region_id: u64,
     applied_index: u64,
-    // A wraper of `(apply_index, safe_ts)` item, where the `read_state.ts` is the peer's current
+    // A wrapper of `(apply_index, safe_ts)` item, where the `read_state.ts` is the peer's current
     // `safe_ts` and the `read_state.idx` is the smallest `apply_index` required for that `safe_ts`
     read_state: ReadState,
     // The local peer's acknowledge about the leader
@@ -1150,7 +1221,7 @@ struct RegionReadProgressCore {
     discard: bool,
 }
 
-// A helpful wraper of `(apply_index, safe_ts)` item
+// A helpful wrapper of `(apply_index, safe_ts)` item
 #[derive(Clone, Debug, Default)]
 pub struct ReadState {
     pub idx: u64,
@@ -1357,6 +1428,7 @@ impl LatencyInspector {
 mod tests {
     use std::thread;
 
+    use engine_test::kv::KvTestEngine;
     use kvproto::{
         metapb::{self, RegionEpoch},
         raft_cmdpb::AdminRequest,
@@ -1978,7 +2050,8 @@ mod tests {
         assert_eq!(rrp.safe_ts(), 10);
         assert_eq!(pending_items_num(&rrp), 10);
 
-        rrp.update_applied(20);
+        let coprocessor_host = CoprocessorHost::<KvTestEngine>::default();
+        rrp.update_applied(20, &coprocessor_host);
         assert_eq!(rrp.safe_ts(), 20);
         assert_eq!(pending_items_num(&rrp), 0);
 
@@ -1990,7 +2063,7 @@ mod tests {
         assert!(pending_items_num(&rrp) <= cap);
 
         // `applied_index` large than all pending items will clear all pending items
-        rrp.update_applied(200);
+        rrp.update_applied(200, &coprocessor_host);
         assert_eq!(rrp.safe_ts(), 199);
         assert_eq!(pending_items_num(&rrp), 0);
 
@@ -2004,9 +2077,9 @@ mod tests {
         rrp.update_safe_ts(301, 600);
         assert_eq!(pending_items_num(&rrp), 2);
         // `safe_ts` will update to 500 instead of 300
-        rrp.update_applied(300);
+        rrp.update_applied(300, &coprocessor_host);
         assert_eq!(rrp.safe_ts(), 500);
-        rrp.update_applied(301);
+        rrp.update_applied(301, &coprocessor_host);
         assert_eq!(rrp.safe_ts(), 600);
         assert_eq!(pending_items_num(&rrp), 0);
 

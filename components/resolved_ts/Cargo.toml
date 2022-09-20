@@ -55,6 +55,7 @@ panic_hook = { path = "../panic_hook" }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 tempfile = "3.0"
 test_raftstore = { path = "../test_raftstore", default-features = false }
+test_sst_importer = { path = "../test_sst_importer" }
 test_util = { path = "../test_util", default-features = false }
 tikv_kv = { path = "../tikv_kv" }
 
