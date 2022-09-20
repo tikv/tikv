@@ -230,7 +230,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         SEQNO_RELATIONS_KEYS_FLOW.inc_by(count as u64);
     }
 
-    fn handle_exec_res<'a>(
+    fn handle_exec_res(
         &mut self,
         region_id: u64,
         seqno: u64,
@@ -364,9 +364,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runnable for Runner<EK, ER> {
     fn run(&mut self, task: Task<EK::Snapshot>) {
         match task {
             Task::ApplyRes(apply_res) => {
-                if self.started {
-                    self.on_apply_res(&apply_res);
-                }
+                self.on_apply_res(&apply_res);
                 for r in apply_res {
                     let _ = self.router.force_send(
                         r.region_id,
@@ -376,16 +374,8 @@ impl<EK: KvEngine, ER: RaftEngine> Runnable for Runner<EK, ER> {
                     );
                 }
             }
-            Task::MemtableSealed(seqno) => {
-                if self.started {
-                    self.on_memtable_sealed(seqno)
-                }
-            }
-            Task::MemtableFlushed { cf, seqno } => {
-                if self.started {
-                    self.on_memtable_flushed(cf, seqno)
-                }
-            }
+            Task::MemtableSealed(seqno) => self.on_memtable_sealed(seqno),
+            Task::MemtableFlushed { cf, seqno } => self.on_memtable_flushed(cf, seqno),
             Task::Start => {
                 self.started = true;
                 info!("seqno relation worker started");

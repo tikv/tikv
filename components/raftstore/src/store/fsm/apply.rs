@@ -3605,6 +3605,7 @@ where
             cb(RecoverStatus::Finished);
             return;
         }
+        info!("apply handle recover"; "region_id" => self.delegate.region_id(), "start" => entries[0].index, "end" => entries[entries.len()-1].index);
         apply_ctx.prepare_for(&mut self.delegate);
         // If we send multiple ConfChange commands, only first one will be proposed
         // correctly, others will be saved as a normal entry with no data, so we
