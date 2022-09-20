@@ -1380,8 +1380,8 @@ pub fn gc_seqno_relations<ER: RaftEngine>(
                             raft_engine.clean(region_id, 0, &raft_state, wb).unwrap();
                         }
                     }
-                    info!("update region state during gc relation"; "region_id" => region_id, "state" => ?state, "index" => applied_index);
                     wb.put_region_state(region_id, state).unwrap();
+                    info!("update region state during gc relation"; "region_id" => region_id, "state" => ?state, "index" => applied_index);
                 }
                 info!("delete relation during gc relation"; "region_id" => region_id, "relation" => ?relation);
                 wb.delete_seqno_relation(region_id, s).unwrap();

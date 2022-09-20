@@ -191,7 +191,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
 
     fn handle_relation(
         &mut self,
-        relation: RegionSequenceNumberRelation,
+        mut relation: RegionSequenceNumberRelation,
         sync_relations: &mut HashMap<u64, RegionSequenceNumberRelation>,
     ) {
         let relations = match relation.sequence_number.cmp(&self.last_persisted_seqno) {
@@ -200,8 +200,13 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         };
         match relations.entry(relation.region_id) {
             HashMapEntry::Occupied(mut e) => {
-                if e.get().sequence_number < relation.sequence_number {
-                    *e.get_mut() = relation;
+                let prev = e.get_mut();
+                if prev.sequence_number < relation.sequence_number {
+                    if !relation.has_region_state() && prev.has_region_state() {
+                        info!("merge inflight relations"; "region_id" => relation.region_id, "prev" => ?prev, "new" => ?relation);
+                        relation.set_region_state(prev.take_region_state());
+                    }
+                    *prev = relation;
                 }
             }
             HashMapEntry::Vacant(e) => {
