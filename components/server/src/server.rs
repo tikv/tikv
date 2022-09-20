@@ -285,7 +285,7 @@ where
         let is_recovering_marked = match pd_client.is_recovering_marked() {
             Err(e) => {
                 warn!(
-                    "pd does not support snapshot recovery";
+                    "failed to get recovery mode from PD";
                     "error" => ?e,
                 );
                 false
