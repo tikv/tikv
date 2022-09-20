@@ -1854,6 +1854,7 @@ pub struct UnifiedReadPoolConfig {
     pub stack_size: ReadableSize,
     #[online_config(skip)]
     pub max_tasks_per_worker: usize,
+    pub auto_adjust_pool_size: bool,
     // FIXME: Add more configs when they are effective in yatp
 }
 
@@ -1909,6 +1910,7 @@ impl Default for UnifiedReadPoolConfig {
             max_thread_count: concurrency,
             stack_size: ReadableSize::mb(DEFAULT_READPOOL_STACK_SIZE_MB),
             max_tasks_per_worker: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
+            auto_adjust_pool_size: false,
         }
     }
 }
@@ -1924,6 +1926,7 @@ mod unified_read_pool_tests {
             max_thread_count: 2,
             stack_size: ReadableSize::mb(2),
             max_tasks_per_worker: 2000,
+            auto_adjust_pool_size: false,
         };
         cfg.validate().unwrap();
         let cfg = UnifiedReadPoolConfig {
@@ -2262,6 +2265,7 @@ mod readpool_tests {
             max_thread_count: 0,
             stack_size: ReadableSize::mb(0),
             max_tasks_per_worker: 0,
+            auto_adjust_pool_size: false,
         };
         unified.validate().unwrap_err();
         let storage = StorageReadPoolConfig {
@@ -2518,10 +2522,10 @@ impl Default for BackupStreamConfig {
         let total_mem = SysQuota::memory_limit_in_bytes();
         let quota_size = (total_mem as f64 * 0.1).min(ReadableSize::mb(512).0 as _);
         Self {
-            max_flush_interval: ReadableDuration::minutes(5),
+            max_flush_interval: ReadableDuration::minutes(3),
             // use at most 50% of vCPU by default
             num_threads: (cpu_num * 0.5).clamp(2.0, 12.0) as usize,
-            enable: false,
+            enable: true,
             // TODO: may be use raft store directory
             temp_path: String::new(),
             file_size_limit: ReadableSize::mb(256),

@@ -2650,7 +2650,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#7c004f4daf21e0677b0ceca50a723377a3968022"
+source = "git+https://github.com/pingcap/kvproto.git#f6d05706948aa296cff4db060e0962d3720f32eb"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4079,8 +4079,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67b66e735395b7ff12f3ebbb4794006aecb365c4c9a82141279b58b227ac3a8b"
+source = "git+https://github.com/tikv/raft-engine.git#5f718cfe50a28f7fee0282c0959670de5962eec8"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4114,8 +4113,7 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43ddbee86249b9d6587e548c05588f6d7cc26d7a99c2d32473fa4c0110361db8"
+source = "git+https://github.com/tikv/raft-engine.git#5f718cfe50a28f7fee0282c0959670de5962eec8"
 dependencies = [
  "clap 3.1.6",
  "env_logger",
@@ -5141,6 +5139,7 @@ dependencies = [
  "signal-hook",
  "slog",
  "slog-global",
+ "snap_recovery",
  "tempfile",
  "tikv",
  "tikv_alloc",
@@ -5287,6 +5286,36 @@ dependencies = [
  "autocfg",
  "static_assertions",
  "version_check 0.9.4",
+]
+
+[[package]]
+name = "snap_recovery"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "encryption",
+ "encryption_export",
+ "engine_rocks",
+ "engine_traits",
+ "futures 0.3.15",
+ "grpcio",
+ "keys",
+ "kvproto",
+ "log",
+ "pd_client",
+ "protobuf",
+ "raft_log_engine",
+ "raftstore",
+ "slog",
+ "slog-global",
+ "structopt",
+ "tempfile",
+ "thiserror",
+ "tikv",
+ "tikv_alloc",
+ "tikv_util",
+ "toml",
+ "txn_types",
 ]
 
 [[package]]
@@ -6334,6 +6363,7 @@ name = "tikv_kv"
 version = "0.1.0"
 dependencies = [
  "backtrace",
+ "collections",
  "engine_panic",
  "engine_rocks",
  "engine_test",

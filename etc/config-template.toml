@@ -1094,8 +1094,8 @@
 ## Only available for `format-version` >= 2. This option is only
 ## available when TiKV >= 6.3.x.
 ##
-## Default: true.
-# enable-log-recycle = true
+## Default: false.
+# enable-log-recycle = false
 
 [security]
 ## The path for TLS certificates. Empty string means disabling secure connections.
@@ -1205,7 +1205,7 @@
 
 ## enable this feature. TiKV will starts watch related tasks in PD. and backup kv changes to storage accodring to task.
 ## The default value is false.
-# enable = false 
+# enable = true 
 
 [backup.hadoop]
 ## let TiKV know how to find the hdfs shell command.

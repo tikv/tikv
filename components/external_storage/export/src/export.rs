@@ -9,7 +9,6 @@ use std::{
     sync::Arc,
 };
 
-use async_compression::futures::bufread::ZstdDecoder;
 use async_trait::async_trait;
 #[cfg(feature = "cloud-aws")]
 pub use aws::{Config as S3Config, S3Storage};
@@ -19,17 +18,19 @@ pub use azure::{AzureStorage, Config as AzureConfig};
 use cloud::blob::BlobConfig;
 use cloud::blob::{BlobStorage, PutResource};
 use encryption::DataKeyManager;
-use engine_traits::FileEncryptionInfo;
 #[cfg(feature = "cloud-storage-dylib")]
 use external_storage::dylib_client;
 #[cfg(feature = "cloud-storage-grpc")]
 use external_storage::grpc_client;
-use external_storage::{encrypt_wrap_reader, record_storage_create, BackendConfig, HdfsStorage};
+use external_storage::{
+    compression_reader_dispatcher, encrypt_wrap_reader, record_storage_create, BackendConfig,
+    HdfsStorage,
+};
 pub use external_storage::{
-    read_external_storage_into_file, ExternalStorage, LocalStorage, NoopStorage, UnpinReader,
+    read_external_storage_into_file, ExternalStorage, LocalStorage, NoopStorage, RestoreConfig,
+    UnpinReader,
 };
 use futures_io::AsyncRead;
-use futures_util::io::BufReader;
 #[cfg(feature = "cloud-gcp")]
 pub use gcp::{Config as GcsConfig, GcsStorage};
 pub use kvproto::brpb::StorageBackend_oneof_backend as Backend;
@@ -333,17 +334,25 @@ impl ExternalStorage for EncryptedExternalStorage {
         &self,
         storage_name: &str,
         restore_name: std::path::PathBuf,
-        compressed_range: Option<(u64, u64)>,
         expected_length: u64,
-        expected_sha256: Option<Vec<u8>>,
         speed_limiter: &Limiter,
-        file_crypter: Option<FileEncryptionInfo>,
+        restore_config: RestoreConfig,
     ) -> io::Result<()> {
-        let reader = if let Some((off, len)) = compressed_range {
-            let r = self.read_part(storage_name, off, len);
-            Box::new(ZstdDecoder::new(BufReader::new(r)))
-        } else {
-            self.read(storage_name)
+        let RestoreConfig {
+            range,
+            compression_type,
+            expected_sha256,
+            file_crypter,
+        } = restore_config;
+
+        let reader = {
+            let inner = if let Some((off, len)) = range {
+                self.read_part(storage_name, off, len)
+            } else {
+                self.read(storage_name)
+            };
+
+            compression_reader_dispatcher(compression_type, inner)?
         };
         let file_writer: &mut dyn Write =
             &mut self.key_manager.create_file_for_write(&restore_name)?;
