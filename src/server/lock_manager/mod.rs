@@ -484,28 +484,64 @@ mod tests {
         );
         assert!(!lock_mgr.has_waiter());
 
-        // // If it's the first lock, no detect.
-        // // If it's not, detect deadlock.
-        // for is_first_lock in &[true, false] {
-        //     let (waiter, _, mut f) = new_test_waiter(30.into(), 40.into(), 40);
-        //     let token = lock_mgr.allocate_token();
-        //     lock_mgr.wait_for(
-        //         token,
-        //         1,
-        //         RegionEpoch::default(),
-        //         1,
-        //         waiter.start_ts,
-        //         waiter.wait_info,
-        //         *is_first_lock,
-        //         Some(WaitTimeout::Default),
-        //         waiter.cancel_callback,
-        //         DiagnosticContext::default(),
-        //     );
-        //     assert!(lock_mgr.has_waiter());
-        //     lock_mgr.remove_lock_wait(token);
-        //     block_on(f).unwrap_err();
-        // }
-        // assert!(!lock_mgr.has_waiter());
+        // If it's the first lock, no detect.
+        // If it's not, detect deadlock.
+        // Note that if txn 30 is writing its first lock, there should never be another
+        // transaction waiting for txn 30's lock. We added this waiter (40
+        // waiting for 30) just for checking whether the lock manager does the
+        // detection internally.
+        let (waiter1, _, f1) = new_test_waiter_with_key(40.into(), 30.into(), b"k1");
+        let token1 = lock_mgr.allocate_token();
+        lock_mgr.wait_for(
+            token1,
+            1,
+            RegionEpoch::default(),
+            1,
+            waiter1.start_ts,
+            waiter1.wait_info,
+            false,
+            Some(WaitTimeout::Default),
+            waiter1.cancel_callback,
+            diag_ctx(b"k1", b"tag1", INVALID_TRACKER_TOKEN),
+        );
+        for is_first_lock in &[true, false] {
+            let (waiter, lock_info2, f2) = new_test_waiter_with_key(30.into(), 40.into(), b"k2");
+            let token2 = lock_mgr.allocate_token();
+            lock_mgr.wait_for(
+                token2,
+                1,
+                RegionEpoch::default(),
+                1,
+                waiter.start_ts,
+                waiter.wait_info,
+                *is_first_lock,
+                Some(WaitTimeout::Default),
+                waiter.cancel_callback,
+                diag_ctx(b"k2", b"tag2", INVALID_TRACKER_TOKEN),
+            );
+            assert!(lock_mgr.has_waiter());
+            if *is_first_lock {
+                lock_mgr.remove_lock_wait(token2);
+                block_on(f2).unwrap_err();
+            } else {
+                assert_elapsed(
+                    || {
+                        expect_deadlock(
+                            block_on(f2).unwrap(),
+                            30.into(),
+                            lock_info2,
+                            Key::from_raw(b"k1").gen_hash(),
+                            &[(40, 30, b"k1", b"tag1"), (30, 40, b"k2", b"tag2")],
+                        )
+                    },
+                    0,
+                    500,
+                );
+            }
+        }
+        lock_mgr.remove_lock_wait(token1);
+        block_on(f1).unwrap_err();
+        assert!(!lock_mgr.has_waiter());
 
         // If timeout is none, no wait for.
         let (waiter, lock_info, f) = new_test_waiter(10.into(), 20.into(), 20);

@@ -753,7 +753,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     }
 
     fn on_release_locks(&self, released_locks: ReleasedLocks) {
-        // let mut wake_up_events = vec![];
         let mut legacy_wake_up_list = vec![];
         let mut delay_wake_up_futures = vec![];
         let wake_up_delay_duration_ms = self
@@ -773,21 +772,12 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     None => return,
                 };
 
-            // wake_up_events.push(lock_manager::KeyWakeUpEvent {
-            //     key: released_lock.key.clone(),
-            //     released_start_ts: released_lock.start_ts,
-            //     released_commit_ts: released_lock.commit_ts,
-            //     awakened_start_ts: lock_wait_entry.parameters.start_ts,
-            //     awakened_allow_resuming:
-            // lock_wait_entry.parameters.allow_lock_with_conflict, });
-
             legacy_wake_up_list.push((lock_wait_entry, released_lock));
             if let Some(f) = delay_wake_up_future {
                 delay_wake_up_futures.push(f);
             }
         });
 
-        // self.inner.lock_mgr.on_keys_wakeup(wake_up_events);
         self.wake_up_legacy_pessimistic_locks(legacy_wake_up_list, delay_wake_up_futures);
     }
 
@@ -1005,22 +995,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         };
         let region_id = ctx.get_region_id();
         SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
-
-        // if let Some(lock_info) = lock_info {
-        //     let WriteResultLockInfo {
-        //         lock,
-        //         key,
-        //         is_first_lock,
-        //         wait_timeout,
-        //     } = lock_info;
-        //     let diag_ctx = DiagnosticContext {
-        //         key,
-        //         resource_group_tag: ctx.get_resource_group_tag().into(),
-        //         tracker,
-        //     };
-        //     scheduler.on_wait_for_lock(cid, ts, pr, lock, is_first_lock,
-        // wait_timeout, diag_ctx);     return;
-        // }
 
         let mut pr = Some(pr);
 
