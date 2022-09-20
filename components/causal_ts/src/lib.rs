@@ -17,13 +17,14 @@ pub use metrics::*;
 mod observer;
 use async_trait::async_trait;
 use futures::executor::block_on;
+use enum_dispatch::enum_dispatch;
 pub use observer::*;
 use txn_types::TimeStamp;
 
 pub use crate::errors::Result;
-
 /// Trait of causal timestamp provider.
 #[async_trait]
+#[enum_dispatch]
 pub trait CausalTsProvider: Send + Sync {
     /// Get a new timestamp.
     fn get_ts(&self) -> Result<TimeStamp> {
@@ -41,8 +42,12 @@ pub trait CausalTsProvider: Send + Sync {
     async fn async_flush(&self) -> Result<()>;
 }
 
-pub trait RawTsTracker: Send + Sync + Clone {
-    fn track_ts(&self, region_id: u64, ts: TimeStamp) -> Result<()>;
+#[enum_dispatch(CausalTsProvider)]
+pub enum CausalTs {
+    BatchTsoProvider(BatchTsoProvider<pd_client::RpcClient>),
+    #[cfg(any(test, feature = "testexport"))]
+    BatchTsoProviderTest(BatchTsoProvider<test_pd_client::TestPdClient>),
+    TestProvider(tests::TestProvider),
 }
 
 pub mod tests {
@@ -54,6 +59,7 @@ pub mod tests {
     use super::*;
 
     /// for TEST purpose.
+    #[derive(Clone)]
     pub struct TestProvider {
         ts: Arc<AtomicU64>,
     }
@@ -77,15 +83,6 @@ pub mod tests {
         // Do not modify this value as several test cases depend on it.
         async fn async_flush(&self) -> Result<()> {
             self.ts.fetch_add(100, Ordering::Relaxed);
-            Ok(())
-        }
-    }
-
-    #[derive(Clone, Default)]
-    pub struct DummyRawTsTracker {}
-
-    impl RawTsTracker for DummyRawTsTracker {
-        fn track_ts(&self, _region_id: u64, _ts: TimeStamp) -> Result<()> {
             Ok(())
         }
     }
