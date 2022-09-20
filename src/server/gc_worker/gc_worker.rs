@@ -747,6 +747,8 @@ where
             .send(FlowInfo::BeforeUnsafeDestroyRange(ctx.region_id))
             .unwrap();
 
+        // We are in single-rocksdb version if we can get a local_storage, otherwise, we
+        // are in multi-rocksdb version.
         if let Some(local_storage) = self.engine.kv_engine() {
             // Convert keys to RocksDB layer form
             // TODO: Logic coupled with raftstore's implementation. Maybe better design is
