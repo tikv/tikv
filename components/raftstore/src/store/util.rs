@@ -1367,22 +1367,22 @@ pub fn gc_seqno_relations<ER: RaftEngine>(
             info!("update apply state during gc relation"; "region_id" => region_id, "relation" => ?relation);
             wb.put_apply_state(region_id, relation.get_apply_state())
                 .unwrap();
-            let applied_index = relation.get_apply_state().get_applied_index();
-            if relation.has_region_state()
-            {
-                let state = relation.get_region_state();
-                if state.get_state() == PeerState::Tombstone {
-                    wb.delete_apply_state(region_id).unwrap();
-                    if let Some(raft_state) = raft_engine.get_raft_state(region_id).unwrap() {
-                        raft_engine.clean(region_id, 0, &raft_state, wb).unwrap();
-                    }
-                }
-                info!("update region state during gc relation"; "region_id" => region_id, "state" => ?state, "index" => applied_index);
-                wb.put_region_state(region_id, state).unwrap();
-            }
         }
         raft_engine
             .scan_seqno_relations(region_id, None, Some(seqno + 1), |s, relation| {
+                let applied_index = relation.get_apply_state().get_applied_index();
+                if relation.has_region_state()
+                {
+                    let state = relation.get_region_state();
+                    if state.get_state() == PeerState::Tombstone {
+                        wb.delete_apply_state(region_id).unwrap();
+                        if let Some(raft_state) = raft_engine.get_raft_state(region_id).unwrap() {
+                            raft_engine.clean(region_id, 0, &raft_state, wb).unwrap();
+                        }
+                    }
+                    info!("update region state during gc relation"; "region_id" => region_id, "state" => ?state, "index" => applied_index);
+                    wb.put_region_state(region_id, state).unwrap();
+                }
                 info!("delete relation during gc relation"; "region_id" => region_id, "relation" => ?relation);
                 wb.delete_seqno_relation(region_id, s).unwrap();
                 true

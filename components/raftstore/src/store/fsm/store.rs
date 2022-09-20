@@ -2059,7 +2059,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                             .or_insert_with(HashMap::default);
                         regions.insert(region_id, (applied_index + 1, end));
                     }
-                    RecoverStatus::Finished => info!("region {} recover finished", region_id),
+                    RecoverStatus::Finished => {
+                        info!("region recover finished"; "region_id" => region_id)
+                    }
                 }
             }
         }
