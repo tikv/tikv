@@ -323,10 +323,15 @@ impl<'a> PeerMsgHandler<'a> {
         }
         let snapshot_not_ready_peers = &peer.get_store().snapshot_not_ready_peers;
         if !snapshot_not_ready_peers.borrow().is_empty() {
-            for peer_id in snapshot_not_ready_peers.take() {
-                // Set these peers' progress to probe.
-                peer.raft_group
-                    .report_snapshot(peer_id, raft::SnapshotStatus::Failure);
+            let peers = snapshot_not_ready_peers.take();
+            if peer.is_leader() {
+                let last_index = peer.get_store().last_index();
+                for peer_id in peers {
+                    if let Some(pr) = peer.raft_group.raft.mut_prs().get_mut(peer_id) {
+                        // Increase these peers' next_idx manually to append entries.
+                        pr.next_idx = last_index;
+                    }
+                }
             }
         }
         let raft_election_timeout_ticks = self.ctx.cfg.raft_election_timeout_ticks;

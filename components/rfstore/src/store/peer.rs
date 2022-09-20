@@ -1118,6 +1118,10 @@ impl Peer {
                 },
             );
             self.cmd_epoch_checker.maybe_update_term(self.term());
+            self.get_store()
+                .snapshot_not_ready_peers
+                .borrow_mut()
+                .clear();
         }
         self.lead_transferee = self.raft_group.raft.lead_transferee.unwrap_or_default();
     }
