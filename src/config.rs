@@ -37,7 +37,7 @@ use engine_rocks::{
 };
 use engine_traits::{
     CfOptions as _, CfOptionsExt, DbOptions as _, DbOptionsExt, TabletAccessor,
-    TabletErrorCollector, TitanDbOptions as _, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    TabletErrorCollector, TitanCfOptions as _, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use file_system::IoRateLimiter;
 use keys::region_raft_prefix_len;
@@ -705,7 +705,7 @@ impl DefaultCfConfig {
                     .unwrap();
             }
         }
-        cf_opts.set_titandb_options(&self.titan.build_opts());
+        cf_opts.set_titan_cf_options(&self.titan.build_opts());
         cf_opts
     }
 }
@@ -811,7 +811,7 @@ impl WriteCfConfig {
                 WriteCompactionFilterFactory,
             )
             .unwrap();
-        cf_opts.set_titandb_options(&self.titan.build_opts());
+        cf_opts.set_titan_cf_options(&self.titan.build_opts());
         cf_opts
     }
 }
@@ -890,7 +890,7 @@ impl LockCfConfig {
         };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
-        cf_opts.set_titandb_options(&self.titan.build_opts());
+        cf_opts.set_titan_cf_options(&self.titan.build_opts());
         cf_opts
     }
 }
@@ -961,7 +961,7 @@ impl RaftCfConfig {
             .set_prefix_extractor("NoopSliceTransform", NoopSliceTransform)
             .unwrap();
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
-        cf_opts.set_titandb_options(&self.titan.build_opts());
+        cf_opts.set_titan_cf_options(&self.titan.build_opts());
         cf_opts
     }
 }
@@ -1337,7 +1337,7 @@ impl RaftDefaultCfConfig {
         cf_opts
             .set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform", f)
             .unwrap();
-        cf_opts.set_titandb_options(&self.titan.build_opts());
+        cf_opts.set_titan_cf_options(&self.titan.build_opts());
         cf_opts
     }
 }
@@ -1849,6 +1849,7 @@ pub struct UnifiedReadPoolConfig {
     pub stack_size: ReadableSize,
     #[online_config(skip)]
     pub max_tasks_per_worker: usize,
+    pub auto_adjust_pool_size: bool,
     // FIXME: Add more configs when they are effective in yatp
 }
 
@@ -1904,6 +1905,7 @@ impl Default for UnifiedReadPoolConfig {
             max_thread_count: concurrency,
             stack_size: ReadableSize::mb(DEFAULT_READPOOL_STACK_SIZE_MB),
             max_tasks_per_worker: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
+            auto_adjust_pool_size: false,
         }
     }
 }
@@ -1919,6 +1921,7 @@ mod unified_read_pool_tests {
             max_thread_count: 2,
             stack_size: ReadableSize::mb(2),
             max_tasks_per_worker: 2000,
+            auto_adjust_pool_size: false,
         };
         cfg.validate().unwrap();
         let cfg = UnifiedReadPoolConfig {
@@ -2257,6 +2260,7 @@ mod readpool_tests {
             max_thread_count: 0,
             stack_size: ReadableSize::mb(0),
             max_tasks_per_worker: 0,
+            auto_adjust_pool_size: false,
         };
         unified.validate().unwrap_err();
         let storage = StorageReadPoolConfig {
@@ -2513,10 +2517,10 @@ impl Default for BackupStreamConfig {
         let total_mem = SysQuota::memory_limit_in_bytes();
         let quota_size = (total_mem as f64 * 0.1).min(ReadableSize::mb(512).0 as _);
         Self {
-            max_flush_interval: ReadableDuration::minutes(5),
+            max_flush_interval: ReadableDuration::minutes(3),
             // use at most 50% of vCPU by default
             num_threads: (cpu_num * 0.5).clamp(2.0, 12.0) as usize,
-            enable: false,
+            enable: true,
             // TODO: may be use raft store directory
             temp_path: String::new(),
             file_size_limit: ReadableSize::mb(256),

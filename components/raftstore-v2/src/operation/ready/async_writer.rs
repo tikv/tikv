@@ -157,6 +157,10 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
     pub fn persisted_number(&self) -> u64 {
         self.persisted_number
     }
+
+    pub fn all_ready_persisted(&self) -> bool {
+        self.unpersisted_readies.is_empty()
+    }
 }
 
 impl<EK, ER, T> WriteRouterContext<EK, ER> for StoreContext<EK, ER, T>

@@ -7,7 +7,9 @@ use std::{borrow::Cow, fmt};
 
 use collections::HashSet;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
+use futures::channel::{mpsc::UnboundedSender, oneshot::Sender};
 use kvproto::{
+    brpb::CheckAdminResponse,
     import_sstpb::SstMeta,
     kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp},
     metapb,
@@ -24,13 +26,16 @@ use smallvec::{smallvec, SmallVec};
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 use tracker::{get_tls_tracker_token, TrackerToken, GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN};
 
-use super::{local_metrics::TimeTracker, worker::FetchedLogs, AbstractPeer, RegionSnapshot};
+use super::{
+    local_metrics::TimeTracker, region_meta::RegionMeta, worker::FetchedLogs, RegionSnapshot,
+};
 use crate::store::{
     fsm::apply::{CatchUpLogs, ChangeObserver, TaskRes as ApplyTaskRes},
     metrics::RaftEventDurationType,
     peer::{
-        UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
-        UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryWaitApplySyncer,
+        SnapshotRecoveryWaitApplySyncer, UnsafeRecoveryExecutePlanSyncer,
+        UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
+        UnsafeRecoveryWaitApplySyncer,
     },
     util::{KeysInfoFormatter, LatencyInspector},
     worker::{Bucket, BucketRange},
@@ -232,6 +237,20 @@ pub trait ErrorCallback: Send {
     fn is_none(&self) -> bool;
 }
 
+impl<C: ErrorCallback> ErrorCallback for Vec<C> {
+    #[inline]
+    fn report_error(self, err: RaftCmdResponse) {
+        for cb in self {
+            cb.report_error(err.clone());
+        }
+    }
+
+    #[inline]
+    fn is_none(&self) -> bool {
+        self.iter().all(|c| c.is_none())
+    }
+}
+
 impl<S: Snapshot> ReadCallback for Callback<S> {
     type Response = ReadResponse<S>;
 
@@ -274,6 +293,45 @@ impl<S: Snapshot> WriteCallback for Callback<S> {
     #[inline]
     fn set_result(self, result: Self::Response) {
         self.invoke_with_response(result);
+    }
+}
+
+impl<C> WriteCallback for Vec<C>
+where
+    C: WriteCallback,
+    C::Response: Clone,
+{
+    type Response = C::Response;
+
+    #[inline]
+    fn notify_proposed(&mut self) {
+        for c in self {
+            c.notify_proposed();
+        }
+    }
+
+    #[inline]
+    fn notify_committed(&mut self) {
+        for c in self {
+            c.notify_committed();
+        }
+    }
+
+    #[inline]
+    fn write_trackers(&self) -> Option<&SmallVec<[TimeTracker; 4]>> {
+        None
+    }
+
+    #[inline]
+    fn write_trackers_mut(&mut self) -> Option<&mut SmallVec<[TimeTracker; 4]>> {
+        None
+    }
+
+    #[inline]
+    fn set_result(self, result: Self::Response) {
+        for c in self {
+            c.set_result(result.clone());
+        }
     }
 }
 
@@ -454,6 +512,10 @@ where
     UnsafeRecoveryDestroy(UnsafeRecoveryExecutePlanSyncer),
     UnsafeRecoveryWaitApply(UnsafeRecoveryWaitApplySyncer),
     UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSyncer),
+    SnapshotRecoveryWaitApply(SnapshotRecoveryWaitApplySyncer),
+    PrepareFlashback(Sender<bool>),
+    FinishFlashback,
+    CheckPendingAdmin(UnboundedSender<CheckAdminResponse>),
 }
 
 /// Message that will be sent to a peer.
@@ -517,7 +579,7 @@ pub enum CasualMessage<EK: KvEngine> {
     ForceCompactRaftLogs,
 
     /// A message to access peer's internal state.
-    AccessPeer(Box<dyn FnOnce(&mut dyn AbstractPeer) + Send + 'static>),
+    AccessPeer(Box<dyn FnOnce(RegionMeta) + Send + 'static>),
 
     /// Region info from PD
     QueryRegionLeaderResp {

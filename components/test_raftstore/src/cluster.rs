@@ -19,7 +19,7 @@ use engine_traits::{
     WriteBatchExt, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IoRateLimiter;
-use futures::executor::block_on;
+use futures::{self, channel::oneshot, executor::block_on};
 use kvproto::{
     errorpb::Error as PbError,
     kvrpcpb::{ApiVersion, Context},
@@ -46,6 +46,7 @@ use raftstore::{
     Error, Result,
 };
 use tempfile::TempDir;
+use test_pd_client::TestPdClient;
 use tikv::server::Result as ServerResult;
 use tikv_util::{
     thread_group::GroupProperties,
@@ -1334,6 +1335,13 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn try_transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) -> RaftCmdResponse {
+        let epoch = self.get_region_epoch(region_id);
+        let transfer_leader = new_admin_request(region_id, &epoch, new_transfer_leader_cmd(leader));
+        self.call_command_on_leader(transfer_leader, Duration::from_secs(5))
+            .unwrap()
+    }
+
     pub fn get_snap_dir(&self, node_id: u64) -> String {
         self.sim.rl().get_snap_dir(node_id)
     }
@@ -1408,6 +1416,28 @@ impl<T: Simulator> Cluster<T> {
         let router = self.sim.rl().get_router(store_id).unwrap();
         router
             .significant_send(region_id, SignificantMsg::ExitForceLeaderState)
+            .unwrap();
+    }
+
+    pub async fn call_and_wait_prepare_flashback(&mut self, region_id: u64, store_id: u64) {
+        let router = self.sim.rl().get_router(store_id).unwrap();
+        let (tx, rx) = oneshot::channel();
+
+        router
+            .significant_send(region_id, SignificantMsg::PrepareFlashback(tx))
+            .unwrap();
+
+        let prepared = rx.await.unwrap();
+        if !prepared {
+            panic!("prepare flashback failed");
+        }
+    }
+
+    pub fn call_finish_flashback(&mut self, region_id: u64, store_id: u64) {
+        let router = self.sim.rl().get_router(store_id).unwrap();
+
+        router
+            .significant_send(region_id, SignificantMsg::FinishFlashback)
             .unwrap();
     }
 

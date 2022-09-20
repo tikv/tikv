@@ -5,6 +5,7 @@ use std::{fmt::Debug, io::Write, path::Path, sync::Arc, time::Duration};
 use engine_rocks::RocksEngine;
 use engine_rocks_helper::sst_recovery::*;
 use engine_traits::{CompactExt, Peekable, CF_DEFAULT};
+use test_pd_client::TestPdClient;
 use test_raftstore::*;
 
 const CHECK_DURATION: Duration = Duration::from_millis(50);

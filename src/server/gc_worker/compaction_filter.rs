@@ -392,7 +392,6 @@ impl WriteCompactionFilter {
             let task = GcTask::GcKeys {
                 keys: mem::replace(&mut self.mvcc_deletions, empty),
                 safe_point: self.safe_point.into(),
-                store_id: self.regions_provider.0,
                 region_info_provider: self.regions_provider.1.clone(),
             };
             self.schedule_gc_task(task, false);
@@ -495,7 +494,8 @@ impl WriteCompactionFilter {
                     ),
                 ))
             });
-            wb.write_opt(wopts)
+            wb.write_opt(wopts)?;
+            Ok(())
         }
 
         if self.write_batch.count() > DEFAULT_DELETE_BATCH_COUNT || force {

@@ -19,18 +19,21 @@
 
 mod async_writer;
 
+use std::cmp;
+
 use engine_traits::{KvEngine, RaftEngine};
 use error_code::ErrorCodeExt;
 use kvproto::raft_serverpb::RaftMessage;
 use protobuf::Message as _;
 use raft::{eraftpb, Ready};
-use raftstore::store::{FetchedLogs, Transport, WriteTask};
+use raftstore::store::{util, ExtraStates, FetchedLogs, Transport, WriteTask};
 use slog::{debug, error, trace, warn};
 
 pub use self::async_writer::AsyncWriter;
 use crate::{
     batch::StoreContext,
     fsm::{PeerFsm, PeerFsmDelegate},
+    operation::DestroyProgress,
     raft::{Peer, Storage},
     router::PeerTick,
 };
@@ -50,6 +53,66 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     fn tick(&mut self) -> bool {
         self.raft_group_mut().tick()
+    }
+
+    pub fn on_raft_message<T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        mut msg: Box<RaftMessage>,
+    ) {
+        debug!(
+            self.logger,
+            "handle raft message";
+            "message_type" => %util::MsgType(&msg),
+            "from_peer_id" => msg.get_from_peer().get_id(),
+            "to_peer_id" => msg.get_to_peer().get_id(),
+        );
+        if !self.serving() {
+            return;
+        }
+        if msg.get_to_peer().get_store_id() != self.peer().get_store_id() {
+            ctx.raft_metrics.message_dropped.mismatch_store_id.inc();
+            return;
+        }
+        if !msg.has_region_epoch() {
+            ctx.raft_metrics.message_dropped.mismatch_region_epoch.inc();
+            return;
+        }
+        if msg.get_is_tombstone() {
+            self.mark_for_destroy(None);
+            return;
+        }
+        if msg.has_merge_target() {
+            unimplemented!();
+            return;
+        }
+        // We don't handle stale message like v1, as we rely on leader to actively
+        // cleanup stale peers.
+        let to_peer = msg.get_to_peer();
+        // Check if the message is sent to the right peer.
+        match to_peer.get_id().cmp(&self.peer_id()) {
+            cmp::Ordering::Equal => (),
+            cmp::Ordering::Less => {
+                ctx.raft_metrics.message_dropped.stale_msg.inc();
+                return;
+            }
+            cmp::Ordering::Greater => {
+                // We need to create the target peer.
+                self.mark_for_destroy(Some(msg));
+                return;
+            }
+        }
+        if msg.has_extra_msg() {
+            unimplemented!();
+            return;
+        }
+        // TODO: drop all msg append when the peer is uninitialized and has conflict
+        // ranges with other peers.
+        self.insert_peer_cache(msg.take_from_peer());
+        if let Err(e) = self.raft_group_mut().step(msg.take_message()) {
+            error!(self.logger, "raft step error"; "err" => ?e);
+        }
+        self.set_has_ready();
     }
 
     /// Callback for fetching logs asynchronously.
@@ -160,11 +223,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     fn handle_raft_committed_entries<T>(
-        &self,
-        _ctx: &mut crate::batch::StoreContext<EK, ER, T>,
-        _take_committed_entries: Vec<raft::prelude::Entry>,
+        &mut self,
+        ctx: &mut crate::batch::StoreContext<EK, ER, T>,
+        committed_entries: Vec<raft::prelude::Entry>,
     ) {
-        unimplemented!()
+        // TODO: skip handling committed entries if a snapshot is being applied
+        // asynchronously.
+        if self.is_leader() {
+            // TODO: Update lease
+        }
+        self.schedule_apply_committed_entries(ctx, committed_entries);
     }
 
     /// Processing the ready of raft. A detail description of how it's handled
@@ -176,14 +244,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn handle_raft_ready<T: Transport>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
         let has_ready = self.reset_has_ready();
-        if !has_ready {
+        if !has_ready || self.destroy_progress().started() {
             return;
         }
         ctx.has_ready = true;
 
-        if !self.raft_group().has_ready() {
+        if !self.raft_group().has_ready() && (self.serving() || self.postpond_destroy()) {
             return;
         }
+
+        // Note even the group has no ready, we can still get an empty ready.
 
         debug!(self.logger, "handle raft ready");
 
@@ -217,6 +287,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 .into_iter()
                 .flat_map(|m| self.build_raft_message(ctx, m))
                 .collect();
+        }
+        if !self.serving() {
+            self.start_destroy(&mut write_task);
         }
         // Ready number should increase monotonically.
         assert!(self.async_writer.known_largest_number() < ready.number());
@@ -273,8 +346,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.storage_mut()
             .entry_storage_mut()
             .update_cache_persisted(persisted_index);
-        // We may need to check if there is persisted committed logs.
-        self.set_has_ready();
+        if !self.destroy_progress().started() {
+            // We may need to check if there is persisted committed logs.
+            self.set_has_ready();
+        } else if self.async_writer.all_ready_persisted() {
+            // Destroy ready is the last ready. All readies are persisted means destroy
+            // is persisted.
+            self.finish_destroy(ctx);
+        }
     }
 }
 
@@ -287,6 +366,7 @@ impl<ER: RaftEngine> Storage<ER> {
         write_task: &mut WriteTask<EK, ER>,
     ) {
         let prev_raft_state = self.entry_storage().raft_state().clone();
+        let ever_persisted = self.ever_persisted();
 
         // TODO: handle snapshot
 
@@ -297,8 +377,14 @@ impl<ER: RaftEngine> Storage<ER> {
         if let Some(hs) = ready.hs() {
             entry_storage.raft_state_mut().set_hard_state(hs.clone());
         }
-        if prev_raft_state != *entry_storage.raft_state() {
+        if !ever_persisted || prev_raft_state != *entry_storage.raft_state() {
             write_task.raft_state = Some(entry_storage.raft_state().clone());
+        }
+        if !ever_persisted {
+            let mut extra_states = ExtraStates::new(self.apply_state().clone());
+            extra_states.set_region_state(self.region_state().clone());
+            write_task.extra_write.set_v2(extra_states);
+            self.set_ever_persisted();
         }
     }
 }

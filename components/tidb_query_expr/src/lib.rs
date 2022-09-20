@@ -38,6 +38,7 @@ pub mod impl_math;
 pub mod impl_miscellaneous;
 pub mod impl_op;
 pub mod impl_other;
+pub mod impl_regexp;
 pub mod impl_string;
 pub mod impl_time;
 
@@ -52,7 +53,7 @@ pub use self::types::*;
 use self::{
     impl_arithmetic::*, impl_cast::*, impl_compare::*, impl_compare_in::*, impl_control::*,
     impl_encryption::*, impl_json::*, impl_like::*, impl_math::*, impl_miscellaneous::*,
-    impl_op::*, impl_other::*, impl_string::*, impl_time::*,
+    impl_op::*, impl_other::*, impl_regexp::*, impl_string::*, impl_time::*,
 };
 
 fn map_to_binary_fn_sig(expr: &Expr) -> Result<RpnFnMeta> {
@@ -94,6 +95,38 @@ fn map_like_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
     Ok(match_template_collator! {
         TT, match ret_field_type.as_accessor().collation().map_err(tidb_query_datatype::codec::Error::from)? {
             Collation::TT => like_fn_meta::<TT>()
+        }
+    })
+}
+
+fn map_regexp_like_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
+    Ok(match_template_collator! {
+        TT, match ret_field_type.as_accessor().collation().map_err(tidb_query_datatype::codec::Error::from)? {
+            Collation::TT => regexp_like_fn_meta::<TT>()
+        }
+    })
+}
+
+fn map_regexp_substr_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
+    Ok(match_template_collator! {
+        TT, match ret_field_type.as_accessor().collation().map_err(tidb_query_datatype::codec::Error::from)? {
+            Collation::TT => regexp_substr_fn_meta::<TT>()
+        }
+    })
+}
+
+fn map_regexp_instr_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
+    Ok(match_template_collator! {
+        TT, match ret_field_type.as_accessor().collation().map_err(tidb_query_datatype::codec::Error::from)? {
+            Collation::TT => regexp_instr_fn_meta::<TT>()
+        }
+    })
+}
+
+fn map_regexp_replace_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
+    Ok(match_template_collator! {
+        TT, match ret_field_type.as_accessor().collation().map_err(tidb_query_datatype::codec::Error::from)? {
+            Collation::TT => regexp_replace_fn_meta::<TT>()
         }
     })
 }
@@ -563,8 +596,14 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::JsonQuoteSig => json_quote_fn_meta(),
         // impl_like
         ScalarFuncSig::LikeSig => map_like_sig(ft)?,
-        ScalarFuncSig::RegexpSig => regexp_fn_meta(),
-        ScalarFuncSig::RegexpUtf8Sig => regexp_utf8_fn_meta(),
+        // impl_regexp
+        ScalarFuncSig::RegexpSig => map_regexp_like_sig(ft)?,
+        ScalarFuncSig::RegexpUtf8Sig => map_regexp_like_sig(ft)?,
+        ScalarFuncSig::RegexpLikeSig => map_regexp_like_sig(ft)?,
+        ScalarFuncSig::RegexpSubstrSig => map_regexp_substr_sig(ft)?,
+        ScalarFuncSig::RegexpInStrSig => map_regexp_instr_sig(ft)?,
+        ScalarFuncSig::RegexpReplaceSig => map_regexp_replace_sig(ft)?,
+
         // impl_math
         ScalarFuncSig::AbsInt => abs_int_fn_meta(),
         ScalarFuncSig::AbsUInt => abs_uint_fn_meta(),
