@@ -10,21 +10,12 @@ use raft::StateRole;
 use raftstore::{coprocessor::*, store::RegionSnapshot, Error as RaftStoreError};
 use tikv::storage::Statistics;
 use tikv_util::{error, warn, worker::Scheduler};
-use txn_types::TimeStamp;
 
 use crate::{
     endpoint::{Deregister, Task},
     old_value::{self, OldValueCache},
     Error as CdcError,
 };
-
-// max_ts presents the max ts in one batch.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RawRegionTs {
-    pub region_id: u64,
-    pub cdc_id: ObserveId,
-    pub max_ts: TimeStamp,
-}
 
 /// An Observer for CDC.
 ///
