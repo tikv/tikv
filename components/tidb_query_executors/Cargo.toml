@@ -6,6 +6,7 @@ publish = false
 description = "A vector query engine to run TiDB pushed down executors"
 
 [dependencies]
+async-trait = "0.1"
 codec = { path = "../codec", default-features = false }
 collections = { path = "../collections" }
 fail = "0.5"

@@ -6,7 +6,7 @@ use std::borrow::Cow;
 
 use batch_system::{BasicMailbox, Fsm};
 use crossbeam::channel::TryRecvError;
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::{KvEngine, RaftEngine, TabletFactory};
 use kvproto::metapb;
 use raftstore::store::{Config, Transport};
 use slog::{debug, error, info, trace, Logger};
@@ -18,7 +18,7 @@ use tikv_util::{
 
 use crate::{
     batch::StoreContext,
-    raft::Peer,
+    raft::{Peer, Storage},
     router::{PeerMsg, PeerTick},
     Result,
 };
@@ -36,7 +36,12 @@ pub struct PeerFsm<EK: KvEngine, ER: RaftEngine> {
 }
 
 impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
-    pub fn new(cfg: &Config, peer: Peer<EK, ER>) -> Result<SenderFsmPair<EK, ER>> {
+    pub fn new(
+        cfg: &Config,
+        tablet_factory: &dyn TabletFactory<EK>,
+        storage: Storage<ER>,
+    ) -> Result<SenderFsmPair<EK, ER>> {
+        let peer = Peer::new(cfg, tablet_factory, storage)?;
         info!(peer.logger, "create peer");
         let (tx, rx) = mpsc::loose_bounded(cfg.notify_capacity);
         let fsm = Box::new(PeerFsm {
@@ -200,15 +205,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
     pub fn on_msgs(&mut self, peer_msgs_buf: &mut Vec<PeerMsg>) {
         for msg in peer_msgs_buf.drain(..) {
             match msg {
-                PeerMsg::RaftMessage(_) => unimplemented!(),
+                PeerMsg::RaftMessage(msg) => self.fsm.peer.on_raft_message(self.store_ctx, msg),
                 PeerMsg::RaftQuery(cmd) => {
                     self.on_receive_command(cmd.send_time);
                     self.on_query(cmd.request, cmd.ch)
                 }
                 PeerMsg::RaftCommand(cmd) => {
                     self.on_receive_command(cmd.send_time);
-                    // self.on_command(cmd.cmd.request, cmd.ch)
-                    unimplemented!()
+                    self.on_command(cmd.request, cmd.ch)
                 }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
                 PeerMsg::ApplyRes(res) => unimplemented!(),
@@ -224,7 +228,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 PeerMsg::FetchedLogs(fetched_logs) => {
                     self.fsm.peer_mut().on_fetched_logs(fetched_logs)
                 }
+                PeerMsg::QueryDebugInfo(ch) => self.fsm.peer_mut().on_query_debug_info(ch),
             }
         }
+        // TODO: instead of propose pending commands immediately, we should use timeout.
+        self.fsm.peer.propose_pending_command(self.store_ctx);
     }
 }

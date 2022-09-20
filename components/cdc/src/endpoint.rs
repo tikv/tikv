@@ -1146,7 +1146,15 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let fut = async move {
             let _ = timeout.compat().await;
             // Ignore get tso errors since we will retry every `min_ts_interval`.
-            let min_ts_pd = pd_client.get_tso().await.unwrap_or_default();
+            let min_ts_pd = match causal_ts_provider {
+                // TiKV API v2 is enabled when causal_ts_provider is Some.
+                // In this scenario, get TSO from causal_ts_provider to make sure that
+                // RawKV write requests will get larger TSO after this point.
+                // RawKV CDC's resolved_ts is guaranteed by ConcurrencyManager::global_min_lock_ts,
+                // which lock flying keys's ts in raw put and delete interfaces in `Storage`.
+                Some(provider) => provider.get_ts().unwrap_or_default(),
+                None => pd_client.get_tso().await.unwrap_or_default(),
+            };
             let mut min_ts = min_ts_pd;
             let mut min_ts_min_lock = min_ts_pd;
 
@@ -1167,13 +1175,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                 // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
                 // advance normally.
                 Err(err) => panic!("failed to regiester min ts event, error: {:?}", err),
-            }
-
-            // If flush_causal_timestamp fails, cannot schedule MinTs task
-            // as new coming raw data may use timestamp smaller than min_ts
-            if let Err(e) = causal_ts_provider.map_or(Ok(()), |provider| provider.flush()) {
-                error!("cdc flush causal timestamp failed"; "err" => ?e);
-                return;
             }
 
             let gate = pd_client.feature_gate();
@@ -1433,7 +1434,8 @@ mod tests {
         errors::{DiscardReason, Error as RaftStoreError},
         store::{msg::CasualMessage, PeerMsg, ReadDelegate},
     };
-    use test_raftstore::{MockRaftStoreRouter, TestPdClient};
+    use test_pd_client::TestPdClient;
+    use test_raftstore::MockRaftStoreRouter;
     use tikv::{
         server::DEFAULT_CLUSTER_ID,
         storage::{kv::Engine, TestEngineBuilder},
@@ -1528,8 +1530,9 @@ mod tests {
                     .build_without_cache()
                     .unwrap()
                     .kv_engine()
+                    .unwrap()
             }),
-            CdcObserver::new(task_sched, api_version),
+            CdcObserver::new(task_sched),
             Arc::new(StdMutex::new(StoreMeta::new(0))),
             ConcurrencyManager::new(1.into()),
             Arc::new(Environment::new(1)),
@@ -2310,7 +2313,7 @@ mod tests {
     }
 
     #[test]
-    fn test_raw_causal_ts_flush() {
+    fn test_raw_causal_min_ts() {
         let sleep_interval = Duration::from_secs(1);
         let cfg = CdcConfig {
             min_ts_interval: ReadableDuration(sleep_interval),
@@ -2327,7 +2330,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let end_ts = ts_provider.get_ts().unwrap();
-        assert!(end_ts.into_inner() >= start_ts.next().into_inner() + 100); // may trigger more than once.
+        assert!(end_ts.into_inner() > start_ts.next().into_inner()); // may trigger more than once.
     }
 
     #[test]

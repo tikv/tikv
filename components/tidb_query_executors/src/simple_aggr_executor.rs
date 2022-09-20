@@ -5,6 +5,7 @@
 
 use std::{mem::size_of, sync::Arc};
 
+use async_trait::async_trait;
 use tidb_query_aggr::*;
 use tidb_query_common::{metrics::*, storage::IntervalRange, Result};
 use tidb_query_datatype::{
@@ -24,6 +25,7 @@ pub struct BatchSimpleAggregationExecutor<Src: BatchExecutor>(
     AggregationExecutor<Src, SimpleAggregationImpl>,
 );
 
+#[async_trait]
 impl<Src: BatchExecutor> BatchExecutor for BatchSimpleAggregationExecutor<Src> {
     type StorageStats = Src::StorageStats;
 
@@ -33,8 +35,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSimpleAggregationExecutor<Src> {
     }
 
     #[inline]
-    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        self.0.next_batch(scan_rows)
+    async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        self.0.next_batch(scan_rows).await
     }
 
     #[inline]
@@ -264,6 +266,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
 
 #[cfg(test)]
 mod tests {
+    use futures::executor::block_on;
     use tidb_query_codegen::AggrFunction;
     use tidb_query_datatype::{
         expr::{EvalContext, EvalWarnings},
@@ -492,15 +495,15 @@ mod tests {
             BatchSimpleAggregationExecutor::new_for_test(src_exec, aggr_definitions, MyParser);
 
         // The scan rows parameter has no effect for mock executor. We don't care.
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[0]);
         assert_eq!(r.physical_columns.rows_len(), 1);
         assert_eq!(r.physical_columns.columns_len(), 12);
@@ -580,15 +583,15 @@ mod tests {
             AllAggrDefinitionParser,
         );
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[0]);
         assert_eq!(r.physical_columns.rows_len(), 1);
         assert_eq!(r.physical_columns.columns_len(), 10);
@@ -697,12 +700,12 @@ mod tests {
         let mut exec =
             BatchSimpleAggregationExecutor::new_for_test(src_exec, vec![Expr::default()], MyParser);
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(r.is_drained.unwrap());

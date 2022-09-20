@@ -2,6 +2,7 @@
 
 use std::{collections::HashSet, sync::Arc};
 
+use async_trait::async_trait;
 use collections::HashMap;
 use kvproto::coprocessor::KeyRange;
 use smallvec::SmallVec;
@@ -129,6 +130,7 @@ impl<S: Storage> BatchTableScanExecutor<S> {
     }
 }
 
+#[async_trait]
 impl<S: Storage> BatchExecutor for BatchTableScanExecutor<S> {
     type StorageStats = S::Statistics;
 
@@ -138,8 +140,8 @@ impl<S: Storage> BatchExecutor for BatchTableScanExecutor<S> {
     }
 
     #[inline]
-    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        self.0.next_batch(scan_rows)
+    async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        self.0.next_batch(scan_rows).await
     }
 
     #[inline]
@@ -468,6 +470,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
 mod tests {
     use std::{iter, sync::Arc};
 
+    use futures::executor::block_on;
     use kvproto::coprocessor::KeyRange;
     use tidb_query_common::{
         execute_stats::*, storage::test_fixture::FixtureStorage, util::convert_to_prefix_next,
@@ -746,7 +749,7 @@ mod tests {
         for expect_rows in batch_expect_rows {
             let expect_rows = *expect_rows;
             let expect_drained = start_row + expect_rows > total_rows;
-            let result = executor.next_batch(expect_rows);
+            let result = block_on(executor.next_batch(expect_rows));
             assert_eq!(*result.is_drained.as_ref().unwrap(), expect_drained);
             if expect_drained {
                 // all remaining rows are fetched
@@ -826,8 +829,8 @@ mod tests {
         .unwrap()
         .collect_summary(1);
 
-        executor.next_batch(1);
-        executor.next_batch(2);
+        block_on(executor.next_batch(1));
+        block_on(executor.next_batch(2));
 
         let mut s = ExecuteStats::new(2);
         executor.collect_exec_stats(&mut s);
@@ -855,7 +858,7 @@ mod tests {
         // Reset collected statistics so that now we will only collect statistics in
         // this round.
         s.clear();
-        executor.next_batch(10);
+        block_on(executor.next_batch(10));
         executor.collect_exec_stats(&mut s);
 
         assert_eq!(s.scanned_rows_per_range.len(), 1);
@@ -968,7 +971,7 @@ mod tests {
             )
             .unwrap();
 
-            let mut result = executor.next_batch(10);
+            let mut result = block_on(executor.next_batch(10));
             result.is_drained.unwrap_err();
             assert_eq!(result.physical_columns.columns_len(), 3);
             assert_eq!(result.physical_columns.rows_len(), 2);
@@ -1075,7 +1078,7 @@ mod tests {
             )
             .unwrap();
 
-            let mut result = executor.next_batch(10);
+            let mut result = block_on(executor.next_batch(10));
             result.is_drained.unwrap_err();
             assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 1);
@@ -1123,7 +1126,7 @@ mod tests {
             )
             .unwrap();
 
-            let mut result = executor.next_batch(10);
+            let mut result = block_on(executor.next_batch(10));
             result.is_drained.unwrap_err();
             assert_eq!(result.physical_columns.columns_len(), 3);
             assert_eq!(result.physical_columns.rows_len(), 1);
@@ -1165,7 +1168,7 @@ mod tests {
             )
             .unwrap();
 
-            let mut result = executor.next_batch(1);
+            let mut result = block_on(executor.next_batch(1));
             result.is_drained.unwrap();
             assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 1);
@@ -1183,7 +1186,7 @@ mod tests {
                 &[Some(7)]
             );
 
-            let result = executor.next_batch(1);
+            let result = block_on(executor.next_batch(1));
             result.is_drained.unwrap_err();
             assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 0);
@@ -1204,7 +1207,7 @@ mod tests {
             )
             .unwrap();
 
-            let result = executor.next_batch(10);
+            let result = block_on(executor.next_batch(10));
             result.is_drained.unwrap_err();
             assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 0);
@@ -1225,7 +1228,7 @@ mod tests {
             )
             .unwrap();
 
-            let mut result = executor.next_batch(10);
+            let mut result = block_on(executor.next_batch(10));
             result.is_drained.unwrap();
             assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 2);
@@ -1259,7 +1262,7 @@ mod tests {
             )
             .unwrap();
 
-            let result = executor.next_batch(10);
+            let result = block_on(executor.next_batch(10));
             result.is_drained.unwrap_err();
             assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 0);
@@ -1309,7 +1312,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut result = executor.next_batch(10);
+        let mut result = block_on(executor.next_batch(10));
         assert_eq!(result.is_drained.unwrap(), true);
         assert_eq!(result.logical_rows.len(), 1);
         assert_eq!(result.physical_columns.columns_len(), columns_is_pk.len());
@@ -1417,7 +1420,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut result = executor.next_batch(10);
+        let mut result = block_on(executor.next_batch(10));
         assert_eq!(result.is_drained.unwrap(), true);
         assert_eq!(result.logical_rows.len(), 1);
 
@@ -1598,7 +1601,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut result = executor.next_batch(10);
+        let mut result = block_on(executor.next_batch(10));
         assert_eq!(result.is_drained.unwrap(), true);
         if !columns_info.is_empty() {
             assert_eq!(result.logical_rows.len(), 1);

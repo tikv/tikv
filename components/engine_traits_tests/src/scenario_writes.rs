@@ -42,17 +42,20 @@ impl WriteScenarioEngine {
             WriteBatchNoCf => {
                 let mut wb = self.db.engine.write_batch();
                 wb.put(key, value)?;
-                wb.write()
+                wb.write()?;
+                Ok(())
             }
             WriteBatchDefaultCf => {
                 let mut wb = self.db.engine.write_batch();
                 wb.put_cf(CF_DEFAULT, key, value)?;
-                wb.write()
+                wb.write()?;
+                Ok(())
             }
             WriteBatchOtherCf => {
                 let mut wb = self.db.engine.write_batch();
                 wb.put_cf(CF_WRITE, key, value)?;
-                wb.write()
+                wb.write()?;
+                Ok(())
             }
         }
     }
@@ -66,17 +69,20 @@ impl WriteScenarioEngine {
             WriteBatchNoCf => {
                 let mut wb = self.db.engine.write_batch();
                 wb.delete(key)?;
-                wb.write()
+                wb.write()?;
+                Ok(())
             }
             WriteBatchDefaultCf => {
                 let mut wb = self.db.engine.write_batch();
                 wb.delete_cf(CF_DEFAULT, key)?;
-                wb.write()
+                wb.write()?;
+                Ok(())
             }
             WriteBatchOtherCf => {
                 let mut wb = self.db.engine.write_batch();
                 wb.delete_cf(CF_WRITE, key)?;
-                wb.write()
+                wb.write()?;
+                Ok(())
             }
         }
     }
@@ -90,17 +96,20 @@ impl WriteScenarioEngine {
             WriteBatchNoCf => {
                 let mut wb = self.db.engine.write_batch();
                 wb.delete_range(start, end)?;
-                wb.write()
+                wb.write()?;
+                Ok(())
             }
             WriteBatchDefaultCf => {
                 let mut wb = self.db.engine.write_batch();
                 wb.delete_range_cf(CF_DEFAULT, start, end)?;
-                wb.write()
+                wb.write()?;
+                Ok(())
             }
             WriteBatchOtherCf => {
                 let mut wb = self.db.engine.write_batch();
                 wb.delete_range_cf(CF_WRITE, start, end)?;
-                wb.write()
+                wb.write()?;
+                Ok(())
             }
         }
     }

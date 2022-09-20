@@ -2,7 +2,10 @@
 
 use std::sync::Arc;
 
+
+use async_trait::async_trait;
 use tidb_query_common::{metrics::*, storage::IntervalRange, Result};
+
 use tidb_query_datatype::{
     codec::{batch::LazyBatchColumnVec, data_type::*},
     expr::{EvalConfig, EvalContext},
@@ -78,12 +81,15 @@ impl<Src: BatchExecutor> BatchProjectionExecutor<Src> {
     }
 }
 
+
+#[async_trait]
 impl<Src: BatchExecutor> Drop for BatchProjectionExecutor<Src> {
     fn drop(&mut self) {
         MEMTRACE_QUERY_EXECUTOR.projection.sub(self.n_bytes as i64);
     }
 }
 
+#[async_trait]
 impl<Src: BatchExecutor> BatchExecutor for BatchProjectionExecutor<Src> {
     type StorageStats = Src::StorageStats;
 
@@ -93,8 +99,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchProjectionExecutor<Src> {
     }
 
     #[inline]
-    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        let mut src_result = self.src.next_batch(scan_rows);
+    async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        let mut src_result = self.src.next_batch(scan_rows).await;
         let child_schema = self.src.schema();
         let mut eval_result = Vec::with_capacity(self.schema().len());
         let BatchExecuteResult {
@@ -177,6 +183,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchProjectionExecutor<Src> {
 
 #[cfg(test)]
 mod tests {
+    use futures::executor::block_on;
     use tidb_query_codegen::rpn_fn;
     use tidb_query_datatype::{codec::batch::LazyBatchColumnVec, expr::EvalWarnings, FieldTypeTp};
 
@@ -231,7 +238,7 @@ mod tests {
         // correctly. No errors should be generated and the expression functions
         // should not be called.
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         // The scan rows parameter has no effect for mock executor. We don't care.
         // FIXME: A compiler bug prevented us write:
         //    |         assert_eq!(r.logical_rows.as_slice(), &[]);
@@ -239,11 +246,11 @@ mod tests {
         assert!(r.logical_rows.is_empty());
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert!(r.is_drained.unwrap());
     }
@@ -307,7 +314,7 @@ mod tests {
         ];
         let mut exec = BatchProjectionExecutor::new_for_test(src_exec, exprs);
         assert_eq!(exec.schema().len(), 1);
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[2, 0]);
         assert_eq!(r.physical_columns.columns_len(), 1);
         assert_eq!(
@@ -316,12 +323,12 @@ mod tests {
         );
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.columns_len(), 0);
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[1]);
         assert_eq!(r.physical_columns.columns_len(), 1);
         assert_eq!(
@@ -344,7 +351,7 @@ mod tests {
         ];
         let mut exec = BatchProjectionExecutor::new_for_test(src_exec, exprs);
         assert_eq!(exec.schema().len(), 2);
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[2, 0]);
         assert_eq!(r.physical_columns.columns_len(), 2);
         assert_eq!(
@@ -357,12 +364,12 @@ mod tests {
         );
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.columns_len(), 0);
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[1]);
         assert_eq!(r.physical_columns.columns_len(), 2);
         assert_eq!(
@@ -456,7 +463,7 @@ mod tests {
             .build_for_test();
 
         let mut exec = BatchProjectionExecutor::new_for_test(src_exec, vec![expr1, expr2]);
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[3, 4, 0, 2]);
         assert_eq!(r.physical_columns.columns_len(), 2);
         assert_eq!(
@@ -469,11 +476,11 @@ mod tests {
         );
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert_eq!(r.logical_rows, &[0]);
         assert_eq!(r.physical_columns[0].decoded().to_int_vec(), vec![None]);
         assert_eq!(r.physical_columns[1].decoded().to_int_vec(), vec![Some(1)]);
@@ -539,7 +546,7 @@ mod tests {
             .collect();
         let mut exec = BatchProjectionExecutor::new_for_test(src_exec, exprs);
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         r.is_drained.unwrap_err();
     }

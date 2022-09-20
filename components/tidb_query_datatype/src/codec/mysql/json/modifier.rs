@@ -228,13 +228,6 @@ impl<'a> BinaryModifier<'a> {
         }
         let tp = self.old.get_type();
         match tp {
-            JsonType::Literal
-            | JsonType::I64
-            | JsonType::U64
-            | JsonType::Double
-            | JsonType::String => {
-                buf.extend_from_slice(self.old.value);
-            }
             JsonType::Object | JsonType::Array => {
                 let doc_off = buf.len();
                 let elem_count = self.old.get_elem_count();
@@ -301,6 +294,9 @@ impl<'a> BinaryModifier<'a> {
                     &mut buf[doc_off + ELEMENT_COUNT_LEN..],
                     data_len as u32,
                 );
+            }
+            _ => {
+                buf.extend_from_slice(self.old.value);
             }
         }
         Ok(tp)

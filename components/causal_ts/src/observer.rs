@@ -2,38 +2,28 @@
 
 use std::sync::Arc;
 
-use api_version::{ApiV2, KeyMode, KvFormat};
 use engine_traits::KvEngine;
-use kvproto::{
-    metapb::Region,
-    raft_cmdpb::{CmdType, Request as RaftRequest},
-};
+use kvproto::metapb::Region;
 use raft::StateRole;
-use raftstore::{
-    coprocessor,
-    coprocessor::{
-        BoxQueryObserver, BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost,
-        ObserverContext, QueryObserver, RegionChangeEvent, RegionChangeObserver,
-        RegionChangeReason, RoleChange, RoleObserver,
-    },
+use raftstore::coprocessor::{
+    BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
+    RegionChangeEvent, RegionChangeObserver, RegionChangeReason, RoleChange, RoleObserver,
 };
 
-use crate::{CausalTsProvider, RawTsTracker};
+use crate::CausalTsProvider;
 
 /// CausalObserver appends timestamp for RawKV V2 data, and invoke
 /// causal_ts_provider.flush() on specified event, e.g. leader
 /// transfer, snapshot apply.
 /// Should be used ONLY when API v2 is enabled.
-pub struct CausalObserver<Ts: CausalTsProvider, Tk: RawTsTracker> {
+pub struct CausalObserver<Ts: CausalTsProvider> {
     causal_ts_provider: Arc<Ts>,
-    ts_tracker: Tk,
 }
 
-impl<Ts: CausalTsProvider, Tk: RawTsTracker> Clone for CausalObserver<Ts, Tk> {
+impl<Ts: CausalTsProvider> Clone for CausalObserver<Ts> {
     fn clone(&self) -> Self {
         Self {
             causal_ts_provider: self.causal_ts_provider.clone(),
-            ts_tracker: self.ts_tracker.clone(),
         }
     }
 }
@@ -41,20 +31,12 @@ impl<Ts: CausalTsProvider, Tk: RawTsTracker> Clone for CausalObserver<Ts, Tk> {
 // Causal observer's priority should be higher than all other observers, to
 // avoid being bypassed.
 const CAUSAL_OBSERVER_PRIORITY: u32 = 0;
-
-impl<Ts: CausalTsProvider + 'static, Tk: RawTsTracker + 'static> CausalObserver<Ts, Tk> {
-    pub fn new(causal_ts_provider: Arc<Ts>, ts_tracker: Tk) -> Self {
-        Self {
-            causal_ts_provider,
-            ts_tracker,
-        }
+impl<Ts: CausalTsProvider + 'static> CausalObserver<Ts> {
+    pub fn new(causal_ts_provider: Arc<Ts>) -> Self {
+        Self { causal_ts_provider }
     }
 
     pub fn register_to<E: KvEngine>(&self, coprocessor_host: &mut CoprocessorHost<E>) {
-        coprocessor_host.registry.register_query_observer(
-            CAUSAL_OBSERVER_PRIORITY,
-            BoxQueryObserver::new(self.clone()),
-        );
         coprocessor_host
             .registry
             .register_role_observer(CAUSAL_OBSERVER_PRIORITY, BoxRoleObserver::new(self.clone()));
@@ -68,7 +50,7 @@ impl<Ts: CausalTsProvider + 'static, Tk: RawTsTracker + 'static> CausalObserver<
 const REASON_LEADER_TRANSFER: &str = "leader_transfer";
 const REASON_REGION_MERGE: &str = "region_merge";
 
-impl<Ts: CausalTsProvider, Tk: RawTsTracker> CausalObserver<Ts, Tk> {
+impl<Ts: CausalTsProvider> CausalObserver<Ts> {
     fn flush_timestamp(&self, region: &Region, reason: &'static str) {
         fail::fail_point!("causal_observer_flush_timestamp", |_| ());
 
@@ -80,43 +62,9 @@ impl<Ts: CausalTsProvider, Tk: RawTsTracker> CausalObserver<Ts, Tk> {
     }
 }
 
-impl<Ts: CausalTsProvider, Tk: RawTsTracker> Coprocessor for CausalObserver<Ts, Tk> {}
+impl<Ts: CausalTsProvider> Coprocessor for CausalObserver<Ts> {}
 
-impl<Ts: CausalTsProvider, Tk: RawTsTracker> QueryObserver for CausalObserver<Ts, Tk> {
-    fn pre_propose_query(
-        &self,
-        ctx: &mut ObserverContext<'_>,
-        requests: &mut Vec<RaftRequest>,
-    ) -> coprocessor::Result<()> {
-        let region_id = ctx.region().get_id();
-        let mut ts = None;
-
-        for req in requests.iter_mut().filter(|r| {
-            r.get_cmd_type() == CmdType::Put
-                && ApiV2::parse_key_mode(r.get_put().get_key()) == KeyMode::Raw
-        }) {
-            if ts.is_none() {
-                ts = Some(self.causal_ts_provider.get_ts().map_err(|err| {
-                    coprocessor::Error::Other(box_err!("Get causal timestamp error: {:?}", err))
-                })?);
-                // use prev ts as `resolved_ts` means the data with smaller or equal ts has
-                // already sink to cdc.
-                self.ts_tracker
-                    .track_ts(region_id, ts.unwrap().prev())
-                    .map_err(|err| {
-                        coprocessor::Error::Other(box_err!("track ts err: {:?}", err))
-                    })?;
-            }
-
-            ApiV2::append_ts_on_encoded_bytes(req.mut_put().mut_key(), ts.unwrap());
-            trace!("CausalObserver::pre_propose_query, append_ts"; "region_id" => region_id,
-                "key" => &log_wrappers::Value::key(req.get_put().get_key()), "ts" => ?ts.unwrap());
-        }
-        Ok(())
-    }
-}
-
-impl<Ts: CausalTsProvider, Tk: RawTsTracker> RoleObserver for CausalObserver<Ts, Tk> {
+impl<Ts: CausalTsProvider> RoleObserver for CausalObserver<Ts> {
     /// Observe becoming leader, to flush CausalTsProvider.
     fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role_change: &RoleChange) {
         // In scenario of frequent leader transfer, the observing of change from
@@ -133,7 +81,7 @@ impl<Ts: CausalTsProvider, Tk: RawTsTracker> RoleObserver for CausalObserver<Ts,
     }
 }
 
-impl<Ts: CausalTsProvider, Tk: RawTsTracker> RegionChangeObserver for CausalObserver<Ts, Tk> {
+impl<Ts: CausalTsProvider> RegionChangeObserver for CausalObserver<Ts> {
     fn on_region_changed(
         &self,
         ctx: &mut ObserverContext<'_>,
@@ -152,79 +100,6 @@ impl<Ts: CausalTsProvider, Tk: RawTsTracker> RegionChangeObserver for CausalObse
         // store.
         if let RegionChangeEvent::Update(RegionChangeReason::CommitMerge) = event {
             self.flush_timestamp(ctx.region(), REASON_REGION_MERGE);
-        }
-    }
-}
-
-#[cfg(test)]
-pub mod tests {
-    use std::{mem, sync::Arc, time::Duration};
-
-    use api_version::{ApiV2, KvFormat};
-    use futures::executor::block_on;
-    use kvproto::{
-        metapb::Region,
-        raft_cmdpb::{RaftCmdRequest, Request as RaftRequest},
-    };
-    use test_raftstore::TestPdClient;
-    use txn_types::{Key, TimeStamp};
-
-    use super::*;
-    use crate::{tests::DummyRawTsTracker, BatchTsoProvider};
-
-    fn init() -> CausalObserver<BatchTsoProvider<TestPdClient>, DummyRawTsTracker> {
-        let pd_cli = Arc::new(TestPdClient::new(0, true));
-        pd_cli.set_tso(100.into());
-        let causal_ts_provider = Arc::new(
-            block_on(BatchTsoProvider::new_opt(
-                pd_cli,
-                Duration::ZERO,
-                Duration::from_secs(3),
-                100,
-                8192,
-            ))
-            .unwrap(),
-        );
-        CausalObserver::new(causal_ts_provider, DummyRawTsTracker::default())
-    }
-
-    #[test]
-    fn test_causal_observer() {
-        let testcases: Vec<&[&[u8]]> = vec![
-            &[b"r\0a", b"r\0b"],
-            &[b"r\0c"],
-            &[b"r\0d", b"r\0e", b"r\0f"],
-        ];
-
-        let ob = init();
-        let mut region = Region::default();
-        region.set_id(1);
-        let mut ctx = ObserverContext::new(&region);
-
-        for (i, keys) in testcases.into_iter().enumerate() {
-            let mut cmd_req = RaftCmdRequest::default();
-
-            for key in keys {
-                let key = ApiV2::encode_raw_key(key, None);
-                let value = b"value".to_vec();
-                let mut req = RaftRequest::default();
-                req.set_cmd_type(CmdType::Put);
-                req.mut_put().set_key(key.into_encoded());
-                req.mut_put().set_value(value);
-
-                cmd_req.mut_requests().push(req);
-            }
-
-            let query = cmd_req.mut_requests();
-            let mut vec_query: Vec<RaftRequest> = mem::take(query).into();
-            ob.pre_propose_query(&mut ctx, &mut vec_query).unwrap();
-            *query = vec_query.into();
-
-            for req in cmd_req.get_requests() {
-                let key = Key::from_encoded_slice(req.get_put().get_key());
-                let (_, ts) = ApiV2::decode_raw_key_owned(key, true).unwrap();
-                assert_eq!(ts, Some(TimeStamp::from(i as u64 + 101)));
-            }
         }
     }
 }

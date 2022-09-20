@@ -1,20 +1,27 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use core::pin::Pin;
 use std::{
     borrow::Borrow,
     collections::{hash_map::RandomState, BTreeMap, HashMap},
     ops::{Bound, RangeBounds},
+    path::Path,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
+    task::Context,
     time::Duration,
 };
 
+use async_compression::{tokio::write::ZstdEncoder, Level};
 use engine_rocks::ReadPerfInstant;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use futures::{channel::mpsc, executor::block_on, FutureExt, StreamExt};
-use kvproto::raft_cmdpb::{CmdType, Request};
+use futures::{channel::mpsc, executor::block_on, ready, task::Poll, FutureExt, StreamExt};
+use kvproto::{
+    brpb::CompressionType,
+    raft_cmdpb::{CmdType, Request},
+};
 use raft::StateRole;
 use raftstore::{coprocessor::RegionInfoProvider, RegionInfo};
 use tikv::storage::CfStatistics;
@@ -28,7 +35,11 @@ use tikv_util::{
     worker::Scheduler,
     Either,
 };
-use tokio::sync::{oneshot, Mutex, RwLock};
+use tokio::{
+    fs::File,
+    io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufWriter},
+    sync::{oneshot, Mutex, RwLock},
+};
 use txn_types::{Key, Lock, LockType};
 
 use crate::{
@@ -589,6 +600,149 @@ pub fn is_overlapping(range: (&[u8], &[u8]), range2: (&[u8], &[u8])) -> bool {
     }
 }
 
+/// read files asynchronously in sequence
+pub struct FilesReader {
+    files: Vec<File>,
+    index: usize,
+}
+
+impl FilesReader {
+    pub fn new(files: Vec<File>) -> Self {
+        FilesReader { files, index: 0 }
+    }
+}
+
+impl AsyncRead for FilesReader {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let me = self.get_mut();
+
+        while me.index < me.files.len() {
+            let rem = buf.remaining();
+            ready!(Pin::new(&mut me.files[me.index]).poll_read(cx, buf))?;
+            if buf.remaining() == rem {
+                me.index += 1;
+            } else {
+                return Poll::Ready(Ok(()));
+            }
+        }
+
+        Poll::Ready(Ok(()))
+    }
+}
+
+/// a wrapper for different compression type
+#[async_trait::async_trait]
+pub trait CompressionWriter: AsyncWrite + Sync + Send {
+    /// call the `File.sync_all()` to flush immediately to disk.
+    async fn done(mut self: Pin<&mut Self>) -> Result<()>;
+}
+
+/// a writer dispatcher for different compression type.
+/// regard `Compression::Unknown` as uncompressed type
+/// to be compatible with v6.2.0.
+pub async fn compression_writer_dispatcher(
+    local_path: impl AsRef<Path>,
+    compression_type: CompressionType,
+) -> Result<Pin<Box<dyn CompressionWriter>>> {
+    let inner = BufWriter::with_capacity(128 * 1024, File::create(local_path.as_ref()).await?);
+    match compression_type {
+        CompressionType::Unknown => Ok(Box::pin(NoneCompressionWriter::new(inner))),
+        CompressionType::Zstd => Ok(Box::pin(ZstdCompressionWriter::new(inner))),
+        _ => Err(Error::Other(box_err!(format!(
+            "the compression type is unimplemented, compression type id {:?}",
+            compression_type
+        )))),
+    }
+}
+
+/// uncompressed type writer
+pub struct NoneCompressionWriter {
+    inner: BufWriter<File>,
+}
+
+impl NoneCompressionWriter {
+    pub fn new(inner: BufWriter<File>) -> Self {
+        NoneCompressionWriter { inner }
+    }
+}
+
+impl AsyncWrite for NoneCompressionWriter {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        src: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let me = self.get_mut();
+        Pin::new(&mut me.inner).poll_write(cx, src)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+#[async_trait::async_trait]
+impl CompressionWriter for NoneCompressionWriter {
+    async fn done(mut self: Pin<&mut Self>) -> Result<()> {
+        let bufwriter = &mut self.inner;
+        bufwriter.flush().await?;
+        bufwriter.get_ref().sync_all().await?;
+        Ok(())
+    }
+}
+
+/// use zstd compression algorithm
+pub struct ZstdCompressionWriter {
+    inner: ZstdEncoder<BufWriter<File>>,
+}
+
+impl ZstdCompressionWriter {
+    pub fn new(inner: BufWriter<File>) -> Self {
+        ZstdCompressionWriter {
+            inner: ZstdEncoder::with_quality(inner, Level::Fastest),
+        }
+    }
+}
+
+impl AsyncWrite for ZstdCompressionWriter {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        src: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let me = self.get_mut();
+        Pin::new(&mut me.inner).poll_write(cx, src)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+#[async_trait::async_trait]
+impl CompressionWriter for ZstdCompressionWriter {
+    async fn done(mut self: Pin<&mut Self>) -> Result<()> {
+        let encoder = &mut self.inner;
+        encoder.shutdown().await?;
+        let bufwriter = encoder.get_mut();
+        bufwriter.flush().await?;
+        bufwriter.get_ref().sync_all().await?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::{
@@ -601,6 +755,7 @@ mod test {
 
     use engine_traits::WriteOptions;
     use futures::executor::block_on;
+    use tokio::io::{AsyncWriteExt, BufReader};
 
     use crate::utils::{is_in_range, CallbackWaitGroup, SegmentMap};
 
@@ -787,5 +942,83 @@ mod test {
             size,
             items_size
         );
+    }
+
+    #[tokio::test]
+    async fn test_files_reader() {
+        use tempdir::TempDir;
+        use tokio::{fs::File, io::AsyncReadExt};
+
+        use super::FilesReader;
+
+        let dir = TempDir::new("test_files").unwrap();
+        let files_num = 5;
+        let mut files_path = Vec::new();
+        let mut expect_content = String::new();
+        for i in 0..files_num {
+            let path = dir.path().join(format!("f{}", i));
+            let mut file = File::create(&path).await.unwrap();
+            let content = format!("{i}_{i}_{i}_{i}_{i}\n{i}{i}{i}{i}\n").repeat(10);
+            file.write_all(content.as_bytes()).await.unwrap();
+            file.sync_all().await.unwrap();
+
+            files_path.push(path);
+            expect_content.push_str(&content);
+        }
+
+        let mut files = Vec::new();
+        for i in 0..files_num {
+            let file = File::open(&files_path[i]).await.unwrap();
+            files.push(file);
+        }
+
+        let mut files_reader = FilesReader::new(files);
+        let mut read_content = String::new();
+        files_reader
+            .read_to_string(&mut read_content)
+            .await
+            .unwrap();
+        assert_eq!(expect_content, read_content);
+    }
+
+    #[tokio::test]
+    async fn test_compression_writer() {
+        use kvproto::brpb::CompressionType;
+        use tempdir::TempDir;
+        use tokio::{fs::File, io::AsyncReadExt};
+
+        use super::compression_writer_dispatcher;
+
+        let dir = TempDir::new("test_files").unwrap();
+        let content = "test for compression writer. try to write to local path, and read it back.";
+
+        // uncompressed writer
+        let path1 = dir.path().join("f1");
+        let mut writer = compression_writer_dispatcher(path1.clone(), CompressionType::Unknown)
+            .await
+            .unwrap();
+        writer.write_all(content.as_bytes()).await.unwrap();
+        writer.as_mut().done().await.unwrap();
+
+        let mut reader = BufReader::new(File::open(path1).await.unwrap());
+        let mut read_content = String::new();
+        reader.read_to_string(&mut read_content).await.unwrap();
+        assert_eq!(content, read_content);
+
+        // zstd compressed writer
+        let path2 = dir.path().join("f2");
+        let mut writer = compression_writer_dispatcher(path2.clone(), CompressionType::Zstd)
+            .await
+            .unwrap();
+        writer.write_all(content.as_bytes()).await.unwrap();
+        writer.as_mut().done().await.unwrap();
+
+        use async_compression::tokio::bufread::ZstdDecoder;
+        let mut reader = ZstdDecoder::new(BufReader::new(File::open(path2).await.unwrap()));
+        let mut read_content = String::new();
+        reader.read_to_string(&mut read_content).await.unwrap();
+
+        println!("1{}2,{}", read_content, read_content.len());
+        assert_eq!(content, read_content);
     }
 }

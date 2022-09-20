@@ -7,6 +7,7 @@ use std::{
     sync::Arc,
 };
 
+use async_trait::async_trait;
 use collections::HashMap;
 use tidb_query_aggr::*;
 use tidb_query_common::{metrics::*, storage::IntervalRange, Result};
@@ -43,6 +44,7 @@ pub struct BatchFastHashAggregationExecutor<Src: BatchExecutor>(
     AggregationExecutor<Src, FastHashAggregationImpl>,
 );
 
+#[async_trait]
 impl<Src: BatchExecutor> BatchExecutor for BatchFastHashAggregationExecutor<Src> {
     type StorageStats = Src::StorageStats;
 
@@ -52,8 +54,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchFastHashAggregationExecutor<Src>
     }
 
     #[inline]
-    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        self.0.next_batch(scan_rows)
+    async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        self.0.next_batch(scan_rows).await
     }
 
     #[inline]
@@ -538,6 +540,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use futures::executor::block_on;
     use tidb_query_datatype::{expr::EvalWarnings, FieldTypeTp};
     use tidb_query_expr::{
         impl_arithmetic::{arithmetic_fn_meta, RealPlus},
@@ -613,17 +616,17 @@ mod tests {
             let src_exec = make_src_executor_1();
             let mut exec = exec_builder(src_exec);
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(!r.is_drained.unwrap());
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(!r.is_drained.unwrap());
 
-            let mut r = exec.next_batch(1);
+            let mut r = block_on(exec.next_batch(1));
             // col_0 + col_1 can result in [NULL, 9.0, 6.0], thus there will be three
             // groups.
             assert_eq!(&r.logical_rows, &[0, 1, 2]);
@@ -749,17 +752,17 @@ mod tests {
             let src_exec = make_src_executor_1();
             let mut exec = exec_builder(src_exec);
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(!r.is_drained.unwrap());
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(!r.is_drained.unwrap());
 
-            let mut r = exec.next_batch(1);
+            let mut r = block_on(exec.next_batch(1));
             assert_eq!(&r.logical_rows, &[0]);
             assert_eq!(r.physical_columns.rows_len(), 1);
             assert_eq!(r.physical_columns.columns_len(), 5); // 4 result column, 1 group by column
@@ -833,17 +836,17 @@ mod tests {
             let src_exec = make_src_executor_1();
             let mut exec = exec_builder(src_exec);
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(!r.is_drained.unwrap());
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(!r.is_drained.unwrap());
 
-            let mut r = exec.next_batch(1);
+            let mut r = block_on(exec.next_batch(1));
             // col_4 can result in [NULL, "aa", "aaa"], thus there will be three groups.
             assert_eq!(&r.logical_rows, &[0, 1, 2]);
             assert_eq!(r.physical_columns.rows_len(), 3);
@@ -1018,12 +1021,12 @@ mod tests {
             );
             let mut exec = exec_builder(src_exec);
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(!r.is_drained.unwrap());
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(r.is_drained.unwrap());
@@ -1066,17 +1069,17 @@ mod tests {
             let src_exec = make_src_executor_1();
             let mut exec = exec_builder(src_exec);
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(!r.is_drained.unwrap());
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(!r.is_drained.unwrap());
 
-            let mut r = exec.next_batch(1);
+            let mut r = block_on(exec.next_batch(1));
             assert_eq!(&r.logical_rows, &[0, 1, 2]);
             assert_eq!(r.physical_columns.rows_len(), 3);
             assert_eq!(r.physical_columns.columns_len(), 1); // 0 result column, 1 group by column
@@ -1137,17 +1140,17 @@ mod tests {
             let src_exec = make_src_executor_1();
             let mut exec = exec_builder(src_exec);
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(!r.is_drained.unwrap());
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
             assert!(!r.is_drained.unwrap());
 
-            let mut r = exec.next_batch(1);
+            let mut r = block_on(exec.next_batch(1));
             assert_eq!(&r.logical_rows, &[0]);
             assert_eq!(r.physical_columns.rows_len(), 1);
             assert_eq!(r.physical_columns.columns_len(), 1); // 0 result column, 1 group by column
@@ -1210,7 +1213,7 @@ mod tests {
             }],
         );
         let mut exec = exec_builder(src_exec);
-        let r = exec.next_batch(4);
+        let r = block_on(exec.next_batch(4));
         assert_eq!(r.physical_columns.rows_len(), 4);
         assert_eq!(r.physical_columns.columns_len(), 2);
 
