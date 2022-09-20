@@ -284,7 +284,6 @@ fn test_raw_gc_keys_handled() {
 
     let (tx, _rx) = mpsc::channel();
     let feature_gate = FeatureGate::default();
-    feature_gate.set_version("5.0.0").unwrap();
     let mut gc_worker = GcWorker::new(
         prefixed_engine,
         RaftStoreBlackHole,
