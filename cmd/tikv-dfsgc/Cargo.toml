@@ -1,0 +1,25 @@
+[package]
+name = "tikv-dfsgc"
+version = "0.1.0"
+edition = "2021"
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+byteorder = "1.2"
+clap = "2.32"
+grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+http = "0.2"
+hyper = "0.14"
+kvengine = { path = "../../components/kvengine" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+pd_client = { path = "../../components/pd_client", default-features = false }
+security = { path = "../../components/security", default-features = false }
+serde = { version = "1.0", features = ["derive"] }
+serde_derive = "1.0"
+serde_ignored = "0.1"
+serde_json = "1.0"
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+slog-term = "2.4"
+tokio = { version = "1.12", features = ["full"] }
+toml = "0.5"

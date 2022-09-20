@@ -377,6 +377,17 @@ impl StatusServer {
         } else if path.starts_with("/kvengine/all") {
             let all_shard_stats = engine.get_all_shard_stats();
             res = serde_json::to_string_pretty(&all_shard_stats);
+        } else if path.starts_with("/kvengine/files") {
+            let all_shard_files: Vec<(u64, Vec<u64>)> = engine
+                .get_all_shard_id_vers()
+                .iter()
+                .filter_map(|id_ver| {
+                    engine
+                        .get_shard(id_ver.id)
+                        .map(|shard| (shard.id, shard.get_all_files()))
+                })
+                .collect();
+            res = serde_json::to_string(&all_shard_files);
         } else {
             let all_shard_stats = engine.get_all_shard_stats();
             let engine_stats = kvengine::Engine::get_engine_stats(all_shard_stats);

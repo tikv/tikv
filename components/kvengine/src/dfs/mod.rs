@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod config;
 mod s3;
 
 use std::{
@@ -15,6 +16,7 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::Bytes;
+pub use config::Config as DFSConfig;
 use file_system;
 pub use s3::S3FS;
 use thiserror::Error;

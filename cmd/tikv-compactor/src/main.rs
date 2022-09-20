@@ -4,6 +4,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use clap::{App, Arg};
 use hyper::service::{make_service_fn, service_fn};
+use kvengine::dfs::DFSConfig;
 use slog_global::{error, info};
 
 fn main() {
@@ -33,12 +34,12 @@ fn main() {
     }
     info!("config is {:?}", &config);
     let dfs = Arc::new(kvengine::dfs::S3FS::new(
-        config.prefix,
-        config.s3_endpoint,
-        config.s3_key_id,
-        config.s3_secret_key,
-        config.s3_region,
-        config.s3_bucket,
+        config.dfs.prefix,
+        config.dfs.s3_endpoint,
+        config.dfs.s3_key_id,
+        config.dfs.s3_secret_key,
+        config.dfs.s3_region,
+        config.dfs.s3_bucket,
     ));
 
     let thread_pool = tokio::runtime::Builder::new_multi_thread()
@@ -90,10 +91,5 @@ extern crate serde_derive;
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     pub port: u16,
-    pub prefix: String,
-    pub s3_endpoint: String,
-    pub s3_key_id: String,
-    pub s3_secret_key: String,
-    pub s3_bucket: String,
-    pub s3_region: String,
+    pub dfs: DFSConfig,
 }

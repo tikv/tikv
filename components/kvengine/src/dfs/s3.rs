@@ -7,7 +7,7 @@ use bytes::Bytes;
 use rusoto_core::{Region, RusotoError};
 use rusoto_s3::{
     util::{AddressingStyle, S3Config},
-    GetObjectError, S3,
+    GetObjectError, ListObjectsV2Request, S3,
 };
 use tikv_util::time::Instant;
 use tokio::{io::AsyncReadExt, runtime::Runtime};
@@ -127,6 +127,13 @@ impl S3FSCore {
         format!("{}/{:08x}/{:016x}.sst", self.prefix, 0, file_id)
     }
 
+    fn parse_file_id(&self, key: &str) -> u64 {
+        let end_idx = key.len() - 4;
+        let start_idx = end_idx - 16;
+        let file_part = &key[start_idx..end_idx];
+        u64::from_str_radix(file_part, 16).unwrap()
+    }
+
     fn is_err_retryable<T>(&self, rustoto_err: &RusotoError<T>) -> bool {
         match rustoto_err {
             RusotoError::Service(_) => true,
@@ -152,6 +159,80 @@ impl S3FSCore {
                 file_id, MAX_RETRY_COUNT
             );
             false
+        }
+    }
+
+    // list gets a list of file ids greater than start_after.
+    // The result contains a vector of file ids and a boolean indicate if there is more.
+    pub async fn list(&self, start_after: u64) -> crate::dfs::Result<(Vec<u64>, bool)> {
+        let mut retry_cnt = 0;
+        loop {
+            let mut req = ListObjectsV2Request::default();
+            req.prefix = Some(self.prefix.clone());
+            req.bucket = self.bucket.clone();
+            req.start_after = Some(self.file_key(start_after));
+            let result = self.s3c.list_objects_v2(req).await;
+            if result.is_ok() {
+                let output = result.unwrap();
+                let mut files = vec![];
+                output.contents.map(|objects| {
+                    for obj in objects {
+                        let key = obj.key.unwrap();
+                        files.push(self.parse_file_id(&key))
+                    }
+                });
+                return Ok((files, output.is_truncated.unwrap_or(false)));
+            }
+            let err = result.unwrap_err();
+            if self.is_err_retryable(&err) {
+                if retry_cnt < MAX_RETRY_COUNT {
+                    retry_cnt += 1;
+                    let retry_sleep = 2u64.pow(retry_cnt) * 100;
+                    tokio::time::sleep(Duration::from_millis(retry_sleep)).await;
+                    continue;
+                }
+            }
+            error!(
+                "failed to list files start after {}, reach max retry count {}, err {:?}",
+                start_after, MAX_RETRY_COUNT, err,
+            );
+            return Err(err.into());
+        }
+    }
+
+    pub async fn is_removed(&self, file_id: u64) -> bool {
+        let mut retry_cnt = 0;
+        loop {
+            let bucket = self.bucket.clone();
+            let key = self.file_key(file_id);
+            let mut req = rusoto_s3::GetObjectTaggingRequest::default();
+            req.key = key;
+            req.bucket = bucket;
+            let result = self.s3c.get_object_tagging(req).await;
+            if result.is_ok() {
+                let output = result.unwrap();
+                return output
+                    .tag_set
+                    .iter()
+                    .any(|tag| tag.key == "deleted" && tag.value == "true");
+            }
+            let err = result.unwrap_err();
+            if let RusotoError::Service(_) = err {
+                return true;
+            }
+            if self.is_err_retryable(&err) {
+                if retry_cnt < MAX_RETRY_COUNT {
+                    retry_cnt += 1;
+                    let retry_sleep = 2u64.pow(retry_cnt) * 100;
+                    tokio::time::sleep(Duration::from_millis(retry_sleep)).await;
+                    continue;
+                }
+            }
+            error!(
+                "failed to get tagging for file {}, reach max retry count {}, err {:?}",
+                file_id, MAX_RETRY_COUNT, err,
+            );
+            return true;
         }
     }
 }

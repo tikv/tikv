@@ -219,6 +219,7 @@ resolver = "2"
 members = [
   "cmd/tikv-compactor",
   "cmd/tikv-ctl",
+  "cmd/tikv-dfsgc",
   "cmd/tikv-server",
   "components/api_version",
   "components/backup",
@@ -286,7 +287,7 @@ members = [
   "fuzz/fuzzer-libfuzzer",
   "tests",
 ]
-default-members = ["cmd/tikv-server", "cmd/tikv-compactor"]
+default-members = ["cmd/tikv-server", "cmd/tikv-compactor", "cmd/tikv-dfsgc"]
 
 [profile.dev.package.grpcio-sys]
 debug = false

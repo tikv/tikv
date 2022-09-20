@@ -40,6 +40,7 @@ use engine_traits::{
 };
 use file_system::{IOPriority, IORateLimiter};
 use keys::region_raft_prefix_len;
+use kvengine::dfs::DFSConfig;
 use kvproto::kvrpcpb::ApiVersion;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
 use pd_client::Config as PdConfig;
@@ -2528,40 +2529,6 @@ impl Default for ResolvedTsConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Default, OnlineConfig)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
-pub struct DFSConfig {
-    #[online_config(skip)]
-    pub prefix: String,
-
-    #[online_config(skip)]
-    pub s3_endpoint: String,
-
-    #[online_config(skip)]
-    pub s3_key_id: String,
-
-    #[online_config(skip)]
-    pub s3_secret_key: String,
-
-    #[online_config(skip)]
-    pub s3_bucket: String,
-
-    #[online_config(skip)]
-    pub s3_region: String,
-
-    #[online_config(skip)]
-    pub remote_compactor_addr: String,
-}
-
-impl DFSConfig {
-    #[allow(dead_code)]
-    fn validate(&self) -> Result<(), Box<dyn Error>> {
-        // TODO(x) validate dfs config
-        Ok(())
-    }
-}
-
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -2774,7 +2741,7 @@ pub struct TiKvConfig {
     #[online_config(submodule)]
     pub resource_metering: ResourceMeteringConfig,
 
-    #[online_config(submodule)]
+    #[online_config(skip)]
     pub dfs: DFSConfig,
 
     #[online_config(skip)]
