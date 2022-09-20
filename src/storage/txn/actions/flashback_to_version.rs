@@ -91,7 +91,6 @@ pub fn flashback_to_version<S: Snapshot>(
     // `start_ts` is greater than the specified version, and if it's not a
     // short-value `LockType::Put`, we need to delete the actual data from
     // `CF_DEFAULT` as well.
-    // TODO: `resolved_ts` should be taken into account.
     for (key, lock) in key_locks {
         if txn.write_size() >= MAX_TXN_WRITE_SIZE {
             *next_lock_key = Some(key);
