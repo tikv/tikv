@@ -16,8 +16,8 @@ mod metrics;
 pub use metrics::*;
 mod observer;
 use async_trait::async_trait;
-use futures::executor::block_on;
 use enum_dispatch::enum_dispatch;
+use futures::executor::block_on;
 pub use observer::*;
 use txn_types::TimeStamp;
 
