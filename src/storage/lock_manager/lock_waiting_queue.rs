@@ -307,12 +307,12 @@ impl<L: LockManager> LockWaitQueues<L> {
                     // If a pessimistic lock request in legacy mode is woken up, increase the
                     // counter.
                     v.legacy_wake_up_cnt += 1;
-                    let notify_all_future =
-                        if !v.queue.is_empty() && wake_up_delay_duration_ms.is_some() {
-                            self.handle_delayed_wake_up(v, key, wake_up_delay_duration_ms.unwrap())
-                        } else {
-                            None
-                        };
+                    let notify_all_future = match wake_up_delay_duration_ms {
+                        Some(delay) if !v.queue.is_empty() => {
+                            self.handle_delayed_wake_up(v, key, delay)
+                        }
+                        _ => None,
+                    };
                     result = Some((lock_wait_entry, notify_all_future));
                 } else {
                     result = Some((lock_wait_entry, None));
@@ -514,7 +514,7 @@ mod tests {
             match self.wake_up_rx.recv_timeout(timeout) {
                 Ok(res) => Some(res),
                 Err(RecvTimeoutError::Timeout) => None,
-                Err(e @ _) => panic!(
+                Err(e) => panic!(
                     "unexpected error when receiving result of a LockWaitEntry: {:?}",
                     e
                 ),
@@ -752,7 +752,7 @@ mod tests {
                 assert_eq!(*conflict_start_ts, expect_conflict_start_ts.into());
                 assert_eq!(*conflict_commit_ts, expect_conflict_commit_ts.into());
             }
-            e @ _ => panic!("unexpected error: {:?}", e),
+            e => panic!("unexpected error: {:?}", e),
         }
     }
 
