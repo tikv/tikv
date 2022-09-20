@@ -785,7 +785,25 @@ pub mod tests {
         lock_ts: TimeStamp,
         lock_hash: u64,
     ) -> WaiterCtx {
-        let raw_key = b"foo".to_vec();
+        new_test_waiter_impl(waiter_ts, lock_ts, None, Some(lock_hash))
+    }
+
+    pub(crate) fn new_test_waiter_with_key(
+        waiter_ts: TimeStamp,
+        lock_ts: TimeStamp,
+        key: &[u8],
+    ) -> WaiterCtx {
+        new_test_waiter_impl(waiter_ts, lock_ts, Some(key), None)
+    }
+
+    fn new_test_waiter_impl(
+        waiter_ts: TimeStamp,
+        lock_ts: TimeStamp,
+        key: Option<&[u8]>,
+        lock_hash: Option<u64>,
+    ) -> WaiterCtx {
+        let raw_key = key.unwrap_or(b"foo").to_vec();
+        let lock_hash = lock_hash.unwrap_or_else(|| Key::from_raw(&raw_key).gen_hash());
         let primary = b"bar".to_vec();
         let mut info = LockInfo::default();
         info.set_key(raw_key.clone());
@@ -821,32 +839,6 @@ pub mod tests {
             StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
                 MvccError(box MvccErrorInner::KeyIsLocked(res)),
             )))) => assert_eq!(res, lock_info),
-            e => panic!("unexpected error: {:?}", e),
-        }
-    }
-
-    pub(crate) fn expect_write_conflict(
-        error: StorageError,
-        waiter_ts: TimeStamp,
-        mut lock_info: LockInfo,
-        commit_ts: TimeStamp,
-    ) {
-        match error {
-            StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
-                MvccError(box MvccErrorInner::WriteConflict {
-                    start_ts,
-                    conflict_start_ts,
-                    conflict_commit_ts,
-                    key,
-                    primary,
-                }),
-            )))) => {
-                assert_eq!(start_ts, waiter_ts);
-                assert_eq!(conflict_start_ts, lock_info.get_lock_version().into());
-                assert_eq!(conflict_commit_ts, commit_ts);
-                assert_eq!(key, lock_info.take_key());
-                assert_eq!(primary, lock_info.take_primary_lock());
-            }
             e => panic!("unexpected error: {:?}", e),
         }
     }
