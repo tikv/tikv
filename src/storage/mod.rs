@@ -7200,8 +7200,9 @@ mod tests {
                     }),
                 )
                 .unwrap();
-            // The DummyLockManager consumes the Msg::WaitForLock.
-            rx.recv_timeout(Duration::from_millis(100)).unwrap_err();
+            // The DummyLockManager calls the callback immediately if wait_timeout is not
+            // set.
+            rx.recv_timeout(Duration::from_millis(1000)).unwrap();
         }
 
         // Needn't update max_ts when failing to read value
@@ -9044,9 +9045,9 @@ mod tests {
                 }),
             )
             .unwrap();
-        // DummyLockManager just drops the callback, so it will fail to receive
-        // anything.
-        rx.recv().unwrap_err();
+        // DummyLockManager will call the callback immediately if wait_timeout
+        // is not set.
+        rx.recv().unwrap().unwrap_err();
 
         let (tx, rx) = channel();
         storage
