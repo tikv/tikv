@@ -49,7 +49,7 @@ where
     pub(crate) pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     pub(crate) raft_engine: ER,
 
-    pub(crate) factory: Option<Arc<dyn TabletFactory<EK>>>,
+    pub(crate) tablet_factory: Arc<dyn TabletFactory<EK>>,
 }
 
 impl<EK, ER> ApplyContext<EK, ER>
@@ -57,13 +57,18 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    pub fn new(cfg: Config, store_id: u64, raft_engine: ER) -> Self {
+    pub fn new(
+        cfg: Config,
+        store_id: u64,
+        raft_engine: ER,
+        tablet_factory: Arc<dyn TabletFactory<EK>>,
+    ) -> Self {
         ApplyContext {
             store_id,
             cfg,
             pending_create_peers: Arc::default(),
             raft_engine,
-            factory: None,
+            tablet_factory,
         }
     }
 }
@@ -157,25 +162,32 @@ where
     }
 }
 
-pub struct ApplyPollerBuilder<ER> {
+pub struct ApplyPollerBuilder<EK, ER> {
     cfg: Arc<VersionTrack<Config>>,
 
     store_id: u64,
     raft_engine: ER,
+    tablet_factory: Arc<dyn TabletFactory<EK>>,
 }
 
-impl<ER: RaftEngine> ApplyPollerBuilder<ER> {
-    pub fn new(cfg: Arc<VersionTrack<Config>>, store_id: u64, raft_engine: ER) -> Self {
+impl<EK: KvEngine, ER: RaftEngine> ApplyPollerBuilder<EK, ER> {
+    pub fn new(
+        cfg: Arc<VersionTrack<Config>>,
+        store_id: u64,
+        raft_engine: ER,
+        factory: Arc<dyn TabletFactory<EK>>,
+    ) -> Self {
         Self {
             cfg,
             store_id,
             raft_engine,
+            tablet_factory: factory,
         }
     }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> HandlerBuilder<ApplyFsm<EK>, ControlFsm>
-    for ApplyPollerBuilder<ER>
+    for ApplyPollerBuilder<EK, ER>
 {
     type Handler = ApplyPoller<EK, ER>;
 
@@ -184,6 +196,7 @@ impl<EK: KvEngine, ER: RaftEngine> HandlerBuilder<ApplyFsm<EK>, ControlFsm>
             self.cfg.value().clone(),
             self.store_id,
             self.raft_engine.clone(),
+            self.tablet_factory.clone(),
         );
         let cfg_tracker = self.cfg.clone().tracker("apply".to_string());
         ApplyPoller::new(apply_ctx, cfg_tracker)

@@ -1964,7 +1964,7 @@ pub fn init_split_regions(
 // sophisticated cases. This methods inject reasons in `NewSplitPeer`
 // when these cases happen (See PR#8084).
 pub fn amend_new_split_regions(
-    peer_id: u64,
+    _peer_id: u64,
     tag: impl fmt::Debug,
     new_split_regions: &mut HashMap<u64, NewSplitPeer>,
     pending_create_peers: &Arc<Mutex<HashMap<u64, (u64, bool)>>>,
@@ -1994,7 +1994,7 @@ pub fn amend_new_split_regions(
 
     fail_point!(
         "on_handle_apply_split_2_after_mem_check",
-        peer_id == 2,
+        _peer_id == 2,
         |_| unimplemented!()
     );
 

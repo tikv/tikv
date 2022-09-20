@@ -59,7 +59,7 @@ impl<EK: KvEngine> Fsm for ApplyFsm<EK> {
 
 pub struct ApplyFsmDelegate<'a, EK: KvEngine, ER: RaftEngine> {
     pub(crate) fsm: &'a mut ApplyFsm<EK>,
-    apply_ctx: &'a mut ApplyContext<EK, ER>,
+    pub(crate) apply_ctx: &'a mut ApplyContext<EK, ER>,
 
     // todo(SpadeA): tmp use.
     pub(crate) region: Region,

@@ -8,8 +8,8 @@ use crate::tablet::CachedTablet;
 
 /// Apply applies all the committed commands to kv db.
 pub struct Apply<EK: KvEngine> {
-    tablet: CachedTablet<EK>,
-    logger: Logger,
+    pub(crate) tablet: CachedTablet<EK>,
+    pub(crate) logger: Logger,
 }
 
 impl<EK: KvEngine> Apply<EK> {
@@ -21,11 +21,16 @@ impl<EK: KvEngine> Apply<EK> {
         }
     }
 
-    pub fn tablet(&mut self) -> Option<&EK> {
-        self.tablet.latest()
+    pub fn tablet(&mut self) -> Option<EK> {
+        self.tablet.latest().cloned()
     }
 
     pub fn logger(&self) -> &Logger {
         &self.logger
+    }
+
+    // only for test
+    pub fn mock(tablet: CachedTablet<EK>, logger: Logger) -> Self {
+        Apply { tablet, logger }
     }
 }

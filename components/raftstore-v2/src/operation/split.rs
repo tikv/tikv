@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::VecDeque, sync::Arc};
+use std::{collections::VecDeque, io, sync::Arc};
 
 use batch_system::BasicMailbox;
 use collections::{HashMap, HashMapEntry, HashSet};
@@ -62,14 +62,27 @@ fn create_read_delegate<EK: KvEngine, ER: RaftEngine>(peer: &Peer<EK, ER>) -> Re
     }
 }
 
+fn hard_link_tablet(
+    src_tablet_dir: &std::path::Path,
+    target_tablet_dir: &std::path::Path,
+) -> io::Result<()> {
+    std::fs::create_dir_all(target_tablet_dir)?;
+    for file in std::fs::read_dir(src_tablet_dir)? {
+        let file = file?;
+        std::fs::hard_link(file.path(), target_tablet_dir.join(file.file_name()))?;
+    }
+
+    Ok(())
+}
+
 impl<'a, EK: KvEngine, ER: RaftEngine> ApplyFsmDelegate<'a, EK, ER> {
     pub fn exec_batch_split(
         &mut self,
-        ctx: &mut ApplyContext<EK, ER>,
         req: &AdminRequest,
         log_index: u64,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         PEER_ADMIN_CMD_COUNTER.batch_split.all.inc();
+        let ctx = &mut self.apply_ctx;
 
         let split_reqs = req.get_splits();
         let mut derived = self.region.clone();
@@ -114,24 +127,22 @@ impl<'a, EK: KvEngine, ER: RaftEngine> ApplyFsmDelegate<'a, EK, ER> {
             }
             let new_split_peer = new_split_regions.get(&new_region_id).unwrap();
             if let Some(ref r) = new_split_peer.result {
-                // warn!(
-                //     self.fsm.apply.logger(),
-                //     "new region from splitting already exists";
-                //     "new_region_id" => new_region.get_id(),
-                //     "new_peer_id" => new_split_peer.peer_id,
-                //     "reason" => r,
-                //     "region_id" => region_id,
-                //     "peer_id" => 0, // FIXME
-                // );
+                warn!(
+                    self.fsm.apply.logger(),
+                    "new region from splitting already exists";
+                    "new_region_id" => new_region.get_id(),
+                    "new_peer_id" => new_split_peer.peer_id,
+                    "reason" => r,
+                    "region_id" => region_id,
+                    "peer_id" => 0, // FIXME
+                );
                 continue;
             }
             let new_tablet_path = ctx
-                .factory
-                .as_ref()
-                .unwrap()
+                .tablet_factory
                 .tablet_path(new_region_id, RAFT_INIT_LOG_INDEX);
 
-            std::fs::hard_link(current_tablet_path, &new_tablet_path).unwrap_or_else(|e| {
+            hard_link_tablet(current_tablet_path, &new_tablet_path).unwrap_or_else(|e| {
                 panic!(
                     "{} fails to hard link rocksdb with path {:?}: {:?}",
                     self.tag, new_tablet_path, e
@@ -154,9 +165,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine> ApplyFsmDelegate<'a, EK, ER> {
 
         // Change the tablet path by the new tablet index
         let _ = ctx
-            .factory
-            .as_ref()
-            .unwrap()
+            .tablet_factory
             .load_tablet(current_tablet_path, region_id, log_index)
             .unwrap();
 
@@ -258,8 +267,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
         let last_key = enc_end_key(regions.last().unwrap());
         if meta.region_ranges.remove(&last_key).is_none() {
-            unimplemented!()
-            // panic!("{} original region should exist", self.fsm.peer.tag);
+            panic!(
+                "{:?} original region should exist",
+                self.store_ctx.logger.list()
+            );
         }
         let last_region_id = regions.last().unwrap().get_id();
         for (new_region, locks) in regions.into_iter().zip(region_locks) {
@@ -417,9 +428,117 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
     }
 }
 
+#[cfg(test)]
 mod test {
+    use engine_test::{
+        ctor::{CfOptions, DbOptions},
+        kv::TestTabletFactoryV2,
+        raft,
+    };
+    use engine_traits::ALL_CFS;
+    use futures::channel::mpsc::unbounded;
+    use kvproto::raft_cmdpb::{BatchSplitRequest, SplitRequest};
+    use raftstore::store::{util::new_learner_peer, Config};
+    use slog::o;
+    use tempfile::TempDir;
+    use tikv_util::{
+        config::VersionTrack,
+        worker::{FutureScheduler, Scheduler},
+    };
+    use util::new_peer;
+
     use super::*;
+    use crate::{batch::ApplyPoller, fsm::ApplyFsm, raft::Apply, tablet::CachedTablet};
+
+    fn new_split_req(key: &[u8], id: u64, children: Vec<u64>) -> SplitRequest {
+        let mut req = SplitRequest::default();
+        req.set_split_key(key.to_vec());
+        req.set_new_region_id(id);
+        req.set_new_peer_ids(children);
+        req
+    }
 
     #[test]
-    fn test_split() {}
+    fn test_split() {
+        let store_id = 2;
+
+        let mut region = Region::default();
+        region.set_id(1);
+        region.set_end_key(b"k5".to_vec());
+        region.mut_region_epoch().set_version(3);
+        let peers = vec![new_peer(2, 3), new_peer(4, 5), new_learner_peer(6, 7)];
+        region.set_peers(peers.into());
+
+        let logger = slog_global::borrow_global().new(o!());
+        let path = TempDir::new().unwrap();
+        let cf_opts = ALL_CFS
+            .iter()
+            .copied()
+            .map(|cf| (cf, CfOptions::default()))
+            .collect();
+        let factory = Arc::new(TestTabletFactoryV2::new(
+            path.path(),
+            DbOptions::default(),
+            cf_opts,
+        ));
+        let raft_engine =
+            raft::new_engine(&format!("{}", path.path().join("raft").display()), None).unwrap();
+
+        let mut apply_ctx = ApplyContext::new(
+            Config::default(),
+            store_id,
+            raft_engine.clone(),
+            factory.clone(),
+        );
+
+        let tablet = factory
+            .open_tablet(
+                region.id,
+                Some(5),
+                OpenOptions::default().set_create_new(true),
+            )
+            .unwrap();
+
+        let apply = Apply::mock(CachedTablet::new(Some(tablet)), logger.clone());
+        let (sender, mut apply_fsm) = ApplyFsm::new(apply);
+        let mut apply_fsm_delegate = ApplyFsmDelegate::new(&mut apply_fsm, &mut apply_ctx);
+        apply_fsm_delegate.region = region;
+
+        let split_region_id = 8;
+        let mut splits = BatchSplitRequest::default();
+        splits.set_right_derive(true);
+        splits
+            .mut_requests()
+            .push(new_split_req(b"k1", split_region_id, vec![9, 10, 11]));
+
+        let log_index = 10;
+        let mut req = AdminRequest::default();
+        req.set_splits(splits);
+        let (resp, apply_res) = apply_fsm_delegate
+            .exec_batch_split(&req, log_index)
+            .unwrap();
+
+        let regions = resp.get_splits().get_regions();
+        assert!(regions.len() == 2);
+
+        // check derived region
+        let state = raft_engine.get_region_state(1).unwrap().unwrap();
+        assert_eq!(state.get_region().get_start_key().to_vec(), b"k1".to_vec());
+        assert_eq!(state.get_region().get_end_key().to_vec(), b"k5".to_vec());
+        assert_eq!(state.tablet_index, log_index);
+        // assert we can read the tablet by the new tablet_index
+        let tablet_path = factory.tablet_path(1, 10);
+        assert!(factory.exists_raw(&tablet_path));
+
+        // check split region
+        let state = raft_engine
+            .get_region_state(split_region_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(state.get_region().get_start_key().to_vec(), b"".to_vec());
+        assert_eq!(state.get_region().get_end_key().to_vec(), b"k1".to_vec());
+        assert_eq!(state.tablet_index, RAFT_INIT_LOG_INDEX);
+        let tablet_path = factory.tablet_path(split_region_id, RAFT_INIT_LOG_INDEX);
+        assert!(factory.exists_raw(&tablet_path));
+    }
 }
