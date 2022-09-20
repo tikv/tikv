@@ -601,7 +601,7 @@ where
         rd.filter(|r| !r.pending_remove)
     }
 
-    pub fn request_check(&mut self, req: &RaftCmdRequest) -> Result<Option<D>> {
+    pub fn validate_request(&mut self, req: &RaftCmdRequest) -> Result<Option<D>> {
         // Check store id.
         if self.store_id.get().is_none() {
             let store_id = self.store_meta.store_id();
@@ -719,7 +719,7 @@ where
         &mut self,
         req: &RaftCmdRequest,
     ) -> Result<Option<(D, RequestPolicy)>> {
-        if let Some(delegate) = self.local_reader.request_check(req)? {
+        if let Some(delegate) = self.local_reader.validate_request(req)? {
             let mut inspector = Inspector {
                 delegate: &delegate,
             };

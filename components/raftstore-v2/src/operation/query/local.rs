@@ -96,7 +96,7 @@ where
         &mut self,
         req: &RaftCmdRequest,
     ) -> Result<Option<(D, RequestPolicy)>> {
-        if let Some(delegate) = self.local_reader.request_check(req)? {
+        if let Some(delegate) = self.local_reader.validate_request(req)? {
             let mut inspector = SnapRequestInspector {
                 delegate: &delegate,
                 logger: &self.logger,
@@ -182,9 +182,8 @@ where
         let (msg, mut sub) = PeerMsg::raft_query(req.clone());
         MsgRouter::send(&self.router, region_id, msg);
         if let Some(query_res) = sub.result().await {
+            // If query successful, try again.
             if query_res.read().is_some() {
-                // Query successful, so try again.
-
                 req.mut_header().set_read_quorum(false);
                 if let Some(snap) = self.try_get_snapshot(req)? {
                     return Ok(snap);
