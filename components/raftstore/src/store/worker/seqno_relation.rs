@@ -324,9 +324,10 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                     result = Some(HandleExecResResult::VersionChanged(state));
                 }
                 ExecResult::CommitMerge {
-                    index,
                     region,
                     source,
+                    commit,
+                    ..
                 } => {
                     let mut target_state = RegionLocalState::default();
                     target_state.set_region(region.clone());
@@ -336,7 +337,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                     source_relation.set_region_id(source.get_id());
                     source_relation.set_sequence_number(seqno);
                     let mut apply_state = RaftApplyState::default();
-                    apply_state.set_applied_index(*index);
+                    apply_state.set_applied_index(*commit);
                     source_relation.set_apply_state(apply_state);
                     let mut source_state = RegionLocalState::default();
                     let mut merging_state = MergeState::default();

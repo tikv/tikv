@@ -253,6 +253,7 @@ pub enum ExecResult<S> {
         index: u64,
         region: Region,
         source: Region,
+        commit: u64,
     },
     RollbackMerge {
         region: Region,
@@ -2750,6 +2751,7 @@ where
                 index: ctx.exec_log_index,
                 region,
                 source: source_region.to_owned(),
+                commit: merge.get_commit(),
             }),
         ))
     }

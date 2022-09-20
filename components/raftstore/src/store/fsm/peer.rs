@@ -4650,6 +4650,7 @@ where
                     index,
                     region,
                     source,
+                    ..
                 } => self.on_ready_commit_merge(index, region, source),
                 ExecResult::RollbackMerge { region, commit } => {
                     self.on_ready_rollback_merge(commit, Some(region))
