@@ -15,7 +15,6 @@ use std::{
     time::Duration,
 };
 
-use async_compression::{tokio::write::ZstdEncoder, Level};
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use external_storage::{BackendConfig, UnpinReader};
 use external_storage_export::{create_storage, ExternalStorage};

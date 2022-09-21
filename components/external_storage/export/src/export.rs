@@ -9,7 +9,6 @@ use std::{
     sync::Arc,
 };
 
-use async_compression::futures::bufread::ZstdDecoder;
 use async_trait::async_trait;
 #[cfg(feature = "cloud-aws")]
 pub use aws::{Config as S3Config, S3Storage};
@@ -32,7 +31,6 @@ pub use external_storage::{
     UnpinReader,
 };
 use futures_io::AsyncRead;
-use futures_util::io::BufReader;
 #[cfg(feature = "cloud-gcp")]
 pub use gcp::{Config as GcsConfig, GcsStorage};
 pub use kvproto::brpb::StorageBackend_oneof_backend as Backend;
