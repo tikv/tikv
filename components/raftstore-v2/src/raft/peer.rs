@@ -8,7 +8,7 @@ use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, raft_serverpb::RegionLocal
 use pd_client::BucketStat;
 use raft::{RawNode, StateRole, INVALID_ID};
 use raftstore::{
-    coprocessor::{CoprocessorHost, RegionChangeReason},
+    coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
     store::{
         util::find_peer, Config, EntryStorage, PeerStat, ProposalQueue, RaftlogFetchTask,
         ReadDelegate, RegionReadProgress, TxnExt, WriteRouter,
@@ -355,12 +355,42 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         unimplemented!()
     }
 
+    /// Register self to apply_scheduler so that the peer is then usable.
+    /// Also trigger `RegionChangeEvent::Create` here.
     pub fn activate<T>(&self, ctx: &StoreContext<EK, ER, T>) {
-        unimplemented!()
+        // self.schedule_apply_fsm(ctx)
+
+        
+        ctx.coprocessor_host.as_ref().unwrap().on_region_changed(
+            self.region(),
+            RegionChangeEvent::Create,
+            self.get_role(),
+        );
+        // self.maybe_gen_approximate_buckets(ctx);
+    }
+
+    fn get_role(&self) -> StateRole {
+        self.raft_group.raft.state
     }
 
     pub fn raw_write_encoder_mut(&mut self) -> &mut Option<SimpleWriteEncoder> {
         &mut self.raw_write_encoder
+    }
+
+    pub fn approximate_size(&self) -> Option<u64> {
+        self.approximate_size
+    }
+
+    pub fn set_approximate_size(&mut self, approximate_size: Option<u64>) {
+        self.approximate_size = approximate_size;
+    }
+
+    pub fn approximate_keys(&self) -> Option<u64> {
+        self.approximate_keys
+    }
+
+    pub fn set_approximate_keys(&mut self, approximate_keys: Option<u64>) {
+        self.approximate_keys = approximate_keys;
     }
 
     #[inline]

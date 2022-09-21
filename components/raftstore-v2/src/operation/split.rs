@@ -159,15 +159,13 @@ impl<'a, EK: KvEngine, ER: RaftEngine> ApplyFsmDelegate<'a, EK, ER> {
             });
         }
 
-        // Create the new tablet for the region being split with the log index of the
-        // split request to be the tablet suffix.
-        let new_tablet_path = ctx.tablet_factory.tablet_path(region_id, log_index);
-        hard_link_tablet(current_tablet_path, &new_tablet_path).unwrap_or_else(|e| {
-            panic!(
-                "{} fails to hard link rocksdb with path {:?}: {:?}",
-                self.tag, new_tablet_path, e
-            )
-        });
+        // Change the tablet path by using the new tablet suffix
+        let tablet = ctx
+            .tablet_factory
+            .load_tablet(current_tablet_path, region_id, log_index)
+            .unwrap();
+        self.fsm.apply.update_tablet(tablet);
+
         write_peer_state(&mut wb, derived.clone(), log_index).unwrap_or_else(|e| {
             panic!("{} fails to update region {:?}: {:?}", self.tag, derived, e)
         });
@@ -217,12 +215,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         let estimated_size = self
             .fsm
             .peer()
-            .approximate_size
+            .approximate_size()
             .map(|v| v / new_region_count);
         let estimated_keys = self
             .fsm
             .peer()
-            .approximate_keys
+            .approximate_keys()
             .map(|v| v / new_region_count);
         let mut meta = self
             .store_ctx
@@ -246,16 +244,18 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
         let is_leader = self.fsm.peer().is_leader();
         if is_leader {
-            self.fsm.peer_mut().approximate_size = estimated_size;
-            self.fsm.peer_mut().approximate_keys = estimated_keys;
+            self.fsm.peer_mut().set_approximate_size(estimated_size);
+            self.fsm.peer_mut().set_approximate_keys(estimated_keys);
+
+            // todo(SpadeA): report regions to PD
             // self.fsm.peer.heartbeat_pd(self.ctx);
-            info!(
-                self.store_ctx.logger,
-                "notify pd with split";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "split_count" => regions.len(),
-            );
+            // info!(
+            //     self.store_ctx.logger,
+            //     "notify pd with split";
+            //     "region_id" => self.fsm.region_id(),
+            //     "peer_id" => self.fsm.peer_id(),
+            //     "split_count" => regions.len(),
+            // );
             // // Now pd only uses ReportBatchSplit for history operation show,
             // // so we send it independently here.
             // let task = PdTask::ReportBatchSplit {
@@ -313,6 +313,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 "region_id" => new_region_id,
                 "region" => ?new_region,
             );
+
             if let Some(r) = meta.regions.get(&new_region_id) {
                 // Suppose a new node is added by conf change and the snapshot comes slowly.
                 // Then, the region splits and the first vote message comes to the new node
@@ -445,7 +446,7 @@ mod test {
     use futures::channel::mpsc::unbounded;
     use kvproto::{
         raft_cmdpb::{BatchSplitRequest, SplitRequest},
-        raft_serverpb::RegionLocalState,
+        raft_serverpb::{PeerState, RaftApplyState, RegionLocalState},
     };
     use raftstore::store::{util::new_learner_peer, Config};
     use slog::o;
@@ -465,6 +466,107 @@ mod test {
         req.set_new_region_id(id);
         req.set_new_peer_ids(children);
         req
+    }
+
+    fn assert_split(
+        apply_fsm_delegate: &mut ApplyFsmDelegate<
+            '_,
+            engine_test::kv::KvTestEngine,
+            raft::RaftTestEngine,
+        >,
+        factory: &Arc<TestTabletFactoryV2>,
+        region_to_split: &Region,
+        get_region_local_state: &dyn Fn(u64) -> RegionLocalState,
+        get_raft_apply_state: &dyn Fn(u64) -> RaftApplyState,
+        right_derived: bool,
+        new_region_ids: Vec<u64>,
+        split_keys: Vec<Vec<u8>>,
+        children_peers: Vec<Vec<u64>>,
+        log_index: u64,
+    ) -> HashMap<u64, Region> {
+        let mut splits = BatchSplitRequest::default();
+        splits.set_right_derive(right_derived);
+        let mut region_boundries = split_keys.clone();
+        region_boundries.insert(0, region_to_split.get_start_key().to_vec());
+        region_boundries.push(region_to_split.get_end_key().to_vec());
+
+        for ((new_region_id, children), split_key) in new_region_ids
+            .into_iter()
+            .zip(children_peers.clone())
+            .zip(split_keys)
+        {
+            splits
+                .mut_requests()
+                .push(new_split_req(&split_key, new_region_id, children));
+        }
+
+        let mut req = AdminRequest::default();
+        req.set_splits(splits);
+
+        // Exec batch split
+        let (resp, apply_res) = apply_fsm_delegate
+            .exec_batch_split(&req, log_index)
+            .unwrap();
+
+        let regions = resp.get_splits().get_regions();
+        assert!(regions.len() == region_boundries.len() - 1);
+
+        let mut epoch = region_to_split.get_region_epoch().clone();
+        epoch.version += children_peers.len() as u64;
+
+        let mut child_idx = 0;
+        for (i, region) in regions.iter().enumerate() {
+            let state = get_region_local_state(region.id);
+            assert_eq!(state.get_state(), PeerState::Normal);
+            assert_eq!(state.get_region().get_id(), region.id);
+            assert_eq!(
+                state.get_region().get_start_key().to_vec(),
+                region_boundries[i]
+            );
+            assert_eq!(
+                state.get_region().get_end_key().to_vec(),
+                region_boundries[i + 1]
+            );
+            assert_eq!(*state.get_region().get_region_epoch(), epoch);
+
+            if region.id == region_to_split.id {
+                assert_eq! {
+                    state.get_region().get_peers(),
+                    region_to_split.get_peers()
+                }
+
+                assert_eq!(state.tablet_index, log_index);
+                // assert we can read the tablet by the new tablet_index
+                let tablet_path = factory.tablet_path(region_to_split.id, log_index);
+                assert!(factory.exists_raw(&tablet_path));
+            } else {
+                assert_eq! {
+                    state.get_region().get_peers().iter().map(|peer| peer.id).collect::<Vec<_>>(),
+                    children_peers[child_idx]
+                }
+                child_idx += 1;
+
+                assert_eq!(state.tablet_index, RAFT_INIT_LOG_INDEX);
+                let tablet_path = factory.tablet_path(region.id, RAFT_INIT_LOG_INDEX);
+                assert!(factory.exists_raw(&tablet_path));
+
+                let initial_state = get_raft_apply_state(region.id);
+                assert_eq!(initial_state.get_applied_index(), RAFT_INIT_LOG_INDEX);
+                assert_eq!(
+                    initial_state.get_truncated_state().get_index(),
+                    RAFT_INIT_LOG_INDEX
+                );
+                assert_eq!(
+                    initial_state.get_truncated_state().get_term(),
+                    RAFT_INIT_LOG_INDEX
+                );
+            }
+        }
+
+        regions
+            .iter()
+            .map(|region| (region.id, region.clone()))
+            .collect()
     }
 
     #[test]
@@ -513,75 +615,12 @@ mod test {
         let mut apply_fsm_delegate = ApplyFsmDelegate::new(&mut apply_fsm, &mut apply_ctx);
         apply_fsm_delegate.region = region.clone();
 
-        fn assert_split(
-            apply_fsm_delegate: &mut ApplyFsmDelegate<
-                engine_test::kv::KvTestEngine,
-                raft::RaftTestEngine,
-            >,
-            factory: &Arc<TestTabletFactoryV2>,
-            region_to_split: &Region,
-            get_state: &dyn Fn(u64) -> RegionLocalState,
-            right_derived: bool,
-            new_region_ids: Vec<u64>,
-            split_keys: Vec<Vec<u8>>,
-            children_peers: Vec<Vec<u64>>,
-            log_index: u64,
-        ) -> HashMap<u64, Region> {
-            let mut splits = BatchSplitRequest::default();
-            splits.set_right_derive(right_derived);
-            let mut region_boundries = split_keys.clone();
-            region_boundries.insert(0, region_to_split.get_start_key().to_vec());
-            region_boundries.push(region_to_split.get_end_key().to_vec());
-
-            for ((new_region_id, children), split_key) in new_region_ids
-                .into_iter()
-                .zip(children_peers)
-                .zip(split_keys)
-            {
-                splits
-                    .mut_requests()
-                    .push(new_split_req(&split_key, new_region_id, children));
-            }
-
-            let mut req = AdminRequest::default();
-            req.set_splits(splits);
-            let (resp, apply_res) = apply_fsm_delegate
-                .exec_batch_split(&req, log_index)
-                .unwrap();
-            let regions = resp.get_splits().get_regions();
-            assert!(regions.len() == region_boundries.len() - 1);
-
-            for (i, region) in regions.iter().enumerate() {
-                let state = get_state(region.id);
-                assert_eq!(
-                    state.get_region().get_start_key().to_vec(),
-                    region_boundries[i]
-                );
-                assert_eq!(
-                    state.get_region().get_end_key().to_vec(),
-                    region_boundries[i + 1]
-                );
-
-                if region.id == region_to_split.id {
-                    assert_eq!(state.tablet_index, log_index);
-                    // assert we can read the tablet by the new tablet_index
-                    let tablet_path = factory.tablet_path(region_to_split.id, log_index);
-                    assert!(factory.exists_raw(&tablet_path));
-                } else {
-                    assert_eq!(state.tablet_index, RAFT_INIT_LOG_INDEX);
-                    let tablet_path = factory.tablet_path(region.id, RAFT_INIT_LOG_INDEX);
-                    assert!(factory.exists_raw(&tablet_path));
-                }
-            }
-
-            regions
-                .into_iter()
-                .map(|region| (region.id, region.clone()))
-                .collect()
-        }
-
-        let get_state = |region_id| -> RegionLocalState {
+        let get_region_local_state = |region_id| -> RegionLocalState {
             raft_engine.get_region_state(region_id).unwrap().unwrap()
+        };
+
+        let get_raft_apply_state = |region_id| -> RaftApplyState {
+            raft_engine.get_apply_state(region_id).unwrap().unwrap()
         };
 
         let mut log_index = 10;
@@ -591,7 +630,8 @@ mod test {
             &mut apply_fsm_delegate,
             &factory,
             &region,
-            &get_state,
+            &get_region_local_state,
+            &get_raft_apply_state,
             false,
             vec![10],
             vec![b"k09".to_vec()],
@@ -607,7 +647,8 @@ mod test {
             &mut apply_fsm_delegate,
             &factory,
             regions.get(&1).unwrap(),
-            &get_state,
+            &get_region_local_state,
+            &get_raft_apply_state,
             true,
             vec![3],
             vec![b"k01".to_vec()],
