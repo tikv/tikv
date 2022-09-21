@@ -1102,6 +1102,7 @@ mod test {
         suite.force_flush_files("pessimistic_lock");
         suite.wait_for_flush();
         std::thread::sleep(Duration::from_secs(1));
+        run_async_test(suite.advance_global_checkpoint("pessimistic_lock")).unwrap();
         let checkpoint = run_async_test(
             suite
                 .get_meta_cli()
