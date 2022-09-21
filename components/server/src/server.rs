@@ -274,6 +274,33 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         );
         let pd_client =
             Self::connect_to_pd_cluster(&mut config, env.clone(), Arc::clone(&security_mgr));
+<<<<<<< HEAD
+=======
+        // check if TiKV need to run in snapshot recovery mode
+        let is_recovering_marked = match pd_client.is_recovering_marked() {
+            Err(e) => {
+                warn!(
+                    "failed to get recovery mode from PD";
+                    "error" => ?e,
+                );
+                false
+            }
+            Ok(marked) => marked,
+        };
+
+        if is_recovering_marked {
+            // Run a TiKV server in recovery modeß
+            info!("TiKV running in Snapshot Recovery Mode");
+            snap_recovery::init_cluster::enter_snap_recovery_mode(&mut config);
+            // connect_to_pd_cluster retreived the cluster id from pd
+            let cluster_id = config.server.cluster_id;
+            snap_recovery::init_cluster::start_recovery(
+                config.clone(),
+                cluster_id,
+                pd_client.clone(),
+            );
+        }
+>>>>>>> 42d3222d3... br: recovering_mark interface block tikv startup when tikv v6.3.0 connect to pd v6.2.0 (#13498)
 
         // Initialize and check config
         let cfg_controller = Self::init_config(config);
