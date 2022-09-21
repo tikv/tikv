@@ -336,7 +336,6 @@ impl ExternalStorage for EncryptedExternalStorage {
         &self,
         storage_name: &str,
         restore_name: std::path::PathBuf,
-        compressed_range: Option<(u64, u64)>,
         expected_length: u64,
         speed_limiter: &Limiter,
         restore_config: RestoreConfig,

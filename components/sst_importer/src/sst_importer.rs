@@ -225,7 +225,6 @@ impl SstImporter {
 
     fn download_file_from_external_storage(
         &self,
-        compressed_range: Option<(u64, u64)>,
         file_length: u64,
         src_file_name: &str,
         dst_file: std::path::PathBuf,
@@ -265,7 +264,6 @@ impl SstImporter {
         let result = ext_storage.restore(
             src_file_name,
             dst_file.clone(),
-            compressed_range,
             file_length,
             speed_limiter,
             restore_config,
@@ -512,7 +510,6 @@ impl SstImporter {
         };
 
         self.download_file_from_external_storage(
-            None,
             meta.length,
             name,
             path.temp.clone(),
