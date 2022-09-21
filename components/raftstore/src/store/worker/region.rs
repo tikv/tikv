@@ -500,6 +500,7 @@ where
 
         region_state.set_state(PeerState::Normal);
 
+        // delete snapshot state.
         if self.disable_kv_wal {
             let mut raft_wb = self.engines.raft.log_batch(0);
             box_try!(raft_wb.put_region_state(region_id, &region_state));

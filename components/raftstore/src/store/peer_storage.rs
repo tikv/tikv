@@ -394,13 +394,6 @@ where
         Ok(())
     }
 
-    #[inline]
-    pub fn save_apply_state_to_raft(&self, raft_wb: &mut impl RaftLogBatch) -> Result<()> {
-        info!("save apply state for snapshot to raftdb"; "region_id" => self.region.get_id(), "apply_state" => ?self.apply_state());
-        raft_wb.put_apply_state(self.region.get_id(), self.apply_state())?;
-        Ok(())
-    }
-
     fn validate_snap(&self, snap: &Snapshot, request_index: u64) -> bool {
         let idx = snap.get_metadata().get_index();
         if idx < self.truncated_index() || idx < request_index {
@@ -914,9 +907,6 @@ where
                 write_task.extra_write.v1_mut().unwrap(),
             )?;
             self.save_apply_state_to(write_task.extra_write.v1_mut().unwrap())?;
-            if self.save_states_to_raft_db {
-                self.save_apply_state_to_raft(write_task.raft_wb.as_mut().unwrap())?;
-            }
         }
 
         if !write_task.has_data() {

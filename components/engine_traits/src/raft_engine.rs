@@ -28,7 +28,7 @@ pub trait RaftEngineReadOnly: Sync + Send + 'static {
         seqno: u64,
     ) -> Result<Option<RegionSequenceNumberRelation>>;
 
-    fn get_region_apply_snapshot_state(
+    fn get_apply_snapshot_state(
         &self,
         raft_group_id: u64,
     ) -> Result<Option<(RegionLocalState, RaftApplyState)>>;

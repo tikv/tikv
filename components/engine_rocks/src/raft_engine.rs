@@ -45,7 +45,7 @@ impl RaftEngineReadOnly for RocksEngine {
         self.get_msg_cf(CF_DEFAULT, &key)
     }
 
-    fn get_region_apply_snapshot_state(
+    fn get_apply_snapshot_state(
         &self,
         raft_group_id: u64,
     ) -> Result<Option<(RegionLocalState, RaftApplyState)>> {

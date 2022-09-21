@@ -1,15 +1,15 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use engine_traits::{MiscExt, CF_LOCK};
+use engine_traits::{MiscExt, Peekable, CF_LOCK, CF_RAFT};
 use grpcio::{ChannelBuilder, Environment};
 use keys::DATA_PREFIX_KEY;
 use kvproto::{
     kvrpcpb::{Context, Op},
+    raft_serverpb::{PeerState, RegionLocalState},
     tikvpb::TikvClient,
 };
-use raft::prelude::ConfChangeType;
 use test_raftstore::*;
 use tikv_util::{keybuilder::KeyBuilder, HandyRwLock};
 use txn_types::Key;
@@ -96,7 +96,7 @@ fn test_disable_wal_recovery_basic() {
 }
 
 #[test]
-fn test_disable_wal_recovery_destroy_self() {
+fn test_disable_wal_recovery_applying_snapshot() {
     let mut cluster = new_server_cluster(0, 3);
     // Initialize the cluster.
     cluster.pd_client.disable_default_operator();
@@ -104,35 +104,33 @@ fn test_disable_wal_recovery_destroy_self() {
     let region = cluster.run_conf_change();
     cluster.must_put(b"k1", b"v1");
     cluster.pd_client.must_add_peer(region, new_peer(2, 2));
-    cluster.pd_client.must_add_peer(region, new_peer(3, 3));
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
-    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
-    let dropped_msgs = Arc::new(Mutex::new(Vec::new()));
-    let recv_filter = Box::new(
-        RegionPacketFilter::new(region, 2)
-            .direction(Direction::Recv)
-            .reserve_dropped(dropped_msgs.clone()),
-    );
     cluster.must_transfer_leader(region, new_peer(1, 1));
-    cluster.sim.wl().add_recv_filter(2, recv_filter);
-    cluster
-        .pd_client
-        .must_joint_confchange(region, vec![(ConfChangeType::RemoveNode, new_peer(3, 3))]);
-    cluster.pd_client.must_leave_joint(region);
-    sleep_ms(10000);
-    // Pause before collecting message to make the these message be handled in one
-    // loop
-    let on_peer_collect_message_2 = "on_peer_collect_message_2";
-    fail::cfg(on_peer_collect_message_2, "pause").unwrap();
-
-    cluster.sim.wl().clear_recv_filters(2);
-
-    let router = cluster.sim.wl().get_router(2).unwrap();
-    for raft_msg in std::mem::take(&mut *dropped_msgs.lock().unwrap()) {
-        router.send_raft_message(raft_msg).unwrap();
+    cluster.pd_client.add_peer(region, new_learner_peer(3, 3));
+    // Skip applying snapshot into RocksDB to keep peer status in Applying.
+    let apply_snapshot_fp = "apply_pending_snapshot";
+    fail::cfg(apply_snapshot_fp, "return()").unwrap();
+    loop {
+        let region_state: Option<RegionLocalState> = cluster
+            .get_engine(3)
+            .get_msg_cf(CF_RAFT, &keys::region_state_key(region))
+            .unwrap();
+        if let Some(region_state) = region_state {
+            if region_state.get_state() == PeerState::Applying {
+                break;
+            }
+        }
     }
-    fail::remove(on_peer_collect_message_2);
-    sleep_ms(1000);
-    cluster.stop_node(2);
-    cluster.run_node(2).unwrap();
+    cluster.stop_node(3);
+    fail::remove(apply_snapshot_fp);
+    cluster.run_node(3).unwrap();
+    cluster.must_put(b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
+    let region_state: RegionLocalState = cluster
+        .get_engine(3)
+        .get_msg_cf(CF_RAFT, &keys::region_state_key(region))
+        .unwrap()
+        .unwrap();
+    assert_eq!(region_state.get_state(), PeerState::Normal);
 }

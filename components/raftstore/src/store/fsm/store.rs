@@ -1235,7 +1235,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
             raft_engine
                 .for_each_raft_group(&mut |region_id| {
                     if let Some((snap_region_state, snap_apply_state)) =
-                        raft_engine.get_region_apply_snapshot_state(region_id)?
+                        raft_engine.get_apply_snapshot_state(region_id)?
                     {
                         kv_wb.put_msg_cf(
                             CF_RAFT,
@@ -1247,10 +1247,16 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                             &keys::apply_state_key(region_id),
                             &snap_apply_state,
                         )?;
-                        info!("recover applying snapshot region from raftdb";
+                        let raft_state =
+                            raft_engine.get_raft_state(region_id)?.unwrap_or_else(|| {
+                                panic!("raft state not found, region_id: {}", region_id)
+                            });
+                        info!(
+                            "recover applying snapshot region from raftdb";
                             "region_id" => region_id,
                             "snap_region_state" => ?snap_region_state,
                             "snap_apply_state" => ?snap_apply_state,
+                            "raft_state" => ?raft_state,
                         );
                     } else {
                         let region_state =
@@ -1313,14 +1319,16 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 self.clear_stale_meta(&mut kv_wb, &mut raft_wb, &local_state);
                 return Ok(true);
             }
-            if local_state.get_state() == PeerState::Applying && !recover_from_raft_db {
-                // in case of restart happen when we just write region state to Applying,
-                // but not write raft_local_state to raft rocksdb in time.
-                box_try!(peer_storage::recover_from_applying_state(
-                    &self.engines,
-                    &mut raft_wb,
-                    region_id
-                ));
+            if local_state.get_state() == PeerState::Applying {
+                if !recover_from_raft_db {
+                    // in case of restart happen when we just write region state to Applying,
+                    // but not write raft_local_state to raft rocksdb in time.
+                    box_try!(peer_storage::recover_from_applying_state(
+                        &self.engines,
+                        &mut raft_wb,
+                        region_id
+                    ));
+                }
                 applying_count += 1;
                 applying_regions.push(region.clone());
                 return Ok(true);

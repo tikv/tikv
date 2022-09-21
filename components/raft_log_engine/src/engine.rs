@@ -575,7 +575,7 @@ impl RaftEngineReadOnly for RaftLogEngine {
         Ok(value.map(|v| serde_json::from_slice(&v).unwrap()))
     }
 
-    fn get_region_apply_snapshot_state(
+    fn get_apply_snapshot_state(
         &self,
         raft_group_id: u64,
     ) -> Result<Option<(RegionLocalState, RaftApplyState)>> {
