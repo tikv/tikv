@@ -2,10 +2,8 @@
 
 use std::sync::Arc;
 
-
 use async_trait::async_trait;
 use tidb_query_common::{metrics::*, storage::IntervalRange, Result};
-
 use tidb_query_datatype::{
     codec::{batch::LazyBatchColumnVec, data_type::*},
     expr::{EvalConfig, EvalContext},
@@ -80,7 +78,6 @@ impl<Src: BatchExecutor> BatchProjectionExecutor<Src> {
         })
     }
 }
-
 
 #[async_trait]
 impl<Src: BatchExecutor> Drop for BatchProjectionExecutor<Src> {

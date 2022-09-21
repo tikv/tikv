@@ -2,7 +2,6 @@
 
 use async_trait::async_trait;
 use tidb_query_common::{metrics::*, storage::IntervalRange, Result};
-
 use tipb::FieldType;
 
 use crate::interface::*;
@@ -27,7 +26,6 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
         })
     }
 }
-
 
 #[async_trait]
 impl<Src: BatchExecutor> Drop for BatchLimitExecutor<Src> {

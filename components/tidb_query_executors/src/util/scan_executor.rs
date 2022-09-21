@@ -162,7 +162,6 @@ pub fn check_columns_info_supported(columns_info: &[ColumnInfo]) -> Result<()> {
     Ok(())
 }
 
-
 #[async_trait]
 impl<S: Storage, I: ScanExecutorImpl + MemoryTrace> BatchExecutor for ScanExecutor<S, I> {
     type StorageStats = S::Statistics;

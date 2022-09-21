@@ -4,7 +4,6 @@ use std::{cmp::Ordering, collections::BinaryHeap, mem::size_of, ptr::NonNull, sy
 
 use async_trait::async_trait;
 use tidb_query_common::{metrics::*, storage::IntervalRange, Result};
-
 use tidb_query_datatype::{
     codec::{
         batch::{LazyBatchColumn, LazyBatchColumnVec},
