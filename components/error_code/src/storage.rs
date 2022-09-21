@@ -10,12 +10,12 @@ define_error_codes!(
     SCHED_TOO_BUSY => ("SchedTooBusy", "", ""),
     GC_WORKER_TOO_BUSY => ("GcWorkerTooBusy", "", ""),
     KEY_TOO_LARGE => ("KeyTooLarge", "", ""),
-    INVALID_CF => ("InvalidCF", "", ""),
-    CF_DEPRECATED => ("CFDeprecated", "", ""),
+    INVALID_CF => ("InvalidCf", "", ""),
+    CF_DEPRECATED => ("CfDeprecated", "", ""),
     TTL_NOT_ENABLED => ("TtlNotEnabled", "", ""),
     TTL_LEN_NOT_EQUALS_TO_PAIRS => ("TtlLenNotEqualsToPairs", "", ""),
     PROTOBUF => ("Protobuf", "", ""),
-    INVALID_TXN_TSO => ("INVALIDTXNTSO", "", ""),
+    INVALID_TXN_TSO => ("InvalidTxnTso", "", ""),
     INVALID_REQ_RANGE => ("InvalidReqRange", "", ""),
     BAD_FORMAT_LOCK => ("BadFormatLock", "", ""),
     BAD_FORMAT_WRITE => ("BadFormatWrite", "",""),
@@ -40,6 +40,7 @@ define_error_codes!(
     COMMIT_TS_TOO_LARGE => ("CommitTsTooLarge", "", ""),
 
     ASSERTION_FAILED => ("AssertionFailed", "", ""),
+    LOCK_IF_EXISTS_FAILED => ("LockIfExistsFailed", "", ""),
 
     UNKNOWN => ("Unknown", "", "")
 );

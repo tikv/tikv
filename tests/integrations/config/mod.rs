@@ -42,7 +42,7 @@ mod test_config_client;
 
 #[test]
 fn test_toml_serde() {
-    let value = TiKvConfig::default();
+    let value = TikvConfig::default();
     let dump = toml::to_string_pretty(&value).unwrap();
     let load = toml::from_str(&dump).unwrap();
     assert_eq!(value, load);
@@ -62,7 +62,7 @@ fn read_file_in_project_dir(path: &str) -> String {
 
 #[test]
 fn test_serde_custom_tikv_config() {
-    let mut value = TiKvConfig::default();
+    let mut value = TikvConfig::default();
     value.log_rotation_timespan = ReadableDuration::days(1);
     value.log.level = Level::Critical.into();
     value.log.file.filename = "foo".to_owned();
@@ -129,6 +129,7 @@ fn test_serde_custom_tikv_config() {
             max_thread_count: 10,
             stack_size: ReadableSize::mb(20),
             max_tasks_per_worker: 2200,
+            auto_adjust_pool_size: false,
         },
         storage: StorageReadPoolConfig {
             use_unified_pool: Some(true),
@@ -204,6 +205,8 @@ fn test_serde_custom_tikv_config() {
         peer_stale_state_check_interval: ReadableDuration::hours(2),
         leader_transfer_max_log_lag: 123,
         snap_apply_batch_size: ReadableSize::mb(12),
+        region_worker_tick_interval: ReadableDuration::millis(1000),
+        clean_stale_ranges_tick: 10,
         lock_cf_compact_interval: ReadableDuration::minutes(12),
         lock_cf_compact_bytes_threshold: ReadableSize::mb(123),
         consistency_check_interval: ReadableDuration::secs(12),
@@ -650,7 +653,6 @@ fn test_serde_custom_tikv_config() {
     let raft_engine_config = value.raft_engine.mut_config();
     raft_engine_config.dir = "test-dir".to_owned();
     raft_engine_config.batch_compression_threshold.0 = ReadableSize::kb(1).0;
-    raft_engine_config.bytes_per_sync.0 = ReadableSize::kb(64).0;
     raft_engine_config.target_file_size.0 = ReadableSize::mb(1).0;
     raft_engine_config.purge_threshold.0 = ReadableSize::gb(1).0;
     raft_engine_config.recovery_mode = RecoveryMode::TolerateTailCorruption;
@@ -794,6 +796,8 @@ fn test_serde_custom_tikv_config() {
     value.causal_ts = CausalTsConfig {
         renew_interval: ReadableDuration::millis(100),
         renew_batch_min_size: 100,
+        renew_batch_max_size: 8192,
+        available_interval: ReadableDuration::millis(3000),
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");
@@ -808,7 +812,7 @@ fn test_serde_custom_tikv_config() {
     }
 }
 
-fn diff_config(lhs: &TiKvConfig, rhs: &TiKvConfig) {
+fn diff_config(lhs: &TikvConfig, rhs: &TikvConfig) {
     let lhs_str = format!("{:?}", lhs);
     let rhs_str = format!("{:?}", rhs);
 
@@ -840,12 +844,12 @@ fn diff_config(lhs: &TiKvConfig, rhs: &TiKvConfig) {
 
 #[test]
 fn test_serde_default_config() {
-    let cfg: TiKvConfig = toml::from_str("").unwrap();
-    assert_eq!(cfg, TiKvConfig::default());
+    let cfg: TikvConfig = toml::from_str("").unwrap();
+    assert_eq!(cfg, TikvConfig::default());
 
     let content = read_file_in_project_dir("integrations/config/test-default.toml");
-    let cfg: TiKvConfig = toml::from_str(&content).unwrap();
-    assert_eq!(cfg, TiKvConfig::default());
+    let cfg: TikvConfig = toml::from_str(&content).unwrap();
+    assert_eq!(cfg, TikvConfig::default());
 }
 
 #[test]
@@ -854,8 +858,8 @@ fn test_readpool_default_config() {
         [readpool.unified]
         max-thread-count = 1
     "#;
-    let cfg: TiKvConfig = toml::from_str(content).unwrap();
-    let mut expected = TiKvConfig::default();
+    let cfg: TikvConfig = toml::from_str(content).unwrap();
+    let mut expected = TikvConfig::default();
     expected.readpool.unified.max_thread_count = 1;
     assert_eq!(cfg, expected);
 }
@@ -869,14 +873,14 @@ fn test_do_not_use_unified_readpool_with_legacy_config() {
         [readpool.coprocessor]
         normal-concurrency = 1
     "#;
-    let cfg: TiKvConfig = toml::from_str(content).unwrap();
+    let cfg: TikvConfig = toml::from_str(content).unwrap();
     assert!(!cfg.readpool.is_unified_pool_enabled());
 }
 
 #[test]
 fn test_block_cache_backward_compatible() {
     let content = read_file_in_project_dir("integrations/config/test-cache-compatible.toml");
-    let mut cfg: TiKvConfig = toml::from_str(&content).unwrap();
+    let mut cfg: TikvConfig = toml::from_str(&content).unwrap();
     assert!(cfg.storage.block_cache.shared);
     assert!(cfg.storage.block_cache.capacity.is_none());
     cfg.compatible_adjust();
@@ -893,7 +897,7 @@ fn test_block_cache_backward_compatible() {
 #[test]
 fn test_log_backward_compatible() {
     let content = read_file_in_project_dir("integrations/config/test-log-compatible.toml");
-    let mut cfg: TiKvConfig = toml::from_str(&content).unwrap();
+    let mut cfg: TikvConfig = toml::from_str(&content).unwrap();
     assert_eq!(cfg.log.level, slog::Level::Info.into());
     assert_eq!(cfg.log.file.filename, "");
     assert_eq!(cfg.log.format, LogFormat::Text);

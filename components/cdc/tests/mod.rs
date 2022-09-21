@@ -2,6 +2,7 @@
 
 use std::{sync::*, time::Duration};
 
+use causal_ts::CausalTsProvider;
 use cdc::{recv_timeout, CdcObserver, FeatureGate, MemoryQuota, Task};
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
@@ -11,7 +12,7 @@ use grpcio::{
 };
 use kvproto::{
     cdcpb::{create_change_data, ChangeDataClient, ChangeDataEvent, ChangeDataRequest},
-    kvrpcpb::*,
+    kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
     tikvpb::TikvClient,
 };
 use online_config::OnlineConfig;
@@ -156,7 +157,7 @@ impl TestSuiteBuilder {
                 Arc::new(cdc::CdcTxnExtraScheduler::new(worker.scheduler().clone())),
             );
             let scheduler = worker.scheduler();
-            let cdc_ob = cdc::CdcObserver::new(scheduler.clone(), ApiVersion::V1);
+            let cdc_ob = cdc::CdcObserver::new(scheduler.clone());
             obs.insert(id, cdc_ob.clone());
             sim.coprocessor_hooks.entry(id).or_default().push(Box::new(
                 move |host: &mut CoprocessorHost<RocksEngine>| {
@@ -188,7 +189,8 @@ impl TestSuiteBuilder {
                 env,
                 sim.security_mgr.clone(),
                 MemoryQuota::new(usize::MAX),
-                None,
+                sim.get_causal_ts_provider(*id)
+                    .map(|p| p as Arc<dyn CausalTsProvider>),
             );
             let mut updated_cfg = cfg.clone();
             updated_cfg.min_ts_interval = ReadableDuration::millis(100);
@@ -418,7 +420,9 @@ impl TestSuite {
         prewrite_req.start_version = ts.into_inner();
         prewrite_req.lock_ttl = prewrite_req.start_version + 1;
         prewrite_req.for_update_ts = for_update_ts.into_inner();
-        prewrite_req.mut_is_pessimistic_lock().push(true);
+        prewrite_req
+            .mut_pessimistic_actions()
+            .push(DoPessimisticCheck);
         let prewrite_resp = self
             .get_tikv_client(region_id)
             .kv_prewrite(&prewrite_req)

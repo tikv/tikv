@@ -14,6 +14,15 @@ pub enum DeleteStrategy {
     /// Delete the SST files that are fullly fit in range. However, the SST
     /// files that are partially overlapped with the range will not be
     /// touched.
+    ///
+    /// Note:
+    ///    - After this operation, some keys in the range might still exist in
+    ///      the database.
+    ///    - After this operation, some keys in the range might be removed from
+    ///      existing snapshot, so you shouldn't expect to be able to read data
+    ///      from the range using existing snapshots any more.
+    ///
+    /// Ref: <https://github.com/facebook/rocksdb/wiki/Delete-A-Range-Of-Keys>
     DeleteFiles,
     /// Delete the data stored in Titan.
     DeleteBlobs,
@@ -29,11 +38,11 @@ pub enum DeleteStrategy {
 }
 
 pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
-    fn flush(&self, sync: bool) -> Result<()>;
+    fn flush_cfs(&self, wait: bool) -> Result<()>;
 
-    fn flush_cf(&self, cf: &str, sync: bool) -> Result<()>;
+    fn flush_cf(&self, cf: &str, wait: bool) -> Result<()>;
 
-    fn delete_all_in_range(&self, strategy: DeleteStrategy, ranges: &[Range<'_>]) -> Result<()> {
+    fn delete_ranges_cfs(&self, strategy: DeleteStrategy, ranges: &[Range<'_>]) -> Result<()> {
         for cf in self.cf_names() {
             self.delete_ranges_cf(cf, strategy.clone(), ranges)?;
         }
@@ -58,18 +67,6 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
     /// * total size (bytes) of active and unflushed immutable memtables.
     /// * total size (bytes) of all blob files.
     fn get_engine_used_size(&self) -> Result<u64>;
-
-    /// Roughly deletes files in multiple ranges.
-    ///
-    /// Note:
-    ///    - After this operation, some keys in the range might still exist in
-    ///      the database.
-    ///    - After this operation, some keys in the range might be removed from
-    ///      existing snapshot, so you shouldn't expect to be able to read data
-    ///      from the range using existing snapshots any more.
-    ///
-    /// Ref: <https://github.com/facebook/rocksdb/wiki/Delete-A-Range-Of-Keys>
-    fn roughly_cleanup_ranges(&self, ranges: &[(Vec<u8>, Vec<u8>)]) -> Result<()>;
 
     /// The path to the directory on the filesystem where the database is stored
     fn path(&self) -> &str;

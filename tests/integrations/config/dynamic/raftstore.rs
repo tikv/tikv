@@ -21,9 +21,9 @@ use raftstore::{
 };
 use resource_metering::CollectorRegHandle;
 use tempfile::TempDir;
-use test_raftstore::TestPdClient;
+use test_pd_client::TestPdClient;
 use tikv::{
-    config::{ConfigController, Module, TiKvConfig},
+    config::{ConfigController, Module, TikvConfig},
     import::SstImporter,
 };
 use tikv_util::{
@@ -58,7 +58,7 @@ fn create_tmp_engine(dir: &TempDir) -> Engines<RocksEngine, RocksEngine> {
 }
 
 fn start_raftstore(
-    cfg: TiKvConfig,
+    cfg: TikvConfig,
     dir: &TempDir,
 ) -> (
     ConfigController,
@@ -142,7 +142,7 @@ where
 
 #[test]
 fn test_update_raftstore_config() {
-    let (mut config, _dir) = TiKvConfig::with_tmp().unwrap();
+    let (mut config, _dir) = TikvConfig::with_tmp().unwrap();
     config.validate().unwrap();
     let (cfg_controller, router, _, mut system) = start_raftstore(config.clone(), &_dir);
 

@@ -14,23 +14,20 @@ use std::{
     time::Duration,
 };
 
-use crossbeam::{atomic::AtomicCell, channel::TrySendError};
+use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, RaftEngine, Snapshot, TabletFactory};
 use fail::fail_point;
 use kvproto::{
-    errorpb,
-    kvrpcpb::ExtraOp as TxnExtraOp,
     metapb,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request, Response},
 };
 use pd_client::BucketMeta;
 use raftstore::{
-    errors::RAFTSTORE_IS_BUSY,
     store::{
         cmd_resp,
         util::{self, LeaseState, RegionReadProgress, RemoteLease},
-        ReadDelegate, ReadExecutor, ReadExecutorProvider, ReadMetrics, ReadProgress, ReadResponse,
-        RegionSnapshot, RequestInspector, RequestPolicy, TrackVer, TxnExt,
+        ReadDelegate, ReadExecutor, ReadExecutorProvider, ReadProgress, ReadResponse,
+        RegionSnapshot, RequestInspector, RequestPolicy,
     },
     Error, Result,
 };
@@ -149,19 +146,17 @@ where
 mod tests {
     use std::{borrow::Borrow, sync::mpsc::*, thread};
 
-    use crossbeam::channel::TrySendError;
     use engine_test::{
         ctor::{CfOptions, DbOptions},
         kv::{KvTestEngine, KvTestSnapshot, TestTabletFactoryV2},
     };
-    use engine_traits::{Peekable, SyncMutable, ALL_CFS, CF_DEFAULT};
+    use engine_traits::{OpenOptions, Peekable, SyncMutable, ALL_CFS, CF_DEFAULT};
     use kvproto::{metapb::Region, raft_cmdpb::*};
     use raftstore::store::{
         util::Lease, Callback, CasualMessage, CasualRouter, LocalReader, ProposalRouter,
         RaftCommand,
     };
     use tempfile::{Builder, TempDir};
-    use tikv_kv::Snapshot;
     use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
     use time::Duration;
     use txn_types::{Key, Lock, LockType, WriteBatchFlags};
@@ -191,11 +186,7 @@ mod tests {
             .prefix("test-local-reader")
             .tempdir()
             .unwrap();
-        let factory = Arc::new(TestTabletFactoryV2::new(
-            path.path().to_str().unwrap(),
-            ops,
-            cf_opts,
-        ));
+        let factory = Arc::new(TestTabletFactoryV2::new(path.path(), ops, cf_opts));
 
         let store_meta =
             StoreMetaDelegate::new(Arc::new(Mutex::new(StoreMeta::<KvTestEngine>::new())));
@@ -210,8 +201,10 @@ mod tests {
             meta.readers.insert(1, read_delegate);
 
             // create tablet with region_id 1 and prepare some data
-            tablet1 = factory.create_tablet(1, 10).unwrap();
-            tablet1.put_cf(CF_DEFAULT, b"a1", b"val1").unwrap();
+            tablet1 = factory
+                .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
+                .unwrap();
+            tablet1.put(b"a1", b"val1").unwrap();
             let cache = CachedTablet::new(Some(tablet1.clone()));
             meta.tablet_caches.insert(1, cache);
 
@@ -221,8 +214,10 @@ mod tests {
             meta.readers.insert(2, read_delegate);
 
             // create tablet with region_id 1 and prepare some data
-            tablet2 = factory.create_tablet(2, 10).unwrap();
-            tablet2.put_cf(CF_DEFAULT, b"a2", b"val2").unwrap();
+            tablet2 = factory
+                .open_tablet(2, Some(10), OpenOptions::default().set_create_new(true))
+                .unwrap();
+            tablet2.put(b"a2", b"val2").unwrap();
             let cache = CachedTablet::new(Some(tablet2.clone()));
             meta.tablet_caches.insert(2, cache);
         }
@@ -234,10 +229,7 @@ mod tests {
         let snapshot = delegate.get_snapshot(None, &mut None);
         assert_eq!(
             b"val1".to_vec(),
-            snapshot
-                .get(&Key::from_encoded(b"a1".to_vec()))
-                .unwrap()
-                .unwrap()
+            *snapshot.get_value(b"a1").unwrap().unwrap()
         );
 
         let (_, delegate) = store_meta.get_executor_and_len(2);
@@ -247,10 +239,7 @@ mod tests {
         let snapshot = delegate.get_snapshot(None, &mut None);
         assert_eq!(
             b"val2".to_vec(),
-            snapshot
-                .get(&Key::from_encoded(b"a2".to_vec()))
-                .unwrap()
-                .unwrap()
+            *snapshot.get_value(b"a2").unwrap().unwrap()
         );
     }
 }

@@ -11,7 +11,7 @@ use tidb_query_common::{execute_stats::ExecSummary, storage::IntervalRange};
 use tikv_alloc::trace::MemoryTraceGuard;
 use tipb::{DagRequest, SelectResponse, StreamResponse};
 
-pub use self::storage_impl::TiKvStorage;
+pub use self::storage_impl::TikvStorage;
 use crate::{
     coprocessor::{metrics::*, Deadline, RequestHandler, Result},
     storage::{Statistics, Store},
@@ -103,7 +103,7 @@ impl BatchDagHandler {
             runner: tidb_query_executors::runner::BatchExecutorsRunner::from_request(
                 req,
                 ranges,
-                TiKvStorage::new(store, is_cache_enabled),
+                TikvStorage::new(store, is_cache_enabled),
                 deadline,
                 streaming_batch_limit,
                 is_streaming,
@@ -122,8 +122,8 @@ impl RequestHandler for BatchDagHandler {
         handle_qe_response(result, self.runner.can_be_cached(), self.data_version).map(|x| x.into())
     }
 
-    fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {
-        handle_qe_stream_response(self.runner.handle_streaming_request())
+    async fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {
+        handle_qe_stream_response(self.runner.handle_streaming_request().await)
     }
 
     fn collect_scan_statistics(&mut self, dest: &mut Statistics) {

@@ -5,11 +5,11 @@ use std::{collections::HashMap, string::ToString};
 use kvproto::diagnosticspb::{ServerInfoItem, ServerInfoPair};
 use tikv_util::{
     config::KIB,
-    sys::{cpu_time::LinuxStyleCpuTime, SysQuota, *},
+    sys::{cpu_time::LinuxStyleCpuTime, ioload, SysQuota, *},
 };
 use walkdir::WalkDir;
 
-use crate::server::service::diagnostics::{ioload, SYS_INFO};
+use crate::server::service::diagnostics::SYS_INFO;
 
 type CpuTimeSnapshot = Option<LinuxStyleCpuTime>;
 
@@ -350,7 +350,7 @@ fn mem_hardware_info(collector: &mut Vec<ServerInfoItem>) {
     system.refresh_memory();
     let mut pair = ServerInfoPair::default();
     pair.set_key("capacity".to_string());
-    pair.set_value((system.get_total_memory() * KIB).to_string());
+    pair.set_value(SysQuota::memory_limit_in_bytes().to_string());
     let mut item = ServerInfoItem::default();
     item.set_tp("memory".to_string());
     item.set_name("memory".to_string());

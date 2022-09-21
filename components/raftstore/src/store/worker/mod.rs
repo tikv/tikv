@@ -18,6 +18,8 @@ mod split_check;
 mod split_config;
 mod split_controller;
 
+#[cfg(test)]
+pub use self::region::tests::make_raftstore_cfg as make_region_worker_raftstore_cfg;
 pub use self::{
     check_leader::{Runner as CheckLeaderRunner, Task as CheckLeaderTask},
     cleanup::{Runner as CleanupRunner, Task as CleanupTask},
@@ -30,11 +32,13 @@ pub use self::{
         Runner as PdRunner, Task as PdTask,
     },
     query_stats::QueryStats,
-    raftlog_fetch::{Runner as RaftlogFetchRunner, Task as RaftlogFetchTask},
+    raftlog_fetch::{
+        FetchedLogs, LogFetchedNotifier, Runner as RaftlogFetchRunner, Task as RaftlogFetchTask,
+    },
     raftlog_gc::{Runner as RaftlogGcRunner, Task as RaftlogGcTask},
     read::{
         CachedReadDelegate, LocalReadContext, LocalReader, Progress as ReadProgress, ReadDelegate,
-        ReadExecutor, ReadExecutorProvider, ReadMetrics, StoreMetaDelegate, TrackVer,
+        ReadExecutor, ReadExecutorProvider, StoreMetaDelegate, TrackVer,
     },
     refresh_config::{
         BatchComponent as RaftStoreBatchComponent, Runner as RefreshConfigRunner,

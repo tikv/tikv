@@ -4,7 +4,7 @@
 use std::borrow::Cow;
 
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use kvproto::kvrpcpb::IsolationLevel;
+use kvproto::kvrpcpb::{IsolationLevel, WriteConflictReason};
 use txn_types::{Key, Lock, LockType, TimeStamp, TsSet, Value, WriteRef, WriteType};
 
 use crate::storage::{
@@ -254,6 +254,7 @@ impl<S: Snapshot> PointGetter<S> {
                         conflict_commit_ts: key_commit_ts,
                         key: cursor_key.into(),
                         primary: vec![],
+                        reason: WriteConflictReason::RcCheckTs,
                     }
                     .into());
                 }
@@ -389,7 +390,7 @@ impl<S: Snapshot> PointGetter<S> {
 #[cfg(test)]
 mod tests {
     use engine_rocks::ReadPerfInstant;
-    use kvproto::kvrpcpb::{Assertion, AssertionLevel};
+    use kvproto::kvrpcpb::{Assertion, AssertionLevel, PrewriteRequestPessimisticAction::*};
     use txn_types::SHORT_VALUE_MAX_LEN;
 
     use super::*;
@@ -929,7 +930,7 @@ mod tests {
         //
         // write.start_ts(10) < primary_lock.start_ts(15) < write.commit_ts(20)
         must_acquire_pessimistic_lock(&engine, key, key, 15, 50);
-        must_pessimistic_prewrite_delete(&engine, key, key, 15, 50, true);
+        must_pessimistic_prewrite_delete(&engine, key, key, 15, 50, DoPessimisticCheck);
         let mut getter = new_point_getter(&engine, TimeStamp::max());
         must_get_value(&mut getter, key, val);
     }
@@ -1017,7 +1018,7 @@ mod tests {
             key,
             &None,
             80.into(),
-            false,
+            SkipPessimisticCheck,
             100,
             80.into(),
             1,

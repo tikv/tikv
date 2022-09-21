@@ -45,7 +45,7 @@ use raft_log_engine::ManagedFileSystem;
 use regex::Regex;
 use security::{SecurityConfig, SecurityManager};
 use structopt::{clap::ErrorKind, StructOpt};
-use tikv::{config::TiKvConfig, server::debug::BottommostLevelCompaction};
+use tikv::{config::TikvConfig, server::debug::BottommostLevelCompaction};
 use tikv_util::{escape, run_and_wait_child_process, sys::thread::StdThreadBuildWrapper, unescape};
 use txn_types::Key;
 
@@ -61,7 +61,7 @@ fn main() {
     let cfg_path = opt.config.as_ref();
     let cfg = cfg_path.map_or_else(
         || {
-            let mut cfg = TiKvConfig::default();
+            let mut cfg = TikvConfig::default();
             cfg.log.level = tikv_util::logger::get_level_by_string("warn")
                 .unwrap()
                 .into();
@@ -332,7 +332,7 @@ fn main() {
                 } => {
                     let to_data_dir = to_data_dir.as_deref();
                     let to_host = to_host.as_deref();
-                    let to_config = to_config.map_or_else(TiKvConfig::default, |path| {
+                    let to_config = to_config.map_or_else(TikvConfig::default, |path| {
                         let s = fs::read_to_string(&path).unwrap();
                         toml::from_str(&s).unwrap()
                     });
@@ -608,7 +608,7 @@ fn split_region(pd_client: &RpcClient, mgr: Arc<SecurityManager>, region_id: u64
 
 fn compact_whole_cluster(
     pd_client: &RpcClient,
-    cfg: &TiKvConfig,
+    cfg: &TikvConfig,
     mgr: Arc<SecurityManager>,
     db_type: DbType,
     cfs: Vec<&str>,
@@ -671,7 +671,7 @@ fn read_fail_file(path: &str) -> Vec<(String, String)> {
     list
 }
 
-fn run_ldb_command(args: Vec<String>, cfg: &TiKvConfig) {
+fn run_ldb_command(args: Vec<String>, cfg: &TikvConfig) {
     let key_manager = data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
         .unwrap()
         .map(Arc::new);
@@ -682,12 +682,12 @@ fn run_ldb_command(args: Vec<String>, cfg: &TiKvConfig) {
     engine_rocks::raw::run_ldb_tool(&args, &opts);
 }
 
-fn run_sst_dump_command(args: Vec<String>, cfg: &TiKvConfig) {
+fn run_sst_dump_command(args: Vec<String>, cfg: &TikvConfig) {
     let opts = cfg.rocksdb.build_opt();
     engine_rocks::raw::run_sst_dump_tool(&args, &opts);
 }
 
-fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &TiKvConfig) {
+fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, cfg: &TikvConfig) {
     let db = &cfg.infer_kv_engine_path(Some(data_dir)).unwrap();
     println!(
         "\nstart to print bad ssts; data_dir:{}; db:{}",

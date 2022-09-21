@@ -7,7 +7,9 @@ use std::{borrow::Cow, fmt};
 
 use collections::HashSet;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
+use futures::channel::{mpsc::UnboundedSender, oneshot::Sender};
 use kvproto::{
+    brpb::CheckAdminResponse,
     import_sstpb::SstMeta,
     kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp},
     metapb,
@@ -19,22 +21,25 @@ use kvproto::{
 };
 #[cfg(any(test, feature = "testexport"))]
 use pd_client::BucketMeta;
-use raft::{GetEntriesContext, SnapshotStatus};
+use raft::SnapshotStatus;
 use smallvec::{smallvec, SmallVec};
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
-use tracker::{get_tls_tracker_token, GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN};
+use tracker::{get_tls_tracker_token, TrackerToken, GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN};
 
-use super::{local_metrics::TimeTracker, AbstractPeer, RegionSnapshot};
+use super::{
+    local_metrics::TimeTracker, region_meta::RegionMeta, worker::FetchedLogs, RegionSnapshot,
+};
 use crate::store::{
     fsm::apply::{CatchUpLogs, ChangeObserver, TaskRes as ApplyTaskRes},
     metrics::RaftEventDurationType,
     peer::{
-        UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
-        UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryWaitApplySyncer,
+        SnapshotRecoveryWaitApplySyncer, UnsafeRecoveryExecutePlanSyncer,
+        UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
+        UnsafeRecoveryWaitApplySyncer,
     },
     util::{KeysInfoFormatter, LatencyInspector},
     worker::{Bucket, BucketRange},
-    RaftlogFetchResult, SnapKey,
+    SnapKey,
 };
 
 #[derive(Debug)]
@@ -73,9 +78,10 @@ where
     }
 }
 
-pub type ReadCallback<S> = Box<dyn FnOnce(ReadResponse<S>) + Send>;
-pub type WriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
+pub type BoxReadCallback<S> = Box<dyn FnOnce(ReadResponse<S>) + Send>;
+pub type BoxWriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
 pub type ExtCallback = Box<dyn FnOnce() + Send>;
+
 #[cfg(any(test, feature = "testexport"))]
 pub type TestCallback = Box<dyn FnOnce(PeerInternalStat) + Send>;
 
@@ -88,10 +94,14 @@ pub enum Callback<S: Snapshot> {
     /// No callback.
     None,
     /// Read callback.
-    Read(ReadCallback<S>),
+    Read {
+        cb: BoxReadCallback<S>,
+
+        tracker: TrackerToken,
+    },
     /// Write callback.
     Write {
-        cb: WriteCallback,
+        cb: BoxWriteCallback,
         /// `proposed_cb` is called after a request is proposed to the raft
         /// group successfully. It's used to notify the caller to move on early
         /// because it's very likely the request will be applied to the
@@ -101,6 +111,7 @@ pub enum Callback<S: Snapshot> {
         /// it's being applied, and it's guaranteed that the request will be
         /// successfully applied soon.
         committed_cb: Option<ExtCallback>,
+
         trackers: SmallVec<[TimeTracker; 4]>,
     },
     #[cfg(any(test, feature = "testexport"))]
@@ -114,12 +125,17 @@ impl<S> Callback<S>
 where
     S: Snapshot,
 {
-    pub fn write(cb: WriteCallback) -> Self {
+    pub fn read(cb: BoxReadCallback<S>) -> Self {
+        let tracker = get_tls_tracker_token();
+        Callback::Read { cb, tracker }
+    }
+
+    pub fn write(cb: BoxWriteCallback) -> Self {
         Self::write_ext(cb, None, None)
     }
 
     pub fn write_ext(
-        cb: WriteCallback,
+        cb: BoxWriteCallback,
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
     ) -> Self {
@@ -142,23 +158,16 @@ where
         }
     }
 
-    pub fn get_trackers(&self) -> Option<&SmallVec<[TimeTracker; 4]>> {
-        match self {
-            Callback::Write { trackers, .. } => Some(trackers),
-            _ => None,
-        }
-    }
-
     pub fn invoke_with_response(self, resp: RaftCmdResponse) {
         match self {
             Callback::None => (),
-            Callback::Read(read) => {
+            Callback::Read { cb, .. } => {
                 let resp = ReadResponse {
                     response: resp,
                     snapshot: None,
                     txn_extra_op: TxnExtraOp::Noop,
                 };
-                read(resp);
+                cb(resp);
             }
             Callback::Write { cb, .. } => {
                 let resp = WriteResponse { response: resp };
@@ -169,38 +178,171 @@ where
         }
     }
 
-    pub fn has_proposed_cb(&mut self) -> bool {
-        if let Callback::Write { proposed_cb, .. } = self {
-            proposed_cb.is_some()
-        } else {
-            false
-        }
+    pub fn has_proposed_cb(&self) -> bool {
+        let Callback::Write { proposed_cb, .. } = self else { return false; };
+        proposed_cb.is_some()
     }
 
     pub fn invoke_proposed(&mut self) {
-        if let Callback::Write { proposed_cb, .. } = self {
-            if let Some(cb) = proposed_cb.take() {
-                cb()
-            }
+        let Callback::Write { proposed_cb, .. } = self else { return; };
+        if let Some(cb) = proposed_cb.take() {
+            cb();
         }
     }
 
     pub fn invoke_committed(&mut self) {
-        if let Callback::Write { committed_cb, .. } = self {
-            if let Some(cb) = committed_cb.take() {
-                cb()
-            }
+        let Callback::Write { committed_cb, .. } = self else { return; };
+        if let Some(cb) = committed_cb.take() {
+            cb();
         }
     }
 
     pub fn invoke_read(self, args: ReadResponse<S>) {
         match self {
-            Callback::Read(read) => read(args),
-            other => panic!("expect Callback::Read(..), got {:?}", other),
+            Callback::Read { cb, .. } => cb(args),
+            other => panic!("expect Callback::read(..), got {:?}", other),
         }
     }
 
-    pub fn is_none(&self) -> bool {
+    pub fn take_proposed_cb(&mut self) -> Option<ExtCallback> {
+        let Callback::Write { proposed_cb, .. } = self else { return None; };
+        proposed_cb.take()
+    }
+
+    pub fn take_committed_cb(&mut self) -> Option<ExtCallback> {
+        let Callback::Write { committed_cb, .. } = self else { return None; };
+        committed_cb.take()
+    }
+}
+
+pub trait ReadCallback: ErrorCallback {
+    type Response;
+
+    fn set_result(self, result: Self::Response);
+    fn read_tracker(&self) -> Option<&TrackerToken>;
+}
+
+pub trait WriteCallback: ErrorCallback {
+    type Response;
+
+    fn notify_proposed(&mut self);
+    fn notify_committed(&mut self);
+    fn write_trackers(&self) -> Option<&SmallVec<[TimeTracker; 4]>>;
+    fn write_trackers_mut(&mut self) -> Option<&mut SmallVec<[TimeTracker; 4]>>;
+    fn set_result(self, result: Self::Response);
+}
+
+pub trait ErrorCallback: Send {
+    fn report_error(self, err: RaftCmdResponse);
+    fn is_none(&self) -> bool;
+}
+
+impl<C: ErrorCallback> ErrorCallback for Vec<C> {
+    #[inline]
+    fn report_error(self, err: RaftCmdResponse) {
+        for cb in self {
+            cb.report_error(err.clone());
+        }
+    }
+
+    #[inline]
+    fn is_none(&self) -> bool {
+        self.iter().all(|c| c.is_none())
+    }
+}
+
+impl<S: Snapshot> ReadCallback for Callback<S> {
+    type Response = ReadResponse<S>;
+
+    #[inline]
+    fn set_result(self, result: Self::Response) {
+        self.invoke_read(result);
+    }
+
+    fn read_tracker(&self) -> Option<&TrackerToken> {
+        let Callback::Read { tracker, .. } = self else { return None; };
+        Some(tracker)
+    }
+}
+
+impl<S: Snapshot> WriteCallback for Callback<S> {
+    type Response = RaftCmdResponse;
+
+    #[inline]
+    fn notify_proposed(&mut self) {
+        self.invoke_proposed();
+    }
+
+    #[inline]
+    fn notify_committed(&mut self) {
+        self.invoke_committed();
+    }
+
+    #[inline]
+    fn write_trackers(&self) -> Option<&SmallVec<[TimeTracker; 4]>> {
+        let Callback::Write { trackers, .. } = self else { return None; };
+        Some(trackers)
+    }
+
+    #[inline]
+    fn write_trackers_mut(&mut self) -> Option<&mut SmallVec<[TimeTracker; 4]>> {
+        let Callback::Write { trackers, .. } = self else { return None; };
+        Some(trackers)
+    }
+
+    #[inline]
+    fn set_result(self, result: Self::Response) {
+        self.invoke_with_response(result);
+    }
+}
+
+impl<C> WriteCallback for Vec<C>
+where
+    C: WriteCallback,
+    C::Response: Clone,
+{
+    type Response = C::Response;
+
+    #[inline]
+    fn notify_proposed(&mut self) {
+        for c in self {
+            c.notify_proposed();
+        }
+    }
+
+    #[inline]
+    fn notify_committed(&mut self) {
+        for c in self {
+            c.notify_committed();
+        }
+    }
+
+    #[inline]
+    fn write_trackers(&self) -> Option<&SmallVec<[TimeTracker; 4]>> {
+        None
+    }
+
+    #[inline]
+    fn write_trackers_mut(&mut self) -> Option<&mut SmallVec<[TimeTracker; 4]>> {
+        None
+    }
+
+    #[inline]
+    fn set_result(self, result: Self::Response) {
+        for c in self {
+            c.set_result(result.clone());
+        }
+    }
+}
+
+impl<S: Snapshot> ErrorCallback for Callback<S> {
+    #[inline]
+    fn report_error(self, err: RaftCmdResponse) {
+        self.invoke_with_response(err);
+    }
+
+    #[inline]
+    fn is_none(&self) -> bool {
         matches!(self, Callback::None)
     }
 }
@@ -212,7 +354,7 @@ where
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Callback::None => write!(fmt, "Callback::None"),
-            Callback::Read(_) => write!(fmt, "Callback::Read(..)"),
+            Callback::Read { .. } => write!(fmt, "Callback::Read(..)"),
             Callback::Write { .. } => write!(fmt, "Callback::Write(..)"),
             #[cfg(any(test, feature = "testexport"))]
             Callback::Test { .. } => write!(fmt, "Callback::Test(..)"),
@@ -357,10 +499,7 @@ where
     LeaderCallback(Callback<SK>),
     RaftLogGcFlushed,
     // Reports the result of asynchronous Raft logs fetching.
-    RaftlogFetched {
-        context: GetEntriesContext,
-        res: Box<RaftlogFetchResult>,
-    },
+    RaftlogFetched(FetchedLogs),
     EnterForceLeaderState {
         syncer: UnsafeRecoveryForceLeaderSyncer,
         failed_stores: HashSet<u64>,
@@ -373,6 +512,10 @@ where
     UnsafeRecoveryDestroy(UnsafeRecoveryExecutePlanSyncer),
     UnsafeRecoveryWaitApply(UnsafeRecoveryWaitApplySyncer),
     UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSyncer),
+    SnapshotRecoveryWaitApply(SnapshotRecoveryWaitApplySyncer),
+    PrepareFlashback(Sender<bool>),
+    FinishFlashback,
+    CheckPendingAdmin(UnboundedSender<CheckAdminResponse>),
 }
 
 /// Message that will be sent to a peer.
@@ -436,7 +579,7 @@ pub enum CasualMessage<EK: KvEngine> {
     ForceCompactRaftLogs,
 
     /// A message to access peer's internal state.
-    AccessPeer(Box<dyn FnOnce(&mut dyn AbstractPeer) + Send + 'static>),
+    AccessPeer(Box<dyn FnOnce(RegionMeta) + Send + 'static>),
 
     /// Region info from PD
     QueryRegionLeaderResp {

@@ -48,7 +48,9 @@ use pd_client::{Feature, FeatureGate};
 use raftstore::store::TxnExt;
 use resource_metering::{FutureExt, ResourceTagFactory};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData};
-use tikv_util::{quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{
+    deadline::Deadline, quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE,
+};
 use tracker::{get_tls_tracker_token, set_tls_tracker_token, TrackerToken};
 use txn_types::TimeStamp;
 
@@ -261,6 +263,17 @@ impl<L: LockManager> SchedulerInner<L> {
         tctx
     }
 
+    /// Try to own the corresponding task context and take the callback.
+    ///
+    /// If the task is been processing, it should be owned.
+    /// If it has been finished, then it is not in the slot.
+    /// In both cases, cb should be None. Otherwise, cb should be some.
+    fn try_own_and_take_cb(&self, cid: u64) -> Option<StorageCallback> {
+        self.get_task_slot(cid)
+            .get_mut(&cid)
+            .and_then(|tctx| if tctx.try_own() { tctx.cb.take() } else { None })
+    }
+
     fn take_task_cb_and_pr(&self, cid: u64) -> (Option<StorageCallback>, Option<ProcessResult>) {
         self.get_task_slot(cid)
             .get_mut(&cid)
@@ -431,7 +444,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             self.inner
                 .new_task_context(Task::new(cid, tracker, cmd), callback)
         });
-        let deadline = tctx.task.as_ref().unwrap().cmd.deadline();
+
         if self.inner.latches.acquire(&mut tctx.lock, cid) {
             fail_point!("txn_scheduler_acquire_success");
             tctx.on_schedule();
@@ -440,30 +453,66 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             self.execute(task);
             return;
         }
-        // Check deadline in background.
+        let task = tctx.task.as_ref().unwrap();
+        let deadline = task.cmd.deadline();
+        let cmd_ctx = task.cmd.ctx().clone();
+        self.fail_fast_or_check_deadline(cid, tag, cmd_ctx, deadline);
+        fail_point!("txn_scheduler_acquire_fail");
+    }
+
+    fn fail_fast_or_check_deadline(
+        &self,
+        cid: u64,
+        tag: CommandKind,
+        cmd_ctx: Context,
+        deadline: Deadline,
+    ) {
         let sched = self.clone();
         self.inner
             .high_priority_pool
             .pool
             .spawn(async move {
-                GLOBAL_TIMER_HANDLE
-                    .delay(deadline.to_std_instant())
-                    .compat()
-                    .await
-                    .unwrap();
-                let cb = sched
-                    .inner
-                    .get_task_slot(cid)
-                    .get_mut(&cid)
-                    .and_then(|tctx| if tctx.try_own() { tctx.cb.take() } else { None });
-                if let Some(cb) = cb {
-                    cb.execute(ProcessResult::Failed {
-                        err: StorageErrorInner::DeadlineExceeded.into(),
-                    })
+                match unsafe {
+                    with_tls_engine(|engine: &E| engine.precheck_write_with_ctx(&cmd_ctx))
+                } {
+                    // Precheck failed, try to return err early.
+                    Err(e) => {
+                        let cb = sched.inner.try_own_and_take_cb(cid);
+                        // The task is not processing or finished currently. It's safe
+                        // to response early here. In the future, the task will be waked up
+                        // and it will finished with DeadlineExceeded error.
+                        // As the cb is taken here, it will not be executed anymore.
+                        if let Some(cb) = cb {
+                            let pr = ProcessResult::Failed {
+                                err: StorageError::from(e),
+                            };
+                            Self::early_response(
+                                cid,
+                                cb,
+                                pr,
+                                tag,
+                                CommandStageKind::precheck_write_err,
+                            );
+                        }
+                    }
+                    Ok(()) => {
+                        SCHED_STAGE_COUNTER_VEC.get(tag).precheck_write_ok.inc();
+                        // Check deadline in background.
+                        GLOBAL_TIMER_HANDLE
+                            .delay(deadline.to_std_instant())
+                            .compat()
+                            .await
+                            .unwrap();
+                        let cb = sched.inner.try_own_and_take_cb(cid);
+                        if let Some(cb) = cb {
+                            cb.execute(ProcessResult::Failed {
+                                err: StorageErrorInner::DeadlineExceeded.into(),
+                            })
+                        }
+                    }
                 }
             })
             .unwrap();
-        fail_point!("txn_scheduler_acquire_fail");
     }
 
     /// Tries to acquire all the necessary latches. If all the necessary latches
@@ -515,10 +564,17 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 let tag = task.cmd.tag();
                 SCHED_STAGE_COUNTER_VEC.get(tag).snapshot.inc();
 
-                let snap_ctx = SnapContext {
+                let mut snap_ctx = SnapContext {
                     pb_ctx: task.cmd.ctx(),
                     ..Default::default()
                 };
+                if matches!(
+                    task.cmd,
+                    Command::FlashbackToVersionReadPhase { .. }
+                        | Command::FlashbackToVersion { .. }
+                ) {
+                    snap_ctx.for_flashback = true;
+                }
                 // The program is currently in scheduler worker threads.
                 // Safety: `self.inner.worker_pool` should ensure that a TLS engine exists.
                 match unsafe { with_tls_engine(|engine: &E| kv::snapshot(engine, snap_ctx)) }.await
@@ -778,6 +834,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let cid = task.cid;
         let priority = task.cmd.priority();
         let ts = task.cmd.ts();
+        let tracker = task.tracker;
         let scheduler = self.clone();
         let quota_limiter = self.inner.quota_limiter.clone();
         let mut sample = quota_limiter.new_sample(true);
@@ -864,6 +921,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             let diag_ctx = DiagnosticContext {
                 key,
                 resource_group_tag: ctx.get_resource_group_tag().into(),
+                tracker,
             };
             scheduler.on_wait_for_lock(cid, ts, pr, lock, is_first_lock, wait_timeout, diag_ctx);
             return;
@@ -1201,6 +1259,7 @@ mod tests {
 
     use super::*;
     use crate::storage::{
+        kv::{Error as KvError, ErrorInner as KvErrorInner},
         lock_manager::DummyLockManager,
         mvcc::{self, Mutation},
         test_util::latest_feature_gate,
@@ -1210,7 +1269,7 @@ mod tests {
             flow_controller::{EngineFlowController, FlowController},
             latch::*,
         },
-        TestEngineBuilder, TxnStatus,
+        RocksEngine, TestEngineBuilder, TxnStatus,
     };
 
     #[derive(Clone)]
@@ -1219,6 +1278,36 @@ mod tests {
     impl FlowStatsReporter for DummyReporter {
         fn report_read_stats(&self, _read_stats: ReadStats) {}
         fn report_write_stats(&self, _write_stats: WriteStats) {}
+    }
+
+    // TODO(cosven): use this in the following test cases to reduce duplicate code.
+    fn new_test_scheduler() -> (Scheduler<RocksEngine, DummyLockManager>, RocksEngine) {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let config = Config {
+            scheduler_concurrency: 1024,
+            scheduler_worker_pool_size: 1,
+            scheduler_pending_write_threshold: ReadableSize(100 * 1024 * 1024),
+            enable_async_apply_prewrite: false,
+            ..Default::default()
+        };
+        (
+            Scheduler::new(
+                engine.clone(),
+                DummyLockManager,
+                ConcurrencyManager::new(1.into()),
+                &config,
+                DynamicConfigs {
+                    pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
+                    in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
+                },
+                Arc::new(FlowController::Singleton(EngineFlowController::empty())),
+                DummyReporter,
+                ResourceTagFactory::new_for_test(),
+                Arc::new(QuotaLimiter::default()),
+                latest_feature_gate(),
+            ),
+            engine,
+        )
     }
 
     #[test]
@@ -1248,6 +1337,7 @@ mod tests {
                 false,
                 TimeStamp::default(),
                 OldValues::default(),
+                false,
                 false,
                 Context::default(),
             )
@@ -1393,6 +1483,52 @@ mod tests {
         let (cb, f) = paired_future_callback();
         scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
         block_on(f).unwrap().unwrap();
+    }
+
+    /// When all latches are acquired, the command should be executed directly.
+    /// When any latch is not acquired, the command should be prechecked.
+    #[test]
+    fn test_schedule_command_with_fail_fast_mode() {
+        let (scheduler, engine) = new_test_scheduler();
+
+        // req can acquire all latches, so it should be executed directly.
+        let mut req = BatchRollbackRequest::default();
+        req.mut_context().max_execution_duration_ms = 10000;
+        req.set_keys(vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()].into());
+        let cmd: TypedCommand<()> = req.into();
+        let (cb, f) = paired_future_callback();
+        scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
+        // It must be executed (and succeed).
+        block_on(f).unwrap().unwrap();
+
+        // Acquire the latch, so that next command(req2) can't require all latches.
+        let mut lock = Lock::new(&[Key::from_raw(b"d")]);
+        let cid = scheduler.inner.gen_id();
+        assert!(scheduler.inner.latches.acquire(&mut lock, cid));
+
+        engine.trigger_not_leader();
+
+        // req2 can't acquire all latches, req2 will be prechecked.
+        let mut req2 = BatchRollbackRequest::default();
+        req2.mut_context().max_execution_duration_ms = 10000;
+        req2.set_keys(vec![b"a".to_vec(), b"b".to_vec(), b"d".to_vec()].into());
+        let cmd2: TypedCommand<()> = req2.into();
+        let (cb2, f2) = paired_future_callback();
+        scheduler.run_cmd(cmd2.cmd, StorageCallback::Boolean(cb2));
+
+        // Precheck should return NotLeader error.
+        assert!(matches!(
+            block_on(f2).unwrap(),
+            Err(StorageError(box StorageErrorInner::Kv(KvError(
+                box KvErrorInner::Request(ref e),
+            )))) if e.has_not_leader(),
+        ));
+        // The task context should be owned, and it's cb should be taken.
+        let cid2 = cid + 1; // Hack: get the cid of req2.
+        let mut task_slot = scheduler.inner.get_task_slot(cid2);
+        let tctx = task_slot.get_mut(&cid2).unwrap();
+        assert!(!tctx.try_own());
+        assert!(tctx.cb.is_none());
     }
 
     #[test]

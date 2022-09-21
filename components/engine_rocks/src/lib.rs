@@ -16,6 +16,7 @@
 //! Please read the engine_trait crate docs before hacking.
 
 #![cfg_attr(test, feature(test))]
+#![feature(generic_associated_types)]
 
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
@@ -67,7 +68,7 @@ mod perf_context_metrics;
 mod engine_iterator;
 pub use crate::engine_iterator::*;
 
-mod options;
+pub mod options;
 pub mod util;
 
 mod compact_listener;

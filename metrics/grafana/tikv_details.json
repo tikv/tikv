@@ -22194,10 +22194,10 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_storage_mvcc_gc_delete_versions_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
+              "expr": "sum(rate(tikv_storage_mvcc_gc_delete_versions_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (key_mode)",
               "format": "time_series",
               "intervalFactor": 2,
-              "legendFormat": "keys/s",
+              "legendFormat": "{{key_mode}}_keys/s",
               "refId": "E"
             }
           ],
@@ -22518,7 +22518,7 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 0,
-          "description": "SafePoint used for TiKV's Auto GC",
+          "description": "Keys handled in GC compaction filter",
           "fill": 0,
           "gridPos": {
             "h": 7,
@@ -22555,70 +22555,70 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_gc_compaction_filtered{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
+              "expr": "sum(rate(tikv_gc_compaction_filtered{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by {key_mode}",
               "format": "time_series",
               "instant": false,
               "interval": "",
               "intervalFactor": 2,
-              "legendFormat": "filtered",
+              "legendFormat": "{{key_mode}}_filtered",
               "metric": "tikv_storage_command_total",
               "refId": "A",
               "step": 4
             },
             {
-              "expr": "sum(rate(tikv_gc_compaction_filter_skip{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
+              "expr": "sum(rate(tikv_gc_compaction_filter_skip{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (key_mode)",
               "format": "time_series",
               "intervalFactor": 1,
-              "legendFormat": "skip",
+              "legendFormat": "{{key_mode}}_skipped",
               "refId": "B"
             },
             {
-              "expr": "sum(rate(tikv_gc_compaction_mvcc_rollback{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
+              "expr": "sum(rate(tikv_gc_compaction_mvcc_rollback{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (key_mode)",
               "format": "time_series",
               "intervalFactor": 1,
-              "legendFormat": "rollback/lock",
+              "legendFormat": "{{key_mode}}_mvcc-rollback/mvcc-lock",
               "refId": "C"
             },
             {
-              "expr": "sum(rate(tikv_gc_compaction_filter_orphan_versions{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
+              "expr": "sum(rate(tikv_gc_compaction_filter_orphan_versions{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (key_mode)",
               "format": "time_series",
               "intervalFactor": 1,
-              "legendFormat": "orphan-versions",
+              "legendFormat": "{{key_mode}}_orphan-versions",
               "refId": "D"
             },
             {
-              "expr": "sum(rate(tikv_gc_compaction_filter_perform{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
+              "expr": "sum(rate(tikv_gc_compaction_filter_perform{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (key_mode)",
               "format": "time_series",
               "intervalFactor": 1,
-              "legendFormat": "perform",
+              "legendFormat": "{{key_mode}}_performed-times",
               "refId": "E"
             },
             {
-              "expr": "sum(rate(tikv_gc_compaction_failure{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type)",
+              "expr": "sum(rate(tikv_gc_compaction_failure{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (key_mode,type)",
               "format": "time_series",
               "intervalFactor": 1,
-              "legendFormat": "failure-{{type}}",
+              "legendFormat": "{{key_mode}}_failure-{{type}}",
               "refId": "F"
             },
             {
-              "expr": "sum(rate(tikv_gc_compaction_filter_mvcc_deletion_met{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
+              "expr": "sum(rate(tikv_gc_compaction_filter_mvcc_deletion_met{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (key_mode)",
               "format": "time_series",
               "intervalFactor": 1,
-              "legendFormat": "mvcc-deletion-met",
+              "legendFormat": "{{key_mode}}_mvcc-deletion-met",
               "refId": "G"
             },
             {
-              "expr": "sum(rate(tikv_gc_compaction_filter_mvcc_deletion_handled{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
+              "expr": "sum(rate(tikv_gc_compaction_filter_mvcc_deletion_handled{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (key_mode)",
               "format": "time_series",
               "intervalFactor": 1,
-              "legendFormat": "mvcc-deletion-handled",
+              "legendFormat": "{{key_mode}}_mvcc-deletion-handled",
               "refId": "H"
             },
             {
-              "expr": "sum(rate(tikv_gc_compaction_filter_mvcc_deletion_wasted{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
+              "expr": "sum(rate(tikv_gc_compaction_filter_mvcc_deletion_wasted{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (key_mode)",
               "format": "time_series",
               "intervalFactor": 1,
-              "legendFormat": "mvcc-deletion-wasted",
+              "legendFormat": "{{key_mode}}_mvcc-deletion-wasted",
               "refId": "I"
             }
           ],
@@ -22708,10 +22708,10 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_gcworker_gc_keys{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\", cf=\"write\"}[1m])) by (tag)",
+              "expr": "sum(rate(tikv_gcworker_gc_keys{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\", cf=\"write\"}[1m])) by (key_mode,tag)",
               "format": "time_series",
               "intervalFactor": 1,
-              "legendFormat": "{{tag}}",
+              "legendFormat": "{{key_mode}}_{{tag}}",
               "refId": "A"
             }
           ],
@@ -22801,10 +22801,10 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_gcworker_gc_keys{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\", cf=\"default\"}[1m])) by (tag)",
+              "expr": "sum(rate(tikv_gcworker_gc_keys{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\", cf=\"default\"}[1m])) by (key_mode,tag)",
               "format": "time_series",
               "intervalFactor": 1,
-              "legendFormat": "{{tag}}",
+              "legendFormat": "{{key_mode}}_{{tag}}",
               "refId": "A"
             }
           ],
@@ -40356,6 +40356,111 @@
               "logBase": 1,
               "max": null,
               "min": "0",
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The accumulated TTL expired KV count during backup",
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "fill": 1,
+          "fillGradient": 0,
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 135
+          },
+          "hiddenSeries": false,
+          "id": 23763572861,
+          "legend": {
+            "avg": false,
+            "current": false,
+            "max": false,
+            "min": false,
+            "show": true,
+            "total": false,
+            "values": false
+          },
+          "lines": true,
+          "linewidth": 1,
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true
+          },
+          "percentage": false,
+          "pluginVersion": "7.5.11",
+          "pointradius": 2,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "exemplar": true,
+              "expr": "sum(tikv_backup_raw_expired_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (instance)",
+              "interval": "",
+              "legendFormat": "{{instance}}",
+              "queryType": "randomWalk",
+              "refId": "A",
+              "hide": true
+            },
+            {
+              "exemplar": true,
+              "expr": "sum(tikv_backup_raw_expired_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"})",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "sum",
+              "refId": "B"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "TTL Expired",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
               "show": true
             }
           ],

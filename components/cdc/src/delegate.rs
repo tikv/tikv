@@ -24,7 +24,7 @@ use kvproto::{
     },
 };
 use raftstore::{
-    coprocessor::{Cmd, CmdBatch, ObserveHandle, ObserveID},
+    coprocessor::{Cmd, CmdBatch, ObserveHandle, ObserveId},
     store::util::compare_region_epoch,
     Error as RaftStoreError,
 };
@@ -38,7 +38,7 @@ use crate::{
     initializer::KvEntry,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
-    service::ConnID,
+    service::ConnId,
     Error, Result,
 };
 
@@ -46,15 +46,15 @@ static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
 /// A unique identifier of a Downstream.
 #[derive(Clone, Copy, Debug, PartialEq, Hash)]
-pub struct DownstreamID(usize);
+pub struct DownstreamId(usize);
 
-impl DownstreamID {
-    pub fn new() -> DownstreamID {
-        DownstreamID(DOWNSTREAM_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
+impl DownstreamId {
+    pub fn new() -> DownstreamId {
+        DownstreamId(DOWNSTREAM_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
     }
 }
 
-impl Default for DownstreamID {
+impl Default for DownstreamId {
     fn default() -> Self {
         Self::new()
     }
@@ -119,10 +119,10 @@ impl DownstreamState {
 pub struct Downstream {
     // TODO: include cdc request.
     /// A unique identifier of the Downstream.
-    id: DownstreamID,
+    id: DownstreamId,
     // The request ID set by CDC to identify events corresponding different requests.
     req_id: u64,
-    conn_id: ConnID,
+    conn_id: ConnId,
     // The IP address of downstream.
     peer: String,
     region_epoch: RegionEpoch,
@@ -140,11 +140,11 @@ impl Downstream {
         peer: String,
         region_epoch: RegionEpoch,
         req_id: u64,
-        conn_id: ConnID,
+        conn_id: ConnId,
         kv_api: ChangeDataRequestKvApi,
     ) -> Downstream {
         Downstream {
-            id: DownstreamID::new(),
+            id: DownstreamId::new(),
             req_id,
             conn_id,
             peer,
@@ -199,7 +199,7 @@ impl Downstream {
         self.sink = Some(sink);
     }
 
-    pub fn get_id(&self) -> DownstreamID {
+    pub fn get_id(&self) -> DownstreamId {
         self.id
     }
 
@@ -207,7 +207,7 @@ impl Downstream {
         self.state.clone()
     }
 
-    pub fn get_conn_id(&self) -> ConnID {
+    pub fn get_conn_id(&self) -> ConnId {
         self.conn_id
     }
 }
@@ -277,7 +277,7 @@ impl Delegate {
         Ok(())
     }
 
-    pub fn downstream(&self, downstream_id: DownstreamID) -> Option<&Downstream> {
+    pub fn downstream(&self, downstream_id: DownstreamId) -> Option<&Downstream> {
         self.downstreams().iter().find(|d| d.id == downstream_id)
     }
 
@@ -297,7 +297,7 @@ impl Delegate {
 
     /// Let downstream unsubscribe the delegate.
     /// Return whether the delegate is empty or not.
-    pub fn unsubscribe(&mut self, id: DownstreamID, err: Option<Error>) -> bool {
+    pub fn unsubscribe(&mut self, id: DownstreamId, err: Option<Error>) -> bool {
         let error_event = err.map(|err| err.into_error_event(self.region_id));
         let region_id = self.region_id;
         if let Some(d) = self.remove_downstream(id) {
@@ -617,7 +617,7 @@ impl Delegate {
         self.sink_downstream(raw_rows, index, ChangeDataRequestKvApi::RawKv)
     }
 
-    pub fn raw_untrack_ts(&mut self, cdc_id: ObserveID, max_ts: TimeStamp) {
+    pub fn raw_untrack_ts(&mut self, cdc_id: ObserveId, max_ts: TimeStamp) {
         // Stale CmdBatch, drop it silently.
         if cdc_id != self.handle.id {
             return;
@@ -863,7 +863,7 @@ impl Delegate {
         self.txn_extra_op.store(TxnExtraOp::ReadOldValue);
     }
 
-    fn remove_downstream(&mut self, id: DownstreamID) -> Option<Downstream> {
+    fn remove_downstream(&mut self, id: DownstreamId) -> Option<Downstream> {
         let downstreams = self.downstreams_mut();
         if let Some(index) = downstreams.iter().position(|x| x.id == id) {
             let downstream = downstreams.swap_remove(index);
@@ -1070,7 +1070,7 @@ mod tests {
             String::new(),
             region_epoch,
             request_id,
-            ConnID::new(),
+            ConnId::new(),
             ChangeDataRequestKvApi::TiDb,
         );
         downstream.set_sink(sink);
@@ -1189,7 +1189,7 @@ mod tests {
             let mut epoch = RegionEpoch::default();
             epoch.set_conf_ver(region_version);
             epoch.set_version(region_version);
-            Downstream::new(peer, epoch, id, ConnID::new(), ChangeDataRequestKvApi::TiDb)
+            Downstream::new(peer, epoch, id, ConnId::new(), ChangeDataRequestKvApi::TiDb)
         };
 
         // Create a new delegate.

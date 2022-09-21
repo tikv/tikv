@@ -106,8 +106,8 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
 
             // Sync with concurrency manager so that it can work correctly when
             // optimizations like async commit is enabled.
-            // Note: This step must be done before scheduling `Task::MinTS` task, and the
-            // resolver must be checked in or after `Task::MinTS`' execution.
+            // Note: This step must be done before scheduling `Task::MinTs` task, and the
+            // resolver must be checked in or after `Task::MinTs`' execution.
             cm.update_max_ts(min_ts);
             if let Some(min_mem_lock_ts) = cm.global_min_lock_ts() {
                 if min_mem_lock_ts < min_ts {
@@ -397,7 +397,7 @@ async fn get_tikv_client(
         CString::new("random id").unwrap(),
         CONN_ID.fetch_add(1, Ordering::SeqCst),
     );
-    let channel = security_mgr.connect(cb, &store.address);
+    let channel = security_mgr.connect(cb, &store.peer_address);
     let cli = TikvClient::new(channel);
     clients.insert(store_id, cli.clone());
     RTS_TIKV_CLIENT_INIT_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());

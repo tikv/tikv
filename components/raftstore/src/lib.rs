@@ -6,6 +6,7 @@
 #![feature(min_specialization)]
 #![feature(box_patterns)]
 #![feature(hash_drain_filter)]
+#![feature(let_else)]
 #![recursion_limit = "256"]
 
 #[cfg(test)]
@@ -27,7 +28,7 @@ pub use self::{
 };
 
 // `bytes::Bytes` is generated for `bytes` in protobuf.
-fn bytes_capacity(b: &bytes::Bytes) -> usize {
+pub fn bytes_capacity(b: &bytes::Bytes) -> usize {
     // NOTE: For deserialized raft messages, `len` equals capacity.
     // This is used to report memory usage to metrics.
     b.len()

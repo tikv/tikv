@@ -35,6 +35,7 @@ make_auto_flush_static_metric! {
         kv_resolve_lock,
         kv_gc,
         kv_delete_range,
+        kv_flashback_to_version,
         raw_get,
         raw_batch_get,
         raw_batch_get_command,
@@ -212,7 +213,7 @@ lazy_static! {
     pub static ref GC_KEYS_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_gcworker_gc_keys",
         "Counter of keys affected during gc",
-        &["cf", "tag"]
+        &["key_mode", "cf", "tag"]
     )
     .unwrap();
     pub static ref GC_KEY_FAILURES: IntCounter = register_int_counter!(

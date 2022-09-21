@@ -18,7 +18,7 @@ use kvproto::{metapb::Region, raft_cmdpb::AdminCmdType};
 use online_config::{self, ConfigChange, ConfigManager, OnlineConfig};
 use pd_client::PdClient;
 use raftstore::{
-    coprocessor::{CmdBatch, ObserveHandle, ObserveID},
+    coprocessor::{CmdBatch, ObserveHandle, ObserveId},
     router::RaftStoreRouter,
     store::{
         fsm::StoreMeta,
@@ -134,6 +134,7 @@ impl ObserveRegion {
                                 }),
                                 // One pc command do not contains any lock, so just skip it
                                 ChangeRow::OnePc { .. } => {}
+                                ChangeRow::IngestSsT => {}
                             });
                             assert!(
                                 *tracked_index < *index,
@@ -191,6 +192,9 @@ impl ObserveRegion {
                                     .untrack_lock(&key.to_raw().unwrap(), Some(*index)),
                                 // One pc command do not contains any lock, so just skip it
                                 ChangeRow::OnePc { .. } => {}
+                                ChangeRow::IngestSsT => {
+                                    self.resolver.update_tracked_index(*index);
+                                }
                             });
                         }
                     }
@@ -458,7 +462,7 @@ where
     }
 
     // Deregister current observed region and try to register it again.
-    fn re_register_region(&mut self, region_id: u64, observe_id: ObserveID, cause: String) {
+    fn re_register_region(&mut self, region_id: u64, observe_id: ObserveId, cause: String) {
         if let Some(observe_region) = self.regions.get(&region_id) {
             if observe_region.handle.id != observe_id {
                 warn!("resolved ts deregister region failed due to observe_id not match");
@@ -554,7 +558,7 @@ where
     fn handle_scan_locks(
         &mut self,
         region_id: u64,
-        observe_id: ObserveID,
+        observe_id: ObserveId,
         entries: Vec<ScanEntry>,
         apply_index: u64,
     ) {
@@ -622,7 +626,7 @@ pub enum Task<S: Snapshot> {
     },
     ReRegisterRegion {
         region_id: u64,
-        observe_id: ObserveID,
+        observe_id: ObserveId,
         cause: String,
     },
     RegisterAdvanceEvent {
@@ -638,7 +642,7 @@ pub enum Task<S: Snapshot> {
     },
     ScanLocks {
         region_id: u64,
-        observe_id: ObserveID,
+        observe_id: ObserveId,
         entries: Vec<ScanEntry>,
         apply_index: u64,
     },

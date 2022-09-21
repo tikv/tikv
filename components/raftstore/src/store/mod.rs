@@ -4,9 +4,13 @@ pub mod cmd_resp;
 pub mod config;
 pub mod entry_storage;
 pub mod fsm;
+pub mod local_metrics;
 pub mod memory;
 pub mod metrics;
 pub mod msg;
+mod peer;
+mod read_queue;
+pub mod region_meta;
 pub mod transport;
 #[macro_use]
 pub mod util;
@@ -15,13 +19,10 @@ mod async_io;
 mod bootstrap;
 mod compaction_guard;
 mod hibernate_state;
-pub mod local_metrics;
-mod peer;
 mod peer_storage;
-mod read_queue;
 mod region_snapshot;
 mod replication_mode;
-mod snap;
+pub mod snap;
 mod txn_ext;
 mod worker;
 
@@ -29,8 +30,11 @@ mod worker;
 pub use self::msg::PeerInternalStat;
 pub use self::{
     async_io::{
-        write::{PersistedNotifier, StoreWriters, Worker as WriteWorker, WriteMsg, WriteTask},
-        write_router::{WriteRouter, WriteRouterContext},
+        write::{
+            ExtraStates, PersistedNotifier, StoreWriters, Worker as WriteWorker, WriteMsg,
+            WriteTask,
+        },
+        write_router::{WriteRouter, WriteRouterContext, WriteSenders},
     },
     bootstrap::{
         bootstrap_store, clear_prepare_bootstrap_cluster, clear_prepare_bootstrap_key,
@@ -48,13 +52,17 @@ pub use self::{
         PeerTick, RaftCmdExtraOpts, RaftCommand, ReadCallback, ReadResponse, SignificantMsg,
         StoreMsg, StoreTick, WriteCallback, WriteResponse,
     },
-    peer::{AbstractPeer, Peer, PeerStat, ProposalContext, RequestInspector, RequestPolicy},
+    peer::{
+        can_amend_read, get_sync_log_from_request, propose_read_index, should_renew_lease, Peer,
+        PeerStat, ProposalContext, ProposalQueue, RequestInspector, RequestPolicy,
+        SnapshotRecoveryWaitApplySyncer,
+    },
     peer_storage::{
         clear_meta, do_snapshot, write_initial_apply_state, write_initial_raft_state,
         write_peer_state, PeerStorage, SnapState, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
         RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
     },
-    read_queue::ReadIndexContext,
+    read_queue::{ReadIndexContext, ReadIndexQueue, ReadIndexRequest},
     region_snapshot::{RegionIterator, RegionSnapshot},
     replication_mode::{GlobalReplicationState, StoreGroup},
     snap::{
@@ -68,10 +76,10 @@ pub use self::{
     util::{RegionReadProgress, RegionReadProgressRegistry},
     worker::{
         AutoSplitController, Bucket, BucketRange, CachedReadDelegate, CheckLeaderRunner,
-        CheckLeaderTask, FlowStatistics, FlowStatsReporter, KeyEntry, LocalReadContext,
-        LocalReader, PdTask, QueryStats, RaftlogFetchRunner, RaftlogFetchTask, ReadDelegate,
-        ReadExecutor, ReadExecutorProvider, ReadMetrics, ReadProgress, ReadStats,
-        RefreshConfigTask, RegionTask, SplitCheckRunner, SplitCheckTask, SplitConfig,
+        CheckLeaderTask, FetchedLogs, FlowStatistics, FlowStatsReporter, KeyEntry,
+        LocalReadContext, LocalReader, LogFetchedNotifier, PdTask, QueryStats, RaftlogFetchRunner,
+        RaftlogFetchTask, ReadDelegate, ReadExecutor, ReadExecutorProvider, ReadProgress,
+        ReadStats, RefreshConfigTask, RegionTask, SplitCheckRunner, SplitCheckTask, SplitConfig,
         SplitConfigManager, StoreMetaDelegate, TrackVer, WriteStats,
     },
 };

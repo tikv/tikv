@@ -5,6 +5,7 @@ use std::{sync::Arc, time::Duration};
 use kvproto::{kvrpcpb::Op, metapb::Peer};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
+use test_pd_client::TestPdClient;
 use test_raftstore::*;
 
 fn prepare_for_stale_read(leader: Peer) -> (Cluster<ServerCluster>, Arc<TestPdClient>, PeerClient) {

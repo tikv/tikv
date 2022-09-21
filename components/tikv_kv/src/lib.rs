@@ -30,6 +30,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use collections::HashMap;
 use engine_traits::{
     CfName, IterOptions, KvEngine as LocalEngine, Mutable, MvccProperties, ReadOptions, WriteBatch,
     CF_DEFAULT, CF_LOCK,
@@ -251,10 +252,14 @@ impl WriteData {
 pub struct SnapContext<'a> {
     pub pb_ctx: &'a Context,
     pub read_id: Option<ThreadReadId>,
-    pub start_ts: TimeStamp,
+    // When start_ts is None and `stale_read` is true, it means acquire a snapshot without any
+    // consistency guarantee.
+    pub start_ts: Option<TimeStamp>,
     // `key_ranges` is used in replica read. It will send to
     // the leader via raft "read index" to check memory locks.
     pub key_ranges: Vec<KeyRange>,
+    // Marks that this read is a FlashbackToVersionReadPhase.
+    pub for_flashback: bool,
 }
 
 /// Engine defines the common behaviour for a storage engine type.
@@ -263,14 +268,22 @@ pub trait Engine: Send + Clone + 'static {
     type Local: LocalEngine;
 
     /// Local storage engine.
-    fn kv_engine(&self) -> Self::Local;
-
-    fn snapshot_on_kv_engine(&self, start_key: &[u8], end_key: &[u8]) -> Result<Self::Snap>;
+    ///
+    /// If local engine can't be accessed directly, `None` is returned.
+    /// Currently, only multi-rocksdb version will return `None`.
+    fn kv_engine(&self) -> Option<Self::Local>;
 
     /// Write modifications into internal local engine directly.
-    fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()>;
+    ///
+    /// region_modifies records each region's modifications.
+    fn modify_on_kv_engine(&self, region_modifies: HashMap<u64, Vec<Modify>>) -> Result<()>;
 
     fn async_snapshot(&self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()>;
+
+    /// Precheck request which has write with it's context.
+    fn precheck_write_with_ctx(&self, _ctx: &Context) -> Result<()> {
+        Ok(())
+    }
 
     fn async_write(&self, ctx: &Context, batch: WriteData, write_cb: Callback<()>) -> Result<()>;
 
@@ -358,12 +371,15 @@ pub trait Snapshot: Sync + Send + Clone {
     /// Get the value associated with `key` in `cf` column family, with Options
     /// in `opts`
     fn get_cf_opt(&self, opts: ReadOptions, cf: CfName, key: &Key) -> Result<Option<Value>>;
+
     fn iter(&self, cf: CfName, iter_opt: IterOptions) -> Result<Self::Iter>;
+
     // The minimum key this snapshot can retrieve.
     #[inline]
     fn lower_bound(&self) -> Option<&[u8]> {
         None
     }
+
     // The maximum key can be fetched from the snapshot should less than the upper
     // bound.
     #[inline]

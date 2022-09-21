@@ -13,7 +13,7 @@ use backup::Task;
 use collections::HashMap;
 use engine_traits::{CfName, IterOptions, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN};
 use external_storage_export::make_local_backend;
-use futures::channel::mpsc as future_mpsc;
+use futures::{channel::mpsc as future_mpsc, executor::block_on};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{brpb::*, kvrpcpb::*, tikvpb::TikvClient};
 use rand::Rng;
@@ -24,7 +24,7 @@ use tidb_query_common::storage::{
 };
 use tikv::{
     config::BackupConfig,
-    coprocessor::{checksum_crc64_xor, dag::TiKvStorage},
+    coprocessor::{checksum_crc64_xor, dag::TikvStorage},
     storage::{
         kv::{Engine, SnapContext},
         SnapshotStore,
@@ -355,14 +355,14 @@ impl TestSuite {
             false,
         );
         let mut scanner = RangesScanner::new(RangesScannerOptions {
-            storage: TiKvStorage::new(snap_store, false),
+            storage: TikvStorage::new(snap_store, false),
             ranges: vec![Range::Interval(IntervalRange::from((start, end)))],
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: false,
         });
         let digest = crc64fast::Digest::new();
-        while let Some((k, v)) = scanner.next().unwrap() {
+        while let Some((k, v)) = block_on(scanner.next()).unwrap() {
             checksum = checksum_crc64_xor(checksum, digest.clone(), &k, &v);
             total_kvs += 1;
             total_bytes += (k.len() + v.len()) as u64;

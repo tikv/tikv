@@ -61,6 +61,10 @@ const SLOW_EVENT_THRESHOLD: f64 = 120.0;
 /// CHECKPOINT_SAFEPOINT_TTL_IF_ERROR specifies the safe point TTL(24 hour) if
 /// task has fatal error.
 const CHECKPOINT_SAFEPOINT_TTL_IF_ERROR: u64 = 24;
+/// The timeout for tick updating the checkpoint.
+/// Generally, it would take ~100ms.
+/// 5s would be enough for it.
+const TICK_UPDATE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct Endpoint<S, R, E, RT, PDC> {
     // Note: those fields are more like a shared context between components.
@@ -592,7 +596,7 @@ where
                     })
                     .collect::<Vec<_>>();
                 range_router
-                    .register_task(task.clone(), ranges.clone())
+                    .register_task(task.clone(), ranges.clone(), self.config.file_size_limit.0)
                     .await?;
 
                 for (start_key, end_key) in ranges {
@@ -720,7 +724,6 @@ where
         async move {
             let mut resolved = get_rts.await?;
             let mut new_rts = resolved.global_checkpoint();
-            #[cfg(feature = "failpoints")]
             fail::fail_point!("delay_on_flush");
             flush_ob.before(resolved.take_region_checkpoints()).await;
             if let Some(rewritten_rts) = flush_ob.rewrite_resolved_ts(&task).await {
@@ -768,19 +771,29 @@ where
         }));
     }
 
-    fn on_update_global_checkpoint(&self, task: String) {
-        self.pool.block_on(async move {
-            let ts = self.meta_client.global_progress_of_task(&task).await;
+    fn update_global_checkpoint(&self, task: String) -> future![()] {
+        let meta_client = self.meta_client.clone();
+        let router = self.range_router.clone();
+        let store_id = self.store_id;
+        async move {
+            #[cfg(feature = "failpoints")]
+            {
+                // fail-rs doesn't support async code blocks now.
+                // let's borrow the feature name and do it ourselves :3
+                if std::env::var("LOG_BACKUP_UGC_SLEEP_AND_RETURN").is_ok() {
+                    tokio::time::sleep(Duration::from_secs(100)).await;
+                    return;
+                }
+            }
+            let ts = meta_client.global_progress_of_task(&task).await;
             match ts {
                 Ok(global_checkpoint) => {
-                    let r = self
-                        .range_router
-                        .update_global_checkpoint(&task, global_checkpoint, self.store_id)
+                    let r = router
+                        .update_global_checkpoint(&task, global_checkpoint, store_id)
                         .await;
                     match r {
                         Ok(true) => {
-                            if let Err(err) = self
-                                .meta_client
+                            if let Err(err) = meta_client
                                 .set_storage_checkpoint(&task, global_checkpoint)
                                 .await
                             {
@@ -812,7 +825,18 @@ where
                     );
                 }
             }
-        });
+        }
+    }
+
+    fn on_update_global_checkpoint(&self, task: String) {
+        let _guard = self.pool.handle().enter();
+        let result = self.pool.block_on(tokio::time::timeout(
+            TICK_UPDATE_TIMEOUT,
+            self.update_global_checkpoint(task),
+        ));
+        if let Err(err) = result {
+            warn!("log backup update global checkpoint timed out"; "err" => %err)
+        }
     }
 
     /// Modify observe over some region.

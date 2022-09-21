@@ -9,7 +9,7 @@ use std::{
     vec::IntoIter,
 };
 
-use engine_traits::CfName;
+use engine_traits::{CfName, SstMetaInfo};
 use kvproto::{
     metapb::Region,
     pdpb::CheckPolicy,
@@ -33,7 +33,7 @@ pub use self::{
     dispatcher::{
         BoxAdminObserver, BoxApplySnapshotObserver, BoxCmdObserver, BoxConsistencyCheckObserver,
         BoxPdTaskObserver, BoxQueryObserver, BoxRegionChangeObserver, BoxRoleObserver,
-        BoxSplitCheckObserver, CoprocessorHost, Registry,
+        BoxSplitCheckObserver, BoxUpdateSafeTsObserver, CoprocessorHost, Registry,
     },
     error::{Error, Result},
     region_info_accessor::{
@@ -75,10 +75,19 @@ impl<'a> ObserverContext<'a> {
     }
 }
 
+/// Context of a region provided for observers.
+#[derive(Default, Clone)]
 pub struct RegionState {
     pub peer_id: u64,
     pub pending_remove: bool,
     pub modified_region: Option<Region>,
+}
+
+/// Context for exec observers of mutation to be applied to ApplyContext.
+pub struct ApplyCtxInfo<'a> {
+    pub pending_handle_ssts: &'a mut Option<Vec<SstMetaInfo>>,
+    pub delete_ssts: &'a mut Vec<SstMetaInfo>,
+    pub pending_delete_ssts: &'a mut Vec<SstMetaInfo>,
 }
 
 pub trait AdminObserver: Coprocessor {
@@ -115,6 +124,7 @@ pub trait AdminObserver: Coprocessor {
         _: &Cmd,
         _: &RaftApplyState,
         _: &RegionState,
+        _: &mut ApplyCtxInfo<'_>,
     ) -> bool {
         false
     }
@@ -154,6 +164,7 @@ pub trait QueryObserver: Coprocessor {
         _: &Cmd,
         _: &RaftApplyState,
         _: &RegionState,
+        _: &mut ApplyCtxInfo<'_>,
     ) -> bool {
         false
     }
@@ -168,6 +179,35 @@ pub trait ApplySnapshotObserver: Coprocessor {
     /// Hook to call after applying sst file. Currently the content of the
     /// snapshot can't be passed to the observer.
     fn apply_sst(&self, _: &mut ObserverContext<'_>, _: CfName, _path: &str) {}
+
+    /// Hook when receiving Task::Apply.
+    /// Should pass valid snapshot, the option is only for testing.
+    /// Notice that we can call `pre_apply_snapshot` to multiple snapshots at
+    /// the same time.
+    fn pre_apply_snapshot(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _peer_id: u64,
+        _: &crate::store::SnapKey,
+        _: Option<&crate::store::Snapshot>,
+    ) {
+    }
+
+    /// Hook when the whole snapshot is applied.
+    /// Should pass valid snapshot, the option is only for testing.
+    fn post_apply_snapshot(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _: u64,
+        _: &crate::store::SnapKey,
+        _snapshot: Option<&crate::store::Snapshot>,
+    ) {
+    }
+
+    /// We call pre_apply_snapshot only when one of the observer returns true.
+    fn should_pre_apply_snapshot(&self) -> bool {
+        false
+    }
 }
 
 /// SplitChecker is invoked during a split check scan, and decides to use
@@ -270,6 +310,17 @@ pub enum RegionChangeEvent {
 pub trait RegionChangeObserver: Coprocessor {
     /// Hook to call when a region changed on this TiKV
     fn on_region_changed(&self, _: &mut ObserverContext<'_>, _: RegionChangeEvent, _: StateRole) {}
+
+    /// Should be called everytime before we write a WriteBatch into
+    /// KvEngine. Returns false if we can't commit at this time.
+    fn pre_persist(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _is_finished: bool,
+        _cmd: Option<&RaftCmdRequest>,
+    ) -> bool {
+        true
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -295,34 +346,34 @@ static OBSERVE_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
 /// A unique identifier for checking stale observed commands.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct ObserveID(usize);
+pub struct ObserveId(usize);
 
-impl ObserveID {
-    pub fn new() -> ObserveID {
-        ObserveID(OBSERVE_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
+impl ObserveId {
+    pub fn new() -> ObserveId {
+        ObserveId(OBSERVE_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
     }
 }
 
 /// ObserveHandle is the status of a term of observing, it contains the
-/// `ObserveID` and the `observing` flag indicate whether the observing is
+/// `ObserveId` and the `observing` flag indicate whether the observing is
 /// ongoing
 #[derive(Clone, Default, Debug)]
 pub struct ObserveHandle {
-    pub id: ObserveID,
+    pub id: ObserveId,
     observing: Arc<AtomicBool>,
 }
 
 impl ObserveHandle {
     pub fn new() -> ObserveHandle {
         ObserveHandle {
-            id: ObserveID::new(),
+            id: ObserveId::new(),
             observing: Arc::new(AtomicBool::new(true)),
         }
     }
 
     pub fn with_id(id: usize) -> ObserveHandle {
         ObserveHandle {
-            id: ObserveID(id),
+            id: ObserveId(id),
             observing: Arc::new(AtomicBool::new(true)),
         }
     }
@@ -412,9 +463,9 @@ pub enum ObserveLevel {
 #[derive(Clone, Debug)]
 pub struct CmdBatch {
     pub level: ObserveLevel,
-    pub cdc_id: ObserveID,
-    pub rts_id: ObserveID,
-    pub pitr_id: ObserveID,
+    pub cdc_id: ObserveId,
+    pub rts_id: ObserveId,
+    pub pitr_id: ObserveId,
     pub region_id: u64,
     pub cmds: Vec<Cmd>,
 }
@@ -489,6 +540,11 @@ pub trait CmdObserver<E>: Coprocessor {
 pub trait ReadIndexObserver: Coprocessor {
     // Hook to call when stepping in raft and the message is a read index message.
     fn on_step(&self, _msg: &mut eraftpb::Message, _role: StateRole) {}
+}
+
+pub trait UpdateSafeTsObserver: Coprocessor {
+    /// Hook after update self safe_ts and received leader safe_ts.
+    fn on_update_safe_ts(&self, _: u64, _: u64, _: u64) {}
 }
 
 #[cfg(test)]

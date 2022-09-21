@@ -2,7 +2,7 @@
 
 //! Configuration for the entire server.
 //!
-//! TiKV is configured through the `TiKvConfig` type, which is in turn
+//! TiKV is configured through the `TikvConfig` type, which is in turn
 //! made up of many other configuration types.
 
 use std::{
@@ -31,13 +31,14 @@ use engine_rocks::{
         PrepopulateBlockCache,
     },
     util::{FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform},
-    RaftDbLogger, RangePropertiesCollectorFactory, RocksCfOptions, RocksDbOptions, RocksEngine,
-    RocksEventListener, RocksTitanDbOptions, RocksdbLogger, TtlPropertiesCollectorFactory,
-    DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+    RaftDbLogger, RangePropertiesCollectorFactory, RawMvccPropertiesCollectorFactory,
+    RocksCfOptions, RocksDbOptions, RocksEngine, RocksEventListener, RocksTitanDbOptions,
+    RocksdbLogger, TtlPropertiesCollectorFactory, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+    DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{
     CfOptions as _, CfOptionsExt, DbOptions as _, DbOptionsExt, TabletAccessor,
-    TabletErrorCollector, TitanDbOptions as _, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    TabletErrorCollector, TitanCfOptions as _, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use file_system::IoRateLimiter;
 use keys::region_raft_prefix_len;
@@ -679,6 +680,10 @@ impl DefaultCfConfig {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
         };
+        cf_opts.add_table_properties_collector_factory(
+            "tikv.rawkv-mvcc-properties-collector",
+            RawMvccPropertiesCollectorFactory::default(),
+        );
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         match api_version {
             ApiVersion::V1 => {
@@ -705,7 +710,7 @@ impl DefaultCfConfig {
                     .unwrap();
             }
         }
-        cf_opts.set_titandb_options(&self.titan.build_opts());
+        cf_opts.set_titan_cf_options(&self.titan.build_opts());
         cf_opts
     }
 }
@@ -811,7 +816,7 @@ impl WriteCfConfig {
                 WriteCompactionFilterFactory,
             )
             .unwrap();
-        cf_opts.set_titandb_options(&self.titan.build_opts());
+        cf_opts.set_titan_cf_options(&self.titan.build_opts());
         cf_opts
     }
 }
@@ -890,7 +895,7 @@ impl LockCfConfig {
         };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
-        cf_opts.set_titandb_options(&self.titan.build_opts());
+        cf_opts.set_titan_cf_options(&self.titan.build_opts());
         cf_opts
     }
 }
@@ -961,7 +966,7 @@ impl RaftCfConfig {
             .set_prefix_extractor("NoopSliceTransform", NoopSliceTransform)
             .unwrap();
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
-        cf_opts.set_titandb_options(&self.titan.build_opts());
+        cf_opts.set_titan_cf_options(&self.titan.build_opts());
         cf_opts
     }
 }
@@ -1337,7 +1342,7 @@ impl RaftDefaultCfConfig {
         cf_opts
             .set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform", f)
             .unwrap();
-        cf_opts.set_titandb_options(&self.titan.build_opts());
+        cf_opts.set_titan_cf_options(&self.titan.build_opts());
         cf_opts
     }
 }
@@ -1849,6 +1854,7 @@ pub struct UnifiedReadPoolConfig {
     pub stack_size: ReadableSize,
     #[online_config(skip)]
     pub max_tasks_per_worker: usize,
+    pub auto_adjust_pool_size: bool,
     // FIXME: Add more configs when they are effective in yatp
 }
 
@@ -1904,6 +1910,7 @@ impl Default for UnifiedReadPoolConfig {
             max_thread_count: concurrency,
             stack_size: ReadableSize::mb(DEFAULT_READPOOL_STACK_SIZE_MB),
             max_tasks_per_worker: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
+            auto_adjust_pool_size: false,
         }
     }
 }
@@ -1919,6 +1926,7 @@ mod unified_read_pool_tests {
             max_thread_count: 2,
             stack_size: ReadableSize::mb(2),
             max_tasks_per_worker: 2000,
+            auto_adjust_pool_size: false,
         };
         cfg.validate().unwrap();
         let cfg = UnifiedReadPoolConfig {
@@ -2257,6 +2265,7 @@ mod readpool_tests {
             max_thread_count: 0,
             stack_size: ReadableSize::mb(0),
             max_tasks_per_worker: 0,
+            auto_adjust_pool_size: false,
         };
         unified.validate().unwrap_err();
         let storage = StorageReadPoolConfig {
@@ -2510,10 +2519,10 @@ impl Default for BackupStreamConfig {
         let total_mem = SysQuota::memory_limit_in_bytes();
         let quota_size = (total_mem as f64 * 0.1).min(ReadableSize::mb(512).0 as _);
         Self {
-            max_flush_interval: ReadableDuration::minutes(5),
+            max_flush_interval: ReadableDuration::minutes(3),
             // use at most 50% of vCPU by default
             num_threads: (cpu_num * 0.5).clamp(2.0, 12.0) as usize,
-            enable: false,
+            enable: true,
             // TODO: may be use raft store directory
             temp_path: String::new(),
             file_size_limit: ReadableSize::mb(256),
@@ -2846,7 +2855,7 @@ impl QuotaConfig {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
-pub struct TiKvConfig {
+pub struct TikvConfig {
     #[doc(hidden)]
     #[serde(skip_serializing)]
     #[online_config(hidden)]
@@ -2971,9 +2980,9 @@ pub struct TiKvConfig {
     pub causal_ts: CausalTsConfig,
 }
 
-impl Default for TiKvConfig {
-    fn default() -> TiKvConfig {
-        TiKvConfig {
+impl Default for TikvConfig {
+    fn default() -> TikvConfig {
+        TikvConfig {
             cfg_path: "".to_owned(),
             log_level: slog::Level::Info.into(),
             log_file: "".to_owned(),
@@ -3015,7 +3024,7 @@ impl Default for TiKvConfig {
     }
 }
 
-impl TiKvConfig {
+impl TikvConfig {
     pub fn infer_raft_db_path(&self, data_dir: Option<&str>) -> Result<String, Box<dyn Error>> {
         if self.raft_store.raftdb_path.is_empty() {
             let data_dir = data_dir.unwrap_or(&self.storage.data_dir);
@@ -3282,7 +3291,7 @@ impl TiKvConfig {
     // As the init of `logger` is very early, this adjust needs to be separated and
     // called immediately after parsing the command line.
     pub fn logger_compatible_adjust(&mut self) {
-        let default_tikv_cfg = TiKvConfig::default();
+        let default_tikv_cfg = TikvConfig::default();
         let default_log_cfg = LogConfig::default();
         if self.log_level != default_tikv_cfg.log_level {
             eprintln!("deprecated configuration, log-level has been moved to log.level");
@@ -3534,7 +3543,7 @@ impl TiKvConfig {
         let mut cfg = if let Some(keys) = unrecognized_keys {
             serde_ignored::deserialize(&mut deserializer, |key| keys.push(key.to_string()))
         } else {
-            <TiKvConfig as serde::Deserialize>::deserialize(&mut deserializer)
+            <TikvConfig as serde::Deserialize>::deserialize(&mut deserializer)
         }?;
         deserializer.end()?;
         cfg.cfg_path = path.display().to_string();
@@ -3555,9 +3564,9 @@ impl TiKvConfig {
         self.rocksdb.write_into_metrics();
     }
 
-    pub fn with_tmp() -> Result<(TiKvConfig, tempfile::TempDir), IoError> {
+    pub fn with_tmp() -> Result<(TikvConfig, tempfile::TempDir), IoError> {
         let tmp = tempfile::tempdir()?;
-        let mut cfg = TiKvConfig::default();
+        let mut cfg = TikvConfig::default();
         cfg.storage.data_dir = tmp.path().display().to_string();
         cfg.cfg_path = tmp.path().join(LAST_CONFIG_FILE).display().to_string();
         Ok((cfg, tmp))
@@ -3593,7 +3602,7 @@ impl TiKvConfig {
 /// Loads the previously-loaded configuration from `last_tikv.toml`,
 /// compares key configuration items and fails if they are not
 /// identical.
-pub fn check_critical_config(config: &TiKvConfig) -> Result<(), String> {
+pub fn check_critical_config(config: &TikvConfig) -> Result<(), String> {
     // Check current critical configurations with last time, if there are some
     // changes, user must guarantee relevant works have been done.
     if let Some(mut cfg) = get_last_config(&config.storage.data_dir) {
@@ -3606,12 +3615,12 @@ pub fn check_critical_config(config: &TiKvConfig) -> Result<(), String> {
     Ok(())
 }
 
-fn get_last_config(data_dir: &str) -> Option<TiKvConfig> {
+fn get_last_config(data_dir: &str) -> Option<TikvConfig> {
     let store_path = Path::new(data_dir);
     let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
     if last_cfg_path.exists() {
         return Some(
-            TiKvConfig::from_file(&last_cfg_path, None).unwrap_or_else(|e| {
+            TikvConfig::from_file(&last_cfg_path, None).unwrap_or_else(|e| {
                 panic!(
                     "invalid auto generated configuration file {}, err {}",
                     last_cfg_path.display(),
@@ -3624,7 +3633,7 @@ fn get_last_config(data_dir: &str) -> Option<TiKvConfig> {
 }
 
 /// Persists config to `last_tikv.toml`
-pub fn persist_config(config: &TiKvConfig) -> Result<(), String> {
+pub fn persist_config(config: &TikvConfig) -> Result<(), String> {
     let store_path = Path::new(&config.storage.data_dir);
     let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
     let tmp_cfg_path = store_path.join(TMP_CONFIG_FILE);
@@ -3690,7 +3699,7 @@ pub fn write_config<P: AsRef<Path>>(path: P, content: &[u8]) -> CfgResult<()> {
 }
 
 // convert tikv config to a flatten array.
-pub fn to_flatten_config_info(cfg: &TiKvConfig) -> Vec<Value> {
+pub fn to_flatten_config_info(cfg: &TikvConfig) -> Vec<Value> {
     fn to_cfg_value(default_value: &Value, cfg_value: Option<&Value>, key: &str) -> Value {
         let mut res = Map::with_capacity(2);
         res.insert("Name".into(), Value::String(key.into()));
@@ -3742,7 +3751,7 @@ pub fn to_flatten_config_info(cfg: &TiKvConfig) -> Vec<Value> {
     }
 
     let cfg_value = to_value(cfg).unwrap();
-    let default_value = to_value(TiKvConfig::default()).unwrap();
+    let default_value = to_value(TikvConfig::default()).unwrap();
 
     let mut key_buf = String::new();
     let mut res = Vec::new();
@@ -3756,7 +3765,7 @@ pub fn to_flatten_config_info(cfg: &TiKvConfig) -> Vec<Value> {
 }
 
 lazy_static! {
-    pub static ref TIKVCONFIG_TYPED: ConfigChange = TiKvConfig::default().typed();
+    pub static ref TIKVCONFIG_TYPED: ConfigChange = TikvConfig::default().typed();
 }
 
 fn serde_to_online_config(name: String) -> String {
@@ -3914,7 +3923,7 @@ pub enum Module {
     PessimisticTxn,
     Gc,
     Split,
-    CDC,
+    Cdc,
     ResolvedTs,
     ResourceMetering,
     BackupStream,
@@ -3943,7 +3952,7 @@ impl From<&str> for Module {
             "backup_stream" => Module::BackupStream,
             "pessimistic_txn" => Module::PessimisticTxn,
             "gc" => Module::Gc,
-            "cdc" => Module::CDC,
+            "cdc" => Module::Cdc,
             "resolved_ts" => Module::ResolvedTs,
             "resource_metering" => Module::ResourceMetering,
             "quota" => Module::Quota,
@@ -3963,12 +3972,12 @@ pub struct ConfigController {
 
 #[derive(Default)]
 struct ConfigInner {
-    current: TiKvConfig,
+    current: TikvConfig,
     config_mgrs: HashMap<Module, Box<dyn ConfigManager>>,
 }
 
 impl ConfigController {
-    pub fn new(current: TiKvConfig) -> Self {
+    pub fn new(current: TikvConfig) -> Self {
         ConfigController {
             inner: Arc::new(RwLock::new(ConfigInner {
                 current,
@@ -3984,7 +3993,7 @@ impl ConfigController {
 
     pub fn update_from_toml_file(&self) -> CfgResult<()> {
         let current = self.get_current();
-        match TiKvConfig::from_file(Path::new(&current.cfg_path), None) {
+        match TikvConfig::from_file(Path::new(&current.cfg_path), None) {
             Ok(incoming) => {
                 let diff = current.diff(&incoming);
                 self.update_impl(diff, None)
@@ -4062,7 +4071,7 @@ impl ConfigController {
         }
     }
 
-    pub fn get_current(&self) -> TiKvConfig {
+    pub fn get_current(&self) -> TikvConfig {
         self.inner.read().unwrap().current.clone()
     }
 }
@@ -4118,13 +4127,13 @@ mod tests {
 
     #[test]
     fn test_check_critical_cfg_with() {
-        let mut tikv_cfg = TiKvConfig::default();
-        let last_cfg = TiKvConfig::default();
+        let mut tikv_cfg = TikvConfig::default();
+        let last_cfg = TikvConfig::default();
         tikv_cfg.validate().unwrap();
         tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
 
-        let mut tikv_cfg = TiKvConfig::default();
-        let mut last_cfg = TiKvConfig::default();
+        let mut tikv_cfg = TikvConfig::default();
+        let mut last_cfg = TikvConfig::default();
         tikv_cfg.rocksdb.wal_dir = "/data/wal_dir".to_owned();
         tikv_cfg.validate().unwrap();
         tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap_err();
@@ -4133,8 +4142,8 @@ mod tests {
         tikv_cfg.validate().unwrap();
         tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
 
-        let mut tikv_cfg = TiKvConfig::default();
-        let mut last_cfg = TiKvConfig::default();
+        let mut tikv_cfg = TikvConfig::default();
+        let mut last_cfg = TikvConfig::default();
         tikv_cfg.storage.data_dir = "/data1".to_owned();
         tikv_cfg.validate().unwrap();
         tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap_err();
@@ -4144,8 +4153,8 @@ mod tests {
         tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
 
         // Enable Raft Engine.
-        let mut tikv_cfg = TiKvConfig::default();
-        let mut last_cfg = TiKvConfig::default();
+        let mut tikv_cfg = TikvConfig::default();
+        let mut last_cfg = TikvConfig::default();
         tikv_cfg.raft_engine.enable = true;
         last_cfg.raft_engine.enable = true;
 
@@ -4158,8 +4167,8 @@ mod tests {
         tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
 
         // Disable Raft Engine and uses RocksDB.
-        let mut tikv_cfg = TiKvConfig::default();
-        let mut last_cfg = TiKvConfig::default();
+        let mut tikv_cfg = TikvConfig::default();
+        let mut last_cfg = TikvConfig::default();
         tikv_cfg.raft_engine.enable = false;
         last_cfg.raft_engine.enable = false;
 
@@ -4206,7 +4215,7 @@ mod tests {
 
     #[test]
     fn test_last_cfg_modified() {
-        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
         let store_path = Path::new(&cfg.storage.data_dir);
         let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
 
@@ -4234,12 +4243,12 @@ mod tests {
         let file = path_buf.as_path();
         let (s1, s2) = ("/xxx/wal_dir".to_owned(), "/yyy/wal_dir".to_owned());
 
-        let mut tikv_cfg = TiKvConfig::default();
+        let mut tikv_cfg = TikvConfig::default();
 
         tikv_cfg.rocksdb.wal_dir = s1.clone();
         tikv_cfg.raftdb.wal_dir = s2.clone();
         tikv_cfg.write_to_file(file).unwrap();
-        let cfg_from_file = TiKvConfig::from_file(file, None).unwrap_or_else(|e| {
+        let cfg_from_file = TikvConfig::from_file(file, None).unwrap_or_else(|e| {
             panic!(
                 "invalid auto generated configuration file {}, err {}",
                 file.display(),
@@ -4253,7 +4262,7 @@ mod tests {
         tikv_cfg.rocksdb.wal_dir = s2.clone();
         tikv_cfg.raftdb.wal_dir = s1.clone();
         tikv_cfg.write_to_file(file).unwrap();
-        let cfg_from_file = TiKvConfig::from_file(file, None).unwrap_or_else(|e| {
+        let cfg_from_file = TikvConfig::from_file(file, None).unwrap_or_else(|e| {
             panic!(
                 "invalid auto generated configuration file {}, err {}",
                 file.display(),
@@ -4266,7 +4275,7 @@ mod tests {
 
     #[test]
     fn test_flatten_cfg() {
-        let mut cfg = TiKvConfig::default();
+        let mut cfg = TikvConfig::default();
         cfg.server.labels.insert("zone".into(), "test".into());
         cfg.raft_store.raft_log_gc_count_limit = Some(123);
 
@@ -4299,14 +4308,14 @@ mod tests {
             .unwrap();
         let path = root_path.path().join("not_exist_dir");
 
-        let mut tikv_cfg = TiKvConfig::default();
+        let mut tikv_cfg = TikvConfig::default();
         tikv_cfg.storage.data_dir = path.as_path().to_str().unwrap().to_owned();
         persist_config(&tikv_cfg).unwrap();
     }
 
     #[test]
     fn test_keepalive_check() {
-        let mut tikv_cfg = TiKvConfig::default();
+        let mut tikv_cfg = TikvConfig::default();
         tikv_cfg.pd.endpoints = vec!["".to_owned()];
         let dur = tikv_cfg.raft_store.raft_heartbeat_interval();
         tikv_cfg.server.grpc_keepalive_time = ReadableDuration(dur);
@@ -4317,7 +4326,7 @@ mod tests {
 
     #[test]
     fn test_block_size() {
-        let mut tikv_cfg = TiKvConfig::default();
+        let mut tikv_cfg = TikvConfig::default();
         tikv_cfg.pd.endpoints = vec!["".to_owned()];
         tikv_cfg.rocksdb.defaultcf.block_size = ReadableSize::gb(10);
         tikv_cfg.rocksdb.lockcf.block_size = ReadableSize::gb(10);
@@ -4388,8 +4397,8 @@ mod tests {
             ConfigValue::from(10000u64)
         );
 
-        let old = TiKvConfig::default();
-        let mut incoming = TiKvConfig::default();
+        let old = TikvConfig::default();
+        let mut incoming = TikvConfig::default();
         incoming.coprocessor.region_split_keys = Some(10000);
         incoming.gc.max_write_bytes_per_sec = ReadableSize::mb(100);
         incoming.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(500);
@@ -4483,7 +4492,7 @@ mod tests {
 
     #[allow(clippy::type_complexity)]
     fn new_engines<F: KvFormat>(
-        cfg: TiKvConfig,
+        cfg: TikvConfig,
     ) -> (
         Storage<RocksDBEngine, DummyLockManager, F>,
         ConfigController,
@@ -4541,7 +4550,7 @@ mod tests {
 
     #[test]
     fn test_flow_control() {
-        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
         cfg.storage.flow_control.l0_files_threshold = 50;
         cfg.validate().unwrap();
         let (storage, cfg_controller, _, flow_controller) = new_engines::<ApiV1>(cfg);
@@ -4600,7 +4609,7 @@ mod tests {
             }
         }
 
-        let (cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        let (cfg, _dir) = TikvConfig::with_tmp().unwrap();
         let cfg_controller = ConfigController::new(cfg);
         let (tx, rx) = channel::unbounded();
         cfg_controller.register(Module::ResolvedTs, Box::new(TestConfigManager(tx)));
@@ -4655,7 +4664,7 @@ mod tests {
 
     #[test]
     fn test_change_rocksdb_config() {
-        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
         cfg.rocksdb.max_background_jobs = 4;
         cfg.rocksdb.max_background_flushes = 2;
         cfg.rocksdb.defaultcf.disable_auto_compactions = false;
@@ -4733,7 +4742,7 @@ mod tests {
 
     #[test]
     fn test_change_rate_limiter_auto_tuned() {
-        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
         // vanilla limiter does not support dynamically changing auto-tuned mode.
         cfg.rocksdb.rate_limiter_auto_tuned = true;
         cfg.validate().unwrap();
@@ -4757,7 +4766,7 @@ mod tests {
 
     #[test]
     fn test_change_shared_block_cache() {
-        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
         cfg.storage.block_cache.shared = true;
         cfg.validate().unwrap();
         let (storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
@@ -4781,7 +4790,7 @@ mod tests {
 
     #[test]
     fn test_change_logconfig() {
-        let (cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        let (cfg, _dir) = TikvConfig::with_tmp().unwrap();
         let cfg_controller = ConfigController::new(cfg);
 
         cfg_controller.register(Module::Log, Box::new(LogConfigManager));
@@ -4804,7 +4813,7 @@ mod tests {
 
     #[test]
     fn test_dispatch_titan_blob_run_mode_config() {
-        let mut cfg = TiKvConfig::default();
+        let mut cfg = TikvConfig::default();
         let mut incoming = cfg.clone();
         cfg.rocksdb.defaultcf.titan.blob_run_mode = BlobRunMode::Normal;
         incoming.rocksdb.defaultcf.titan.blob_run_mode = BlobRunMode::Fallback;
@@ -4824,7 +4833,7 @@ mod tests {
 
     #[test]
     fn test_change_ttl_check_poll_interval() {
-        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
         cfg.storage.block_cache.shared = true;
         cfg.validate().unwrap();
         let (_, cfg_controller, mut rx, _) = new_engines::<ApiV1>(cfg);
@@ -4841,7 +4850,7 @@ mod tests {
 
     #[test]
     fn test_change_store_scheduler_worker_pool_size() {
-        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
         cfg.storage.scheduler_worker_pool_size = 4;
         cfg.validate().unwrap();
         let (storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
@@ -4891,7 +4900,7 @@ mod tests {
 
     #[test]
     fn test_change_quota_config() {
-        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
         cfg.quota.foreground_cpu_time = 1000;
         cfg.quota.foreground_write_bandwidth = ReadableSize::mb(128);
         cfg.quota.foreground_read_bandwidth = ReadableSize::mb(256);
@@ -5004,7 +5013,7 @@ mod tests {
 
     #[test]
     fn test_change_server_config() {
-        let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+        let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
         cfg.validate().unwrap();
         let cfg_controller = ConfigController::new(cfg.clone());
         let (scheduler, _receiver) = dummy_scheduler();
@@ -5018,7 +5027,7 @@ mod tests {
             )),
         );
 
-        let check_cfg = |cfg: &TiKvConfig| {
+        let check_cfg = |cfg: &TikvConfig| {
             assert_eq!(&cfg_controller.get_current(), cfg);
             assert_eq!(&*version_tracker.value(), &cfg.server);
         };
@@ -5041,7 +5050,7 @@ mod tests {
     fn test_compatible_adjust_validate_equal() {
         // After calling many time of `compatible_adjust` and `validate` should has
         // the same effect as calling `compatible_adjust` and `validate` one time
-        let mut c = TiKvConfig::default();
+        let mut c = TikvConfig::default();
         let mut cfg = c.clone();
         c.compatible_adjust();
         c.validate().unwrap();
@@ -5059,7 +5068,7 @@ mod tests {
         [readpool.storage]
         [readpool.coprocessor]
         "#;
-        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
         cfg.compatible_adjust();
         assert_eq!(cfg.readpool.storage.use_unified_pool, Some(true));
         assert_eq!(cfg.readpool.coprocessor.use_unified_pool, Some(true));
@@ -5070,7 +5079,7 @@ mod tests {
         [readpool.coprocessor]
         normal-concurrency = 1
         "#;
-        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
         cfg.compatible_adjust();
         assert_eq!(cfg.readpool.storage.use_unified_pool, Some(false));
         assert_eq!(cfg.readpool.coprocessor.use_unified_pool, Some(false));
@@ -5100,7 +5109,7 @@ mod tests {
         temp_config_writer.sync_data().unwrap();
 
         let mut unrecognized_keys = Vec::new();
-        let _ = TiKvConfig::from_file(temp_config_file.path(), Some(&mut unrecognized_keys));
+        let _ = TikvConfig::from_file(temp_config_file.path(), Some(&mut unrecognized_keys));
 
         assert_eq!(
             unrecognized_keys,
@@ -5120,7 +5129,7 @@ mod tests {
             [raft-engine]
             enable = true
         "#;
-        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap();
         assert_eq!(
             cfg.raft_engine.config.dir,
@@ -5178,7 +5187,7 @@ mod tests {
 
     #[test]
     fn test_validate_tikv_config() {
-        let mut cfg = TiKvConfig::default();
+        let mut cfg = TikvConfig::default();
         cfg.validate().unwrap();
         let default_region_split_check_diff = cfg.raft_store.region_split_check_diff().0;
         cfg.raft_store.region_split_check_diff =
@@ -5222,19 +5231,19 @@ mod tests {
         }
 
         {
-            let mut cfg = TiKvConfig::default();
+            let mut cfg = TikvConfig::default();
             cfg.validate().unwrap();
         }
 
         {
-            let mut cfg = TiKvConfig::default();
+            let mut cfg = TikvConfig::default();
             cfg.storage.data_dir = tmp_path_string_generate!(tmp_path, "data");
             cfg.raft_store.raftdb_path = tmp_path_string_generate!(tmp_path, "data", "db");
             cfg.validate().unwrap_err();
         }
 
         {
-            let mut cfg = TiKvConfig::default();
+            let mut cfg = TikvConfig::default();
             cfg.storage.data_dir = tmp_path_string_generate!(tmp_path, "data", "kvdb");
             cfg.raft_store.raftdb_path =
                 tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
@@ -5243,7 +5252,7 @@ mod tests {
         }
 
         {
-            let mut cfg = TiKvConfig::default();
+            let mut cfg = TikvConfig::default();
             cfg.storage.data_dir = tmp_path_string_generate!(tmp_path, "data", "kvdb");
             cfg.raft_store.raftdb_path =
                 tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
@@ -5252,14 +5261,14 @@ mod tests {
         }
 
         {
-            let mut cfg = TiKvConfig::default();
+            let mut cfg = TikvConfig::default();
             cfg.rocksdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "wal");
             cfg.raftdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "wal");
             cfg.validate().unwrap_err();
         }
 
         {
-            let mut cfg = TiKvConfig::default();
+            let mut cfg = TikvConfig::default();
             cfg.storage.data_dir = tmp_path_string_generate!(tmp_path, "data", "kvdb");
             cfg.raft_store.raftdb_path =
                 tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
@@ -5390,7 +5399,7 @@ mod tests {
             .map(|l| l.strip_prefix('#').unwrap_or(l))
             .join("\n");
 
-        let mut cfg: TiKvConfig = toml::from_str(&template_config).unwrap();
+        let mut cfg: TikvConfig = toml::from_str(&template_config).unwrap();
         cfg.validate().unwrap();
     }
 
@@ -5403,7 +5412,7 @@ mod tests {
 
         let mut deserializer = toml::Deserializer::new(&template_config);
         let mut unrecognized_keys = Vec::new();
-        let _: TiKvConfig = serde_ignored::deserialize(&mut deserializer, |key| {
+        let _: TikvConfig = serde_ignored::deserialize(&mut deserializer, |key| {
             unrecognized_keys.push(key.to_string())
         })
         .unwrap();
@@ -5419,8 +5428,8 @@ mod tests {
             .map(|l| l.strip_prefix('#').unwrap_or(l))
             .join("\n");
 
-        let mut cfg: TiKvConfig = toml::from_str(&template_config).unwrap();
-        let mut default_cfg = TiKvConfig::default();
+        let mut cfg: TikvConfig = toml::from_str(&template_config).unwrap();
+        let mut default_cfg = TikvConfig::default();
 
         // Some default values are computed based on the environment.
         // Because we can't set config values for these in `config-template.toml`, we
@@ -5510,7 +5519,7 @@ mod tests {
                     .lines()
                     .map(|l| l.strip_prefix('#').unwrap_or(l))
                     .join("\n");
-                let _: TiKvConfig = toml::from_str(&template_config).unwrap();
+                let _: TikvConfig = toml::from_str(&template_config).unwrap();
             }
             Err(e) => {
                 if e.is_timeout() {
@@ -5527,7 +5536,7 @@ mod tests {
         let content = r#"
             [cdc]
         "#;
-        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap();
 
         // old-value-cache-size is deprecated, 0 must not report error.
@@ -5535,28 +5544,28 @@ mod tests {
             [cdc]
             old-value-cache-size = 0
         "#;
-        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap();
 
         let content = r#"
             [cdc]
             min-ts-interval = "0s"
         "#;
-        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap();
 
         let content = r#"
             [cdc]
             incremental-scan-threads = 0
         "#;
-        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap();
 
         let content = r#"
             [cdc]
             incremental-scan-concurrency = 0
         "#;
-        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap();
 
         let content = r#"
@@ -5564,7 +5573,7 @@ mod tests {
             incremental-scan-concurrency = 1
             incremental-scan-threads = 2
         "#;
-        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap();
     }
 
@@ -5587,7 +5596,7 @@ mod tests {
             ("backup_stream", Module::BackupStream),
             ("pessimistic_txn", Module::PessimisticTxn),
             ("gc", Module::Gc),
-            ("cdc", Module::CDC),
+            ("cdc", Module::Cdc),
             ("resolved_ts", Module::ResolvedTs),
             ("resource_metering", Module::ResourceMetering),
             ("unknown", Module::Unknown("unknown".to_string())),
@@ -5718,7 +5727,7 @@ mod tests {
             l0-files-threshold = 77
             soft-pending-compaction-bytes-limit = "777GB"
         "#;
-        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap();
         assert_eq!(
             cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger,
@@ -5740,7 +5749,7 @@ mod tests {
             soft-pending-compaction-bytes-limit = "888GB"
             [rocksdb.writecf]
         "#;
-        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap();
         assert_eq!(
             cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger,
@@ -5763,7 +5772,7 @@ mod tests {
             level0-slowdown-writes-trigger = 66
             soft-pending-compaction-bytes-limit = "666GB"
         "#;
-        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap();
         assert_eq!(
             cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger,
@@ -5784,7 +5793,7 @@ mod tests {
             level0-slowdown-writes-trigger = 88
             soft-pending-compaction-bytes-limit = "888GB"
         "#;
-        let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap();
         assert_eq!(
             cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger,
