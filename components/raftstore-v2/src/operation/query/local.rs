@@ -114,7 +114,7 @@ where
     }
 }
 
-impl<E> ReadExecutorProvider<E> for StoreMetaDelegate<E>
+impl<E> ReadExecutorProvider for StoreMetaDelegate<E>
 where
     E: KvEngine,
 {

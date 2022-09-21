@@ -225,10 +225,7 @@ impl Drop for ReadDelegate {
 }
 
 /// #[RaftstoreCommon]
-pub trait ReadExecutorProvider<E>: Send + Clone + 'static
-where
-    E: KvEngine,
-{
+pub trait ReadExecutorProvider: Send + Clone + 'static {
     type Executor: ReadExecutor;
 
     fn store_id(&self) -> Option<u64>;
@@ -259,7 +256,7 @@ where
     }
 }
 
-impl<E> ReadExecutorProvider<E> for StoreMetaDelegate<E>
+impl<E> ReadExecutorProvider for StoreMetaDelegate<E>
 where
     E: KvEngine,
 {
@@ -544,7 +541,7 @@ where
     C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
     D: ReadExecutor + Deref<Target = ReadDelegate>,
-    S: ReadExecutorProvider<E, Executor = D>,
+    S: ReadExecutorProvider<Executor = D>,
 {
     pub store_id: Cell<Option<u64>>,
     store_meta: S,
@@ -597,7 +594,7 @@ where
     C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
     D: ReadExecutor<E = E> + Deref<Target = ReadDelegate> + Clone,
-    S: ReadExecutorProvider<E, Executor = D>,
+    S: ReadExecutorProvider<Executor = D>,
 {
     pub fn new(kv_engine: E, store_meta: S, router: C) -> Self {
         let cache_read_id = ThreadReadId::new();
@@ -865,7 +862,7 @@ where
     C: ProposalRouter<E::Snapshot> + CasualRouter<E> + Clone,
     E: KvEngine,
     D: ReadExecutor + Deref<Target = ReadDelegate>,
-    S: ReadExecutorProvider<E, Executor = D>,
+    S: ReadExecutorProvider<Executor = D>,
 {
     fn clone(&self) -> Self {
         LocalReader {
