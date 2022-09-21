@@ -1269,7 +1269,10 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                             &region_state,
                         )?;
                         let apply_state = if region_state.get_state() != PeerState::Tombstone {
-                            let state = raft_engine.get_apply_state(region_id)?.unwrap();
+                            let state =
+                                raft_engine.get_apply_state(region_id)?.unwrap_or_else(|| {
+                                    panic!("apply state not found, region_id: {}", region_id)
+                                });
                             kv_wb.put_msg_cf(CF_RAFT, &keys::apply_state_key(region_id), &state)?;
                             Some(state)
                         } else {
