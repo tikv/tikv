@@ -312,17 +312,16 @@ impl MiscExt for RocksEngine {
                 != 0
     }
 
-    fn checkpoint_to(&self, _path: &[PathBuf], _size_to_flush: u64) -> Result<()> {
-        unimplemented!()
-        // if path.is_empty() {
-        //     return Ok(());
-        // }
-        // let mut checkpoint = self.as_inner().checkpoint()?;
-        // checkpoint.create_at(&path[0], size_to_flush)?;
-        // for p in &path[1..] {
-        //     checkpoint.create_at(p, u64::MAX)?;
-        // }
-        // Ok(())
+    fn checkpoint_to(&self, path: &[PathBuf], size_to_flush: u64) -> Result<()> {
+        if path.is_empty() {
+            return Ok(());
+        }
+        let mut checkpoint = self.as_inner().checkpoint().map_err(r2e)?;
+        checkpoint.create_at(&path[0], size_to_flush).map_err(r2e)?;
+        for p in &path[1..] {
+            checkpoint.create_at(p, u64::MAX).map_err(r2e)?;
+        }
+        Ok(())
     }
 }
 
