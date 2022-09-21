@@ -282,9 +282,16 @@ where
         let pd_client =
             Self::connect_to_pd_cluster(&mut config, env.clone(), Arc::clone(&security_mgr));
         // check if TiKV need to run in snapshot recovery mode
-        let is_recovering_marked = pd_client
-            .is_recovering_marked()
-            .expect("failed to get recovery mode from PD");
+        let is_recovering_marked = match pd_client.is_recovering_marked() {
+            Err(e) => {
+                warn!(
+                    "failed to get recovery mode from PD";
+                    "error" => ?e,
+                );
+                false
+            }
+            Ok(marked) => marked,
+        };
 
         if is_recovering_marked {
             // Run a TiKV server in recovery modeß
