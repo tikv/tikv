@@ -18,7 +18,6 @@ use crate::{
     },
     DiscardReason, Error as RaftStoreError, Result as RaftStoreResult,
 };
-
 /// Routes messages to the raftstore.
 pub trait RaftStoreRouter<EK>:
     StoreRouter<EK>
