@@ -3641,8 +3641,11 @@ where
                                 // If the previous peer is not witness, but the new peer is witness,
                                 // we need to cleanup the kv data of this region
                                 let _ = self.fsm.peer.get_store().clear_data();
+                                // witness has lower election priority
+                                self.fsm.peer.raft_group.set_priority(0);
                             }
                             (true, false) => {
+                                self.fsm.peer.raft_group.set_priority(1);
                                 // TODO: support witness -> nonwitness conf change
                                 panic!(
                                     "{} is witness, but the new peer is not witness",
