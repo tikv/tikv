@@ -449,24 +449,22 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             let mut sample = self.quota_limiter.new_sample(true);
             let (drained, record_len) = {
                 let (cpu_time, res) = sample
-                    .observe_cpu_async(
-                        match self.internal_handle_request(
-                          false,
-                          batch_size,
-                          &mut chunk,
-                          &mut warnings,
-                          &mut ctx, 
-                        ) {
-                          Ok((drained, record_len)) => (drained, record_len),
-                          Err(e) => {
-                            MEMTRACE_QUERY_EXECUTOR.chunk.sub(record_all as i64);
-                            return Err(e);
-                          }
-                        }
-                      ))
+                    .observe_cpu_async(self.internal_handle_request(
+                        false,
+                        batch_size,
+                        &mut chunk,
+                        &mut warnings,
+                        &mut ctx,
+                    ))
                     .await;
                 sample.add_cpu_time(cpu_time);
-                res?
+                match res {
+                    Ok((drained, record_len)) => (drained, record_len),
+                    Err(e) => {
+                        MEMTRACE_QUERY_EXECUTOR.chunk.sub(record_all as i64);
+                        return Err(e);
+                    }
+                }
             };
             if chunk.has_rows_data() {
                 sample.add_read_bytes(chunk.get_rows_data().len());

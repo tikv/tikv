@@ -384,18 +384,12 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
             }
         };
 
-<<<<<<< Updated upstream
         n_bytes += self.states_offset_each_logical_row.len() * size_of::<usize>()
             + entities.context.n_bytes;
 
         entities.context.n_bytes = 0;
 
         self.alloc_trace(n_bytes);
-=======
-        warn!(""; "entities.each_aggr_fn: " => ?entities.each_aggr_fn.len());
-
-        self.alloc_trace(self.states_offset_each_logical_row.len() * size_of::<usize>());
->>>>>>> Stashed changes
 
         // 2. Update states according to the group.
         HashAggregationHelper::update_each_row_states_by_offset(
@@ -496,13 +490,7 @@ where
         }
     }
 
-<<<<<<< Updated upstream
     Ok(n_bytes)
-=======
-    warn!(""; "group.len(): " => ?group.len());
-
-    Ok(())
->>>>>>> Stashed changes
 }
 
 fn handle_scalar_group_each_row<T>(
