@@ -4716,7 +4716,7 @@ where
         Ok(propose_index)
     }
 
-    fn handle_read<E: ReadExecutor<EK>>(
+    fn handle_read<E: ReadExecutor<E = EK>>(
         &self,
         reader: &mut E,
         req: RaftCmdRequest,
@@ -5609,11 +5609,13 @@ where
     }
 }
 
-impl<EK, ER, T> ReadExecutor<EK> for PollContext<EK, ER, T>
+impl<EK, ER, T> ReadExecutor for PollContext<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
 {
+    type E = EK;
+
     fn get_tablet(&mut self) -> &EK {
         &self.engines.kv
     }

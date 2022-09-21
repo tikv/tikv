@@ -78,10 +78,12 @@ where
     }
 }
 
-impl<E> ReadExecutor<E> for CachedReadDelegate<E>
+impl<E> ReadExecutor for CachedReadDelegate<E>
 where
     E: KvEngine,
 {
+    type E = E;
+
     fn get_tablet(&mut self) -> &E {
         self.cached_tablet.latest().unwrap()
     }
