@@ -28,6 +28,7 @@ use kvproto::{
     kvrpcpb::*,
     tikvpb::*,
 };
+use pd_client::PdClient;
 use protobuf::parse_from_bytes;
 use tempdir::TempDir;
 use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
