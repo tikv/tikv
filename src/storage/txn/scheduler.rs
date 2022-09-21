@@ -1378,7 +1378,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             parameters: lock_info.parameters,
             lock_wait_token,
             req_states: Some(ctx.get_shared_states().clone()),
-            current_legacy_wakeup_cnt: None,
+            current_legacy_wake_up_cnt: None,
             key_cb: Some(ctx.get_callback_for_blocked_key().into()),
         });
 

@@ -188,7 +188,7 @@ mod tests {
         let lock_mgr = DummyLockManager::new();
         let (cb, rx) = create_storage_cb();
         let ctx = LockWaitContext::new(
-            lock_mgr,
+            lock_mgr.clone(),
             lock_mgr.allocate_token(),
             1.into(),
             1.into(),
