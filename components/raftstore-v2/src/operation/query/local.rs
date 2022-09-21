@@ -147,8 +147,8 @@ where
 
                     delegate.check_stale_read_safe::<E>(read_ts)?;
 
-                    // TLS_LOCAL_READ_METRICS.with(|m|
-                    // m.borrow_mut().local_executed_stale_read_requests.inc());
+                    TLS_LOCAL_READ_METRICS
+                        .with(|m| m.borrow_mut().local_executed_stale_read_requests.inc());
                     Ok(Some(snap))
                 }
                 _ => unreachable!(),
@@ -398,7 +398,7 @@ impl<'r> RequestInspector for SnapRequestInspector<'r> {
             LeaseState::Valid
         } else {
             debug!(self.logger, "rejected by leader lease"; "tag" => &self.delegate.tag);
-            // TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.no_lease.inc());
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.no_lease.inc());
             LeaseState::Expired
         }
     }
