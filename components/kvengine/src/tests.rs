@@ -122,15 +122,13 @@ fn test_destroy_range() {
             }
             thread::sleep(Duration::from_millis(100));
         }
+        let shard = engine.get_shard(1).unwrap();
+        let length = shard
+            .get_property(DEL_PREFIXES_KEY)
+            .map(|v| v.len())
+            .unwrap_or_default();
         // Delete-prefixes is cleaned up.
-        assert!(
-            engine
-                .get_shard(1)
-                .unwrap()
-                .get_data()
-                .del_prefixes
-                .is_empty()
-        );
+        assert_eq!(length, 0);
     };
     wait_for_destroying_range();
     // After destroying range, key [10, 30) should be removed.

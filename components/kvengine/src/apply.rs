@@ -283,7 +283,9 @@ impl EngineCore {
             new_l0s,
             new_cfs,
         );
+        let new_del_prefixes = new_data.del_prefixes.marshal();
         shard.set_data(new_data);
+        shard.set_property(DEL_PREFIXES_KEY, &new_del_prefixes);
         let del_files = dr
             .get_table_deletes()
             .iter()
