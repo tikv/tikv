@@ -47,6 +47,7 @@ use tikv_util::{
     worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler},
 };
 use yatp::Remote;
+use tikv_util::query_stats::QueryStats;
 
 use crate::{
     coprocessor::CoprocessorHost,
@@ -57,7 +58,6 @@ use crate::{
         transport::SignificantRouter,
         util::{is_epoch_stale, KeysInfoFormatter, LatencyInspector, RaftstoreDuration},
         worker::{
-            query_stats::QueryStats,
             split_controller::{SplitInfo, TOP_N},
             AutoSplitController, ReadStats, SplitConfigChange, WriteStats,
         },

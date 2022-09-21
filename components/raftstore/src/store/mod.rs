@@ -76,7 +76,7 @@ pub use self::{
     worker::{
         AutoSplitController, Bucket, BucketRange, CachedReadDelegate, CheckLeaderRunner,
         CheckLeaderTask, FetchedLogs, FlowStatistics, FlowStatsReporter, KeyEntry,
-        LocalReadContext, LocalReader, LogFetchedNotifier, PdTask, QueryStats, RaftlogFetchRunner,
+        LocalReadContext, LocalReader, LogFetchedNotifier, PdTask, RaftlogFetchRunner,
         RaftlogFetchTask, ReadDelegate, ReadExecutor, ReadExecutorProvider, ReadProgress,
         ReadStats, RefreshConfigTask, RegionTask, SplitCheckRunner, SplitCheckTask, SplitConfig,
         SplitConfigManager, StoreMetaDelegate, TrackVer, WriteStats,
