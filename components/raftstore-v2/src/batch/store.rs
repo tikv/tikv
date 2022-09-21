@@ -1,6 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    cell::Cell,
     mem,
     ops::{Deref, DerefMut},
     sync::{atomic::AtomicUsize, Arc, Mutex},
@@ -30,6 +31,7 @@ use slog::Logger;
 use tikv_util::{
     box_err,
     config::{Tracker, VersionTrack},
+    defer,
     future::poll_future_notify,
     time::Instant as TiInstant,
     timer::SteadyTimer,
@@ -42,7 +44,7 @@ use super::apply::{create_apply_batch_system, ApplyPollerBuilder, ApplyRouter, A
 use crate::{
     fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate, StoreMeta},
     raft::{Peer, Storage},
-    router::{PeerMsg, PeerTick, StoreMsg},
+    router::{PeerMsg, PeerTick, QueryResChannel, StoreMsg},
     Error, Result,
 };
 
@@ -65,11 +67,11 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     /// The precise timer for scheduling tick.
     pub timer: SteadyTimer,
     pub write_senders: WriteSenders<EK, ER>,
+    /// store meta
+    pub store_meta: Arc<Mutex<StoreMeta<EK>>>,
     pub engine: ER,
     pub tablet_factory: Arc<dyn TabletFactory<EK>>,
     pub log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
-    // todo(SpadeA): remove option
-    pub store_meta: Option<Arc<Mutex<StoreMeta<EK>>>>,
     // todo(SpadeA): remove option
     pub coprocessor_host: Option<CoprocessorHost<EK>>,
     /// region_id -> (peer_id, is_splitting)
@@ -232,6 +234,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
     write_senders: WriteSenders<EK, ER>,
     logger: Logger,
+    store_meta: Arc<Mutex<StoreMeta<EK>>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
@@ -245,6 +248,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         store_writers: &mut StoreWriters<EK, ER>,
         logger: Logger,
+        store_meta: Arc<Mutex<StoreMeta<EK>>>,
     ) -> Self {
         StorePollerBuilder {
             cfg,
@@ -256,6 +260,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             log_fetch_scheduler,
             logger,
             write_senders: store_writers.senders(),
+            store_meta,
         }
     }
 
@@ -320,11 +325,11 @@ where
             tick_batch: vec![PeerTickBatch::default(); PeerTick::VARIANT_COUNT],
             timer: SteadyTimer::default(),
             write_senders: self.write_senders.clone(),
+            store_meta: self.store_meta.clone(),
             engine: self.engine.clone(),
             tablet_factory: self.tablet_factory.clone(),
             log_fetch_scheduler: self.log_fetch_scheduler.clone(),
             coprocessor_host: None,
-            store_meta: None,
             pending_create_peers: Arc::default(),
         };
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
@@ -367,6 +372,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         tablet_factory: Arc<dyn TabletFactory<EK>>,
         trans: T,
         router: &StoreRouter<EK, ER>,
+        store_meta: Arc<Mutex<StoreMeta<EK>>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -390,6 +396,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             log_fetch_scheduler,
             &mut workers.store_writers,
             self.logger.clone(),
+            store_meta,
         );
         self.workers = Some(workers);
         let peers = builder.init()?;

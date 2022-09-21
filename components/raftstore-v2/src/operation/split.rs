@@ -55,7 +55,7 @@ fn create_read_delegate<EK: KvEngine, ER: RaftEngine>(peer: &Peer<EK, ER>) -> Re
         tag: format!("[region {}] {}", region_id, peer_id),
         txn_extra_op: peer.txn_extra_op.clone(),
         txn_ext: peer.txn_ext.clone(),
-        read_progress: peer.read_progress.clone(),
+        read_progress: peer.read_progress().clone(),
         pending_remove: false,
         bucket_meta: peer.region_buckets.as_ref().map(|b| b.meta.clone()),
         track_ver: TrackVer::new(),
@@ -222,14 +222,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
             .peer()
             .approximate_keys()
             .map(|v| v / new_region_count);
-        let mut meta = self
-            .store_ctx
-            .store_meta
-            .as_ref()
-            .unwrap()
-            .as_ref()
-            .lock()
-            .unwrap();
+        let mut meta = self.store_ctx.store_meta.lock().unwrap();
         meta.set_region(
             self.store_ctx.coprocessor_host.as_ref().unwrap(),
             derived,
@@ -399,7 +392,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
             meta.readers
                 .insert(new_region_id, create_read_delegate(new_peer.peer()));
             meta.region_read_progress
-                .insert(new_region_id, new_peer.peer().read_progress.clone());
+                .insert(new_region_id, new_peer.peer().read_progress().clone());
 
             if last_region_id == new_region_id {
                 // To prevent from big region, the right region needs run split

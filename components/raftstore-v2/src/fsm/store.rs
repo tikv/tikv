@@ -82,15 +82,11 @@ where
     }
 }
 
-impl<E> Default for StoreMeta<E>
-where
-    E: KvEngine,
-{
+impl<E: KvEngine> Default for StoreMeta<E> {
     fn default() -> Self {
         Self::new(0)
     }
 }
-
 pub struct Store {
     id: u64,
     // Unix time when it's started.

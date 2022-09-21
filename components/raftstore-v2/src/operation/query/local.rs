@@ -14,23 +14,20 @@ use std::{
     time::Duration,
 };
 
-use crossbeam::{atomic::AtomicCell, channel::TrySendError};
+use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, RaftEngine, Snapshot, TabletFactory};
 use fail::fail_point;
 use kvproto::{
-    errorpb,
-    kvrpcpb::ExtraOp as TxnExtraOp,
     metapb,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request, Response},
 };
 use pd_client::BucketMeta;
 use raftstore::{
-    errors::RAFTSTORE_IS_BUSY,
     store::{
         cmd_resp,
         util::{self, LeaseState, RegionReadProgress, RemoteLease},
         ReadDelegate, ReadExecutor, ReadExecutorProvider, ReadProgress, ReadResponse,
-        RegionSnapshot, RequestInspector, RequestPolicy, TrackVer, TxnExt,
+        RegionSnapshot, RequestInspector, RequestPolicy,
     },
     Error, Result,
 };
@@ -149,7 +146,6 @@ where
 mod tests {
     use std::{borrow::Borrow, sync::mpsc::*, thread};
 
-    use crossbeam::channel::TrySendError;
     use engine_test::{
         ctor::{CfOptions, DbOptions},
         kv::{KvTestEngine, KvTestSnapshot, TestTabletFactoryV2},
