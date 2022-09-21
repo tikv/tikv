@@ -1850,7 +1850,7 @@ impl PdClient for TestPdClient {
 
 // TODO: Function `check_key_in_region/find_peer/is_learner/new_peer` also 
 // exists same in `raftstore`. But `test_pd_client` should not depend on 
-// `raftstore`, so this utils should be move to tikv_util(or others).
+// `raftstore`, so this utils should be moved to tikv_util(or others) and reused.
 //
 fn check_key_in_region(key: &[u8], region: &metapb::Region) -> bool {
     let end_key = region.get_end_key();
