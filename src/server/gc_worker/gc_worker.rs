@@ -30,11 +30,12 @@ use pd_client::{FeatureGate, PdClient};
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionInfoProvider},
     router::RaftStoreRouter,
-    store::{msg::StoreMsg, util::find_peer},
+    store::msg::StoreMsg,
 };
 use tikv_kv::{CfStatistics, CursorBuilder, Modify, SnapContext};
 use tikv_util::{
     config::{Tracker, VersionTrack},
+    raftstore::find_peer,
     time::{duration_to_sec, Instant, Limiter, SlowTimer},
     worker::{Builder as WorkerBuilder, LazyWorker, Runnable, ScheduleError, Scheduler},
     Either,
@@ -1705,11 +1706,12 @@ mod tests {
             RegionChangeEvent,
         },
         router::RaftStoreBlackHole,
-        store::util::new_peer,
     };
     use tempfile::Builder;
     use tikv_kv::Snapshot;
-    use tikv_util::{codec::number::NumberEncoder, future::paired_future_callback};
+    use tikv_util::{
+        codec::number::NumberEncoder, future::paired_future_callback, raftstore::new_peer,
+    };
     use txn_types::Mutation;
 
     use super::{test_gc_worker::MultiRocksEngine, *};

@@ -24,7 +24,7 @@ use kvproto::{
 };
 use online_config::OnlineConfig;
 use raft::StateRole;
-use raftstore::{coprocessor::RegionInfoProvider, store::util::find_peer};
+use raftstore::coprocessor::RegionInfoProvider;
 use tikv::{
     config::BackupConfig,
     storage::{
@@ -37,6 +37,7 @@ use tikv::{
 };
 use tikv_util::{
     box_err, debug, error, error_unknown, impl_display_as_debug, info,
+    raftstore::find_peer,
     time::{Instant, Limiter},
     warn,
     worker::Runnable,
@@ -1188,10 +1189,7 @@ pub mod tests {
     use file_system::{IoOp, IoRateLimiter, IoType};
     use futures::{executor::block_on, stream::StreamExt};
     use kvproto::metapb;
-    use raftstore::{
-        coprocessor::{RegionCollector, Result as CopResult, SeekRegionCallback},
-        store::util::new_peer,
-    };
+    use raftstore::coprocessor::{RegionCollector, Result as CopResult, SeekRegionCallback};
     use rand::Rng;
     use tempfile::TempDir;
     use tikv::{
@@ -1201,7 +1199,7 @@ pub mod tests {
             RocksEngine, TestEngineBuilder,
         },
     };
-    use tikv_util::config::ReadableSize;
+    use tikv_util::{config::ReadableSize, raftstore::new_peer};
     use tokio::time;
     use txn_types::SHORT_VALUE_MAX_LEN;
 

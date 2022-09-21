@@ -40,7 +40,7 @@ use pd_client::{
 };
 use raft::eraftpb::ConfChangeType;
 use tikv_util::{
-    query_stats::QueryStats,
+    raftstore::{check_key_in_region, find_peer, is_learner, new_peer, QueryStats},
     time::{Instant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
     Either, HandyRwLock,
@@ -1844,34 +1844,4 @@ impl PdClient for TestPdClient {
             .or_insert(buckets);
         ready(Ok(())).boxed()
     }
-}
-
-// TODO: Function `check_key_in_region/find_peer/is_learner/new_peer` also
-// exists same in `raftstore`. But `test_pd_client` should not depend on
-// `raftstore`, so this utils should be moved to tikv_util(or others) and
-// reused.
-//
-fn check_key_in_region(key: &[u8], region: &metapb::Region) -> bool {
-    let end_key = region.get_end_key();
-    let start_key = region.get_start_key();
-    key >= start_key && (end_key.is_empty() || key < end_key)
-}
-
-fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
-    region
-        .get_peers()
-        .iter()
-        .find(|&p| p.get_store_id() == store_id)
-}
-
-fn is_learner(peer: &metapb::Peer) -> bool {
-    peer.get_role() == PeerRole::Learner
-}
-
-fn new_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
-    let mut peer = metapb::Peer::default();
-    peer.set_store_id(store_id);
-    peer.set_id(peer_id);
-    peer.set_role(PeerRole::Voter);
-    peer
 }
