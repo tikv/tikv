@@ -5537,11 +5537,13 @@ where
     }
 }
 
-impl<EK, ER, T> ReadExecutor<EK> for PollContext<EK, ER, T>
+impl<EK, ER, T> ReadExecutor for PollContext<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
 {
+    type Tablet = EK;
+    
     fn get_tablet(&mut self) -> &EK {
         &self.engines.kv
     }

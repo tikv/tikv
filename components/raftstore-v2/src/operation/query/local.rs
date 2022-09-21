@@ -67,8 +67,8 @@ pub struct LocalReader<E, C, D, S>
 where
     E: KvEngine,
     C: MsgRouter,
-    D: ReadExecutor<E> + Deref<Target = ReadDelegate>,
-    S: ReadExecutorProvider<E, Executor = D>,
+    D: ReadExecutor + Deref<Target = ReadDelegate>,
+    S: ReadExecutorProvider<Executor = D>,
 {
     local_reader: LocalReaderCore<E, D, S>,
     router: C,
@@ -80,8 +80,8 @@ impl<E, C, D, S> LocalReader<E, C, D, S>
 where
     E: KvEngine,
     C: MsgRouter,
-    D: ReadExecutor<E> + Deref<Target = ReadDelegate> + Clone,
-    S: ReadExecutorProvider<E, Executor = D> + Clone,
+    D: ReadExecutor<Tablet = E> + Deref<Target = ReadDelegate> + Clone,
+    S: ReadExecutorProvider<Executor = D> + Clone,
 {
     pub fn new(store_meta: S, router: C, logger: Logger) -> Self {
         let cache_read_id = ThreadReadId::new();
@@ -267,10 +267,12 @@ where
     }
 }
 
-impl<E> ReadExecutor<E> for CachedReadDelegate<E>
+impl<E> ReadExecutor for CachedReadDelegate<E>
 where
     E: KvEngine,
 {
+    type Tablet = E;
+
     fn get_tablet(&mut self) -> &E {
         self.cached_tablet.latest().unwrap()
     }
@@ -301,7 +303,7 @@ where
     }
 }
 
-impl<E> ReadExecutorProvider<E> for StoreMetaDelegate<E>
+impl<E> ReadExecutorProvider for StoreMetaDelegate<E>
 where
     E: KvEngine,
 {

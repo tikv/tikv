@@ -13,7 +13,7 @@ use std::{
 };
 
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::{KvEngine, Peekable, RaftEngine};
 use fail::fail_point;
 use kvproto::{
     errorpb,
@@ -44,14 +44,15 @@ use crate::{
 };
 
 /// #[RaftstoreCommon]
-pub trait ReadExecutor<E: KvEngine> {
-    fn get_tablet(&mut self) -> &E;
+pub trait ReadExecutor {
+    type Tablet: KvEngine;
 
+    fn get_tablet(&mut self) -> &Self::Tablet;
     fn get_snapshot(
         &mut self,
         ts: Option<ThreadReadId>,
-        read_context: &mut Option<LocalReadContext<'_, E>>,
-    ) -> Arc<E::Snapshot>;
+        read_context: &mut Option<LocalReadContext<'_, Self::Tablet>>,
+    ) -> Arc<<Self::Tablet as KvEngine>::Snapshot>;
 
     fn get_value(&mut self, req: &Request, region: &metapb::Region) -> Result<Response> {
         let key = req.get_get().get_key();
@@ -96,8 +97,8 @@ pub trait ReadExecutor<E: KvEngine> {
         region: &Arc<metapb::Region>,
         read_index: Option<u64>,
         mut ts: Option<ThreadReadId>,
-        mut read_context: Option<LocalReadContext<'_, E>>,
-    ) -> ReadResponse<E::Snapshot> {
+        mut read_context: Option<LocalReadContext<'_, Self::Tablet>>,
+    ) -> ReadResponse<<Self::Tablet as KvEngine>::Snapshot> {
         let requests = msg.get_requests();
         let mut response = ReadResponse {
             response: RaftCmdResponse::default(),
@@ -226,11 +227,8 @@ impl Drop for ReadDelegate {
 }
 
 /// #[RaftstoreCommon]
-pub trait ReadExecutorProvider<E>: Send + Clone + 'static
-where
-    E: KvEngine,
-{
-    type Executor: ReadExecutor<E>;
+pub trait ReadExecutorProvider: Send + Clone + 'static {
+    type Executor: ReadExecutor;
 
     fn store_id(&self) -> Option<u64>;
 
@@ -260,7 +258,7 @@ where
     }
 }
 
-impl<E> ReadExecutorProvider<E> for StoreMetaDelegate<E>
+impl<E> ReadExecutorProvider for StoreMetaDelegate<E>
 where
     E: KvEngine,
 {
@@ -542,8 +540,8 @@ impl Progress {
 pub struct LocalReaderCore<E, D, S>
 where
     E: KvEngine,
-    D: ReadExecutor<E> + Deref<Target = ReadDelegate>,
-    S: ReadExecutorProvider<E, Executor = D>,
+    D: ReadExecutor + Deref<Target = ReadDelegate>,
+    S: ReadExecutorProvider<Executor = D>,
 {
     pub store_id: Cell<Option<u64>>,
     store_meta: S,
@@ -557,8 +555,8 @@ where
 impl<E, D, S> LocalReaderCore<E, D, S>
 where
     E: KvEngine,
-    D: ReadExecutor<E> + Deref<Target = ReadDelegate> + Clone,
-    S: ReadExecutorProvider<E, Executor = D>,
+    D: ReadExecutor + Deref<Target = ReadDelegate> + Clone,
+    S: ReadExecutorProvider<Executor = D>,
 {
     pub fn new(store_meta: S) -> Self {
         LocalReaderCore {
@@ -660,8 +658,8 @@ where
 impl<E, D, S> Clone for LocalReaderCore<E, D, S>
 where
     E: KvEngine,
-    D: ReadExecutor<E> + Deref<Target = ReadDelegate>,
-    S: ReadExecutorProvider<E, Executor = D>,
+    D: ReadExecutor + Deref<Target = ReadDelegate>,
+    S: ReadExecutorProvider<Executor = D>,
 {
     fn clone(&self) -> Self {
         LocalReaderCore {
@@ -677,8 +675,8 @@ pub struct LocalReader<C, E, D, S>
 where
     C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
-    D: ReadExecutor<E> + Deref<Target = ReadDelegate>,
-    S: ReadExecutorProvider<E, Executor = D>,
+    D: ReadExecutor + Deref<Target = ReadDelegate>,
+    S: ReadExecutorProvider<Executor = D>,
 {
     local_reader: LocalReaderCore<E, D, S>,
     kv_engine: E,
@@ -694,8 +692,8 @@ impl<C, E, D, S> LocalReader<C, E, D, S>
 where
     C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
-    D: ReadExecutor<E> + Deref<Target = ReadDelegate> + Clone,
-    S: ReadExecutorProvider<E, Executor = D> + Clone,
+    D: ReadExecutor<Tablet = E> + Deref<Target = ReadDelegate> + Clone,
+    S: ReadExecutorProvider<Executor = D> + Clone,
 {
     pub fn new(kv_engine: E, store_meta: S, router: C) -> Self {
         let cache_read_id = ThreadReadId::new();
@@ -893,8 +891,8 @@ impl<C, E, D, S> Clone for LocalReader<C, E, D, S>
 where
     C: ProposalRouter<E::Snapshot> + CasualRouter<E> + Clone,
     E: KvEngine,
-    D: ReadExecutor<E> + Deref<Target = ReadDelegate>,
-    S: ReadExecutorProvider<E, Executor = D>,
+    D: ReadExecutor + Deref<Target = ReadDelegate>,
+    S: ReadExecutorProvider<Executor = D>,
 {
     fn clone(&self) -> Self {
         Self {
@@ -907,10 +905,12 @@ where
     }
 }
 
-impl<E> ReadExecutor<E> for CachedReadDelegate<E>
+impl<E> ReadExecutor for CachedReadDelegate<E>
 where
     E: KvEngine,
 {
+    type Tablet = E;
+
     fn get_tablet(&mut self) -> &E {
         &self.kv_engine
     }
