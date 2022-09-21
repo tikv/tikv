@@ -20,7 +20,7 @@ use tikv_util::{
     config::Tracker,
     debug, info,
     metrics::ThreadInfoStatistics,
-    raftstore::{is_read_query, QueryStats},
+    store::{is_read_query, QueryStats},
     warn,
 };
 

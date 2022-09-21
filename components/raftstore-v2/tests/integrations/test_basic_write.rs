@@ -7,7 +7,7 @@ use kvproto::{
 };
 use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
 use raftstore_v2::router::PeerMsg;
-use tikv_util::raftstore::new_peer;
+use tikv_util::store::new_peer;
 
 use crate::Cluster;
 

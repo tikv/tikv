@@ -37,7 +37,7 @@ use tikv::{
 };
 use tikv_util::{
     box_err, debug, error, error_unknown, impl_display_as_debug, info,
-    raftstore::find_peer,
+    store::find_peer,
     time::{Instant, Limiter},
     warn,
     worker::Runnable,
@@ -1199,7 +1199,7 @@ pub mod tests {
             RocksEngine, TestEngineBuilder,
         },
     };
-    use tikv_util::{config::ReadableSize, raftstore::new_peer};
+    use tikv_util::{config::ReadableSize, store::new_peer};
     use tokio::time;
     use txn_types::SHORT_VALUE_MAX_LEN;
 

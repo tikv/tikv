@@ -5,7 +5,7 @@ use kvproto::{
     metapb,
     raft_serverpb::{RaftLocalState, RegionLocalState, StoreIdent},
 };
-use tikv_util::{box_err, box_try, raftstore::new_peer};
+use tikv_util::{box_err, box_try, store::new_peer};
 
 use super::peer_storage::{
     write_initial_apply_state, write_initial_raft_state, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,

@@ -27,7 +27,7 @@ use raft::{
     INVALID_INDEX,
 };
 use raft_proto::ConfChangeI;
-use tikv_util::{box_err, debug, info, raftstore::region, time::monotonic_raw_now, Either};
+use tikv_util::{box_err, debug, info, store::region, time::monotonic_raw_now, Either};
 use time::{Duration, Timespec};
 use txn_types::TimeStamp;
 
@@ -1369,7 +1369,7 @@ mod tests {
         raft_cmdpb::AdminRequest,
     };
     use raft::eraftpb::{ConfChangeType, Entry, Message, MessageType};
-    use tikv_util::raftstore::new_peer;
+    use tikv_util::store::new_peer;
     use time::Duration as TimeDuration;
 
     use super::*;

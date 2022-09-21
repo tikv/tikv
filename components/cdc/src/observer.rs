@@ -212,7 +212,7 @@ mod tests {
     use kvproto::metapb::Region;
     use raftstore::coprocessor::RoleChange;
     use tikv::storage::kv::TestEngineBuilder;
-    use tikv_util::raftstore::new_peer;
+    use tikv_util::store::new_peer;
 
     use super::*;
 

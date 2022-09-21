@@ -37,7 +37,7 @@ use tikv::storage::{
     },
     Snapshot, TestEngineBuilder, TestStorageBuilderApiV1,
 };
-use tikv_util::{raftstore::new_peer, HandyRwLock};
+use tikv_util::{store::new_peer, HandyRwLock};
 use txn_types::{Key, Mutation, PessimisticLock, TimeStamp};
 
 #[test]

@@ -6,7 +6,7 @@ use futures::executor::block_on;
 use kvproto::{metapb, pdpb};
 use pd_client::PdClient;
 use test_raftstore::*;
-use tikv_util::{config::ReadableDuration, mpsc, raftstore::find_peer};
+use tikv_util::{config::ReadableDuration, mpsc, store::find_peer};
 
 #[test]
 fn test_unsafe_recovery_send_report() {

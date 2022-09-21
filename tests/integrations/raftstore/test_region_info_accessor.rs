@@ -11,7 +11,7 @@ use raft::StateRole;
 use raftstore::coprocessor::{RangeKey, RegionInfo, RegionInfoAccessor};
 use test_raftstore::{configure_for_merge, new_node_cluster, Cluster, NodeCluster};
 use tikv_util::{
-    raftstore::{find_peer, new_peer},
+    store::{find_peer, new_peer},
     HandyRwLock,
 };
 

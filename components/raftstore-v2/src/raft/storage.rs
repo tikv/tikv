@@ -15,7 +15,7 @@ use raftstore::store::{
     util, EntryStorage, RaftlogFetchTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
 };
 use slog::{o, Logger};
-use tikv_util::{box_err, raftstore::find_peer, worker::Scheduler};
+use tikv_util::{box_err, store::find_peer, worker::Scheduler};
 
 use crate::{Error, Result};
 

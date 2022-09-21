@@ -432,7 +432,7 @@ mod tests {
     use kvproto::encryptionpb;
     use tempfile::TempDir;
     use tikv::storage::TestEngineBuilder;
-    use tikv_util::raftstore::new_peer;
+    use tikv_util::store::new_peer;
     use txn_types::OldValue;
 
     use super::*;

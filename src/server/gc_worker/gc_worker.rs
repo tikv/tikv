@@ -35,7 +35,7 @@ use raftstore::{
 use tikv_kv::{CfStatistics, CursorBuilder, Modify, SnapContext};
 use tikv_util::{
     config::{Tracker, VersionTrack},
-    raftstore::find_peer,
+    store::find_peer,
     time::{duration_to_sec, Instant, Limiter, SlowTimer},
     worker::{Builder as WorkerBuilder, LazyWorker, Runnable, ScheduleError, Scheduler},
     Either,
@@ -1710,7 +1710,7 @@ mod tests {
     use tempfile::Builder;
     use tikv_kv::Snapshot;
     use tikv_util::{
-        codec::number::NumberEncoder, future::paired_future_callback, raftstore::new_peer,
+        codec::number::NumberEncoder, future::paired_future_callback, store::new_peer,
     };
     use txn_types::Mutation;
 

@@ -7,7 +7,7 @@ use kvproto::{
     kvrpcpb::Context,
     raft_cmdpb::{CmdType, GetRequest, RaftCmdRequest, ReadIndexRequest, Request, StatusCmdType},
 };
-use tikv_util::{codec::number::NumberEncoder, raftstore::new_peer};
+use tikv_util::{codec::number::NumberEncoder, store::new_peer};
 use txn_types::WriteBatchFlags;
 
 use crate::Cluster;

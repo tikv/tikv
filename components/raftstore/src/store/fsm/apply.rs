@@ -58,8 +58,8 @@ use tikv_util::{
     debug, error, info,
     memory::HeapSize,
     mpsc::{loose_bounded, LooseBoundedSender, Receiver},
-    raftstore::{find_peer, find_peer_mut, is_learner, remove_peer},
     safe_panic, slow_log,
+    store::{find_peer, find_peer_mut, is_learner, remove_peer},
     time::{duration_to_sec, Instant},
     warn,
     worker::Scheduler,
@@ -4450,7 +4450,7 @@ mod tests {
     use test_sst_importer::*;
     use tikv_util::{
         config::VersionTrack,
-        raftstore::{new_learner_peer, new_peer},
+        store::{new_learner_peer, new_peer},
         worker::dummy_scheduler,
     };
     use uuid::Uuid;

@@ -40,7 +40,7 @@ use pd_client::{
 };
 use raft::eraftpb::ConfChangeType;
 use tikv_util::{
-    raftstore::{check_key_in_region, find_peer, is_learner, new_peer, QueryStats},
+    store::{check_key_in_region, find_peer, is_learner, new_peer, QueryStats},
     time::{Instant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
     Either, HandyRwLock,

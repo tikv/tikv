@@ -29,7 +29,7 @@ use tikv::{
         Engine,
     },
 };
-use tikv_util::{raftstore::new_peer, time::ThreadReadId};
+use tikv_util::{store::new_peer, time::ThreadReadId};
 use txn_types::Key;
 
 use crate::test;

@@ -21,7 +21,7 @@ use kvproto::{
 };
 use raftstore::store::{util, ExtraStates, WriteTask};
 use slog::{debug, error, info};
-use tikv_util::raftstore::find_peer;
+use tikv_util::store::find_peer;
 
 use crate::{
     batch::StoreContext,

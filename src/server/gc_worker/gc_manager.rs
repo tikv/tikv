@@ -14,7 +14,7 @@ use engine_traits::KvEngine;
 use kvproto::metapb::Region;
 use pd_client::FeatureGate;
 use raftstore::coprocessor::RegionInfoProvider;
-use tikv_util::{raftstore::find_peer, time::Instant, worker::Scheduler};
+use tikv_util::{store::find_peer, time::Instant, worker::Scheduler};
 use txn_types::{Key, TimeStamp};
 
 use super::{
@@ -635,7 +635,7 @@ mod tests {
     use raft::StateRole;
     use raftstore::coprocessor::{RegionInfo, Result as CopResult, SeekRegionCallback};
     use tikv_util::{
-        raftstore::new_peer,
+        store::new_peer,
         sys::thread::StdThreadBuildWrapper,
         worker::{Builder as WorkerBuilder, LazyWorker, Runnable},
     };

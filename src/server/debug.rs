@@ -32,7 +32,7 @@ use raftstore::{
 };
 use thiserror::Error;
 use tikv_util::{
-    config::ReadableSize, keybuilder::KeyBuilder, raftstore::find_peer,
+    config::ReadableSize, keybuilder::KeyBuilder, store::find_peer,
     sys::thread::StdThreadBuildWrapper, worker::Worker,
 };
 use txn_types::Key;

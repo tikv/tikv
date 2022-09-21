@@ -53,7 +53,7 @@ use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
     box_err, debug, defer, error, escape, info, is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver},
-    raftstore::{find_peer, is_learner, region_on_same_stores},
+    store::{find_peer, is_learner, region_on_same_stores},
     sys::{disk::DiskUsage, memory_usage_reaches_high_water},
     time::{monotonic_raw_now, Instant as TiInstant},
     trace, warn,

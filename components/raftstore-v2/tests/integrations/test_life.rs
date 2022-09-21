@@ -15,7 +15,7 @@ use kvproto::{
     raft_serverpb::{PeerState, RaftMessage},
 };
 use raftstore_v2::router::{DebugInfoChannel, PeerMsg};
-use tikv_util::raftstore::new_peer;
+use tikv_util::store::new_peer;
 
 use crate::{Cluster, TestRouter};
 

@@ -13,7 +13,7 @@ use pd_client::PdClient;
 use raft::eraftpb::ConfChangeType;
 use raftstore::Result;
 use test_raftstore::*;
-use tikv_util::raftstore::find_peer;
+use tikv_util::store::find_peer;
 
 /// Tests multiple confchange commands can be done by one request
 #[test]

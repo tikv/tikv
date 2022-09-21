@@ -197,7 +197,7 @@ mod tests {
         metapb,
         replication_modepb::{ReplicationMode, ReplicationStatus},
     };
-    use tikv_util::raftstore::new_peer;
+    use tikv_util::store::new_peer;
 
     use super::*;
 

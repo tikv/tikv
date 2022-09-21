@@ -7,7 +7,7 @@ use kvproto::{metapb, pdpb};
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use test_raftstore::*;
-use tikv_util::{config::ReadableDuration, raftstore::find_peer, HandyRwLock};
+use tikv_util::{config::ReadableDuration, store::find_peer, HandyRwLock};
 
 fn confirm_quorum_is_lost<T: Simulator>(cluster: &mut Cluster<T>, region: &metapb::Region) {
     let put = new_put_cmd(b"k2", b"v2");

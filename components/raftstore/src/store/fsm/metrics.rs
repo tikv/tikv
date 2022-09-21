@@ -8,7 +8,7 @@ use std::sync::{
 
 use lazy_static::lazy_static;
 use prometheus::{exponential_buckets, register_histogram, Histogram};
-use tikv_util::raftstore::QueryStats;
+use tikv_util::store::QueryStats;
 
 lazy_static! {
     pub static ref APPLY_PROPOSAL: Histogram = register_histogram!(
