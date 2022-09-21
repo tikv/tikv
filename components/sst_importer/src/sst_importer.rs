@@ -1303,6 +1303,7 @@ mod tests {
             expected_sha256: Some(kv_meta.get_sha256().to_vec()),
             ..Default::default()
         };
+
         importer
             .download_file_from_external_storage(
                 None,
