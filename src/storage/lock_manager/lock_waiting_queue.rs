@@ -127,7 +127,7 @@ pub struct LockWaitEntry {
     pub parameters: PessimisticLockParameters,
     pub lock_wait_token: LockWaitToken,
     pub req_states: Option<Arc<LockWaitContextSharedState>>,
-    pub current_legacy_wakeup_cnt: Option<usize>,
+    pub current_legacy_wake_up_cnt: Option<usize>,
     pub key_cb: Option<SyncWrapper<PessimisticLockKeyCallback>>,
 }
 
@@ -180,6 +180,50 @@ impl Ord for LockWaitEntryComparableWrapper {
 pub struct KeyLockWaitState {
     #[allow(dead_code)]
     current_lock: kvrpcpb::LockInfo,
+
+    /// The counter of wake up events of legacy pessimistic lock requests
+    /// (`allow_lock_with_conflict == false`). When an lock wait entry is
+    /// pushed to the queue, it records the current counter. The purpose
+    /// is to mark the entries that needs to be woken up after delaying. An
+    /// example:
+    ///
+    /// Let's denote a lock-wait entry by `(start_ts,
+    /// current_legacy_wake_up_cnt)`. Consider there are three requests with
+    /// start_ts 20, 30, 40 respectively, and they are pushed to the
+    /// queue when the `KeyLockWaitState::legacy_wake_up_cnt` is 0. Then the
+    /// `KeyLockWaitState` is:
+    ///
+    /// ```text
+    /// legacy_wake_up_cnt: 0, queue: [(20, 0), (30, 0), (40, 0)]
+    /// ```
+    ///
+    /// Then the lock on the key is released. We pops the first entry in the
+    /// queue to wake it up, and then schedule a call to
+    /// [`LockWaitQueues::delayed_notify_all`] after delaying for
+    /// `wake_up_delay_duration`. The current state becomes:
+    ///
+    /// ```text
+    /// legacy_wake_up_cnt: 1, queue: [(30, 0), (40, 0)]
+    /// ````
+    ///
+    /// Here, if some other request arrives, one of them may successfully
+    /// acquire the lock and others are pushed to the queue. the state
+    /// becomes:
+    ///
+    /// ```text
+    /// legacy_wake_up_cnt: 1, queue: [(30, 0), (40, 0), (50, 1), (60, 1)]
+    /// ```
+    ///
+    /// Then `wake_up_delay_duration` is elapsed since the previous waking up.
+    /// Here, we expect that the lock wait entries 30 and 40 can be woken
+    /// up, since they exists when the previous waking up occurs. But we
+    /// don't want to wake up later-arrived entries (50 and 60) since it
+    /// introduces useless pessimistic retries to transaction 50 and 60 when
+    /// they don't need to. The solution is, only wake up the entries that
+    /// has `entry.current_legacy_wake_up_cnt <
+    /// key_lock_wait_state.legacy_wake_up_cnt`. Therefore, we only wakes up
+    /// entries 30 and 40 who has `current_legacy_wake_up_cnt < 1`, while 50 and
+    /// 60 will be left untouched.
     legacy_wake_up_cnt: usize,
     queue: BinaryHeap<LockWaitEntryComparableWrapper>,
 
@@ -245,8 +289,8 @@ impl<L: LockManager> LockWaitQueues<L> {
             .or_insert_with(|| KeyLockWaitState::new());
         entry.current_lock = current_lock;
 
-        if lock_wait_entry.current_legacy_wakeup_cnt.is_none() {
-            lock_wait_entry.current_legacy_wakeup_cnt = Some(entry.value().legacy_wake_up_cnt);
+        if lock_wait_entry.current_legacy_wake_up_cnt.is_none() {
+            lock_wait_entry.current_legacy_wake_up_cnt = Some(entry.value().legacy_wake_up_cnt);
         }
         entry.value_mut().queue.push(lock_wait_entry.into());
     }
@@ -307,12 +351,12 @@ impl<L: LockManager> LockWaitQueues<L> {
                     // If a pessimistic lock request in legacy mode is woken up, increase the
                     // counter.
                     v.legacy_wake_up_cnt += 1;
-                    let notify_all_future =
-                        if !v.queue.is_empty() && wake_up_delay_duration_ms.is_some() {
-                            self.handle_delayed_wake_up(v, key, wake_up_delay_duration_ms.unwrap())
-                        } else {
-                            None
-                        };
+                    let notify_all_future = match wake_up_delay_duration_ms {
+                        Some(delay) if !v.queue.is_empty() => {
+                            self.handle_delayed_wake_up(v, key, delay)
+                        }
+                        _ => None,
+                    };
                     result = Some((lock_wait_entry, notify_all_future));
                 } else {
                     result = Some((lock_wait_entry, None));
@@ -445,7 +489,7 @@ impl<L: LockManager> LockWaitQueues<L> {
                 }
                 if front
                     .0
-                    .current_legacy_wakeup_cnt
+                    .current_legacy_wake_up_cnt
                     .map_or(false, |cnt| cnt >= legacy_wake_up_index)
                 {
                     // This entry is added after the legacy-wakeup that issued the current
@@ -514,7 +558,7 @@ mod tests {
             match self.wake_up_rx.recv_timeout(timeout) {
                 Ok(res) => Some(res),
                 Err(RecvTimeoutError::Timeout) => None,
-                Err(e @ _) => panic!(
+                Err(e) => panic!(
                     "unexpected error when receiving result of a LockWaitEntry: {:?}",
                     e
                 ),
@@ -587,7 +631,7 @@ mod tests {
                 parameters,
                 lock_wait_token: token,
                 req_states: Some(dummy_ctx.get_shared_states().clone()),
-                current_legacy_wakeup_cnt: None,
+                current_legacy_wake_up_cnt: None,
                 key_cb: Some(SyncWrapper::new(Box::new(move |res| tx.send(res).unwrap()))),
             });
 
@@ -752,7 +796,7 @@ mod tests {
                 assert_eq!(*conflict_start_ts, expect_conflict_start_ts.into());
                 assert_eq!(*conflict_commit_ts, expect_conflict_commit_ts.into());
             }
-            e @ _ => panic!("unexpected error: {:?}", e),
+            e => panic!("unexpected error: {:?}", e),
         }
     }
 

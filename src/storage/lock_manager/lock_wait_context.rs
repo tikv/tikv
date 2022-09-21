@@ -45,7 +45,7 @@ pub struct LockWaitContextSharedState {
 
 impl LockWaitContextSharedState {
     pub fn is_finished(&self) -> bool {
-        return self.finished.load(Ordering::Acquire);
+        self.finished.load(Ordering::Acquire)
     }
 }
 
@@ -188,7 +188,7 @@ mod tests {
         let lock_mgr = DummyLockManager::new();
         let (cb, rx) = create_storage_cb();
         let ctx = LockWaitContext::new(
-            lock_mgr.clone(),
+            lock_mgr,
             lock_mgr.allocate_token(),
             1.into(),
             1.into(),
