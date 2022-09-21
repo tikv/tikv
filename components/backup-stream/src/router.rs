@@ -2295,7 +2295,6 @@ mod tests {
         let mut f = File::create(file_path.clone()).await?;
         f.write_all("test-data".as_bytes()).await?;
 
-
         let data_file = DataFile::new(file_path, CompressionType::Zstd)
             .await
             .unwrap();

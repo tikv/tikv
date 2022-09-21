@@ -1267,7 +1267,6 @@ mod tests {
         let restore_config = external_storage_export::RestoreConfig::default();
         importer
             .download_file_from_external_storage(
-                None,
                 meta.get_length(),
                 file_name,
                 path.temp.clone(),
@@ -1303,10 +1302,8 @@ mod tests {
             expected_sha256: Some(kv_meta.get_sha256().to_vec()),
             ..Default::default()
         };
-
         importer
             .download_file_from_external_storage(
-                None,
                 kv_meta.get_length(),
                 kv_meta.get_name(),
                 path.temp.clone(),
