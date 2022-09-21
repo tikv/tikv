@@ -25,6 +25,10 @@ impl<EK: KvEngine> Apply<EK> {
         self.tablet.latest().cloned()
     }
 
+    pub fn update_tablet(&mut self, tablet: EK) {
+        self.tablet.set(tablet);
+    }
+
     pub fn logger(&self) -> &Logger {
         &self.logger
     }
