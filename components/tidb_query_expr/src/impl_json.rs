@@ -839,7 +839,6 @@ mod tests {
 
     #[test]
     fn test_json_contains() {
-
         let cases: Vec<(Vec<ScalarValue>, Option<i64>)> = vec![
             (
                 vec![
