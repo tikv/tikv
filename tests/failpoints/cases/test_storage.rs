@@ -11,6 +11,7 @@ use std::{
 };
 
 use api_version::KvFormat;
+use causal_ts::CausalTsProvider;
 use collections::HashMap;
 use engine_traits::DummyFactory;
 use errors::{extract_key_error, extract_region_error};
@@ -18,8 +19,8 @@ use futures::executor::block_on;
 use grpcio::*;
 use kvproto::{
     kvrpcpb::{
-        self, AssertionLevel, BatchRollbackRequest, CommandPri, CommitRequest, Context, GetRequest,
-        Op, PrewriteRequest, PrewriteRequestPessimisticAction::*, RawPutRequest,
+        self, ApiVersion, AssertionLevel, BatchRollbackRequest, CommandPri, CommitRequest, Context,
+        GetRequest, Op, PrewriteRequest, PrewriteRequestPessimisticAction::*, RawPutRequest,
     },
     tikvpb::TikvClient,
 };
@@ -253,7 +254,7 @@ fn test_scale_scheduler_pool() {
         .unwrap();
 
     let cfg = new_tikv_config(1);
-    let kv_engine = storage.get_engine().kv_engine();
+    let kv_engine = storage.get_engine().kv_engine().unwrap();
     let (_tx, rx) = std::sync::mpsc::channel();
     let flow_controller = Arc::new(FlowController::Singleton(EngineFlowController::new(
         &cfg.storage.flow_control,
@@ -1178,6 +1179,7 @@ fn test_atomic_cas_lock_by_latch() {
             cb,
         )
         .unwrap();
+    thread::sleep(Duration::from_secs(1));
     assert!(acquire_flag.load(Ordering::Acquire));
     assert!(!acquire_flag_fail.load(Ordering::Acquire));
     acquire_flag.store(false, Ordering::Release);
@@ -1193,6 +1195,7 @@ fn test_atomic_cas_lock_by_latch() {
             cb,
         )
         .unwrap();
+    thread::sleep(Duration::from_secs(1));
     assert!(acquire_flag_fail.load(Ordering::Acquire));
     assert!(!acquire_flag.load(Ordering::Acquire));
     fail::remove(pending_cas_fp);
@@ -1469,4 +1472,50 @@ fn test_raw_put_deadline() {
     let put_resp = client.raw_put(&put_req).unwrap();
     assert!(!put_resp.has_region_error(), "{:?}", put_resp);
     must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
+}
+
+#[test]
+fn test_raw_put_key_guard() {
+    let api_version = ApiVersion::V2;
+    let pause_write_fp = "raftkv_async_write";
+    let mut cluster = new_server_cluster_with_api_ver(0, 1, api_version);
+    cluster.run();
+    let region = cluster.get_region(b"");
+    let leader = region.get_peers()[0].clone();
+    let node_id = leader.get_id();
+    let leader_cm = cluster.sim.rl().get_concurrency_manager(node_id);
+    let ts_provider = cluster.sim.rl().get_causal_ts_provider(node_id).unwrap();
+    let ts = ts_provider.get_ts().unwrap();
+
+    let env = Arc::new(Environment::new(1));
+    let channel =
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
+    let client = TikvClient::new(channel);
+
+    let mut ctx = Context::default();
+    ctx.set_region_id(region.get_id());
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    ctx.set_peer(leader);
+    ctx.set_api_version(api_version);
+    let mut put_req = RawPutRequest::default();
+    put_req.set_context(ctx);
+    put_req.key = b"rk3".to_vec();
+    put_req.value = b"v3".to_vec();
+
+    fail::cfg(pause_write_fp, "pause").unwrap();
+    let handle = thread::spawn(move || {
+        let _ = client.raw_put(&put_req).unwrap();
+    });
+
+    thread::sleep(Duration::from_millis(100));
+    must_get_none(&cluster.get_engine(1), b"rk3");
+    let min_ts = leader_cm.global_min_lock_ts();
+    assert_eq!(min_ts.unwrap(), ts.next());
+
+    fail::remove(pause_write_fp);
+    handle.join().unwrap();
+    thread::sleep(Duration::from_millis(100));
+    must_get_none(&cluster.get_engine(1), b"rk3");
+    let min_ts = leader_cm.global_min_lock_ts();
+    assert!(min_ts.is_none());
 }

@@ -742,9 +742,11 @@ name = "causal_ts"
 version = "0.0.1"
 dependencies = [
  "api_version",
+ "async-trait",
  "criterion",
  "engine_rocks",
  "engine_traits",
+ "enum_dispatch",
  "error_code",
  "fail",
  "futures 0.3.15",
@@ -761,7 +763,7 @@ dependencies = [
  "serde_derive",
  "slog",
  "slog-global",
- "test_raftstore",
+ "test_pd_client",
  "thiserror",
  "tikv_alloc",
  "tikv_util",
@@ -813,6 +815,7 @@ dependencies = [
  "slog",
  "slog-global",
  "tempfile",
+ "test_pd_client",
  "test_raftstore",
  "test_util",
  "thiserror",
@@ -1590,6 +1593,18 @@ dependencies = [
  "panic_hook",
  "tempfile",
  "tikv_alloc",
+]
+
+[[package]]
+name = "enum_dispatch"
+version = "0.3.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0eb359f1476bf611266ac1f5355bc14aeca37b299d0ebccc038ee7058891c9cb"
+dependencies = [
+ "once_cell",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -2649,7 +2664,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#7c004f4daf21e0677b0ceca50a723377a3968022"
+source = "git+https://github.com/pingcap/kvproto.git#f6d05706948aa296cff4db060e0962d3720f32eb"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4077,8 +4092,8 @@ dependencies = [
 
 [[package]]
 name = "raft-engine"
-version = "0.2.0"
-source = "git+https://github.com/tikv/raft-engine.git#9751c6dd5c20a056570c9fbfe62bad6e0d585094"
+version = "0.3.0"
+source = "git+https://github.com/tikv/raft-engine.git#5f718cfe50a28f7fee0282c0959670de5962eec8"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4111,8 +4126,8 @@ dependencies = [
 
 [[package]]
 name = "raft-engine-ctl"
-version = "0.2.0"
-source = "git+https://github.com/tikv/raft-engine.git#9751c6dd5c20a056570c9fbfe62bad6e0d585094"
+version = "0.3.0"
+source = "git+https://github.com/tikv/raft-engine.git#5f718cfe50a28f7fee0282c0959670de5962eec8"
 dependencies = [
  "clap 3.1.6",
  "env_logger",
@@ -4546,6 +4561,7 @@ dependencies = [
  "slog-global",
  "tempfile",
  "test_raftstore",
+ "test_sst_importer",
  "test_util",
  "thiserror",
  "tikv",
@@ -5137,6 +5153,7 @@ dependencies = [
  "signal-hook",
  "slog",
  "slog-global",
+ "snap_recovery",
  "tempfile",
  "tikv",
  "tikv_alloc",
@@ -5283,6 +5300,36 @@ dependencies = [
  "autocfg",
  "static_assertions",
  "version_check 0.9.4",
+]
+
+[[package]]
+name = "snap_recovery"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "encryption",
+ "encryption_export",
+ "engine_rocks",
+ "engine_traits",
+ "futures 0.3.15",
+ "grpcio",
+ "keys",
+ "kvproto",
+ "log",
+ "pd_client",
+ "protobuf",
+ "raft_log_engine",
+ "raftstore",
+ "slog",
+ "slog-global",
+ "structopt",
+ "tempfile",
+ "thiserror",
+ "tikv",
+ "tikv_alloc",
+ "tikv_util",
+ "toml",
+ "txn_types",
 ]
 
 [[package]]
@@ -5698,6 +5745,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "test_pd_client"
+version = "0.0.1"
+dependencies = [
+ "collections",
+ "fail",
+ "futures 0.3.15",
+ "grpcio",
+ "keys",
+ "kvproto",
+ "log_wrappers",
+ "pd_client",
+ "raft",
+ "raftstore",
+ "slog",
+ "slog-global",
+ "tikv_util",
+ "tokio",
+ "tokio-timer",
+ "txn_types",
+]
+
+[[package]]
 name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
@@ -5733,6 +5802,7 @@ dependencies = [
  "slog",
  "slog-global",
  "tempfile",
+ "test_pd_client",
  "test_util",
  "tikv",
  "tikv_util",
@@ -5811,6 +5881,7 @@ dependencies = [
  "encryption",
  "engine_rocks",
  "engine_rocks_helper",
+ "engine_test",
  "engine_traits",
  "error_code",
  "external_storage_export",
@@ -5848,6 +5919,7 @@ dependencies = [
  "test_backup",
  "test_coprocessor",
  "test_pd",
+ "test_pd_client",
  "test_raftstore",
  "test_sst_importer",
  "test_storage",
@@ -6305,6 +6377,7 @@ name = "tikv_kv"
 version = "0.1.0"
 dependencies = [
  "backtrace",
+ "collections",
  "engine_panic",
  "engine_rocks",
  "engine_test",
@@ -7199,7 +7272,7 @@ version = "5.0.2+zstd.1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d2a5585e04f9eea4b2a3d1eca508c4dee9592a89ef6f450c11719da0726f4db"
 dependencies = [
- "libc 0.2.125",
+ "libc 0.2.132",
  "zstd-sys",
 ]
 

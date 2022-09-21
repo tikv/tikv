@@ -21,7 +21,7 @@ use raftstore::{
 };
 use resource_metering::CollectorRegHandle;
 use tempfile::TempDir;
-use test_raftstore::TestPdClient;
+use test_pd_client::TestPdClient;
 use tikv::{
     config::{ConfigController, Module, TikvConfig},
     import::SstImporter,
