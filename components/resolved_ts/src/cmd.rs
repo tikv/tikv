@@ -289,7 +289,6 @@ mod tests {
     use kvproto::kvrpcpb::{AssertionLevel, PrewriteRequestPessimisticAction::*};
     use tikv::storage::{
         kv::{MockEngineBuilder, TestEngineBuilder},
-        lock_manager::DummyLockManager,
         mvcc::{tests::write, Mutation, MvccTxn, SnapshotReader},
         txn::{
             commands::one_pc_commit, prewrite, tests::*, CommitKind, TransactionKind,

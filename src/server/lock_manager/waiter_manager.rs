@@ -373,7 +373,7 @@ impl WaitTable {
         let result = std::mem::replace(&mut waiter.wait_info, update_event.wait_info.clone());
         waiter.diag_ctx = update_event.diag_ctx.clone();
 
-        return Some(result);
+        Some(result)
     }
 
     fn take_waiter_by_lock_digest(

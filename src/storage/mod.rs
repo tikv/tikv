@@ -7809,7 +7809,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::CheckTxnStatus::new(
-                    key.clone(),
+                    key,
                     start_ts,
                     TimeStamp::compose(110, 0),
                     TimeStamp::compose(201, 0),

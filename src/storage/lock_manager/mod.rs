@@ -186,6 +186,13 @@ impl DummyLockManager {
     }
 }
 
+// Make the linter happy.
+impl Default for DummyLockManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LockManager for DummyLockManager {
     fn allocate_token(&self) -> LockWaitToken {
         LockWaitToken(Some(self.0.fetch_add(1, Ordering::SeqCst)))

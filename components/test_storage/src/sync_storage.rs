@@ -81,7 +81,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorageBuilder<E, F> {
     pub fn build(mut self) -> Result<SyncTestStorage<E, F>> {
         let mut builder = TestStorageBuilder::<_, _, F>::from_engine_and_lock_mgr(
             self.engine.clone(),
-            DummyLockManager,
+            DummyLockManager::new(),
         );
         if let Some(config) = self.config.take() {
             builder = builder.config(config);
