@@ -7,7 +7,7 @@ use std::{
     collections::VecDeque,
     fmt, mem,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc::SyncSender,
         Arc, Mutex,
     },
@@ -888,6 +888,9 @@ where
     peer_cache: RefCell<HashMap<u64, metapb::Peer>>,
     /// Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: HashMap<u64, Instant>,
+    /// Record the data status of each follower or learner peer,
+    /// used for witness -> non-witness conversion.
+    pub peers_miss_data: HashMap<u64, bool>,
 
     proposals: ProposalQueue<Callback<EK::Snapshot>>,
     leader_missing_time: Option<Instant>,
@@ -910,6 +913,13 @@ where
     ///   target peer.
     /// - all read requests must be rejected.
     pub pending_remove: bool,
+    /// Currently it's used to indicate whether the witness -> non-witess
+    /// convertion operation is complete. The meaning of completion is that
+    /// this peer must contain the applied data, then PD can consider that
+    /// the conversion operation is complete, and can continue to schedule
+    /// other operators to prevent the existence of multiple witnesses in
+    /// the same time period.
+    pub unavailable: Arc<AtomicBool>,
 
     /// Force leader state is only used in online recovery when the majority of
     /// peers are missing. In this state, it forces one peer to become leader
@@ -1112,6 +1122,7 @@ where
             long_uncommitted_threshold: cfg.long_uncommitted_base_threshold.0,
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
+            peers_miss_data: HashMap::default(),
             peers_start_pending_time: vec![],
             down_peer_ids: vec![],
             size_diff_hint: 0,
@@ -1122,6 +1133,7 @@ where
             compaction_declined_bytes: 0,
             leader_unreachable: false,
             pending_remove: false,
+            unavailable: Arc::new(AtomicBool::new(false)),
             should_wake_up: false,
             force_leader: None,
             pending_merge_state: None,
@@ -2005,6 +2017,7 @@ where
         if !self.is_leader() {
             self.peer_heartbeats.clear();
             self.peers_start_pending_time.clear();
+            self.peers_miss_data.clear();
             return;
         }
 
@@ -5221,6 +5234,7 @@ where
             approximate_size: self.approximate_size,
             approximate_keys: self.approximate_keys,
             replication_status: self.region_replication_status(),
+            peers_miss_data: self.peers_miss_data.clone(),
         });
         if let Err(e) = ctx.pd_scheduler.schedule(task) {
             error!(

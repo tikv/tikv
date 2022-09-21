@@ -11,7 +11,7 @@ use std::{
     },
     iter::{FromIterator, Iterator},
     mem,
-    sync::{Arc, Mutex},
+    sync::{atomic::Ordering, Arc, Mutex},
     time::{Duration, Instant},
     u64,
 };
@@ -1217,6 +1217,7 @@ where
             PeerTick::ReactivateMemoryLock => self.on_reactivate_memory_lock_tick(),
             PeerTick::ReportBuckets => self.on_report_region_buckets_tick(),
             PeerTick::CheckLongUncommitted => self.on_check_long_uncommitted_tick(),
+            PeerTick::CheckNonWitnessesAvailability => self.on_check_non_witnesses_availability(),
         }
     }
 
@@ -2487,7 +2488,10 @@ where
         }
 
         if msg.has_extra_msg() {
-            self.on_extra_message(msg);
+            self.on_extra_message(&mut msg);
+        }
+
+        if !msg.has_message() {
             return Ok(());
         }
 
@@ -2627,7 +2631,34 @@ where
         self.fsm.hibernate_state.count_vote(from.get_id());
     }
 
-    fn on_extra_message(&mut self, mut msg: RaftMessage) {
+    fn on_trace_peer_availability_info(&mut self, from: &metapb::Peer, msg: &ExtraMessage) {
+        if !self.fsm.peer.is_leader() {
+            let mut resp = ExtraMessage::default();
+            resp.set_type(ExtraMessageType::MsgTracePeerAvailabilityInfo);
+            resp.miss_data = self.fsm.peer.unavailable.load(Ordering::SeqCst);
+            self.fsm
+                .peer
+                .send_extra_message(resp, &mut self.ctx.trans, from);
+            info!(
+                "non-witness response availability info to leader";
+                "region_id" => self.region().get_id(),
+                "peer_id" => self.fsm.peer.peer.get_id(),
+                "leader_id" => from.id,
+            );
+            return;
+        }
+        if !msg.miss_data {
+            self.fsm.peer.peers_miss_data.remove(&from.get_id());
+            info!(
+                "receive non-witness ready info";
+                "peer_id" => self.fsm.peer.peer.get_id(),
+            );
+            return;
+        }
+        self.register_track_non_witnesses_availability_tick();
+    }
+
+    fn on_extra_message(&mut self, msg: &mut RaftMessage) {
         match msg.get_extra_msg().get_type() {
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
                 if self.fsm.hibernate_state.group_state() == GroupState::Idle {
@@ -2659,6 +2690,9 @@ where
             }
             ExtraMessageType::MsgRejectRaftLogCausedByMemoryUsage => {
                 unimplemented!()
+            }
+            ExtraMessageType::MsgTracePeerAvailabilityInfo => {
+                self.on_trace_peer_availability_info(msg.get_from_peer(), msg.get_extra_msg());
             }
         }
     }
@@ -3209,6 +3243,7 @@ where
                         );
                     } else {
                         self.fsm.peer.transfer_leader(&from);
+                        self.fsm.peer.peers_miss_data.clear();
                     }
                 }
             }
@@ -3624,6 +3659,15 @@ where
             let (store_id, peer_id) = (peer.get_store_id(), peer.get_id());
             match change_type {
                 ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
+                    if self.fsm.peer.is_leader() {
+                        if peer.is_witness {
+                            self.fsm.peer.peers_miss_data.insert(peer.id, false);
+                        } else {
+                            self.fsm.peer.peers_miss_data.insert(peer.id, true);
+                            self.register_track_non_witnesses_availability_tick();
+                        }
+                    }
+
                     let group_id = self
                         .ctx
                         .global_replication_state
@@ -3660,6 +3704,7 @@ where
                             .peer
                             .peers_start_pending_time
                             .retain(|&(p, _)| p != peer_id);
+                        self.fsm.peer.peers_miss_data.remove(&peer_id);
                     }
                     self.fsm.peer.remove_peer_from_cache(peer_id);
                     // We only care remove itself now.
@@ -5856,6 +5901,40 @@ where
 
     fn register_pd_heartbeat_tick(&mut self) {
         self.schedule_tick(PeerTick::PdHeartbeat)
+    }
+
+    fn register_track_non_witnesses_availability_tick(&mut self) {
+        fail_point!(
+            "ignore schedule check non-witness availability tick",
+            |_| {}
+        );
+        self.schedule_tick(PeerTick::CheckNonWitnessesAvailability)
+    }
+
+    fn on_check_non_witnesses_availability(&mut self) {
+        for (peer_id, miss_data) in self.fsm.peer.peers_miss_data.iter() {
+            if *miss_data {
+                if let Some(peer) = self.fsm.peer.get_peer_from_cache(*peer_id) {
+                    let mut msg = ExtraMessage::default();
+                    msg.set_type(ExtraMessageType::MsgTracePeerAvailabilityInfo);
+                    self.fsm
+                        .peer
+                        .send_extra_message(msg, &mut self.ctx.trans, &peer);
+                    info!(
+                        "check non-witness availability";
+                        "target peer id" => *peer_id,
+                    );
+                    continue;
+                }
+                // TODO: make sure if the path is reasonable
+                warn!(
+                    "peer not found, ignore check availability";
+                    "region_id" => self.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "to_peer_id" => peer_id,
+                );
+            }
+        }
     }
 
     fn on_check_peer_stale_state_tick(&mut self) {
