@@ -4716,7 +4716,7 @@ where
         Ok(propose_index)
     }
 
-    fn handle_read<E: ReadExecutor<E = EK>>(
+    fn handle_read<E: ReadExecutor<Tablet = EK>>(
         &self,
         reader: &mut E,
         req: RaftCmdRequest,
@@ -5614,7 +5614,7 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    type E = EK;
+    type Tablet = EK;
 
     fn get_tablet(&mut self) -> &EK {
         &self.engines.kv

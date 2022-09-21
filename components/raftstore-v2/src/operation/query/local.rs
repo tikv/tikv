@@ -82,7 +82,7 @@ impl<E> ReadExecutor for CachedReadDelegate<E>
 where
     E: KvEngine,
 {
-    type E = E;
+    type Tablet = E;
 
     fn get_tablet(&mut self) -> &E {
         self.cached_tablet.latest().unwrap()

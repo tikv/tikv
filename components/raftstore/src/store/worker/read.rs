@@ -43,14 +43,14 @@ use crate::{
 };
 /// #[RaftstoreCommon]
 pub trait ReadExecutor {
-    type E: KvEngine;
+    type Tablet: KvEngine;
 
-    fn get_tablet(&mut self) -> &Self::E;
+    fn get_tablet(&mut self) -> &Self::Tablet;
     fn get_snapshot(
         &mut self,
         ts: Option<ThreadReadId>,
-        read_context: &mut Option<LocalReadContext<'_, Self::E>>,
-    ) -> Arc<<Self::E as KvEngine>::Snapshot>;
+        read_context: &mut Option<LocalReadContext<'_, Self::Tablet>>,
+    ) -> Arc<<Self::Tablet as KvEngine>::Snapshot>;
 
     fn get_value(&mut self, req: &Request, region: &metapb::Region) -> Result<Response> {
         let key = req.get_get().get_key();
@@ -95,8 +95,8 @@ pub trait ReadExecutor {
         region: &Arc<metapb::Region>,
         read_index: Option<u64>,
         mut ts: Option<ThreadReadId>,
-        mut read_context: Option<LocalReadContext<'_, Self::E>>,
-    ) -> ReadResponse<<Self::E as KvEngine>::Snapshot> {
+        mut read_context: Option<LocalReadContext<'_, Self::Tablet>>,
+    ) -> ReadResponse<<Self::Tablet as KvEngine>::Snapshot> {
         let requests = msg.get_requests();
         let mut response = ReadResponse {
             response: RaftCmdResponse::default(),
@@ -559,7 +559,7 @@ impl<E> ReadExecutor for CachedReadDelegate<E>
 where
     E: KvEngine,
 {
-    type E = E;
+    type Tablet = E;
 
     fn get_tablet(&mut self) -> &E {
         &self.kv_engine
@@ -593,7 +593,7 @@ impl<C, E, D, S> LocalReader<C, E, D, S>
 where
     C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
-    D: ReadExecutor<E = E> + Deref<Target = ReadDelegate> + Clone,
+    D: ReadExecutor<Tablet = E> + Deref<Target = ReadDelegate> + Clone,
     S: ReadExecutorProvider<Executor = D>,
 {
     pub fn new(kv_engine: E, store_meta: S, router: C) -> Self {
