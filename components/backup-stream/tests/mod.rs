@@ -28,7 +28,6 @@ use kvproto::{
     kvrpcpb::*,
     tikvpb::*,
 };
-use pd_client::PdClient;
 use protobuf::parse_from_bytes;
 use tempdir::TempDir;
 use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
@@ -797,7 +796,7 @@ mod test {
     ///   scanning get the snapshot.
     #[test]
     fn with_split_txn() {
-        let mut suite = super::SuiteBuilder::new_named("split_txn").use_v3().build();
+        let mut suite = super::SuiteBuilder::new_named("split_txn").build();
         run_async_test(async {
             let start_ts = suite.cluster.pd_client.get_tso().await.unwrap();
             let keys = (1..1960).map(|i| make_record_key(1, i)).collect::<Vec<_>>();
