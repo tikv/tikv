@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use engine_traits::{MiscExt, Peekable, CF_LOCK, CF_RAFT};
+use engine_traits::{MiscExt, Peekable, CF_DEFAULT, CF_LOCK, CF_RAFT};
 use grpcio::{ChannelBuilder, Environment};
 use keys::DATA_PREFIX_KEY;
 use kvproto::{
@@ -133,4 +133,36 @@ fn test_disable_wal_recovery_applying_snapshot() {
         .unwrap()
         .unwrap();
     assert_eq!(region_state.get_state(), PeerState::Normal);
+    cluster.stop_node(3);
+    cluster.run_node(3).unwrap();
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
+}
+
+#[test]
+fn test_disable_wal_recovery_region_merge() {
+    let mut cluster = new_server_cluster(0, 1);
+    // Initialize the cluster.
+    cluster.pd_client.disable_default_operator();
+    cluster.cfg.raft_store.disable_kv_wal = true;
+    cluster.run();
+    cluster.must_put(b"k1", b"v1");
+
+    cluster.must_split(&cluster.get_region(b""), b"k5");
+    cluster.must_split(&cluster.get_region(b""), b"k3");
+    cluster.get_engine(1).flush_cfs(true).unwrap();
+    cluster
+        .pd_client
+        .must_merge(cluster.get_region_id(b"k3"), cluster.get_region_id(b"k5"));
+    cluster
+        .pd_client
+        .must_merge(cluster.get_region_id(b""), cluster.get_region_id(b"k5"));
+    cluster.must_put(b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
+    cluster.get_engine(1).flush_cf(CF_DEFAULT, true).unwrap();
+    sleep_ms(100);
+    cluster.stop_node(1);
+    cluster.run_node(1).unwrap();
+    assert_eq!(cluster.get_region_id(b"k3"), cluster.get_region_id(b"k5"));
+    assert_eq!(cluster.get_region_id(b""), cluster.get_region_id(b"k5"));
 }

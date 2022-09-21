@@ -10,7 +10,10 @@ use std::{
     },
     mem,
     ops::{Deref, DerefMut, RangeInclusive},
-    sync::{atomic::Ordering, Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
     u64,
 };
@@ -2018,7 +2021,18 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .thread_count(4, 4, 4)
             .build_single_level_pool();
 
-        while let Some((_, regions)) = recover_regions.pop_first() {
+        #[derive(Clone)]
+        struct WaitMergeSourceRegion {
+            region_id: u64,
+            version: u64,
+            applied_index: u64,
+            end: u64,
+            logs_up_to_date: Arc<AtomicU64>,
+        }
+
+        let mut wait_merge_source_regions = HashMap::default();
+        let mut regions_applied_index = HashMap::default();
+        while let Some((version, regions)) = recover_regions.pop_first() {
             let results: Vec<_> = regions
                 .into_iter()
                 .map(|(region_id, (start, end))| {
@@ -2062,22 +2076,113 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                         applied_index,
                     } => {
                         assert!(applied_index < end);
-                        if applied_index + 1 == end {
-                            continue;
+                        if applied_index + 1 != end {
+                            let regions = recover_regions
+                                .entry(new_version)
+                                .or_insert_with(HashMap::default);
+                            regions.insert(region_id, (applied_index + 1, end));
                         }
-                        let regions = recover_regions
-                            .entry(new_version)
-                            .or_insert_with(HashMap::default);
-                        regions.insert(region_id, (applied_index + 1, end));
+                        regions_applied_index.insert(region_id, end - 1);
+                        if let Some(WaitMergeSourceRegion {
+                            region_id: target_region_id,
+                            version: target_region_version,
+                            logs_up_to_date,
+                            applied_index: target_applied_index,
+                            end: target_end,
+                        }) = wait_merge_source_regions
+                            .get(&(region_id, applied_index))
+                            .cloned()
+                        {
+                            info!(
+                                "region recovery merge continue, source: {}, applied_index: {}",
+                                region_id, applied_index;
+                                "region_id" => target_region_id,
+                            );
+                            logs_up_to_date.store(region_id, Ordering::Relaxed);
+                            let regions = recover_regions
+                                .entry(target_region_version)
+                                .or_insert_with(HashMap::default);
+                            regions
+                                .insert(target_region_id, (target_applied_index + 1, target_end));
+                            wait_merge_source_regions.remove(&(region_id, applied_index));
+                        }
+                    }
+                    RecoverStatus::WaitMergeSource {
+                        logs_up_to_date,
+                        source_region_id,
+                        commit,
+                        applied_index,
+                    } => {
+                        assert!(applied_index < end - 1);
+                        let mut merge_prepared = false;
+                        if let Some(index) = regions_applied_index.get(&source_region_id) {
+                            if *index >= commit {
+                                merge_prepared = true;
+                            }
+                        } else if let Some(apply_state) =
+                            engines.raft.get_apply_state(source_region_id).unwrap()
+                        {
+                            if apply_state.get_applied_index() >= commit {
+                                merge_prepared = true;
+                            }
+                        }
+                        info!(
+                            "region recovery wait merge source region, source: {}, applied_index: {}, commit: {}, merge_prepared: {}",
+                            source_region_id, applied_index, commit, merge_prepared;
+                            "region_id" => region_id
+                        );
+                        if merge_prepared {
+                            logs_up_to_date.store(source_region_id, Ordering::Relaxed);
+                            let regions = recover_regions
+                                .entry(version)
+                                .or_insert_with(HashMap::default);
+                            regions.insert(region_id, (applied_index + 1, end));
+                        } else {
+                            wait_merge_source_regions.insert(
+                                (source_region_id, commit),
+                                WaitMergeSourceRegion {
+                                    region_id,
+                                    version,
+                                    logs_up_to_date,
+                                    applied_index,
+                                    end,
+                                },
+                            );
+                        }
                     }
                     RecoverStatus::Finished => {
-                        info!("region recover finished"; "region_id" => region_id)
+                        let applied_index = end - 1;
+                        regions_applied_index.insert(region_id, applied_index);
+                        if let Some(WaitMergeSourceRegion {
+                            region_id: target_region_id,
+                            version: target_region_version,
+                            logs_up_to_date,
+                            applied_index: target_applied_index,
+                            end: target_end,
+                        }) = wait_merge_source_regions
+                            .get(&(region_id, applied_index))
+                            .cloned()
+                        {
+                            info!(
+                                "region recovery merge continue, source: {}, applied_index: {}",
+                                region_id, applied_index;
+                                "region_id" => target_region_id,
+                            );
+                            logs_up_to_date.store(region_id, Ordering::Relaxed);
+                            let regions = recover_regions
+                                .entry(target_region_version)
+                                .or_insert_with(HashMap::default);
+                            regions
+                                .insert(target_region_id, (target_applied_index + 1, target_end));
+                            wait_merge_source_regions.remove(&(region_id, applied_index));
+                        }
+                        info!("region recover finished"; "region_id" => region_id);
                     }
                 }
             }
         }
         engines.kv.flush_cfs(true).unwrap();
-        info!("all regions recover finished")
+        info!("all regions recover finished");
     }
 }
 

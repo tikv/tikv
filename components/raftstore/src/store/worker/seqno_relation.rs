@@ -231,16 +231,19 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             .raft
             .put_flushed_seqno(&self.flushed_seqno)
             .unwrap();
-        if let Some(min) = min_flushed {
-            gc_seqno_relations(min, &self.engines.raft, &mut self.raft_wb).unwrap();
-            if !self.raft_wb.is_empty() {
-                self.consume_raft_wb(true);
-            }
-            if let Err(e) = self
-                .raftlog_gc_scheduler
-                .schedule(RaftlogGcTask::MemtableFlushed { cf, seqno })
-            {
-                error!("failed to notify memtable flushed to raftlog gc worker"; "err" => ?e);
+        // Prevent raft log gc before recovery done.
+        if self.started {
+            if let Some(min) = min_flushed {
+                gc_seqno_relations(min, &self.engines.raft, &mut self.raft_wb).unwrap();
+                if !self.raft_wb.is_empty() {
+                    self.consume_raft_wb(true);
+                }
+                if let Err(e) = self
+                    .raftlog_gc_scheduler
+                    .schedule(RaftlogGcTask::MemtableFlushed { cf, seqno })
+                {
+                    error!("failed to notify memtable flushed to raftlog gc worker"; "err" => ?e);
+                }
             }
         }
     }

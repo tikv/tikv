@@ -503,8 +503,11 @@ where
         // delete snapshot state.
         if self.disable_kv_wal {
             let mut raft_wb = self.engines.raft.log_batch(0);
+            let (_, apply_state) =
+                box_try!(self.engines.raft.get_apply_snapshot_state(region_id)).unwrap();
             box_try!(raft_wb.put_region_state(region_id, &region_state));
-            box_try!(raft_wb.delete_region_apply_snapshot_state(region_id));
+            box_try!(raft_wb.put_apply_state(region_id, &apply_state));
+            box_try!(raft_wb.delete_apply_snapshot_state(region_id));
             self.engines
                 .raft
                 .consume(&mut raft_wb, true)

@@ -49,7 +49,7 @@ where
                     .unwrap()
                     .unwrap();
                 raft_wb.put_apply_state(region_id, &apply_state).unwrap();
-                raft_wb.put_region_apply_snapshot_state(region_id, &region_state, &apply_state).unwrap();
+                raft_wb.put_apply_snapshot_state(region_id, &region_state, &apply_state).unwrap();
                 applying_count += 1;
             }
             PeerState::Tombstone => {

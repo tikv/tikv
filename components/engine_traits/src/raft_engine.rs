@@ -208,14 +208,14 @@ pub trait RaftLogBatch: Send {
 
     fn delete_seqno_relation(&mut self, raft_group_id: u64, seqno: u64) -> Result<()>;
 
-    fn put_region_apply_snapshot_state(
+    fn put_apply_snapshot_state(
         &mut self,
         raft_group_id: u64,
         region_state: &RegionLocalState,
         apply_state: &RaftApplyState,
     ) -> Result<()>;
 
-    fn delete_region_apply_snapshot_state(&mut self, raft_group_id: u64) -> Result<()>;
+    fn delete_apply_snapshot_state(&mut self, raft_group_id: u64) -> Result<()>;
 
     /// The data size of this RaftLogBatch.
     fn persist_size(&self) -> usize;

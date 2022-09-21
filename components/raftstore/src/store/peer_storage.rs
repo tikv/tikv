@@ -1159,7 +1159,7 @@ pub fn write_snapshot_state_to_raft<T: RaftLogBatch>(
     region_state.set_state(PeerState::Applying);
     region_state.set_region(region.clone());
     raft_wb
-        .put_region_apply_snapshot_state(region_id, &region_state, apply_state)
+        .put_apply_snapshot_state(region_id, &region_state, apply_state)
         .unwrap();
     Ok(())
 }

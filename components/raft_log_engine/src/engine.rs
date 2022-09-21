@@ -445,7 +445,7 @@ impl RaftLogBatchTrait for RaftLogBatch {
             .map_err(transfer_error)
     }
 
-    fn put_region_apply_snapshot_state(
+    fn put_apply_snapshot_state(
         &mut self,
         raft_group_id: u64,
         region_state: &RegionLocalState,
@@ -467,7 +467,7 @@ impl RaftLogBatchTrait for RaftLogBatch {
             .map_err(transfer_error)
     }
 
-    fn delete_region_apply_snapshot_state(&mut self, raft_group_id: u64) -> Result<()> {
+    fn delete_apply_snapshot_state(&mut self, raft_group_id: u64) -> Result<()> {
         self.0
             .delete(raft_group_id, SNAPSHOT_REGION_STATE_KEY.to_vec());
         self.0

@@ -510,7 +510,7 @@ impl RaftLogBatch for RocksWriteBatchVec {
         self.put_msg(&keys::apply_state_key(raft_group_id), state)
     }
 
-    fn put_region_apply_snapshot_state(
+    fn put_apply_snapshot_state(
         &mut self,
         raft_group_id: u64,
         region_state: &RegionLocalState,
@@ -523,7 +523,7 @@ impl RaftLogBatch for RocksWriteBatchVec {
         self.put_msg(&keys::snapshot_apply_state_key(raft_group_id), apply_state)
     }
 
-    fn delete_region_apply_snapshot_state(&mut self, raft_group_id: u64) -> Result<()> {
+    fn delete_apply_snapshot_state(&mut self, raft_group_id: u64) -> Result<()> {
         self.delete(&keys::snapshot_region_state_key(raft_group_id))?;
         self.delete(&keys::snapshot_apply_state_key(raft_group_id))
     }

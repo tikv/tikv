@@ -1,4 +1,4 @@
-// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2&.0.
 
 // #[PerformanceCriticalPath]
 #[cfg(test)]
@@ -291,7 +291,11 @@ pub enum ApplyResult<S> {
     /// It is unable to apply the `CommitMerge` until the source peer
     /// has applied to the required position and sets the atomic boolean
     /// to true.
-    WaitMergeSource(Arc<AtomicU64>),
+    WaitMergeSource {
+        logs_up_to_date: Arc<AtomicU64>,
+        source_region_id: u64,
+        commit: u64,
+    },
 }
 
 // The applied command and their callback
@@ -1057,7 +1061,7 @@ where
             match res {
                 ApplyResult::None => {}
                 ApplyResult::Res(res) => results.push(res),
-                ApplyResult::Yield | ApplyResult::WaitMergeSource(_) => {
+                ApplyResult::Yield | ApplyResult::WaitMergeSource { .. } => {
                     // Both cancel and merge will yield current processing.
                     apply_ctx.committed_count -= committed_entries_drainer.len() + 1;
                     let mut pending_entries =
@@ -1071,7 +1075,10 @@ where
                         pending_msgs: Vec::default(),
                         heap_size: None,
                     });
-                    if let ApplyResult::WaitMergeSource(logs_up_to_date) = res {
+                    if let ApplyResult::WaitMergeSource {
+                        logs_up_to_date, ..
+                    } = res
+                    {
                         self.wait_merge_state = Some(WaitSourceMergeState { logs_up_to_date });
                     }
                     return;
@@ -1207,7 +1214,7 @@ where
                 }
                 ApplyResult::Res(res)
             }
-            ApplyResult::Yield | ApplyResult::WaitMergeSource(_) => unreachable!(),
+            ApplyResult::Yield | ApplyResult::WaitMergeSource { .. } => unreachable!(),
         }
     }
 
@@ -1267,7 +1274,7 @@ where
         apply_ctx.host.pre_apply(&self.region, &cmd);
         let (mut resp, exec_result, should_write) =
             self.apply_raft_cmd(apply_ctx, index, term, &cmd);
-        if let ApplyResult::WaitMergeSource(_) = exec_result {
+        if let ApplyResult::WaitMergeSource { .. } = exec_result {
             return exec_result;
         }
 
@@ -1357,7 +1364,7 @@ where
             };
             (resp, exec_result)
         };
-        if let ApplyResult::WaitMergeSource(_) = exec_result {
+        if let ApplyResult::WaitMergeSource { .. } = exec_result {
             return (resp, exec_result, false);
         }
 
@@ -2672,7 +2679,11 @@ where
                 .notify_one(source_region_id, PeerMsg::SignificantMsg(msg));
             return Ok((
                 AdminResponse::default(),
-                ApplyResult::WaitMergeSource(logs_up_to_date),
+                ApplyResult::WaitMergeSource {
+                    logs_up_to_date,
+                    source_region_id,
+                    commit: merge.get_commit(),
+                },
             ));
         }
 
@@ -3284,6 +3295,12 @@ pub enum RecoverStatus {
         new_version: u64,
         applied_index: u64,
     },
+    WaitMergeSource {
+        logs_up_to_date: Arc<AtomicU64>,
+        source_region_id: u64,
+        commit: u64,
+        applied_index: u64,
+    },
     Finished,
 }
 
@@ -3607,6 +3624,16 @@ where
             cb(RecoverStatus::Finished);
             return;
         }
+        if let Some(ref state) = self.delegate.wait_merge_state.take() {
+            let source_region_id = state.logs_up_to_date.load(Ordering::SeqCst);
+            if source_region_id == 0 {
+                panic!(
+                    "region {} send recover entries again without setting wait_merge_state",
+                    self.delegate.region_id()
+                );
+            }
+            self.delegate.ready_source_region_id = source_region_id;
+        }
         info!("apply handle recover"; "region_id" => self.delegate.region_id(), "start" => entries[0].index, "end" => entries[entries.len()-1].index);
         apply_ctx.prepare_for(&mut self.delegate);
         // If we send multiple ConfChange commands, only first one will be proposed
@@ -3614,6 +3641,7 @@ where
         // must re-propose these commands again.
         apply_ctx.committed_count += entries.len();
         let mut results = Vec::new();
+        let mut wait_merge_source = None;
         let mut entries_drainer = entries.drain(..);
         for entry in entries_drainer.by_ref() {
             if self.delegate.pending_remove {
@@ -3650,19 +3678,28 @@ where
                         break;
                     }
                 }
-                ApplyResult::WaitMergeSource(_) => {
-                    // Should not exist because we recover regions in version order.
-                    panic!(
-                        "region {} wait merge source during recovery",
-                        self.delegate.region_id()
-                    );
+                ApplyResult::WaitMergeSource {
+                    logs_up_to_date,
+                    source_region_id,
+                    commit,
+                } => {
+                    wait_merge_source = Some((logs_up_to_date.clone(), source_region_id, commit));
+                    self.delegate.wait_merge_state = Some(WaitSourceMergeState { logs_up_to_date });
+                    break;
                 }
                 ApplyResult::Yield => (),
             }
         }
         apply_ctx.finish_for(&mut self.delegate, results);
 
-        if entries_drainer.len() == 0 || self.delegate.pending_remove {
+        if let Some((logs_up_to_date, source_region_id, commit)) = wait_merge_source {
+            cb(RecoverStatus::WaitMergeSource {
+                logs_up_to_date,
+                source_region_id,
+                commit,
+                applied_index: self.delegate.apply_state.get_applied_index(),
+            });
+        } else if entries_drainer.len() == 0 || self.delegate.pending_remove {
             cb(RecoverStatus::Finished);
         } else {
             cb(RecoverStatus::VersionChanged {
