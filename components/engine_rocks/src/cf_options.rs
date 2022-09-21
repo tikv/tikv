@@ -59,7 +59,7 @@ impl DerefMut for RocksCfOptions {
 }
 
 impl CfOptions for RocksCfOptions {
-    type TitanDbOptions = RocksTitanDbOptions;
+    type TitanCfOptions = RocksTitanDbOptions;
 
     fn new() -> Self {
         RocksCfOptions::from_raw(RawCfOptions::default())
@@ -69,12 +69,12 @@ impl CfOptions for RocksCfOptions {
         self.0.get_max_write_buffer_number()
     }
 
-    fn get_level_zero_slowdown_writes_trigger(&self) -> u32 {
-        self.0.get_level_zero_slowdown_writes_trigger()
+    fn get_level_zero_slowdown_writes_trigger(&self) -> i32 {
+        self.0.get_level_zero_slowdown_writes_trigger() as i32
     }
 
-    fn get_level_zero_stop_writes_trigger(&self) -> u32 {
-        self.0.get_level_zero_stop_writes_trigger()
+    fn get_level_zero_stop_writes_trigger(&self) -> i32 {
+        self.0.get_level_zero_stop_writes_trigger() as i32
     }
 
     fn set_level_zero_file_num_compaction_trigger(&mut self, v: i32) {
@@ -97,7 +97,7 @@ impl CfOptions for RocksCfOptions {
         self.0.set_block_cache_capacity(capacity).map_err(r2e)
     }
 
-    fn set_titandb_options(&mut self, opts: &Self::TitanDbOptions) {
+    fn set_titan_cf_options(&mut self, opts: &Self::TitanCfOptions) {
         self.0.set_titandb_options(opts.as_raw())
     }
 

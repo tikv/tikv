@@ -2,7 +2,7 @@
 
 mod imp;
 mod internal_message;
-mod message;
+pub mod message;
 mod response_channel;
 
 pub(crate) use self::internal_message::ApplyTask;

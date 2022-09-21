@@ -19,14 +19,11 @@ use crossbeam::{atomic::AtomicCell, channel::TrySendError};
 use engine_traits::{KvEngine, RaftEngine, Snapshot, TabletFactory};
 use fail::fail_point;
 use kvproto::{
-    errorpb,
-    kvrpcpb::ExtraOp as TxnExtraOp,
-    metapb,
+    errorpb, metapb,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request, Response},
 };
 use pd_client::BucketMeta;
 use raftstore::{
-    errors::RAFTSTORE_IS_BUSY,
     store::{
         cmd_resp,
         util::{self, LeaseState, RegionReadProgress, RemoteLease},
@@ -421,7 +418,7 @@ mod tests {
     };
     use engine_traits::{OpenOptions, Peekable, SyncMutable, ALL_CFS, CF_DEFAULT};
     use futures::executor::block_on;
-    use kvproto::{metapb::Region, raft_cmdpb::*};
+    use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb::Region, raft_cmdpb::*};
     use raftstore::store::{
         util::{new_peer, Lease},
         Callback, LocalReaderCore, ProposalRouter, RaftCommand, ReadCallback,
@@ -518,6 +515,7 @@ mod tests {
                     PeerMsg::RaftQuery(query) => ReadCallback::set_result(
                         query.ch,
                         QueryResult::Read(ReadResponse {
+                            read_index: 0,
                             txn_extra_op: Default::default(),
                         }),
                     ),

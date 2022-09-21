@@ -5,7 +5,7 @@ use std::{sync::Arc, time::Duration};
 use causal_ts::{BatchTsoProvider, CausalTsProvider, TsoBatchList};
 use criterion::*;
 use futures::executor::block_on;
-use test_raftstore::TestPdClient;
+use test_pd_client::TestPdClient;
 use txn_types::TimeStamp;
 
 fn bench_batch_tso_list_pop(c: &mut Criterion) {
