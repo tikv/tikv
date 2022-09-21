@@ -38,6 +38,7 @@ use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecord
 use tikv_util::{
     box_err, debug, error, info,
     metrics::ThreadInfoStatistics,
+    query_stats::QueryStats,
     sys::thread::StdThreadBuildWrapper,
     thd_name,
     time::{Instant as TiInstant, UnixSecs},
@@ -47,7 +48,6 @@ use tikv_util::{
     worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler},
 };
 use yatp::Remote;
-use tikv_util::query_stats::QueryStats;
 
 use crate::{
     coprocessor::CoprocessorHost,

@@ -39,10 +39,8 @@ use pd_client::{
     BucketStat, Error, FeatureGate, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result,
 };
 use raft::eraftpb::ConfChangeType;
-
-use tikv_util::query_stats::QueryStats;
-
 use tikv_util::{
+    query_stats::QueryStats,
     time::{Instant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
     Either, HandyRwLock,
@@ -1848,9 +1846,10 @@ impl PdClient for TestPdClient {
     }
 }
 
-// TODO: Function `check_key_in_region/find_peer/is_learner/new_peer` also 
-// exists same in `raftstore`. But `test_pd_client` should not depend on 
-// `raftstore`, so this utils should be moved to tikv_util(or others) and reused.
+// TODO: Function `check_key_in_region/find_peer/is_learner/new_peer` also
+// exists same in `raftstore`. But `test_pd_client` should not depend on
+// `raftstore`, so this utils should be moved to tikv_util(or others) and
+// reused.
 //
 fn check_key_in_region(key: &[u8], region: &metapb::Region) -> bool {
     let end_key = region.get_end_key();
