@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use causal_ts::CausalTsProvider;
+use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
 use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::atomic::AtomicCell;
@@ -354,7 +354,7 @@ pub struct Endpoint<T, E> {
     env: Arc<Environment>,
     security_mgr: Arc<SecurityManager>,
     region_read_progress: RegionReadProgressRegistry,
-    causal_ts_provider: Option<Arc<dyn CausalTsProvider + 'static>>,
+    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
 
     // Metrics and logging.
     current_ts: TimeStamp,
@@ -380,7 +380,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
         sink_memory_quota: MemoryQuota,
-        causal_ts_provider: Option<Arc<dyn CausalTsProvider>>,
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
     ) -> Endpoint<T, E> {
         let workers = Builder::new_multi_thread()
             .thread_name("cdcwkr")
@@ -1373,7 +1373,7 @@ mod tests {
         cfg: &CdcConfig,
         engine: Option<RocksEngine>,
         api_version: ApiVersion,
-        causal_ts_provider: Option<Arc<dyn CausalTsProvider>>,
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
     ) -> TestEndpointSuite {
         let (task_sched, task_rx) = dummy_scheduler();
         let raft_router = MockRaftStoreRouter::new();
@@ -1891,7 +1891,8 @@ mod tests {
             min_ts_interval: ReadableDuration(sleep_interval),
             ..Default::default()
         };
-        let ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
+        let ts_provider: Arc<CausalTsProviderImpl> =
+            Arc::new(causal_ts::tests::TestProvider::default().into());
         let start_ts = ts_provider.get_ts().unwrap();
         let mut suite =
             mock_endpoint_with_ts_provider(&cfg, None, ApiVersion::V2, Some(ts_provider.clone()));

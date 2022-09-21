@@ -7,7 +7,6 @@ use std::{
 };
 
 use api_version::{test_kv_format_impl, KvFormat};
-use causal_ts::CausalTsProvider;
 use cdc::{recv_timeout, OldValueCache, Task, Validate};
 use futures::{executor::block_on, sink::SinkExt};
 use grpcio::{ChannelBuilder, Environment, WriteFlags};

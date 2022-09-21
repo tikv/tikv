@@ -9,7 +9,7 @@ use std::{
 };
 
 use async_channel::SendError;
-use causal_ts::CausalTsProvider;
+use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
 use engine_traits::{name_to_cf, raw_ttl::ttl_current_ts, CfName, SstCompressionType};
@@ -666,7 +666,7 @@ pub struct Endpoint<E: Engine, R: RegionInfoProvider + Clone + 'static> {
     concurrency_manager: ConcurrencyManager,
     softlimit: SoftLimitKeeper,
     api_version: ApiVersion,
-    causal_ts_provider: Option<Arc<dyn CausalTsProvider>>, // used in rawkv apiv2 only
+    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used in rawkv apiv2 only
 
     pub(crate) engine: E,
     pub(crate) region_info: R,
@@ -788,7 +788,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         config: BackupConfig,
         concurrency_manager: ConcurrencyManager,
         api_version: ApiVersion,
-        causal_ts_provider: Option<Arc<dyn CausalTsProvider>>,
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
     ) -> Endpoint<E, R> {
         let pool = ControlThreadPool::new();
         let rt = utils::create_tokio_runtime(config.io_thread_size, "backup-io").unwrap();
@@ -1274,7 +1274,7 @@ pub mod tests {
         limiter: Option<Arc<IoRateLimiter>>,
         api_version: ApiVersion,
         is_raw_kv: bool,
-        causal_ts_provider: Option<Arc<dyn CausalTsProvider>>,
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
     ) -> (TempDir, Endpoint<RocksEngine, MockRegionInfoProvider>) {
         let temp = TempDir::new().unwrap();
         let rocks = TestEngineBuilder::new()
@@ -1659,7 +1659,12 @@ pub mod tests {
     ) -> bool {
         let limiter = Arc::new(IoRateLimiter::new_for_test());
         let stats = limiter.statistics().unwrap();
-        let (tmp, endpoint) = new_endpoint_with_limiter(Some(limiter), cur_api_ver, true, None);
+        let mut ts_provider: Option<Arc<CausalTsProviderImpl>> = None;
+        if cur_api_ver == ApiVersion::V2 {
+            ts_provider = Some(Arc::new(causal_ts::tests::TestProvider::default().into()));
+        }
+        let (tmp, endpoint) =
+            new_endpoint_with_limiter(Some(limiter), cur_api_ver, true, ts_provider);
         let engine = endpoint.engine.clone();
 
         let start_key_idx: u64 = 100;
@@ -1826,7 +1831,8 @@ pub mod tests {
     #[test]
     fn test_backup_raw_apiv2_causal_ts() {
         let limiter = Arc::new(IoRateLimiter::new_for_test());
-        let ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
+        let ts_provider: Arc<CausalTsProviderImpl> =
+            Arc::new(causal_ts::tests::TestProvider::default().into());
         let start_ts = ts_provider.get_ts().unwrap();
         let (tmp, endpoint) = new_endpoint_with_limiter(
             Some(limiter),
