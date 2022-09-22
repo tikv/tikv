@@ -323,12 +323,12 @@ impl PerfContextStatistics {
                     GLOBAL_TRACKERS.with_tracker(*token, |t| perf_context.report_to_tracker(t));
                 }
                 self.read += perf_context;
-                self.flush_read_metrics();
+                self.maybe_flush_read_metrics();
             }
         }
     }
 
-    fn flush_read_metrics(&mut self) {
+    fn maybe_flush_read_metrics(&mut self) {
         if self.last_flush_time.saturating_elapsed() < FLUSH_METRICS_INTERVAL {
             return;
         }
