@@ -168,7 +168,6 @@ fn test_txn_gc_keys_handled() {
     let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, 1);
     let safe_point = Arc::new(AtomicU64::new(500));
 
-    let kv_engine = engine.get_rocksdb();
     // Building a tablet factory
     let ops = DbOptions::default();
     let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
@@ -178,7 +177,6 @@ fn test_txn_gc_keys_handled() {
         .unwrap();
     gc_worker
         .start_auto_gc(
-            &kv_engine,
             auto_gc_cfg,
             safe_point,
             Arc::new(TestTabletFactory::new(path.path(), ops, cf_opts)),
@@ -327,7 +325,6 @@ fn test_raw_gc_keys_handled() {
     let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, store_id);
     let safe_point = Arc::new(AtomicU64::new(500));
 
-    let kv_engine = engine.get_rocksdb();
     // Building a tablet factory
     let ops = DbOptions::default();
     let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
@@ -338,7 +335,6 @@ fn test_raw_gc_keys_handled() {
 
     gc_worker
         .start_auto_gc(
-            &kv_engine,
             auto_gc_cfg,
             safe_point,
             Arc::new(TestTabletFactory::new(path.path(), ops, cf_opts)),

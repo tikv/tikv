@@ -450,22 +450,7 @@ fn init_compaction_filter(
 
     let sim = cluster.sim.rl();
     let gc_worker = sim.get_gc_worker(store_id);
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-=======
-    let feature_gate = {
-        let feature_gate = FeatureGate::default();
-        feature_gate.set_version("5.0.0").unwrap();
-        feature_gate
-    };
-=======
->>>>>>> d4121a4e2 (*: make cases pass)
-
     gc_worker.set_feature_gate_verion("5.0.0").unwrap();
-
->>>>>>> ef526ae61 (*: address comments)
     let kv_engine = cluster.get_engine(store_id);
     // Building a tablet factory
     let ops = DbOptions::default();
@@ -475,40 +460,18 @@ fn init_compaction_filter(
         .tempdir()
         .unwrap();
 
-<<<<<<< HEAD
->>>>>>> 4869d8714 (*: remove unnecessary db field of GC_Context)
-=======
     let factory = TestTabletFactory::new(path.path(), ops, cf_opts);
     {
         let arc_root_db = factory.get_root_db();
         let mut root_db = arc_root_db.lock().unwrap();
-        root_db.replace(kv_engine.clone());
+        root_db.replace(kv_engine);
     }
 
-<<<<<<< HEAD
-    factory.open_tablet(0, Some(0), OpenOptions::default());
->>>>>>> ef526ae61 (*: address comments)
-=======
->>>>>>> d4121a4e2 (*: make cases pass)
     gc_worker
         .start_auto_gc(
-<<<<<<< HEAD
             AutoGcConfig::new(MockSafePointProvider, MockRegionInfoProvider, 1),
-=======
-            &kv_engine,
-<<<<<<< HEAD
-            AutoGcConfig::new(MockSafePointProvider, MockRegionInfoProvider, 1, None),
->>>>>>> d05ffa40a (*: address comments and use clean interfaces)
-=======
-            AutoGcConfig::new(MockSafePointProvider, MockRegionInfoProvider, 1),
-<<<<<<< HEAD
->>>>>>> 4869d8714 (*: remove unnecessary db field of GC_Context)
-            Arc::new(AtomicU64::new(0)),
-            Arc::new(TestTabletFactory::new(path.path(), ops, cf_opts)),
-=======
             safe_point,
             Arc::new(factory),
->>>>>>> ef526ae61 (*: address comments)
         )
         .unwrap();
 }

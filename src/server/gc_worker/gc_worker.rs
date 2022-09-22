@@ -1278,15 +1278,7 @@ where
         );
 
         info!("initialize compaction filter to perform GC when necessary");
-<<<<<<< HEAD
-<<<<<<< HEAD
         self.engine.kv_engine().unwrap().init_compaction_filter(
-=======
-        tablet_factory.open_tablet(0, Some(0), OpenOptions::default());
-=======
->>>>>>> d4121a4e2 (*: make cases pass)
-        kv_engine.init_compaction_filter(
->>>>>>> ef526ae61 (*: address comments)
             cfg.self_store_id,
             safe_point.clone(),
             self.config_manager.clone(),
@@ -1653,16 +1645,18 @@ mod tests {
 =======
     use engine_test::{
         ctor::{CfOptions, DbOptions},
-<<<<<<< HEAD
-        kv::TestTabletFactoryV2,
+        kv::{TestTabletFactory, TestTabletFactoryV2},
     };
     use engine_traits::{OpenOptions, TabletFactory, ALL_CFS};
+<<<<<<< HEAD
 =======
         kv::TestTabletFactory,
     };
     use engine_traits::ALL_CFS;
 >>>>>>> 4869d8714 (*: remove unnecessary db field of GC_Context)
 >>>>>>> 99ee97858 (*: remove unnecessary db field of GC_Context)
+=======
+>>>>>>> b140f0f4b (*: rebase)
     use futures::executor::block_on;
     use kvproto::{
         kvrpcpb::{ApiVersion, Op},
@@ -2112,10 +2106,6 @@ mod tests {
 
         let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, 1);
         let safe_point = Arc::new(AtomicU64::new(0));
-<<<<<<< HEAD
-        gc_worker.start_auto_gc(auto_gc_cfg, safe_point).unwrap();
-=======
-        let kv_engine = engine.get_rocksdb();
         // Building a tablet factory
         let ops = DbOptions::default();
         let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
@@ -2126,13 +2116,11 @@ mod tests {
 
         gc_worker
             .start_auto_gc(
-                &kv_engine,
                 auto_gc_cfg,
                 safe_point,
                 Arc::new(TestTabletFactory::new(path.path(), ops, cf_opts)),
             )
             .unwrap();
->>>>>>> 4869d8714 (*: remove unnecessary db field of GC_Context)
         host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
         host.on_region_changed(&r2, RegionChangeEvent::Create, StateRole::Leader);
         host.on_region_changed(&r3, RegionChangeEvent::Create, StateRole::Leader);

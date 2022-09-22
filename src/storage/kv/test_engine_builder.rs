@@ -5,8 +5,6 @@ use std::{
     sync::Arc,
 };
 
-use causal_ts::tests::DummyRawTsTracker;
-use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
 use engine_rocks::RocksCfOptions;
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use file_system::IoRateLimiter;

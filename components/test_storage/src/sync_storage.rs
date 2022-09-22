@@ -154,16 +154,11 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
             .tempdir()
             .unwrap();
         self.gc_worker
-<<<<<<< HEAD
-            .start_auto_gc(cfg, Arc::new(AtomicU64::new(0)))
-=======
             .start_auto_gc(
-                kv_engine,
                 cfg,
                 Arc::new(AtomicU64::new(0)),
                 Arc::new(TestTabletFactory::new(path.path(), ops, cf_opts)),
             )
->>>>>>> 4869d8714 (*: remove unnecessary db field of GC_Context)
             .unwrap();
     }
 

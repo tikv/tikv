@@ -22,40 +22,17 @@ use tikv_util::worker::{ScheduleError, Scheduler};
 use txn_types::Key;
 
 use crate::{
-<<<<<<< HEAD
-<<<<<<< HEAD
     server::gc_worker::{
         compaction_filter::{
-            check_need_gc, CompactionFilterStats, DEFAULT_DELETE_BATCH_COUNT,
-            GC_COMPACTION_FAILURE, GC_COMPACTION_FILTERED, GC_COMPACTION_FILTER_MVCC_DELETION_MET,
-            GC_COMPACTION_FILTER_ORPHAN_VERSIONS, GC_COMPACTION_FILTER_PERFORM,
-            GC_COMPACTION_FILTER_SKIP, GC_CONTEXT,
-=======
-    server::{
-        engine_factory_v2::KvEngineFactoryV2,
-        gc_worker::{
-            compaction_filter::{
-                CompactionFilterStats, DEFAULT_DELETE_BATCH_COUNT, GC_COMPACTION_FAILURE,
-                GC_COMPACTION_FILTERED, GC_COMPACTION_FILTER_MVCC_DELETION_MET,
-                GC_COMPACTION_FILTER_ORPHAN_VERSIONS, GC_CONTEXT,
-            },
-            GcTask, STAT_RAW_KEYMODE,
->>>>>>> e682d8885 (*: support to rawkv compaction filter)
-=======
-    server::gc_worker::{
-        compaction_filter::{
-            get_rocksdb_from_factory, CompactionFilterStats, DEFAULT_DELETE_BATCH_COUNT,
-            GC_COMPACTION_FAILURE, GC_COMPACTION_FILTERED, GC_COMPACTION_FILTER_MVCC_DELETION_MET,
-            GC_COMPACTION_FILTER_ORPHAN_VERSIONS, GC_CONTEXT,
->>>>>>> d05ffa40a (*: address comments and use clean interfaces)
+            check_need_gc, get_rocksdb_from_factory, CompactionFilterStats,
+            DEFAULT_DELETE_BATCH_COUNT, GC_COMPACTION_FAILURE, GC_COMPACTION_FILTERED,
+            GC_COMPACTION_FILTER_MVCC_DELETION_MET, GC_COMPACTION_FILTER_ORPHAN_VERSIONS,
+            GC_COMPACTION_FILTER_PERFORM, GC_COMPACTION_FILTER_SKIP, GC_CONTEXT,
         },
         GcTask, STAT_RAW_KEYMODE,
     },
     storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM},
 };
-<<<<<<< HEAD
-pub struct RawCompactionFilterFactory;
-=======
 
 pub struct RawCompactionFilterFactory {
     region_id: u64,
@@ -66,7 +43,6 @@ impl RawCompactionFilterFactory {
         Self { region_id, suffix }
     }
 }
->>>>>>> e682d8885 (*: support to rawkv compaction filter)
 
 impl CompactionFilterFactory for RawCompactionFilterFactory {
     fn create_compaction_filter(

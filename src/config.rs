@@ -815,26 +815,14 @@ impl WriteCfConfig {
             prop_keys_index_distance: self.prop_keys_index_distance,
         };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
-<<<<<<< HEAD
-<<<<<<< HEAD
-        cf_opts
-            .set_compaction_filter_factory(
-                "write_compaction_filter_factory",
-                WriteCompactionFilterFactory,
-            )
-            .unwrap();
-        cf_opts.set_titan_cf_options(&self.titan.build_opts());
-=======
-=======
         cf_opts
             .set_compaction_filter_factory(
                 "write_compaction_filter_factory",
                 WriteCompactionFilterFactory::new(region_id, suffix_id),
             )
             .unwrap();
->>>>>>> bd28806d5 (*: rebase and rework writecompactionfilter factory to address comments)
-        cf_opts.set_titandb_options(&self.titan.build_opts());
->>>>>>> 8ccd66b2e (src: GC in compaction filter support to multi-rocksdb)
+        cf_opts.set_titan_cf_options(&self.titan.build_opts());
+
         cf_opts
     }
 }
