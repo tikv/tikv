@@ -45,7 +45,7 @@ use resource_metering::CollectorRegHandle;
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
-    box_err, box_try,
+    box_try,
     config::{Tracker, VersionTrack},
     debug, defer, error,
     future::poll_future_notify,
@@ -101,7 +101,7 @@ use crate::{
         Callback, CasualMessage, GlobalReplicationState, InspectedRaftMessage, MergeResultKind,
         PdTask, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapManager, StoreMsg, StoreTick,
     },
-    Result,
+    Error, Result,
 };
 
 type Key = Vec<u8>;
@@ -708,10 +708,20 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 StoreMsg::Tick(tick) => self.on_tick(tick),
                 StoreMsg::RaftMessage(msg) => {
                     if let Err(e) = self.on_raft_message(msg) {
-                        error!(?e;
-                            "handle raft message failed";
-                            "store_id" => self.fsm.store.id,
-                        );
+                        if matches!(&e, Error::RegionNotRegistered { .. }) {
+                            // This may happen in normal cases when add-peer runs slowly
+                            // occasionally after a region split. Avoid printing error
+                            // log here, which may confuse users.
+                            warn!("handle raft message failed";
+                                "err" => ?e,
+                                "store_id" => self.fsm.store.id,
+                            );
+                        } else {
+                            error!(?e;
+                                "handle raft message failed";
+                                "store_id" => self.fsm.store.id,
+                            );
+                        }
                     }
                 }
                 StoreMsg::CompactedEvent(event) => self.on_compaction_finished(event),
@@ -1785,11 +1795,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                     .message_dropped
                     .region_nonexistent
                     .inc();
-                return Err(box_err!(
-                    "[region {}] region not exist but not tombstone: {:?}",
+                return Err(Error::RegionNotRegistered {
                     region_id,
-                    local_state
-                ));
+                    local_state,
+                });
             }
             info!(
                 "region doesn't exist yet, wait for it to be split";
