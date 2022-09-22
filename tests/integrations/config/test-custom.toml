@@ -212,6 +212,7 @@ waterfall-metrics = true
 io-reschedule-concurrent-max-count = 1234
 io-reschedule-hotpot-duration = "4321s"
 inspect-interval = "444ms"
+unreachable-backoff = "111s"
 
 [coprocessor]
 split-region-on-table = false

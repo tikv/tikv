@@ -24,7 +24,7 @@ fn generate_token(ast: DeriveInput) -> std::result::Result<TokenStream, Error> {
     let name = &ast.ident;
     check_generics(&ast.generics, name.span())?;
 
-    let creat_name = Ident::new("online_config", Span::call_site());
+    let crate_name = Ident::new("online_config", Span::call_site());
     let encoder_name = Ident::new(
         {
             // Avoid naming conflict
@@ -37,13 +37,13 @@ fn generate_token(ast: DeriveInput) -> std::result::Result<TokenStream, Error> {
     let encoder_lt = Lifetime::new("'lt", Span::call_site());
 
     let fields = get_struct_fields(ast.data, name.span())?;
-    let update_fn = update(&fields, &creat_name)?;
-    let diff_fn = diff(&fields, &creat_name)?;
+    let update_fn = update(&fields, &crate_name)?;
+    let diff_fn = diff(&fields, &crate_name)?;
     let get_encoder_fn = get_encoder(&encoder_name, &encoder_lt);
-    let typed_fn = typed(&fields, &creat_name)?;
+    let typed_fn = typed(&fields, &crate_name)?;
     let encoder_struct = encoder(
         name,
-        &creat_name,
+        &crate_name,
         &encoder_name,
         &encoder_lt,
         ast.attrs,
@@ -51,7 +51,7 @@ fn generate_token(ast: DeriveInput) -> std::result::Result<TokenStream, Error> {
     )?;
 
     Ok(quote! {
-        impl<#encoder_lt> #creat_name::OnlineConfig<#encoder_lt> for #name {
+        impl<#encoder_lt> #crate_name::OnlineConfig<#encoder_lt> for #name {
             type Encoder = #encoder_name<#encoder_lt>;
             #update_fn
             #diff_fn
@@ -92,7 +92,7 @@ fn get_struct_fields(
 
 fn encoder(
     name: &Ident,
-    creat_name: &Ident,
+    crate_name: &Ident,
     encoder_name: &Ident,
     lt: &Lifetime,
     attrs: Vec<Attribute>,
@@ -117,7 +117,7 @@ fn encoder(
         field.ty = {
             let ty = &field.ty;
             if submodule {
-                Type::Verbatim(quote! { <#ty as #creat_name::OnlineConfig<#lt>>::Encoder })
+                Type::Verbatim(quote! { <#ty as #crate_name::OnlineConfig<#lt>>::Encoder })
             } else {
                 Type::Verbatim(quote! { &#lt #ty })
             }
@@ -159,7 +159,7 @@ fn get_encoder(encoder_name: &Ident, lt: &Lifetime) -> TokenStream {
     }
 }
 
-fn update(fields: &Punctuated<Field, Comma>, creat_name: &Ident) -> Result<TokenStream> {
+fn update(fields: &Punctuated<Field, Comma>, crate_name: &Ident) -> Result<TokenStream> {
     let incoming = Ident::new("incoming", Span::call_site());
     let mut update_fields = Vec::with_capacity(fields.len());
     for field in fields {
@@ -171,8 +171,18 @@ fn update(fields: &Punctuated<Field, Comma>, creat_name: &Ident) -> Result<Token
         let name_lit = LitStr::new(&format!("{}", name), name.span());
         let f = if submodule {
             quote! {
-                if let Some(#creat_name::ConfigValue::Module(v)) = #incoming.remove(#name_lit) {
-                    #creat_name::OnlineConfig::update(&mut self.#name, v);
+                if let Some(#crate_name::ConfigValue::Module(v)) = #incoming.remove(#name_lit) {
+                    #crate_name::OnlineConfig::update(&mut self.#name, v);
+                }
+            }
+        } else if is_option_type(&field.ty) {
+            quote! {
+                if let Some(v) = #incoming.remove(#name_lit) {
+                    if #crate_name::ConfigValue::None == v {
+                        self.#name = None;
+                    } else {
+                        self.#name = Some(v.into());
+                    }
                 }
             }
         } else {
@@ -185,13 +195,13 @@ fn update(fields: &Punctuated<Field, Comma>, creat_name: &Ident) -> Result<Token
         update_fields.push(f);
     }
     Ok(quote! {
-        fn update(&mut self, mut #incoming: #creat_name::ConfigChange) {
+        fn update(&mut self, mut #incoming: #crate_name::ConfigChange) {
             #(#update_fields)*
         }
     })
 }
 
-fn diff(fields: &Punctuated<Field, Comma>, creat_name: &Ident) -> Result<TokenStream> {
+fn diff(fields: &Punctuated<Field, Comma>, crate_name: &Ident) -> Result<TokenStream> {
     let diff_ident = Ident::new("diff_ident", Span::call_site());
     let incoming = Ident::new("incoming", Span::call_site());
     let mut diff_fields = Vec::with_capacity(fields.len());
@@ -205,16 +215,26 @@ fn diff(fields: &Punctuated<Field, Comma>, creat_name: &Ident) -> Result<TokenSt
         let f = if submodule {
             quote! {
                 {
-                    let diff = #creat_name::OnlineConfig::diff(&self.#name, &#incoming.#name);
+                    let diff = #crate_name::OnlineConfig::diff(&self.#name, &#incoming.#name);
                     if diff.len() != 0 {
-                        #diff_ident.insert(#name_lit.to_owned(), #creat_name::ConfigValue::from(diff));
+                        #diff_ident.insert(#name_lit.to_owned(), #crate_name::ConfigValue::from(diff));
+                    }
+                }
+            }
+        } else if is_option_type(&field.ty) {
+            quote! {
+                if self.#name != #incoming.#name {
+                    if let Some(ref v) = #incoming.#name {
+                        #diff_ident.insert(#name_lit.to_owned(), #crate_name::ConfigValue::from(v.clone()));
+                    } else {
+                        #diff_ident.insert(#name_lit.to_owned(), #crate_name::ConfigValue::None);
                     }
                 }
             }
         } else {
             quote! {
                 if self.#name != #incoming.#name {
-                    #diff_ident.insert(#name_lit.to_owned(), #creat_name::ConfigValue::from(#incoming.#name.clone()));
+                    #diff_ident.insert(#name_lit.to_owned(), #crate_name::ConfigValue::from(#incoming.#name.clone()));
                 }
             }
         };
@@ -222,7 +242,7 @@ fn diff(fields: &Punctuated<Field, Comma>, creat_name: &Ident) -> Result<TokenSt
     }
     Ok(quote! {
         #[allow(clippy::float_cmp)]
-        fn diff(&self, mut #incoming: &Self) -> #creat_name::ConfigChange {
+        fn diff(&self, mut #incoming: &Self) -> #crate_name::ConfigChange {
             let mut #diff_ident = std::collections::HashMap::default();
             #(#diff_fields)*
             #diff_ident
@@ -230,7 +250,7 @@ fn diff(fields: &Punctuated<Field, Comma>, creat_name: &Ident) -> Result<TokenSt
     })
 }
 
-fn typed(fields: &Punctuated<Field, Comma>, creat_name: &Ident) -> Result<TokenStream> {
+fn typed(fields: &Punctuated<Field, Comma>, crate_name: &Ident) -> Result<TokenStream> {
     let typed_ident = Ident::new("typed_ident", Span::call_site());
     let mut typed_fields = Vec::with_capacity(fields.len());
     for field in fields {
@@ -243,23 +263,27 @@ fn typed(fields: &Punctuated<Field, Comma>, creat_name: &Ident) -> Result<TokenS
         let f = if submodule {
             quote! {
                 {
-                    let typed = #creat_name::OnlineConfig::typed(&self.#name);
-                    #typed_ident.insert(#name_lit.to_owned(), #creat_name::ConfigValue::from(typed));
+                    let typed = #crate_name::OnlineConfig::typed(&self.#name);
+                    #typed_ident.insert(#name_lit.to_owned(), #crate_name::ConfigValue::from(typed));
                 }
             }
         } else if skip || hidden {
             quote! {
-                #typed_ident.insert(#name_lit.to_owned(), #creat_name::ConfigValue::Skip);
+                #typed_ident.insert(#name_lit.to_owned(), #crate_name::ConfigValue::Skip);
+            }
+        } else if is_option_type(&field.ty) {
+            quote! {
+                #typed_ident.insert(#name_lit.to_owned(), #crate_name::ConfigValue::from(self.#name.clone().unwrap_or_default()));
             }
         } else {
             quote! {
-                #typed_ident.insert(#name_lit.to_owned(), #creat_name::ConfigValue::from(self.#name.clone()));
+                #typed_ident.insert(#name_lit.to_owned(), #crate_name::ConfigValue::from(self.#name.clone()));
             }
         };
         typed_fields.push(f);
     }
     Ok(quote! {
-        fn typed(&self) -> #creat_name::ConfigChange {
+        fn typed(&self) -> #crate_name::ConfigChange {
             let mut #typed_ident = std::collections::HashMap::default();
             #(#typed_fields)*
             #typed_ident
@@ -295,4 +319,36 @@ fn is_attr(name: &str, attr: &Attribute) -> bool {
         }
     }
     false
+}
+
+// Copied from https://stackoverflow.com/questions/55271857/how-can-i-get-the-t-from-an-optiont-when-using-syn.
+fn is_option_type(ty: &Type) -> bool {
+    fn extract_type_path(ty: &syn::Type) -> Option<&Path> {
+        match *ty {
+            syn::Type::Path(ref typepath) if typepath.qself.is_none() => Some(&typepath.path),
+            _ => None,
+        }
+    }
+
+    // TODO store (with lazy static) the vec of string
+    // TODO maybe optimization, reverse the order of segments
+    fn extract_option_segment(path: &Path) -> Option<&PathSegment> {
+        let idents_of_path = path
+            .segments
+            .iter()
+            .into_iter()
+            .fold(String::new(), |mut acc, v| {
+                acc.push_str(&v.ident.to_string());
+                acc.push('|');
+                acc
+            });
+        vec!["Option|", "std|option|Option|", "core|option|Option|"]
+            .into_iter()
+            .find(|s| idents_of_path == *s)
+            .and_then(|_| path.segments.last())
+    }
+
+    extract_type_path(ty)
+        .and_then(|path| extract_option_segment(path))
+        .is_some()
 }
