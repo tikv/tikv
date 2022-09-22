@@ -10,7 +10,6 @@ use futures::executor::block_on;
 use kvproto::kvrpcpb::ApiVersion;
 use raw::RawStore;
 use tikv_kv::{SnapshotExt, Statistics};
-use tikv_kv::Statistics;
 use txn_types::{Key, TimeStamp, Value};
 
 use crate::storage::{
@@ -68,7 +67,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
         }
 
         let provider = self.causal_ts_provider.clone();
-        let concurrency_manager = wctx.concurrency_manager.clone();
+        let concurrency_manager = wctx.concurrency_manager;
         let (cf, mut key, value, previous_value, ctx) =
             (self.cf, self.key, self.value, self.previous_value, self.ctx);
         let mut data = vec![];
@@ -165,15 +164,10 @@ mod tests {
         let key = b"rk";
 
         let encoded_key = F::encode_raw_key(key, None);
-<<<<<<< HEAD
         let ts_provider = if F::TAG == kvproto::kvrpcpb::ApiVersion::V2 {
             let test_provider: causal_ts::CausalTs =
                 causal_ts::tests::TestProvider::default().into();
             Some(Arc::new(test_provider))
-=======
-        let mut ts = if F::TAG == kvproto::kvrpcpb::ApiVersion::V2 {
-            Some(TimeStamp::from(100))
->>>>>>> async-causal-ts
         } else {
             None
         };
@@ -185,18 +179,13 @@ mod tests {
             b"v1".to_vec(),
             0,
             F::TAG,
-<<<<<<< HEAD
             ts_provider.clone(),
-=======
-            ts,
->>>>>>> async-causal-ts
             Context::default(),
         );
         let (prev_val, succeed) = sched_command(&engine, cm.clone(), cmd).unwrap();
         assert!(prev_val.is_none());
         assert!(succeed);
 
-        ts = ts.map(|t| t.next());
         let cmd = RawCompareAndSwap::new(
             CF_DEFAULT,
             encoded_key.clone(),
@@ -204,18 +193,13 @@ mod tests {
             b"v2".to_vec(),
             1,
             F::TAG,
-<<<<<<< HEAD
             ts_provider.clone(),
-=======
-            ts,
->>>>>>> async-causal-ts
             Context::default(),
         );
         let (prev_val, succeed) = sched_command(&engine, cm.clone(), cmd).unwrap();
         assert_eq!(prev_val, Some(b"v1".to_vec()));
         assert!(!succeed);
 
-        ts = ts.map(|t| t.next());
         let cmd = RawCompareAndSwap::new(
             CF_DEFAULT,
             encoded_key,
@@ -223,11 +207,7 @@ mod tests {
             b"v3".to_vec(),
             2,
             F::TAG,
-<<<<<<< HEAD
             ts_provider,
-=======
-            ts,
->>>>>>> async-causal-ts
             Context::default(),
         );
         let (prev_val, succeed) = sched_command(&engine, cm, cmd).unwrap();
@@ -272,7 +252,6 @@ mod tests {
     }
 
     fn test_cas_process_write_impl<F: KvFormat>() {
-<<<<<<< HEAD
         let ts_provider = if F::TAG == kvproto::kvrpcpb::ApiVersion::V2 {
             let test_provider: causal_ts::CausalTs =
                 causal_ts::tests::TestProvider::default().into();
@@ -280,20 +259,10 @@ mod tests {
         } else {
             None
         };
-=======
->>>>>>> async-causal-ts
         let engine = TestEngineBuilder::new().build().unwrap();
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
         let raw_key = b"rk";
         let raw_value = b"valuek";
-<<<<<<< HEAD
-=======
-        let encode_ts = if F::TAG == kvproto::kvrpcpb::ApiVersion::V2 {
-            Some(TimeStamp::from(100))
-        } else {
-            None
-        };
->>>>>>> async-causal-ts
         let ttl = 30;
         let encode_value = RawValue {
             user_value: raw_value.to_vec(),
@@ -307,11 +276,7 @@ mod tests {
             raw_value.to_vec(),
             ttl,
             F::TAG,
-<<<<<<< HEAD
             ts_provider,
-=======
-            encode_ts,
->>>>>>> async-causal-ts
             Context::default(),
         );
         let mut statistic = Statistics::default();
@@ -327,11 +292,7 @@ mod tests {
         let write_result = cmd.process_write(snap, context).unwrap();
         let modifies_with_ts = vec![Modify::Put(
             CF_DEFAULT,
-<<<<<<< HEAD
             F::encode_raw_key(raw_key, Some(100.into())),
-=======
-            F::encode_raw_key(raw_key, encode_ts),
->>>>>>> async-causal-ts
             F::encode_raw_value_owned(encode_value),
         )];
         assert_eq!(write_result.to_be_write.modifies, modifies_with_ts)

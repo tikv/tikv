@@ -57,7 +57,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
         }
 
         let provider = self.causal_ts_provider.clone();
-        let concurrency_manager = wctx.concurrency_manager.clone();
+        let concurrency_manager = wctx.concurrency_manager;
         let lock_guard = block_on(get_raw_key_guard(&provider, concurrency_manager)).map_err(
             |err: StorageError| ErrorInner::Other(box_err!("failed to key guard: {:?}", err)),
         )?;
@@ -113,15 +113,10 @@ mod tests {
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
         let raw_keys = vec![b"ra", b"rz"];
         let raw_values = vec![b"valuea", b"valuez"];
-<<<<<<< HEAD
         let ts_provider = if F::TAG == kvproto::kvrpcpb::ApiVersion::V2 {
             let test_provider: causal_ts::CausalTs =
                 causal_ts::tests::TestProvider::default().into();
             Some(Arc::new(test_provider))
-=======
-        let encode_ts = if F::TAG == kvproto::kvrpcpb::ApiVersion::V2 {
-            Some(TimeStamp::from(100))
->>>>>>> async-causal-ts
         } else {
             None
         };
@@ -138,11 +133,7 @@ mod tests {
                 F::encode_raw_value_owned(raw_value),
             ));
         }
-<<<<<<< HEAD
         let cmd = RawAtomicStore::new(CF_DEFAULT, modifies, ts_provider, Context::default());
-=======
-        let cmd = RawAtomicStore::new(CF_DEFAULT, modifies, encode_ts, Context::default());
->>>>>>> async-causal-ts
         let mut statistic = Statistics::default();
         let snap = engine.snapshot(Default::default()).unwrap();
         let context = WriteContext {
@@ -163,11 +154,7 @@ mod tests {
             };
             modifies_with_ts.push(Modify::Put(
                 CF_DEFAULT,
-<<<<<<< HEAD
                 F::encode_raw_key_owned(raw_keys[i].to_vec(), Some(100.into())),
-=======
-                F::encode_raw_key_owned(raw_keys[i].to_vec(), encode_ts),
->>>>>>> async-causal-ts
                 F::encode_raw_value_owned(raw_value),
             ));
         }

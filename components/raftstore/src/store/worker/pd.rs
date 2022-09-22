@@ -1624,7 +1624,10 @@ where
             while txn_ext.max_ts_sync_status.load(Ordering::SeqCst) == initial_status {
                 if let Some(causal_ts_provider) = &causal_ts_provider {
                     if let Err(e) = causal_ts_provider.async_flush().await {
-                        warn!("failed to update max timestamp for region {}: {:?}", region_id, e);
+                        warn!(
+                            "failed to update max timestamp for region {}: {:?}",
+                            region_id, e
+                        );
                     } else {
                         match causal_ts_provider.async_get_ts().await {
                             Ok(ts) => {

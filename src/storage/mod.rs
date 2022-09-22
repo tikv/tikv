@@ -123,7 +123,7 @@ use crate::{
             commands::{RawAtomicStore, RawCompareAndSwap, TypedCommand},
             flow_controller::{EngineFlowController, FlowController},
             scheduler::Scheduler as TxnScheduler,
-            Command, ErrorInner  as TxnError,
+            Command, ErrorInner as TxnError,
         },
         types::StorageCallbackType,
     },
@@ -1849,17 +1849,18 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
     async fn check_causal_ts_synced(ctx: &mut Context) -> Result<()> {
         let snap_ctx = SnapContext {
-            pb_ctx: &ctx,
+            pb_ctx: ctx,
             ..Default::default()
         };
-        let snapshot = 
-            Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+        let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
 
         if !snapshot.ext().is_max_ts_synced() {
-            return Err(Error::from(txn::Error::from(TxnError::MaxTimestampNotSynced {
+            return Err(Error::from(txn::Error::from(
+                TxnError::MaxTimestampNotSynced {
                     region_id: ctx.get_region_id(),
                     start_ts: TimeStamp::zero(),
-                })));
+                },
+            )));
         }
         let term = snapshot.ext().get_term();
         if let Some(term) = term {
@@ -2637,9 +2638,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             Self::sched_raw_atomic_command(
                 sched,
                 cmd,
-                Box::new(|res| {
-                    callback(res.map_err(Error::from))
-                }),
+                Box::new(|res| callback(res.map_err(Error::from))),
             );
         })
     }
@@ -2671,9 +2670,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             Self::sched_raw_atomic_command(
                 sched,
                 cmd,
-                Box::new(|res| {
-                    callback(res.map_err(Error::from))
-                }),
+                Box::new(|res| callback(res.map_err(Error::from))),
             );
         })
     }
@@ -2701,9 +2698,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             Self::sched_raw_atomic_command(
                 sched,
                 cmd,
-                Box::new(|res| {
-                    callback(res.map_err(Error::from))
-                }),
+                Box::new(|res| callback(res.map_err(Error::from))),
             );
         })
     }

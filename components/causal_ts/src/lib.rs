@@ -13,12 +13,12 @@ pub use errors::*;
 mod tso;
 pub use tso::*;
 mod metrics;
-pub use metrics::*;
 use async_trait::async_trait;
-use futures::executor::block_on;
 use enum_dispatch::enum_dispatch;
-use txn_types::TimeStamp;
+use futures::executor::block_on;
+pub use metrics::*;
 use test_pd_client::TestPdClient;
+use txn_types::TimeStamp;
 
 pub use crate::errors::Result;
 /// Trait of causal timestamp provider.
