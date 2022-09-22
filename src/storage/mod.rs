@@ -1847,24 +1847,26 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         }
     }
 
-    async fn check_causal_ts_synced(ctx: &mut Context) -> Result<()> {
-        let snap_ctx = SnapContext {
-            pb_ctx: ctx,
-            ..Default::default()
-        };
-        let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+    async fn check_causal_ts_synced(ctx: &mut Context, api_version: ApiVersion) -> Result<()> {
+        if api_version == ApiVersion::V2 {
+            let snap_ctx = SnapContext {
+                pb_ctx: ctx,
+                ..Default::default()
+            };
+            let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
 
-        if !snapshot.ext().is_max_ts_synced() {
-            return Err(Error::from(txn::Error::from(
-                TxnError::MaxTimestampNotSynced {
-                    region_id: ctx.get_region_id(),
-                    start_ts: TimeStamp::zero(),
-                },
-            )));
-        }
-        let term = snapshot.ext().get_term();
-        if let Some(term) = term {
-            ctx.set_term(term.get());
+            if !snapshot.ext().is_max_ts_synced() {
+                return Err(Error::from(txn::Error::from(
+                    TxnError::MaxTimestampNotSynced {
+                        region_id: ctx.get_region_id(),
+                        start_ts: TimeStamp::zero(),
+                    },
+                )));
+            }
+            let term = snapshot.ext().get_term();
+            if let Some(term) = term {
+                ctx.set_term(term.get());
+            }
         }
         Ok(())
     }
@@ -1890,7 +1892,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             return Err(Error::from(ErrorInner::TtlNotEnabled));
         }
         let deadline = Self::get_deadline(&ctx);
-        let cf = Self::rawkv_cf(&cf, self.api_version)?;
+        let cf = Self::rawkv_cf(&cf, api_version)?;
         let provider = self.causal_ts_provider.clone();
         let engine = self.engine.clone();
         let concurrency_manager = self.concurrency_manager.clone();
@@ -1900,7 +1902,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             }
             let command_duration = tikv_util::time::Instant::now();
 
-            if let Err(e) = Self::check_causal_ts_synced(&mut ctx).await {
+            if let Err(e) = Self::check_causal_ts_synced(&mut ctx, api_version).await {
                 return callback(Err(e));
             }
 
@@ -1986,14 +1988,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         callback: Callback<()>,
     ) -> Result<()> {
         const CMD: CommandKind = CommandKind::raw_batch_put;
+        let api_version = self.api_version;
         Self::check_api_version(
-            self.api_version,
+            api_version,
             ctx.api_version,
             CMD,
             pairs.iter().map(|(ref k, _)| k),
         )?;
 
-        let cf = Self::rawkv_cf(&cf, self.api_version)?;
+        let cf = Self::rawkv_cf(&cf, api_version)?;
 
         check_key_size!(
             pairs.iter().map(|(ref k, _)| k),
@@ -2012,7 +2015,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             }
             let command_duration = tikv_util::time::Instant::now();
 
-            if let Err(e) = Self::check_causal_ts_synced(&mut ctx).await {
+            if let Err(e) = Self::check_causal_ts_synced(&mut ctx, api_version).await {
                 return callback(Err(e));
             }
 
@@ -2063,10 +2066,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         callback: Callback<()>,
     ) -> Result<()> {
         const CMD: CommandKind = CommandKind::raw_delete;
-        Self::check_api_version(self.api_version, ctx.api_version, CMD, [&key])?;
+        let api_version = self.api_version;
+        Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
 
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
-        let cf = Self::rawkv_cf(&cf, self.api_version)?;
+        let cf = Self::rawkv_cf(&cf, api_version)?;
         let provider = self.causal_ts_provider.clone();
         let engine = self.engine.clone();
         let concurrency_manager = self.concurrency_manager.clone();
@@ -2077,7 +2081,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             }
             let command_duration = tikv_util::time::Instant::now();
 
-            if let Err(e) = Self::check_causal_ts_synced(&mut ctx).await {
+            if let Err(e) = Self::check_causal_ts_synced(&mut ctx, api_version).await {
                 return callback(Err(e));
             }
 
@@ -2172,9 +2176,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         callback: Callback<()>,
     ) -> Result<()> {
         const CMD: CommandKind = CommandKind::raw_batch_delete;
-        Self::check_api_version(self.api_version, ctx.api_version, CMD, &keys)?;
+        let api_version = self.api_version;
+        Self::check_api_version(api_version, ctx.api_version, CMD, &keys)?;
 
-        let cf = Self::rawkv_cf(&cf, self.api_version)?;
+        let cf = Self::rawkv_cf(&cf, api_version)?;
         check_key_size!(keys.iter(), self.max_key_size, callback);
         let provider = self.causal_ts_provider.clone();
         let engine = self.engine.clone();
@@ -2186,7 +2191,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             }
             let command_duration = tikv_util::time::Instant::now();
 
-            if let Err(e) = Self::check_causal_ts_synced(&mut ctx).await {
+            if let Err(e) = Self::check_causal_ts_synced(&mut ctx, api_version).await {
                 return callback(Err(e));
             }
 
