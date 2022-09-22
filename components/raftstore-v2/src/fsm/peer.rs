@@ -8,7 +8,7 @@ use batch_system::{BasicMailbox, Fsm};
 use crossbeam::channel::TryRecvError;
 use engine_traits::{KvEngine, RaftEngine, TabletFactory};
 use kvproto::metapb;
-use raftstore::store::{Config, ReadDelegate, TrackVer, Transport};
+use raftstore::store::{Config, Transport};
 use slog::{debug, error, info, trace, Logger};
 use tikv_util::{
     is_zero_duration,

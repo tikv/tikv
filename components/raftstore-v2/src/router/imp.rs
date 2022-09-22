@@ -5,9 +5,13 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine};
 use futures::executor::block_on;
-use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
+use kvproto::{
+    raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
+    raft_serverpb::RaftMessage,
+};
 use raftstore::store::{FetchedLogs, LogFetchedNotifier, RegionSnapshot};
 use slog::Logger;
 
@@ -64,24 +68,23 @@ impl<EK: KvEngine, ER: RaftEngine> ServerRaftStoreRouter<EK, ER> {
         }
     }
 
-    pub fn router(&self) -> &StoreRouter<EK, ER> {
-        &self.router
+    pub fn send(&self, addr: u64, msg: PeerMsg) -> Result<(), TrySendError<PeerMsg>> {
+        self.router.send(addr, msg)
     }
 
-    pub fn router_mut(&mut self) -> &mut StoreRouter<EK, ER> {
-        &mut self.router
+    pub fn send_raft_message(
+        &self,
+        msg: Box<RaftMessage>,
+    ) -> std::result::Result<(), TrySendError<Box<RaftMessage>>> {
+        self.router.send_raft_message(msg)
     }
 
     #[allow(clippy::await_holding_refcell_ref)]
-    pub fn get_snapshot(
+    pub async fn get_snapshot(
         &self,
         req: RaftCmdRequest,
     ) -> std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse> {
-        block_on({
-            async {
-                let mut local_reader = self.local_reader.borrow_mut();
-                local_reader.snapshot(req).await
-            }
-        })
+        let mut local_reader = self.local_reader.borrow_mut();
+        local_reader.snapshot(req).await
     }
 }

@@ -41,8 +41,10 @@ use crate::{
 };
 
 mod lease;
-pub(crate) mod local;
+mod local;
 mod replica;
+
+pub(crate) use self::local::{LocalReader, StoreMetaDelegate};
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
     PeerFsmDelegate<'a, EK, ER, T>

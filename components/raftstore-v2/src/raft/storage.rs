@@ -63,15 +63,6 @@ pub struct Storage<ER> {
     logger: Logger,
 }
 
-impl<ER: RaftEngine> Deref for Storage<ER> {
-    type Target = EntryStorage<ER>;
-
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        &self.entry_storage
-    }
-}
-
 impl<ER> Debug for Storage<ER> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(

@@ -403,7 +403,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             region: Arc::new(region),
             peer_id,
             term: self.term(),
-            applied_term: self.storage().applied_term(),
+            applied_term: self.storage().entry_storage().applied_term(),
             leader_lease: None,
             last_valid_ts: Timespec::new(0, 0),
             tag: format!("[region {}] {}", region_id, peer_id),

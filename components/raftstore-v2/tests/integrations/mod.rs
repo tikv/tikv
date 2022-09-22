@@ -55,16 +55,16 @@ mod test_status;
 struct TestRouter(ServerRaftStoreRouter<KvTestEngine, RaftTestEngine>);
 
 impl Deref for TestRouter {
-    type Target = StoreRouter<KvTestEngine, RaftTestEngine>;
+    type Target = ServerRaftStoreRouter<KvTestEngine, RaftTestEngine>;
 
     fn deref(&self) -> &Self::Target {
-        self.0.router()
+        &self.0
     }
 }
 
 impl DerefMut for TestRouter {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.0.router_mut()
+        &mut self.0
     }
 }
 
@@ -95,12 +95,12 @@ impl TestRouter {
         block_on(sub.result())
     }
 
-    fn get_snapshot(
+    async fn get_snapshot(
         &self,
         req: RaftCmdRequest,
     ) -> std::result::Result<RegionSnapshot<<KvTestEngine as KvEngine>::Snapshot>, RaftCmdResponse>
     {
-        self.0.get_snapshot(req)
+        self.0.get_snapshot(req).await
     }
 }
 
