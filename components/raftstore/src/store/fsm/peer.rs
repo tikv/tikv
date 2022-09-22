@@ -53,6 +53,7 @@ use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
     box_err, debug, defer, error, escape, info, is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver},
+    store::{find_peer, is_learner, region_on_same_stores},
     sys::{disk::DiskUsage, memory_usage_reaches_high_water},
     time::{monotonic_raw_now, Instant as TiInstant},
     trace, warn,
@@ -90,7 +91,7 @@ use crate::{
         region_meta::RegionMeta,
         transport::Transport,
         util,
-        util::{is_learner, KeysInfoFormatter, LeaseState},
+        util::{KeysInfoFormatter, LeaseState},
         worker::{
             new_change_peer_v2_request, Bucket, BucketRange, CleanupTask, ConsistencyCheckTask,
             GcSnapshotTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, ReadProgress,
@@ -248,7 +249,7 @@ where
         engines: Engines<EK, ER>,
         region: &metapb::Region,
     ) -> Result<SenderFsmPair<EK, ER>> {
-        let meta_peer = match util::find_peer(region, store_id) {
+        let meta_peer = match find_peer(region, store_id) {
             None => {
                 return Err(box_err!(
                     "find no peer for store {} in region {:?}",
@@ -1394,8 +1395,7 @@ where
                 }
             }
             SignificantMsg::StoreUnreachable { store_id } => {
-                if let Some(peer_id) = util::find_peer(self.region(), store_id).map(|p| p.get_id())
-                {
+                if let Some(peer_id) = find_peer(self.region(), store_id).map(|p| p.get_id()) {
                     if self.fsm.peer.is_leader() {
                         self.fsm.peer.raft_group.report_unreachable(peer_id);
                     } else if peer_id == self.fsm.peer.leader_id() {
@@ -2740,7 +2740,7 @@ where
         // and pd will tell 2 is stale, so 2 can remove itself.
         let self_epoch = self.fsm.peer.region().get_region_epoch();
         if util::is_epoch_stale(from_epoch, self_epoch)
-            && util::find_peer(self.fsm.peer.region(), from_store_id).is_none()
+            && find_peer(self.fsm.peer.region(), from_store_id).is_none()
         {
             self.ctx.handle_stale_msg(msg, self_epoch.clone(), None);
             return true;
@@ -3996,7 +3996,7 @@ where
     /// and return false.
     fn is_merge_target_region_stale(&self, target_region: &metapb::Region) -> Result<bool> {
         let target_region_id = target_region.get_id();
-        let target_peer_id = util::find_peer(target_region, self.ctx.store_id())
+        let target_peer_id = find_peer(target_region, self.ctx.store_id())
             .unwrap()
             .get_id();
 
@@ -4016,7 +4016,7 @@ where
             // applying conf change, the epoch may staler but it's legal, so check peer id
             // to assure that.
             if let Some(local_target_peer_id) =
-                util::find_peer(target_state.get_region(), self.ctx.store_id()).map(|r| r.get_id())
+                find_peer(target_state.get_region(), self.ctx.store_id()).map(|r| r.get_id())
             {
                 match local_target_peer_id.cmp(&target_peer_id) {
                     cmp::Ordering::Equal => {
@@ -4174,7 +4174,7 @@ where
                 }
             };
 
-            let sibling_peer = util::find_peer(sibling_region, self.store_id()).unwrap();
+            let sibling_peer = find_peer(sibling_region, self.store_id()).unwrap();
             let mut request = new_admin_request(sibling_region.get_id(), sibling_peer.clone());
             request
                 .mut_header()
@@ -4843,7 +4843,7 @@ where
                     region
                 ));
             }
-            if !util::region_on_same_stores(target_region, region) {
+            if !region_on_same_stores(target_region, region) {
                 return Err(box_err!(
                     "peers doesn't match {:?} != {:?}, reject merge",
                     region.get_peers(),
@@ -4859,7 +4859,7 @@ where
                     region
                 ));
             }
-            if !util::region_on_same_stores(source_region, region) {
+            if !region_on_same_stores(source_region, region) {
                 return Err(box_err!(
                     "peers not matched: {:?} {:?}",
                     source_region,
@@ -6237,7 +6237,7 @@ pub fn maybe_destroy_source(
                 return (
                     true,
                     target_peer_id
-                        == util::find_peer(target_region, meta.store_id.unwrap())
+                        == find_peer(target_region, meta.store_id.unwrap())
                             .unwrap()
                             .get_id(),
                 );

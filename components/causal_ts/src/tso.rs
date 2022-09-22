@@ -30,7 +30,7 @@ use std::{
     },
 };
 
-use futures::executor::block_on;
+use async_trait::async_trait;
 use parking_lot::RwLock;
 use pd_client::PdClient;
 use tikv_util::{
@@ -564,9 +564,10 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
 
 const GET_TS_MAX_RETRY: u32 = 3;
 
+#[async_trait]
 impl<C: PdClient + 'static> CausalTsProvider for BatchTsoProvider<C> {
     // TODO: support `after_ts` argument.
-    fn get_ts(&self) -> Result<TimeStamp> {
+    async fn async_get_ts(&self) -> Result<TimeStamp> {
         let start = Instant::now();
         let mut retries = 0;
         let mut last_batch_size: u32;
@@ -590,7 +591,10 @@ impl<C: PdClient + 'static> CausalTsProvider for BatchTsoProvider<C> {
             if retries >= GET_TS_MAX_RETRY {
                 break;
             }
-            if let Err(err) = block_on(self.renew_tso_batch(false, TsoBatchRenewReason::used_up)) {
+            if let Err(err) = self
+                .renew_tso_batch(false, TsoBatchRenewReason::used_up)
+                .await
+            {
                 // `renew_tso_batch` failure is likely to be caused by TSO timeout, which would
                 // mean that PD is quite busy. So do not retry any more.
                 error!("BatchTsoProvider::get_ts, renew_tso_batch fail on batch used-up"; "err" => ?err);
@@ -605,9 +609,8 @@ impl<C: PdClient + 'static> CausalTsProvider for BatchTsoProvider<C> {
         Err(Error::TsoBatchUsedUp(last_batch_size))
     }
 
-    // TODO: provide asynchronous method
-    fn flush(&self) -> Result<()> {
-        block_on(self.renew_tso_batch(true, TsoBatchRenewReason::flush))
+    async fn async_flush(&self) -> Result<()> {
+        self.renew_tso_batch(true, TsoBatchRenewReason::flush).await
     }
 }
 
@@ -623,16 +626,22 @@ impl SimpleTsoProvider {
     }
 }
 
+#[async_trait]
 impl CausalTsProvider for SimpleTsoProvider {
-    fn get_ts(&self) -> Result<TimeStamp> {
-        let ts = block_on(self.pd_client.get_tso())?;
+    async fn async_get_ts(&self) -> Result<TimeStamp> {
+        let ts = self.pd_client.get_tso().await?;
         debug!("SimpleTsoProvider::get_ts"; "ts" => ?ts);
         Ok(ts)
+    }
+
+    async fn async_flush(&self) -> Result<()> {
+        Ok(())
     }
 }
 
 #[cfg(test)]
 pub mod tests {
+    use futures::executor::block_on;
     use test_pd_client::TestPdClient;
 
     use super::*;
