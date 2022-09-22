@@ -13,8 +13,8 @@ use std::{
 use engine_traits::KvEngine;
 use kvproto::metapb::Region;
 use pd_client::FeatureGate;
-use raftstore::{coprocessor::RegionInfoProvider, store::util::find_peer};
-use tikv_util::{time::Instant, worker::Scheduler};
+use raftstore::coprocessor::RegionInfoProvider;
+use tikv_util::{store::find_peer, time::Instant, worker::Scheduler};
 use txn_types::{Key, TimeStamp};
 
 use super::{
@@ -633,11 +633,9 @@ mod tests {
     use engine_rocks::RocksEngine;
     use kvproto::metapb;
     use raft::StateRole;
-    use raftstore::{
-        coprocessor::{RegionInfo, Result as CopResult, SeekRegionCallback},
-        store::util::new_peer,
-    };
+    use raftstore::coprocessor::{RegionInfo, Result as CopResult, SeekRegionCallback};
     use tikv_util::{
+        store::new_peer,
         sys::thread::StdThreadBuildWrapper,
         worker::{Builder as WorkerBuilder, LazyWorker, Runnable},
     };

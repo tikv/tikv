@@ -4,8 +4,8 @@ use std::assert_matches::assert_matches;
 
 use futures::executor::block_on;
 use kvproto::raft_cmdpb::{RaftCmdRequest, StatusCmdType};
-use raftstore::store::util::new_peer;
 use raftstore_v2::router::{PeerMsg, PeerTick, QueryResChannel, QueryResult, RaftRequest};
+use tikv_util::store::new_peer;
 
 use crate::Cluster;
 

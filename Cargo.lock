@@ -5757,7 +5757,6 @@ dependencies = [
  "log_wrappers",
  "pd_client",
  "raft",
- "raftstore",
  "slog",
  "slog-global",
  "tikv_util",
