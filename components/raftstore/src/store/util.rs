@@ -1504,34 +1504,6 @@ mod tests {
         }
     }
 
-    // Tests the util function `check_key_in_region`.
-    #[test]
-    fn test_check_key_in_region() {
-        let test_cases = vec![
-            ("", "", "", true, true, false),
-            ("", "", "6", true, true, false),
-            ("", "3", "6", false, false, false),
-            ("4", "3", "6", true, true, true),
-            ("4", "3", "", true, true, true),
-            ("3", "3", "", true, true, false),
-            ("2", "3", "6", false, false, false),
-            ("", "3", "6", false, false, false),
-            ("", "3", "", false, false, false),
-            ("6", "3", "6", false, true, false),
-        ];
-        for (key, start_key, end_key, is_in_region, inclusive, exclusive) in test_cases {
-            let mut region = metapb::Region::default();
-            region.set_start_key(start_key.as_bytes().to_vec());
-            region.set_end_key(end_key.as_bytes().to_vec());
-            let mut result = check_key_in_region(key.as_bytes(), &region);
-            assert_eq!(result.is_ok(), is_in_region);
-            result = check_key_in_region_inclusive(key.as_bytes(), &region);
-            assert_eq!(result.is_ok(), inclusive);
-            result = check_key_in_region_exclusive(key.as_bytes(), &region);
-            assert_eq!(result.is_ok(), exclusive);
-        }
-    }
-
     fn gen_region(
         voters: &[u64],
         learners: &[u64],
