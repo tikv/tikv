@@ -712,7 +712,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                             // This may happen in normal cases when add-peer runs slowly
                             // occasionally after a region split. Avoid printing error
                             // log here, which may confuse users.
-                            warn!("handle raft message failed";
+                            info!("handle raft message failed";
                                 "err" => ?e,
                                 "store_id" => self.fsm.store.id,
                             );
