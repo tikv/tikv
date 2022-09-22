@@ -27,10 +27,8 @@ use parking_lot::Mutex;
 use txn_types::TimeStamp;
 
 use crate::storage::{
-    lock_manager::{
-        lock_waiting_queue::{PessimisticLockKeyCallback, SharedError},
-        LockManager, LockWaitToken,
-    },
+    errors::SharedError,
+    lock_manager::{lock_waiting_queue::PessimisticLockKeyCallback, LockManager, LockWaitToken},
     Error as StorageError, PessimisticLockRes, ProcessResult, StorageCallback,
 };
 

@@ -56,7 +56,6 @@
 
 use std::{
     collections::BinaryHeap,
-    convert::TryFrom,
     future::Future,
     pin::Pin,
     result::Result,
@@ -72,46 +71,17 @@ use futures_util::compat::Future01CompatExt;
 use kvproto::kvrpcpb;
 use smallvec::SmallVec;
 use sync_wrapper::SyncWrapper;
-use thiserror::Error;
 use tikv_util::{time::InstantExt, timer::GLOBAL_TIMER_HANDLE};
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
+    errors::SharedError,
     lock_manager::{lock_wait_context::LockWaitContextSharedState, LockManager, LockWaitToken},
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
     txn::Error as TxnError,
     types::{PessimisticLockParameters, PessimisticLockRes},
     Error as StorageError, ErrorInner as StorageErrorInner,
 };
-
-/// The shared version of [`crate::storage::Error`]. It's necessary to pass a
-/// single error to more than one requests, since the inner error doesn't
-/// support cloning.
-#[derive(Debug, Error)]
-#[error(transparent)]
-pub struct SharedError(Arc<StorageErrorInner>);
-
-impl From<StorageErrorInner> for SharedError {
-    fn from(e: StorageErrorInner) -> Self {
-        Self(Arc::new(e))
-    }
-}
-
-impl From<StorageError> for SharedError {
-    fn from(e: StorageError) -> Self {
-        Self(Arc::from(e.0))
-    }
-}
-
-/// Tries to convert the shared error to owned one. It can success only when
-/// it's the only reference to the error.
-impl TryFrom<SharedError> for StorageError {
-    type Error = ();
-
-    fn try_from(e: SharedError) -> Result<Self, Self::Error> {
-        Arc::try_unwrap(e.0).map(Into::into).map_err(|_| ())
-    }
-}
 
 pub type CallbackWithSharedError<T> = Box<dyn FnOnce(Result<T, SharedError>) + Send + 'static>;
 pub type PessimisticLockKeyCallback = CallbackWithSharedError<PessimisticLockRes>;
