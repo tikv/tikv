@@ -41,7 +41,7 @@ use crate::{
 };
 
 mod lease;
-mod local;
+pub mod local;
 mod replica;
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>

@@ -7,4 +7,5 @@ mod ready;
 
 pub use command::{SimpleWriteDecoder, SimpleWriteEncoder};
 pub use life::DestroyProgress;
+pub use query::local::{CachedReadDelegate, LocalReader, MsgRouter, StoreMetaDelegate};
 pub use ready::AsyncWriter;

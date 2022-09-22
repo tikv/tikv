@@ -283,7 +283,7 @@ where
 }
 
 #[derive(Clone)]
-struct StoreMetaDelegate<E>
+pub struct StoreMetaDelegate<E>
 where
     E: KvEngine,
 {
