@@ -1629,7 +1629,6 @@ pub mod test_gc_worker {
 
 #[cfg(test)]
 mod tests {
-
     use std::{
         collections::{BTreeMap, BTreeSet},
         path::Path,
@@ -1680,7 +1679,10 @@ mod tests {
     use super::{test_gc_worker::MultiRocksEngine, *};
     use crate::{
         config::DbConfig,
-        server::gc_worker::{MockSafePointProvider, PrefixedEngine},
+        server::gc_worker::{
+            compaction_filter::{get_rocksdb_from_factory, new_gc_context},
+            MockSafePointProvider, PrefixedEngine, TestGcRunner,
+        },
         storage::{
             kv::{metrics::GcKeyMode, Modify, TestEngineBuilder, WriteData},
             lock_manager::DummyLockManager,
@@ -2668,6 +2670,28 @@ mod tests {
             cfg,
         );
 
+        let cfg_tracker = {
+            let mut cfg = GcConfig::default();
+            // let ratio_threshold less than 1
+            cfg.ratio_threshold = 0.5;
+            cfg.enable_compaction_filter = true;
+            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg)))
+        };
+
+        let worker_builder = WorkerBuilder::new("gc-worker").pending_capacity(GC_MAX_PENDING_TASKS);
+        let worker = worker_builder.create().lazy_build("gc-worker");
+        let gc_scheduler = worker.scheduler();
+
+        new_gc_context(
+            store_id,
+            Arc::new(AtomicU64::new(0)),
+            cfg_tracker,
+            feature_gate,
+            gc_scheduler,
+            ri_provider.clone(),
+            factory.clone(),
+        );
+
         let mut region_id = 0;
         for i in 0..30 {
             if i % 10 == 0 {
@@ -3028,5 +3052,46 @@ mod tests {
         // Cover two regions
         test_destroy_range_for_multi_rocksdb_impl(b"k05", b"k195", vec![1, 2]);
         test_destroy_range_for_multi_rocksdb_impl(b"k099", b"k25", vec![2, 3]);
+    }
+
+    #[test]
+    fn test_compaction_filter_for_multi_rocksdb() {
+        let store_id = 1;
+
+        let put_start_ts = 100;
+        let delete_start_ts = 150;
+        let (_, engine, ..) = multi_gc_engine_setup(store_id, put_start_ts, delete_start_ts, true);
+
+        // gc_runner.gc(regions[0].clone(), 200.into()).unwrap();
+        // gc_runner.gc(regions[1].clone(), 200.into()).unwrap();
+        // gc_runner.gc(regions[2].clone(), 200.into()).unwrap();
+        // let engine = factory.
+        // let raw_engine = engine.get_rocksdb();
+        // let mut gc_runner = TestGcRunner::new(0);
+        // gc_runner.safe_point(200).gc(&raw_engine, false);
+
+        for region_id in 1..=3 {
+            let raw_engine = match get_rocksdb_from_factory(region_id, 10) {
+                Ok(rocksdb) => rocksdb,
+                Err(_) => panic!("rocksdb retrieval fails!"),
+            };
+
+            let db = raw_engine.as_inner();
+            let mut gc_runner = TestGcRunner::new(0);
+            gc_runner.safe_point(200).gc(&raw_engine, true);
+            let cf = get_cf_handle(db, CF_WRITE).unwrap();
+            for i in 10 * (region_id - 1)..10 * region_id {
+                let k = format!("k{:02}", i).into_bytes();
+
+                // Stale MVCC-PUTs will be cleaned in write CF's compaction filter.
+                must_get_none_on_region(&engine, region_id, &k, delete_start_ts - 1);
+
+                // MVCC-DELETIONs is cleaned
+                let mut raw_k = vec![b'z'];
+                let suffix = Key::from_raw(&k).append_ts((delete_start_ts + 1).into());
+                raw_k.extend_from_slice(suffix.as_encoded());
+                assert!(db.get_cf(cf, &raw_k).unwrap().is_none());
+            }
+        }
     }
 }

@@ -63,6 +63,29 @@ pub struct GcContext {
     pub(crate) tablet_factory: Arc<dyn TabletFactory<RocksEngine> + Send + Sync>,
 }
 
+#[cfg(any(test, feature = "failpoints"))]
+pub fn new_gc_context(
+    store_id: u64,
+    safe_point: Arc<AtomicU64>,
+    cfg_tracker: GcWorkerConfigManager,
+    feature_gate: FeatureGate,
+    gc_scheduler: Scheduler<GcTask<RocksEngine>>,
+    region_info_provider: Arc<dyn RegionInfoProvider + 'static>,
+    tablet_factory: Arc<dyn TabletFactory<RocksEngine> + Send + Sync>,
+) {
+    let mut gc_context = GC_CONTEXT.lock().unwrap();
+    *gc_context = Some(GcContext {
+        store_id,
+        safe_point,
+        cfg_tracker,
+        feature_gate,
+        gc_scheduler,
+        region_info_provider,
+        callbacks_on_drop: vec![],
+        tablet_factory,
+    })
+}
+
 // Give all orphan versions an ID to log them.
 static ORPHAN_VERSIONS_ID: AtomicUsize = AtomicUsize::new(0);
 
