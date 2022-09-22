@@ -9,19 +9,13 @@ use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftMessage;
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
-<<<<<<< HEAD
-use raftstore::store::config::Config as RaftstoreConfig;
-use raftstore::store::util::is_vote_msg;
-use raftstore::Result;
-use tikv_util::HandyRwLock;
-
-use collections::HashMap;
-=======
 use raftstore::{
     store::{config::Config as RaftstoreConfig, util::is_vote_msg, Callback, PeerMsg},
     Result,
 };
->>>>>>> 940e13958... raftstore: use force_send to send ApplyRes (#13168)
+use tikv_util::HandyRwLock;
+
+use collections::HashMap;
 use test_raftstore::*;
 use tikv_util::config::{ReadableDuration, ReadableSize};
 
