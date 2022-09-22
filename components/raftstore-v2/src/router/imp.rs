@@ -29,8 +29,7 @@ where
     ER: RaftEngine,
 {
     router: StoreRouter<EK, ER>,
-    local_reader:
-        RefCell<LocalReader<StoreRouter<EK, ER>, CachedReadDelegate<EK>, StoreMetaDelegate<EK>>>,
+    local_reader: RefCell<LocalReader<EK, StoreRouter<EK, ER>>>,
 }
 
 impl<EK, ER> Clone for ServerRaftStoreRouter<EK, ER>

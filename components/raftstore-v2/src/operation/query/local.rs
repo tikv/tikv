@@ -60,26 +60,23 @@ where
 }
 
 #[derive(Clone)]
-pub struct LocalReader<C, D, S>
+pub struct LocalReader<E, C>
 where
+    E: KvEngine,
     C: MsgRouter,
-    D: ReadExecutor + Deref<Target = ReadDelegate>,
-    S: ReadExecutorProvider<Executor = D>,
 {
-    local_reader: LocalReaderCore<D, S>,
+    local_reader: LocalReaderCore<CachedReadDelegate<E>, StoreMetaDelegate<E>>,
     router: C,
 
     logger: Logger,
 }
 
-impl<E, C, D, S> LocalReader<C, D, S>
+impl<E, C> LocalReader<E, C>
 where
     E: KvEngine,
     C: MsgRouter,
-    D: ReadExecutor<Tablet = E> + Deref<Target = ReadDelegate> + Clone,
-    S: ReadExecutorProvider<Executor = D> + Clone,
 {
-    pub fn new(store_meta: S, router: C, logger: Logger) -> Self {
+    pub fn new(store_meta: StoreMetaDelegate<E>, router: C, logger: Logger) -> Self {
         let cache_read_id = ThreadReadId::new();
         Self {
             local_reader: LocalReaderCore::new(store_meta),
@@ -91,7 +88,7 @@ where
     pub fn pre_propose_raft_command(
         &mut self,
         req: &RaftCmdRequest,
-    ) -> Result<Option<(D, RequestPolicy)>> {
+    ) -> Result<Option<(CachedReadDelegate<E>, RequestPolicy)>> {
         if let Some(delegate) = self.local_reader.validate_request(req)? {
             let mut inspector = SnapRequestInspector {
                 delegate: &delegate,
@@ -133,7 +130,7 @@ where
                 }
                 RequestPolicy::StaleRead => {
                     let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
-                    delegate.check_stale_read_safe::<E>(read_ts)?;
+                    delegate.check_stale_read_safe(read_ts)?;
 
                     let region = Arc::clone(&delegate.region);
                     let snap = RegionSnapshot::from_snapshot(
@@ -141,7 +138,7 @@ where
                         region,
                     );
 
-                    delegate.check_stale_read_safe::<E>(read_ts)?;
+                    delegate.check_stale_read_safe(read_ts)?;
 
                     TLS_LOCAL_READ_METRICS
                         .with(|m| m.borrow_mut().local_executed_stale_read_requests.inc());
@@ -468,7 +465,7 @@ mod tests {
         store_id: u64,
         store_meta: Arc<Mutex<StoreMeta<KvTestEngine>>>,
     ) -> (
-        LocalReader<MockRouter, CachedReadDelegate<KvTestEngine>, StoreMetaDelegate<KvTestEngine>>,
+        LocalReader<KvTestEngine, MockRouter>,
         Receiver<(u64, PeerMsg)>,
     ) {
         let (ch, rx) = MockRouter::new();

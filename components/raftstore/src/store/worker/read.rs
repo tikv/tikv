@@ -439,10 +439,7 @@ impl ReadDelegate {
         false
     }
 
-    pub fn check_stale_read_safe<EK: KvEngine>(
-        &self,
-        read_ts: u64,
-    ) -> std::result::Result<(), RaftCmdResponse> {
+    pub fn check_stale_read_safe(&self, read_ts: u64) -> std::result::Result<(), RaftCmdResponse> {
         let safe_ts = self.read_progress.safe_ts();
         if safe_ts >= read_ts {
             return Ok(());
@@ -663,14 +660,12 @@ where
     }
 }
 
-pub struct LocalReader<C, E, D, S>
+pub struct LocalReader<E, C>
 where
-    C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
-    D: ReadExecutor + Deref<Target = ReadDelegate>,
-    S: ReadExecutorProvider<Executor = D>,
+    C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
 {
-    local_reader: LocalReaderCore<D, S>,
+    local_reader: LocalReaderCore<CachedReadDelegate<E>, StoreMetaDelegate<E>>,
     kv_engine: E,
 
     snap_cache: Box<Option<Arc<E::Snapshot>>>,
@@ -680,14 +675,12 @@ where
     router: C,
 }
 
-impl<C, E, D, S> LocalReader<C, E, D, S>
+impl<E, C> LocalReader<E, C>
 where
-    C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
-    D: ReadExecutor<Tablet = E> + Deref<Target = ReadDelegate> + Clone,
-    S: ReadExecutorProvider<Executor = D> + Clone,
+    C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
 {
-    pub fn new(kv_engine: E, store_meta: S, router: C) -> Self {
+    pub fn new(kv_engine: E, store_meta: StoreMetaDelegate<E>, router: C) -> Self {
         let cache_read_id = ThreadReadId::new();
         Self {
             local_reader: LocalReaderCore::new(store_meta),
@@ -708,7 +701,7 @@ where
     pub fn pre_propose_raft_command(
         &mut self,
         req: &RaftCmdRequest,
-    ) -> Result<Option<(D, RequestPolicy)>> {
+    ) -> Result<Option<(CachedReadDelegate<E>, RequestPolicy)>> {
         if let Some(delegate) = self.local_reader.validate_request(req)? {
             let mut inspector = Inspector {
                 delegate: &delegate,
@@ -797,7 +790,7 @@ where
                     // Replica can serve stale read if and only if its `safe_ts` >= `read_ts`
                     RequestPolicy::StaleRead => {
                         let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
-                        if let Err(resp) = delegate.check_stale_read_safe::<E>(read_ts) {
+                        if let Err(resp) = delegate.check_stale_read_safe(read_ts) {
                             cb.set_result(ReadResponse {
                                 response: resp,
                                 snapshot: None,
@@ -815,7 +808,7 @@ where
 
                         // Double check in case `safe_ts` change after the first check and before
                         // getting snapshot
-                        if let Err(resp) = delegate.check_stale_read_safe::<E>(read_ts) {
+                        if let Err(resp) = delegate.check_stale_read_safe(read_ts) {
                             cb.set_result(ReadResponse {
                                 response: resp,
                                 snapshot: None,
@@ -879,12 +872,10 @@ where
     }
 }
 
-impl<C, E, D, S> Clone for LocalReader<C, E, D, S>
+impl<E, C> Clone for LocalReader<E, C>
 where
-    C: ProposalRouter<E::Snapshot> + CasualRouter<E> + Clone,
     E: KvEngine,
-    D: ReadExecutor + Deref<Target = ReadDelegate>,
-    S: ReadExecutorProvider<Executor = D>,
+    C: ProposalRouter<E::Snapshot> + CasualRouter<E> + Clone,
 {
     fn clone(&self) -> Self {
         Self {
@@ -1030,12 +1021,7 @@ mod tests {
         store_meta: Arc<Mutex<StoreMeta>>,
     ) -> (
         TempDir,
-        LocalReader<
-            MockRouter,
-            KvTestEngine,
-            CachedReadDelegate<KvTestEngine>,
-            StoreMetaDelegate<KvTestEngine>,
-        >,
+        LocalReader<KvTestEngine, MockRouter>,
         Receiver<RaftCommand<KvTestSnapshot>>,
     ) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
@@ -1059,12 +1045,7 @@ mod tests {
     }
 
     fn must_redirect(
-        reader: &mut LocalReader<
-            MockRouter,
-            KvTestEngine,
-            CachedReadDelegate<KvTestEngine>,
-            StoreMetaDelegate<KvTestEngine>,
-        >,
+        reader: &mut LocalReader<KvTestEngine, MockRouter>,
         rx: &Receiver<RaftCommand<KvTestSnapshot>>,
         cmd: RaftCmdRequest,
     ) {
@@ -1084,12 +1065,7 @@ mod tests {
     }
 
     fn must_not_redirect(
-        reader: &mut LocalReader<
-            MockRouter,
-            KvTestEngine,
-            CachedReadDelegate<KvTestEngine>,
-            StoreMetaDelegate<KvTestEngine>,
-        >,
+        reader: &mut LocalReader<KvTestEngine, MockRouter>,
         rx: &Receiver<RaftCommand<KvTestSnapshot>>,
         task: RaftCommand<KvTestSnapshot>,
     ) {
