@@ -83,6 +83,7 @@ impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
             };
             loop {
                 match task {
+                    // TODO: flush by buffer size.
                     ApplyTask::CommittedEntries(ce) => self.apply.apply_committed_entries(ce).await,
                 }
 

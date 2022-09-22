@@ -96,6 +96,7 @@ use crate::{
     Error, Result,
 };
 
+// These consts are shared in both v1 and v2.
 pub const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 pub const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 pub const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
