@@ -33,7 +33,9 @@ impl Default for RaftstoreConfig {
             region_worker_tick_interval: ReadableDuration::millis(500),
             // This pool is used when handling raft Snapshots, e.g. when
             // adding a new TiFlash replica, or scaling TiFlash instances.
-            snap_handle_pool_size: (cpu_num * 0.3).clamp(2.0, 8.0) as usize,
+            // The rate limit is by default controlled by PD scheduling limit,
+            // so it is safe to have a large default here.
+            snap_handle_pool_size: (cpu_num * 0.7).clamp(2.0, 16.0) as usize,
             // This pool is used when handling ingest SST raft messages, e.g.
             // when using BR / lightning.
             apply_low_priority_pool_size: (cpu_num * 0.3).clamp(2.0, 8.0) as usize,
