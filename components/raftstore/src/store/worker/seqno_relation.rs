@@ -19,7 +19,7 @@ use kvproto::{
     },
 };
 use tikv_util::{
-    debug, info,
+    debug, error, info,
     sequence_number::{SequenceNumberWindow, SYNCED_MAX_SEQUENCE_NUMBER},
     warn,
     worker::{Runnable, Scheduler},
@@ -278,10 +278,6 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         for (region_id, relation) in relations {
             assert!(relation.sequence_number <= self.last_persisted_seqno);
             info!("save seqno relation to raftdb"; "region_id" => region_id, "relation" => ?relation);
-            println!(
-                "save seqno relation to raftdb, region_id: {}, relation: {:?}",
-                region_id, relation
-            );
             self.raft_wb
                 .put_seqno_relation(region_id, &relation)
                 .unwrap();
@@ -440,13 +436,22 @@ impl<EK: KvEngine, ER: RaftEngine> Runnable for Runner<EK, ER> {
         match task {
             Task::ApplyRes(apply_res) => {
                 self.on_apply_res(&apply_res);
-                for r in apply_res {
-                    let _ = self.router.force_send(
-                        r.region_id,
-                        PeerMsg::ApplyRes {
-                            res: ApplyTaskRes::Apply(r),
-                        },
-                    );
+                if self.started {
+                    for r in apply_res {
+                        let region_id = r.region_id;
+                        if let Err(e) = self.router.force_send(
+                            region_id,
+                            PeerMsg::ApplyRes {
+                                res: ApplyTaskRes::Apply(r),
+                            },
+                        ) {
+                            error!(
+                                "failed to force send apply res";
+                                "region_id" => region_id,
+                                "err" => ?e
+                            );
+                        }
+                    }
                 }
             }
             Task::MemtableSealed(seqno) => self.on_memtable_sealed(seqno),

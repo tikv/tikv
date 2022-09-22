@@ -465,6 +465,17 @@ where
         }
     }
 
+    fn notify_direct(&self, apply_res: Vec<ApplyRes<<EK as KvEngine>::Snapshot>>) {
+        for r in apply_res {
+            let _ = self.router.force_send(
+                r.region_id,
+                PeerMsg::ApplyRes {
+                    res: ApplyTaskRes::Apply(r),
+                },
+            );
+        }
+    }
+
     fn notify_one(&self, region_id: u64, msg: PeerMsg<EK>) {
         let _ = self.router.force_send(region_id, msg);
     }
@@ -1892,6 +1903,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             let scheduler = seqno_worker.scheduler();
             scheduler.schedule(SeqnoRelationTask::Start).unwrap();
         }
+
         let tag = format!("raftstore-{}", store.get_id());
         let coprocessor_host = builder.coprocessor_host.clone();
         self.system.spawn(tag, builder);

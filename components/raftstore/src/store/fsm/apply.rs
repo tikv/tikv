@@ -191,7 +191,7 @@ impl<C> PendingCmdQueue<C> {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct ChangePeer {
     pub index: u64,
     // The proposed ConfChangeV2 or (legacy) ConfChange
@@ -205,6 +205,7 @@ pub struct ChangePeer {
     pub remove_self: bool,
 }
 
+#[derive(Clone)]
 pub struct Range {
     pub cf: String,
     pub start_key: Vec<u8>,
@@ -263,7 +264,7 @@ pub enum ExecResult<S> {
         region: Region,
         index: u64,
         context: Vec<u8>,
-        snap: S,
+        snap: Arc<S>,
     },
     VerifyHash {
         index: u64,
@@ -279,6 +280,71 @@ pub enum ExecResult<S> {
     TransferLeader {
         term: u64,
     },
+}
+
+impl<S> Clone for ExecResult<S> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::ChangePeer(cp) => Self::ChangePeer(cp.clone()),
+            Self::CompactLog { state, first_index } => Self::CompactLog {
+                state: state.clone(),
+                first_index: first_index.clone(),
+            },
+            Self::SplitRegion {
+                regions,
+                derived,
+                new_split_regions,
+            } => Self::SplitRegion {
+                regions: regions.clone(),
+                derived: derived.clone(),
+                new_split_regions: new_split_regions.clone(),
+            },
+            Self::PrepareMerge { region, state } => Self::PrepareMerge {
+                region: region.clone(),
+                state: state.clone(),
+            },
+            Self::CommitMerge {
+                index,
+                region,
+                source,
+                commit,
+            } => Self::CommitMerge {
+                index: index.clone(),
+                region: region.clone(),
+                source: source.clone(),
+                commit: commit.clone(),
+            },
+            Self::RollbackMerge { region, commit } => Self::RollbackMerge {
+                region: region.clone(),
+                commit: commit.clone(),
+            },
+            Self::ComputeHash {
+                region,
+                index,
+                context,
+                snap,
+            } => Self::ComputeHash {
+                region: region.clone(),
+                index: index.clone(),
+                context: context.clone(),
+                snap: snap.clone(),
+            },
+            Self::VerifyHash {
+                index,
+                context,
+                hash,
+            } => Self::VerifyHash {
+                index: index.clone(),
+                context: context.clone(),
+                hash: hash.clone(),
+            },
+            Self::DeleteRange { ranges } => Self::DeleteRange {
+                ranges: ranges.clone(),
+            },
+            Self::IngestSst { ssts } => Self::IngestSst { ssts: ssts.clone() },
+            Self::TransferLeader { term } => Self::TransferLeader { term: term.clone() },
+        }
+    }
 }
 
 /// The possible returned value when applying logs.
@@ -349,6 +415,7 @@ pub trait Notifier<EK: KvEngine>: Send {
     // Notify apply res to regions.
     fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>);
     fn notify_one(&self, region_id: u64, msg: PeerMsg<EK>);
+    fn notify_direct(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>);
     fn notify_destroy_region(&self, region: Region, peer_id: u64, merge_from_snapshot: bool);
     fn clone_box(&self) -> Box<dyn Notifier<EK>>;
 }
@@ -970,6 +1037,7 @@ where
     last_write_seqno: Vec<SequenceNumber>,
 
     last_recover_index: u64,
+    last_recover_apply_res: Vec<ApplyRes<EK::Snapshot>>,
 }
 
 impl<EK> ApplyDelegate<EK>
@@ -1004,6 +1072,7 @@ where
             buckets: None,
             last_write_seqno: vec![],
             last_recover_index: 0,
+            last_recover_apply_res: vec![],
         }
     }
 
@@ -1036,7 +1105,14 @@ where
                 // This peer is about to be destroyed, skip everything.
                 break;
             }
-            if entry.get_index() <= self.last_recover_index {
+            if entry.get_index() < self.last_recover_index {
+                continue;
+            }
+            if entry.get_index() == self.last_recover_index {
+                if !self.last_recover_apply_res.is_empty() {
+                    let apply_res = mem::take(&mut self.last_recover_apply_res);
+                    apply_ctx.notifier.notify_direct(apply_res);
+                }
                 continue;
             }
 
@@ -2914,7 +2990,7 @@ where
                 // open files in rocksdb.
                 // TODO: figure out another way to do consistency check without snapshot
                 // or short life snapshot.
-                snap: ctx.engine.snapshot(),
+                snap: Arc::new(ctx.engine.snapshot()),
             }),
         ))
     }
@@ -3441,6 +3517,20 @@ where
     pub write_seqno: Vec<SequenceNumber>,
 }
 
+impl<S: Snapshot> Clone for ApplyRes<S> {
+    fn clone(&self) -> Self {
+        Self {
+            region_id: self.region_id.clone(),
+            apply_state: self.apply_state.clone(),
+            applied_term: self.applied_term.clone(),
+            exec_res: self.exec_res.clone(),
+            metrics: self.metrics.clone(),
+            bucket_stat: self.bucket_stat.clone(),
+            write_seqno: self.write_seqno.clone(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum TaskRes<S>
 where
@@ -3703,6 +3793,7 @@ where
         }
         apply_ctx.finish_for(&mut self.delegate, results);
         apply_ctx.skip_sst_ingest = false;
+        self.delegate.last_recover_apply_res = apply_ctx.apply_res.clone();
 
         if let Some((logs_up_to_date, source_region_id, commit)) = wait_merge_source {
             cb(RecoverStatus::WaitMergeSource {
@@ -4720,6 +4811,12 @@ mod tests {
 
     impl<EK: KvEngine> Notifier<EK> for TestNotifier<EK> {
         fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
+            for r in apply_res {
+                let res = TaskRes::Apply(r);
+                let _ = self.tx.send(PeerMsg::ApplyRes { res });
+            }
+        }
+        fn notify_direct(&self, apply_res: Vec<ApplyRes<<EK as KvEngine>::Snapshot>>) {
             for r in apply_res {
                 let res = TaskRes::Apply(r);
                 let _ = self.tx.send(PeerMsg::ApplyRes { res });

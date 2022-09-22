@@ -1366,7 +1366,6 @@ pub fn gc_seqno_relations<ER: RaftEngine>(
         let mut region_state_update = None;
         raft_engine
             .scan_seqno_relations(region_id, None, Some(seqno + 1), |s, relation| {
-                println!("scan relation {:?}", relation);
                 apply_state_update = Some(relation.get_apply_state().clone());
                 if relation.has_region_state()
                 {

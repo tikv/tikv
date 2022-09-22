@@ -214,7 +214,6 @@ fn test_disable_wal_recovery_catchup_snapshot() {
         .get_apply_state(1)
         .unwrap()
         .unwrap();
-    println!("restarted state {:?}", restarted_state);
     assert_eq!(apply_state, restarted_state);
     must_get_equal(&cluster.get_engine(3), b"k2", b"v");
 }
