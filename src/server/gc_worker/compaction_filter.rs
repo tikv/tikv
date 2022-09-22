@@ -11,7 +11,6 @@ use std::{
     },
     time::Duration,
 };
-use std::ops::Deref;
 
 use engine_rocks::{
     raw::{
@@ -182,6 +181,7 @@ impl CompactionFilterInitializer<RocksEngine> for RocksEngine {
         safe_point: Arc<AtomicU64>,
         cfg_tracker: GcWorkerConfigManager,
         feature_gate: FeatureGate,
+
         gc_scheduler: Scheduler<GcTask<RocksEngine>>,
         region_info_provider: Arc<dyn RegionInfoProvider>,
         tablet_factory: Arc<dyn TabletFactory<RocksEngine> + Send + Sync>,
@@ -841,7 +841,7 @@ pub mod test_utils {
             self
         }
 
-        fn prepare_gc(&self, engine: &RocksEngine) {
+        fn prepare_gc(&self, _engine: &RocksEngine) {
             let safe_point = Arc::new(AtomicU64::new(self.safe_point));
             let cfg_tracker = {
                 let mut cfg = GcConfig::default();
@@ -863,12 +863,6 @@ pub mod test_utils {
             let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
             let path = Builder::new().prefix("prepare_gc").tempdir().unwrap();
             let factory = TestTabletFactory::new(path.path(), ops, cf_opts);
-            {
-                let arc_root_db = factory.get_root_db();
-                let mut root_db = arc_root_db.lock().unwrap();
-                //fixme later
-                //root_db.replace(*engine);
-            }
             *gc_context_opt = Some(GcContext {
                 store_id: 1,
                 safe_point,

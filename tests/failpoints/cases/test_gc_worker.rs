@@ -11,7 +11,7 @@ use engine_test::{
     ctor::{CfOptions, DbOptions},
     kv::TestTabletFactory,
 };
-use engine_traits::{Peekable, WriteBatch, ALL_CFS, TabletFactory, OpenOptions};
+use engine_traits::{Peekable, WriteBatch, ALL_CFS};
 use grpcio::{ChannelBuilder, Environment};
 use keys::data_key;
 use kvproto::{kvrpcpb::*, metapb::Region, tikvpb::TikvClient};
@@ -32,7 +32,6 @@ use tikv::{
 };
 use tikv_util::HandyRwLock;
 use txn_types::{Key, TimeStamp};
-use pd_client::FeatureGate;
 
 // In theory, raft can propose conf change as long as there is no pending one.
 // Replicas don't apply logs synchronously, so it's possible the old leader is
@@ -368,10 +367,10 @@ fn test_orphan_versions_from_compaction_filter() {
 
     let engine = cluster.engines.get(&leader_store).unwrap();
 
-    let safe_point = 10;
+    let safe_point = 100;
     let mut gc_runner = TestGcRunner::new(safe_point);
 
-    init_compaction_filter(&cluster, leader_store, Arc::new(AtomicU64::new(gc_runner.safe_point)));
+    init_compaction_filter(&cluster, leader_store, Arc::new(AtomicU64::new(safe_point)));
 
     let pk = b"k1".to_vec();
     let large_value = vec![b'x'; 300];
@@ -414,12 +413,16 @@ fn test_orphan_versions_from_compaction_filter() {
 // Call `start_auto_gc` like `cmd/src/server.rs` does. It will combine
 // compaction filter and GC worker so that GC worker can help to process orphan
 // versions on default CF.
-fn init_compaction_filter(cluster: &Cluster<ServerCluster>, store_id: u64, safe_point: Arc<AtomicU64>) {
+fn init_compaction_filter(
+    cluster: &Cluster<ServerCluster>,
+    store_id: u64,
+    safe_point: Arc<AtomicU64>,
+) {
     #[derive(Clone)]
     struct MockSafePointProvider;
     impl GcSafePointProvider for MockSafePointProvider {
         fn get_safe_point(&self) -> GcWorkerResult<TimeStamp> {
-            Ok(TimeStamp::from(0))
+            Ok(TimeStamp::from(100))
         }
     }
 
@@ -449,6 +452,7 @@ fn init_compaction_filter(cluster: &Cluster<ServerCluster>, store_id: u64, safe_
     let gc_worker = sim.get_gc_worker(store_id);
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
 =======
     let feature_gate = {
@@ -456,8 +460,10 @@ fn init_compaction_filter(cluster: &Cluster<ServerCluster>, store_id: u64, safe_
         feature_gate.set_version("5.0.0").unwrap();
         feature_gate
     };
+=======
+>>>>>>> d4121a4e2 (*: make cases pass)
 
-    gc_worker.set_feature_gate_verion("5.0.0");
+    gc_worker.set_feature_gate_verion("5.0.0").unwrap();
 
 >>>>>>> ef526ae61 (*: address comments)
     let kv_engine = cluster.get_engine(store_id);
@@ -479,8 +485,11 @@ fn init_compaction_filter(cluster: &Cluster<ServerCluster>, store_id: u64, safe_
         root_db.replace(kv_engine.clone());
     }
 
+<<<<<<< HEAD
     factory.open_tablet(0, Some(0), OpenOptions::default());
 >>>>>>> ef526ae61 (*: address comments)
+=======
+>>>>>>> d4121a4e2 (*: make cases pass)
     gc_worker
         .start_auto_gc(
 <<<<<<< HEAD
