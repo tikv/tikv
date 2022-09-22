@@ -14,6 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use causal_ts::{CausalTs, CausalTsProvider};
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, RaftEngine};
@@ -895,6 +896,7 @@ where
     health_service: Option<HealthService>,
     curr_health_status: ServingStatus,
     coprocessor_host: CoprocessorHost<EK>,
+    causal_ts_provider: Option<Arc<CausalTs>>, // used for rawkv apiv2
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -920,6 +922,7 @@ where
         region_read_progress: RegionReadProgressRegistry,
         health_service: Option<HealthService>,
         coprocessor_host: CoprocessorHost<EK>,
+        causal_ts_provider: Option<Arc<CausalTs>>, // used for rawkv apiv2
     ) -> Runner<EK, ER, T> {
         // Register the region CPU records collector.
         let mut region_cpu_records_collector = None;
@@ -964,6 +967,7 @@ where
             health_service,
             curr_health_status: ServingStatus::Serving,
             coprocessor_host,
+            causal_ts_provider,
         }
     }
 
@@ -1600,29 +1604,53 @@ where
     ) {
         let pd_client = self.pd_client.clone();
         let concurrency_manager = self.concurrency_manager.clone();
+        let causal_ts_provider = self.causal_ts_provider.clone();
+
         let f = async move {
             let mut success = false;
+            let mut update_ts = |ts| {
+                concurrency_manager.update_max_ts(ts);
+                // Set the least significant bit to 1 to mark it as synced.
+                success = txn_ext
+                    .max_ts_sync_status
+                    .compare_exchange(
+                        initial_status,
+                        initial_status | 1,
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                    )
+                    .is_ok();
+            };
             while txn_ext.max_ts_sync_status.load(Ordering::SeqCst) == initial_status {
-                match pd_client.get_tso().await {
-                    Ok(ts) => {
-                        concurrency_manager.update_max_ts(ts);
-                        // Set the least significant bit to 1 to mark it as synced.
-                        success = txn_ext
-                            .max_ts_sync_status
-                            .compare_exchange(
-                                initial_status,
-                                initial_status | 1,
-                                Ordering::SeqCst,
-                                Ordering::SeqCst,
-                            )
-                            .is_ok();
-                        break;
+                if let Some(causal_ts_provider) = &causal_ts_provider {
+                    if let Err(e) = causal_ts_provider.async_flush().await {
+                        warn!("failed to update max timestamp for region {}: {:?}", region_id, e);
+                    } else {
+                        match causal_ts_provider.async_get_ts().await {
+                            Ok(ts) => {
+                                update_ts(ts);
+                                break;
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "failed to update max timestamp for region {}: {:?}",
+                                    region_id, e
+                                );
+                            }
+                        }
                     }
-                    Err(e) => {
-                        warn!(
-                            "failed to update max timestamp for region {}: {:?}",
-                            region_id, e
-                        );
+                } else {
+                    match pd_client.get_tso().await {
+                        Ok(ts) => {
+                            update_ts(ts);
+                            break;
+                        }
+                        Err(e) => {
+                            warn!(
+                                "failed to update max timestamp for region {}: {:?}",
+                                region_id, e
+                            );
+                        }
                     }
                 }
             }

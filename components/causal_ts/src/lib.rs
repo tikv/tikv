@@ -14,12 +14,11 @@ mod tso;
 pub use tso::*;
 mod metrics;
 pub use metrics::*;
-mod observer;
 use async_trait::async_trait;
-use enum_dispatch::enum_dispatch;
 use futures::executor::block_on;
-pub use observer::*;
+use enum_dispatch::enum_dispatch;
 use txn_types::TimeStamp;
+use test_pd_client::TestPdClient;
 
 pub use crate::errors::Result;
 /// Trait of causal timestamp provider.
@@ -46,7 +45,7 @@ pub trait CausalTsProvider: Send + Sync {
 pub enum CausalTs {
     BatchTsoProvider(BatchTsoProvider<pd_client::RpcClient>),
     #[cfg(any(test, feature = "testexport"))]
-    BatchTsoProviderTest(BatchTsoProvider<test_pd_client::TestPdClient>),
+    BatchTsoProviderTest(BatchTsoProvider<TestPdClient>),
     TestProvider(tests::TestProvider),
 }
 

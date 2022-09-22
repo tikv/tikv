@@ -66,7 +66,7 @@ pub fn create_raft_storage<
     resource_tag_factory: ResourceTagFactory,
     quota_limiter: Arc<QuotaLimiter>,
     feature_gate: FeatureGate,
-    causal_ts_provider: Option<Arc<CausalTs>>,
+    causal_ts_provider: Option<Arc<CausalTs>>, // used for rawkv apiv2
 ) -> Result<Storage<RaftKv<EK, S>, LM, F>>
 where
     S: RaftStoreRouter<EK> + LocalReadRouter<EK> + 'static,
@@ -222,6 +222,7 @@ where
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
+        causal_ts_provider: Option<Arc<CausalTs>>, // used for rawkv apiv2
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -258,6 +259,7 @@ where
             auto_split_controller,
             concurrency_manager,
             collector_reg_handle,
+            causal_ts_provider,
         )?;
 
         Ok(())
@@ -504,6 +506,7 @@ where
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
+        causal_ts_provider: Option<Arc<CausalTs>>, // used for rawkv apiv2
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -536,6 +539,7 @@ where
             concurrency_manager,
             collector_reg_handle,
             self.health_service.clone(),
+            causal_ts_provider,
         )?;
         Ok(())
     }

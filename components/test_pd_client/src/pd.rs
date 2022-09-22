@@ -1845,3 +1845,34 @@ impl PdClient for TestPdClient {
         ready(Ok(())).boxed()
     }
 }
+
+/// Check if key in region range [`start_key`, `end_key`].
+pub fn check_key_in_region_inclusive(key: &[u8], region: &metapb::Region) -> Result<()> {
+    let end_key = region.get_end_key();
+    let start_key = region.get_start_key();
+    if key >= start_key && (end_key.is_empty() || key <= end_key) {
+        Ok(())
+    } else {
+        Err(Error::KeyNotInRegion(key.to_vec(), region.clone()))
+    }
+}
+
+pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
+    region
+        .get_peers()
+        .iter()
+        .find(|&p| p.get_store_id() == store_id)
+}
+
+pub fn is_learner(peer: &metapb::Peer) -> bool {
+    peer.get_role() == PeerRole::Learner
+}
+
+// a helper function to create peer easily.
+pub fn new_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
+    let mut peer = metapb::Peer::default();
+    peer.set_store_id(store_id);
+    peer.set_id(peer_id);
+    peer.set_role(PeerRole::Voter);
+    peer
+}

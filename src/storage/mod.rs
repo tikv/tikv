@@ -123,7 +123,7 @@ use crate::{
             commands::{RawAtomicStore, RawCompareAndSwap, TypedCommand},
             flow_controller::{EngineFlowController, FlowController},
             scheduler::Scheduler as TxnScheduler,
-            Command,
+            Command, ErrorInner  as TxnError,
         },
         types::StorageCallbackType,
     },
@@ -1847,47 +1847,31 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         }
     }
 
-    fn get_causal_ts(ts_provider: &Option<Arc<CausalTs>>) -> Result<Option<TimeStamp>> {
-        if let Some(p) = ts_provider {
-            match p.get_ts() {
-                Ok(ts) => Ok(Some(ts)),
-                Err(e) => Err(box_err!("Fail to get ts: {}", e)),
-            }
-        } else {
-            Ok(None)
-        }
-    }
+    async fn check_causal_ts_synced(ctx: &mut Context) -> Result<()> {
+        let snap_ctx = SnapContext {
+            pb_ctx: &ctx,
+            ..Default::default()
+        };
+        let snapshot = 
+            Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
 
-    async fn get_raw_key_guard(
-        ts_provider: &Option<Arc<CausalTs>>,
-        concurrency_manager: ConcurrencyManager,
-    ) -> Result<Option<KeyHandleGuard>> {
-        // NOTE: the ts cannot be reused as timestamp of data key.
-        // There is a little chance that CDC will acquired a timestamp for resolved-ts
-        // just between the Self::get_causal_ts & concurrency_manager.lock_key,
-        // which violate the constraint that resolve-ts should not be larger
-        // than timestamp of captured data.
-        let ts = Self::get_causal_ts(ts_provider)?;
-        if let Some(ts) = ts {
-            let raw_key = vec![api_version::api_v2::RAW_KEY_PREFIX];
-            // Make keys for locking by RAW_KEY_PREFIX & ts. RAW_KEY_PREFIX to avoid
-            // conflict with TiDB & TxnKV keys, and ts to avoid collision with
-            // other raw write requests. Ts in lock value to used by CDC which
-            // get maximum resolved-ts from concurrency_manager.global_min_lock_ts
-            let encode_key = ApiV2::encode_raw_key(&raw_key, Some(ts));
-            let key_guard = concurrency_manager.lock_key(&encode_key).await;
-            let lock = Lock::new(LockType::Put, raw_key, ts, 0, None, 0.into(), 1, ts);
-            key_guard.with_lock(|l| *l = Some(lock));
-            Ok(Some(key_guard))
-        } else {
-            Ok(None)
+        if !snapshot.ext().is_max_ts_synced() {
+            return Err(Error::from(txn::Error::from(TxnError::MaxTimestampNotSynced {
+                    region_id: ctx.get_region_id(),
+                    start_ts: TimeStamp::zero(),
+                })));
         }
+        let term = snapshot.ext().get_term();
+        if let Some(term) = term {
+            ctx.set_term(term.get());
+        }
+        Ok(())
     }
 
     /// Write a raw key to the storage.
     pub fn raw_put(
         &self,
-        ctx: Context,
+        mut ctx: Context,
         cf: String,
         key: Vec<u8>,
         value: Vec<u8>,
@@ -1913,12 +1897,18 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
+            if let Err(e) = Self::check_causal_ts_synced(&mut ctx).await {
+                return callback(Err(e));
+            }
+
             let command_duration = tikv_util::time::Instant::now();
-            let key_guard = Self::get_raw_key_guard(&provider, concurrency_manager).await;
+            // get new ts after get key_guard to avoid cdc register_min_ts_event
+            // use a smaller ts then ts used here.
+            let key_guard = get_raw_key_guard(&provider, concurrency_manager).await;
             if let Err(e) = key_guard {
                 return callback(Err(e));
             }
-            let ts = Self::get_causal_ts(&provider);
+            let ts = get_causal_ts(&provider).await;
             if let Err(e) = ts {
                 return callback(Err(e));
             }
@@ -1989,7 +1979,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     /// Write some keys to the storage in a batch.
     pub fn raw_batch_put(
         &self,
-        ctx: Context,
+        mut ctx: Context,
         cf: String,
         pairs: Vec<KvPair>,
         ttls: Vec<u64>,
@@ -2020,13 +2010,16 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
-            let command_duration = tikv_util::time::Instant::now();
+            if let Err(e) = Self::check_causal_ts_synced(&mut ctx).await {
+                return callback(Err(e));
+            }
 
-            let key_guard = Self::get_raw_key_guard(&provider, concurrency_manager).await;
+            let command_duration = tikv_util::time::Instant::now();
+            let key_guard = get_raw_key_guard(&provider, concurrency_manager).await;
             if let Err(e) = key_guard {
                 return callback(Err(e));
             }
-            let ts = Self::get_causal_ts(&provider);
+            let ts = get_causal_ts(&provider).await;
             if let Err(e) = ts {
                 return callback(Err(e));
             }
@@ -2063,7 +2056,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     /// operations.
     pub fn raw_delete(
         &self,
-        ctx: Context,
+        mut ctx: Context,
         cf: String,
         key: Vec<u8>,
         callback: Callback<()>,
@@ -2081,13 +2074,17 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
+            if let Err(e) = Self::check_causal_ts_synced(&mut ctx).await {
+                return callback(Err(e));
+            }
+
             let command_duration = tikv_util::time::Instant::now();
 
-            let key_guard = Self::get_raw_key_guard(&provider, concurrency_manager).await;
+            let key_guard = get_raw_key_guard(&provider, concurrency_manager).await;
             if let Err(e) = key_guard {
                 return callback(Err(e));
             }
-            let ts = Self::get_causal_ts(&provider);
+            let ts = get_causal_ts(&provider).await;
             if let Err(e) = ts {
                 return callback(Err(e));
             }
@@ -2168,7 +2165,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     /// operations.
     pub fn raw_batch_delete(
         &self,
-        ctx: Context,
+        mut ctx: Context,
         cf: String,
         keys: Vec<Vec<u8>>,
         callback: Callback<()>,
@@ -2186,13 +2183,17 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
+            if let Err(e) = Self::check_causal_ts_synced(&mut ctx).await {
+                return callback(Err(e));
+            }
+
             let command_duration = tikv_util::time::Instant::now();
 
-            let key_guard = Self::get_raw_key_guard(&provider, concurrency_manager).await;
+            let key_guard = get_raw_key_guard(&provider, concurrency_manager).await;
             if let Err(e) = key_guard {
                 return callback(Err(e));
             }
-            let ts = Self::get_causal_ts(&provider);
+            let ts = get_causal_ts(&provider).await;
             if let Err(e) = ts {
                 return callback(Err(e));
             }
@@ -2602,7 +2603,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         previous_value: Option<Vec<u8>>,
         value: Vec<u8>,
         ttl: u64,
-        cb: Callback<(Option<Value>, bool)>,
+        callback: Callback<(Option<Value>, bool)>,
     ) -> Result<()> {
         const CMD: CommandKind = CommandKind::raw_compare_and_swap;
         let api_version = self.api_version;
@@ -2614,7 +2615,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         }
         let provider = self.causal_ts_provider.clone();
         let sched = self.get_scheduler();
-        let concurrency_manager = self.get_concurrency_manager();
         self.sched_raw_command(CMD, async move {
             // Raw atomic cmd has two locks, one is concurrency_manager and the other is txn
             // latch. Now, concurrency_manager lock key with ts encoded, it aims
@@ -2622,14 +2622,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             // to "lock" other concurrent requests. TODO: Merge the two locks
             // into one to simplify the process. Same to other raw atomic
             // commands.
-            let key_guard = Self::get_raw_key_guard(&provider, concurrency_manager).await;
-            if let Err(e) = key_guard {
-                return cb(Err(e));
-            }
-            let ts = Self::get_causal_ts(&provider);
-            if let Err(e) = ts {
-                return cb(Err(e));
-            }
             // Do NOT encode ts here as RawCompareAndSwap use key to gen lock.
             let key = F::encode_raw_key_owned(key, None);
             let cmd = RawCompareAndSwap::new(
@@ -2639,15 +2631,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 value,
                 ttl,
                 api_version,
-                ts.unwrap(),
+                provider,
                 ctx,
             );
             Self::sched_raw_atomic_command(
                 sched,
                 cmd,
                 Box::new(|res| {
-                    cb(res.map_err(Error::from));
-                    drop(key_guard)
+                    callback(res.map_err(Error::from))
                 }),
             );
         })
@@ -2674,25 +2665,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
         let provider = self.causal_ts_provider.clone();
         let sched = self.get_scheduler();
-        let concurrency_manager = self.get_concurrency_manager();
         self.sched_raw_command(CMD, async move {
-            let key_guard = Self::get_raw_key_guard(&provider, concurrency_manager).await;
-            if let Err(e) = key_guard {
-                return callback(Err(e));
-            }
-            let ts = Self::get_causal_ts(&provider);
-            if let Err(e) = ts {
-                return callback(Err(e));
-            }
-            // Do NOT encode ts here as RawAtomicStore use key to gen lock
             let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls, None);
-            let cmd = RawAtomicStore::new(cf, modifies, ts.unwrap(), ctx);
+            let cmd = RawAtomicStore::new(cf, modifies, provider, ctx);
             Self::sched_raw_atomic_command(
                 sched,
                 cmd,
                 Box::new(|res| {
-                    callback(res.map_err(Error::from));
-                    drop(key_guard)
+                    callback(res.map_err(Error::from))
                 }),
             );
         })
@@ -2711,28 +2691,18 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         let provider = self.causal_ts_provider.clone();
         let sched = self.get_scheduler();
-        let concurrency_manager = self.get_concurrency_manager();
         self.sched_raw_command(CMD, async move {
-            let key_guard = Self::get_raw_key_guard(&provider, concurrency_manager).await;
-            if let Err(e) = key_guard {
-                return callback(Err(e));
-            }
-            let ts = Self::get_causal_ts(&provider);
-            if let Err(e) = ts {
-                return callback(Err(e));
-            }
             // Do NOT encode ts here as RawAtomicStore use key to gen lock
             let modifies = keys
                 .into_iter()
                 .map(|k| Self::raw_delete_request_to_modify(cf, k, None))
                 .collect();
-            let cmd = RawAtomicStore::new(cf, modifies, ts.unwrap(), ctx);
+            let cmd = RawAtomicStore::new(cf, modifies, provider, ctx);
             Self::sched_raw_atomic_command(
                 sched,
                 cmd,
                 Box::new(|res| {
-                    callback(res.map_err(Error::from));
-                    drop(key_guard)
+                    callback(res.map_err(Error::from))
                 }),
             );
         })
@@ -2826,6 +2796,43 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
                 .await?
         }
+    }
+}
+
+pub async fn get_raw_key_guard(
+    ts_provider: &Option<Arc<CausalTs>>,
+    concurrency_manager: ConcurrencyManager,
+) -> Result<Option<KeyHandleGuard>> {
+    // NOTE: the ts cannot be reused as timestamp of data key.
+    // There is a little chance that CDC will acquired a timestamp for resolved-ts
+    // just between the get_causal_ts & concurrency_manager.lock_key,
+    // which violate the constraint that resolve-ts should not be larger
+    // than timestamp of captured data.
+    let ts = get_causal_ts(ts_provider).await?;
+    if let Some(ts) = ts {
+        let raw_key = vec![api_version::api_v2::RAW_KEY_PREFIX];
+        // Make keys for locking by RAW_KEY_PREFIX & ts. RAW_KEY_PREFIX to avoid
+        // conflict with TiDB & TxnKV keys, and ts to avoid collision with
+        // other raw write requests. Ts in lock value to used by CDC which
+        // get maximum resolved-ts from concurrency_manager.global_min_lock_ts
+        let encode_key = ApiV2::encode_raw_key(&raw_key, Some(ts));
+        let key_guard = concurrency_manager.lock_key(&encode_key).await;
+        let lock = Lock::new(LockType::Put, raw_key, ts, 0, None, 0.into(), 1, ts);
+        key_guard.with_lock(|l| *l = Some(lock));
+        Ok(Some(key_guard))
+    } else {
+        Ok(None)
+    }
+}
+
+pub async fn get_causal_ts(ts_provider: &Option<Arc<CausalTs>>) -> Result<Option<TimeStamp>> {
+    if let Some(p) = ts_provider {
+        match p.async_get_ts().await {
+            Ok(ts) => Ok(Some(ts)),
+            Err(e) => Err(box_err!("Fail to get ts: {}", e)),
+        }
+    } else {
+        Ok(None)
     }
 }
 
