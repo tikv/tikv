@@ -9,13 +9,12 @@
 //! - Related type aliases
 //! - [`LockWaitEntry`]: which is used to represent lock-waiting requests in the
 //!   queue
-//! - [`LockWaitEntryComparableWrapper`]: The comparable wrapper of
-//!   [`LockWaitEntry`] which defines the priority ordering among lock-waiting
-//!   requests
+//! - [`Box<LockWaitEntry>`]: The comparable wrapper of [`LockWaitEntry`] which
+//!   defines the priority ordering among lock-waiting requests
 //!
 //! Each key may have its own lock-waiting queue, which is a priority queue that
 //! orders the entries with the order defined by
-//! [`LockWaitEntryComparableWrapper`].
+//! [`Box<LockWaitEntry>`].
 //!
 //! There are be two kinds of `AcquirePessimisticLock` requests:
 //!
@@ -131,49 +130,30 @@ pub struct LockWaitEntry {
     pub key_cb: Option<SyncWrapper<PessimisticLockKeyCallback>>,
 }
 
-/// A wrapper to [`LockWaitEntry`] to define its ordering.
-/// A [`LockWaitEntry`] takes precedence over another if it has smaller
-/// `start_ts`.
-#[repr(transparent)]
-struct LockWaitEntryComparableWrapper(pub Box<LockWaitEntry>);
-
-impl From<Box<LockWaitEntry>> for LockWaitEntryComparableWrapper {
-    fn from(x: Box<LockWaitEntry>) -> Self {
-        LockWaitEntryComparableWrapper(x)
-    }
-}
-
-impl LockWaitEntryComparableWrapper {
-    pub fn unwrap(self) -> Box<LockWaitEntry> {
-        self.0
-    }
-}
-
-impl PartialEq<Self> for LockWaitEntryComparableWrapper {
+impl PartialEq<Self> for LockWaitEntry {
     fn eq(&self, other: &Self) -> bool {
-        self.0.parameters.start_ts == other.0.parameters.start_ts
+        self.parameters.start_ts == other.parameters.start_ts
     }
 }
 
-impl Eq for LockWaitEntryComparableWrapper {}
+impl Eq for LockWaitEntry {}
 
-impl PartialOrd<Self> for LockWaitEntryComparableWrapper {
+impl PartialOrd<Self> for LockWaitEntry {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         // Reverse it since the std BinaryHeap is max heap and we want to pop the
         // minimal.
         other
-            .0
             .parameters
             .start_ts
-            .partial_cmp(&self.0.parameters.start_ts)
+            .partial_cmp(&self.parameters.start_ts)
     }
 }
 
-impl Ord for LockWaitEntryComparableWrapper {
+impl Ord for LockWaitEntry {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // Reverse it since the std BinaryHeap is max heap and we want to pop the
         // minimal.
-        other.0.parameters.start_ts.cmp(&self.0.parameters.start_ts)
+        other.parameters.start_ts.cmp(&self.parameters.start_ts)
     }
 }
 
@@ -225,7 +205,7 @@ pub struct KeyLockWaitState {
     /// entries 30 and 40 who has `current_legacy_wake_up_cnt < 1`, while 50 and
     /// 60 will be left untouched.
     legacy_wake_up_cnt: usize,
-    queue: BinaryHeap<LockWaitEntryComparableWrapper>,
+    queue: BinaryHeap<Box<LockWaitEntry>>,
 
     /// The start_ts of the most recent waking up event.
     last_conflict_start_ts: TimeStamp,
@@ -292,7 +272,7 @@ impl<L: LockManager> LockWaitQueues<L> {
         if lock_wait_entry.current_legacy_wake_up_cnt.is_none() {
             lock_wait_entry.current_legacy_wake_up_cnt = Some(entry.value().legacy_wake_up_cnt);
         }
-        entry.value_mut().queue.push(lock_wait_entry.into());
+        entry.value_mut().queue.push(lock_wait_entry);
     }
 
     /// Dequeues the head of the lock waiting queue of the specified key,
@@ -338,10 +318,7 @@ impl<L: LockManager> LockWaitQueues<L> {
             v.last_conflict_start_ts = conflicting_start_ts;
             v.last_conflict_commit_ts = conflicting_commit_ts;
 
-            while let Some(front) = v.queue.pop() {
-                // Remove the comparator wrapper.
-                let lock_wait_entry = front.unwrap();
-
+            while let Some(lock_wait_entry) = v.queue.pop() {
                 if lock_wait_entry.req_states.as_ref().unwrap().is_finished() {
                     // Skip already cancelled entries.
                     continue;
@@ -482,13 +459,12 @@ impl<L: LockManager> LockWaitQueues<L> {
             let legacy_wake_up_index = v.legacy_wake_up_cnt;
 
             while let Some(front) = v.queue.peek() {
-                if front.0.req_states.as_ref().unwrap().is_finished() {
+                if front.req_states.as_ref().unwrap().is_finished() {
                     // Skip already cancelled entries.
                     v.queue.pop();
                     continue;
                 }
                 if front
-                    .0
                     .current_legacy_wake_up_cnt
                     .map_or(false, |cnt| cnt >= legacy_wake_up_index)
                 {
@@ -496,7 +472,7 @@ impl<L: LockManager> LockWaitQueues<L> {
                     // delayed_notify_all operation. Keep it and other remaining items in the queue.
                     break;
                 }
-                let lock_wait_entry = v.queue.pop().unwrap().unwrap();
+                let lock_wait_entry = v.queue.pop().unwrap();
                 if lock_wait_entry.parameters.allow_lock_with_conflict {
                     woken_up_resumable_entry = Some(lock_wait_entry);
                     break;
@@ -750,7 +726,6 @@ mod tests {
                     .queue
                     .peek()
                     .unwrap()
-                    .0
                     .parameters
                     .start_ts,
                 start_ts.into()
