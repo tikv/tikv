@@ -4,7 +4,7 @@ use std::{error::Error as StdError, io, net, result};
 
 use crossbeam::channel::TrySendError;
 use error_code::{self, ErrorCode, ErrorCodeExt};
-use kvproto::{errorpb, metapb};
+use kvproto::{errorpb, metapb, raft_serverpb};
 use protobuf::ProtobufError;
 use thiserror::Error;
 use tikv_util::{codec, deadline::DeadlineError};
@@ -131,6 +131,12 @@ pub enum Error {
 
     #[error("Prepare merge is pending due to unapplied proposals")]
     PendingPrepareMerge,
+
+    #[error("Region not exist but not tombstone, region: {}, local_state: {:?}", .region_id, .local_state)]
+    RegionNotRegistered {
+        region_id: u64,
+        local_state: raft_serverpb::RegionLocalState,
+    },
 }
 
 pub type Result<T> = result::Result<T, Error>;
@@ -305,7 +311,7 @@ impl ErrorCodeExt for Error {
             Error::DeadlineExceeded => error_code::raftstore::DEADLINE_EXCEEDED,
             Error::PendingPrepareMerge => error_code::raftstore::PENDING_PREPARE_MERGE,
 
-            Error::Other(_) => error_code::raftstore::UNKNOWN,
+            Error::Other(_) | Error::RegionNotRegistered { .. } => error_code::raftstore::UNKNOWN,
         }
     }
 }

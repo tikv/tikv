@@ -407,8 +407,7 @@ mod tests {
     use futures::executor::block_on;
     use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb::Region, raft_cmdpb::*};
     use raftstore::store::{
-        util::{new_peer, Lease},
-        Callback, LocalReaderCore, ProposalRouter, RaftCommand, ReadCallback,
+        util::Lease, Callback, LocalReaderCore, ProposalRouter, RaftCommand, ReadCallback,
         TLS_LOCAL_READ_METRICS,
     };
     use tempfile::{Builder, TempDir};
