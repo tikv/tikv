@@ -1898,13 +1898,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
+            let command_duration = tikv_util::time::Instant::now();
+
             if let Err(e) = Self::check_causal_ts_synced(&mut ctx).await {
                 return callback(Err(e));
             }
 
-            let command_duration = tikv_util::time::Instant::now();
-            // get new ts after get key_guard to avoid cdc register_min_ts_event
-            // use a smaller ts then ts used here.
             let key_guard = get_raw_key_guard(&provider, concurrency_manager).await;
             if let Err(e) = key_guard {
                 return callback(Err(e));
@@ -2011,11 +2010,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
+            let command_duration = tikv_util::time::Instant::now();
+
             if let Err(e) = Self::check_causal_ts_synced(&mut ctx).await {
                 return callback(Err(e));
             }
 
-            let command_duration = tikv_util::time::Instant::now();
             let key_guard = get_raw_key_guard(&provider, concurrency_manager).await;
             if let Err(e) = key_guard {
                 return callback(Err(e));
@@ -2075,11 +2075,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
+            let command_duration = tikv_util::time::Instant::now();
+
             if let Err(e) = Self::check_causal_ts_synced(&mut ctx).await {
                 return callback(Err(e));
             }
-
-            let command_duration = tikv_util::time::Instant::now();
 
             let key_guard = get_raw_key_guard(&provider, concurrency_manager).await;
             if let Err(e) = key_guard {
@@ -2184,11 +2184,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
+            let command_duration = tikv_util::time::Instant::now();
+
             if let Err(e) = Self::check_causal_ts_synced(&mut ctx).await {
                 return callback(Err(e));
             }
-
-            let command_duration = tikv_util::time::Instant::now();
 
             let key_guard = get_raw_key_guard(&provider, concurrency_manager).await;
             if let Err(e) = key_guard {
