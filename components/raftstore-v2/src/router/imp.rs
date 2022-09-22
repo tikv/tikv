@@ -6,13 +6,15 @@ use std::{
 };
 
 use engine_traits::{KvEngine, RaftEngine};
-use raftstore::store::{FetchedLogs, LogFetchedNotifier};
+use futures::executor::block_on;
+use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
+use raftstore::store::{FetchedLogs, LogFetchedNotifier, RegionSnapshot};
 use slog::Logger;
 
 use super::PeerMsg;
 use crate::{
     batch::StoreRouter,
-    operation::{CachedReadDelegate, LocalReader, StoreMetaDelegate},
+    operation::{LocalReader, StoreMetaDelegate},
     StoreMeta,
 };
 
@@ -68,5 +70,18 @@ impl<EK: KvEngine, ER: RaftEngine> ServerRaftStoreRouter<EK, ER> {
 
     pub fn router_mut(&mut self) -> &mut StoreRouter<EK, ER> {
         &mut self.router
+    }
+
+    #[allow(clippy::await_holding_refcell_ref)]
+    pub fn get_snapshot(
+        &self,
+        req: RaftCmdRequest,
+    ) -> std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse> {
+        block_on({
+            async {
+                let mut local_reader = self.local_reader.borrow_mut();
+                local_reader.snapshot(req).await
+            }
+        })
     }
 }

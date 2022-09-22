@@ -6,10 +6,12 @@ use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory};
 use fail::fail_point;
 use kvproto::{
+    kvrpcpb::ExtraOp as TxnExtraOp,
     metapb,
     raft_cmdpb::{self, RaftCmdRequest},
     raft_serverpb::RegionLocalState,
 };
+use pd_client::BucketStat;
 use protobuf::Message;
 use raft::{RawNode, StateRole, INVALID_ID};
 use raftstore::{
@@ -17,8 +19,8 @@ use raftstore::{
         fsm::Proposal,
         metrics::PEER_PROPOSE_LOG_SIZE_HISTOGRAM,
         util::{find_peer, Lease, RegionReadProgress},
-        Config, EntryStorage, ProposalQueue, RaftlogFetchTask, ReadIndexQueue, ReadIndexRequest,
-        Transport, WriteRouter,
+        Config, EntryStorage, ProposalQueue, RaftlogFetchTask, ReadDelegate, ReadIndexQueue,
+        ReadIndexRequest, TrackVer, Transport, TxnExt, WriteRouter,
     },
     Error,
 };
@@ -30,6 +32,7 @@ use tikv_util::{
     worker::Scheduler,
     Either,
 };
+use time::Timespec;
 
 use super::storage::Storage;
 use crate::{
@@ -67,6 +70,12 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     pending_reads: ReadIndexQueue<QueryResChannel>,
     read_progress: Arc<RegionReadProgress>,
     leader_lease: Lease,
+
+    /// region buckets.
+    region_buckets: Option<BucketStat>,
+    /// Transaction extensions related to this peer.
+    txn_ext: Arc<TxnExt>,
+    txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -145,6 +154,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 cfg.raft_store_max_leader_lease(),
                 cfg.renew_leader_lease_advance_duration(),
             ),
+            region_buckets: None,
+            txn_ext: Arc::default(),
+            txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -381,5 +393,26 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn proposals_mut(&mut self) -> &mut ProposalQueue<Vec<CmdResChannel>> {
         &mut self.proposals
+    }
+
+    pub fn generate_read_delegate(&self) -> ReadDelegate {
+        let region = self.region().clone();
+        let region_id = region.get_id();
+        let peer_id = self.peer().get_id();
+        ReadDelegate {
+            region: Arc::new(region),
+            peer_id,
+            term: self.term(),
+            applied_term: self.storage().applied_term(),
+            leader_lease: None,
+            last_valid_ts: Timespec::new(0, 0),
+            tag: format!("[region {}] {}", region_id, peer_id),
+            txn_extra_op: self.txn_extra_op.clone(),
+            txn_ext: self.txn_ext.clone(),
+            read_progress: self.read_progress().clone(),
+            pending_remove: false,
+            bucket_meta: self.region_buckets.as_ref().map(|b| b.meta.clone()),
+            track_ver: TrackVer::new(),
+        }
     }
 }

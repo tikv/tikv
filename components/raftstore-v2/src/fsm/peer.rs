@@ -2,19 +2,20 @@
 
 //! This module contains the peer implementation for batch system.
 
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 
 use batch_system::{BasicMailbox, Fsm};
 use crossbeam::channel::TryRecvError;
 use engine_traits::{KvEngine, RaftEngine, TabletFactory};
 use kvproto::metapb;
-use raftstore::store::{Config, Transport};
+use raftstore::store::{Config, ReadDelegate, TrackVer, Transport};
 use slog::{debug, error, info, trace, Logger};
 use tikv_util::{
     is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver, Sender},
     time::{duration_to_sec, Instant},
 };
+use time::Timespec;
 
 use crate::{
     batch::StoreContext,

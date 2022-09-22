@@ -376,7 +376,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             log_fetch_scheduler,
             &mut workers.store_writers,
             self.logger.clone(),
-            store_meta,
+            store_meta.clone(),
         );
         self.workers = Some(workers);
         let peers = builder.init()?;
@@ -390,6 +390,12 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         let mut mailboxes = Vec::with_capacity(peers.len());
         let mut address = Vec::with_capacity(peers.len());
         for (region_id, (tx, fsm)) in peers {
+            let mut meta = store_meta.as_ref().lock().unwrap();
+            meta.readers
+                .insert(region_id, fsm.peer().generate_read_delegate());
+            meta.tablet_caches
+                .insert(region_id, fsm.peer().tablet().clone());
+
             address.push(region_id);
             mailboxes.push((
                 region_id,

@@ -25,7 +25,7 @@ use engine_test::{
     kv::{KvTestEngine, TestTabletFactoryV2},
     raft::RaftTestEngine,
 };
-use engine_traits::{OpenOptions, TabletFactory, ALL_CFS};
+use engine_traits::{KvEngine, OpenOptions, TabletFactory, ALL_CFS};
 use futures::executor::block_on;
 use kvproto::{
     metapb::Store,
@@ -33,7 +33,9 @@ use kvproto::{
     raft_serverpb::RaftMessage,
 };
 use pd_client::RpcClient;
-use raftstore::store::{region_meta::RegionMeta, Config, Transport, RAFT_INIT_LOG_INDEX};
+use raftstore::store::{
+    region_meta::RegionMeta, Config, RegionSnapshot, Transport, RAFT_INIT_LOG_INDEX,
+};
 use raftstore_v2::{
     create_store_batch_system,
     router::{DebugInfoChannel, PeerMsg, QueryResult, ServerRaftStoreRouter},
@@ -92,6 +94,14 @@ impl TestRouter {
         self.send(region_id, msg).unwrap();
         block_on(sub.result())
     }
+
+    fn get_snapshot(
+        &self,
+        req: RaftCmdRequest,
+    ) -> std::result::Result<RegionSnapshot<<KvTestEngine as KvEngine>::Snapshot>, RaftCmdResponse>
+    {
+        self.0.get_snapshot(req)
+    }
 }
 
 struct RunningState {
@@ -148,7 +158,9 @@ impl RunningState {
             logger.clone(),
         );
 
-        let store_meta = Arc::new(Mutex::new(StoreMeta::<KvTestEngine>::new()));
+        let mut store_meta = StoreMeta::<KvTestEngine>::new();
+        store_meta.store_id = Some(store_id);
+        let store_meta = Arc::new(Mutex::new(store_meta));
         system
             .start(
                 store_id,

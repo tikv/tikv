@@ -184,7 +184,14 @@ where
             }
         }
 
-        Err(not_leader_err(region_id))
+        let mut err = errorpb::Error::default();
+        err.set_message(format!(
+            "Fail to get snapshot from LocalReader for region {}. Maybe due to `not leader` or `not applied to the current term`",
+            region_id
+        ));
+        let mut resp = RaftCmdResponse::default();
+        resp.mut_header().set_error(err);
+        Err(resp)
     }
 
     // If the remote lease will be expired in near future send message
@@ -205,22 +212,6 @@ where
         let (msg, mut sub) = PeerMsg::raft_query(req.clone());
         MsgRouter::send(&self.router, region_id, msg);
     }
-}
-
-fn not_leader_err(region_id: u64) -> RaftCmdResponse {
-    let mut err = errorpb::Error::default();
-    err.set_not_leader(Default::default());
-    let mut resp = RaftCmdResponse::default();
-    resp.mut_header().set_error(err);
-    resp
-}
-
-fn delegate_not_found_err(region_id: u64) -> RaftCmdResponse {
-    let mut err = errorpb::Error::default();
-    err.set_region_not_found(Default::default());
-    let mut resp = RaftCmdResponse::default();
-    resp.mut_header().set_error(err);
-    resp
 }
 
 /// CachedReadDelegate is a wrapper the ReadDelegate and CachedTablet.

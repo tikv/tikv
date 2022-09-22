@@ -1,6 +1,9 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::{self, Debug, Formatter};
+use std::{
+    fmt::{self, Debug, Formatter},
+    ops::Deref,
+};
 
 use engine_traits::{RaftEngine, RaftLogBatch};
 use kvproto::{
@@ -59,6 +62,15 @@ pub struct Storage<ER> {
     /// at least once dispite whether the state changes since create.
     ever_persisted: bool,
     logger: Logger,
+}
+
+impl<ER: RaftEngine> Deref for Storage<ER> {
+    type Target = EntryStorage<ER>;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.entry_storage
+    }
 }
 
 impl<ER> Debug for Storage<ER> {
