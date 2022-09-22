@@ -80,7 +80,7 @@ use crate::storage::{
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
     txn::Error as TxnError,
     types::{PessimisticLockParameters, PessimisticLockRes},
-    Error as StorageError, ErrorInner as StorageErrorInner,
+    Error as StorageError,
 };
 
 pub type CallbackWithSharedError<T> = Box<dyn FnOnce(Result<T, SharedError>) + Send + 'static>;
