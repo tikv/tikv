@@ -15,9 +15,9 @@ use kvproto::{
 use raftstore::{
     router::{LocalReadRouter, RaftStoreRouter},
     store::{
-        cmd_resp, util, Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter,
-        RaftCmdExtraOpts, RaftCommand, ReadResponse, RegionSnapshot, SignificantMsg,
-        SignificantRouter, StoreMsg, StoreRouter, WriteResponse,
+        cmd_resp, Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter, RaftCmdExtraOpts,
+        RaftCommand, ReadResponse, RegionSnapshot, SignificantMsg, SignificantRouter, StoreMsg,
+        StoreRouter, WriteResponse,
     },
     Result,
 };
@@ -29,7 +29,7 @@ use tikv::{
         Engine,
     },
 };
-use tikv_util::time::ThreadReadId;
+use tikv_util::{store::new_peer, time::ThreadReadId};
 use txn_types::Key;
 
 use crate::test;
@@ -171,7 +171,7 @@ fn bench_async_snapshots_noop(b: &mut test::Bencher) {
 
 #[bench]
 fn bench_async_snapshot(b: &mut test::Bencher) {
-    let leader = util::new_peer(2, 3);
+    let leader = new_peer(2, 3);
     let mut region = Region::default();
     region.set_id(1);
     region.set_start_key(vec![]);
@@ -204,7 +204,7 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
 
 #[bench]
 fn bench_async_write(b: &mut test::Bencher) {
-    let leader = util::new_peer(2, 3);
+    let leader = new_peer(2, 3);
     let mut region = Region::default();
     region.set_id(1);
     region.set_start_key(vec![]);
