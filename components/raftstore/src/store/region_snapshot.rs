@@ -388,6 +388,7 @@ mod tests {
             engines,
             r,
             region_sched,
+            None,
             raftlog_fetch_sched,
             0,
             false,

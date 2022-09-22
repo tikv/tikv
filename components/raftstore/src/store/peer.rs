@@ -104,7 +104,7 @@ use crate::{
             ReadProgress, RegionTask, SplitCheckTask,
         },
         Callback, Config, GlobalReplicationState, PdTask, ReadCallback, ReadIndexContext,
-        ReadResponse, TxnExt, WriteCallback, RAFT_INIT_LOG_INDEX,
+        ReadResponse, SeqnoRelationTask, TxnExt, WriteCallback, RAFT_INIT_LOG_INDEX,
     },
     Error, Result,
 };
@@ -927,6 +927,7 @@ where
         store_id: u64,
         cfg: &Config,
         region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+        seqno_scheduler: Option<Scheduler<SeqnoRelationTask<EK::Snapshot>>>,
         raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         engines: Engines<EK, ER>,
         region: &metapb::Region,
@@ -942,6 +943,7 @@ where
             engines,
             region,
             region_scheduler,
+            seqno_scheduler,
             raftlog_fetch_scheduler,
             peer.get_id(),
             cfg.disable_kv_wal,
@@ -2979,6 +2981,7 @@ where
         ctx: &mut PollContext<EK, ER, T>,
         number: u64,
     ) -> Option<PersistSnapshotResult> {
+        println!("on persisted ready, region_id: {}", self.region_id);
         assert!(ctx.sync_write_worker.is_none());
         if self.persisted_number >= number {
             return None;

@@ -599,6 +599,7 @@ where
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     pub raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+    pub seqno_scheduler: Option<Scheduler<SeqnoRelationTask<EK::Snapshot>>>,
     pub apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
     pub importer: Arc<SstImporter>,
@@ -1192,6 +1193,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     split_check_scheduler: Scheduler<SplitCheckTask>,
     cleanup_scheduler: Scheduler<CleanupTask>,
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
+    seqno_scheduler: Option<Scheduler<SeqnoRelationTask<EK::Snapshot>>>,
     raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     apply_router: ApplyRouter<EK>,
@@ -1344,6 +1346,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 store_id,
                 &self.cfg.value(),
                 self.region_scheduler.clone(),
+                self.seqno_scheduler.clone(),
                 self.raftlog_fetch_scheduler.clone(),
                 self.engines.clone(),
                 region,
@@ -1385,6 +1388,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 store_id,
                 &self.cfg.value(),
                 self.region_scheduler.clone(),
+                self.seqno_scheduler.clone(),
                 self.raftlog_fetch_scheduler.clone(),
                 self.engines.clone(),
                 &region,
@@ -1497,6 +1501,7 @@ where
             consistency_check_scheduler: self.consistency_check_scheduler.clone(),
             split_check_scheduler: self.split_check_scheduler.clone(),
             region_scheduler: self.region_scheduler.clone(),
+            seqno_scheduler: self.seqno_scheduler.clone(),
             apply_router: self.apply_router.clone(),
             router: self.router.clone(),
             cleanup_scheduler: self.cleanup_scheduler.clone(),
@@ -1586,6 +1591,7 @@ where
             feature_gate: self.feature_gate.clone(),
             write_senders: self.write_senders.clone(),
             seqno_recover_range: self.seqno_recover_range.clone(),
+            seqno_scheduler: self.seqno_scheduler.clone(),
         }
     }
 }
@@ -1733,6 +1739,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 self.router.clone(),
                 engines.clone(),
                 raftlog_gc_scheduler.clone(),
+                region_scheduler.clone(),
             );
             seqno_worker.start(seqno_runner);
         }
@@ -1799,7 +1806,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             feature_gate: pd_client.feature_gate().clone(),
             write_senders: self.store_writers.senders(),
             seqno_recover_range: None,
+            seqno_scheduler: workers.seqno_worker.as_ref().map(|w| w.scheduler()),
         };
+
         let region_peers = builder.init()?;
         self.start_system::<T, C>(
             workers,
@@ -2652,6 +2661,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             self.ctx.store_id(),
             &self.ctx.cfg,
             self.ctx.region_scheduler.clone(),
+            self.ctx.seqno_scheduler.clone(),
             self.ctx.raftlog_fetch_scheduler.clone(),
             self.ctx.engines.clone(),
             region_id,
@@ -3269,6 +3279,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             self.ctx.store.get_id(),
             &self.ctx.cfg,
             self.ctx.region_scheduler.clone(),
+            self.ctx.seqno_scheduler.clone(),
             self.ctx.raftlog_fetch_scheduler.clone(),
             self.ctx.engines.clone(),
             &region,

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use engine_traits::{MiscExt, Peekable, CF_DEFAULT, CF_LOCK, CF_RAFT};
+use engine_traits::{MiscExt, Peekable, RaftEngineReadOnly, CF_DEFAULT, CF_LOCK, CF_RAFT};
 use grpcio::{ChannelBuilder, Environment};
 use keys::DATA_PREFIX_KEY;
 use kvproto::{
@@ -10,6 +10,7 @@ use kvproto::{
     raft_serverpb::{PeerState, RegionLocalState},
     tikvpb::TikvClient,
 };
+use raft::prelude::MessageType;
 use test_raftstore::*;
 use tikv_util::{keybuilder::KeyBuilder, HandyRwLock};
 use txn_types::Key;
@@ -96,7 +97,7 @@ fn test_disable_wal_recovery_basic() {
 }
 
 #[test]
-fn test_disable_wal_recovery_applying_snapshot() {
+fn test_disable_wal_recovery_add_peer_snapshot() {
     let mut cluster = new_server_cluster(0, 3);
     // Initialize the cluster.
     cluster.pd_client.disable_default_operator();
@@ -165,4 +166,55 @@ fn test_disable_wal_recovery_region_merge() {
     cluster.run_node(1).unwrap();
     assert_eq!(cluster.get_region_id(b"k3"), cluster.get_region_id(b"k5"));
     assert_eq!(cluster.get_region_id(b""), cluster.get_region_id(b"k5"));
+}
+
+#[test]
+fn test_disable_wal_recovery_catchup_snapshot() {
+    let mut cluster = new_server_cluster(0, 3);
+    configure_for_snapshot(&mut cluster);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(10);
+    cluster.cfg.raft_store.disable_kv_wal = true;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    let fp = "gc_seqno_relations";
+    fail::cfg(fp, "return").unwrap();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    let recv_filter = Box::new(
+        RegionPacketFilter::new(1, 3)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend),
+    );
+    cluster.sim.wl().add_recv_filter(3, recv_filter);
+
+    for i in 0..20 {
+        cluster.must_put(format!("k{}", i).as_bytes(), b"v");
+    }
+    // Wait util raft logs GC-ed.
+    sleep_ms(1000);
+    cluster.sim.wl().clear_recv_filters(3);
+    must_get_equal(&cluster.get_engine(3), b"k2", b"v");
+    let apply_state = cluster
+        .get_raft_engine(3)
+        .get_apply_state(1)
+        .unwrap()
+        .unwrap();
+    cluster.get_engine(3).flush_cfs(true).unwrap();
+    cluster.stop_node(3);
+    fail::remove(fp);
+    cluster.run_node(3).unwrap();
+    let restarted_state = cluster
+        .get_raft_engine(3)
+        .get_apply_state(1)
+        .unwrap()
+        .unwrap();
+    println!("restarted state {:?}", restarted_state);
+    assert_eq!(apply_state, restarted_state);
+    must_get_equal(&cluster.get_engine(3), b"k2", b"v");
 }

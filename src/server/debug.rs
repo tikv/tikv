@@ -519,6 +519,7 @@ impl<ER: RaftEngine> Debugger<ER> {
                 self.engines.clone(),
                 region,
                 fake_snap_worker.scheduler(),
+                None,
                 fake_raftlog_fetch_worker.scheduler(),
                 peer_id,
                 false,

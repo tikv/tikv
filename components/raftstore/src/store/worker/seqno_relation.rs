@@ -1,6 +1,12 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp, fmt, sync::atomic::Ordering};
+use std::{
+    cmp, fmt,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
 use collections::{HashMap, HashMapEntry};
 use engine_traits::{
@@ -13,8 +19,9 @@ use kvproto::{
     },
 };
 use tikv_util::{
-    debug, error, info,
+    debug, info,
     sequence_number::{SequenceNumberWindow, SYNCED_MAX_SEQUENCE_NUMBER},
+    warn,
     worker::{Runnable, Scheduler},
 };
 
@@ -23,9 +30,9 @@ use crate::store::{
     async_io::write::{RAFT_WB_DEFAULT_SIZE, RAFT_WB_SHRINK_SIZE},
     fsm::{ApplyRes, ApplyTaskRes, ExecResult},
     peer_storage::write_initial_apply_state_raft,
-    util::gc_seqno_relations,
+    util::{clear_region_seqno_relation, gc_seqno_relations},
     worker::RaftlogGcTask,
-    PeerMsg, RaftRouter,
+    PeerMsg, RaftRouter, RegionTask,
 };
 
 const RAFT_WB_MAX_KEYS: usize = 256;
@@ -36,6 +43,11 @@ pub enum Task<S: Snapshot> {
         region: Region,
         peer_id: u64,
         merge_from_snapshot: bool,
+    },
+    ApplySnapshot {
+        region_id: u64,
+        status: Arc<AtomicUsize>,
+        peer_id: u64,
     },
     MemtableSealed(u64),
     MemtableFlushed {
@@ -73,12 +85,19 @@ impl<S: Snapshot> fmt::Display for Task<S> {
                 .field("peer_id", &peer_id)
                 .field("merge_from_snapshot", &merge_from_snapshot)
                 .finish(),
+            Task::ApplySnapshot {
+                region_id, peer_id, ..
+            } => de
+                .field("name", &"applying-snapshot")
+                .field("region_id", &region_id)
+                .field("peer_id", &peer_id)
+                .finish(),
         }
     }
 }
 
 enum HandleExecResResult {
-    VersionChanged(RegionLocalState),
+    RegionStateChanged(RegionLocalState),
     CommitMerge {
         target_state: RegionLocalState,
         source_relation: RegionSequenceNumberRelation,
@@ -95,6 +114,7 @@ pub struct Runner<EK: KvEngine, ER: RaftEngine> {
     last_persisted_seqno: u64,
     flushed_seqno: FlushedSeqno,
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
+    region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     started: bool,
 }
 
@@ -103,6 +123,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         router: RaftRouter<EK, ER>,
         engines: Engines<EK, ER>,
         raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
+        region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     ) -> Self {
         Runner {
             router,
@@ -113,6 +134,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             inflight_seqno_relations: HashMap::default(),
             last_persisted_seqno: 0,
             raftlog_gc_scheduler,
+            region_scheduler,
             started: false,
         }
     }
@@ -148,7 +170,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
 
             if let Some(result) = self.handle_exec_res(res.region_id, seqno.number, &res.exec_res) {
                 match result {
-                    HandleExecResResult::VersionChanged(region_state) => {
+                    HandleExecResResult::RegionStateChanged(region_state) => {
                         info!("region state changed"; "region_id" => res.region_id, "region_state" => ?region_state, "apply_state" => ?res.apply_state);
                         relation.set_region_state(region_state);
                     }
@@ -167,12 +189,14 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                         self.handle_relation(source_relation, &mut sync_relations);
                     }
                     HandleExecResResult::Destroy => {
-                        sync_relations.remove(&res.region_id);
                         info!(
                             "region destroyed";
                             "region_id" => res.region_id,
                             "apply_state" => ?res.apply_state,
                         );
+                        sync_relations.remove(&res.region_id);
+                        // Skip following relation handle.
+                        continue;
                     }
                 }
             }
@@ -242,7 +266,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                     .raftlog_gc_scheduler
                     .schedule(RaftlogGcTask::MemtableFlushed { cf, seqno })
                 {
-                    error!("failed to notify memtable flushed to raftlog gc worker"; "err" => ?e);
+                    warn!("failed to notify memtable flushed to raftlog gc worker"; "err" => ?e);
                 }
             }
         }
@@ -254,6 +278,10 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         for (region_id, relation) in relations {
             assert!(relation.sequence_number <= self.last_persisted_seqno);
             info!("save seqno relation to raftdb"; "region_id" => region_id, "relation" => ?relation);
+            println!(
+                "save seqno relation to raftdb, region_id: {}, relation: {:?}",
+                region_id, relation
+            );
             self.raft_wb
                 .put_seqno_relation(region_id, &relation)
                 .unwrap();
@@ -294,7 +322,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                         let mut state = RegionLocalState::default();
                         state.set_region(cp.region.clone());
                         state.set_state(PeerState::Normal);
-                        result = Some(HandleExecResResult::VersionChanged(state));
+                        result = Some(HandleExecResResult::RegionStateChanged(state));
                     };
                 }
                 ExecResult::SplitRegion {
@@ -317,7 +345,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                                 .unwrap();
                         }
                         if region.get_id() == region_id {
-                            result = Some(HandleExecResResult::VersionChanged(state));
+                            result = Some(HandleExecResResult::RegionStateChanged(state));
                         }
                     }
                 }
@@ -329,7 +357,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                     state.set_region(region.clone());
                     state.set_state(PeerState::Merging);
                     state.set_merge_state(merge_state.clone());
-                    result = Some(HandleExecResResult::VersionChanged(state));
+                    result = Some(HandleExecResResult::RegionStateChanged(state));
                 }
                 ExecResult::CommitMerge {
                     region,
@@ -363,7 +391,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                     let mut state = RegionLocalState::default();
                     state.set_region(region.clone());
                     state.set_state(PeerState::Normal);
-                    result = Some(HandleExecResResult::VersionChanged(state));
+                    result = Some(HandleExecResResult::RegionStateChanged(state));
                 }
                 ExecResult::DeleteRange { .. }
                 | ExecResult::IngestSst { .. }
@@ -381,14 +409,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         let raft_engine = self.engines.raft.clone();
         let region_id = region.get_id();
         self.inflight_seqno_relations.remove(&region_id);
-        raft_engine
-            .scan_seqno_relations(region_id, None, None, |seqno, _| {
-                self.raft_wb
-                    .delete_seqno_relation(region_id, seqno)
-                    .unwrap();
-                true
-            })
-            .unwrap();
+        clear_region_seqno_relation(region_id, &raft_engine, &mut self.raft_wb);
         let mut region_state = RegionLocalState::default();
         region_state.set_region(region);
         region_state.set_state(PeerState::Tombstone);
@@ -396,6 +417,20 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             .put_region_state(region_id, &region_state)
             .unwrap();
         info!("handle destroy region"; "region_id" => region_id, "region_state" => ?region_state);
+    }
+
+    fn handle_apply_snapshot(&mut self, region_id: u64, status: Arc<AtomicUsize>, peer_id: u64) {
+        let raft_engine = self.engines.raft.clone();
+        self.inflight_seqno_relations.remove(&region_id);
+        clear_region_seqno_relation(region_id, &raft_engine, &mut self.raft_wb);
+        info!("handle apply snapshot"; "region_id" => region_id);
+        if let Err(e) = self.region_scheduler.schedule(RegionTask::Apply {
+            region_id,
+            status,
+            peer_id,
+        }) {
+            warn!("failed to schedule region task"; "err" => ?e, "region_id" => region_id);
+        }
     }
 }
 
@@ -439,6 +474,11 @@ impl<EK: KvEngine, ER: RaftEngine> Runnable for Runner<EK, ER> {
                     },
                 );
             }
+            Task::ApplySnapshot {
+                region_id,
+                status,
+                peer_id,
+            } => self.handle_apply_snapshot(region_id, status, peer_id),
         }
     }
 }

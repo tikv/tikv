@@ -424,6 +424,9 @@ where
     key_buffer: Vec<u8>,
 
     uncommitted_res_count: usize,
+
+    // TODO: add a test
+    skip_sst_ingest: bool,
 }
 
 impl<EK> ApplyContext<EK>
@@ -479,6 +482,7 @@ where
             key_buffer: Vec::with_capacity(1024),
             disable_wal: cfg.disable_kv_wal,
             uncommitted_res_count: 0,
+            skip_sst_ingest: false,
         }
     }
 
@@ -1052,7 +1056,7 @@ where
             // running on data written by new version tikv), but PD will reject old version
             // tikv join the cluster, so this should not happen.
             let res = match entry.get_entry_type() {
-                EntryType::EntryNormal => self.handle_raft_entry_normal(apply_ctx, &entry),
+                EntryType::EntryNormal => self.handle_raft_entry_normal(apply_ctx, &entry, false),
                 EntryType::EntryConfChange | EntryType::EntryConfChangeV2 => {
                     self.handle_raft_entry_conf_change(apply_ctx, &entry)
                 }
@@ -1115,6 +1119,7 @@ where
         &mut self,
         apply_ctx: &mut ApplyContext<EK>,
         entry: &Entry,
+        skip_yield: bool,
     ) -> ApplyResult<EK::Snapshot> {
         fail_point!(
             "yield_apply_first_region",
@@ -1139,13 +1144,13 @@ where
             {
                 apply_ctx.commit(self);
                 if let Some(start) = self.handle_start.as_ref() {
-                    if start.saturating_elapsed() >= apply_ctx.yield_duration {
+                    if !skip_yield && start.saturating_elapsed() >= apply_ctx.yield_duration {
                         return ApplyResult::Yield;
                     }
                 }
                 has_unflushed_data = false;
             }
-            if self.priority != apply_ctx.priority {
+            if !skip_yield && self.priority != apply_ctx.priority {
                 if has_unflushed_data {
                     apply_ctx.commit(self);
                 }
@@ -1823,6 +1828,9 @@ where
         req: &Request,
         ssts: &mut Vec<SstMetaInfo>,
     ) -> Result<()> {
+        if ctx.skip_sst_ingest {
+            return Ok(());
+        }
         PEER_WRITE_CMD_COUNTER.ingest_sst.inc();
         let sst = req.get_ingest_sst().get_sst();
 
@@ -3640,6 +3648,7 @@ where
         // correctly, others will be saved as a normal entry with no data, so we
         // must re-propose these commands again.
         apply_ctx.committed_count += entries.len();
+        apply_ctx.skip_sst_ingest = true;
         let mut results = Vec::new();
         let mut wait_merge_source = None;
         let mut entries_drainer = entries.drain(..);
@@ -3663,7 +3672,9 @@ where
 
             let prev_version = self.delegate.region.get_region_epoch().get_version();
             let res = match entry.get_entry_type() {
-                EntryType::EntryNormal => self.delegate.handle_raft_entry_normal(apply_ctx, &entry),
+                EntryType::EntryNormal => self
+                    .delegate
+                    .handle_raft_entry_normal(apply_ctx, &entry, true),
                 EntryType::EntryConfChange | EntryType::EntryConfChangeV2 => self
                     .delegate
                     .handle_raft_entry_conf_change(apply_ctx, &entry),
@@ -3687,10 +3698,11 @@ where
                     self.delegate.wait_merge_state = Some(WaitSourceMergeState { logs_up_to_date });
                     break;
                 }
-                ApplyResult::Yield => (),
+                ApplyResult::Yield => panic!("should not yield during recovery"),
             }
         }
         apply_ctx.finish_for(&mut self.delegate, results);
+        apply_ctx.skip_sst_ingest = false;
 
         if let Some((logs_up_to_date, source_region_id, commit)) = wait_merge_source {
             cb(RecoverStatus::WaitMergeSource {

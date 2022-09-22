@@ -15,6 +15,7 @@ use std::{
 };
 
 use engine_traits::{RaftEngine, RaftLogBatch};
+use fail::fail_point;
 use kvproto::{
     kvrpcpb::{self, KeyRange, LeaderInfo},
     metapb::{self, Peer, PeerRole, Region, RegionEpoch},
@@ -1359,11 +1360,13 @@ pub fn gc_seqno_relations<ER: RaftEngine>(
     raft_engine: &ER,
     wb: &mut ER::LogBatch,
 ) -> Result<()> {
+    fail_point!("gc_seqno_relations", |_| Ok(()));
     raft_engine.for_each_raft_group(&mut |region_id| {
         let mut apply_state_update = None;
         let mut region_state_update = None;
         raft_engine
             .scan_seqno_relations(region_id, None, Some(seqno + 1), |s, relation| {
+                println!("scan relation {:?}", relation);
                 apply_state_update = Some(relation.get_apply_state().clone());
                 if relation.has_region_state()
                 {
@@ -1391,6 +1394,19 @@ pub fn gc_seqno_relations<ER: RaftEngine>(
         }
         Ok(())
     })
+}
+
+pub fn clear_region_seqno_relation<ER: RaftEngine>(
+    region_id: u64,
+    raft_engine: &ER,
+    wb: &mut ER::LogBatch,
+) {
+    raft_engine
+        .scan_seqno_relations(region_id, None, None, |seqno, _| {
+            wb.delete_seqno_relation(region_id, seqno).unwrap();
+            true
+        })
+        .unwrap();
 }
 
 #[cfg(test)]

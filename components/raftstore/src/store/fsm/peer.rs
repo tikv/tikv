@@ -93,7 +93,7 @@ use crate::{
         },
         CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg, PeerTick,
         ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, ReadCallback,
-        SignificantMsg, SnapKey, StoreMsg, WriteCallback,
+        SeqnoRelationTask, SignificantMsg, SnapKey, StoreMsg, WriteCallback,
     },
     Error, Result,
 };
@@ -237,6 +237,7 @@ where
         store_id: u64,
         cfg: &Config,
         region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+        seqno_scheduler: Option<Scheduler<SeqnoRelationTask<EK::Snapshot>>>,
         raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         engines: Engines<EK, ER>,
         region: &metapb::Region,
@@ -266,6 +267,7 @@ where
                     store_id,
                     cfg,
                     region_scheduler,
+                    seqno_scheduler,
                     raftlog_fetch_scheduler,
                     engines,
                     region,
@@ -296,6 +298,7 @@ where
         store_id: u64,
         cfg: &Config,
         region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+        seqno_scheduler: Option<Scheduler<SeqnoRelationTask<EK::Snapshot>>>,
         raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         engines: Engines<EK, ER>,
         region_id: u64,
@@ -320,6 +323,7 @@ where
                     store_id,
                     cfg,
                     region_scheduler,
+                    seqno_scheduler,
                     raftlog_fetch_scheduler,
                     engines,
                     &region,
@@ -1764,6 +1768,7 @@ where
             );
             return;
         }
+        println!("on persisted msg, region_id: {}", self.region_id());
         if let Some(persist_snap_res) = self.fsm.peer.on_persist_ready(self.ctx, ready_number) {
             self.on_ready_persist_snapshot(persist_snap_res);
             if self.fsm.peer.pending_merge_state.is_some() {
@@ -3783,6 +3788,7 @@ where
                 self.ctx.store_id(),
                 &self.ctx.cfg,
                 self.ctx.region_scheduler.clone(),
+                self.ctx.seqno_scheduler.clone(),
                 self.ctx.raftlog_fetch_scheduler.clone(),
                 self.ctx.engines.clone(),
                 &new_region,

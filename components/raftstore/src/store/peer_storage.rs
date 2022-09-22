@@ -37,7 +37,7 @@ use super::{metrics::*, worker::RegionTask, SnapEntry, SnapKey, SnapManager};
 use crate::{
     store::{
         async_io::write::WriteTask, entry_storage::EntryStorage, fsm::GenSnapTask,
-        peer::PersistSnapshotResult, util, worker::RaftlogFetchTask,
+        peer::PersistSnapshotResult, util, worker::RaftlogFetchTask, SeqnoRelationTask,
     },
     Error, Result,
 };
@@ -216,11 +216,12 @@ where
     snap_state: RefCell<SnapState>,
     gen_snap_task: RefCell<Option<GenSnapTask>>,
     region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+    seqno_scheduler: Option<Scheduler<SeqnoRelationTask<EK::Snapshot>>>,
     snap_tried_cnt: RefCell<usize>,
 
     entry_storage: EntryStorage<ER>,
 
-    save_states_to_raft_db: bool,
+    disable_kv_wal: bool,
 
     pub tag: String,
 }
@@ -288,9 +289,10 @@ where
         engines: Engines<EK, ER>,
         region: &metapb::Region,
         region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+        seqno_scheduler: Option<Scheduler<SeqnoRelationTask<EK::Snapshot>>>,
         raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         peer_id: u64,
-        save_states_to_raft_db: bool,
+        disable_kv_wal: bool,
         tag: String,
     ) -> Result<PeerStorage<EK, ER>> {
         debug!(
@@ -312,13 +314,14 @@ where
         )?;
 
         Ok(PeerStorage {
-            save_states_to_raft_db,
+            disable_kv_wal,
             engines,
             peer_id,
             region: region.clone(),
             snap_state: RefCell::new(SnapState::Relax),
             gen_snap_task: RefCell::new(None),
             region_scheduler,
+            seqno_scheduler,
             snap_tried_cnt: RefCell::new(0),
             tag,
             entry_storage,
@@ -618,7 +621,7 @@ where
             .mut_truncated_state()
             .set_term(snap.get_metadata().get_term());
 
-        if self.save_states_to_raft_db {
+        if self.disable_kv_wal {
             write_snapshot_state_to_raft(raft_wb, &region, self.apply_state())?;
         }
 
@@ -831,23 +834,39 @@ where
     pub fn schedule_applying_snapshot(&mut self) {
         let status = Arc::new(AtomicUsize::new(JOB_STATUS_PENDING));
         self.set_snap_state(SnapState::Applying(Arc::clone(&status)));
-        let task = RegionTask::Apply {
-            region_id: self.get_region_id(),
-            status,
-            peer_id: self.peer_id,
-        };
 
         // Don't schedule the snapshot to region worker.
         fail_point!("skip_schedule_applying_snapshot", |_| {});
 
         // TODO: gracefully remove region instead.
-        if let Err(e) = self.region_scheduler.schedule(task) {
-            info!(
-                "failed to to schedule apply job, are we shutting down?";
-                "region_id" => self.region.get_id(),
-                "peer_id" => self.peer_id,
-                "err" => ?e,
-            );
+        if self.disable_kv_wal {
+            let task = SeqnoRelationTask::ApplySnapshot {
+                region_id: self.get_region_id(),
+                status,
+                peer_id: self.peer_id,
+            };
+            if let Err(e) = self.seqno_scheduler.as_ref().unwrap().schedule(task) {
+                info!(
+                    "failed to to schedule apply job, are we shutting down?";
+                    "region_id" => self.region.get_id(),
+                    "peer_id" => self.peer_id,
+                    "err" => ?e,
+                );
+            }
+        } else {
+            let task = RegionTask::Apply {
+                region_id: self.get_region_id(),
+                status,
+                peer_id: self.peer_id,
+            };
+            if let Err(e) = self.region_scheduler.schedule(task) {
+                info!(
+                    "failed to to schedule apply job, are we shutting down?";
+                    "region_id" => self.region.get_id(),
+                    "peer_id" => self.peer_id,
+                    "err" => ?e,
+                );
+            }
         }
     }
 
@@ -1232,6 +1251,7 @@ pub mod tests {
             engines,
             &region,
             region_scheduler,
+            None,
             raftlog_fetch_scheduler,
             1,
             false,
@@ -2011,6 +2031,7 @@ pub mod tests {
                 engines.clone(),
                 &region,
                 region_sched.clone(),
+                None,
                 raftlog_fetch_sched.clone(),
                 0,
                 false,
