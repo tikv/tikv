@@ -1659,12 +1659,7 @@ pub mod tests {
     ) -> bool {
         let limiter = Arc::new(IoRateLimiter::new_for_test());
         let stats = limiter.statistics().unwrap();
-        let mut ts_provider: Option<Arc<CausalTsProviderImpl>> = None;
-        if cur_api_ver == ApiVersion::V2 {
-            ts_provider = Some(Arc::new(causal_ts::tests::TestProvider::default().into()));
-        }
-        let (tmp, endpoint) =
-            new_endpoint_with_limiter(Some(limiter), cur_api_ver, true, ts_provider);
+        let (tmp, endpoint) = new_endpoint_with_limiter(Some(limiter), cur_api_ver, true, None);
         let engine = endpoint.engine.clone();
 
         let start_key_idx: u64 = 100;
