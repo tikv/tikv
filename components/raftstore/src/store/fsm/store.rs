@@ -2082,7 +2082,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                                 .or_insert_with(HashMap::default);
                             regions.insert(region_id, (applied_index + 1, end));
                         }
-                        regions_applied_index.insert(region_id, end - 1);
+                        regions_applied_index.insert(region_id, applied_index);
                         if let Some(WaitMergeSourceRegion {
                             region_id: target_region_id,
                             version: target_region_version,

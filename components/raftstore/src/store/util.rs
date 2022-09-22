@@ -1360,34 +1360,35 @@ pub fn gc_seqno_relations<ER: RaftEngine>(
     wb: &mut ER::LogBatch,
 ) -> Result<()> {
     raft_engine.for_each_raft_group(&mut |region_id| {
-        if let Some(relation) = raft_engine
-            .get_seqno_relation(region_id, seqno + 1)
-            .unwrap()
-        {
-            info!("update apply state during gc relation"; "region_id" => region_id, "relation" => ?relation);
-            wb.put_apply_state(region_id, relation.get_apply_state())
-                .unwrap();
-        }
+        let mut apply_state_update = None;
+        let mut region_state_update = None;
         raft_engine
             .scan_seqno_relations(region_id, None, Some(seqno + 1), |s, relation| {
-                let applied_index = relation.get_apply_state().get_applied_index();
+                apply_state_update = Some(relation.get_apply_state().clone());
                 if relation.has_region_state()
                 {
-                    let state = relation.get_region_state();
-                    if state.get_state() == PeerState::Tombstone {
+                    let region_state = relation.get_region_state();
+                    if region_state.get_state() == PeerState::Tombstone {
                         wb.delete_apply_state(region_id).unwrap();
                         if let Some(raft_state) = raft_engine.get_raft_state(region_id).unwrap() {
                             raft_engine.clean(region_id, 0, &raft_state, wb).unwrap();
                         }
                     }
-                    wb.put_region_state(region_id, state).unwrap();
-                    info!("update region state during gc relation"; "region_id" => region_id, "state" => ?state, "index" => applied_index);
+                    region_state_update = Some(region_state.clone());
                 }
                 info!("delete relation during gc relation"; "region_id" => region_id, "relation" => ?relation);
                 wb.delete_seqno_relation(region_id, s).unwrap();
                 true
             })
             .unwrap();
+        if let Some(apply_state) = apply_state_update {
+            info!("update apply state during gc relation"; "region_id" => region_id, "apply_state" => ?apply_state);
+            wb.put_apply_state(region_id, &apply_state).unwrap();
+        }
+        if let Some(region_state) = region_state_update {
+            info!("update region state during gc relation"; "region_id" => region_id, "state" => ?region_state);
+            wb.put_region_state(region_id, &region_state).unwrap();
+        }
         Ok(())
     })
 }

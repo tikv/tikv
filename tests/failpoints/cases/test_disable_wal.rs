@@ -149,8 +149,8 @@ fn test_disable_wal_recovery_region_merge() {
     cluster.must_put(b"k1", b"v1");
 
     cluster.must_split(&cluster.get_region(b""), b"k5");
-    cluster.must_split(&cluster.get_region(b""), b"k3");
     cluster.get_engine(1).flush_cfs(true).unwrap();
+    cluster.must_split(&cluster.get_region(b""), b"k3");
     cluster
         .pd_client
         .must_merge(cluster.get_region_id(b"k3"), cluster.get_region_id(b"k5"));

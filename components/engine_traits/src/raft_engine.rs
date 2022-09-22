@@ -22,6 +22,7 @@ pub trait RaftEngineReadOnly: Sync + Send + 'static {
     fn get_region_state(&self, raft_group_id: u64) -> Result<Option<RegionLocalState>>;
     fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>>;
 
+    /// Return the relation with the biggest seqno which its seqno <= `seqno`.
     fn get_seqno_relation(
         &self,
         raft_group_id: u64,
@@ -169,6 +170,7 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
 
     fn put_recover_from_raft_db(&self, seqno: u64) -> Result<()>;
 
+    /// scan the relations between start(inclusive) and end(exclusive).
     fn scan_seqno_relations<F>(
         &self,
         raft_group_id: u64,

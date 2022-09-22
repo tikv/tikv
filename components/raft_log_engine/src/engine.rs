@@ -360,6 +360,17 @@ fn raft_seqno_relation_key(seqno: u64) -> Vec<u8> {
     key
 }
 
+fn min_raft_seqno_relation_key() -> Vec<u8> {
+    SEQNO_RELATION_KEY.to_vec()
+}
+
+fn max_raft_seqno_relation_key() -> Vec<u8> {
+    let mut key = Vec::with_capacity(SEQNO_RELATION_KEY.len() + 8);
+    key.extend_from_slice(SEQNO_RELATION_KEY);
+    key.extend_from_slice(&u64::MAX.to_be_bytes());
+    key
+}
+
 fn parse_raft_seqno_relation_key(key: &[u8]) -> Option<u64> {
     if &key[..1] != SEQNO_RELATION_KEY {
         return None;
@@ -773,13 +784,17 @@ impl RaftEngine for RaftLogEngine {
     where
         F: FnMut(u64, &RegionSequenceNumberRelation) -> bool,
     {
-        let start = start.map(|s| raft_seqno_relation_key(s));
-        let end = end.map(|s| raft_seqno_relation_key(s));
+        let start = start
+            .map(|s| raft_seqno_relation_key(s))
+            .unwrap_or_else(min_raft_seqno_relation_key);
+        let end = end
+            .map(|s| raft_seqno_relation_key(s))
+            .unwrap_or_else(max_raft_seqno_relation_key);
         self.0
             .scan_messages(
                 raft_group_id,
-                start.as_deref(),
-                end.as_deref(),
+                Some(start.as_slice()),
+                Some(end.as_slice()),
                 false,
                 |key, value| {
                     let index = parse_raft_seqno_relation_key(key).unwrap();
