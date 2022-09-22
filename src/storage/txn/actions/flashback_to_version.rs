@@ -2,6 +2,7 @@
 
 use txn_types::{Key, Lock, LockType, TimeStamp, Write, WriteType};
 
+use super::check_txn_status::rollback_lock;
 use crate::storage::{
     mvcc::{MvccReader, MvccTxn, SnapshotReader, MAX_TXN_WRITE_SIZE},
     txn::{Error, ErrorInner, Result as TxnResult},
@@ -96,7 +97,14 @@ pub fn flashback_to_version<S: Snapshot>(
             *next_lock_key = Some(key);
             break;
         }
-        txn.unlock_key(key.clone(), lock.is_pessimistic_txn());
+        rollback_lock(
+            txn,
+            reader,
+            key.clone(),
+            &lock,
+            lock.is_pessimistic_txn(),
+            true,
+        )?;
         rows += 1;
         // If the short value is none and it's a `LockType::Put`, we should delete the
         // corresponding key from `CF_DEFAULT` as well.
@@ -156,9 +164,12 @@ pub mod tests {
     use super::*;
     use crate::storage::{
         mvcc::tests::{must_get, must_get_none, write},
-        txn::actions::{
-            commit::tests::must_succeed as must_commit,
-            tests::{must_prewrite_delete, must_prewrite_put, must_rollback},
+        txn::{
+            actions::{
+                commit::tests::must_succeed as must_commit,
+                tests::{must_prewrite_delete, must_prewrite_put, must_rollback},
+            },
+            tests::{must_acquire_pessimistic_lock, must_pessimistic_prewrite_put_err},
         },
         Engine, TestEngineBuilder,
     };
@@ -188,16 +199,20 @@ pub mod tests {
         )
         .unwrap();
         assert!(!has_remain_writes);
+        let (key_locks, _) =
+            flashback_to_version_read_lock(&mut reader, &Some(key.clone()), &None, &mut statistics)
+                .unwrap();
+
         let cm = ConcurrencyManager::new(TimeStamp::zero());
         let mut txn = MvccTxn::new(start_ts, cm);
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = SnapshotReader::new_with_ctx(version, snapshot, &ctx);
+        let mut reader = SnapshotReader::new_with_ctx(start_ts, snapshot, &ctx);
         let rows = flashback_to_version(
             &mut txn,
             &mut reader,
             &mut None,
             &mut Some(key),
-            vec![],
+            key_locks,
             key_old_writes,
             start_ts,
             commit_ts,
@@ -295,5 +310,27 @@ pub mod tests {
             0
         );
         must_get_none(&engine, k, ts);
+    }
+
+    #[test]
+    fn test_flashback_to_version_pessimistic() {
+        use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
+
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let (k, v) = (b"k1", b"v");
+        // Prewrite and commit Put(k -> v1) with stat_ts = 10, commit_ts = 20.
+        must_prewrite_put(&engine, k, v, k, 10);
+        must_commit(&engine, k, 10, 20);
+
+        let v1 = b"v1";
+        must_acquire_pessimistic_lock(&engine, k, k, 30, 30);
+
+        // Flashback to version 25 with start_ts = 30, commit_ts = 40.
+        assert_eq!(must_flashback_write(&engine, k, 25, 30, 40), 1);
+
+        // Pessimistic Prewrite Put(k -> v1) with stat_ts = 30 will be error with
+        // Rollback.
+        must_pessimistic_prewrite_put_err(&engine, k, v1, k, 30, 30, DoPessimisticCheck);
+        must_get(&engine, k, 45, v);
     }
 }
