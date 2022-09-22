@@ -389,18 +389,20 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
 
         let mut mailboxes = Vec::with_capacity(peers.len());
         let mut address = Vec::with_capacity(peers.len());
-        for (region_id, (tx, fsm)) in peers {
+        {
             let mut meta = store_meta.as_ref().lock().unwrap();
-            meta.readers
-                .insert(region_id, fsm.peer().generate_read_delegate());
-            meta.tablet_caches
-                .insert(region_id, fsm.peer().tablet().clone());
+            for (region_id, (tx, fsm)) in peers {
+                meta.readers
+                    .insert(region_id, fsm.peer().generate_read_delegate());
+                meta.tablet_caches
+                    .insert(region_id, fsm.peer().tablet().clone());
 
-            address.push(region_id);
-            mailboxes.push((
-                region_id,
-                BasicMailbox::new(tx, fsm, router.state_cnt().clone()),
-            ));
+                address.push(region_id);
+                mailboxes.push((
+                    region_id,
+                    BasicMailbox::new(tx, fsm, router.state_cnt().clone()),
+                ));
+            }
         }
         router.register_all(mailboxes);
 

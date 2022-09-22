@@ -110,6 +110,8 @@ struct RunningState {
     system: StoreSystem<KvTestEngine, RaftTestEngine>,
     cfg: Arc<VersionTrack<Config>>,
     transport: TestTransport,
+    // We need this to clear the ref counts of CachedTablet when shutdown
+    store_meta: Arc<Mutex<StoreMeta<KvTestEngine>>>,
 }
 
 impl RunningState {
@@ -158,9 +160,10 @@ impl RunningState {
             logger.clone(),
         );
 
-        let mut store_meta = StoreMeta::<KvTestEngine>::new();
+        let mut store_meta = StoreMeta::new();
         store_meta.store_id = Some(store_id);
         let store_meta = Arc::new(Mutex::new(store_meta));
+
         system
             .start(
                 store_id,
@@ -173,7 +176,7 @@ impl RunningState {
             )
             .unwrap();
 
-        let router = ServerRaftStoreRouter::new(store_meta, router, logger.clone());
+        let router = ServerRaftStoreRouter::new(store_meta.clone(), router, logger.clone());
 
         let state = Self {
             raft_engine,
@@ -181,6 +184,7 @@ impl RunningState {
             system,
             cfg,
             transport,
+            store_meta,
         };
         (TestRouter(router), state)
     }
@@ -225,7 +229,10 @@ impl TestNode {
     }
 
     fn stop(&mut self) {
-        self.running_state.take();
+        if let Some(state) = std::mem::take(&mut self.running_state) {
+            let mut meta = state.store_meta.lock().unwrap();
+            meta.tablet_caches.clear();
+        }
     }
 
     fn restart(&mut self) -> TestRouter {
