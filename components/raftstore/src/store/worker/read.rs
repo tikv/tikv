@@ -4,7 +4,6 @@
 use std::{
     cell::Cell,
     fmt::{self, Display, Formatter},
-    marker::PhantomData,
     ops::Deref,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -537,9 +536,8 @@ impl Progress {
 /// #[RaftstoreCommon]: LocalReader is an entry point where local read requests are dipatch to the
 /// relevant regions by LocalReader so that these requests can be handled by the
 /// relevant ReadDelegate respectively.
-pub struct LocalReaderCore<E, D, S>
+pub struct LocalReaderCore<D, S>
 where
-    E: KvEngine,
     D: ReadExecutor + Deref<Target = ReadDelegate>,
     S: ReadExecutorProvider<Executor = D>,
 {
@@ -548,20 +546,16 @@ where
     // region id -> ReadDelegate
     // The use of `Arc` here is a workaround, see the comment at `get_delegate`
     pub delegates: LruCache<u64, D>,
-
-    phantom_data: PhantomData<E>,
 }
 
-impl<E, D, S> LocalReaderCore<E, D, S>
+impl<D, S> LocalReaderCore<D, S>
 where
-    E: KvEngine,
     D: ReadExecutor + Deref<Target = ReadDelegate> + Clone,
     S: ReadExecutorProvider<Executor = D>,
 {
     pub fn new(store_meta: S) -> Self {
         LocalReaderCore {
             store_meta,
-            phantom_data: PhantomData,
             store_id: Cell::new(None),
             delegates: LruCache::with_capacity_and_sample(0, 7),
         }
@@ -655,16 +649,14 @@ where
     }
 }
 
-impl<E, D, S> Clone for LocalReaderCore<E, D, S>
+impl<D, S> Clone for LocalReaderCore<D, S>
 where
-    E: KvEngine,
     D: ReadExecutor + Deref<Target = ReadDelegate>,
     S: ReadExecutorProvider<Executor = D>,
 {
     fn clone(&self) -> Self {
         LocalReaderCore {
             store_meta: self.store_meta.clone(),
-            phantom_data: self.phantom_data,
             store_id: self.store_id.clone(),
             delegates: LruCache::with_capacity_and_sample(0, 7),
         }
@@ -678,7 +670,7 @@ where
     D: ReadExecutor + Deref<Target = ReadDelegate>,
     S: ReadExecutorProvider<Executor = D>,
 {
-    local_reader: LocalReaderCore<E, D, S>,
+    local_reader: LocalReaderCore<D, S>,
     kv_engine: E,
 
     snap_cache: Box<Option<Arc<E::Snapshot>>>,

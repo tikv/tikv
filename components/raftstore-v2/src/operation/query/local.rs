@@ -60,20 +60,19 @@ where
 }
 
 #[derive(Clone)]
-pub struct LocalReader<E, C, D, S>
+pub struct LocalReader<C, D, S>
 where
-    E: KvEngine,
     C: MsgRouter,
     D: ReadExecutor + Deref<Target = ReadDelegate>,
     S: ReadExecutorProvider<Executor = D>,
 {
-    local_reader: LocalReaderCore<E, D, S>,
+    local_reader: LocalReaderCore<D, S>,
     router: C,
 
     logger: Logger,
 }
 
-impl<E, C, D, S> LocalReader<E, C, D, S>
+impl<E, C, D, S> LocalReader<C, D, S>
 where
     E: KvEngine,
     C: MsgRouter,
@@ -469,12 +468,7 @@ mod tests {
         store_id: u64,
         store_meta: Arc<Mutex<StoreMeta<KvTestEngine>>>,
     ) -> (
-        LocalReader<
-            KvTestEngine,
-            MockRouter,
-            CachedReadDelegate<KvTestEngine>,
-            StoreMetaDelegate<KvTestEngine>,
-        >,
+        LocalReader<MockRouter, CachedReadDelegate<KvTestEngine>, StoreMetaDelegate<KvTestEngine>>,
         Receiver<(u64, PeerMsg)>,
     ) {
         let (ch, rx) = MockRouter::new();
