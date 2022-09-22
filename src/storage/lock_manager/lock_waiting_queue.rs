@@ -488,7 +488,7 @@ mod tests {
     use crate::storage::{
         lock_manager::{lock_wait_context::LockWaitContext, DummyLockManager, WaitTimeout},
         txn::ErrorInner as TxnErrorInner,
-        ProcessResult, StorageCallback,
+        ErrorInner as StorageErrorInner, ProcessResult, StorageCallback,
     };
 
     struct TestLockWaitEntryHandle {
