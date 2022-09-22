@@ -5,8 +5,8 @@ use tirocks::{option::WriteOptions, WriteBatch};
 
 use crate::{r2e, RocksEngine};
 
-const WRITE_BATCH_MAX_BATCH: usize = 16;
-const WRITE_BATCH_LIMIT: usize = 16;
+const WRITE_BATCH_MAX_BATCH_NUM: usize = 16;
+const WRITE_BATCH_MAX_KEY_NUM: usize = 16;
 
 impl engine_traits::WriteBatchExt for RocksEngine {
     type WriteBatch = RocksWriteBatchVec;
@@ -55,7 +55,9 @@ impl RocksWriteBatchVec {
     /// long.
     #[inline(always)]
     fn check_switch_batch(&mut self) {
-        if self.engine.multi_batch_write() && self.wbs[self.index].count() >= WRITE_BATCH_LIMIT {
+        if self.engine.multi_batch_write()
+            && self.wbs[self.index].count() >= WRITE_BATCH_MAX_KEY_NUM
+        {
             self.index += 1;
             if self.index >= self.wbs.len() {
                 self.wbs.push(WriteBatch::default());
@@ -112,9 +114,10 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
         self.wbs[0].as_bytes().is_empty()
     }
 
+    #[inline]
     fn should_write_to_engine(&self) -> bool {
         if self.engine.multi_batch_write() {
-            self.index >= WRITE_BATCH_MAX_BATCH
+            self.index >= WRITE_BATCH_MAX_BATCH_NUM
         } else {
             self.wbs[0].count() > RocksEngine::WRITE_BATCH_MAX_KEYS
         }
@@ -127,8 +130,8 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
         self.save_points.clear();
         // Avoid making the wbs too big at one time, then the memory will be kept
         // after reusing
-        if self.index > WRITE_BATCH_MAX_BATCH {
-            self.wbs.shrink_to(WRITE_BATCH_MAX_BATCH);
+        if self.index > WRITE_BATCH_MAX_BATCH_NUM {
+            self.wbs.shrink_to(WRITE_BATCH_MAX_BATCH_NUM);
         }
         self.index = 0;
     }
@@ -175,14 +178,16 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
             return Ok(());
         }
         let self_wb = &mut self.wbs[self.index];
-        if self_wb.count() < WRITE_BATCH_LIMIT {
+        let mut other_start = 0;
+        if self_wb.count() < WRITE_BATCH_MAX_KEY_NUM {
             self_wb.append(&other.wbs[0]).map_err(r2e)?;
+            other_start = 1;
         }
         // From this point, either of following statements is true:
-        // - self_wb.count() >= WRITE_BATCH_LIMIT
+        // - self_wb.count() >= WRITE_BATCH_MAX_KEY_NUM
         // - other.index == 0
-        if other.index >= 1 {
-            for wb in other.wbs.drain(1..=other.index) {
+        if other.index >= other_start {
+            for wb in other.wbs.drain(other_start..=other.index) {
                 self.index += 1;
                 if self.wbs.len() == self.index {
                     self.wbs.push(wb);
@@ -239,6 +244,8 @@ impl engine_traits::Mutable for RocksWriteBatchVec {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use engine_traits::{Mutable, Peekable, WriteBatch, WriteBatchExt, CF_DEFAULT};
     use tempfile::Builder;
 
@@ -247,24 +254,32 @@ mod tests {
         cf_options::RocksCfOptions, db_options::RocksDbOptions, new_engine_opt, RocksEngine,
     };
 
+    fn new_engine(path: &Path, multi_batch_write: bool) -> RocksEngine {
+        let mut db_opt = RocksDbOptions::default();
+        db_opt
+            .set_unordered_write(false)
+            .set_enable_pipelined_write(!multi_batch_write)
+            .set_multi_batch_write(multi_batch_write);
+        let engine = new_engine_opt(
+            &path.join("db"),
+            db_opt,
+            vec![(CF_DEFAULT, RocksCfOptions::default())],
+        )
+        .unwrap();
+        assert_eq!(
+            engine.as_inner().db_options().multi_batch_write(),
+            multi_batch_write
+        );
+        engine
+    }
+
     #[test]
     fn test_should_write_to_engine_with_pipeline_write_mode() {
         let path = Builder::new()
             .prefix("test-should-write-to-engine")
             .tempdir()
             .unwrap();
-        let mut db_opt = RocksDbOptions::default();
-        db_opt
-            .set_unordered_write(false)
-            .set_enable_pipelined_write(true)
-            .set_multi_batch_write(false);
-        let engine = new_engine_opt(
-            &path.path().join("db"),
-            db_opt,
-            vec![(CF_DEFAULT, RocksCfOptions::default())],
-        )
-        .unwrap();
-        assert!(!engine.as_inner().db_options().multi_batch_write());
+        let engine = new_engine(path.path(), false);
         let mut wb = engine.write_batch();
         for _ in 0..RocksEngine::WRITE_BATCH_MAX_KEYS {
             wb.put(b"aaa", b"bbb").unwrap();
@@ -295,17 +310,7 @@ mod tests {
             .prefix("test-should-write-to-engine")
             .tempdir()
             .unwrap();
-        let mut opt = RocksDbOptions::default();
-        opt.set_unordered_write(false)
-            .set_enable_pipelined_write(false)
-            .set_multi_batch_write(true);
-        let engine = new_engine_opt(
-            &path.path().join("db"),
-            opt,
-            vec![(CF_DEFAULT, RocksCfOptions::default())],
-        )
-        .unwrap();
-        assert!(engine.as_inner().db_options().multi_batch_write());
+        let engine = new_engine(path.path(), true);
         let mut wb = engine.write_batch();
         for _ in 0..RocksEngine::WRITE_BATCH_MAX_KEYS {
             wb.put(b"aaa", b"bbb").unwrap();
@@ -314,7 +319,7 @@ mod tests {
         wb.put(b"aaa", b"bbb").unwrap();
         assert!(wb.should_write_to_engine());
         let mut wb = RocksWriteBatchVec::with_unit_capacity(&engine, 1024);
-        for _ in 0..WRITE_BATCH_MAX_BATCH * WRITE_BATCH_LIMIT {
+        for _ in 0..WRITE_BATCH_MAX_BATCH_NUM * WRITE_BATCH_MAX_KEY_NUM {
             wb.put(b"aaa", b"bbb").unwrap();
         }
         assert!(!wb.should_write_to_engine());
@@ -322,5 +327,57 @@ mod tests {
         assert!(wb.should_write_to_engine());
         wb.clear();
         assert!(!wb.should_write_to_engine());
+    }
+
+    #[test]
+    fn test_write_batch_merge() {
+        let path = Builder::new()
+            .prefix("test-should-write-to-engine")
+            .tempdir()
+            .unwrap();
+        for multi_batch_write in &[false, true] {
+            let engine = new_engine(path.path(), *multi_batch_write);
+            let mut wb = engine.write_batch();
+            for _ in 0..RocksEngine::WRITE_BATCH_MAX_KEYS {
+                wb.put(b"aaa", b"bbb").unwrap();
+            }
+            assert_eq!(wb.count(), RocksEngine::WRITE_BATCH_MAX_KEYS);
+
+            let mut wb2 = engine.write_batch();
+            for _ in 0..WRITE_BATCH_MAX_KEY_NUM / 2 {
+                wb2.put(b"aaa", b"bbb").unwrap();
+            }
+            assert_eq!(wb2.count(), WRITE_BATCH_MAX_KEY_NUM / 2);
+            // The only batch should be moved directly.
+            wb.merge(wb2).unwrap();
+            assert_eq!(
+                wb.count(),
+                RocksEngine::WRITE_BATCH_MAX_KEYS + WRITE_BATCH_MAX_KEY_NUM / 2
+            );
+            if *multi_batch_write {
+                assert_eq!(
+                    wb.wbs.len(),
+                    RocksEngine::WRITE_BATCH_MAX_KEYS / WRITE_BATCH_MAX_KEY_NUM + 1
+                );
+            }
+
+            let mut wb3 = engine.write_batch();
+            for _ in 0..WRITE_BATCH_MAX_KEY_NUM / 2 * 3 {
+                wb3.put(b"aaa", b"bbb").unwrap();
+            }
+            assert_eq!(wb3.count(), WRITE_BATCH_MAX_KEY_NUM / 2 * 3);
+            // The half batch should be merged together, and then move the left one.
+            wb.merge(wb3).unwrap();
+            assert_eq!(
+                wb.count(),
+                RocksEngine::WRITE_BATCH_MAX_KEYS + WRITE_BATCH_MAX_KEY_NUM * 2
+            );
+            if *multi_batch_write {
+                assert_eq!(
+                    wb.wbs.len(),
+                    RocksEngine::WRITE_BATCH_MAX_KEYS / WRITE_BATCH_MAX_KEY_NUM + 2
+                );
+            }
+        }
     }
 }
