@@ -10,8 +10,6 @@ use tidb_query_datatype::{
     EvalType,
 };
 
-
-
 #[rpn_fn]
 #[inline]
 fn json_depth(arg: JsonRef) -> Result<Option<i64>> {
@@ -292,7 +290,8 @@ fn json_length(args: &[ScalarValueRef]) -> Result<Option<Int>> {
     })
 }
 
-// Args should be like `(Option<JsonRef> , Option<JsonRef>, &[Option<BytesRef>])`. or `(Option<JsonRef> , Option<JsonRef>)`
+// Args should be like `(Option<JsonRef> , Option<JsonRef>,
+// &[Option<BytesRef>])`. or `(Option<JsonRef> , Option<JsonRef>)`
 fn json_contains_validator(expr: &tipb::Expr) -> Result<()> {
     assert!(expr.get_children().len() == 2 || expr.get_children().len() == 3);
     let children = expr.get_children();
@@ -319,7 +318,6 @@ fn json_contains(args: &[ScalarValueRef]) -> Result<Option<i64>> {
         Some(target) => target.to_owned(),
     };
 
-
     if args.len() == 3 {
         match parse_json_path_list(&args[2..])? {
             Some(path_expr_list) => {
@@ -330,21 +328,15 @@ fn json_contains(args: &[ScalarValueRef]) -> Result<Option<i64>> {
                     Some(json) => {
                         j = json;
                     }
-                    _ => {
-                        return Ok(None)
-                    }
+                    _ => return Ok(None),
                 }
-            },
+            }
             None => return Ok(None),
         };
     }
     match j.as_ref().json_contains(target.as_ref())? {
-        Some(_) => {
-            Ok(Some(1))
-        }
-        _ => {
-            Ok(Some(0))
-        }
+        Some(_) => Ok(Some(1)),
+        _ => Ok(Some(0)),
     }
 }
 
@@ -887,13 +879,7 @@ mod tests {
                 Some(1),
             ),
             // copy from tidb  Tests None arguments
-            (
-                vec![
-                    None::<Json>.into(),
-                    None::<Json>.into(),
-                ],
-                None,
-            ),
+            (vec![None::<Json>.into(), None::<Json>.into()], None),
             (
                 vec![
                     Some(Json::from_str(r#"{"a":1}"#).unwrap()).into(),
@@ -977,7 +963,6 @@ mod tests {
             // 		{[]interface{}{`{}`, `{}`}, 1, nil},
             // 		{[]interface{}{`{"a":1}`, `{}`}, 1, nil},
             // 		{[]interface{}{`{"a":1}`, `1`}, 0, nil},
-
             (
                 vec![
                     Some(Json::from_str(r#"{}"#).unwrap()).into(),
@@ -1003,7 +988,6 @@ mod tests {
             // 		{[]interface{}{`{"b":2, "c":3}`, `{"c":3}`}, 1, nil},
             // 		{[]interface{}{`1`, `1`}, 1, nil},
             // 		{[]interface{}{`[1]`, `1`}, 1, nil},
-
             (
                 vec![
                     Some(Json::from_str(r#"{"a":[1]}"#).unwrap()).into(),
@@ -1036,7 +1020,6 @@ mod tests {
             // 		{[]interface{}{`[1,2]`, `[1,3]`}, 0, nil},
             // 		{[]interface{}{`[1,2]`, `["1"]`}, 0, nil},
             // 		{[]interface{}{`[1,2,[1,3]]`, `[1,3]`}, 1, nil},
-
             (
                 vec![
                     Some(Json::from_str(r#"[1,2]"#).unwrap()).into(),
@@ -1068,7 +1051,6 @@ mod tests {
             // 		{[]interface{}{`[1,2,[1,3]]`, `[1,      3]`}, 1, nil},
             // 		{[]interface{}{`[1,2,[1,[5,[3]]]]`, `[1,3]`}, 1, nil},
             // 		{[]interface{}{`[1,2,[1,[5,{"a":[2,3]}]]]`, `[1,{"a":[3]}]`}, 1, nil},
-
             (
                 vec![
                     Some(Json::from_str(r#"[1,2,[1,3]]"#).unwrap()).into(),
@@ -1115,9 +1097,11 @@ mod tests {
                 Some(0),
             ),
             // Tests path expression contains any asterisk
-            //      {[]interface{}{`{"a": [1, 2, {"aa": "xx"}]}`, `1`, "$.*"}, nil, json.ErrInvalidJSONPathWildcard},
-            // 		{[]interface{}{`{"a": [1, 2, {"aa": "xx"}]}`, `1`, "$[*]"}, nil, json.ErrInvalidJSONPathWildcard},
-            // 		{[]interface{}{`{"a": [1, 2, {"aa": "xx"}]}`, `1`, "$**.a"}, nil, json.ErrInvalidJSONPathWildcard},
+            //      {[]interface{}{`{"a": [1, 2, {"aa": "xx"}]}`, `1`, "$.*"}, nil,
+            // json.ErrInvalidJSONPathWildcard}, 		{[]interface{}{`{"a": [1, 2, {"aa":
+            // "xx"}]}`, `1`, "$[*]"}, nil, json.ErrInvalidJSONPathWildcard},
+            // 		{[]interface{}{`{"a": [1, 2, {"aa": "xx"}]}`, `1`, "$**.a"}, nil,
+            // json.ErrInvalidJSONPathWildcard},
             (
                 vec![
                     Some(Json::from_str(r#"{"a": [1, 2, {"aa": "xx"}]}"#).unwrap()).into(),
