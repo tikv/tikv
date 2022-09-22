@@ -1,11 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::borrow::Cow;
-
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request};
 use protobuf::{CodedInputStream, Message, SingularPtrField};
-use tikv_util::Either;
 
 use crate::router::CmdResChannel;
 

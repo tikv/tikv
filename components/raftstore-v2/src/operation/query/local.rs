@@ -2,43 +2,30 @@
 
 // #[PerformanceCriticalPath]
 use std::{
-    cell::Cell,
-    collections::HashMap,
-    fmt::{self, Display, Formatter},
-    marker::PhantomData,
     ops::Deref,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
-    },
-    time::Duration,
+    sync::{Arc, Mutex},
 };
 
 use batch_system::Router;
-use crossbeam::{atomic::AtomicCell, channel::TrySendError};
-use engine_traits::{KvEngine, RaftEngine, Snapshot, TabletFactory};
-use fail::fail_point;
+use crossbeam::channel::TrySendError;
+use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
-    errorpb, metapb,
-    raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request, Response},
+    errorpb,
+    raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse},
 };
-use pd_client::BucketMeta;
 use raftstore::{
     store::{
-        cmd_resp,
-        util::{self, LeaseState, RegionReadProgress, RemoteLease},
-        LocalReaderCore, ProposalRouter, ReadDelegate, ReadExecutor, ReadExecutorProvider,
-        ReadProgress, RegionSnapshot, RequestInspector, RequestPolicy, TrackVer, TxnExt,
+        cmd_resp, util::LeaseState, LocalReaderCore, ReadDelegate, ReadExecutor,
+        ReadExecutorProvider, RegionSnapshot, RequestInspector, RequestPolicy,
         TLS_LOCAL_READ_METRICS,
     },
     Error, Result,
 };
-use slog::{debug, error, info, o, warn, Logger};
+use slog::{debug, Logger};
 use tikv_util::{
     box_err,
     codec::number::decode_u64,
-    lru::LruCache,
-    time::{monotonic_raw_now, Instant, ThreadReadId},
+    time::{monotonic_raw_now, ThreadReadId},
 };
 use time::Timespec;
 use txn_types::WriteBatchFlags;
@@ -76,10 +63,9 @@ where
     E: KvEngine,
     C: MsgRouter,
 {
-    pub fn new(store_meta: StoreMetaDelegate<E>, router: C, logger: Logger) -> Self {
-        let cache_read_id = ThreadReadId::new();
+    pub fn new(store_meta: Arc<Mutex<StoreMeta<E>>>, router: C, logger: Logger) -> Self {
         Self {
-            local_reader: LocalReaderCore::new(store_meta),
+            local_reader: LocalReaderCore::new(StoreMetaDelegate::new(store_meta)),
             router,
             logger,
         }
@@ -172,8 +158,8 @@ where
 
         // try to renew the lease by sending read query where the reading process may
         // renew the lease
-        let (msg, mut sub) = PeerMsg::raft_query(req.clone());
-        MsgRouter::send(&self.router, region_id, msg);
+        let (msg, sub) = PeerMsg::raft_query(req.clone());
+        let _ = MsgRouter::send(&self.router, region_id, msg);
         if let Some(query_res) = sub.result().await {
             // If query successful, try again.
             if query_res.read().is_some() {
@@ -209,8 +195,8 @@ where
         let region_id = req.header.get_ref().region_id;
         TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().renew_lease_advance.inc());
         // Send a read query which may renew the lease
-        let (msg, mut sub) = PeerMsg::raft_query(req.clone());
-        MsgRouter::send(&self.router, region_id, msg);
+        let (msg, sub) = PeerMsg::raft_query(req.clone());
+        let _ = MsgRouter::send(&self.router, region_id, msg);
     }
 }
 
@@ -271,7 +257,7 @@ where
 }
 
 #[derive(Clone)]
-pub struct StoreMetaDelegate<E>
+struct StoreMetaDelegate<E>
 where
     E: KvEngine,
 {
@@ -393,44 +379,31 @@ impl<'r> RequestInspector for SnapRequestInspector<'r> {
 #[cfg(test)]
 mod tests {
     use std::{
-        borrow::Borrow,
+        cell::Cell,
         sync::mpsc::*,
         thread::{self, JoinHandle},
     };
 
-    use crossbeam::channel::TrySendError;
+    use crossbeam::{atomic::AtomicCell, channel::TrySendError};
     use engine_test::{
         ctor::{CfOptions, DbOptions},
-        kv::{KvTestEngine, KvTestSnapshot, TestTabletFactoryV2},
+        kv::{KvTestEngine, TestTabletFactoryV2},
     };
-    use engine_traits::{OpenOptions, Peekable, SyncMutable, ALL_CFS, CF_DEFAULT};
+    use engine_traits::{OpenOptions, Peekable, SyncMutable, TabletFactory, ALL_CFS};
     use futures::executor::block_on;
-    use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb::Region, raft_cmdpb::*};
+    use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, raft_cmdpb::*};
     use raftstore::store::{
-        util::Lease, Callback, LocalReaderCore, ProposalRouter, RaftCommand, ReadCallback,
+        util::Lease, ReadCallback, ReadProgress, RegionReadProgress, TrackVer, TxnExt,
         TLS_LOCAL_READ_METRICS,
     };
-    use tempfile::{Builder, TempDir};
+    use slog::o;
+    use tempfile::Builder;
     use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
     use time::Duration;
-    use txn_types::{Key, Lock, LockType, WriteBatchFlags};
+    use txn_types::WriteBatchFlags;
 
     use super::*;
     use crate::router::{QueryResult, ReadResponse};
-
-    fn new_read_delegate(
-        region: &Region,
-        peer_id: u64,
-        term: u64,
-        applied_index_term: u64,
-    ) -> ReadDelegate {
-        let mut read_delegate_core = ReadDelegate::mock(region.id);
-        read_delegate_core.peer_id = peer_id;
-        read_delegate_core.term = term;
-        read_delegate_core.applied_term = applied_index_term;
-        read_delegate_core.region = Arc::new(region.clone());
-        read_delegate_core
-    }
 
     struct MockRouter {
         p_router: SyncSender<(u64, PeerMsg)>,
@@ -460,7 +433,7 @@ mod tests {
     ) {
         let (ch, rx) = MockRouter::new();
         let mut reader = LocalReader::new(
-            StoreMetaDelegate::new(store_meta),
+            store_meta,
             ch,
             Logger::root(slog::Discard, o!("key1" => "value1")),
         );
@@ -489,7 +462,7 @@ mod tests {
         ) -> JoinHandle<()> {
             thread::spawn(move || {
                 // Msg for query will be sent
-                let (region_id, msg) = rx.recv().unwrap();
+                let (_, msg) = rx.recv().unwrap();
 
                 f();
                 match msg {
@@ -502,7 +475,7 @@ mod tests {
                     ),
                     _ => unreachable!(),
                 }
-                ch_tx.send(rx);
+                ch_tx.send(rx).unwrap();
             })
         }
 
@@ -627,16 +600,16 @@ mod tests {
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.applied_term.get()),
             1
         );
-        handler.join();
+        handler.join().unwrap();
         rx = ch_rx.recv().unwrap();
 
         // Read quorum.
         let mut cmd_read_quorum = cmd.clone();
         cmd_read_quorum.mut_header().set_read_quorum(true);
         let handler = handle_msg(|| {}, rx, ch_tx);
-        let snap = block_on(reader.snapshot(cmd_read_quorum.clone())).unwrap();
-        handler.join();
-        rx = ch_rx.recv().unwrap();
+        let _ = block_on(reader.snapshot(cmd_read_quorum.clone())).unwrap();
+        handler.join().unwrap();
+        ch_rx.recv().unwrap();
 
         // Stale read
         assert_eq!(
@@ -685,7 +658,7 @@ mod tests {
             let mut meta = store_meta.store_meta.as_ref().lock().unwrap();
 
             // Create read_delegate with region id 1
-            let mut read_delegate = ReadDelegate::mock(1);
+            let read_delegate = ReadDelegate::mock(1);
             meta.readers.insert(1, read_delegate);
 
             // create tablet with region_id 1 and prepare some data
@@ -696,9 +669,8 @@ mod tests {
             let cache = CachedTablet::new(Some(tablet1.clone()));
             meta.tablet_caches.insert(1, cache);
 
-            // Create read_delegate with region id 1
-            let mut read_delegate = ReadDelegate::mock(2);
-            let cache = CachedTablet::new(Some(read_delegate.clone()));
+            // Create read_delegate with region id 2
+            let read_delegate = ReadDelegate::mock(2);
             meta.readers.insert(2, read_delegate);
 
             // create tablet with region_id 1 and prepare some data

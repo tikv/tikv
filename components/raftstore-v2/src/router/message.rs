@@ -3,14 +3,11 @@
 // #[PerformanceCriticalPath]
 use std::fmt;
 
-use engine_traits::{KvEngine, Snapshot};
 use kvproto::{
-    cdcpb::Event,
-    metapb,
-    raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
+    raft_cmdpb::{RaftCmdRequest},
     raft_serverpb::RaftMessage,
 };
-use raftstore::store::{metrics::RaftEventDurationType, FetchedLogs, RegionSnapshot};
+use raftstore::store::{metrics::RaftEventDurationType, FetchedLogs};
 use tikv_util::time::Instant;
 
 use super::{

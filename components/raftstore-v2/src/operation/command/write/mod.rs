@@ -7,11 +7,9 @@ use raftstore::{
         cmd_resp,
         fsm::{apply, Proposal, MAX_PROPOSAL_SIZE_RATIO},
         msg::ErrorCallback,
-        WriteCallback,
     },
     Result,
 };
-use tikv_util::Either;
 
 use crate::{batch::StoreContext, raft::Peer, router::CmdResChannel};
 

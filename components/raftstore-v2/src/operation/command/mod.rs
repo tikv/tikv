@@ -12,21 +12,13 @@ use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest};
 use protobuf::Message;
 use raft::eraftpb::Entry;
 use raftstore::{
-    store::{
-        fsm::Proposal, local_metrics::RaftMetrics, metrics::*, msg::ErrorCallback, util,
-        WriteCallback,
-    },
+    store::{fsm::Proposal, local_metrics::RaftMetrics, metrics::*, util, WriteCallback},
     Error, Result,
 };
 use slog::error;
 use tikv_util::{box_err, time::monotonic_raw_now};
 
-use crate::{
-    batch::StoreContext,
-    fsm::{PeerFsm, PeerFsmDelegate},
-    raft::Peer,
-    router::CmdResChannel,
-};
+use crate::{batch::StoreContext, fsm::PeerFsmDelegate, raft::Peer, router::CmdResChannel};
 
 mod write;
 

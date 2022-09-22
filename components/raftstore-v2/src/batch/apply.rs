@@ -15,15 +15,7 @@ use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, HandleResult, HandlerBuilder, PollHandler,
 };
 use engine_traits::{KvEngine, RaftEngine};
-use raftstore::store::{
-    fsm::{
-        apply::{ControlFsm, ControlMsg},
-        ApplyNotifier,
-    },
-    util::LatencyInspector,
-    Config,
-};
-use slog::Logger;
+use raftstore::store::{fsm::apply::ControlFsm, util::LatencyInspector, Config};
 use tikv_util::config::{Tracker, VersionTrack};
 
 use crate::{

@@ -1,35 +1,27 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cell::Cell,
-    mem,
     ops::{Deref, DerefMut},
-    sync::{atomic::AtomicUsize, Arc, Mutex},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
 use batch_system::{
-    BasicMailbox, BatchRouter, BatchSystem, HandleResult, HandlerBuilder, PollHandler, Router,
+    BasicMailbox, BatchRouter, BatchSystem, HandleResult, HandlerBuilder, PollHandler,
 };
 use collections::HashMap;
-use crossbeam::channel::{Sender, TrySendError};
-use engine_traits::{Engines, KvEngine, RaftEngine, TabletFactory};
-use futures::{compat::Future01CompatExt, FutureExt};
-use kvproto::{
-    metapb::Store,
-    raft_serverpb::{PeerState, RaftMessage},
-};
+use crossbeam::channel::TrySendError;
+use engine_traits::{KvEngine, RaftEngine, TabletFactory};
+use kvproto::raft_serverpb::RaftMessage;
 use raft::INVALID_ID;
 use raftstore::store::{
     fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, RaftlogFetchRunner,
-    RaftlogFetchTask, StoreWriters, Transport, WriteMsg, WriteSenders,
+    RaftlogFetchTask, StoreWriters, Transport, WriteSenders,
 };
 use slog::Logger;
 use tikv_util::{
     box_err,
     config::{Tracker, VersionTrack},
-    defer,
-    future::poll_future_notify,
     time::Instant as TiInstant,
     timer::SteadyTimer,
     worker::{Scheduler, Worker},
@@ -40,8 +32,8 @@ use time::Timespec;
 use super::apply::{create_apply_batch_system, ApplyPollerBuilder, ApplyRouter, ApplySystem};
 use crate::{
     fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate, StoreMeta},
-    raft::{Peer, Storage},
-    router::{PeerMsg, PeerTick, QueryResChannel, StoreMsg},
+    raft::Storage,
+    router::{PeerMsg, PeerTick, StoreMsg},
     Error, Result,
 };
 

@@ -4,42 +4,22 @@ use std::{mem, sync::Arc};
 
 use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory};
-use fail::fail_point;
-use kvproto::{
-    kvrpcpb::ExtraOp as TxnExtraOp,
-    metapb,
-    raft_cmdpb::{self, RaftCmdRequest},
-    raft_serverpb::RegionLocalState,
-};
+use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb};
 use pd_client::BucketStat;
-use protobuf::Message;
-use raft::{RawNode, StateRole, INVALID_ID};
-use raftstore::{
-    store::{
-        fsm::Proposal,
-        metrics::PEER_PROPOSE_LOG_SIZE_HISTOGRAM,
-        util::{Lease, RegionReadProgress},
-        Config, EntryStorage, ProposalQueue, RaftlogFetchTask, ReadDelegate, ReadIndexQueue,
-        ReadIndexRequest, TrackVer, Transport, TxnExt, WriteRouter,
-    },
-    Error,
+use raft::{RawNode, StateRole};
+use raftstore::store::{
+    util::{Lease, RegionReadProgress},
+    Config, EntryStorage, ProposalQueue, ReadDelegate, ReadIndexQueue, TrackVer, TxnExt,
 };
-use slog::{debug, error, info, o, warn, Logger};
-use tikv_util::{
-    box_err,
-    config::ReadableSize,
-    time::{monotonic_raw_now, Instant as TiInstant},
-    worker::Scheduler,
-    Either,
-};
+use slog::Logger;
+use tikv_util::{box_err, config::ReadableSize};
 use time::Timespec;
 
 use super::storage::Storage;
 use crate::{
-    batch::StoreContext,
     operation::{AsyncWriter, DestroyProgress, SimpleWriteEncoder},
     router::{CmdResChannel, QueryResChannel},
-    tablet::{self, CachedTablet},
+    tablet::CachedTablet,
     Result,
 };
 

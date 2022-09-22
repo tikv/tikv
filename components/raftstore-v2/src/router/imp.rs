@@ -7,7 +7,6 @@ use std::{
 
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine};
-use futures::executor::block_on;
 use kvproto::{
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RaftMessage,
@@ -16,11 +15,7 @@ use raftstore::store::{FetchedLogs, LogFetchedNotifier, RegionSnapshot};
 use slog::Logger;
 
 use super::PeerMsg;
-use crate::{
-    batch::StoreRouter,
-    operation::{LocalReader, StoreMetaDelegate},
-    StoreMeta,
-};
+use crate::{batch::StoreRouter, operation::LocalReader, StoreMeta};
 
 impl<EK: KvEngine, ER: RaftEngine> LogFetchedNotifier for StoreRouter<EK, ER> {
     fn notify(&self, region_id: u64, fetched: FetchedLogs) {
@@ -57,11 +52,7 @@ impl<EK: KvEngine, ER: RaftEngine> ServerRaftStoreRouter<EK, ER> {
         router: StoreRouter<EK, ER>,
         logger: Logger,
     ) -> Self {
-        let local_reader = RefCell::new(LocalReader::new(
-            StoreMetaDelegate::new(store_meta),
-            router.clone(),
-            logger,
-        ));
+        let local_reader = RefCell::new(LocalReader::new(store_meta, router.clone(), logger));
         ServerRaftStoreRouter {
             router,
             local_reader,

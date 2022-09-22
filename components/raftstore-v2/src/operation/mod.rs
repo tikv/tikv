@@ -9,5 +9,4 @@ pub use command::{SimpleWriteDecoder, SimpleWriteEncoder};
 pub use life::DestroyProgress;
 pub use ready::AsyncWriter;
 
-// pub use query::local::{LocalReader, StoreMetaDelegate};
-pub(crate) use self::query::{LocalReader, StoreMetaDelegate};
+pub(crate) use self::query::LocalReader;
