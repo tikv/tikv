@@ -14,7 +14,8 @@ use tokio::{io::AsyncReadExt, runtime::Runtime};
 
 use crate::dfs::{Options, DFS};
 
-const MAX_RETRY_COUNT: u32 = 5;
+const MAX_RETRY_COUNT: u32 = 7;
+const RETRY_SLEEP_MS: u64 = 500;
 
 #[derive(Clone)]
 pub struct S3FS {
@@ -150,7 +151,7 @@ impl S3FSCore {
     async fn sleep_for_retry(&self, retry_cnt: &mut u32, file_id: u64) -> bool {
         if *retry_cnt < MAX_RETRY_COUNT {
             *retry_cnt += 1;
-            let retry_sleep = 2u64.pow(*retry_cnt) * 100;
+            let retry_sleep = 2u64.pow(*retry_cnt) * RETRY_SLEEP_MS;
             tokio::time::sleep(Duration::from_millis(retry_sleep)).await;
             true
         } else {
@@ -187,7 +188,7 @@ impl S3FSCore {
             if self.is_err_retryable(&err) {
                 if retry_cnt < MAX_RETRY_COUNT {
                     retry_cnt += 1;
-                    let retry_sleep = 2u64.pow(retry_cnt) * 100;
+                    let retry_sleep = 2u64.pow(retry_cnt) * RETRY_SLEEP_MS;
                     tokio::time::sleep(Duration::from_millis(retry_sleep)).await;
                     continue;
                 }
@@ -223,7 +224,7 @@ impl S3FSCore {
             if self.is_err_retryable(&err) {
                 if retry_cnt < MAX_RETRY_COUNT {
                     retry_cnt += 1;
-                    let retry_sleep = 2u64.pow(retry_cnt) * 100;
+                    let retry_sleep = 2u64.pow(retry_cnt) * RETRY_SLEEP_MS;
                     tokio::time::sleep(Duration::from_millis(retry_sleep)).await;
                     continue;
                 }
@@ -311,7 +312,7 @@ impl DFS for S3FS {
             if self.is_err_retryable(&err) {
                 if retry_cnt < MAX_RETRY_COUNT {
                     retry_cnt += 1;
-                    let retry_sleep = 2u64.pow(retry_cnt) * 100;
+                    let retry_sleep = 2u64.pow(retry_cnt) * RETRY_SLEEP_MS;
                     tokio::time::sleep(Duration::from_millis(retry_sleep)).await;
                     continue;
                 } else {
@@ -342,7 +343,7 @@ impl DFS for S3FS {
             if let Err(err) = self.s3c.copy_object(req).await {
                 if retry_cnt < MAX_RETRY_COUNT {
                     retry_cnt += 1;
-                    let retry_sleep = 2u64.pow(retry_cnt as u32) * 100;
+                    let retry_sleep = 2u64.pow(retry_cnt as u32) * RETRY_SLEEP_MS;
                     tokio::time::sleep(Duration::from_millis(retry_sleep)).await;
                     continue;
                 } else {
