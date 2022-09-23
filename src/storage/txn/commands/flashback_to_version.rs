@@ -62,7 +62,7 @@ impl CommandExt for FlashbackToVersion {
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
     fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
-        let mut reader = SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx);
+        let mut reader = SnapshotReader::new_with_ctx(self.version, snapshot, &self.ctx);
         let mut txn = MvccTxn::new(TimeStamp::zero(), context.concurrency_manager);
 
         let mut next_lock_key = self.next_lock_key.take();
