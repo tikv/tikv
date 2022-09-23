@@ -134,8 +134,10 @@ pub struct KeyLockWaitState {
     /// The counter of wake up events of legacy pessimistic lock requests
     /// (`allow_lock_with_conflict == false`). When an lock wait entry is
     /// pushed to the queue, it records the current counter. The purpose
-    /// is to mark the entries that needs to be woken up after delaying. An
-    /// example:
+    /// is to mark the entries that needs to be woken up after delaying.
+    ///
+    /// Here is an example showing how it works (note that requests in
+    /// the example are all in legacy mode):
     ///
     /// Let's denote a lock-wait entry by `(start_ts,
     /// current_legacy_wake_up_cnt)`. Consider there are three requests with
@@ -174,6 +176,13 @@ pub struct KeyLockWaitState {
     /// key_lock_wait_state.legacy_wake_up_cnt`. Therefore, we only wakes up
     /// entries 30 and 40 who has `current_legacy_wake_up_cnt < 1`, while 50 and
     /// 60 will be left untouched.
+    ///
+    /// When waking up resumable requests, the mechanism above won't take
+    /// effect. If a legacy request is woken up and triggered the mechanism,
+    /// and there is a resumable request in the queue, `delayed_notify_all`
+    /// will stop at the first resumable request it meets, pop it out, and
+    /// return it from a [`DelayedNotifyAllFuture`]. See
+    /// [`LockWaitQueues::pop_for_waking_up`].
     legacy_wake_up_cnt: usize,
     queue: BinaryHeap<Box<LockWaitEntry>>,
 
@@ -488,7 +497,7 @@ mod tests {
     use crate::storage::{
         lock_manager::{lock_wait_context::LockWaitContext, DummyLockManager, WaitTimeout},
         txn::ErrorInner as TxnErrorInner,
-        ErrorInner as StorageErrorInner, ProcessResult, StorageCallback,
+        ErrorInner as StorageErrorInner, StorageCallback,
     };
 
     struct TestLockWaitEntryHandle {
@@ -549,7 +558,6 @@ mod tests {
                 token,
                 start_ts,
                 start_ts,
-                ProcessResult::Res,
                 dummy_request_cb,
                 false,
             );
