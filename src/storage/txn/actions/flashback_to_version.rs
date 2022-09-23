@@ -2,7 +2,6 @@
 
 use txn_types::{Key, Lock, LockType, TimeStamp, Write, WriteType};
 
-use super::check_txn_status::rollback_lock;
 use crate::storage::{
     mvcc::{MvccReader, MvccTxn, SnapshotReader, MAX_TXN_WRITE_SIZE},
     txn::{Error, ErrorInner, Result as TxnResult},
@@ -97,14 +96,12 @@ pub fn flashback_to_version<S: Snapshot>(
             *next_lock_key = Some(key);
             break;
         }
-        rollback_lock(
-            txn,
-            reader,
-            key.clone(),
-            &lock,
-            lock.is_pessimistic_txn(),
-            true,
-        )?;
+        // We need to rollback with lock.ts rather than using version timestamp by
+        // invoking rollback funtion
+        let write = Write::new_rollback(lock.ts, false);
+        txn.put_write(key.clone(), lock.ts, write.as_ref().to_bytes());
+        txn.unlock_key(key.clone(), lock.is_pessimistic_txn());
+
         rows += 1;
         // If the short value is none and it's a `LockType::Put`, we should delete the
         // corresponding key from `CF_DEFAULT` as well.
@@ -166,6 +163,7 @@ pub mod tests {
         mvcc::tests::{must_get, must_get_none, write},
         txn::{
             actions::{
+                acquire_pessimistic_lock::tests::must_pessimistic_locked,
                 commit::tests::must_succeed as must_commit,
                 tests::{must_prewrite_delete, must_prewrite_put, must_rollback},
             },
@@ -174,7 +172,7 @@ pub mod tests {
         Engine, TestEngineBuilder,
     };
 
-    fn must_flashback_write<E: Engine>(
+    fn must_flashback_to_version<E: Engine>(
         engine: &E,
         key: &[u8],
         version: impl Into<TimeStamp>,
@@ -187,6 +185,11 @@ pub mod tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &ctx);
         let mut statistics = Statistics::default();
+        let (key_locks, has_remain_locks) =
+            flashback_to_version_read_lock(&mut reader, &Some(key.clone()), &None, &mut statistics)
+                .unwrap();
+        assert!(!has_remain_locks);
+
         let (key_old_writes, has_remain_writes) = flashback_to_version_read_write(
             &mut reader,
             0,
@@ -199,14 +202,11 @@ pub mod tests {
         )
         .unwrap();
         assert!(!has_remain_writes);
-        let (key_locks, _) =
-            flashback_to_version_read_lock(&mut reader, &Some(key.clone()), &None, &mut statistics)
-                .unwrap();
 
         let cm = ConcurrencyManager::new(TimeStamp::zero());
         let mut txn = MvccTxn::new(start_ts, cm);
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = SnapshotReader::new_with_ctx(start_ts, snapshot, &ctx);
+        let mut reader = SnapshotReader::new_with_ctx(version, snapshot, &ctx);
         let rows = flashback_to_version(
             &mut txn,
             &mut reader,
@@ -251,43 +251,43 @@ pub mod tests {
         must_get(&engine, k, *ts.incr(), v2);
         // Flashback to version 1 with start_ts = 14, commit_ts = 15.
         assert_eq!(
-            must_flashback_write(&engine, k, 1, *ts.incr(), *ts.incr()),
+            must_flashback_to_version(&engine, k, 1, *ts.incr(), *ts.incr()),
             1
         );
         must_get_none(&engine, k, *ts.incr());
         // Flashback to version 2 with start_ts = 17, commit_ts = 18.
         assert_eq!(
-            must_flashback_write(&engine, k, 2, *ts.incr(), *ts.incr()),
+            must_flashback_to_version(&engine, k, 2, *ts.incr(), *ts.incr()),
             1
         );
         must_get(&engine, k, *ts.incr(), v1);
         // Flashback to version 5 with start_ts = 20, commit_ts = 21.
         assert_eq!(
-            must_flashback_write(&engine, k, 5, *ts.incr(), *ts.incr()),
+            must_flashback_to_version(&engine, k, 5, *ts.incr(), *ts.incr()),
             1
         );
         must_get(&engine, k, *ts.incr(), v1);
         // Flashback to version 7 with start_ts = 23, commit_ts = 24.
         assert_eq!(
-            must_flashback_write(&engine, k, 7, *ts.incr(), *ts.incr()),
+            must_flashback_to_version(&engine, k, 7, *ts.incr(), *ts.incr()),
             1
         );
         must_get(&engine, k, *ts.incr(), v1);
         // Flashback to version 10 with start_ts = 26, commit_ts = 27.
         assert_eq!(
-            must_flashback_write(&engine, k, 10, *ts.incr(), *ts.incr()),
+            must_flashback_to_version(&engine, k, 10, *ts.incr(), *ts.incr()),
             1
         );
         must_get_none(&engine, k, *ts.incr());
         // Flashback to version 13 with start_ts = 29, commit_ts = 30.
         assert_eq!(
-            must_flashback_write(&engine, k, 13, *ts.incr(), *ts.incr()),
+            must_flashback_to_version(&engine, k, 13, *ts.incr(), *ts.incr()),
             1
         );
         must_get(&engine, k, *ts.incr(), v2);
         // Flashback to version 27 with start_ts = 32, commit_ts = 33.
         assert_eq!(
-            must_flashback_write(&engine, k, 27, *ts.incr(), *ts.incr()),
+            must_flashback_to_version(&engine, k, 27, *ts.incr(), *ts.incr()),
             1
         );
         must_get_none(&engine, k, *ts.incr());
@@ -306,7 +306,7 @@ pub mod tests {
         // Since the key has been deleted, flashback to version 1 should not do
         // anything.
         assert_eq!(
-            must_flashback_write(&engine, k, ts, *ts.incr(), *ts.incr()),
+            must_flashback_to_version(&engine, k, ts, *ts.incr(), *ts.incr()),
             0
         );
         must_get_none(&engine, k, ts);
@@ -317,16 +317,17 @@ pub mod tests {
         use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let (k, v) = (b"k1", b"v");
+        let (k, v) = (b"k", b"v");
         // Prewrite and commit Put(k -> v1) with stat_ts = 10, commit_ts = 20.
         must_prewrite_put(&engine, k, v, k, 10);
         must_commit(&engine, k, 10, 20);
 
         let v1 = b"v1";
         must_acquire_pessimistic_lock(&engine, k, k, 30, 30);
+        must_pessimistic_locked(&engine, k, 30, 30);
 
         // Flashback to version 25 with start_ts = 30, commit_ts = 40.
-        assert_eq!(must_flashback_write(&engine, k, 25, 30, 40), 1);
+        assert_eq!(must_flashback_to_version(&engine, k, 25, 30, 40), 1);
 
         // Pessimistic Prewrite Put(k -> v1) with stat_ts = 30 will be error with
         // Rollback.
