@@ -932,6 +932,7 @@ where
         engines: Engines<EK, ER>,
         region: &metapb::Region,
         peer: metapb::Peer,
+        commit_since_index: Option<u64>,
     ) -> Result<Peer<EK, ER>> {
         if peer.get_id() == raft::INVALID_ID {
             return Err(box_err!("invalid peer id"));
@@ -961,6 +962,7 @@ where
             max_size_per_msg: cfg.raft_max_size_per_msg.0,
             max_inflight_msgs: cfg.raft_max_inflight_msgs,
             applied: applied_index,
+            commit_since_index: commit_since_index.unwrap_or(applied_index),
             check_quorum: true,
             skip_bcast_commit: true,
             pre_vote: cfg.prevote,

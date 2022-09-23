@@ -185,8 +185,8 @@ zipf = "6.1.0"
 
 [patch.crates-io]
 # TODO: remove this when new raft-rs is published.
-raft = { git = "https://github.com/tikv/raft-rs", branch = "master" }
-raft-proto = { git = "https://github.com/tikv/raft-rs", branch = "master" }
+raft = { git = "https://github.com/5kbpers/raft-rs", branch = "option-commit-since-index" }
+raft-proto = { git = "https://github.com/5kbpers/raft-rs", branch = "option-commit-since-index" }
 protobuf = { git = "https://github.com/pingcap/rust-protobuf", branch = "v2.8" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", branch = "v2.8" }
 
@@ -298,7 +298,7 @@ opt-level = 1
 
 [profile.dev]
 opt-level = 0
-debug = 0
+debug = 2
 codegen-units = 4
 lto = false
 incremental = true

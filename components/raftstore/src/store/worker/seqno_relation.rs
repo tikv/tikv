@@ -436,21 +436,19 @@ impl<EK: KvEngine, ER: RaftEngine> Runnable for Runner<EK, ER> {
         match task {
             Task::ApplyRes(apply_res) => {
                 self.on_apply_res(&apply_res);
-                if self.started {
-                    for r in apply_res {
-                        let region_id = r.region_id;
-                        if let Err(e) = self.router.force_send(
-                            region_id,
-                            PeerMsg::ApplyRes {
-                                res: ApplyTaskRes::Apply(r),
-                            },
-                        ) {
-                            error!(
-                                "failed to force send apply res";
-                                "region_id" => region_id,
-                                "err" => ?e
-                            );
-                        }
+                for r in apply_res {
+                    let region_id = r.region_id;
+                    if let Err(e) = self.router.force_send(
+                        region_id,
+                        PeerMsg::ApplyRes {
+                            res: ApplyTaskRes::Apply(r),
+                        },
+                    ) {
+                        error!(
+                            "failed to force send apply res";
+                            "region_id" => region_id,
+                            "err" => ?e
+                        );
                     }
                 }
             }

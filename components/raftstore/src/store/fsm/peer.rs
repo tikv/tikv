@@ -241,6 +241,7 @@ where
         raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         engines: Engines<EK, ER>,
         region: &metapb::Region,
+        commit_since_index: Option<u64>,
     ) -> Result<SenderFsmPair<EK, ER>> {
         let meta_peer = match util::find_peer(region, store_id) {
             None => {
@@ -272,6 +273,7 @@ where
                     engines,
                     region,
                     meta_peer,
+                    commit_since_index,
                 )?,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
@@ -328,6 +330,7 @@ where
                     engines,
                     &region,
                     peer,
+                    None,
                 )?,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
@@ -600,6 +603,11 @@ where
     }
 
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK>>) {
+        // println!(
+        //     ">>>>>>>> region {} handle msgs: {:?}",
+        //     self.region_id(),
+        //     msgs
+        // );
         for m in msgs.drain(..) {
             match m {
                 PeerMsg::RaftMessage(msg) => {
@@ -3792,6 +3800,7 @@ where
                 self.ctx.raftlog_fetch_scheduler.clone(),
                 self.ctx.engines.clone(),
                 &new_region,
+                None,
             ) {
                 Ok((sender, new_peer)) => (sender, new_peer),
                 Err(e) => {

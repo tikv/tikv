@@ -1234,8 +1234,146 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
         let kv_engine = self.engines.kv.clone();
         let raft_engine = self.engines.raft.clone();
         let store_id = self.store.get_id();
-        let mut recover_from_raft_db = false;
+        let recover_from_raft_db = self.maybe_recover_state_from_raft_db()?;
 
+        let mut total_count = 0;
+        let mut tombstone_count = 0;
+        let mut applying_count = 0;
+        let mut region_peers = vec![];
+
+        let t = TiInstant::now();
+        let mut kv_wb = self.engines.kv.write_batch();
+        let mut raft_wb = self.engines.raft.log_batch(4 * 1024);
+        let mut applying_regions = vec![];
+        let mut merging_count = 0;
+        let mut meta = self.store_meta.lock().unwrap();
+        let mut replication_state = self.global_replication_state.lock().unwrap();
+        kv_engine.scan(CF_RAFT, start_key, end_key, false, |key, value| {
+            let (region_id, suffix) = box_try!(keys::decode_region_meta_key(key));
+            if suffix != keys::REGION_STATE_SUFFIX {
+                return Ok(true);
+            }
+
+            total_count += 1;
+
+            let mut local_state = RegionLocalState::default();
+            local_state.merge_from_bytes(value)?;
+
+            let region = local_state.get_region();
+            if local_state.get_state() == PeerState::Tombstone {
+                tombstone_count += 1;
+                debug!("region is tombstone"; "region" => ?region, "store_id" => store_id);
+                self.clear_stale_meta(&mut kv_wb, &mut raft_wb, &local_state);
+                return Ok(true);
+            }
+            if local_state.get_state() == PeerState::Applying {
+                if !recover_from_raft_db {
+                    // in case of restart happen when we just write region state to Applying,
+                    // but not write raft_local_state to raft rocksdb in time.
+                    box_try!(peer_storage::recover_from_applying_state(
+                        &self.engines,
+                        &mut raft_wb,
+                        region_id
+                    ));
+                }
+                applying_count += 1;
+                applying_regions.push(region.clone());
+                return Ok(true);
+            }
+
+            let commit_since_index = self.seqno_recover_range.as_ref().and_then(|range| {
+                if let Some(relation) = raft_engine
+                    .get_seqno_relation(region_id, *range.end())
+                    .unwrap()
+                {
+                    Some(relation.get_apply_state().get_applied_index())
+                } else {
+                    None
+                }
+            });
+
+            let (tx, mut peer) = box_try!(PeerFsm::create(
+                store_id,
+                &self.cfg.value(),
+                self.region_scheduler.clone(),
+                self.seqno_scheduler.clone(),
+                self.raftlog_fetch_scheduler.clone(),
+                self.engines.clone(),
+                region,
+                commit_since_index,
+            ));
+            peer.peer.init_replication_mode(&mut replication_state);
+            if local_state.get_state() == PeerState::Merging {
+                info!("region is merging"; "region" => ?region, "store_id" => store_id);
+                merging_count += 1;
+                peer.set_pending_merge_state(local_state.get_merge_state().to_owned());
+            }
+            meta.region_ranges.insert(enc_end_key(region), region_id);
+            meta.regions.insert(region_id, region.clone());
+            meta.region_read_progress
+                .insert(region_id, peer.peer.read_progress.clone());
+            // No need to check duplicated here, because we use region id as the key
+            // in DB.
+            region_peers.push((tx, peer));
+            self.coprocessor_host.on_region_changed(
+                region,
+                RegionChangeEvent::Create,
+                StateRole::Follower,
+            );
+            Ok(true)
+        })?;
+
+        if !kv_wb.is_empty() {
+            kv_wb.write().unwrap();
+            self.engines.kv.sync_wal().unwrap();
+            self.engines.kv.flush_cfs(true).unwrap();
+        }
+        if !raft_wb.is_empty() {
+            self.engines.raft.consume(&mut raft_wb, true).unwrap();
+        }
+
+        // schedule applying snapshot after raft writebatch were written.
+        for region in applying_regions {
+            info!("region is applying snapshot"; "region" => ?region, "store_id" => store_id);
+            let (tx, mut peer) = PeerFsm::create(
+                store_id,
+                &self.cfg.value(),
+                self.region_scheduler.clone(),
+                self.seqno_scheduler.clone(),
+                self.raftlog_fetch_scheduler.clone(),
+                self.engines.clone(),
+                &region,
+                None,
+            )?;
+            peer.peer.init_replication_mode(&mut replication_state);
+            peer.schedule_applying_snapshot();
+            meta.region_ranges
+                .insert(enc_end_key(&region), region.get_id());
+            meta.region_read_progress
+                .insert(region.get_id(), peer.peer.read_progress.clone());
+            meta.regions.insert(region.get_id(), region);
+            region_peers.push((tx, peer));
+        }
+
+        info!(
+            "start store";
+            "store_id" => store_id,
+            "region_count" => total_count,
+            "tombstone_count" => tombstone_count,
+            "applying_count" =>  applying_count,
+            "merge_count" => merging_count,
+            "takes" => ?t.saturating_elapsed(),
+        );
+
+        self.clear_stale_data(&meta)?;
+
+        Ok(region_peers)
+    }
+
+    fn maybe_recover_state_from_raft_db(&mut self) -> Result<bool> {
+        let mut recover_from_raft_db = false;
+        let kv_engine = self.engines.kv.clone();
+        let raft_engine = self.engines.raft.clone();
         if let Some(last_seqno) = raft_engine.recover_from_raft_db().unwrap() {
             info!("start to recover states from raftdb"; "seqno" => last_seqno);
             recover_from_raft_db = true;
@@ -1294,7 +1432,9 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                         } else {
                             None
                         };
-                        info!("recover region from raftdb";
+
+                        info!(
+                            "recover region from raftdb";
                             "region_id" => region_id,
                             "region_state" => ?region_state,
                             "apply_state" => ?apply_state,
@@ -1307,126 +1447,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
         } else if self.cfg.value().disable_kv_wal {
             migrate_states_from_kvdb_to_raftdb(&self.engines)?;
         }
-
-        let mut total_count = 0;
-        let mut tombstone_count = 0;
-        let mut applying_count = 0;
-        let mut region_peers = vec![];
-
-        let t = TiInstant::now();
-        let mut kv_wb = self.engines.kv.write_batch();
-        let mut raft_wb = self.engines.raft.log_batch(4 * 1024);
-        let mut applying_regions = vec![];
-        let mut merging_count = 0;
-        let mut meta = self.store_meta.lock().unwrap();
-        let mut replication_state = self.global_replication_state.lock().unwrap();
-        kv_engine.scan(CF_RAFT, start_key, end_key, false, |key, value| {
-            let (region_id, suffix) = box_try!(keys::decode_region_meta_key(key));
-            if suffix != keys::REGION_STATE_SUFFIX {
-                return Ok(true);
-            }
-
-            total_count += 1;
-
-            let mut local_state = RegionLocalState::default();
-            local_state.merge_from_bytes(value)?;
-
-            let region = local_state.get_region();
-            if local_state.get_state() == PeerState::Tombstone {
-                tombstone_count += 1;
-                debug!("region is tombstone"; "region" => ?region, "store_id" => store_id);
-                self.clear_stale_meta(&mut kv_wb, &mut raft_wb, &local_state);
-                return Ok(true);
-            }
-            if local_state.get_state() == PeerState::Applying {
-                if !recover_from_raft_db {
-                    // in case of restart happen when we just write region state to Applying,
-                    // but not write raft_local_state to raft rocksdb in time.
-                    box_try!(peer_storage::recover_from_applying_state(
-                        &self.engines,
-                        &mut raft_wb,
-                        region_id
-                    ));
-                }
-                applying_count += 1;
-                applying_regions.push(region.clone());
-                return Ok(true);
-            }
-
-            let (tx, mut peer) = box_try!(PeerFsm::create(
-                store_id,
-                &self.cfg.value(),
-                self.region_scheduler.clone(),
-                self.seqno_scheduler.clone(),
-                self.raftlog_fetch_scheduler.clone(),
-                self.engines.clone(),
-                region,
-            ));
-            peer.peer.init_replication_mode(&mut replication_state);
-            if local_state.get_state() == PeerState::Merging {
-                info!("region is merging"; "region" => ?region, "store_id" => store_id);
-                merging_count += 1;
-                peer.set_pending_merge_state(local_state.get_merge_state().to_owned());
-            }
-            meta.region_ranges.insert(enc_end_key(region), region_id);
-            meta.regions.insert(region_id, region.clone());
-            meta.region_read_progress
-                .insert(region_id, peer.peer.read_progress.clone());
-            // No need to check duplicated here, because we use region id as the key
-            // in DB.
-            region_peers.push((tx, peer));
-            self.coprocessor_host.on_region_changed(
-                region,
-                RegionChangeEvent::Create,
-                StateRole::Follower,
-            );
-            Ok(true)
-        })?;
-
-        if !kv_wb.is_empty() {
-            kv_wb.write().unwrap();
-            self.engines.kv.sync_wal().unwrap();
-            self.engines.kv.flush_cfs(true).unwrap();
-        }
-        if !raft_wb.is_empty() {
-            self.engines.raft.consume(&mut raft_wb, true).unwrap();
-        }
-
-        // schedule applying snapshot after raft writebatch were written.
-        for region in applying_regions {
-            info!("region is applying snapshot"; "region" => ?region, "store_id" => store_id);
-            let (tx, mut peer) = PeerFsm::create(
-                store_id,
-                &self.cfg.value(),
-                self.region_scheduler.clone(),
-                self.seqno_scheduler.clone(),
-                self.raftlog_fetch_scheduler.clone(),
-                self.engines.clone(),
-                &region,
-            )?;
-            peer.peer.init_replication_mode(&mut replication_state);
-            peer.schedule_applying_snapshot();
-            meta.region_ranges
-                .insert(enc_end_key(&region), region.get_id());
-            meta.region_read_progress
-                .insert(region.get_id(), peer.peer.read_progress.clone());
-            meta.regions.insert(region.get_id(), region);
-            region_peers.push((tx, peer));
-        }
-
-        info!(
-            "start store";
-            "store_id" => store_id,
-            "region_count" => total_count,
-            "tombstone_count" => tombstone_count,
-            "applying_count" =>  applying_count,
-            "merge_count" => merging_count,
-            "takes" => ?t.saturating_elapsed(),
-        );
-
-        self.clear_stale_data(&meta)?;
-
-        Ok(region_peers)
+        Ok(recover_from_raft_db)
     }
 
     fn clear_stale_meta(
@@ -1887,6 +1908,20 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             })
             .unwrap();
 
+        let mut mailboxes = Vec::with_capacity(region_peers.len());
+        let mut address = Vec::with_capacity(region_peers.len());
+        for (tx, fsm) in region_peers {
+            address.push(fsm.region_id());
+            mailboxes.push((
+                fsm.region_id(),
+                BasicMailbox::new(tx, fsm, self.router.state_cnt().clone()),
+            ));
+        }
+        self.router.register_all(mailboxes);
+        let tag = format!("raftstore-{}", store.get_id());
+        let coprocessor_host = builder.coprocessor_host.clone();
+        self.system.spawn(tag, builder);
+
         self.apply_system
             .spawn("apply".to_owned(), apply_poller_builder);
         if let Some(range) = raft_builder.seqno_recover_range.as_ref() {
@@ -1904,23 +1939,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             scheduler.schedule(SeqnoRelationTask::Start).unwrap();
         }
 
-        let tag = format!("raftstore-{}", store.get_id());
-        let coprocessor_host = builder.coprocessor_host.clone();
-        self.system.spawn(tag, builder);
-        let mut mailboxes = Vec::with_capacity(region_peers.len());
-        let mut address = Vec::with_capacity(region_peers.len());
-        for (tx, fsm) in region_peers {
-            address.push(fsm.region_id());
-            mailboxes.push((
-                fsm.region_id(),
-                BasicMailbox::new(tx, fsm, self.router.state_cnt().clone()),
-            ));
-        }
-        self.router.register_all(mailboxes);
-
         // Make sure Msg::Start is the first message each FSM received.
         for addr in address {
-            self.router.force_send(addr, PeerMsg::Start).unwrap();
+            let _ = self.router.force_send(addr, PeerMsg::Start);
         }
 
         let refresh_config_runner = RefreshConfigRunner::new(
@@ -3295,6 +3316,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             self.ctx.raftlog_fetch_scheduler.clone(),
             self.ctx.engines.clone(),
             &region,
+            None,
         ) {
             Ok((sender, peer)) => (sender, peer),
             Err(e) => {

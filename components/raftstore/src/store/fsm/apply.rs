@@ -1111,7 +1111,13 @@ where
             if entry.get_index() == self.last_recover_index {
                 if !self.last_recover_apply_res.is_empty() {
                     let apply_res = mem::take(&mut self.last_recover_apply_res);
-                    apply_ctx.notifier.notify_direct(apply_res);
+                    println!(
+                        "region {} recovering apply res {}: {:?}",
+                        self.region_id(),
+                        self.last_recover_index,
+                        apply_res
+                    );
+                    // apply_ctx.notifier.notify_direct(apply_res);
                 }
                 continue;
             }
@@ -3793,7 +3799,9 @@ where
         }
         apply_ctx.finish_for(&mut self.delegate, results);
         apply_ctx.skip_sst_ingest = false;
-        self.delegate.last_recover_apply_res = apply_ctx.apply_res.clone();
+        self.delegate
+            .last_recover_apply_res
+            .extend_from_slice(&apply_ctx.apply_res);
 
         if let Some((logs_up_to_date, source_region_id, commit)) = wait_merge_source {
             cb(RecoverStatus::WaitMergeSource {
