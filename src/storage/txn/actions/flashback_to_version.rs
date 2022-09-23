@@ -96,7 +96,6 @@ pub fn flashback_to_version<S: Snapshot>(
             *next_lock_key = Some(key);
             break;
         }
-        
         rollback_lock(
             txn,
             reader,
@@ -105,7 +104,6 @@ pub fn flashback_to_version<S: Snapshot>(
             lock.is_pessimistic_txn(),
             true,
         )?;
-
         rows += 1;
         // If the short value is none and it's a `LockType::Put`, we should delete the
         // corresponding key from `CF_DEFAULT` as well.
@@ -193,7 +191,6 @@ pub mod tests {
             flashback_to_version_read_lock(&mut reader, &Some(key.clone()), &None, &mut statistics)
                 .unwrap();
         assert!(!has_remain_locks);
-
         let (key_old_writes, has_remain_writes) = flashback_to_version_read_write(
             &mut reader,
             0,
@@ -206,7 +203,6 @@ pub mod tests {
         )
         .unwrap();
         assert!(!has_remain_writes);
-
         let cm = ConcurrencyManager::new(TimeStamp::zero());
         let mut txn = MvccTxn::new(start_ts, cm);
         let snapshot = engine.snapshot(Default::default()).unwrap();
