@@ -441,14 +441,14 @@ mod test {
         raft_cmdpb::{BatchSplitRequest, SplitRequest},
         raft_serverpb::{PeerState, RaftApplyState, RegionLocalState},
     };
-    use raftstore::store::{util::new_learner_peer, Config};
+    use raftstore::store::Config;
     use slog::o;
     use tempfile::TempDir;
     use tikv_util::{
         config::VersionTrack,
+        store::{new_learner_peer, new_peer},
         worker::{FutureScheduler, Scheduler},
     };
-    use util::new_peer;
 
     use super::*;
     use crate::{batch::ApplyPoller, fsm::ApplyFsm, raft::Apply, tablet::CachedTablet};

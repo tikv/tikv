@@ -19,7 +19,7 @@ use raftstore::{
     store::{
         fsm::Proposal,
         metrics::PEER_PROPOSE_LOG_SIZE_HISTOGRAM,
-        util::{find_peer, Lease, RegionReadProgress},
+        util::{Lease, RegionReadProgress},
         Config, EntryStorage, PeerStat, ProposalQueue, RaftlogFetchTask, ReadDelegate,
         ReadIndexQueue, ReadIndexRequest, Transport, TxnExt, WriteRouter,
     },
