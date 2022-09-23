@@ -2,6 +2,7 @@
 
 use txn_types::{Key, Lock, LockType, TimeStamp, Write, WriteType};
 
+use super::check_txn_status::rollback_lock;
 use crate::storage::{
     mvcc::{MvccReader, MvccTxn, SnapshotReader, MAX_TXN_WRITE_SIZE},
     txn::{Error, ErrorInner, Result as TxnResult},
@@ -98,9 +99,14 @@ pub fn flashback_to_version<S: Snapshot>(
         }
         // We need to rollback with lock.ts rather than using version timestamp by
         // invoking rollback funtion
-        let write = Write::new_rollback(lock.ts, false);
-        txn.put_write(key.clone(), lock.ts, write.as_ref().to_bytes());
-        txn.unlock_key(key.clone(), lock.is_pessimistic_txn());
+        rollback_lock(
+            txn,
+            reader,
+            key.clone(),
+            &lock,
+            lock.is_pessimistic_txn(),
+            true,
+        )?;
 
         rows += 1;
         // If the short value is none and it's a `LockType::Put`, we should delete the
@@ -165,7 +171,7 @@ pub mod tests {
             actions::{
                 acquire_pessimistic_lock::tests::must_pessimistic_locked,
                 commit::tests::must_succeed as must_commit,
-                tests::{must_prewrite_delete, must_prewrite_put, must_rollback},
+                tests::{must_prewrite_delete, must_prewrite_put,must_rollback},
             },
             tests::{must_acquire_pessimistic_lock, must_pessimistic_prewrite_put_err},
         },
@@ -206,7 +212,7 @@ pub mod tests {
         let cm = ConcurrencyManager::new(TimeStamp::zero());
         let mut txn = MvccTxn::new(start_ts, cm);
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = SnapshotReader::new_with_ctx(version, snapshot, &ctx);
+        let mut reader = SnapshotReader::new_with_ctx(start_ts, snapshot, &ctx);
         let rows = flashback_to_version(
             &mut txn,
             &mut reader,
@@ -317,21 +323,24 @@ pub mod tests {
         use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let (k, v) = (b"k", b"v");
-        // Prewrite and commit Put(k -> v1) with stat_ts = 10, commit_ts = 20.
-        must_prewrite_put(&engine, k, v, k, 10);
-        must_commit(&engine, k, 10, 20);
+        let k = b"k";
+        let (v1, v2, v3) = (b"v1", b"v2", b"v3");
+        // Prewrite and commit Put(k -> v1) with stat_ts = 10, commit_ts = 15.
+        must_prewrite_put(&engine, k, v1, k, 10);
+        must_commit(&engine, k, 10, 15);
+        // Prewrite and commit Put(k -> v2) with stat_ts = 20, commit_ts = 25.
+        must_prewrite_put(&engine, k, v2, k, 20);
+        must_commit(&engine, k, 20, 25);
 
-        let v1 = b"v1";
         must_acquire_pessimistic_lock(&engine, k, k, 30, 30);
         must_pessimistic_locked(&engine, k, 30, 30);
 
-        // Flashback to version 25 with start_ts = 30, commit_ts = 40.
-        assert_eq!(must_flashback_to_version(&engine, k, 25, 30, 40), 1);
+        // Flashback to version 17 with start_ts = 30, commit_ts = 40.
+        assert_eq!(must_flashback_to_version(&engine, k, 17, 30, 40), 2);
 
-        // Pessimistic Prewrite Put(k -> v1) with stat_ts = 30 will be error with
+        // Pessimistic Prewrite Put(k -> v3) with stat_ts = 30 will be error with
         // Rollback.
-        must_pessimistic_prewrite_put_err(&engine, k, v1, k, 30, 30, DoPessimisticCheck);
-        must_get(&engine, k, 45, v);
+        must_pessimistic_prewrite_put_err(&engine, k, v3, k, 30, 30, DoPessimisticCheck);
+        must_get(&engine, k, 45, v1);
     }
 }
