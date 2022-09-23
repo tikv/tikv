@@ -62,6 +62,7 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 tempfile = "3.0"
 test_pd = { path = "../test_pd" }
 test_util = { path = "../test_util" }
+test_raftstore = { path = "../test_raftstore"}
 
 [[test]]
 name = "raftstore-v2-failpoints"

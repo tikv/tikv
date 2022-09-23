@@ -355,63 +355,11 @@ where
         start_key: &[u8],
         end_key: &[u8],
     ) {
-        info!("register deleting data in range";
-            "region_id" => region_id,
-            "start_key" => log_wrappers::Value::key(start_key),
-            "end_key" => log_wrappers::Value::key(end_key),
-        );
-        let seq = tablet.get_latest_sequence_number();
-        self.pending_delete_ranges
-            .entry((region_id, tablet_suffix))
-            .or_insert_with(Default::default)
-            .push(StalePeerInfo {
-                start_key: start_key.to_vec(),
-                end_key: end_key.to_vec(),
-                stale_sequence: seq,
-            });
+        unimplemented!()
     }
 
     fn clean_stale_tablets(&self) {
-        let root = self.table_factory.tablets_path();
-        let dir = match std::fs::read_dir(&root) {
-            Ok(dir) => dir,
-            Err(e) => {
-                info!("skip cleaning stale tablets: {:?}", e);
-                return;
-            }
-        };
-        for path in dir.flatten() {
-            let file_name = path.file_name().into_string().unwrap();
-            let mut parts = file_name.split('_');
-            let region_id = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-            // let suffix = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-            // if region_id == 0 && suffix == 0 {
-            //     continue;
-            // };
-            let (region_id, suffix) = match (
-                parts.next().map(|p| p.parse()),
-                parts.next().map(|p| p.parse()),
-            ) {
-                (Some(Ok(r)), Some(Ok(s))) => (r, s),
-                _ => continue,
-            };
-            if self
-                .table_factory
-                .open_tablet(
-                    region_id,
-                    Some(suffix),
-                    OpenOptions::default().set_create_new(true),
-                )
-                .is_ok()
-            {
-                continue;
-            }
-            if self.table_factory.is_tombstoned(region_id, suffix) {
-                if let Err(e) = self.table_factory.destroy_tablet(region_id, suffix) {
-                    info!("failed to destroy tablet {} {}: {:?}", region_id, suffix, e);
-                }
-            }
-        }
+        unimplemented!()
     }
 }
 
@@ -433,7 +381,7 @@ where
         "region_id" => region_id,
     );
 
-    // FIXME: remove me after snap flow control.
+    // TODO: new way to do flow control.
     if mgr.stats().sending_count >= 32 {
         canceled.store(true, Ordering::Relaxed);
         return Err(storage_error(format!(
@@ -515,7 +463,7 @@ where
 
     let key = SnapKey::new(region_id, apply_term, apply_index);
     let final_path = mgr.get_final_name_for_build(&key);
-    // TODO: perhaps should check if exists before creating checkpoint.
+
     let reused = tablet_factory.exists_raw(&final_path);
     if reused {
         drop(tablet);

@@ -4263,6 +4263,7 @@ dependencies = [
  "smallvec",
  "tempfile",
  "test_pd",
+ "test_raftstore",
  "test_util",
  "tikv_alloc",
  "tikv_util",

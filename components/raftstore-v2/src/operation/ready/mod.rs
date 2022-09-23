@@ -38,7 +38,7 @@ use crate::{
     fsm::{PeerFsm, PeerFsmDelegate},
     operation::DestroyProgress,
     raft::{Peer, Storage},
-    router::PeerTick,
+    router::{PeerTick, ApplyTask},
 };
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
     /// Raft relies on periodic ticks to keep the state machine sync with other
@@ -262,6 +262,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         debug!(self.logger, "handle raft ready");
 
         let mut ready = self.raft_group_mut().ready();
+        if let Some(gen_task) = self.storage_mut().take_gen_snap_task() {
+            ctx.apply_router.schedule_task(self.region_id(), ApplyTask::Snapshot(gen_task));
+        }
         // Update it after unstable entries pagination is introduced.
         debug_assert!(ready.entries().last().map_or_else(
             || true,

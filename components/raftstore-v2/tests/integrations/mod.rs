@@ -13,7 +13,7 @@ use std::{
     path::Path,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, RwLock,
     },
     thread,
     time::{Duration, Instant},
@@ -48,9 +48,11 @@ use raftstore_v2::{
 use slog::{o, Logger};
 use tempfile::{TempDir, TempPath};
 use test_pd::mocker::Service;
+use test_raftstore::{filter_send, Filter};
 use tikv_util::{
     box_err,
     config::{ReadableDuration, VersionTrack},
+    HandyRwLock,
 };
 
 mod test_basic_write;
@@ -60,23 +62,33 @@ mod test_snap;
 mod test_status;
 
 #[derive(Clone)]
-struct TestRouter(StoreRouter<KvTestEngine, RaftTestEngine>);
+struct TestRouter {
+    router: StoreRouter<KvTestEngine, RaftTestEngine>,
+    recv_filters: Arc<RwLock<Vec<Box<dyn Filter>>>>,
+}
 
 impl Deref for TestRouter {
     type Target = StoreRouter<KvTestEngine, RaftTestEngine>;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.router
     }
 }
 
 impl DerefMut for TestRouter {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+        &mut self.router
     }
 }
 
 impl TestRouter {
+    pub fn new(router: StoreRouter<KvTestEngine, RaftTestEngine>) -> TestRouter {
+        TestRouter {
+            router,
+            recv_filters: Arc::new(RwLock::new(vec![])),
+        }
+    }
+
     fn query(&self, region_id: u64, req: RaftCmdRequest) -> Option<QueryResult> {
         let (msg, sub) = PeerMsg::raft_query(req);
         self.send(region_id, msg).unwrap();
@@ -101,6 +113,22 @@ impl TestRouter {
         let (msg, sub) = PeerMsg::raft_command(req);
         self.send(region_id, msg).unwrap();
         block_on(sub.result())
+    }
+
+    fn send_raft_message(&self, msg: Box<RaftMessage>) -> raftstore_v2::Result<()> {
+        filter_send(&self.recv_filters, *msg, |m| {
+            self.router
+                .send_raft_message(Box::new(m))
+                .map_err(|e| box_err!(e))
+        })
+    }
+
+    fn clear_recv_filters(&mut self) {
+        self.recv_filters.wl().clear();
+    }
+
+    fn add_recv_filter(&mut self, filter: Box<dyn Filter>) {
+        self.recv_filters.wl().push(filter);
     }
 }
 
@@ -193,7 +221,6 @@ impl ClusterBuilder {
                 .unwrap()
                 .insert(*store_id, router.clone());
             cluster.nodes.push(node);
-            // cluster.receivers.push(rx);
             cluster.routers.push(router)
         }
         cluster
@@ -325,7 +352,7 @@ impl RunningState {
             )
             .unwrap();
         self.system = Some(system);
-        TestRouter(router)
+        TestRouter::new(router)
     }
 }
 
@@ -393,9 +420,9 @@ pub struct ChannelTransport {
 
 impl Transport for ChannelTransport {
     fn send(&mut self, msg: RaftMessage) -> raftstore_v2::Result<()> {
-        // let from_store = msg.get_from_peer().get_store_id();
         let to_store = msg.get_to_peer().get_store_id();
         let core = self.core.lock().unwrap();
+        // TODO: handle snapshot message
         match core.get(&to_store) {
             Some(h) => {
                 h.send_raft_message(Box::new(msg))?;
@@ -418,7 +445,6 @@ impl Transport for ChannelTransport {
 
 #[derive(Clone)]
 pub struct TestNodeTransport {
-    // tx: Sender<RaftMessage>,
     flush_cnt: Arc<AtomicUsize>,
     ch: ChannelTransport,
 }

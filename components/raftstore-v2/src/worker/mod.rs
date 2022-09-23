@@ -1,5 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-mod snap;
+mod region;
 
-pub use snap::{Runner as SnapshotRunner, Task as SnapshotTask};
+pub use region::{Runner as SnapshotRunner, Task as SnapshotTask};

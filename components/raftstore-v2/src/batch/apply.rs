@@ -8,12 +8,17 @@
 
 use std::{
     ops::{Deref, DerefMut},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        mpsc::SyncSender,
+        Arc,
+    },
 };
 
 use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, HandleResult, HandlerBuilder, PollHandler,
 };
+use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{KvEngine, RaftEngine};
 use raftstore::store::{
     fsm::{
@@ -24,7 +29,10 @@ use raftstore::store::{
     Config,
 };
 use slog::Logger;
-use tikv_util::config::{Tracker, VersionTrack};
+use tikv_util::{
+    config::{Tracker, VersionTrack},
+    warn, Either,
+};
 
 use crate::{
     fsm::{ApplyFsm, ApplyFsmDelegate},
@@ -173,12 +181,60 @@ impl<EK: KvEngine> ApplySystem<EK> {
     }
 }
 
-pub type ApplyRouter<EK> = BatchRouter<ApplyFsm<EK>, ControlFsm>;
+#[derive(Clone)]
+pub struct ApplyRouter<EK>
+where
+    EK: KvEngine,
+{
+    pub router: BatchRouter<ApplyFsm<EK>, ControlFsm>,
+}
+
+impl<EK> Deref for ApplyRouter<EK>
+where
+    EK: KvEngine,
+{
+    type Target = BatchRouter<ApplyFsm<EK>, ControlFsm>;
+
+    fn deref(&self) -> &BatchRouter<ApplyFsm<EK>, ControlFsm> {
+        &self.router
+    }
+}
+
+impl<EK> DerefMut for ApplyRouter<EK>
+where
+    EK: KvEngine,
+{
+    fn deref_mut(&mut self) -> &mut BatchRouter<ApplyFsm<EK>, ControlFsm> {
+        &mut self.router
+    }
+}
+
+impl<EK> ApplyRouter<EK>
+where
+    EK: KvEngine,
+{
+    pub fn schedule_task(&self, region_id: u64, msg: ApplyTask) {
+        let _reg = match self.try_send(region_id, msg) {
+            Either::Left(Ok(())) => return,
+            Either::Left(Err(TrySendError::Disconnected(msg))) | Either::Right(msg) => match msg {
+                ApplyTask::Snapshot(_) => {
+                    warn!(
+                        "region is removed before taking snapshot, are we shutting down?";
+                        "region_id" => region_id
+                    );
+                    return;
+                }
+                _ => return,
+            },
+            Either::Left(Err(TrySendError::Full(_))) => unreachable!(),
+        };
+    }
+}
 
 pub fn create_apply_batch_system<EK: KvEngine>(cfg: &Config) -> (ApplyRouter<EK>, ApplySystem<EK>) {
     let (control_tx, control_fsm) = ControlFsm::new();
     let (router, system) =
         batch_system::create_system(&cfg.apply_batch_system, control_tx, control_fsm);
     let system = ApplySystem { system };
-    (router, system)
+    (ApplyRouter { router }, system)
 }

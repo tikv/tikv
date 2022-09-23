@@ -69,6 +69,9 @@ impl<'a, EK: KvEngine> ApplyFsmDelegate<'a, EK> {
     pub fn handle_msgs(&self, apply_task_buf: &mut Vec<ApplyTask>) {
         for task in apply_task_buf.drain(..) {
             // TODO: handle the tasks.
+            match task {
+                ApplyTask::Snapshot(snap_task) => {unimplemented!()},
+            }
         }
     }
 }

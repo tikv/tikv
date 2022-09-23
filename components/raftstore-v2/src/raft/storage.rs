@@ -271,6 +271,10 @@ where
         self.ever_persisted = true;
     }
 
+    pub fn take_gen_snap_task(&mut self) -> Option<GenSnapTask> {
+        self.gen_snap_task.get_mut().take()
+    }
+
     /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no
     /// unavailable snapshot.
     pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {

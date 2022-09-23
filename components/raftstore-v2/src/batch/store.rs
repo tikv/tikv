@@ -4,9 +4,9 @@ use std::{
     cell::Cell,
     mem,
     ops::{Deref, DerefMut},
-    sync::{atomic::AtomicUsize, Arc, Mutex},
-    time::Duration,
     path::Path,
+    sync::{atomic::AtomicUsize, Arc, Mutex, RwLock},
+    time::Duration,
 };
 
 use batch_system::{
@@ -50,6 +50,7 @@ use crate::{
     worker::{SnapshotRunner, SnapshotTask},
     Error, Result,
 };
+use crate::router::internal_message::ApplyTask;
 
 /// A per-thread context shared by the [`StoreFsm`] and multiple [`PeerFsm`]s.
 pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
@@ -63,6 +64,7 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     /// The latest configuration.
     pub cfg: Config,
     pub router: StoreRouter<EK, ER>,
+    pub apply_router: ApplyRouter<EK>,
     /// The tick batch for delay ticking. It will be flushed at the end of every
     /// round.
     pub tick_batch: Vec<PeerTickBatch>,
@@ -233,6 +235,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     tablet_factory: Arc<dyn TabletFactory<EK>>,
     trans: T,
     router: StoreRouter<EK, ER>,
+    apply_router: ApplyRouter<EK>,
     log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
     snapshot_scheduler: Scheduler<SnapshotTask>,
     write_senders: WriteSenders<EK, ER>,
@@ -248,6 +251,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         tablet_factory: Arc<dyn TabletFactory<EK>>,
         trans: T,
         router: StoreRouter<EK, ER>,
+        apply_router: ApplyRouter<EK>,
         log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         snapshot_scheduler: Scheduler<SnapshotTask>,
         store_writers: &mut StoreWriters<EK, ER>,
@@ -261,6 +265,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             tablet_factory,
             trans,
             router,
+            apply_router,
             log_fetch_scheduler,
             snapshot_scheduler,
             logger,
@@ -327,6 +332,7 @@ where
             raft_metrics: RaftMetrics::new(cfg.waterfall_metrics),
             cfg,
             router: self.router.clone(),
+            apply_router: self.apply_router.clone(),
             tick_batch: vec![PeerTickBatch::default(); PeerTick::VARIANT_COUNT],
             timer: SteadyTimer::default(),
             write_senders: self.write_senders.clone(),
@@ -416,7 +422,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         let snapshot_scheduler = workers
             .snapshot_worker
             .start_with_timer("snapshot-worker", snapshot_runner);
-
+   
         let mut builder = StorePollerBuilder::new(
             cfg.clone(),
             store_id,
@@ -424,6 +430,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             tablet_factory,
             trans,
             router.clone(),
+            self.apply_router.clone(),
             log_fetch_scheduler,
             snapshot_scheduler,
             &mut workers.store_writers,
