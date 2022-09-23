@@ -201,8 +201,9 @@ mod tests {
 
     use engine_rocks::RocksEngine;
     use kvproto::metapb::Region;
-    use raftstore::{coprocessor::RoleChange, store::util::new_peer};
+    use raftstore::coprocessor::RoleChange;
     use tikv::storage::kv::TestEngineBuilder;
+    use tikv_util::store::new_peer;
 
     use super::*;
 

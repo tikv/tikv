@@ -18,7 +18,7 @@ use kvproto::{
     },
     tikvpb::TikvClient,
 };
-use raftstore::store::{util::new_peer, LocksStatus};
+use raftstore::store::LocksStatus;
 use storage::{
     mvcc::{
         self,
@@ -37,7 +37,7 @@ use tikv::storage::{
     },
     Snapshot, TestEngineBuilder, TestStorageBuilderApiV1,
 };
-use tikv_util::HandyRwLock;
+use tikv_util::{store::new_peer, HandyRwLock};
 use txn_types::{Key, Mutation, PessimisticLock, TimeStamp};
 
 #[test]
