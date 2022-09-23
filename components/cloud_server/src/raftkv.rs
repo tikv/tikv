@@ -722,7 +722,7 @@ fn build_pessimistic_rollback(builder: &mut CustomBuilder, modifies: Vec<Modify>
 fn build_rollback(builder: &mut CustomBuilder, mut modifies: Vec<Modify>) {
     builder.set_type(rlog::TYPE_ROLLBACK);
 
-    let deleted_lock = modifies
+    let mut deleted_locks = modifies
         .iter_mut()
         .filter_map(|m| {
             if let Modify::Delete(CF_LOCK, k) = m {
@@ -738,7 +738,7 @@ fn build_rollback(builder: &mut CustomBuilder, mut modifies: Vec<Modify>) {
             Modify::Put(CF_WRITE, key, _) => {
                 let start_ts = key.decode_ts().unwrap().into_inner();
                 let key = key.truncate_ts().unwrap();
-                let del_lock = deleted_lock.contains(&key);
+                let del_lock = deleted_locks.remove(&key);
                 let raw_key = key.into_raw().unwrap();
                 builder.append_rollback(&raw_key, start_ts, del_lock);
             }
@@ -754,6 +754,7 @@ fn build_rollback(builder: &mut CustomBuilder, mut modifies: Vec<Modify>) {
             _ => unreachable!("unexpected modify: {:?}", m),
         }
     }
+    assert!(deleted_locks.is_empty());
 }
 
 fn build_check_txn_status(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
@@ -799,9 +800,9 @@ fn build_resolve_lock(builder: &mut CustomBuilder, modifies: Vec<Modify>) {
                     continue;
                 }
             }
-            builder.append_type(rlog::TYPE_ROLLBACK);
-            build_rollback(builder, modifies);
         }
+        builder.append_type(rlog::TYPE_ROLLBACK);
+        build_rollback(builder, modifies);
     }
     builder.set_type(rlog::TYPE_RESOLVE_LOCK);
 }

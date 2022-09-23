@@ -340,6 +340,15 @@ impl<'a> PrewriteMutation<'a> {
         &self,
         reader: &mut SnapshotReader<S>,
     ) -> Result<Option<(Write, TimeStamp)>> {
+        // check rollback
+        if let Some(cloud_reader) = reader.cloud_reader.as_mut() {
+            if cloud_reader.get_rollback(&self.key, self.txn_props.start_ts) {
+                self.write_conflict_error(
+                    &Write::new(WriteType::Rollback, self.txn_props.start_ts, None),
+                    self.txn_props.start_ts,
+                )?;
+            }
+        }
         // The get_newer API returns None if there is no conflict,
         // so it can not be used to check if key exists or get the value of the key.
         let can_use_get_newer = self.assertion == Assertion::None
@@ -367,9 +376,9 @@ impl<'a> PrewriteMutation<'a> {
                     // if it is a retrying prewrite request.
                     TransactionKind::Pessimistic(for_update_ts) => {
                         if commit_ts > for_update_ts {
-                            warn!("conflicting write was found, pessimistic lock must be lost for the corresponding row key"; 
-                                "key" => %self.key, 
-                                "start_ts" => self.txn_props.start_ts, 
+                            warn!("conflicting write was found, pessimistic lock must be lost for the corresponding row key";
+                                "key" => %self.key,
+                                "start_ts" => self.txn_props.start_ts,
                                 "for_update_ts" => for_update_ts,
                                 "conflicting start_ts" => write.start_ts,
                                 "conflicting commit_ts" => commit_ts);
@@ -676,6 +685,18 @@ fn amend_pessimistic_lock<S: Snapshot>(
                 "commit_ts" => *commit_ts,
                 "key" => %mutation.key
             );
+            MVCC_CONFLICT_COUNTER
+                .pipelined_acquire_pessimistic_lock_amend_fail
+                .inc();
+            return Err(ErrorInner::PessimisticLockNotFound {
+                start_ts: reader.start_ts,
+                key: mutation.key.clone().into_raw()?,
+            }
+            .into());
+        }
+    }
+    if let Some(cloud_reader) = reader.cloud_reader.as_mut() {
+        if cloud_reader.get_rollback(&mutation.key, reader.start_ts) {
             MVCC_CONFLICT_COUNTER
                 .pipelined_acquire_pessimistic_lock_amend_fail
                 .inc();

@@ -172,6 +172,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             .into());
         }
 
+        /*
         // Handle rollback.
         // The rollback information may come from either a Rollback record or a record with
         // `has_overlapped_rollback` flag.
@@ -185,18 +186,10 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             }
             .into());
         }
+
         // If `commit_ts` we seek is already before `start_ts`, the rollback must not exist.
         if commit_ts > reader.start_ts {
-            if reader.cloud_reader.is_some() {
-                let cloud_reader = reader.cloud_reader.as_mut().unwrap();
-                if cloud_reader.get_rollback(&key, reader.start_ts) {
-                    return Err(ErrorInner::PessimisticLockRolledBack {
-                        start_ts: reader.start_ts,
-                        key: key.into_raw()?,
-                    }
-                    .into());
-                }
-            } else if let Some((older_commit_ts, older_write)) =
+            if let Some((older_commit_ts, older_write)) =
                 reader.seek_write(&key, reader.start_ts)?
             {
                 if older_commit_ts == reader.start_ts
@@ -211,6 +204,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 }
             }
         }
+        */
 
         // Check data constraint when acquiring pessimistic lock.
         check_data_constraint(reader, should_not_exist, &write, commit_ts, &key)?;
@@ -238,6 +232,17 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                     }
                 }
             };
+        }
+    }
+
+    // check rollback
+    if let Some(cloud_reader) = reader.cloud_reader.as_mut() {
+        if cloud_reader.get_rollback(&key, reader.start_ts) {
+            return Err(ErrorInner::PessimisticLockRolledBack {
+                start_ts: reader.start_ts,
+                key: key.into_raw()?,
+            }
+            .into());
         }
     }
 

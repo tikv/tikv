@@ -183,12 +183,14 @@ pub fn collapse_prev_rollback(
     // No need to collapse rollback because of the extra-cf.
     Ok(())
 
-    // if let Some((commit_ts, write)) = reader.seek_write(key, reader.start_ts)? {
-    // if write.write_type == WriteType::Rollback && !write.as_ref().is_protected() {
-    // txn.delete_write(key.clone(), commit_ts);
-    // }
-    // }
-    // Ok(())
+    /*
+    if let Some((commit_ts, write)) = reader.seek_write(key, reader.start_ts)? {
+        if write.write_type == WriteType::Rollback && !write.as_ref().is_protected() {
+            txn.delete_write(key.clone(), commit_ts);
+        }
+    }
+    Ok(())
+    */
 }
 
 /// Generate the Write record that should be written that means to perform a specified rollback
