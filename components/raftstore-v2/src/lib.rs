@@ -37,3 +37,5 @@ pub use batch::{create_store_batch_system, StoreRouter, StoreSystem};
 pub use bootstrap::Bootstrap;
 pub use fsm::StoreMeta;
 pub use raftstore::{Error, Result};
+
+pub use crate::raft::write_initial_states;

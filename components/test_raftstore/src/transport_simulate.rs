@@ -162,7 +162,7 @@ impl<C> SimulateTransport<C> {
     }
 }
 
-fn filter_send<H>(
+pub fn filter_send<H>(
     filters: &Arc<RwLock<Vec<Box<dyn Filter>>>>,
     msg: RaftMessage,
     mut h: H,
