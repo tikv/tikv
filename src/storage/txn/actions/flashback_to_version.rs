@@ -331,8 +331,10 @@ pub mod tests {
         must_acquire_pessimistic_lock(&engine, k, k, 30, 30);
         must_pessimistic_locked(&engine, k, 30, 30);
 
-        // Flashback to version 17 with start_ts = 30, commit_ts = 40.
-        assert_eq!(must_flashback_to_version(&engine, k, 17, 30, 40), 2);
+        // Flashback to version 17 with start_ts = 35, commit_ts = 40.
+        // Distinguish from pessimistic start_ts 30 to make sure rollback ts is by lock
+        // ts.
+        assert_eq!(must_flashback_to_version(&engine, k, 17, 35, 40), 2);
 
         // Pessimistic Prewrite Put(k -> v3) with stat_ts = 30 will be error with
         // Rollback.
