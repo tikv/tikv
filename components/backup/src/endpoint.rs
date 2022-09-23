@@ -24,7 +24,7 @@ use kvproto::{
 };
 use online_config::OnlineConfig;
 use raft::StateRole;
-use raftstore::{coprocessor::RegionInfoProvider, store::util::find_peer};
+use raftstore::coprocessor::RegionInfoProvider;
 use tikv::{
     config::BackupConfig,
     storage::{
@@ -37,6 +37,7 @@ use tikv::{
 };
 use tikv_util::{
     box_err, debug, error, error_unknown, impl_display_as_debug, info,
+    store::find_peer,
     time::{Instant, Limiter},
     warn,
     worker::Runnable,
@@ -1188,10 +1189,7 @@ pub mod tests {
     use file_system::{IoOp, IoRateLimiter, IoType};
     use futures::{executor::block_on, stream::StreamExt};
     use kvproto::metapb;
-    use raftstore::{
-        coprocessor::{RegionCollector, Result as CopResult, SeekRegionCallback},
-        store::util::new_peer,
-    };
+    use raftstore::coprocessor::{RegionCollector, Result as CopResult, SeekRegionCallback};
     use rand::Rng;
     use tempfile::TempDir;
     use tikv::{
@@ -1201,7 +1199,7 @@ pub mod tests {
             RocksEngine, TestEngineBuilder,
         },
     };
-    use tikv_util::config::ReadableSize;
+    use tikv_util::{config::ReadableSize, store::new_peer};
     use tokio::time;
     use txn_types::SHORT_VALUE_MAX_LEN;
 
@@ -1682,7 +1680,8 @@ pub mod tests {
             } else {
                 u64::MAX
             };
-            let key = generate_engine_test_key(key_str.clone(), None, cur_api_ver);
+            // engine do not append ts anymore, need write ts encoded key into engine.
+            let key = generate_engine_test_key(key_str.clone(), Some(i.into()), cur_api_ver);
             let value = generate_engine_test_value(value_str.clone(), cur_api_ver, ttl);
             let dst_user_key = convert_test_backup_user_key(key_str, cur_api_ver, dst_api_ver);
             let dst_value = value_str.as_bytes();

@@ -33,7 +33,7 @@ use backup_stream::{
     metadata::{ConnectionConfig, LazyEtcdClient},
     observer::BackupStreamObserver,
 };
-use causal_ts::{BatchTsoProvider, CausalTsProvider};
+use causal_ts::{CausalTs, CausalTsProvider};
 use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
@@ -234,7 +234,7 @@ struct TikvServer<ER: RaftEngine> {
     background_worker: Worker,
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
-    causal_ts_provider: Option<Arc<BatchTsoProvider<RpcClient>>>, // used for rawkv apiv2
+    causal_ts_provider: Option<Arc<CausalTs>>, // used for rawkv apiv2
     tablet_factory: Option<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
     br_snap_recovery_mode: bool, // use for br snapshot recovery
 }
@@ -282,9 +282,16 @@ where
         let pd_client =
             Self::connect_to_pd_cluster(&mut config, env.clone(), Arc::clone(&security_mgr));
         // check if TiKV need to run in snapshot recovery mode
-        let is_recovering_marked = pd_client
-            .is_recovering_marked()
-            .expect("failed to get recovery mode from PD");
+        let is_recovering_marked = match pd_client.is_recovering_marked() {
+            Err(e) => {
+                warn!(
+                    "failed to get recovery mode from PD";
+                    "error" => ?e,
+                );
+                false
+            }
+            Ok(marked) => marked,
+        };
 
         if is_recovering_marked {
             // Run a TiKV server in recovery modeß
@@ -349,7 +356,7 @@ where
             if let Err(e) = tso {
                 fatal!("Causal timestamp provider initialize failed: {:?}", e);
             }
-            causal_ts_provider = Some(Arc::new(tso.unwrap()));
+            causal_ts_provider = Some(Arc::new(tso.unwrap().into()));
             info!("Causal timestamp provider startup.");
         }
 
@@ -760,6 +767,7 @@ where
             resource_tag_factory.clone(),
             Arc::clone(&self.quota_limiter),
             self.pd_client.feature_gate().clone(),
+            self.causal_ts_provider.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
         cfg_controller.register(
@@ -828,7 +836,7 @@ where
         }
 
         // Register cdc.
-        let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone(), F::TAG);
+        let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
         // Register cdc config manager.
         cfg_controller.register(
@@ -856,7 +864,7 @@ where
 
         // Register causal observer for RawKV API V2
         if let Some(provider) = self.causal_ts_provider.clone() {
-            let causal_ob = causal_ts::CausalObserver::new(provider, cdc_ob.clone());
+            let causal_ob = causal_ts::CausalObserver::new(provider);
             causal_ob.register_to(self.coprocessor_host.as_mut().unwrap());
         };
 

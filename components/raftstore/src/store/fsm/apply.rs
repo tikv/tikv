@@ -59,6 +59,7 @@ use tikv_util::{
     memory::HeapSize,
     mpsc::{loose_bounded, LooseBoundedSender, Receiver},
     safe_panic, slow_log,
+    store::{find_peer, find_peer_mut, is_learner, remove_peer},
     time::{duration_to_sec, Instant},
     warn,
     worker::Scheduler,
@@ -88,8 +89,8 @@ use crate::{
         peer_storage::{write_initial_apply_state, write_peer_state},
         util,
         util::{
-            admin_cmd_epoch_lookup, check_region_epoch, compare_region_epoch, is_learner,
-            ChangePeerI, ConfChangeKind, KeysInfoFormatter, LatencyInspector,
+            admin_cmd_epoch_lookup, check_region_epoch, compare_region_epoch, ChangePeerI,
+            ConfChangeKind, KeysInfoFormatter, LatencyInspector,
         },
         Config, RegionSnapshot, RegionTask, WriteCallback,
     },
@@ -1925,7 +1926,7 @@ where
                     .inc();
 
                 let mut exists = false;
-                if let Some(p) = util::find_peer_mut(&mut region, store_id) {
+                if let Some(p) = find_peer_mut(&mut region, store_id) {
                     exists = true;
                     if !is_learner(p) || p.get_id() != peer.get_id() {
                         error!(
@@ -1965,7 +1966,7 @@ where
                     .with_label_values(&["remove_peer", "all"])
                     .inc();
 
-                if let Some(p) = util::remove_peer(&mut region, store_id) {
+                if let Some(p) = remove_peer(&mut region, store_id) {
                     // Considering `is_learner` flag in `Peer` here is by design.
                     if &p != peer {
                         error!(
@@ -2018,7 +2019,7 @@ where
                     .with_label_values(&["add_learner", "all"])
                     .inc();
 
-                if util::find_peer(&region, store_id).is_some() {
+                if find_peer(&region, store_id).is_some() {
                     error!(
                         "can't add duplicated learner";
                         "region_id" => self.region_id(),
@@ -2126,7 +2127,7 @@ where
 
             confchange_cmd_metric::inc_all(change_type);
 
-            if let Some(exist_peer) = util::find_peer(&region, store_id) {
+            if let Some(exist_peer) = find_peer(&region, store_id) {
                 let r = exist_peer.get_role();
                 if r == PeerRole::IncomingVoter || r == PeerRole::DemotingVoter {
                     panic!(
@@ -2135,7 +2136,7 @@ where
                     );
                 }
             }
-            match (util::find_peer_mut(&mut region, store_id), change_type) {
+            match (find_peer_mut(&mut region, store_id), change_type) {
                 (None, ConfChangeType::AddNode) => {
                     let mut peer = peer.clone();
                     match kind {
@@ -2227,7 +2228,7 @@ where
                             self.region
                         ));
                     }
-                    match util::remove_peer(&mut region, store_id) {
+                    match remove_peer(&mut region, store_id) {
                         Some(p) => {
                             if &p != peer {
                                 error!(
@@ -2407,7 +2408,7 @@ where
             new_split_regions.insert(
                 new_region.get_id(),
                 NewSplitPeer {
-                    peer_id: util::find_peer(&new_region, ctx.store_id).unwrap().get_id(),
+                    peer_id: find_peer(&new_region, ctx.store_id).unwrap().get_id(),
                     result: None,
                 },
             );
@@ -4447,18 +4448,17 @@ mod tests {
     use sst_importer::Config as ImportConfig;
     use tempfile::{Builder, TempDir};
     use test_sst_importer::*;
-    use tikv_util::{config::VersionTrack, worker::dummy_scheduler};
+    use tikv_util::{
+        config::VersionTrack,
+        store::{new_learner_peer, new_peer},
+        worker::dummy_scheduler,
+    };
     use uuid::Uuid;
 
     use super::*;
     use crate::{
         coprocessor::*,
-        store::{
-            msg::WriteResponse,
-            peer_storage::RAFT_INIT_LOG_INDEX,
-            util::{new_learner_peer, new_peer},
-            Config, RegionTask,
-        },
+        store::{msg::WriteResponse, peer_storage::RAFT_INIT_LOG_INDEX, Config, RegionTask},
     };
 
     impl GenSnapTask {

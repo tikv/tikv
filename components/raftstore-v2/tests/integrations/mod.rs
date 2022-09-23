@@ -13,7 +13,7 @@ use std::{
     path::Path,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     thread,
     time::{Duration, Instant},
@@ -37,7 +37,7 @@ use raftstore::store::{region_meta::RegionMeta, Config, Transport, RAFT_INIT_LOG
 use raftstore_v2::{
     create_store_batch_system,
     router::{DebugInfoChannel, PeerMsg, QueryResult},
-    Bootstrap, StoreRouter, StoreSystem,
+    Bootstrap, StoreMeta, StoreRouter, StoreSystem,
 };
 use slog::{o, Logger};
 use tempfile::TempDir;
@@ -46,6 +46,7 @@ use tikv_util::config::{ReadableDuration, VersionTrack};
 
 mod test_basic_write;
 mod test_life;
+mod test_read;
 mod test_status;
 
 #[derive(Clone)]
@@ -146,6 +147,8 @@ impl RunningState {
             store_id,
             logger.clone(),
         );
+
+        let store_meta = Arc::new(Mutex::new(StoreMeta::<KvTestEngine>::new()));
         system
             .start(
                 store_id,
@@ -154,6 +157,7 @@ impl RunningState {
                 factory.clone(),
                 transport.clone(),
                 &router,
+                store_meta,
             )
             .unwrap();
 
