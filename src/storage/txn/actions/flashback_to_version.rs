@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use txn_types::{Key, Lock, LockType, TimeStamp, Write, WriteType};
+use txn_types::{Key, Lock, TimeStamp, Write, WriteType};
 
 use crate::storage::{
     mvcc::{MvccReader, MvccTxn, SnapshotReader, MAX_TXN_WRITE_SIZE},
