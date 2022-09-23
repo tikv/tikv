@@ -96,8 +96,7 @@ pub fn flashback_to_version<S: Snapshot>(
             *next_lock_key = Some(key);
             break;
         }
-        // We need to rollback with lock.ts rather than using version timestamp by
-        // invoking rollback funtion
+        
         rollback_lock(
             txn,
             reader,
