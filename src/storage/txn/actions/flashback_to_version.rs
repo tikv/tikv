@@ -2,10 +2,9 @@
 
 use txn_types::{Key, Lock, LockType, TimeStamp, Write, WriteType};
 
-use super::check_txn_status::rollback_lock;
 use crate::storage::{
     mvcc::{MvccReader, MvccTxn, SnapshotReader, MAX_TXN_WRITE_SIZE},
-    txn::{Error, ErrorInner, Result as TxnResult},
+    txn::{actions::check_txn_status::rollback_lock, Error, ErrorInner, Result as TxnResult},
     Snapshot, Statistics,
 };
 
@@ -171,7 +170,7 @@ pub mod tests {
             actions::{
                 acquire_pessimistic_lock::tests::must_pessimistic_locked,
                 commit::tests::must_succeed as must_commit,
-                tests::{must_prewrite_delete, must_prewrite_put,must_rollback},
+                tests::{must_prewrite_delete, must_prewrite_put, must_rollback},
             },
             tests::{must_acquire_pessimistic_lock, must_pessimistic_prewrite_put_err},
         },
