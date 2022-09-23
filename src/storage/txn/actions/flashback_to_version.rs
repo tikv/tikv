@@ -155,16 +155,10 @@ pub mod tests {
 
     use super::*;
     use crate::storage::{
-        mvcc::{
-            tests::{must_get, must_get_none, write},
-            SnapshotReader,
-        },
-        txn::{
-            actions::{
-                commit::tests::must_succeed as must_commit,
-                tests::{must_prewrite_delete, must_prewrite_put, must_rollback},
-            },
-            commands::ReaderWithStats,
+        mvcc::tests::{must_get, must_get_none, write},
+        txn::actions::{
+            commit::tests::must_succeed as must_commit,
+            tests::{must_prewrite_delete, must_prewrite_put, must_rollback},
         },
         Engine, TestEngineBuilder,
     };
@@ -197,10 +191,7 @@ pub mod tests {
         let cm = ConcurrencyManager::new(TimeStamp::zero());
         let mut txn = MvccTxn::new(start_ts, cm);
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = ReaderWithStats::new(
-            SnapshotReader::new_with_ctx(version, snapshot, &ctx),
-            &mut statistics,
-        );
+        let mut reader = SnapshotReader::new_with_ctx(version, snapshot, &ctx);
         let rows = flashback_to_version(
             &mut txn,
             &mut reader,
