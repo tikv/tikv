@@ -71,7 +71,7 @@ use std::{
 };
 
 use api_version::{ApiV1, ApiV2, KeyMode, KvFormat, RawValue};
-use causal_ts::{CausalTs, CausalTsProvider};
+use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
@@ -180,7 +180,7 @@ pub struct Storage<E: Engine, L: LockManager, F: KvFormat> {
 
     api_version: ApiVersion, // TODO: remove this. Use `Api` instead.
 
-    causal_ts_provider: Option<Arc<CausalTs>>,
+    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
 
     quota_limiter: Arc<QuotaLimiter>,
 
@@ -262,7 +262,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         resource_tag_factory: ResourceTagFactory,
         quota_limiter: Arc<QuotaLimiter>,
         feature_gate: FeatureGate,
-        causal_ts_provider: Option<Arc<CausalTs>>,
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
     ) -> Result<Self> {
         assert_eq!(config.api_version(), F::TAG, "Api version not match");
 
@@ -1847,7 +1847,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         }
     }
 
-    fn get_causal_ts(ts_provider: &Option<Arc<CausalTs>>) -> Result<Option<TimeStamp>> {
+    fn get_causal_ts(ts_provider: &Option<Arc<CausalTsProviderImpl>>) -> Result<Option<TimeStamp>> {
         if let Some(p) = ts_provider {
             match p.get_ts() {
                 Ok(ts) => Ok(Some(ts)),
@@ -1859,7 +1859,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     }
 
     async fn get_raw_key_guard(
-        ts_provider: &Option<Arc<CausalTs>>,
+        ts_provider: &Option<Arc<CausalTsProviderImpl>>,
         concurrency_manager: ConcurrencyManager,
     ) -> Result<Option<KeyHandleGuard>> {
         // NOTE: the ts cannot be reused as timestamp of data key.
@@ -3107,7 +3107,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             self.engine.clone(),
         );
         let ts_provider = if F::TAG == ApiVersion::V2 {
-            let test_provider: causal_ts::CausalTs =
+            let test_provider: causal_ts::CausalTsProviderImpl =
                 causal_ts::tests::TestProvider::default().into();
             Some(Arc::new(test_provider))
         } else {
