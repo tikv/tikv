@@ -124,14 +124,17 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::mpsc, time::Duration};
+    use std::{
+        sync::{mpsc, Arc},
+        time::Duration,
+    };
 
     use byteorder::{BigEndian, WriteBytesExt};
     use engine_test::kv::{new_engine, KvTestEngine};
     use engine_traits::{KvEngine, SyncMutable, ALL_CFS};
     use kvproto::metapb::*;
     use tempfile::Builder;
-    use tikv_util::worker::Runnable;
+    use tikv_util::{config::VersionTrack, worker::Runnable};
 
     use super::*;
     use crate::coprocessor::{
@@ -147,8 +150,10 @@ mod tests {
         region.mut_peers().push(Peer::default());
 
         let (tx, rx) = mpsc::sync_channel(100);
-        let mut host =
-            CoprocessorHost::<KvTestEngine>::new(tx.clone(), crate::coprocessor::Config::default());
+        let mut host = CoprocessorHost::<KvTestEngine>::new(
+            tx.clone(),
+            Arc::new(VersionTrack::new(crate::coprocessor::Config::default())),
+        );
         host.registry.register_consistency_check_observer(
             100,
             BoxConsistencyCheckObserver::new(RawConsistencyCheckObserver::default()),

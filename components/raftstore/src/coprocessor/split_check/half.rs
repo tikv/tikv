@@ -82,7 +82,7 @@ where
     fn add_checker(
         &self,
         _: &mut ObserverContext<'_>,
-        host: &mut Host<'_, E>,
+        host: &mut Host<E>,
         _: &E,
         policy: CheckPolicy,
     ) {
@@ -123,8 +123,10 @@ pub fn get_region_approximate_middle(
 
 #[cfg(test)]
 mod tests {
-    use std::{iter, sync::mpsc};
-
+    use std::{
+        iter,
+        sync::{mpsc, Arc},
+    };
     use engine_test::ctor::{CfOptions, DbOptions};
     use engine_traits::{MiscExt, SyncMutable, ALL_CFS, CF_DEFAULT, LARGE_CFS};
     use kvproto::{
@@ -132,7 +134,11 @@ mod tests {
         pdpb::CheckPolicy,
     };
     use tempfile::Builder;
-    use tikv_util::{config::ReadableSize, escape, worker::Runnable};
+    use tikv_util::{
+        config::{ReadableSize, VersionTrack},
+        escape,
+        worker::Runnable,
+    };
     use txn_types::Key;
 
     use super::{
@@ -161,6 +167,7 @@ mod tests {
             region_max_size: Some(ReadableSize(BUCKET_NUMBER_LIMIT as u64)),
             ..Default::default()
         };
+        let cfg = Arc::new(VersionTrack::new(cfg));
         let mut runnable =
             SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
 
@@ -206,6 +213,7 @@ mod tests {
             region_max_size: Some(ReadableSize(BUCKET_NUMBER_LIMIT as u64)),
             ..Default::default()
         };
+        let cfg = Arc::new(VersionTrack::new(cfg));
         let mut runnable =
             SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
 
@@ -272,6 +280,7 @@ mod tests {
             region_bucket_size: ReadableSize(20_u64), // so that each key below will form a bucket
             ..Default::default()
         };
+        let cfg = Arc::new(VersionTrack::new(cfg));
         let cop_host = CoprocessorHost::new(tx.clone(), cfg);
         let mut runnable = SplitCheckRunner::new(engine.clone(), tx, cop_host.clone());
 
@@ -396,6 +405,7 @@ mod tests {
             region_bucket_size: ReadableSize(20_u64), // so that each key below will form a bucket
             ..Default::default()
         };
+        let cfg = Arc::new(VersionTrack::new(cfg));
         let mut runnable =
             SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
 

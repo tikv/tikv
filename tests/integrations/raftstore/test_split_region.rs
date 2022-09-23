@@ -5,8 +5,10 @@ use std::{
     sync::{mpsc::channel, Arc},
     thread,
     time::Duration,
+    collections::HashMap,
 };
 
+use tikv_util::{config::ReadableDuration, HandyRwLock};
 use engine_traits::{Iterable, Peekable, CF_DEFAULT, CF_WRITE};
 use keys::data_key;
 use kvproto::{metapb, pdpb, raft_cmdpb::*, raft_serverpb::RaftMessage};
@@ -20,6 +22,8 @@ use test_raftstore::*;
 use tikv::storage::{kv::SnapshotExt, Snapshot};
 use tikv_util::config::*;
 use txn_types::{Key, PessimisticLock};
+use tikv_util::config::ReadableSize;
+
 
 pub const REGION_MAX_SIZE: u64 = 50000;
 pub const REGION_SPLIT_SIZE: u64 = 30000;
@@ -1273,4 +1277,55 @@ fn test_gen_split_check_bucket_ranges() {
     let region = pd_client.get_region(b"k10").unwrap();
     // the bucket_ranges should be None to refresh the bucket
     cluster.send_half_split_region_message(&region, None);
+}
+
+// Test region split after config changed
+// Test region split after config changed
+#[test]
+fn test_online_split_region_size() {
+    let mut cluster = new_node_cluster(0, 1);
+    cluster.cfg.coprocessor.region_max_size = Some(ReadableSize(2000));
+    cluster.cfg.coprocessor.region_split_size = ReadableSize(2000);
+    cluster.cfg.coprocessor.region_max_keys = Some(1000);
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(10);
+    cluster.cfg.raft_store.hibernate_regions = false;
+    cluster.cfg.raft_store.raft_heartbeat_ticks = 2;
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 10;
+
+    cluster.pd_client.disable_default_operator();
+    cluster.run();
+
+    // Wait until region 1 executing its first split check.
+    sleep_ms(100);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    put_till_size(&mut cluster, 500, &mut (1..));
+    let init_region_number = pd_client.get_regions_number();
+
+    let sim = cluster.sim.rl();
+    let cfg_controller = sim.get_cfg_controller().unwrap();
+    {
+        let mut change = HashMap::new();
+        change.insert("coprocessor.region_split_size".to_owned(), "100".to_owned());
+        change.insert("coprocessor.region_split_keys".to_owned(), "100".to_owned());
+        change.insert("coprocessor.region_max_size".to_owned(), "200".to_owned());
+        // Update config,
+        cfg_controller.update(change.clone()).unwrap();
+        assert_eq!(
+            cfg_controller.get_current().coprocessor.region_split_size,
+            ReadableSize(100)
+        );
+        assert_eq!(
+            cfg_controller.get_current().coprocessor.region_split_keys,
+            Some(100)
+        );
+    }
+    sleep_ms(100);
+    let region_number = pd_client.get_regions_number();
+    assert_ne!(
+        init_region_number, region_number,
+        "init_region_number value:{}, region_number value:{}",
+        init_region_number, region_number
+    );
 }

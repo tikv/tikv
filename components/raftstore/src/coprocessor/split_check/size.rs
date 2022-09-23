@@ -142,7 +142,7 @@ where
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,
-        host: &mut Host<'_, E>,
+        host: &mut Host<E>,
         engine: &E,
         mut policy: CheckPolicy,
     ) {
@@ -271,7 +271,10 @@ pub mod tests {
         pdpb::CheckPolicy,
     };
     use tempfile::Builder;
-    use tikv_util::{config::ReadableSize, worker::Runnable};
+    use tikv_util::{
+        config::{ReadableSize, VersionTrack},
+        worker::Runnable,
+    };
     use txn_types::{Key, TimeStamp};
 
     use super::{Checker, *};
@@ -473,6 +476,7 @@ pub mod tests {
             ..Default::default()
         };
 
+        let cfg = Arc::new(VersionTrack::new(cfg));
         let mut runnable =
             SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
 
@@ -613,6 +617,7 @@ pub mod tests {
                 keys::data_key(Key::from_raw(bytes).append_ts(ts).as_encoded())
             }
         };
+        let cfg = Arc::new(VersionTrack::new(cfg));
         let cop_host = CoprocessorHost::new(tx.clone(), cfg);
         let mut runnable = SplitCheckRunner::new(engine.clone(), tx, cop_host.clone());
         for i in 0..2000 {
@@ -749,12 +754,12 @@ pub mod tests {
             engine.put_cf(CF_WRITE, &s, &s).unwrap();
         }
 
-        let cop_host = CoprocessorHost::new(tx.clone(), cfg.clone());
+        let cop_host = CoprocessorHost::new(tx.clone(), Arc::new(VersionTrack::new(cfg.clone())));
         let host = cop_host.new_split_checker_host(&region, &engine, true, CheckPolicy::Scan);
         assert_eq!(host.policy(), CheckPolicy::Scan);
 
         cfg.prefer_approximate_bucket = true;
-        let cop_host = CoprocessorHost::new(tx, cfg);
+        let cop_host = CoprocessorHost::new(tx, Arc::new(VersionTrack::new(cfg)));
         let host = cop_host.new_split_checker_host(&region, &engine, true, CheckPolicy::Scan);
         assert_eq!(host.policy(), CheckPolicy::Approximate);
     }
@@ -801,7 +806,7 @@ pub mod tests {
         let mut runnable = SplitCheckRunner::new(
             engine.clone(),
             tx.clone(),
-            CoprocessorHost::new(tx.clone(), cfg.clone()),
+            CoprocessorHost::new(tx.clone(), Arc::new(VersionTrack::new(cfg.clone()))),
         );
 
         for cf in LARGE_CFS {
@@ -838,9 +843,11 @@ pub mod tests {
         let engine =
             engine_test::kv::new_engine_opt(path_str, DbOptions::default(), cfs_opts).unwrap();
 
-        let mut runnable =
-            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
-
+        let mut runnable = SplitCheckRunner::new(
+                engine.clone(),
+                tx.clone(),
+                CoprocessorHost::new(tx, Arc::new(VersionTrack::new(cfg))),
+            );
         // Flush a sst of CF_LOCK with range properties.
         for i in 7..15 {
             let s = keys::data_key(format!("{:04}", i).as_bytes());

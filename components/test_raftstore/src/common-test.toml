@@ -73,6 +73,9 @@ apply-pool-size = 1
 store-pool-size = 1
 [coprocessor]
 
+region-max-size = "200"
+region-split-size = "100"
+region-split-keys = 100
 [rocksdb]
 max-background-jobs = 1
 max-sub-compactions = 1

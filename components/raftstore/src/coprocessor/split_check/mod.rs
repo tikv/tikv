@@ -16,14 +16,14 @@ pub use self::{
 };
 use super::{config::Config, error::Result, Bucket, KeyEntry, ObserverContext, SplitChecker};
 
-pub struct Host<'a, E> {
+pub struct Host<E> {
     checkers: Vec<Box<dyn SplitChecker<E>>>,
     auto_split: bool,
-    cfg: &'a Config,
+    cfg: Config,
 }
 
-impl<'a, E> Host<'a, E> {
-    pub fn new(auto_split: bool, cfg: &'a Config) -> Host<'a, E> {
+impl<E> Host<E> {
+    pub fn new(auto_split: bool, cfg: Config) -> Host<E> {
         Host {
             auto_split,
             checkers: vec![],
