@@ -77,6 +77,7 @@ use txn_types::{Key, TimeStamp};
 use crate::storage::{
     errors::SharedError,
     lock_manager::{lock_wait_context::LockWaitContextSharedState, LockManager, LockWaitToken},
+    metrics::*,
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
     txn::Error as TxnError,
     types::{PessimisticLockParameters, PessimisticLockRes},
@@ -241,17 +242,29 @@ impl<L: LockManager> LockWaitQueues<L> {
         mut lock_wait_entry: Box<LockWaitEntry>,
         current_lock: kvrpcpb::LockInfo,
     ) {
+        let mut new_key = false;
         let mut entry = self
             .inner
             .queue_map
             .entry(lock_wait_entry.key.clone())
-            .or_insert_with(|| KeyLockWaitState::new());
+            .or_insert_with(|| {
+                new_key = true;
+                KeyLockWaitState::new()
+            });
         entry.current_lock = current_lock;
 
         if lock_wait_entry.current_legacy_wake_up_cnt.is_none() {
             lock_wait_entry.current_legacy_wake_up_cnt = Some(entry.value().legacy_wake_up_cnt);
         }
         entry.value_mut().queue.push(lock_wait_entry);
+
+        let len = entry.value_mut().queue.len();
+        drop(entry);
+        LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.waiters.inc();
+        LOCK_WAIT_QUEUE_LENGTH_HISTOGRAM.observe(len as f64);
+        if new_key {
+            LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.keys.inc()
+        }
     }
 
     /// Dequeues the head of the lock waiting queue of the specified key,
@@ -288,16 +301,20 @@ impl<L: LockManager> LockWaitQueues<L> {
         wake_up_delay_duration_ms: Option<u64>,
     ) -> Option<(Box<LockWaitEntry>, Option<DelayedNotifyAllFuture>)> {
         let mut result = None;
+        // For statistics.
+        let mut removed_waiters = 0;
 
         // We don't want other thread insert insert any more entries between finding the
         // queue is empty and removing the queue from the map. Wrap the logic
         // within a call to `remove_if_mut` to avoid releasing lock during the
         // procedure.
-        self.inner.queue_map.remove_if_mut(key, |_, v| {
+        let removed_key = self.inner.queue_map.remove_if_mut(key, |_, v| {
             v.last_conflict_start_ts = conflicting_start_ts;
             v.last_conflict_commit_ts = conflicting_commit_ts;
 
             while let Some(lock_wait_entry) = v.queue.pop() {
+                removed_waiters += 1;
+
                 if lock_wait_entry.req_states.as_ref().unwrap().is_finished() {
                     // Skip already cancelled entries.
                     continue;
@@ -323,6 +340,15 @@ impl<L: LockManager> LockWaitQueues<L> {
             // Remove the queue if it's emptied.
             v.queue.is_empty()
         });
+
+        if removed_waiters != 0 {
+            LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC
+                .waiters
+                .sub(removed_waiters);
+        }
+        if removed_key.is_some() {
+            LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.keys.dec();
+        }
 
         result
     }
@@ -414,11 +440,13 @@ impl<L: LockManager> LockWaitQueues<L> {
         let mut conflicting_start_ts = TimeStamp::zero();
         let mut conflicting_commit_ts = TimeStamp::zero();
 
+        let mut removed_waiters = 0;
+
         // We don't want other thread insert insert any more entries between finding the
         // queue is empty and removing the queue from the map. Wrap the logic
         // within a call to `remove_if_mut` to avoid releasing lock during the
         // procedure.
-        self.inner.queue_map.remove_if_mut(key, |_, v| {
+        let removed_key = self.inner.queue_map.remove_if_mut(key, |_, v| {
             // The KeyLockWaitState of the key might have been removed from the map and then
             // recreated. Skip.
             if v.delayed_notify_all_state
@@ -441,6 +469,7 @@ impl<L: LockManager> LockWaitQueues<L> {
                 if front.req_states.as_ref().unwrap().is_finished() {
                     // Skip already cancelled entries.
                     v.queue.pop();
+                    removed_waiters += 1;
                     continue;
                 }
                 if front
@@ -452,6 +481,7 @@ impl<L: LockManager> LockWaitQueues<L> {
                     break;
                 }
                 let lock_wait_entry = v.queue.pop().unwrap();
+                removed_waiters += 1;
                 if lock_wait_entry.parameters.allow_lock_with_conflict {
                     woken_up_resumable_entry = Some(lock_wait_entry);
                     break;
@@ -462,6 +492,15 @@ impl<L: LockManager> LockWaitQueues<L> {
             // If the queue is empty, remove it from the map.
             v.queue.is_empty()
         });
+
+        if removed_waiters != 0 {
+            LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC
+                .waiters
+                .sub(removed_waiters);
+        }
+        if removed_key.is_some() {
+            LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.keys.dec();
+        }
 
         // Call callbacks to cancel these entries here.
         // TODO: Perhaps we'd better make it concurrent with scheduling the new command
