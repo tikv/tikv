@@ -85,7 +85,6 @@ pub fn flashback_to_version<S: Snapshot>(
     start_ts: TimeStamp,
     commit_ts: TimeStamp,
 ) -> TxnResult<usize> {
-    let mut rows = 0;
     // To flashback the `CF_LOCK`, we need to delete all locks records whose
     // `start_ts` is greater than the specified version, and if it's not a
     // short-value `LockType::Put`, we need to delete the actual data from
@@ -106,13 +105,6 @@ pub fn flashback_to_version<S: Snapshot>(
             lock.is_pessimistic_txn(),
             true,
         )?;
-        rows += 1;
-        // If the short value is none and it's a `LockType::Put`, we should delete the
-        // corresponding key from `CF_DEFAULT` as well.
-        if lock.short_value.is_none() && lock.lock_type == LockType::Put {
-            txn.delete_value(key, lock.ts);
-            rows += 1;
-        }
     }
     // To flashback the `CF_WRITE` and `CF_DEFAULT`, we need to write a new MVCC
     // record for each key in `self.keys` with its old value at `self.version`,
@@ -136,7 +128,6 @@ pub fn flashback_to_version<S: Snapshot>(
                     start_ts,
                     reader.load_data(&key, old_write.clone())?,
                 );
-                rows += 1;
             }
             Write::new(old_write.write_type, start_ts, old_write.short_value)
         } else {
@@ -150,9 +141,8 @@ pub fn flashback_to_version<S: Snapshot>(
             Write::new(WriteType::Delete, start_ts, None)
         };
         txn.put_write(key.clone(), commit_ts, new_write.as_ref().to_bytes());
-        rows += 1;
     }
-    Ok(rows)
+    Ok(txn.modifies.len())
 }
 
 #[cfg(test)]
@@ -334,7 +324,7 @@ pub mod tests {
         // Flashback to version 17 with start_ts = 35, commit_ts = 40.
         // Distinguish from pessimistic start_ts 30 to make sure rollback ts is by lock
         // ts.
-        assert_eq!(must_flashback_to_version(&engine, k, 17, 35, 40), 2);
+        assert_eq!(must_flashback_to_version(&engine, k, 17, 35, 40), 3);
 
         // Pessimistic Prewrite Put(k -> v3) with stat_ts = 30 will be error with
         // Rollback.
