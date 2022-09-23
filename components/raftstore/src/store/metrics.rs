@@ -203,6 +203,7 @@ make_static_metric! {
         is_applying_snapshot,
         force_leader,
         flashback,
+        witness,
     }
 
     pub label_enum RaftLogGcSkippedReason {

@@ -4952,6 +4952,7 @@ where
             if !(msg.has_admin_request()
                 && msg.get_admin_request().get_cmd_type() == AdminCmdType::TransferLeader)
             {
+                self.ctx.raft_metrics.invalid_proposal.witness.inc();
                 return Err(Error::RecoveryInProgress(self.region_id()));
             }
         }

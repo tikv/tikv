@@ -2,15 +2,17 @@
 
 use std::{iter::FromIterator, sync::Arc, time::Duration};
 
+use collections::HashMap;
 use futures::executor::block_on;
-use kvproto::{metapb, pdpb};
+use kvproto::{metapb, pdpb, raft_serverpb::RaftApplyState};
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::store::util::find_peer;
 use test_raftstore::*;
 
+// Test flow of witness conf change
 #[test]
-fn test_witness() {
+fn test_witness_conf_change() {
     let mut cluster = new_server_cluster(0, 3);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
@@ -22,7 +24,7 @@ fn test_witness() {
     cluster.must_put(b"k1", b"v1");
 
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
-    let peer_on_store1 = find_peer(&region, nodes[1]).unwrap();
+    let peer_on_store1 = find_peer(&region, nodes[0]).unwrap();
     cluster.must_transfer_leader(region.get_id(), peer_on_store1.clone());
 
     // nonwitness -> witness
@@ -62,6 +64,7 @@ fn test_witness() {
     must_get_none(&cluster.get_engine(3), b"k1");
 }
 
+// Test the case that leader is forbidden to become witness
 #[test]
 fn test_witness_leader() {
     let mut cluster = new_server_cluster(0, 3);
@@ -78,22 +81,68 @@ fn test_witness_leader() {
     let mut peer_on_store1 = find_peer(&region, nodes[0]).unwrap().clone();
     cluster.must_transfer_leader(region.get_id(), peer_on_store1.clone());
 
-    // nonwitness -> witness
+    // can't make leader to witness
     peer_on_store1.set_is_witness(true);
     cluster
         .pd_client
         .add_peer(region.get_id(), peer_on_store1.clone());
 
-    // leader changes to witness failed
     std::thread::sleep(Duration::from_millis(100));
-    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    assert_eq!(
+        cluster.leader_of_region(region.get_id()).unwrap().store_id,
+        1
+    );
+    // leader changes to witness failed, so still can get the value
+    must_get_equal(&cluster.get_engine(nodes[0]), b"k1", b"v1");
+
+    let mut peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
+    // can't transfer leader to witness
+    cluster.transfer_leader(region.get_id(), peer_on_store3.clone());
+    assert_eq!(
+        cluster.leader_of_region(region.get_id()).unwrap().store_id,
+       nodes[0] ,
+    );
 }
 
+// Test witness priority
 #[test]
-fn test_witness_leader_down() {
+fn test_witness_election_priority() {
     let mut cluster = new_server_cluster(0, 3);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
+    assert_eq!(nodes.len(), 3);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.must_put(b"k0", b"v0");
+
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+    // nonwitness -> witness
+    let mut peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
+    peer_on_store3.set_is_witness(true);
+    cluster
+        .pd_client
+        .must_add_peer(region.get_id(), peer_on_store3.clone());
+    for _ in 1..10 {
+        let node = cluster.leader_of_region(region.get_id()).unwrap().store_id;
+        cluster.stop_node(node);
+        // the witness can't be elected as the leader when there is no log gap
+        assert_ne!(
+            cluster.leader_of_region(region.get_id()).unwrap().store_id,
+            nodes[2],
+        );
+        cluster.run_node(node).unwrap();
+    }
+}
+
+// Test the case that truncated index won't advance when there is a witness even if the gap gap exceeds the gc count limit 
+#[test]
+fn test_witness_raftlog_gc() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+    let nodes = Vec::from_iter(cluster.get_node_ids());
+    assert_eq!(nodes.len(), 3);
 
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -103,28 +152,54 @@ fn test_witness_leader_down() {
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
     let mut peer_on_store1 = find_peer(&region, nodes[0]).unwrap().clone();
     cluster.must_transfer_leader(region.get_id(), peer_on_store1.clone());
-
-    let mut peer_on_store2 = find_peer(&region, nodes[1]).unwrap().clone();
     // nonwitness -> witness
-    peer_on_store2.set_is_witness(true);
-
+    let mut peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
+    peer_on_store3.set_is_witness(true);
     cluster
         .pd_client
-        .add_peer(region.get_id(), peer_on_store2.clone());
+        .must_add_peer(region.get_id(), peer_on_store3.clone());
 
-    // the other follower is isolated
-    cluster.add_send_filter(IsolationFilterFactory::new(3));
-    for i in 1..100 {
-        cluster.must_put(format!("k{}", i).as_bytes(), format!("v{}", i).as_bytes());
+    // make sure raft log gc is triggered
+    std::thread::sleep(Duration::from_millis(200));
+    let mut before_states = HashMap::default();
+    for (&id, engines) in &cluster.engines {
+        let mut state: RaftApplyState = get_raft_msg_or_default(engines, &keys::apply_state_key(1));
+        before_states.insert(id, state.take_truncated_state());
     }
-    // the leader is down
-    cluster.stop_node(1);
 
-    cluster.clear_send_filters();
-    std::thread::sleep(Duration::from_millis(1000));
-    assert_eq!(
-        cluster.leader_of_region(region.get_id()).unwrap().store_id,
-        3
-    );
-    assert_eq!(cluster.must_get(b"k99"), Some(b"v99".to_vec()));
+    // one follower is down
+    cluster.stop_node(nodes[1]);    
+
+    // write some data to make log gap exceeds the gc limit
+    for i in 1..1000 {
+        let (k, v) = (format!("k{}", i), format!("v{}", i));
+        let key = k.as_bytes();
+        let value = v.as_bytes();
+        cluster.must_put(key, value);
+    }
+
+    // the truncated index is not advanced
+    for (&id, engines) in &cluster.engines {
+        let mut state: RaftApplyState = get_raft_msg_or_default(engines, &keys::apply_state_key(1));
+        assert_eq!(before_states[&id].get_index(), state.get_truncated_state().get_index());
+    }
+
+    // the follower is back online
+    cluster.run_node(nodes[1]).unwrap();
+
+    cluster.must_put(b"k00", b"v00");
+    // make sure raft log gc is triggered
+    std::thread::sleep(Duration::from_millis(100));
+
+    // the truncated index is advanced now, as all the peers has replicated 
+    for (&id, engines) in &cluster.engines {
+        let mut state: RaftApplyState = get_raft_msg_or_default(engines, &keys::apply_state_key(1));
+        assert_ne!(before_states[&id].get_index(), state.get_truncated_state().get_index());
+    }
 }
+
+
+// test witness hasn't the log
+
+
+// test witness is lagging behind, the gc is advanced
