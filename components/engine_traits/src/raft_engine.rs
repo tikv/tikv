@@ -3,7 +3,8 @@
 use kvproto::{
     metapb::Region,
     raft_serverpb::{
-        RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent, StoreRecoverState,
+        RaftApplyState, RaftLocalState, RegionLocalState, RegionSequenceNumberRelation, StoreIdent,
+        StoreRecoverState,
     },
 };
 use raft::eraftpb::Entry;
@@ -153,6 +154,18 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
     /// When kvdb's write-ahead-log is disabled, the sequence number of the last
     /// boot time is saved.
     fn put_recover_state(&self, state: &StoreRecoverState) -> Result<()>;
+
+    /// scan the relations between start_seqno(inclusive) and
+    /// end_seqno(exclusive).
+    fn scan_seqno_relations<F>(
+        &self,
+        raft_group_id: u64,
+        start: Option<u64>,
+        end: Option<u64>,
+        f: F,
+    ) -> Result<()>
+    where
+        F: FnMut(u64, &RegionSequenceNumberRelation) -> bool;
 }
 
 pub trait RaftLogBatch: Send {
@@ -170,6 +183,15 @@ pub trait RaftLogBatch: Send {
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()>;
     fn put_region_state(&mut self, raft_group_id: u64, state: &RegionLocalState) -> Result<()>;
     fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()>;
+
+    fn put_seqno_relation(
+        &mut self,
+        raft_group_id: u64,
+        relation: &RegionSequenceNumberRelation,
+    ) -> Result<()>;
+
+    fn delete_seqno_relation(&mut self, raft_group_id: u64, seqno: u64) -> Result<()>;
+    fn delete_apply_state(&mut self, raft_group_id: u64) -> Result<()>;
 
     /// The data size of this RaftLogBatch.
     fn persist_size(&self) -> usize;

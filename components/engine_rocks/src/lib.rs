@@ -24,6 +24,8 @@ extern crate tikv_alloc;
 #[cfg(test)]
 extern crate test;
 
+mod flush_listener;
+pub use crate::flush_listener::*;
 mod cf_names;
 pub use crate::cf_names::*;
 mod cf_options;

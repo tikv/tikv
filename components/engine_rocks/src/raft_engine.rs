@@ -9,7 +9,8 @@ use engine_traits::{
 use kvproto::{
     metapb::Region,
     raft_serverpb::{
-        RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent, StoreRecoverState,
+        RaftApplyState, RaftLocalState, RegionLocalState, RegionSequenceNumberRelation, StoreIdent,
+        StoreRecoverState,
     },
 };
 use protobuf::Message;
@@ -374,6 +375,36 @@ impl RaftEngine for RocksEngine {
     fn put_recover_state(&self, state: &StoreRecoverState) -> Result<()> {
         self.put_msg(keys::RECOVER_STATE_KEY, state)
     }
+
+    fn scan_seqno_relations<F>(
+        &self,
+        raft_group_id: u64,
+        start: Option<u64>,
+        end: Option<u64>,
+        mut f: F,
+    ) -> Result<()>
+    where
+        F: FnMut(u64, &RegionSequenceNumberRelation) -> bool,
+    {
+        let start = start.unwrap_or(0);
+        let end = end.unwrap_or(u64::MAX);
+        let start_key = keys::sequence_number_relation_key(raft_group_id, start);
+        let end_key = keys::sequence_number_relation_key(raft_group_id, end);
+        self.scan(
+            CF_DEFAULT,
+            &start_key,
+            &end_key,
+            false, // fill_cache
+            |key, value| {
+                let mut relation = RegionSequenceNumberRelation::default();
+                relation.merge_from_bytes(value)?;
+                let (_, seqno) = keys::decode_sequence_number_relation_key(key).unwrap();
+                f(seqno, &relation);
+                Ok(true)
+            },
+        )?;
+        Ok(())
+    }
 }
 
 impl RaftLogBatch for RocksWriteBatchVec {
@@ -426,6 +457,25 @@ impl RaftLogBatch for RocksWriteBatchVec {
 
     fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()> {
         self.put_msg(&keys::apply_state_key(raft_group_id), state)
+    }
+
+    fn put_seqno_relation(
+        &mut self,
+        raft_group_id: u64,
+        relation: &RegionSequenceNumberRelation,
+    ) -> Result<()> {
+        self.put_msg(
+            &keys::sequence_number_relation_key(raft_group_id, relation.sequence_number),
+            relation,
+        )
+    }
+
+    fn delete_seqno_relation(&mut self, raft_group_id: u64, seqno: u64) -> Result<()> {
+        self.delete(&keys::sequence_number_relation_key(raft_group_id, seqno))
+    }
+
+    fn delete_apply_state(&mut self, raft_group_id: u64) -> Result<()> {
+        self.delete(&keys::apply_state_key(raft_group_id))
     }
 }
 

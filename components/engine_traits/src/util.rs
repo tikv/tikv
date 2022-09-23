@@ -2,7 +2,7 @@
 
 use std::{
     cmp,
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -44,9 +44,18 @@ pub fn current_memtable_version() -> u64 {
     MEMTABLE_VERSION_COUNTER_ALLOCATOR.load(Ordering::SeqCst)
 }
 
+pub fn increase_memtable_version() -> u64 {
+    MEMTABLE_VERSION_COUNTER_ALLOCATOR.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+pub fn set_max_synced_sequence_number(seqno: u64) {
+    MAX_SYNCED_SEQUENCE_NUMBER.store(seqno, Ordering::SeqCst);
+}
+
 pub trait MemtableEventNotifier: Send {
     fn notify_memtable_sealed(&self, seqno: u64);
-    fn notify_memtable_flushed(&self, seqno: u64);
+    fn notify_memtable_flushed(&self, cf: &str, seqno: u64);
+    fn notify_flush_cfs(&self, seqno: u64);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -169,6 +178,57 @@ impl SequenceNumberWindow {
 
     pub fn pending_count(&self) -> usize {
         self.write_status_window.len()
+    }
+}
+
+pub struct FlushedSeqno {
+    seqno: HashMap<String, u64>,
+    min_seqno: u64,
+}
+
+impl FlushedSeqno {
+    pub fn new(cfs: &[&str], min_seqno: u64) -> Self {
+        let mut seqno = HashMap::new();
+        for cf in cfs {
+            seqno.insert(cf.to_string(), 0);
+        }
+        Self { seqno, min_seqno }
+    }
+
+    pub fn update(&mut self, cf: &str, seqno: u64) -> Option<u64> {
+        self.seqno
+            .entry(cf.to_string())
+            .and_modify(|v| *v = u64::max(*v, seqno));
+        let min = self.seqno.values().min().copied();
+        match min {
+            Some(min) if min > self.min_seqno => {
+                self.min_seqno = min;
+                Some(min)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn update_all(&mut self, seqno: u64) -> Option<u64> {
+        self.seqno
+            .iter_mut()
+            .for_each(|(_, v)| *v = u64::max(*v, seqno));
+        let min = self.seqno.values().min().copied();
+        match min {
+            Some(min) if min > self.min_seqno => {
+                self.min_seqno = min;
+                Some(min)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn min_seqno(&self) -> u64 {
+        self.min_seqno
+    }
+
+    pub fn max_seqno(&self) -> u64 {
+        self.seqno.values().max().copied().unwrap()
     }
 }
 

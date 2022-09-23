@@ -159,6 +159,19 @@ impl RaftEngine for PanicEngine {
     fn put_recover_state(&self, state: &StoreRecoverState) -> Result<()> {
         panic!()
     }
+
+    fn scan_seqno_relations<F>(
+        &self,
+        raft_group_id: u64,
+        start: Option<u64>,
+        end: Option<u64>,
+        f: F,
+    ) -> Result<()>
+    where
+        F: FnMut(u64, &kvproto::raft_serverpb::RegionSequenceNumberRelation) -> bool,
+    {
+        panic!()
+    }
 }
 
 impl RaftLogBatch for PanicWriteBatch {
@@ -203,6 +216,22 @@ impl RaftLogBatch for PanicWriteBatch {
     }
 
     fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()> {
+        panic!()
+    }
+
+    fn put_seqno_relation(
+        &mut self,
+        raft_group_id: u64,
+        relation: &kvproto::raft_serverpb::RegionSequenceNumberRelation,
+    ) -> Result<()> {
+        panic!()
+    }
+
+    fn delete_seqno_relation(&mut self, raft_group_id: u64, seqno: u64) -> Result<()> {
+        panic!()
+    }
+
+    fn delete_apply_state(&mut self, raft_group_id: u64) -> Result<()> {
         panic!()
     }
 }

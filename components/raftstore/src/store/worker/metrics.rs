@@ -202,4 +202,26 @@ lazy_static! {
         "Total number of renewing lease in advance from local reader."
     )
     .unwrap();
+    pub static ref SEQNO_RELATIONS_WRITE_DURATION_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_raftstore_seqno_relations_write_duration_secs",
+        "Bucketed histogram of raftdb write duration of seqno relations.",
+        exponential_buckets(0.0001, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref SEQNO_RELATIONS_WRITE_SIZE_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_raftstore_seqno_relations_write_size",
+        "Bucketed histogram of raftdb write duration of seqno relations.",
+        exponential_buckets(1.0, 2.0, 32).unwrap()
+    )
+    .unwrap();
+    pub static ref SEQNO_RELATIONS_KEYS_FLOW: IntCounter = register_int_counter!(
+        "tikv_raftstore_seqno_relations_keys_flow",
+        "Total number of written seqno relations."
+    )
+    .unwrap();
+    pub static ref SEQNO_UNCOMMITTED_COUNT: IntGauge = register_int_gauge!(
+        "tikv_raftstore_seqno_uncommitted_count",
+        "Count of uncommitted seqno"
+    )
+    .unwrap();
 }
