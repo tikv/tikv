@@ -1003,7 +1003,7 @@ where
             last_committed_prepare_merge_idx: 0,
             leader_missing_time: Some(Instant::now()),
             tag: tag.clone(),
-            last_applying_idx: applied_index,
+            last_applying_idx: commit_since_index.unwrap_or(applied_index),
             last_compacted_idx: 0,
             last_urgent_proposal_idx: u64::MAX,
             last_committed_split_idx: 0,

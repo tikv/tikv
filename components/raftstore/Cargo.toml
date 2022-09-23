@@ -65,6 +65,7 @@ online_config = { path = "../online_config" }
 openssl = "0.10"
 ordered-float = "2.6"
 parking_lot = "0.12"
+parking_lot_core = "0.9"
 pd_client = { path = "../pd_client", default-features = false }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"

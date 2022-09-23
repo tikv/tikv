@@ -3651,7 +3651,19 @@ where
     fn on_ready_compact_log(&mut self, first_index: u64, state: RaftTruncatedState) {
         let total_cnt = self.fsm.peer.last_applying_idx - first_index;
         // the size of current CompactLog command can be ignored.
-        let remain_cnt = self.fsm.peer.last_applying_idx - state.get_index() - 1;
+        let remain_cnt = self
+            .fsm
+            .peer
+            .last_applying_idx
+            .checked_sub(state.get_index() - 1)
+            .unwrap_or_else(|| {
+                panic!(
+                    "region {} last_applying_idx {} truncated_idx {}",
+                    self.region_id(),
+                    self.fsm.peer.last_applying_idx,
+                    state.get_index()
+                )
+            });
         self.fsm.peer.raft_log_size_hint =
             self.fsm.peer.raft_log_size_hint * remain_cnt / total_cnt;
         let compact_to = state.get_index() + 1;

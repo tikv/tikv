@@ -4179,6 +4179,7 @@ dependencies = [
  "ordered-float",
  "panic_hook",
  "parking_lot 0.12.0",
+ "parking_lot_core 0.9.1",
  "pd_client",
  "prometheus",
  "prometheus-static-metric",

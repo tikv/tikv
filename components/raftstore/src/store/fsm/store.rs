@@ -42,6 +42,7 @@ use kvproto::{
     raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState},
     replication_modepb::{ReplicationMode, ReplicationStatus},
 };
+use parking_lot_core::SpinWait;
 use pd_client::{Feature, FeatureGate, PdClient};
 use protobuf::Message;
 use raft::StateRole;
@@ -1925,7 +1926,11 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         self.apply_system
             .spawn("apply".to_owned(), apply_poller_builder);
         if let Some(range) = raft_builder.seqno_recover_range.as_ref() {
-            self.replay_raft_logs_between_seqnos(range, &raft_builder.engines);
+            self.replay_raft_logs_between_seqnos(
+                range,
+                &raft_builder.engines,
+                raft_builder.store_meta.clone(),
+            );
         }
         if raft_builder.cfg.value().disable_kv_wal {
             let seqno = raft_builder.engines.kv.get_latest_sequence_number();
@@ -2016,6 +2021,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         &mut self,
         range: &RangeInclusive<u64>,
         engines: &Engines<EK, ER>,
+        store_meta: Arc<Mutex<StoreMeta>>,
     ) {
         let mut recover_regions: BTreeMap<u64, HashMap<_, _>> = BTreeMap::new();
         engines
@@ -2045,13 +2051,11 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                             relation,
                             region_state
                         );
-                        if start != end {
-                            info!("replay raft logs"; "region_id" => region_id, "start" => start, "end" => end, "version" => version);
-                            let regions = recover_regions
-                                .entry(version)
-                                .or_insert_with(HashMap::default);
-                            regions.insert(region_id, (start, end));
-                        }
+                        info!("replay raft logs"; "region_id" => region_id, "start" => start, "end" => end, "version" => version);
+                        let regions = recover_regions
+                            .entry(version)
+                            .or_insert_with(HashMap::default);
+                        regions.insert(region_id, (start, end, Some(region_state)));
                     }
                 }
                 EngineTraitsResult::Ok(())
@@ -2077,7 +2081,40 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         while let Some((version, regions)) = recover_regions.pop_first() {
             let results: Vec<_> = regions
                 .into_iter()
-                .map(|(region_id, (start, end))| {
+                .map(|(region_id, (start, end, region_state))| {
+                    // Regions could be overlapped before recovery, because the splitted regions
+                    // were created immediately and tombstone states of a source merge region were
+                    // persisted after CFs flushed. So after restarted, a source merge region may
+                    // be overlapped with other regions.
+                    // This situation is safe because we recover regions by the order of
+                    // versions, a tombstoned source merge region will be destroyed after recovery,
+                    // but still region ranges in StoreMeta could be inconsistent because
+                    // overlapped, here we insert it again at the first time we recover a region to
+                    // keep it partly consistent during recovering a region.
+                    if let Some(state) = region_state {
+                        let region = state.get_region();
+                        let end_key = enc_end_key(state.get_region());
+                        let mut spin_wait = SpinWait::new();
+                        loop {
+                            let mut meta = store_meta.lock().unwrap();
+                            if let Some(meta_region_id) = meta.region_ranges.get(&end_key) {
+                                if *meta_region_id == region_id {
+                                    break;
+                                } else {
+                                    let meta_region = meta.regions.get(&region_id).unwrap();
+                                    if meta_region.get_region_epoch().get_version()
+                                        > region.get_region_epoch().get_version()
+                                    {
+                                        meta.region_ranges.insert(end_key, region_id);
+                                        break;
+                                    }
+                                }
+                            }
+                            // the region with smaller version may be running a region destroy, wait
+                            // until it done.
+                            spin_wait.spin();
+                        }
+                    }
                     let (tx, rx) = std::sync::mpsc::sync_channel(1);
                     let router = self.apply_router.clone();
                     let raftdb = engines.raft.clone();
@@ -2122,7 +2159,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                             let regions = recover_regions
                                 .entry(new_version)
                                 .or_insert_with(HashMap::default);
-                            regions.insert(region_id, (applied_index + 1, end));
+                            regions.insert(region_id, (applied_index + 1, end, None));
                         }
                         regions_applied_index.insert(region_id, applied_index);
                         if let Some(WaitMergeSourceRegion {
@@ -2144,8 +2181,10 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                             let regions = recover_regions
                                 .entry(target_region_version)
                                 .or_insert_with(HashMap::default);
-                            regions
-                                .insert(target_region_id, (target_applied_index + 1, target_end));
+                            regions.insert(
+                                target_region_id,
+                                (target_applied_index + 1, target_end, None),
+                            );
                             wait_merge_source_regions.remove(&(region_id, applied_index));
                         }
                     }
@@ -2178,7 +2217,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                             let regions = recover_regions
                                 .entry(version)
                                 .or_insert_with(HashMap::default);
-                            regions.insert(region_id, (applied_index + 1, end));
+                            regions.insert(region_id, (applied_index + 1, end, None));
                         } else {
                             wait_merge_source_regions.insert(
                                 (source_region_id, commit),
@@ -2214,8 +2253,10 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                             let regions = recover_regions
                                 .entry(target_region_version)
                                 .or_insert_with(HashMap::default);
-                            regions
-                                .insert(target_region_id, (target_applied_index + 1, target_end));
+                            regions.insert(
+                                target_region_id,
+                                (target_applied_index + 1, target_end, None),
+                            );
                             wait_merge_source_regions.remove(&(region_id, applied_index));
                         }
                         info!("region recover finished"; "region_id" => region_id);

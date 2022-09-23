@@ -59,6 +59,19 @@ fn test_disable_wal_recovery_split_merge() {
     cluster.run_node(1).unwrap();
     assert_eq!(cluster.get_region_id(b"k3"), cluster.get_region_id(b"k5"));
     assert_eq!(cluster.get_region_id(b""), cluster.get_region_id(b"k5"));
-    sleep_ms(100);
-    cluster.must_split(&cluster.get_region(b""), b"k3");
+
+    cluster.must_split(&cluster.get_region(b""), b"k1");
+    cluster.must_split(&cluster.get_region(b"k1"), b"k2");
+    cluster.must_put(b"k3", b"v3");
+    must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
+    cluster
+        .pd_client
+        .must_merge(cluster.get_region_id(b"k1"), cluster.get_region_id(b"k2"));
+    cluster.stop_node(1);
+    cluster.run_node(1).unwrap();
+    cluster
+        .pd_client
+        .must_merge(cluster.get_region_id(b""), cluster.get_region_id(b"k1"));
+    assert_eq!(cluster.get_region_id(b"k1"), cluster.get_region_id(b"k2"));
+    assert_eq!(cluster.get_region_id(b""), cluster.get_region_id(b"k1"));
 }
