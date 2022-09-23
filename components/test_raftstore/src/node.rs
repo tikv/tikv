@@ -282,7 +282,8 @@ impl Simulator for NodeCluster {
         self.snap_mgrs.insert(node_id, snap_mgr.clone());
 
         // Create coprocessor.
-        let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
+        let cop_cfg = Arc::new(VersionTrack::new(cfg.coprocessor.clone()));
+        let mut coprocessor_host = CoprocessorHost::new(router.clone(), cop_cfg);
 
         if let Some(f) = self.post_create_coprocessor_host.as_ref() {
             f(node_id, &mut coprocessor_host);
@@ -309,7 +310,7 @@ impl Simulator for NodeCluster {
         let split_scheduler = bg_worker.start("test-split-check", split_check_runner);
         cfg_controller.register(
             Module::Coprocessor,
-            Box::new(SplitCheckConfigManager(split_scheduler.clone())),
+        Box::new(SplitCheckConfigManager::new(coprocessor_host.cfg.clone())),
         );
 
         node.try_bootstrap_store(engines.clone())?;

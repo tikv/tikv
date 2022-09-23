@@ -292,7 +292,8 @@ impl ServerCluster {
         );
 
         // Create coprocessor.
-        let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
+        let cop_cfg = Arc::new(VersionTrack::new(cfg.coprocessor.clone()));
+        let mut coprocessor_host = CoprocessorHost::new(router.clone(), cop_cfg);
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
 
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);

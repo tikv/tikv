@@ -220,6 +220,7 @@ fn test_serde_custom_tikv_config() {
         snap_generator_pool_size: 2,
         cleanup_import_sst_interval: ReadableDuration::minutes(12),
         region_max_size: ReadableSize(0),
+        region_split_keys: ReadableSize(0),
         region_split_size: ReadableSize(0),
         local_read_batch_size: 33,
         apply_batch_system,

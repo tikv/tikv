@@ -80,7 +80,7 @@ where
     fn add_checker(
         &self,
         ctx: &mut ObserverContext<'_>,
-        host: &mut Host<'_, E>,
+        host: &mut Host<E>,
         engine: &E,
         policy: CheckPolicy,
     ) {
@@ -226,14 +226,21 @@ fn is_same_table(left_key: &[u8], right_key: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::{io::Write, sync::mpsc};
+    use std::{
+        io::Write,
+        sync::{mpsc, Arc},
+    };
 
     use engine_test::kv::new_engine;
     use engine_traits::{SyncMutable, ALL_CFS};
     use kvproto::{metapb::Peer, pdpb::CheckPolicy};
     use tempfile::Builder;
     use tidb_query_datatype::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
-    use tikv_util::{codec::number::NumberEncoder, config::ReadableSize, worker::Runnable};
+    use tikv_util::{
+        codec::number::NumberEncoder,
+        config::{ReadableSize, VersionTrack},
+        worker::Runnable,
+    };
     use txn_types::Key;
 
     use super::*;
@@ -334,6 +341,7 @@ mod tests {
         };
 
         // Try to ignore the ApproximateRegionSize
+        let cfg = Arc::new(VersionTrack::new(cfg));
         let coprocessor = CoprocessorHost::new(stx, cfg);
         let mut runnable = SplitCheckRunner::new(engine.clone(), tx, coprocessor);
 

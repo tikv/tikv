@@ -324,7 +324,7 @@ where
 
         let mut coprocessor_host = Some(CoprocessorHost::new(
             router.clone(),
-            config.coprocessor.clone(),
+            Arc::new(VersionTrack::new(config.coprocessor.clone())),
         ));
         let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
 
@@ -1004,7 +1004,9 @@ where
             .start("split-check", split_check_runner);
         cfg_controller.register(
             tikv::config::Module::Coprocessor,
-            Box::new(SplitCheckConfigManager(split_check_scheduler.clone())),
+            Box::new(SplitCheckConfigManager::new(
+                self.coprocessor_host.as_ref().unwrap().cfg.clone(),
+            )),
         );
 
         let split_config_manager =
