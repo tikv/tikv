@@ -7,7 +7,7 @@ use std::{
 };
 
 use api_version::{api_v2::TIDB_RANGES_COMPLEMENT, KvFormat};
-use causal_ts::CausalTs;
+use causal_ts::CausalTsProviderImpl;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{Engines, Iterable, KvEngine, RaftEngine, DATA_CFS, DATA_KEY_PREFIX_LEN};
 use grpcio_health::HealthService;
@@ -66,7 +66,7 @@ pub fn create_raft_storage<
     resource_tag_factory: ResourceTagFactory,
     quota_limiter: Arc<QuotaLimiter>,
     feature_gate: FeatureGate,
-    causal_ts_provider: Option<Arc<CausalTs>>,
+    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
 ) -> Result<Storage<RaftKv<EK, S>, LM, F>>
 where
     S: RaftStoreRouter<EK> + LocalReadRouter<EK> + 'static,
