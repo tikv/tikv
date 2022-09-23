@@ -222,7 +222,7 @@ where
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
-        causal_ts_provider: Option<Arc<CausalTs>>, // used for rawkv apiv2
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -506,7 +506,7 @@ where
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
-        causal_ts_provider: Option<Arc<CausalTs>>, // used for rawkv apiv2
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     ) -> Result<()>
     where
         T: Transport + 'static,

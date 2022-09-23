@@ -3,7 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::sync::Arc;
 
-use causal_ts::CausalTs;
+use causal_ts::CausalTsProviderImpl;
 use engine_traits::CfName;
 use futures::executor::block_on;
 use tikv_kv::SnapshotExt;
@@ -32,7 +32,7 @@ command! {
             /// The set of mutations to apply.
             cf: CfName,
             mutations: Vec<Modify>,
-            causal_ts_provider: Option<Arc<CausalTs>>,
+            causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
         }
 }
 
@@ -114,7 +114,7 @@ mod tests {
         let raw_keys = vec![b"ra", b"rz"];
         let raw_values = vec![b"valuea", b"valuez"];
         let ts_provider = if F::TAG == kvproto::kvrpcpb::ApiVersion::V2 {
-            let test_provider: causal_ts::CausalTs =
+            let test_provider: causal_ts::CausalTsProviderImpl =
                 causal_ts::tests::TestProvider::default().into();
             Some(Arc::new(test_provider))
         } else {

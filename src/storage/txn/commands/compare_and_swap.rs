@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use api_version::{match_template_api_version, KvFormat, RawValue};
-use causal_ts::CausalTs;
+use causal_ts::CausalTsProviderImpl;
 use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName};
 use futures::executor::block_on;
 use kvproto::kvrpcpb::ApiVersion;
@@ -42,7 +42,7 @@ command! {
             value: Value,
             ttl: u64,
             api_version: ApiVersion,
-            causal_ts_provider: Option<Arc<CausalTs>>,
+            causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
         }
 }
 
@@ -165,7 +165,7 @@ mod tests {
 
         let encoded_key = F::encode_raw_key(key, None);
         let ts_provider = if F::TAG == kvproto::kvrpcpb::ApiVersion::V2 {
-            let test_provider: causal_ts::CausalTs =
+            let test_provider: causal_ts::CausalTsProviderImpl =
                 causal_ts::tests::TestProvider::default().into();
             Some(Arc::new(test_provider))
         } else {
@@ -253,7 +253,7 @@ mod tests {
 
     fn test_cas_process_write_impl<F: KvFormat>() {
         let ts_provider = if F::TAG == kvproto::kvrpcpb::ApiVersion::V2 {
-            let test_provider: causal_ts::CausalTs =
+            let test_provider: causal_ts::CausalTsProviderImpl =
                 causal_ts::tests::TestProvider::default().into();
             Some(Arc::new(test_provider))
         } else {

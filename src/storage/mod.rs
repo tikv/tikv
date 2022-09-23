@@ -1846,7 +1846,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 .await?
         }
     }
-    
+
     async fn check_causal_ts_synced(ctx: &mut Context, api_version: ApiVersion) -> Result<()> {
         if api_version == ApiVersion::V2 {
             let snap_ctx = SnapContext {
@@ -2800,7 +2800,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 }
 
 pub async fn get_raw_key_guard(
-    ts_provider: &Option<Arc<CausalTs>>,
+    ts_provider: &Option<Arc<CausalTsProviderImpl>>,
     concurrency_manager: ConcurrencyManager,
 ) -> Result<Option<KeyHandleGuard>> {
     // NOTE: the ts cannot be reused as timestamp of data key.
@@ -2825,7 +2825,9 @@ pub async fn get_raw_key_guard(
     }
 }
 
-pub async fn get_causal_ts(ts_provider: &Option<Arc<CausalTs>>) -> Result<Option<TimeStamp>> {
+pub async fn get_causal_ts(
+    ts_provider: &Option<Arc<CausalTsProviderImpl>>,
+) -> Result<Option<TimeStamp>> {
     if let Some(p) = ts_provider {
         match p.async_get_ts().await {
             Ok(ts) => Ok(Some(ts)),

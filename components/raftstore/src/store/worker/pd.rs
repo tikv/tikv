@@ -14,7 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use causal_ts::{CausalTs, CausalTsProvider};
+use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, RaftEngine};
@@ -896,7 +896,7 @@ where
     health_service: Option<HealthService>,
     curr_health_status: ServingStatus,
     coprocessor_host: CoprocessorHost<EK>,
-    causal_ts_provider: Option<Arc<CausalTs>>, // used for rawkv apiv2
+    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -922,7 +922,7 @@ where
         region_read_progress: RegionReadProgressRegistry,
         health_service: Option<HealthService>,
         coprocessor_host: CoprocessorHost<EK>,
-        causal_ts_provider: Option<Arc<CausalTs>>, // used for rawkv apiv2
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     ) -> Runner<EK, ER, T> {
         // Register the region CPU records collector.
         let mut region_cpu_records_collector = None;
