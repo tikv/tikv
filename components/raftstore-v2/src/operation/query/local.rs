@@ -14,6 +14,7 @@ use kvproto::{
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse},
 };
 use raftstore::{
+    errors::RAFTSTORE_IS_BUSY,
     store::{
         cmd_resp, util::LeaseState, LocalReaderCore, ReadDelegate, ReadExecutor,
         ReadExecutorProvider, RegionSnapshot, RequestInspector, RequestPolicy,
@@ -30,7 +31,12 @@ use tikv_util::{
 use time::Timespec;
 use txn_types::WriteBatchFlags;
 
-use crate::{fsm::StoreMeta, router::PeerMsg, tablet::CachedTablet, StoreRouter};
+use crate::{
+    fsm::StoreMeta,
+    router::{PeerMsg, QueryResult},
+    tablet::CachedTablet,
+    StoreRouter,
+};
 
 pub trait MsgRouter: Send {
     fn send(&self, addr: u64, msg: PeerMsg) -> std::result::Result<(), TrySendError<PeerMsg>>;
@@ -156,11 +162,7 @@ where
             return Ok(snap);
         }
 
-        // try to renew the lease by sending read query where the reading process may
-        // renew the lease
-        let (msg, sub) = PeerMsg::raft_query(req.clone());
-        let _ = MsgRouter::send(&self.router, region_id, msg);
-        if let Some(query_res) = sub.result().await {
+        if let Some(query_res) = self.try_to_renew_lease(region_id, &req).await? {
             // If query successful, try again.
             if query_res.read().is_some() {
                 req.mut_header().set_read_quorum(false);
@@ -175,6 +177,35 @@ where
             "Fail to get snapshot from LocalReader for region {}. Maybe due to `not leader` or `not applied to the current term`",
             region_id
         ));
+        let mut resp = RaftCmdResponse::default();
+        resp.mut_header().set_error(err);
+        Err(resp)
+    }
+
+    // try to renew the lease by sending read query where the reading process may
+    // renew the lease
+    async fn try_to_renew_lease(
+        &self,
+        region_id: u64,
+        req: &RaftCmdRequest,
+    ) -> std::result::Result<Option<QueryResult>, RaftCmdResponse> {
+        let (msg, sub) = PeerMsg::raft_query(req.clone());
+        let mut err = errorpb::Error::default();
+        match MsgRouter::send(&self.router, region_id, msg) {
+            Ok(()) => return Ok(sub.result().await),
+            Err(TrySendError::Full(c)) => {
+                TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.channel_full.inc());
+                err.set_message(RAFTSTORE_IS_BUSY.to_owned());
+                err.mut_server_is_busy()
+                    .set_reason(RAFTSTORE_IS_BUSY.to_owned());
+            }
+            Err(TrySendError::Disconnected(c)) => {
+                TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.no_region.inc());
+                err.set_message(format!("region {} is missing", region_id));
+                err.mut_region_not_found().set_region_id(region_id);
+            }
+        }
+
         let mut resp = RaftCmdResponse::default();
         resp.mut_header().set_error(err);
         Err(resp)

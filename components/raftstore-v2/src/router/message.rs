@@ -3,10 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::fmt;
 
-use kvproto::{
-    raft_cmdpb::{RaftCmdRequest},
-    raft_serverpb::RaftMessage,
-};
+use kvproto::{raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
 use raftstore::store::{metrics::RaftEventDurationType, FetchedLogs};
 use tikv_util::time::Instant;
 
