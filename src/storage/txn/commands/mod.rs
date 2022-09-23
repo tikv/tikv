@@ -540,7 +540,7 @@ pub struct ReaderWithStats<'a, S: Snapshot> {
 }
 
 impl<'a, S: Snapshot> ReaderWithStats<'a, S> {
-    fn new(reader: SnapshotReader<S>, statistics: &'a mut Statistics) -> Self {
+    pub fn new(reader: SnapshotReader<S>, statistics: &'a mut Statistics) -> Self {
         Self { reader, statistics }
     }
 }

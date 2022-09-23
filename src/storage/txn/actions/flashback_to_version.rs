@@ -75,9 +75,9 @@ pub fn flashback_to_version_read_write<S: Snapshot>(
     Ok((key_old_writes, has_remain_writes))
 }
 
-pub fn flashback_to_version<S: Snapshot>(
+pub fn flashback_to_version(
     txn: &mut MvccTxn,
-    reader: &mut SnapshotReader<S>,
+    reader: &mut SnapshotReader<impl Snapshot>,
     next_lock_key: &mut Option<Key>,
     next_write_key: &mut Option<Key>,
     key_locks: Vec<(Key, Lock)>,
@@ -155,10 +155,16 @@ pub mod tests {
 
     use super::*;
     use crate::storage::{
-        mvcc::tests::{must_get, must_get_none, write},
-        txn::actions::{
-            commit::tests::must_succeed as must_commit,
-            tests::{must_prewrite_delete, must_prewrite_put, must_rollback},
+        mvcc::{
+            tests::{must_get, must_get_none, write},
+            SnapshotReader,
+        },
+        txn::{
+            actions::{
+                commit::tests::must_succeed as must_commit,
+                tests::{must_prewrite_delete, must_prewrite_put, must_rollback},
+            },
+            commands::ReaderWithStats,
         },
         Engine, TestEngineBuilder,
     };
@@ -191,7 +197,10 @@ pub mod tests {
         let cm = ConcurrencyManager::new(TimeStamp::zero());
         let mut txn = MvccTxn::new(start_ts, cm);
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = SnapshotReader::new_with_ctx(version, snapshot, &ctx);
+        let mut reader = ReaderWithStats::new(
+            SnapshotReader::new_with_ctx(version, snapshot, &ctx),
+            &mut statistics,
+        );
         let rows = flashback_to_version(
             &mut txn,
             &mut reader,
