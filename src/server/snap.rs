@@ -151,7 +151,9 @@ pub fn send_snap(
         return Err(box_err!("missing snap file: {:?}", s.path()));
     }
     let total_size = s.total_size();
-
+    SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC
+        .send
+        .inc_by(total_size);
     let mut chunks = {
         let mut first_chunk = SnapshotChunk::default();
         first_chunk.set_message(msg);
@@ -207,6 +209,7 @@ struct RecvSnapContext {
     file: Option<Box<Snapshot>>,
     raft_msg: RaftMessage,
     io_type: IoType,
+    start: Instant,
 }
 
 impl RecvSnapContext {
@@ -253,6 +256,7 @@ impl RecvSnapContext {
             file: snap,
             raft_msg: meta,
             io_type,
+            start: Instant::now(),
         })
     }
 
@@ -270,6 +274,7 @@ impl RecvSnapContext {
         if let Err(e) = raft_router.send_raft_msg(self.raft_msg) {
             return Err(box_err!("{} failed to send snapshot to raft: {}", key, e));
         }
+        info!("saving all snapshot files"; "snap_key" => %key, "takes" => ?self.start.saturating_elapsed());
         Ok(())
     }
 }
@@ -288,6 +293,10 @@ fn recv_snap<R: RaftStoreRouter<impl KvEngine> + 'static>(
             return context.finish(raft_router);
         }
         let context_key = context.key.clone();
+        let total_size = context.file.as_ref().unwrap().total_size();
+        SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC
+            .recv
+            .inc_by(total_size);
         snap_mgr.register(context.key.clone(), SnapEntry::Receiving);
         defer!(snap_mgr.deregister(&context_key, &SnapEntry::Receiving));
         while let Some(item) = stream.next().await {
@@ -435,6 +444,7 @@ where
             }
             Task::Send { addr, msg, cb } => {
                 fail_point!("send_snapshot");
+                let region_id = msg.get_region_id();
                 if self.sending_count.load(Ordering::SeqCst) >= self.cfg.concurrent_send_snap_limit
                 {
                     warn!(
@@ -451,7 +461,6 @@ where
                 let security_mgr = Arc::clone(&self.security_mgr);
                 let sending_count = Arc::clone(&self.sending_count);
                 sending_count.fetch_add(1, Ordering::SeqCst);
-
                 let send_task = send_snap(env, mgr, security_mgr, &self.cfg.clone(), &addr, msg);
                 let task = async move {
                     let res = match send_task {
@@ -470,7 +479,7 @@ where
                             cb(Ok(()));
                         }
                         Err(e) => {
-                            error!("failed to send snap"; "to_addr" => addr, "err" => ?e);
+                            error!("failed to send snap"; "to_addr" => addr, "region_id" => region_id, "err" => ?e);
                             cb(Err(e));
                         }
                     };
