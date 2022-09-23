@@ -154,7 +154,7 @@ mod tests {
             };
             modifies_with_ts.push(Modify::Put(
                 CF_DEFAULT,
-                F::encode_raw_key_owned(raw_keys[i].to_vec(), Some(100.into())),
+                F::encode_raw_key_owned(raw_keys[i].to_vec(), Some(101.into())),
                 F::encode_raw_value_owned(raw_value),
             ));
         }

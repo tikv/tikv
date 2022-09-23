@@ -292,7 +292,7 @@ mod tests {
         let write_result = cmd.process_write(snap, context).unwrap();
         let modifies_with_ts = vec![Modify::Put(
             CF_DEFAULT,
-            F::encode_raw_key(raw_key, Some(100.into())),
+            F::encode_raw_key(raw_key, Some(101.into())),
             F::encode_raw_value_owned(encode_value),
         )];
         assert_eq!(write_result.to_be_write.modifies, modifies_with_ts)
