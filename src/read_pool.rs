@@ -142,10 +142,10 @@ impl ReadPoolHandle {
                 };
                 let extras = Extras::new_multilevel(task_id, fixed_level);
                 let task_cell = TaskCell::new(
-                    TrackedFuture::new(async move {
+                    async move {
                         f.await;
                         running_tasks.dec();
-                    }),
+                    },
                     extras,
                 );
                 remote.spawn(task_cell);

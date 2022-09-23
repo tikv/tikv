@@ -731,13 +731,7 @@ where
                         self.store_id, self.tag, e
                     );
                 });
-            let trackers: Vec<_> = self
-                .batch
-                .tasks
-                .iter()
-                .flat_map(|task| task.trackers.iter().flat_map(|t| t.as_tracker_token()))
-                .collect();
-            self.perf_context.report_metrics(&trackers);
+            self.perf_context.report_metrics(&[]);
             write_raft_time = duration_to_sec(now.saturating_elapsed());
             STORE_WRITE_RAFTDB_DURATION_HISTOGRAM.observe(write_raft_time);
         }

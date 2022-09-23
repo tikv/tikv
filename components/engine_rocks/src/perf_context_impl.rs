@@ -205,35 +205,16 @@ impl PerfContextStatistics {
         self.apply_perf_settings();
     }
 
-    pub fn report(&mut self, trackers: &[TrackerToken]) {
+    pub fn report(&mut self, _trackers: &[TrackerToken]) {
         match self.kind {
             PerfContextKind::RaftstoreApply => {
                 report_write_perf_context!(self, APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC);
-                for token in trackers {
-                    GLOBAL_TRACKERS.with_tracker(*token, |t| {
-                        t.metrics.apply_mutex_lock_nanos = self.write.db_mutex_lock_nanos;
-                        t.metrics.apply_thread_wait_nanos = self.write.write_thread_wait;
-                        t.metrics.apply_write_wal_nanos = self.write.write_wal_time;
-                        t.metrics.apply_write_memtable_nanos = self.write.write_memtable_time;
-                    });
-                }
             }
             PerfContextKind::RaftstoreStore => {
                 report_write_perf_context!(self, STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC);
-                for token in trackers {
-                    GLOBAL_TRACKERS.with_tracker(*token, |t| {
-                        t.metrics.store_mutex_lock_nanos = self.write.db_mutex_lock_nanos;
-                        t.metrics.store_thread_wait_nanos = self.write.write_thread_wait;
-                        t.metrics.store_write_wal_nanos = self.write.write_wal_time;
-                        t.metrics.store_write_memtable_nanos = self.write.write_memtable_time;
-                    });
-                }
             }
             PerfContextKind::Storage(_) | PerfContextKind::Coprocessor(_) => {
                 let perf_context = ReadPerfContext::capture();
-                for token in trackers {
-                    GLOBAL_TRACKERS.with_tracker(*token, |t| perf_context.report_to_tracker(t));
-                }
                 self.read += perf_context;
                 self.flush_read_metrics();
             }

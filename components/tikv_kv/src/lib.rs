@@ -586,7 +586,6 @@ pub fn snapshot<E: Engine>(
     engine: &E,
     ctx: SnapContext<'_>,
 ) -> impl std::future::Future<Output = Result<E::Snap>> {
-    let begin = Instant::now();
     let (callback, future) =
         tikv_util::future::paired_must_called_future_callback(drop_snapshot_callback::<E>);
     let val = engine.async_snapshot(ctx, callback);
@@ -596,9 +595,6 @@ pub fn snapshot<E: Engine>(
         let result = future
             .map_err(|cancel| Error::from(ErrorInner::Other(box_err!(cancel))))
             .await?;
-        with_tls_tracker(|tracker| {
-            tracker.metrics.get_snapshot_nanos += begin.elapsed().as_nanos() as u64;
-        });
         fail_point!("after-snapshot");
         result
     }

@@ -44,7 +44,7 @@ use tikv_util::{
     time::{duration_to_ms, duration_to_sec, Instant},
     worker::Scheduler,
 };
-use tracker::{set_tls_tracker_token, RequestInfo, RequestType, Tracker, GLOBAL_TRACKERS};
+use tracker::{set_tls_tracker_token, RequestInfo, RequestType, Tracker};
 use txn_types::{self, Key};
 
 use super::batch::{BatcherBuilder, ReqBatcher};
@@ -192,18 +192,15 @@ macro_rules! handle_request {
             forward_unary!(self.proxy, $fn_name, ctx, req, sink);
             let begin_instant = Instant::now();
 
-            let source = req.mut_context().take_request_source();
             let resp = $future_name(&self.storage, req);
             let task = async move {
                 let resp = resp.await?;
                 let elapsed = begin_instant.saturating_elapsed();
-                set_total_time!(resp, elapsed, $time_detail);
                 sink.success(resp).await?;
                 GRPC_MSG_HISTOGRAM_STATIC
                     .$fn_name
                     .observe(elapsed.as_secs_f64());
-                record_request_source_metrics(source, elapsed);
-                ServerResult::Ok(())
+                                ServerResult::Ok(())
             }
             .map_err(|e| {
                 log_net_error!(e, "kv rpc failed";
@@ -216,17 +213,6 @@ macro_rules! handle_request {
             ctx.spawn(task);
         }
     }
-}
-
-macro_rules! set_total_time {
-    ($resp:ident, $duration:expr,no_time_detail) => {};
-    ($resp:ident, $duration:expr,has_time_detail) => {
-        let mut $resp = $resp;
-        $resp
-            .mut_exec_details_v2()
-            .mut_time_detail()
-            .set_total_rpc_wall_time_ns($duration.as_nanos() as u64);
-    };
 }
 
 impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFormat> Tikv
@@ -409,7 +395,6 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
     ) {
         let begin_instant = Instant::now();
 
-        let source = req.mut_context().take_request_source();
         let resp = future_flashback_to_version(&self.storage, &self.ch, req);
         let task = async move {
             let resp = resp.await?;
@@ -418,7 +403,6 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
             GRPC_MSG_HISTOGRAM_STATIC
                 .kv_flashback_to_version
                 .observe(elapsed.as_secs_f64());
-            record_request_source_metrics(source, elapsed);
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -434,7 +418,6 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
 
     fn coprocessor(&mut self, ctx: RpcContext<'_>, mut req: Request, sink: UnarySink<Response>) {
         forward_unary!(self.proxy, coprocessor, ctx, req, sink);
-        let source = req.mut_context().take_request_source();
         let begin_instant = Instant::now();
         let future = future_copr(&self.copr, Some(ctx.peer()), req);
         let task = async move {
@@ -444,7 +427,6 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
             GRPC_MSG_HISTOGRAM_STATIC
                 .coprocessor
                 .observe(elapsed.as_secs_f64());
-            record_request_source_metrics(source, elapsed);
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -464,7 +446,6 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
         mut req: RawCoprocessorRequest,
         sink: UnarySink<RawCoprocessorResponse>,
     ) {
-        let source = req.mut_context().take_request_source();
         let begin_instant = Instant::now();
         let future = future_raw_coprocessor(&self.copr_v2, &self.storage, req);
         let task = async move {
@@ -474,7 +455,6 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
             GRPC_MSG_HISTOGRAM_STATIC
                 .raw_coprocessor
                 .observe(elapsed.as_secs_f64());
-            record_request_source_metrics(source, elapsed);
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -664,7 +644,6 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
         assert!(!req.get_start_key().is_empty());
         assert!(!req.get_end_key().is_empty());
 
-        let source = req.mut_context().take_request_source();
         let (cb, f) = paired_future_callback();
         let res = self.gc_worker.unsafe_destroy_range(
             req.take_context(),
@@ -688,7 +667,6 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
             GRPC_MSG_HISTOGRAM_STATIC
                 .unsafe_destroy_range
                 .observe(elapsed.as_secs_f64());
-            record_request_source_metrics(source, elapsed);
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -1255,18 +1233,13 @@ fn response_batch_commands_request<F, T>(
     tx: Sender<MeasuredSingleResponse>,
     begin: Instant,
     label: GrpcTypeKind,
-    source: String,
 ) where
     MemoryTraceGuard<batch_commands_response::Response>: From<T>,
     F: Future<Output = Result<T, ()>> + Send + 'static,
 {
     let task = async move {
         if let Ok(resp) = resp.await {
-            let measure = GrpcRequestDuration {
-                begin,
-                label,
-                source,
-            };
+            let measure = GrpcRequestDuration { begin, label };
             let task = MeasuredSingleResponse::new(id, resp, measure);
             if let Err(e) = tx.send_and_notify(task) {
                 error!("KvService response batch commands fail"; "err" => ?e);
@@ -1309,7 +1282,7 @@ fn handle_batch_commands_request<
                     // For some invalid requests.
                     let begin_instant = Instant::now();
                     let resp = future::ok(batch_commands_response::Response::default());
-                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::invalid, String::default());
+                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::invalid);
                 },
                 Some(batch_commands_request::request::Cmd::Get(mut req)) => {
                     if batcher.as_mut().map_or(false, |req_batch| {
@@ -1318,11 +1291,10 @@ fn handle_batch_commands_request<
                         batcher.as_mut().unwrap().add_get_request(req, id);
                     } else {
                        let begin_instant = Instant::now();
-                       let source = req.mut_context().take_request_source();
-                       let resp = future_get(storage, req)
+                                              let resp = future_get(storage, req)
                             .map_ok(oneof!(batch_commands_response::response::Cmd::Get))
                             .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_get.inc());
-                        response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::kv_get, source);
+                        response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::kv_get);
                     }
                 },
                 Some(batch_commands_request::request::Cmd::RawGet(mut req)) => {
@@ -1332,22 +1304,20 @@ fn handle_batch_commands_request<
                         batcher.as_mut().unwrap().add_raw_get_request(req, id);
                     } else {
                        let begin_instant = Instant::now();
-                       let source = req.mut_context().take_request_source();
-                       let resp = future_raw_get(storage, req)
+                                              let resp = future_raw_get(storage, req)
                             .map_ok(oneof!(batch_commands_response::response::Cmd::RawGet))
                             .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_get.inc());
-                        response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::raw_get, source);
+                        response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::raw_get);
                     }
                 },
                 Some(batch_commands_request::request::Cmd::Coprocessor(mut req)) => {
                     let begin_instant = Instant::now();
-                    let source = req.mut_context().take_request_source();
-                    let resp = future_copr(copr, Some(peer.to_string()), req)
+                                        let resp = future_copr(copr, Some(peer.to_string()), req)
                         .map_ok(|resp| {
                             resp.map(oneof!(batch_commands_response::response::Cmd::Coprocessor))
                         })
                         .map_err(|_| GRPC_MSG_FAIL_COUNTER.coprocessor.inc());
-                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::coprocessor, source);
+                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::coprocessor);
                 },
                 Some(batch_commands_request::request::Cmd::Empty(req)) => {
                     let begin_instant = Instant::now();
@@ -1363,16 +1333,14 @@ fn handle_batch_commands_request<
                         tx.clone(),
                         begin_instant,
                         GrpcTypeKind::invalid,
-                        String::default(),
                     );
                 }
                 $(Some(batch_commands_request::request::Cmd::$cmd(mut req)) => {
                     let begin_instant = Instant::now();
-                    let source = req.mut_context().take_request_source();
-                    let resp = $future_fn($($arg,)* req)
+                                        let resp = $future_fn($($arg,)* req)
                         .map_ok(oneof!(batch_commands_response::response::Cmd::$cmd))
                         .map_err(|_| GRPC_MSG_FAIL_COUNTER.$metric_name.inc());
-                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::$metric_name, source);
+                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::$metric_name);
                 })*
                 Some(batch_commands_request::request::Cmd::Import(_)) => unimplemented!(),
             }
@@ -1417,16 +1385,11 @@ fn handle_measures_for_batch_commands(measures: &mut MeasuredBatchResponse) {
         .iter_mut()
         .zip(mem::take(&mut measures.measures))
     {
-        let GrpcRequestDuration {
-            label,
-            begin,
-            source,
-        } = measure;
+        let GrpcRequestDuration { label, begin } = measure;
         let elapsed = now.saturating_duration_since(begin);
         GRPC_MSG_HISTOGRAM_STATIC
             .get(label)
             .observe(elapsed.as_secs_f64());
-        record_request_source_metrics(source, elapsed);
         let exec_details = resp.cmd.as_mut().and_then(|cmd| match cmd {
             Get(resp) => Some(resp.mut_exec_details_v2()),
             Prewrite(resp) => Some(resp.mut_exec_details_v2()),
@@ -1471,12 +1434,6 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: GetRequest,
 ) -> impl Future<Output = ServerResult<GetResponse>> {
-    let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
-        req.get_context(),
-        RequestType::KvGet,
-        req.get_version(),
-    )));
-    set_tls_tracker_token(tracker);
     let start = Instant::now();
     let v = storage.get(
         req.take_context(),
@@ -1496,9 +1453,6 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
                     let exec_detail_v2 = resp.mut_exec_details_v2();
                     let scan_detail_v2 = exec_detail_v2.mut_scan_detail_v2();
                     stats.stats.write_scan_detail(scan_detail_v2);
-                    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-                        tracker.write_scan_detail(scan_detail_v2);
-                    });
                     let time_detail = exec_detail_v2.mut_time_detail();
                     time_detail.set_kv_read_wall_time_ms(duration_ms);
                     time_detail.set_wait_wall_time_ms(stats.latency_stats.wait_wall_time_ms);
@@ -1511,7 +1465,6 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
                 Err(e) => resp.set_error(extract_key_error(&e)),
             }
         }
-        GLOBAL_TRACKERS.remove(tracker);
         Ok(resp)
     }
 }
@@ -1520,12 +1473,6 @@ fn future_scan<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: ScanRequest,
 ) -> impl Future<Output = ServerResult<ScanResponse>> {
-    let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
-        req.get_context(),
-        RequestType::KvScan,
-        req.get_version(),
-    )));
-    set_tls_tracker_token(tracker);
     let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
 
     let v = storage.scan(
@@ -1559,7 +1506,6 @@ fn future_scan<E: Engine, L: LockManager, F: KvFormat>(
                 }
             }
         }
-        GLOBAL_TRACKERS.remove(tracker);
         Ok(resp)
     }
 }
@@ -1568,12 +1514,6 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: BatchGetRequest,
 ) -> impl Future<Output = ServerResult<BatchGetResponse>> {
-    let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
-        req.get_context(),
-        RequestType::KvBatchGet,
-        req.get_version(),
-    )));
-    set_tls_tracker_token(tracker);
     let start = Instant::now();
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
     let v = storage.batch_get(req.take_context(), keys, req.get_version().into());
@@ -1591,9 +1531,6 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
                     let exec_detail_v2 = resp.mut_exec_details_v2();
                     let scan_detail_v2 = exec_detail_v2.mut_scan_detail_v2();
                     stats.stats.write_scan_detail(scan_detail_v2);
-                    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-                        tracker.write_scan_detail(scan_detail_v2);
-                    });
                     let time_detail = exec_detail_v2.mut_time_detail();
                     time_detail.set_kv_read_wall_time_ms(duration_ms);
                     time_detail.set_wait_wall_time_ms(stats.latency_stats.wait_wall_time_ms);
@@ -1610,7 +1547,6 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
                 }
             }
         }
-        GLOBAL_TRACKERS.remove(tracker);
         Ok(resp)
     }
 }
@@ -1619,12 +1555,6 @@ fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: ScanLockRequest,
 ) -> impl Future<Output = ServerResult<ScanLockResponse>> {
-    let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
-        req.get_context(),
-        RequestType::KvScanLock,
-        req.get_max_version(),
-    )));
-    set_tls_tracker_token(tracker);
     let start_key = Key::from_raw_maybe_unbounded(req.get_start_key());
     let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
 
@@ -1647,7 +1577,6 @@ fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat>(
                 Err(e) => resp.set_error(extract_key_error(&e)),
             }
         }
-        GLOBAL_TRACKERS.remove(tracker);
         Ok(resp)
     }
 }
@@ -2126,19 +2055,10 @@ macro_rules! txn_command_future {
             $req: $req_ty,
         ) -> impl Future<Output = ServerResult<$resp_ty>> {
             $prelude
-            let $tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
-                $req.get_context(),
-                RequestType::Unknown,
-                0,
-            )));
-            set_tls_tracker_token($tracker);
             let (cb, f) = paired_future_callback();
             let res = storage.sched_txn_command($req.into(), cb);
 
             async move {
-                defer!{{
-                    GLOBAL_TRACKERS.remove($tracker);
-                }};
                 let $v = match res {
                     Err(e) => Err(e),
                     Ok(_) => f.await?,
@@ -2165,10 +2085,6 @@ txn_command_future!(future_prewrite, PrewriteRequest, PrewriteResponse, (v, resp
     if let Ok(v) = &v {
         resp.set_min_commit_ts(v.min_commit_ts.into_inner());
         resp.set_one_pc_commit_ts(v.one_pc_commit_ts.into_inner());
-        GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-            tracker.write_scan_detail(resp.mut_exec_details_v2().mut_scan_detail_v2());
-            tracker.write_write_detail(resp.mut_exec_details_v2().mut_write_detail());
-        });
     }
     resp.set_errors(extract_key_errors(v.map(|v| v.locks)).into());
 }});
@@ -2183,10 +2099,6 @@ txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, Pes
             resp.set_errors(vec![extract_key_error(&e)].into())
         },
     }
-    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-        tracker.write_scan_detail(resp.mut_exec_details_v2().mut_scan_detail_v2());
-        tracker.write_write_detail(resp.mut_exec_details_v2().mut_write_detail());
-    });
 }});
 txn_command_future!(future_pessimistic_rollback, PessimisticRollbackRequest, PessimisticRollbackResponse, (v, resp) {
     resp.set_errors(extract_key_errors(v).into())
@@ -2205,10 +2117,6 @@ txn_command_future!(future_commit, CommitRequest, CommitResponse, (v, resp, trac
     match v {
         Ok(TxnStatus::Committed { commit_ts }) => {
             resp.set_commit_version(commit_ts.into_inner());
-            GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-                tracker.write_scan_detail(resp.mut_exec_details_v2().mut_scan_detail_v2());
-                tracker.write_write_detail(resp.mut_exec_details_v2().mut_write_detail());
-            });
         }
         Ok(_) => unreachable!(),
         Err(e) => resp.set_error(extract_key_error(&e)),
@@ -2311,15 +2219,10 @@ pub mod batch_commands_request {
 pub struct GrpcRequestDuration {
     pub begin: Instant,
     pub label: GrpcTypeKind,
-    pub source: String,
 }
 impl GrpcRequestDuration {
-    pub fn new(begin: Instant, label: GrpcTypeKind, source: String) -> Self {
-        GrpcRequestDuration {
-            begin,
-            label,
-            source,
-        }
+    pub fn new(begin: Instant, label: GrpcTypeKind) -> Self {
+        GrpcRequestDuration { begin, label }
     }
 }
 

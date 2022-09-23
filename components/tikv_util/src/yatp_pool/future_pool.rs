@@ -82,7 +82,7 @@ impl FuturePool {
     where
         F: Future + Send + 'static,
     {
-        self.inner.spawn(TrackedFuture::new(future))
+        self.inner.spawn(future)
     }
 
     /// Spawns a future in the pool and returns a handle to the result of the
@@ -97,7 +97,7 @@ impl FuturePool {
         F: Future + Send + 'static,
         F::Output: Send,
     {
-        self.inner.spawn_handle(TrackedFuture::new(future))
+        self.inner.spawn_handle(future)
     }
 }
 

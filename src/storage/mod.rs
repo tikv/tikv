@@ -729,7 +729,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         &self,
         requests: Vec<GetRequest>,
         ids: Vec<u64>,
-        trackers: Vec<TrackerToken>,
         consumer: P,
         begin_instant: tikv_util::time::Instant,
     ) -> impl Future<Output = Result<()>> {
@@ -762,8 +761,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let mut statistics = Statistics::default();
                 let mut req_snaps = vec![];
 
-                for ((mut req, id), tracker) in requests.into_iter().zip(ids).zip(trackers) {
-                    set_tls_tracker_token(tracker);
+                for (mut req, id) in requests.into_iter().zip(ids) {
                     let mut ctx = req.take_context();
                     let source = ctx.take_request_source();
                     let region_id = ctx.get_region_id();
@@ -812,7 +810,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                     let snap = Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx));
                     req_snaps.push((
-                        TrackedFuture::new(snap),
+                        snap,
                         key,
                         start_ts,
                         isolation_level,
@@ -822,7 +820,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         region_id,
                         id,
                         source,
-                        tracker,
                     ));
                 }
                 Self::with_tls_engine(|engine| engine.release_snapshot());
@@ -838,10 +835,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         region_id,
                         id,
                         source,
-                        tracker,
                     ) = req_snap;
                     let snap_res = snap.await;
-                    set_tls_tracker_token(tracker);
                     match snap_res {
                         Ok(snapshot) => Self::with_perf_context(CMD, || {
                             let buckets = snapshot.ext().get_buckets();
@@ -3429,7 +3424,6 @@ mod tests {
         block_on(storage.batch_get_command(
             vec![create_get_request(b"c", 1), create_get_request(b"d", 1)],
             vec![1, 2],
-            vec![INVALID_TRACKER_TOKEN; 2],
             consumer.clone(),
             Instant::now(),
         ))
@@ -4115,7 +4109,6 @@ mod tests {
         block_on(storage.batch_get_command(
             vec![create_get_request(b"c", 2), create_get_request(b"d", 2)],
             vec![1, 2],
-            vec![INVALID_TRACKER_TOKEN; 2],
             consumer.clone(),
             Instant::now(),
         ))
@@ -4156,7 +4149,6 @@ mod tests {
                 create_get_request(b"b", 5),
             ],
             vec![1, 2, 3, 4],
-            vec![INVALID_TRACKER_TOKEN; 4],
             consumer.clone(),
             Instant::now(),
         ))
@@ -8237,7 +8229,6 @@ mod tests {
             block_on(storage.batch_get_command(
                 vec![req1.clone(), req2],
                 vec![1, 2],
-                vec![INVALID_TRACKER_TOKEN; 2],
                 consumer.clone(),
                 Instant::now(),
             ))
@@ -8311,14 +8302,8 @@ mod tests {
         req.set_key(k1.clone());
         req.set_version(110);
         let consumer = GetConsumer::new();
-        block_on(storage.batch_get_command(
-            vec![req],
-            vec![1],
-            vec![INVALID_TRACKER_TOKEN],
-            consumer.clone(),
-            Instant::now(),
-        ))
-        .unwrap();
+        block_on(storage.batch_get_command(vec![req], vec![1], consumer.clone(), Instant::now()))
+            .unwrap();
         let res = consumer.take_data();
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].as_ref().unwrap(), &Some(v1.clone()));

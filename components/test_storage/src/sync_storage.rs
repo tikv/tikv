@@ -192,11 +192,10 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
                 req
             })
             .collect();
-        let trackers = keys.iter().map(|_| INVALID_TRACKER_TOKEN).collect();
         let p = GetConsumer::new();
         block_on(
             self.store
-                .batch_get_command(requests, ids, trackers, p.clone(), Instant::now()),
+                .batch_get_command(requests, ids, p.clone(), Instant::now()),
         )?;
         let mut values = vec![];
         for value in p.take_data().into_iter() {

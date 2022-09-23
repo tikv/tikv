@@ -622,12 +622,6 @@ where
                         .raft_metrics
                         .propose_wait_time
                         .observe(propose_time.as_secs_f64());
-                    cmd.callback.read_tracker().map(|tracker| {
-                        GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
-                            t.metrics.read_index_propose_wait_nanos =
-                                propose_time.as_nanos() as u64;
-                        })
-                    });
 
                     if let Some(Err(e)) = cmd.extra_opts.deadline.map(|deadline| deadline.check()) {
                         cmd.callback.invoke_with_response(new_error(e.into()));

@@ -488,12 +488,6 @@ impl<E: Engine> Endpoint<E> {
         req: coppb::Request,
         peer: Option<String>,
     ) -> impl Future<Output = MemoryTraceGuard<coppb::Response>> {
-        let tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo::new(
-            req.get_context(),
-            RequestType::Unknown,
-            req.start_ts,
-        )));
-        set_tls_tracker_token(tracker);
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)
             .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
@@ -506,13 +500,9 @@ impl<E: Engine> Endpoint<E> {
                         .await
                         .unwrap_or_else(|e| make_error_response(e).into());
                     let scan_detail_v2 = response.mut_exec_details_v2().mut_scan_detail_v2();
-                    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-                        tracker.write_scan_detail(scan_detail_v2);
-                    });
                     response
                 }
             };
-            GLOBAL_TRACKERS.remove(tracker);
             res
         }
     }

@@ -1727,28 +1727,6 @@ where
                 "disk_usage" => ?msg.get_disk_usage(),
             );
 
-            for (term, index) in msg
-                .get_message()
-                .get_entries()
-                .iter()
-                .map(|e| (e.get_term(), e.get_index()))
-            {
-                if let Ok(idx) = self
-                    .proposals
-                    .queue
-                    .binary_search_by_key(&index, |p: &Proposal<_>| p.index)
-                {
-                    let proposal = &self.proposals.queue[idx];
-                    if term == proposal.term {
-                        for tracker in proposal.cb.write_trackers().iter().flat_map(|v| v.iter()) {
-                            tracker.observe(std_now, &ctx.raft_metrics.wf_send_proposal, |t| {
-                                &mut t.metrics.wf_send_proposal_nanos
-                            });
-                        }
-                    }
-                }
-            }
-
             if let Err(e) = ctx.trans.send(msg) {
                 // We use metrics to observe failure on production.
                 debug!(
@@ -3170,12 +3148,6 @@ where
         RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds().len() as i64);
         let time = monotonic_raw_now();
         for (req, cb, mut read_index) in read.take_cmds().drain(..) {
-            cb.read_tracker().map(|tracker| {
-                GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
-                    t.metrics.read_index_confirm_wait_nanos =
-                        (time - read.propose_time).to_std().unwrap().as_nanos() as u64;
-                })
-            });
             // leader reports key is locked
             if let Some(locked) = read.locked.take() {
                 let mut response = raft_cmdpb::Response::default();

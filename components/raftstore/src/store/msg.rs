@@ -139,16 +139,8 @@ where
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
     ) -> Self {
-        let tracker_token = get_tls_tracker_token();
         let now = std::time::Instant::now();
-        let tracker = if tracker_token == INVALID_TRACKER_TOKEN {
-            TimeTracker::Instant(now)
-        } else {
-            GLOBAL_TRACKERS.with_tracker(tracker_token, |tracker| {
-                tracker.metrics.write_instant = Some(now);
-            });
-            TimeTracker::Tracker(tracker_token)
-        };
+        let tracker = TimeTracker::Instant(now);
 
         Callback::Write {
             cb,

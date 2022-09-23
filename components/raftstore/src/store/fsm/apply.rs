@@ -549,15 +549,7 @@ where
             if let Some(seqno) = seqno.as_mut() {
                 seqno.post_write(seq)
             }
-            let trackers: Vec<_> = self
-                .applied_batch
-                .cb_batch
-                .iter()
-                .flat_map(|(cb, _)| cb.write_trackers())
-                .flat_map(|trackers| trackers.iter().map(|t| t.as_tracker_token()))
-                .flatten()
-                .collect();
-            self.perf_context.report_metrics(&trackers);
+            self.perf_context.report_metrics(&[]);
             self.sync_log_hint = false;
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
@@ -3829,16 +3821,6 @@ where
                 Msg::Apply { start, mut apply } => {
                     let apply_wait = start.saturating_elapsed();
                     apply_ctx.apply_wait.observe(apply_wait.as_secs_f64());
-                    for tracker in apply
-                        .cbs
-                        .iter()
-                        .flat_map(|p| p.cb.write_trackers())
-                        .flat_map(|ts| ts.iter().flat_map(|t| t.as_tracker_token()))
-                    {
-                        GLOBAL_TRACKERS.with_tracker(tracker, |t| {
-                            t.metrics.apply_wait_nanos = apply_wait.as_nanos() as u64;
-                        });
-                    }
 
                     if let Some(batch) = batch_apply.as_mut() {
                         if batch.try_batch(&mut apply) {
