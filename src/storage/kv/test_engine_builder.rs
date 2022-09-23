@@ -112,7 +112,6 @@ impl TestEngineBuilder {
             .collect();
         let engine =
             RocksEngine::new(&path, None, cfs_opts, cache.is_some(), self.io_rate_limiter)?;
-
         Ok(engine)
     }
 }
