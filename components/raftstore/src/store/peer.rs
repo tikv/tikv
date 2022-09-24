@@ -79,8 +79,8 @@ use super::{
     read_queue::{ReadIndexQueue, ReadIndexRequest},
     transport::Transport,
     util::{
-        self, check_region_epoch, is_initial_msg, AdminCmdEpochState, ChangePeerI, ConfChangeKind,
-        Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
+        self, check_region_epoch, is_initial_msg, message_size, AdminCmdEpochState, ChangePeerI,
+        ConfChangeKind, Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
     },
     DestroyPeerJob, LocalReadContext,
 };
@@ -1776,6 +1776,7 @@ where
     ) {
         let mut now = None;
         let std_now = Instant::now();
+        let local_peer_id = self.peer_id();
         for msg in msgs {
             let msg_type = msg.get_message().get_msg_type();
             if msg_type == MessageType::MsgSnapshot {
@@ -1827,6 +1828,16 @@ where
                         }
                     }
                 }
+            }
+
+            // Metrics for cross-AZ data traffic roughly.
+            let is_same_az: bool = self
+                .raft_group
+                .raft
+                .is_in_same_broadcast_group(local_peer_id, to_peer_id);
+            if !is_same_az {
+                let len = message_size(&msg) as u64;
+                RAFT_CROSS_AZ_TRAFFIC_COUNTER.inc_by(len);
             }
 
             if let Err(e) = ctx.trans.send(msg) {

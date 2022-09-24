@@ -753,6 +753,12 @@ lazy_static! {
     )
     .unwrap();
 
+    pub static ref RAFT_CROSS_AZ_TRAFFIC_COUNTER: IntCounter = register_int_counter!(
+        "raft_cross_az_data_traffic",
+        "Count for Raft cross-AZ data traffic size"
+    )
+    .unwrap();
+
     pub static ref RAFT_APPLYING_SST_GAUGE: IntGaugeVec = register_int_gauge_vec!(
         "tikv_raft_applying_sst",
         "Sum of applying sst.",
