@@ -779,4 +779,10 @@ lazy_static! {
     .unwrap();
     pub static ref RAFT_LOG_GC_SKIPPED: RaftLogGcSkippedVec =
         auto_flush_from!(RAFT_LOG_GC_SKIPPED_VEC, RaftLogGcSkippedVec);
+
+    pub static ref RAFT_CROSS_AZ_TRAFFIC_COUNTER: IntCounter = register_int_counter!(
+        "raft_cross_az_data_traffic",
+        "Count for Raft cross-AZ data traffic size"
+    )
+    .unwrap();
 }

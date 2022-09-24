@@ -428,14 +428,6 @@ lazy_static! {
     .unwrap();
 }
 
-lazy_static! {
-    pub static ref RAFT_CROSS_AZ_TRAFFIC_COUNTER: IntCounter = register_int_counter!(
-        "raft_cross_az_data_traffic",
-        "Count for Raft cross-AZ data traffic size"
-    )
-    .unwrap();
-}
-
 make_auto_flush_static_metric! {
     pub label_enum RequestStatusKind {
         all,

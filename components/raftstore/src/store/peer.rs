@@ -51,7 +51,7 @@ use raft::{
     SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT,
 };
 use raft_proto::ConfChangeI;
-use rand::{seq::SliceRandom, thread_rng, Rng};
+use rand::seq::SliceRandom;
 use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
@@ -76,7 +76,7 @@ use super::{
     read_queue::{ReadIndexQueue, ReadIndexRequest},
     transport::Transport,
     util::{
-        self, check_region_epoch, is_initial_msg, AdminCmdEpochState, ChangePeerI, ConfChangeKind,
+        self, check_region_epoch, is_initial_msg, message_size, AdminCmdEpochState, ChangePeerI, ConfChangeKind,
         Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
     },
     DestroyPeerJob, LocalReadContext,
@@ -1610,7 +1610,7 @@ where
         let std_now = Instant::now();
         let leader_az = ctx.zone_info.get(&self.peer.store_id);
 
-        for mut msg in msgs {
+        for msg in msgs {
             let msg_type = msg.get_message().get_msg_type();
             if msg_type == MessageType::MsgSnapshot {
                 let snap_index = msg.get_message().get_snapshot().get_metadata().get_index();
@@ -1663,12 +1663,13 @@ where
                 }
             }
 
+            // Metrics for cross-AZ data traffic roughly.
             let to_az = ctx.zone_info.get(&to_store_id);
-            let mut is_cross_az: bool = true;
-            if to_az.is_some() && leader_az.is_some() && to_az.unwrap() == leader_az.unwrap() {
-                is_cross_az = false;
+            let is_same_az: bool = to_az.is_some() && leader_az.is_some() && to_az.unwrap() == leader_az.unwrap();
+            if !is_same_az {
+                let len = message_size(&msg) as u64;
+                RAFT_CROSS_AZ_TRAFFIC_COUNTER.inc_by(len);
             }
-            msg.set_is_cross_az(is_cross_az);
 
             if let Err(e) = ctx.trans.send(msg) {
                 // We use metrics to observe failure on production.
@@ -1697,26 +1698,25 @@ where
         }
     }
 
-    #[inline]
+    // Select a suitable agent.
     fn assign_zone_agent(&self, group: &[usize], msgs: &[eraftpb::Message]) -> Option<u64> {
-        // TODO: Find a better way to decide agent.
-        let idx = thread_rng().gen_range(0..group.len());
-        Some(msgs[group[idx]].get_to())
-        // let mut agent_id: Option<u64> = None;
-        // let mut next_idx = 0;
-        // for idx in group {
-        //     let peer_id = msgs[*idx].get_to();
-        //     let is_voter =
-        // self.raft_group.raft.prs().conf().voters().contains(peer_id);
-        //     if self.raft_group.raft.is_recent_active(peer_id)
-        //         && self.raft_group.raft.get_next_idx(peer_id).unwrap() >
-        // next_idx         && is_voter
-        //     {
-        //         agent_id = Some(peer_id);
-        //         next_idx =
-        // self.raft_group.raft.get_next_idx(peer_id).unwrap();     }
-        // }
-        // agent_id
+        let mut agent_id: Option<u64> = None;
+        let mut next_idx = 0;
+        for idx in group {
+            // The agent must be a voter and active recently.
+            // The agent should have larger next_idx,
+            // indicating that it may have more up-to-date log entries.
+            let peer_id = msgs[*idx].get_to();
+            let is_voter = self.raft_group.raft.prs().conf().voters().contains(peer_id);
+            if is_voter
+                && self.raft_group.raft.is_recent_active(peer_id)
+                && self.raft_group.raft.get_next_idx(peer_id).unwrap() > next_idx
+            {
+                agent_id = Some(peer_id);
+                next_idx = self.raft_group.raft.get_next_idx(peer_id).unwrap();
+            }
+        }
+        agent_id
     }
 
     fn merge_msg_append(
@@ -1725,8 +1725,13 @@ where
         msgs: &mut [eraftpb::Message],
         skip: &mut [bool],
     ) {
-        // If no appropriate agent, do not use follower replication.
+        // Do not need to merge MsgAppend if less than two.
+        if group.len() < 2 {
+            return;
+        }
+
         if let Some(agent_id) = self.assign_zone_agent(group, msgs) {
+            // Build forward information.
             let mut forwards: Vec<Forward> = Vec::new();
             for idx in group {
                 let msg = &msgs[*idx];
@@ -1740,21 +1745,17 @@ where
                 }
             }
 
+            // Modify MsgAppend to the agent.
             for idx in group {
                 let msg = &mut msgs[*idx];
                 if msg.get_to() == agent_id {
                     msg.set_forwards(forwards.into());
                     msg.set_msg_type(MessageType::MsgGroupBroadcast);
-                    debug!(
-                        "Follower replication: Peer {} via agent {}. Forwards:{:?}",
-                        self.peer.id,
-                        agent_id,
-                        msg.get_forwards()
-                    );
                     break;
                 }
             }
         } else {
+            // If no appropriate agent, do not use follower replication.
             info!("Fail to select agent.");
         }
     }
@@ -1765,40 +1766,63 @@ where
         mut msgs: Vec<eraftpb::Message>,
     ) -> Vec<RaftMessage> {
         let mut raft_msgs = Vec::with_capacity(msgs.len());
+        let leader_store_id = self.peer.get_store_id();
 
-        if self.follower_repl() && self.is_leader() {
+        if self.follower_repl() && self.is_leader() && let Some(leader_zone) = ctx.zone_info.get(&leader_store_id) {
             // Group MsgAppend by AZ.
             let mut msg_append_group: HashMap<String, Vec<usize>> = HashMap::default();
-            let leader_store_id = self.peer.get_store_id();
-            let leader_zone = ctx.zone_info.get(&leader_store_id);
             // Record message that should be discarded after merge_msg_append.
             let mut skip = vec![false; msgs.len()];
+            // Whether or not start group broadcast at this ready.
+            // Actually if msgs does not contain complete messages sent by send_bcast, 
+            // it means that replication is not in a good state.
+            let mut should_forward = true;
 
-            // Filter MsgAppend.
-            for (pos, msg) in msgs.iter().enumerate() {
-                // Follower replication is enabled and msg is append.
+            // Filter MsgAppend in msgs.
+            // Follower replication is enabled and msg is MsgAppend.
+            let mut pos: usize = 0;
+            while pos < msgs.len() {
+                let msg = &msgs[pos];
                 if msg.get_msg_type() == MessageType::MsgAppend
                     && self.raft_group.raft.is_replicate_state(msg.get_to())
                 {
                     if let Some(to_peer) = self.get_peer_from_cache(msg.get_to()) {
                         let to_peer_store_id = to_peer.get_store_id();
                         // Leader and to_peer is not in the same zone.
-                        if let Some(to_peer_zone) = ctx.zone_info.get(&to_peer_store_id)
-                            && leader_zone.is_some() && to_peer_zone != leader_zone.unwrap()
+                        if let Some(to_peer_zone) = ctx.zone_info.get(&to_peer_store_id) && to_peer_zone != leader_zone
                         {
+                            // If batch_append is disabled, there may be several MsgAppend to a same peer in msgs.
+                            // The agent should not forward more than one MsgAppend to a single peer.
                             if let Some(v) = msg_append_group.get_mut(to_peer_zone) {
+                                for idx in v.iter() {
+                                    if msgs[*idx].to == msgs[pos].to {
+                                        info!("Multiple target");
+                                        should_forward = false;
+                                        break;
+                                    }
+                                }
                                 v.push(pos);
                             } else {
                                 msg_append_group.insert(to_peer_zone.clone(), vec![pos]);
                             }
+                            // if should_forward {
+                            //     info!("Forward!!!");
+                            //     for (zone, group) in msg_append_group.iter_mut() {
+                            //         self.merge_msg_append(group, &mut msgs, &mut skip);
+                            //         group.clear();
+                            //         if zone == to_peer_zone {
+                            //             group.push(pos);
+                            //         }
+                            //     }
+                            //     should_forward = false;
+                            // }
                         }
                     }
                 }
+                pos += 1;
             }
-
-            // Build MsgGroupBroadcast.
-            for (_, group) in msg_append_group.iter() {
-                if group.len() == 2 {
+            if should_forward {
+                for (_, group) in msg_append_group.iter() {
                     self.merge_msg_append(group, &mut msgs, &mut skip);
                 }
             }
