@@ -3526,9 +3526,9 @@ where
 impl<S: Snapshot> Clone for ApplyRes<S> {
     fn clone(&self) -> Self {
         Self {
-            region_id: self.region_id.clone(),
+            region_id: self.region_id,
             apply_state: self.apply_state.clone(),
-            applied_term: self.applied_term.clone(),
+            applied_term: self.applied_term,
             exec_res: self.exec_res.clone(),
             metrics: self.metrics.clone(),
             bucket_stat: self.bucket_stat.clone(),

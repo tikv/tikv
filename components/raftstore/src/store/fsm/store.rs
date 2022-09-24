@@ -1287,6 +1287,11 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                     .get_seqno_relation(region_id, *range.end())
                     .unwrap()
                 {
+                    info!(
+                        "update commit_since_index for region recovery";
+                        "region_id" => region_id,
+                        "relation" => ?relation,
+                    );
                     Some(relation.get_apply_state().get_applied_index())
                 } else {
                     None
@@ -1423,13 +1428,21 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                             &keys::region_state_key(region_id),
                             &region_state,
                         )?;
-                        let apply_state = if region_state.get_state() != PeerState::Tombstone {
-                            let state =
+                        let states = if region_state.get_state() != PeerState::Tombstone {
+                            let apply_state =
                                 raft_engine.get_apply_state(region_id)?.unwrap_or_else(|| {
                                     panic!("apply state not found, region_id: {}", region_id)
                                 });
-                            kv_wb.put_msg_cf(CF_RAFT, &keys::apply_state_key(region_id), &state)?;
-                            Some(state)
+                            kv_wb.put_msg_cf(
+                                CF_RAFT,
+                                &keys::apply_state_key(region_id),
+                                &apply_state,
+                            )?;
+                            let raft_state =
+                                raft_engine.get_raft_state(region_id)?.unwrap_or_else(|| {
+                                    panic!("raft state not found, region_id: {}", region_id)
+                                });
+                            Some((apply_state, raft_state))
                         } else {
                             None
                         };
@@ -1438,7 +1451,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                             "recover region from raftdb";
                             "region_id" => region_id,
                             "region_state" => ?region_state,
-                            "apply_state" => ?apply_state,
+                            "states" => ?states,
                         );
                     }
                     Result::Ok(())
