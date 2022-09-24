@@ -582,7 +582,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
         &self,
         region: &Region,
         context: &[u8],
-        snap: Arc<E::Snapshot>,
+        snap: E::Snapshot,
     ) -> Result<Vec<(Vec<u8>, u32)>> {
         let mut hashes = Vec::new();
         let (mut reader, context_len) = (context, context.len());

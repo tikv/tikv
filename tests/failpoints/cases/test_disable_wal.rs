@@ -82,13 +82,14 @@ fn test_disable_wal_recovery_catchup_snapshot() {
     }
     // Wait util raft logs GC-ed.
     sleep_ms(100);
-    cluster.sim.wl().clear_recv_filters(3);
-    must_get_equal(&cluster.get_engine(3), b"k2", b"v");
     let apply_state = cluster
         .get_raft_engine(3)
         .get_apply_state(1)
         .unwrap()
         .unwrap();
+    cluster.sim.wl().clear_recv_filters(3);
+    must_get_equal(&cluster.get_engine(3), b"k2", b"v");
+    sleep_ms(100);
     cluster.get_engine(3).flush_cfs(true).unwrap();
     cluster.stop_node(3);
     fail::remove(fp);
@@ -98,7 +99,7 @@ fn test_disable_wal_recovery_catchup_snapshot() {
         .get_apply_state(1)
         .unwrap()
         .unwrap();
-    assert_eq!(apply_state, restarted_state);
+    assert!(apply_state.get_applied_index() < restarted_state.get_applied_index());
     must_get_equal(&cluster.get_engine(3), b"k2", b"v");
 }
 

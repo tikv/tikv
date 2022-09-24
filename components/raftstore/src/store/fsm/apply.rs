@@ -191,7 +191,7 @@ impl<C> PendingCmdQueue<C> {
     }
 }
 
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug)]
 pub struct ChangePeer {
     pub index: u64,
     // The proposed ConfChangeV2 or (legacy) ConfChange
@@ -264,7 +264,7 @@ pub enum ExecResult<S> {
         region: Region,
         index: u64,
         context: Vec<u8>,
-        snap: Arc<S>,
+        snap: S,
     },
     VerifyHash {
         index: u64,
@@ -280,71 +280,6 @@ pub enum ExecResult<S> {
     TransferLeader {
         term: u64,
     },
-}
-
-impl<S> Clone for ExecResult<S> {
-    fn clone(&self) -> Self {
-        match self {
-            Self::ChangePeer(cp) => Self::ChangePeer(cp.clone()),
-            Self::CompactLog { state, first_index } => Self::CompactLog {
-                state: state.clone(),
-                first_index: first_index.clone(),
-            },
-            Self::SplitRegion {
-                regions,
-                derived,
-                new_split_regions,
-            } => Self::SplitRegion {
-                regions: regions.clone(),
-                derived: derived.clone(),
-                new_split_regions: new_split_regions.clone(),
-            },
-            Self::PrepareMerge { region, state } => Self::PrepareMerge {
-                region: region.clone(),
-                state: state.clone(),
-            },
-            Self::CommitMerge {
-                index,
-                region,
-                source,
-                commit,
-            } => Self::CommitMerge {
-                index: index.clone(),
-                region: region.clone(),
-                source: source.clone(),
-                commit: commit.clone(),
-            },
-            Self::RollbackMerge { region, commit } => Self::RollbackMerge {
-                region: region.clone(),
-                commit: commit.clone(),
-            },
-            Self::ComputeHash {
-                region,
-                index,
-                context,
-                snap,
-            } => Self::ComputeHash {
-                region: region.clone(),
-                index: index.clone(),
-                context: context.clone(),
-                snap: snap.clone(),
-            },
-            Self::VerifyHash {
-                index,
-                context,
-                hash,
-            } => Self::VerifyHash {
-                index: index.clone(),
-                context: context.clone(),
-                hash: hash.clone(),
-            },
-            Self::DeleteRange { ranges } => Self::DeleteRange {
-                ranges: ranges.clone(),
-            },
-            Self::IngestSst { ssts } => Self::IngestSst { ssts: ssts.clone() },
-            Self::TransferLeader { term } => Self::TransferLeader { term: term.clone() },
-        }
-    }
 }
 
 /// The possible returned value when applying logs.
@@ -1035,9 +970,6 @@ where
     buckets: Option<BucketStat>,
 
     last_write_seqno: Vec<SequenceNumber>,
-
-    last_recover_index: u64,
-    last_recover_apply_res: Vec<ApplyRes<EK::Snapshot>>,
 }
 
 impl<EK> ApplyDelegate<EK>
@@ -1071,8 +1003,6 @@ where
             trace: ApplyMemoryTrace::default(),
             buckets: None,
             last_write_seqno: vec![],
-            last_recover_index: 0,
-            last_recover_apply_res: vec![],
         }
     }
 
@@ -1104,22 +1034,6 @@ where
             if self.pending_remove {
                 // This peer is about to be destroyed, skip everything.
                 break;
-            }
-            if entry.get_index() < self.last_recover_index {
-                continue;
-            }
-            if entry.get_index() == self.last_recover_index {
-                if !self.last_recover_apply_res.is_empty() {
-                    let apply_res = mem::take(&mut self.last_recover_apply_res);
-                    println!(
-                        "region {} recovering apply res {}: {:?}",
-                        self.region_id(),
-                        self.last_recover_index,
-                        apply_res
-                    );
-                    // apply_ctx.notifier.notify_direct(apply_res);
-                }
-                continue;
             }
 
             let expect_index = self.apply_state.get_applied_index() + 1;
@@ -2996,7 +2910,7 @@ where
                 // open files in rocksdb.
                 // TODO: figure out another way to do consistency check without snapshot
                 // or short life snapshot.
-                snap: Arc::new(ctx.engine.snapshot()),
+                snap: ctx.engine.snapshot(),
             }),
         ))
     }
@@ -3523,20 +3437,6 @@ where
     pub write_seqno: Vec<SequenceNumber>,
 }
 
-impl<S: Snapshot> Clone for ApplyRes<S> {
-    fn clone(&self) -> Self {
-        Self {
-            region_id: self.region_id,
-            apply_state: self.apply_state.clone(),
-            applied_term: self.applied_term,
-            exec_res: self.exec_res.clone(),
-            metrics: self.metrics.clone(),
-            bucket_stat: self.bucket_stat.clone(),
-            write_seqno: self.write_seqno.clone(),
-        }
-    }
-}
-
 #[derive(Debug)]
 pub enum TaskRes<S>
 where
@@ -3661,11 +3561,6 @@ where
             self.delegate.apply_state.get_commit_term(),
         );
         let cur_state = (apply.commit_index, apply.commit_term);
-        if apply.commit_index <= self.delegate.last_recover_index {
-            assert!(prev_state.0 >= cur_state.0);
-            assert!(prev_state.1 >= cur_state.1);
-            return;
-        }
         if prev_state.0 > cur_state.0 || prev_state.1 > cur_state.1 {
             panic!(
                 "{} commit state jump backward {:?} -> {:?}",
@@ -3764,7 +3659,6 @@ where
                     apply_ctx.tag,
                 );
             }
-            self.delegate.last_recover_index = entry.get_index();
 
             let prev_version = self.delegate.region.get_region_epoch().get_version();
             let res = match entry.get_entry_type() {
@@ -3799,9 +3693,6 @@ where
         }
         apply_ctx.finish_for(&mut self.delegate, results);
         apply_ctx.skip_sst_ingest = false;
-        self.delegate
-            .last_recover_apply_res
-            .extend_from_slice(&apply_ctx.apply_res);
 
         if let Some((logs_up_to_date, source_region_id, commit)) = wait_merge_source {
             cb(RecoverStatus::WaitMergeSource {

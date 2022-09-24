@@ -871,7 +871,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
                 .raft_engine
                 .get_entry(self.region_id, idx)
                 .unwrap()
-                .unwrap()
+                .unwrap_or_else(|| panic!("region {} entry at {} not found", self.region_id, idx))
                 .get_term())
         }
     }

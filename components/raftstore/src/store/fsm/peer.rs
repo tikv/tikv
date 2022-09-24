@@ -5969,7 +5969,7 @@ where
         region: metapb::Region,
         index: u64,
         context: Vec<u8>,
-        snap: Arc<EK::Snapshot>,
+        snap: EK::Snapshot,
     ) {
         self.fsm.peer.consistency_state.last_check_time = Instant::now();
         let task = ConsistencyCheckTask::compute_hash(region, index, context, snap);

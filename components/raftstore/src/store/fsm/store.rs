@@ -2127,6 +2127,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                         let region = state.get_region();
                         let end_key = enc_end_key(state.get_region());
                         let mut spin_wait = SpinWait::new();
+                        let mut wait_count = 0;
                         loop {
                             {
                                 let mut meta = store_meta.lock().unwrap();
@@ -2134,12 +2135,19 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                                     if *meta_region_id == region_id {
                                         break;
                                     } else {
-                                        let meta_region = meta.regions.get(&region_id).unwrap();
+                                        let meta_region = meta.regions.get(meta_region_id).unwrap();
                                         if meta_region.get_region_epoch().get_version()
                                             > region.get_region_epoch().get_version()
                                         {
                                             meta.region_ranges.insert(end_key, region_id);
                                             break;
+                                        } else if wait_count == 1000 {
+                                            wait_count = 0;
+                                            info!(
+                                                "wait region range update";
+                                                "region_id" => region_id,
+                                                "meta_region_id" => meta_region_id,
+                                            );
                                         }
                                     }
                                 } else {
@@ -2150,6 +2158,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                             // the region with smaller version may be running a region destroy, wait
                             // until it done.
                             spin_wait.spin();
+                            wait_count += 1;
                         }
                     }
                     if start != end {
