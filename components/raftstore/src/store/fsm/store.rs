@@ -2040,19 +2040,30 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         engines
             .raft
             .for_each_raft_group(&mut |region_id| {
-                if engines.raft.get_apply_snapshot_state(region_id).unwrap().is_some() {
+                if engines
+                    .raft
+                    .get_apply_snapshot_state(region_id)
+                    .unwrap()
+                    .is_some()
+                {
                     return EngineTraitsResult::Ok(());
                 }
-                let region_state = engines.raft.get_region_state(region_id).unwrap().unwrap_or_else(|| {
-                    panic!("region_id {}", region_id);
-                });
+                let region_state = engines
+                    .raft
+                    .get_region_state(region_id)
+                    .unwrap()
+                    .unwrap_or_else(|| {
+                        panic!("region_id {}", region_id);
+                    });
                 if !matches!(
                     region_state.get_state(),
                     PeerState::Applying | PeerState::Tombstone
                 ) {
                     let apply_state = engines.raft.get_apply_state(region_id).unwrap().unwrap();
                     let version = region_state.get_region().get_region_epoch().get_version();
-                    let (start, end) = if let Some(relation) = engines.raft.get_seqno_relation(region_id, *range.end())? {
+                    let (start, end) = if let Some(relation) =
+                        engines.raft.get_seqno_relation(region_id, *range.end())?
+                    {
                         assert!(
                             relation.get_sequence_number() > *range.start(),
                             "relation {:?}, range {:?}",
@@ -2077,7 +2088,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                         .entry(version)
                         .or_insert_with(HashMap::default);
                     regions.insert(region_id, (start, end, Some(region_state)));
-                    info!("replay raft logs"; "region_id" => region_id, "start" => start, "end" => end, "version" => version);
                 }
                 EngineTraitsResult::Ok(())
             })
@@ -2103,6 +2113,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             let results: Vec<_> = regions
                 .into_iter()
                 .filter_map(|(region_id, (start, end, region_state))| {
+                    info!("replay raft logs"; "region_id" => region_id, "start" => start, "end" => end, "version" => version);
                     // Regions could be overlapped before recovery, because the splitted regions
                     // were created immediately and tombstone states of a source merge region were
                     // persisted after CFs flushed. So after restarted, a source merge region may
@@ -2117,18 +2128,23 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                         let end_key = enc_end_key(state.get_region());
                         let mut spin_wait = SpinWait::new();
                         loop {
-                            let mut meta = store_meta.lock().unwrap();
-                            if let Some(meta_region_id) = meta.region_ranges.get(&end_key) {
-                                if *meta_region_id == region_id {
-                                    break;
-                                } else {
-                                    let meta_region = meta.regions.get(&region_id).unwrap();
-                                    if meta_region.get_region_epoch().get_version()
-                                        > region.get_region_epoch().get_version()
-                                    {
-                                        meta.region_ranges.insert(end_key, region_id);
+                            {
+                                let mut meta = store_meta.lock().unwrap();
+                                if let Some(meta_region_id) = meta.region_ranges.get(&end_key) {
+                                    if *meta_region_id == region_id {
                                         break;
+                                    } else {
+                                        let meta_region = meta.regions.get(&region_id).unwrap();
+                                        if meta_region.get_region_epoch().get_version()
+                                            > region.get_region_epoch().get_version()
+                                        {
+                                            meta.region_ranges.insert(end_key, region_id);
+                                            break;
+                                        }
                                     }
+                                } else {
+                                    meta.region_ranges.insert(end_key, region_id);
+                                    break;
                                 }
                             }
                             // the region with smaller version may be running a region destroy, wait
