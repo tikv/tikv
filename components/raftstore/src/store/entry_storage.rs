@@ -551,6 +551,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
         raft_engine: ER,
         mut raft_state: RaftLocalState,
         apply_state: RaftApplyState,
+        commit_since_state: Option<RaftApplyState>,
         region: &metapb::Region,
         raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
     ) -> Result<Self> {
@@ -561,6 +562,16 @@ impl<ER: RaftEngine> EntryStorage<ER> {
                 peer_id,
                 e
             ));
+        }
+        if let Some(state) = commit_since_state {
+            if let Err(e) = validate_states(region.id, &raft_engine, &mut raft_state, &state) {
+                return Err(box_err!(
+                    "[region {}] {} validate state fail: {:?}",
+                    region.id,
+                    peer_id,
+                    e
+                ));
+            }
         }
         let last_term = init_last_term(&raft_engine, region, &raft_state, &apply_state)?;
         let applied_term = init_applied_term(&raft_engine, region, &apply_state)?;

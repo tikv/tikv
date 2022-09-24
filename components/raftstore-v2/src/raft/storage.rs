@@ -158,6 +158,7 @@ impl<ER: RaftEngine> Storage<ER> {
             engine,
             raft_state,
             apply_state,
+            None,
             region,
             log_fetch_scheduler,
         )?;

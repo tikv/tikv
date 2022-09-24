@@ -31,8 +31,8 @@ use kvproto::{
         StatusCmdType, StatusResponse,
     },
     raft_serverpb::{
-        ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftMessage, RaftSnapshotData,
-        RaftTruncatedState, RegionLocalState,
+        ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
+        RaftSnapshotData, RaftTruncatedState, RegionLocalState,
     },
     replication_modepb::{DrAutoSyncState, ReplicationMode},
 };
@@ -242,7 +242,7 @@ where
         raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         engines: Engines<EK, ER>,
         region: &metapb::Region,
-        commit_since_index: Option<u64>,
+        commit_since_state: Option<RaftApplyState>,
     ) -> Result<SenderFsmPair<EK, ER>> {
         let meta_peer = match util::find_peer(region, store_id) {
             None => {
@@ -274,7 +274,7 @@ where
                     engines,
                     region,
                     meta_peer,
-                    commit_since_index,
+                    commit_since_state,
                 )?,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,

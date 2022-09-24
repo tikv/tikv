@@ -3,7 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::{
     cell::Cell,
-    cmp::{self, Ord, Ordering as CmpOrdering},
+    cmp::{Ord, Ordering as CmpOrdering},
     collections::{
         BTreeMap,
         Bound::{Excluded, Included, Unbounded},
@@ -1282,29 +1282,17 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 return Ok(true);
             }
 
-            let commit_since_index = self.seqno_recover_range.as_ref().and_then(|range| {
-                if let Some(relation) = raft_engine
+            let commit_since_state = self.seqno_recover_range.as_ref().and_then(|range| {
+                if let Some(mut relation) = raft_engine
                     .get_seqno_relation(region_id, *range.end())
                     .unwrap()
                 {
-                    let raft_state = raft_engine
-                        .get_raft_state(region_id)
-                        .unwrap()
-                        .unwrap_or_else(|| {
-                            panic!("raft state not found, region_id: {}", region_id)
-                        });
                     info!(
                         "update commit_since_index for region recovery";
                         "region_id" => region_id,
                         "relation" => ?relation,
-                        "raft_state" => ?raft_state,
                     );
-                    // Some(relation.get_apply_state().get_applied_index())
-                    // Committed index in raft start could be smaller than the last applied index
-                    Some(cmp::min(
-                        relation.get_apply_state().get_applied_index(),
-                        raft_state.get_hard_state().get_commit(),
-                    ))
+                    Some(relation.take_apply_state())
                 } else {
                     None
                 }
@@ -1318,7 +1306,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 self.raftlog_fetch_scheduler.clone(),
                 self.engines.clone(),
                 region,
-                commit_since_index,
+                commit_since_state,
             ));
             peer.peer.init_replication_mode(&mut replication_state);
             if local_state.get_state() == PeerState::Merging {
@@ -2063,7 +2051,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                     PeerState::Applying | PeerState::Tombstone
                 ) {
                     let apply_state = engines.raft.get_apply_state(region_id).unwrap().unwrap();
-                    let raft_state = engines.raft.get_raft_state(region_id).unwrap().unwrap();
                     let version = region_state.get_region().get_region_epoch().get_version();
                     let (start, end) = if let Some(relation) = engines.raft.get_seqno_relation(region_id, *range.end())? {
                         assert!(
@@ -2073,9 +2060,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                             range
                         );
                         let start = apply_state.applied_index + 1;
-                        let end = cmp::min(relation.get_apply_state().applied_index, raft_state.get_hard_state().commit) + 1;
+                        let end = relation.get_apply_state().applied_index + 1;
                         assert!(
-                            start <= relation.get_apply_state().applied_index + 1,
+                            start <= end,
                             "region {} apply_state {:?}, relation {:?}, region_state {:?}",
                             region_id,
                             apply_state,
@@ -2149,7 +2136,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                             spin_wait.spin();
                         }
                     }
-                    if start < end {
+                    if start != end {
                         let (tx, rx) = std::sync::mpsc::sync_channel(1);
                         let router = self.apply_router.clone();
                         let raftdb = engines.raft.clone();

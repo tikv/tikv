@@ -392,6 +392,7 @@ mod tests {
             raftlog_fetch_sched,
             0,
             false,
+            None,
             "".to_owned(),
         )
         .unwrap()

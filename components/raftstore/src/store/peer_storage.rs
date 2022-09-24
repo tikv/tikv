@@ -293,6 +293,7 @@ where
         raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         peer_id: u64,
         disable_kv_wal: bool,
+        commit_since_state: Option<RaftApplyState>,
         tag: String,
     ) -> Result<PeerStorage<EK, ER>> {
         debug!(
@@ -309,6 +310,7 @@ where
             engines.raft.clone(),
             raft_state,
             apply_state,
+            commit_since_state,
             region,
             raftlog_fetch_scheduler,
         )?;
@@ -1255,6 +1257,7 @@ pub mod tests {
             raftlog_fetch_scheduler,
             1,
             false,
+            None,
             "".to_owned(),
         )
         .unwrap()
@@ -2035,6 +2038,7 @@ pub mod tests {
                 raftlog_fetch_sched.clone(),
                 0,
                 false,
+                None,
                 "".to_owned(),
             )
         };

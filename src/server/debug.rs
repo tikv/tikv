@@ -523,6 +523,7 @@ impl<ER: RaftEngine> Debugger<ER> {
                 fake_raftlog_fetch_worker.scheduler(),
                 peer_id,
                 false,
+                None,
                 tag,
             ));
 

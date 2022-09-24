@@ -932,13 +932,14 @@ where
         engines: Engines<EK, ER>,
         region: &metapb::Region,
         peer: metapb::Peer,
-        commit_since_index: Option<u64>,
+        commit_since_state: Option<RaftApplyState>,
     ) -> Result<Peer<EK, ER>> {
         if peer.get_id() == raft::INVALID_ID {
             return Err(box_err!("invalid peer id"));
         }
 
         let tag = format!("[region {}] {}", region.get_id(), peer.get_id());
+        let commit_since_index = commit_since_state.as_ref().map(|s| s.applied_index);
 
         let ps = PeerStorage::new(
             engines,
@@ -948,6 +949,7 @@ where
             raftlog_fetch_scheduler,
             peer.get_id(),
             cfg.disable_kv_wal,
+            commit_since_state,
             tag.clone(),
         )?;
 
