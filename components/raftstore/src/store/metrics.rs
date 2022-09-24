@@ -149,6 +149,8 @@ make_static_metric! {
     pub label_enum RaftSentMessageCounterType {
         append,
         append_resp,
+        group_broadcast,
+        group_broadcast_resp,
         prevote,
         prevote_resp,
         vote,

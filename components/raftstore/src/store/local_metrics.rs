@@ -38,6 +38,10 @@ impl RaftSendMessageMetrics {
         match msg_type {
             MessageType::MsgAppend => set_send_status!(self.0.append, success),
             MessageType::MsgAppendResponse => set_send_status!(self.0.append_resp, success),
+            MessageType::MsgGroupBroadcast => set_send_status!(self.0.group_broadcast, success),
+            MessageType::MsgGroupBroadcastResponse => {
+                set_send_status!(self.0.group_broadcast_resp, success)
+            }
             MessageType::MsgRequestPreVote => set_send_status!(self.0.prevote, success),
             MessageType::MsgRequestPreVoteResponse => {
                 set_send_status!(self.0.prevote_resp, success)
