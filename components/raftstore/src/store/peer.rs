@@ -1095,6 +1095,7 @@ where
             check_quorum: true,
             skip_bcast_commit: true,
             pre_vote: cfg.prevote,
+            follower_replication: cfg.follower_replication,
             max_committed_size_per_ready: MAX_COMMITTED_SIZE_PER_READY,
             ..Default::default()
         };
