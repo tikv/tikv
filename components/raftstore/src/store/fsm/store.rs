@@ -3,7 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::{
     cell::Cell,
-    cmp::{Ord, Ordering as CmpOrdering},
+    cmp::{self, Ord, Ordering as CmpOrdering},
     collections::{
         BTreeMap,
         Bound::{Excluded, Included, Unbounded},
@@ -1287,12 +1287,24 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                     .get_seqno_relation(region_id, *range.end())
                     .unwrap()
                 {
+                    let raft_state = raft_engine
+                        .get_raft_state(region_id)
+                        .unwrap()
+                        .unwrap_or_else(|| {
+                            panic!("raft state not found, region_id: {}", region_id)
+                        });
                     info!(
                         "update commit_since_index for region recovery";
                         "region_id" => region_id,
                         "relation" => ?relation,
+                        "raft_state" => ?raft_state,
                     );
-                    Some(relation.get_apply_state().get_applied_index())
+                    // Some(relation.get_apply_state().get_applied_index())
+                    // Committed index in raft start could be smaller than the last applied index
+                    Some(cmp::min(
+                        relation.get_apply_state().get_applied_index(),
+                        raft_state.get_hard_state().get_commit(),
+                    ))
                 } else {
                     None
                 }
@@ -1916,6 +1928,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
 
         let (raft_builder, apply_builder) = (builder.clone(), apply_poller_builder.clone());
 
+        // Make sure Msg::Start is the first message each FSM received.
         self.router
             .send_control(StoreMsg::Start {
                 store: store.clone(),
@@ -1957,7 +1970,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             scheduler.schedule(SeqnoRelationTask::Start).unwrap();
         }
 
-        // Make sure Msg::Start is the first message each FSM received.
         for addr in address {
             let _ = self.router.force_send(addr, PeerMsg::Start);
         }
@@ -2040,36 +2052,45 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         engines
             .raft
             .for_each_raft_group(&mut |region_id| {
-                if let Some(relation) = engines.raft.get_seqno_relation(region_id, *range.end())? {
-                    assert!(
-                        relation.get_sequence_number() > *range.start(),
-                        "relation {:?}, range {:?}",
-                        relation,
-                        range
-                    );
-                    let region_state = engines.raft.get_region_state(region_id).unwrap().unwrap();
-                    if !matches!(
-                        region_state.get_state(),
-                        PeerState::Applying | PeerState::Tombstone
-                    ) {
-                        let apply_state = engines.raft.get_apply_state(region_id).unwrap().unwrap();
-                        let version = region_state.get_region().get_region_epoch().get_version();
-                        let start = apply_state.applied_index + 1;
-                        let end = relation.get_apply_state().applied_index + 1;
+                if engines.raft.get_apply_snapshot_state(region_id).unwrap().is_some() {
+                    return EngineTraitsResult::Ok(());
+                }
+                let region_state = engines.raft.get_region_state(region_id).unwrap().unwrap_or_else(|| {
+                    panic!("region_id {}", region_id);
+                });
+                if !matches!(
+                    region_state.get_state(),
+                    PeerState::Applying | PeerState::Tombstone
+                ) {
+                    let apply_state = engines.raft.get_apply_state(region_id).unwrap().unwrap();
+                    let raft_state = engines.raft.get_raft_state(region_id).unwrap().unwrap();
+                    let version = region_state.get_region().get_region_epoch().get_version();
+                    let (start, end) = if let Some(relation) = engines.raft.get_seqno_relation(region_id, *range.end())? {
                         assert!(
-                            start <= end,
+                            relation.get_sequence_number() > *range.start(),
+                            "relation {:?}, range {:?}",
+                            relation,
+                            range
+                        );
+                        let start = apply_state.applied_index + 1;
+                        let end = cmp::min(relation.get_apply_state().applied_index, raft_state.get_hard_state().commit) + 1;
+                        assert!(
+                            start <= relation.get_apply_state().applied_index + 1,
                             "region {} apply_state {:?}, relation {:?}, region_state {:?}",
                             region_id,
                             apply_state,
                             relation,
                             region_state
                         );
-                        info!("replay raft logs"; "region_id" => region_id, "start" => start, "end" => end, "version" => version);
-                        let regions = recover_regions
-                            .entry(version)
-                            .or_insert_with(HashMap::default);
-                        regions.insert(region_id, (start, end, Some(region_state)));
-                    }
+                        (start, end)
+                    } else {
+                        (apply_state.applied_index + 1, apply_state.applied_index + 1)
+                    };
+                    let regions = recover_regions
+                        .entry(version)
+                        .or_insert_with(HashMap::default);
+                    regions.insert(region_id, (start, end, Some(region_state)));
+                    info!("replay raft logs"; "region_id" => region_id, "start" => start, "end" => end, "version" => version);
                 }
                 EngineTraitsResult::Ok(())
             })
@@ -2094,7 +2115,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         while let Some((version, regions)) = recover_regions.pop_first() {
             let results: Vec<_> = regions
                 .into_iter()
-                .map(|(region_id, (start, end, region_state))| {
+                .filter_map(|(region_id, (start, end, region_state))| {
                     // Regions could be overlapped before recovery, because the splitted regions
                     // were created immediately and tombstone states of a source merge region were
                     // persisted after CFs flushed. So after restarted, a source merge region may
@@ -2128,36 +2149,40 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                             spin_wait.spin();
                         }
                     }
-                    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-                    let router = self.apply_router.clone();
-                    let raftdb = engines.raft.clone();
-                    pool.spawn(async move {
-                        let mut entries = vec![];
-                        if let Err(e) =
-                            raftdb.fetch_entries_to(region_id, start, end, None, &mut entries)
-                        {
-                            panic!(
-                                "fetch entries failed: {:?}, region_id: {}, start:{}, end: {}",
-                                e, region_id, start, end
-                            );
-                        }
-                        let term = entries.last().unwrap().get_term();
-                        let commit_index = entries.last().unwrap().get_index();
-                        router.schedule_task(
-                            region_id,
-                            ApplyTask::recover(
+                    if start < end {
+                        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+                        let router = self.apply_router.clone();
+                        let raftdb = engines.raft.clone();
+                        pool.spawn(async move {
+                            let mut entries = vec![];
+                            if let Err(e) =
+                                raftdb.fetch_entries_to(region_id, start, end, None, &mut entries)
+                            {
+                                panic!(
+                                    "fetch entries failed: {:?}, region_id: {}, start:{}, end: {}",
+                                    e, region_id, start, end
+                                );
+                            }
+                            let term = entries.last().unwrap().get_term();
+                            let commit_index = entries.last().unwrap().get_index();
+                            router.schedule_task(
                                 region_id,
-                                term,
-                                commit_index,
-                                term,
-                                entries,
-                                Box::new(move |status| {
-                                    tx.send(status).unwrap();
-                                }),
-                            ),
-                        );
-                    });
-                    (rx, region_id, end)
+                                ApplyTask::recover(
+                                    region_id,
+                                    term,
+                                    commit_index,
+                                    term,
+                                    entries,
+                                    Box::new(move |status| {
+                                        tx.send(status).unwrap();
+                                    }),
+                                ),
+                            );
+                        });
+                        Some((rx, region_id, end))
+                    } else {
+                        None
+                    }
                 })
                 .collect();
             for (rx, region_id, end) in results {

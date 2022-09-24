@@ -2983,7 +2983,6 @@ where
         ctx: &mut PollContext<EK, ER, T>,
         number: u64,
     ) -> Option<PersistSnapshotResult> {
-        println!("on persisted ready, region_id: {}", self.region_id);
         assert!(ctx.sync_write_worker.is_none());
         if self.persisted_number >= number {
             return None;

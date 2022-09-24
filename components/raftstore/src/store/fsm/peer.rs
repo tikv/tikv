@@ -145,6 +145,7 @@ where
     hibernate_state: HibernateState,
     stopped: bool,
     has_ready: bool,
+    started: bool,
     mailbox: Option<BasicMailbox<PeerFsm<EK, ER>>>,
     pub receiver: Receiver<PeerMsg<EK>>,
     /// when snapshot is generating or sending, skip split check at most
@@ -289,6 +290,7 @@ where
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
                 logs_gc_flushed: false,
+                started: false,
             }),
         ))
     }
@@ -346,6 +348,7 @@ where
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
                 logs_gc_flushed: false,
+                started: false,
             }),
         ))
     }
@@ -1140,6 +1143,7 @@ where
         self.register_split_region_check_tick();
         self.register_check_peer_stale_state_tick();
         self.on_check_merge();
+        self.fsm.started = true;
         // Apply committed entries more quickly.
         // Or if it's a leader. This implicitly means it's a singleton
         // because it becomes leader in `Peer::new` when it's a
@@ -1776,7 +1780,6 @@ where
             );
             return;
         }
-        println!("on persisted msg, region_id: {}", self.region_id());
         if let Some(persist_snap_res) = self.fsm.peer.on_persist_ready(self.ctx, ready_number) {
             self.on_ready_persist_snapshot(persist_snap_res);
             if self.fsm.peer.pending_merge_state.is_some() {
@@ -1874,6 +1877,11 @@ where
     ///
     /// Returns false is no readiness is generated.
     pub fn collect_ready(&mut self) -> bool {
+        if !self.fsm.started {
+            // Should not handle any ready before recovery was done and fsm got started,
+            // otherwise it could be inconsistent in ApplyFsm.
+            return false;
+        }
         let has_ready = self.fsm.has_ready;
         self.fsm.has_ready = false;
         if !has_ready || self.fsm.stopped {

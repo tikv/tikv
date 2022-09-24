@@ -101,3 +101,23 @@ fn test_disable_wal_recovery_catchup_snapshot() {
     assert_eq!(apply_state, restarted_state);
     must_get_equal(&cluster.get_engine(3), b"k2", b"v");
 }
+
+// #[test]
+// fn test_disable_wal_recovery_raft_state_not_updated() {
+//     let mut cluster = new_node_cluster(0, 3);
+//     // Initialize the cluster.
+//     cluster.pd_client.disable_default_operator();
+//     cluster.cfg.raft_store.disable_kv_wal = true;
+//     cluster.cfg.raft_store.store_io_pool_size = 1;
+//     cluster.run();
+//     cluster.must_put(b"k1", b"v1");
+//     must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
+//     let fp = "raft_before_put_raft_state";
+//     fail::cfg(fp, "pause").unwrap();
+//     cluster.must_put(b"k2", b"v2");
+//     must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
+//     sleep_ms(100);
+//     cluster.stop_node(1);
+//     fail::remove(fp);
+//     cluster.run_node(1).unwrap();
+// }
