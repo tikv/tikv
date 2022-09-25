@@ -14,7 +14,7 @@ use std::{
     u64,
 };
 
-use engine_traits::{RaftEngine, RaftLogBatch};
+use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
 use fail::fail_point;
 use kvproto::{
     kvrpcpb::{self, KeyRange, LeaderInfo},
@@ -31,7 +31,7 @@ use raft_proto::ConfChangeI;
 use tikv_util::{box_err, debug, info, time::monotonic_raw_now, Either};
 use time::{Duration, Timespec};
 
-use super::peer_storage;
+use super::{peer_storage, RaftRouter};
 use crate::{Error, Result};
 
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
@@ -1355,12 +1355,14 @@ impl LatencyInspector {
     }
 }
 
-pub fn gc_seqno_relations<ER: RaftEngine>(
+pub fn gc_seqno_relations<EK: KvEngine, ER: RaftEngine>(
     seqno: u64,
     raft_engine: &ER,
+    router: &RaftRouter<EK, ER>,
     wb: &mut ER::LogBatch,
-) -> Result<()> {
-    fail_point!("gc_seqno_relations", |_| Ok(()));
+) -> Result<Vec<u64>> {
+    fail_point!("gc_seqno_relations", |_| Ok(vec![]));
+    let mut pending_clean_regions = vec![];
     raft_engine.for_each_raft_group(&mut |region_id| {
         let mut apply_state_update = None;
         let mut region_state_update = None;
@@ -1373,7 +1375,12 @@ pub fn gc_seqno_relations<ER: RaftEngine>(
                     if region_state.get_state() == PeerState::Tombstone {
                         wb.delete_apply_state(region_id).unwrap();
                         if let Some(raft_state) = raft_engine.get_raft_state(region_id).unwrap() {
-                            raft_engine.clean(region_id, 0, &raft_state, wb).unwrap();
+                            if router.mailbox(region_id).is_none() {
+                                raft_engine.clean(region_id, 0, &raft_state, wb).unwrap();
+                            } else {
+                                // Region destroy may be delayed, clean up meta later.
+                                pending_clean_regions.push(region_id);
+                            }
                         }
                     }
                     region_state_update = Some(region_state.clone());
@@ -1391,8 +1398,9 @@ pub fn gc_seqno_relations<ER: RaftEngine>(
             info!("update region state during gc relation"; "region_id" => region_id, "state" => ?region_state);
             wb.put_region_state(region_id, &region_state).unwrap();
         }
-        Ok(())
-    })
+        engine_traits::Result::Ok(())
+    })?;
+    Ok(pending_clean_regions)
 }
 
 pub fn clear_region_seqno_relation<ER: RaftEngine>(

@@ -1389,7 +1389,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
             let end_seqno = kv_engine.get_latest_sequence_number();
             self.seqno_recover_range = Some(RangeInclusive::new(start_seqno, end_seqno));
             let mut raft_wb = raft_engine.log_batch(0);
-            gc_seqno_relations(start_seqno, &raft_engine, &mut raft_wb).unwrap();
+            gc_seqno_relations(start_seqno, &raft_engine, &self.router, &mut raft_wb).unwrap();
             raft_engine.consume(&mut raft_wb, true).unwrap();
             let mut kv_wb = kv_engine.write_batch();
             raft_engine

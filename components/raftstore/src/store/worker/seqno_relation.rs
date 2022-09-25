@@ -1,7 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cmp, fmt,
+    cmp, fmt, mem,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -116,6 +116,7 @@ pub struct Runner<EK: KvEngine, ER: RaftEngine> {
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     started: bool,
+    pending_clean_regions: Vec<u64>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
@@ -136,6 +137,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             raftlog_gc_scheduler,
             region_scheduler,
             started: false,
+            pending_clean_regions: vec![],
         }
     }
 
@@ -261,7 +263,24 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         // Prevent raft log gc before recovery done.
         if self.started {
             if let Some(min) = min_flushed {
-                gc_seqno_relations(min, &self.engines.raft, &mut self.raft_wb).unwrap();
+                for region_id in mem::take(&mut self.pending_clean_regions) {
+                    if let Some(raft_state) = self.engines.raft.get_raft_state(region_id).unwrap() {
+                        if self.router.mailbox(region_id).is_none() {
+                            self.engines
+                                .raft
+                                .clean(region_id, 0, &raft_state, &mut self.raft_wb)
+                                .unwrap();
+                        } else {
+                            // Region destroy may be delayed, clean up meta later.
+                            self.pending_clean_regions.push(region_id);
+                        }
+                    }
+                }
+                let mut pending_clean_regions =
+                    gc_seqno_relations(min, &self.engines.raft, &self.router, &mut self.raft_wb)
+                        .unwrap();
+                self.pending_clean_regions
+                    .append(&mut pending_clean_regions);
                 if !self.raft_wb.is_empty() {
                     self.consume_raft_wb(true);
                 }
