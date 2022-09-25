@@ -167,12 +167,13 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             relation.set_region_id(res.region_id);
             relation.set_sequence_number(seqno.number);
             relation.set_apply_state(res.apply_state.clone());
+            let mut relation = Some(relation);
 
-            if let Some(result) = self.handle_exec_res(res.region_id, seqno.number, &res.exec_res) {
+            for result in self.handle_exec_res(res.region_id, seqno.number, &res.exec_res) {
                 match result {
                     HandleExecResResult::RegionStateChanged(region_state) => {
                         info!("region state changed"; "region_id" => res.region_id, "region_state" => ?region_state, "apply_state" => ?res.apply_state);
-                        relation.set_region_state(region_state);
+                        relation.as_mut().unwrap().set_region_state(region_state);
                     }
                     HandleExecResResult::CommitMerge {
                         target_state,
@@ -185,7 +186,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                             "source_relation" => ?source_relation,
                             "apply_state" => ?res.apply_state,
                         );
-                        relation.set_region_state(target_state);
+                        relation.as_mut().unwrap().set_region_state(target_state);
                         self.handle_relation(source_relation, &mut sync_relations);
                     }
                     HandleExecResResult::Destroy => {
@@ -196,11 +197,13 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                         );
                         sync_relations.remove(&res.region_id);
                         // Skip following relation handle.
-                        continue;
+                        relation = None;
                     }
                 }
             }
-            self.handle_relation(relation, &mut sync_relations);
+            if let Some(relation) = relation {
+                self.handle_relation(relation, &mut sync_relations);
+            }
         }
         if !sync_relations.is_empty() {
             self.handle_sync_relations(sync_relations);
@@ -297,12 +300,12 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         region_id: u64,
         seqno: u64,
         exec_res: &[ExecResult<EK::Snapshot>],
-    ) -> Option<HandleExecResResult> {
+    ) -> Vec<HandleExecResResult> {
         if exec_res.is_empty() {
-            return None;
+            return vec![];
         }
         info!("handle exec res"; "exec_res" => ?exec_res, "region_id" => region_id);
-        let mut result = None;
+        let mut results = vec![];
         for res in exec_res {
             match res {
                 ExecResult::ChangePeer(cp) => {
@@ -313,12 +316,12 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                     if cp.remove_self {
                         info!("handle region self destroy"; "region_id" => region_id);
                         self.handle_destroy_region(cp.region.clone());
-                        result = Some(HandleExecResResult::Destroy);
+                        results.push(HandleExecResResult::Destroy);
                     } else {
                         let mut state = RegionLocalState::default();
                         state.set_region(cp.region.clone());
                         state.set_state(PeerState::Normal);
-                        result = Some(HandleExecResResult::RegionStateChanged(state));
+                        results.push(HandleExecResResult::RegionStateChanged(state));
                     };
                 }
                 ExecResult::SplitRegion {
@@ -341,7 +344,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                                 .unwrap();
                         }
                         if region.get_id() == region_id {
-                            result = Some(HandleExecResResult::RegionStateChanged(state));
+                            results.push(HandleExecResResult::RegionStateChanged(state));
                         }
                     }
                 }
@@ -353,7 +356,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                     state.set_region(region.clone());
                     state.set_state(PeerState::Merging);
                     state.set_merge_state(merge_state.clone());
-                    result = Some(HandleExecResResult::RegionStateChanged(state));
+                    results.push(HandleExecResResult::RegionStateChanged(state));
                 }
                 ExecResult::CommitMerge {
                     region,
@@ -378,7 +381,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                     source_state.set_state(PeerState::Tombstone);
                     source_state.set_merge_state(merging_state);
                     source_relation.set_region_state(source_state);
-                    result = Some(HandleExecResResult::CommitMerge {
+                    results.push(HandleExecResResult::CommitMerge {
                         target_state,
                         source_relation,
                     });
@@ -387,7 +390,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                     let mut state = RegionLocalState::default();
                     state.set_region(region.clone());
                     state.set_state(PeerState::Normal);
-                    result = Some(HandleExecResResult::RegionStateChanged(state));
+                    results.push(HandleExecResResult::RegionStateChanged(state));
                 }
                 ExecResult::DeleteRange { .. }
                 | ExecResult::IngestSst { .. }
@@ -397,7 +400,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                 | ExecResult::ComputeHash { .. } => (),
             }
         }
-        result
+        results
     }
 
     fn handle_destroy_region(&mut self, region: Region) {
