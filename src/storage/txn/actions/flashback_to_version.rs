@@ -75,9 +75,9 @@ pub fn flashback_to_version_read_write<S: Snapshot>(
     Ok((key_old_writes, has_remain_writes))
 }
 
-pub fn flashback_to_version<S: Snapshot>(
+pub fn flashback_to_version(
     txn: &mut MvccTxn,
-    reader: &mut SnapshotReader<S>,
+    reader: &mut SnapshotReader<impl Snapshot>,
     next_lock_key: &mut Option<Key>,
     next_write_key: &mut Option<Key>,
     key_locks: Vec<(Key, Lock)>,
