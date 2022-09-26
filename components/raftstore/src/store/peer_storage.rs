@@ -1222,7 +1222,8 @@ pub mod tests {
             fsm::apply::compact_raft_log,
             initial_region, prepare_bootstrap_cluster,
             worker::{
-                FetchedLogs, LogFetchedNotifier, RaftlogFetchRunner, RegionRunner, RegionTask,
+                make_region_worker_raftstore_cfg, FetchedLogs, LogFetchedNotifier,
+                RaftlogFetchRunner, RegionRunner, RegionTask,
             },
         },
     };
@@ -1639,12 +1640,11 @@ pub mod tests {
         let (dummy_scheduler, _) = dummy_scheduler();
         let mut s = new_storage_from_ents(sched.clone(), dummy_scheduler, &td, &ents);
         let (router, _) = mpsc::sync_channel(100);
+        let cfg = make_region_worker_raftstore_cfg(true);
         let runner = RegionRunner::new(
             s.engines.clone(),
             mgr,
-            0,
-            true,
-            2,
+            cfg,
             CoprocessorHost::<KvTestEngine>::default(),
             router,
             Option::<Arc<TestPdClient>>::None,
@@ -1791,12 +1791,11 @@ pub mod tests {
         let store = new_store(1, labels);
         pd_client.add_store(store);
         let pd_mock = Arc::new(pd_client);
+        let cfg = make_region_worker_raftstore_cfg(true);
         let runner = RegionRunner::new(
             s.engines.clone(),
             mgr,
-            0,
-            true,
-            2,
+            cfg,
             CoprocessorHost::<KvTestEngine>::default(),
             router,
             Some(pd_mock),
@@ -1858,12 +1857,11 @@ pub mod tests {
         let (dummy_scheduler, _) = dummy_scheduler();
         let s1 = new_storage_from_ents(sched.clone(), dummy_scheduler.clone(), &td1, &ents);
         let (router, _) = mpsc::sync_channel(100);
+        let cfg = make_region_worker_raftstore_cfg(true);
         let runner = RegionRunner::new(
             s1.engines.clone(),
             mgr,
-            0,
-            true,
-            2,
+            cfg,
             CoprocessorHost::<KvTestEngine>::default(),
             router,
             Option::<Arc<TestPdClient>>::None,

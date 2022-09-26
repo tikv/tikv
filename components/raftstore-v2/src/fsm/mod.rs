@@ -11,4 +11,4 @@ mod store;
 
 pub use apply::{ApplyFsm, ApplyFsmDelegate};
 pub use peer::{PeerFsm, PeerFsmDelegate, SenderFsmPair};
-pub use store::{StoreFsm, StoreFsmDelegate, StoreMeta};
+pub use store::{Store, StoreFsm, StoreFsmDelegate, StoreMeta};

@@ -248,12 +248,15 @@
 //! - "Plain old data" types in `engine` can be moved directly into
 //!   `engine_traits` and reexported from `engine` to ease the transition.
 //!   Likewise `engine_rocks` can temporarily call code from inside `engine`.
+#![cfg_attr(test, feature(test))]
 #![feature(min_specialization)]
 #![feature(assert_matches)]
 #![feature(generic_associated_types)]
 
 #[macro_use(fail_point)]
 extern crate fail;
+#[cfg(test)]
+extern crate test;
 
 #[macro_use]
 extern crate serde_derive;

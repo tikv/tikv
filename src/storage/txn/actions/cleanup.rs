@@ -39,14 +39,12 @@ pub fn cleanup<S: Snapshot>(
                     ErrorInner::KeyIsLocked(lock.clone().into_lock_info(key.into_raw()?)).into(),
                 );
             }
-
-            let is_pessimistic_txn = !lock.for_update_ts.is_zero();
             rollback_lock(
                 txn,
                 reader,
                 key,
                 lock,
-                is_pessimistic_txn,
+                lock.is_pessimistic_txn(),
                 !protect_rollback,
             )
         }

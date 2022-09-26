@@ -197,9 +197,9 @@ mod tests {
         metapb,
         replication_modepb::{ReplicationMode, ReplicationStatus},
     };
+    use tikv_util::store::new_peer;
 
     use super::*;
-    use crate::store::util::new_peer;
 
     fn new_label(key: &str, value: &str) -> metapb::StoreLabel {
         metapb::StoreLabel {

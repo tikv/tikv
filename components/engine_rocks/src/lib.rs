@@ -70,7 +70,7 @@ mod perf_context_metrics;
 mod engine_iterator;
 pub use crate::engine_iterator::*;
 
-mod options;
+pub mod options;
 pub mod util;
 
 mod compact_listener;

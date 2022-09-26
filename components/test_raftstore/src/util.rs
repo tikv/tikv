@@ -16,8 +16,8 @@ use encryption_export::{
 use engine_rocks::{config::BlobRunMode, FlushListener, RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    Engines, Iterable, Peekable, RaftEngineDebug, RaftEngineReadOnly, TabletFactory, ALL_CFS,
-    CF_DEFAULT, CF_RAFT,
+    util::MemtableEventNotifier, Engines, Iterable, Peekable, RaftEngineDebug, RaftEngineReadOnly,
+    TabletFactory, ALL_CFS, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IoRateLimiter;
 use futures::executor::block_on;
@@ -26,10 +26,6 @@ use kvproto::{
     encryptionpb::EncryptionMethod,
     kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
     metapb::{self, RegionEpoch},
-    pdpb::{
-        ChangePeer, ChangePeerV2, CheckPolicy, Merge, RegionHeartbeatResponse, SplitRegion,
-        TransferLeader,
-    },
     raft_cmdpb::{
         AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, CmdType,
         RaftCmdRequest, RaftCmdResponse, Request, StatusCmdType, StatusRequest,
@@ -42,7 +38,6 @@ use kvproto::{
 use pd_client::PdClient;
 use protobuf::RepeatedField;
 use raft::eraftpb::ConfChangeType;
-pub use raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 use raftstore::{
     store::{fsm::RaftRouter, *},
     RaftRouterCompactedEventSender, Result,
@@ -50,14 +45,13 @@ use raftstore::{
 use rand::RngCore;
 use server::server::ConfiguredRaftEngine;
 use tempfile::TempDir;
+use test_pd_client::TestPdClient;
 use tikv::{config::*, server::KvEngineFactoryBuilder, storage::point_key_range};
-use tikv_util::{
-    config::*, escape, sequence_number::Notifier as SeqnoNotifier, time::ThreadReadId,
-    worker::LazyWorker, HandyRwLock,
-};
+pub use tikv_util::store::{find_peer, new_learner_peer, new_peer};
+use tikv_util::{config::*, escape, time::ThreadReadId, worker::LazyWorker, HandyRwLock};
 use txn_types::Key;
 
-use crate::{Cluster, Config, ServerCluster, Simulator, TestPdClient};
+use crate::{Cluster, Config, ServerCluster, Simulator};
 
 pub fn must_get(engine: &RocksEngine, cf: &str, key: &[u8], value: Option<&[u8]>) {
     for _ in 1..300 {
@@ -337,59 +331,6 @@ pub fn is_error_response(resp: &RaftCmdResponse) -> bool {
     resp.get_header().has_error()
 }
 
-pub fn new_pd_change_peer(
-    change_type: ConfChangeType,
-    peer: metapb::Peer,
-) -> RegionHeartbeatResponse {
-    let mut change_peer = ChangePeer::default();
-    change_peer.set_change_type(change_type);
-    change_peer.set_peer(peer);
-
-    let mut resp = RegionHeartbeatResponse::default();
-    resp.set_change_peer(change_peer);
-    resp
-}
-
-pub fn new_pd_change_peer_v2(changes: Vec<ChangePeer>) -> RegionHeartbeatResponse {
-    let mut change_peer = ChangePeerV2::default();
-    change_peer.set_changes(changes.into());
-
-    let mut resp = RegionHeartbeatResponse::default();
-    resp.set_change_peer_v2(change_peer);
-    resp
-}
-
-pub fn new_split_region(policy: CheckPolicy, keys: Vec<Vec<u8>>) -> RegionHeartbeatResponse {
-    let mut split_region = SplitRegion::default();
-    split_region.set_policy(policy);
-    split_region.set_keys(keys.into());
-    let mut resp = RegionHeartbeatResponse::default();
-    resp.set_split_region(split_region);
-    resp
-}
-
-pub fn new_pd_transfer_leader(
-    peer: metapb::Peer,
-    peers: Vec<metapb::Peer>,
-) -> RegionHeartbeatResponse {
-    let mut transfer_leader = TransferLeader::default();
-    transfer_leader.set_peer(peer);
-    transfer_leader.set_peers(peers.into());
-
-    let mut resp = RegionHeartbeatResponse::default();
-    resp.set_transfer_leader(transfer_leader);
-    resp
-}
-
-pub fn new_pd_merge_region(target_region: metapb::Region) -> RegionHeartbeatResponse {
-    let mut merge = Merge::default();
-    merge.set_target(target_region);
-
-    let mut resp = RegionHeartbeatResponse::default();
-    resp.set_merge(merge);
-    resp
-}
-
 #[derive(Default)]
 struct CallbackLeakDetector {
     called: bool,
@@ -629,7 +570,7 @@ pub fn must_contains_error(resp: &RaftCmdResponse, msg: &str) {
 #[derive(Clone)]
 struct TestNotifier;
 
-impl SeqnoNotifier for TestNotifier {
+impl MemtableEventNotifier for TestNotifier {
     fn notify_memtable_sealed(&self, _seqno: u64) {}
     fn notify_memtable_flushed(&self, _cf: &str, _seqno: u64) {}
     fn notify_flush_cfs(&self, _seqno: u64) {}

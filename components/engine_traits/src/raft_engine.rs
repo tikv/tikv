@@ -4,6 +4,7 @@ use kvproto::{
     metapb::Region,
     raft_serverpb::{
         RaftApplyState, RaftLocalState, RegionLocalState, RegionSequenceNumberRelation, StoreIdent,
+        StoreRecoverState,
     },
 };
 use raft::eraftpb::Entry;
@@ -21,6 +22,7 @@ pub trait RaftEngineReadOnly: Sync + Send + 'static {
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>>;
     fn get_region_state(&self, raft_group_id: u64) -> Result<Option<RegionLocalState>>;
     fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>>;
+    fn get_recover_state(&self) -> Result<Option<StoreRecoverState>>;
 
     /// Return the relation with the biggest seqno which its seqno <= `seqno`.
     fn get_seqno_relation(
@@ -164,11 +166,9 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
 
     /// Indicate whether region states should be recovered from raftdb and
     /// replay raft logs.
-    /// Generally it would be true when write-ahead-log of kvdb was disabled
-    /// before.
-    fn recover_from_raft_db(&self) -> Result<Option<u64>>;
-
-    fn put_recover_from_raft_db(&self, seqno: u64) -> Result<()>;
+    /// When kvdb's write-ahead-log is disabled, the sequence number of the last
+    /// boot time is saved.
+    fn put_recover_state(&self, state: &StoreRecoverState) -> Result<()>;
 
     /// scan the relations between start(inclusive) and end(exclusive).
     fn scan_seqno_relations<F>(

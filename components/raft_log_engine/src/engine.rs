@@ -19,6 +19,7 @@ use kvproto::{
     metapb::Region,
     raft_serverpb::{
         RaftApplyState, RaftLocalState, RegionLocalState, RegionSequenceNumberRelation, StoreIdent,
+        StoreRecoverState,
     },
 };
 use raft::eraftpb::Entry;
@@ -118,13 +119,6 @@ impl WriteExt for ManagedWriter {
         }
     }
 
-    fn sync(&mut self) -> IoResult<()> {
-        match self.inner.as_mut() {
-            Either::Left(writer) => writer.sync(),
-            Either::Right(writer) => writer.inner_mut().sync(),
-        }
-    }
-
     fn allocate(&mut self, offset: usize, size: usize) -> IoResult<()> {
         match self.inner.as_mut() {
             Either::Left(writer) => writer.allocate(offset, size),
@@ -164,6 +158,10 @@ impl Handle for ManagedHandle {
 
     fn file_size(&self) -> IoResult<usize> {
         self.base.file_size()
+    }
+
+    fn sync(&self) -> IoResult<()> {
+        self.base.sync()
     }
 }
 
@@ -347,8 +345,8 @@ const STORE_IDENT_KEY: &[u8] = &[0x01];
 const PREPARE_BOOTSTRAP_REGION_KEY: &[u8] = &[0x02];
 const REGION_STATE_KEY: &[u8] = &[0x03];
 const APPLY_STATE_KEY: &[u8] = &[0x04];
-const SEQNO_RELATION_KEY: &[u8] = &[0x05];
-const RECOVER_FROM_RAFT_DB_KEY: &[u8] = &[0x06];
+const RECOVER_STATE_KEY: &[u8] = &[0x05];
+const SEQNO_RELATION_KEY: &[u8] = &[0x06];
 const SNAPSHOT_APPLY_STATE_KEY: &[u8] = &[0x07];
 const SNAPSHOT_REGION_STATE_KEY: &[u8] = &[0x08];
 const FLUSHED_SEQNO_KEY: &[u8] = &[0x09];
@@ -581,6 +579,12 @@ impl RaftEngineReadOnly for RaftLogEngine {
             .map_err(transfer_error)
     }
 
+    fn get_recover_state(&self) -> Result<Option<StoreRecoverState>> {
+        self.0
+            .get_message(STORE_STATE_ID, RECOVER_STATE_KEY)
+            .map_err(transfer_error)
+    }
+
     fn get_flushed_seqno(&self) -> Result<Option<FlushedSeqno>> {
         let value = self.0.get(STORE_STATE_ID, FLUSHED_SEQNO_KEY);
         Ok(value.map(|v| serde_json::from_slice(&v).unwrap()))
@@ -755,21 +759,12 @@ impl RaftEngine for RaftLogEngine {
         Ok(())
     }
 
-    fn recover_from_raft_db(&self) -> Result<Option<u64>> {
-        let seqno = self
-            .0
-            .get(STORE_STATE_ID, RECOVER_FROM_RAFT_DB_KEY)
-            .map(|v| u64::from_be_bytes(v.try_into().unwrap()));
-        Ok(seqno)
-    }
-
-    fn put_recover_from_raft_db(&self, seqno: u64) -> Result<()> {
+    fn put_recover_state(&self, state: &StoreRecoverState) -> Result<()> {
         let mut batch = Self::LogBatch::default();
-        batch.0.put(
-            STORE_STATE_ID,
-            RECOVER_FROM_RAFT_DB_KEY.to_vec(),
-            u64::to_be_bytes(seqno).to_vec(),
-        );
+        batch
+            .0
+            .put_message(STORE_STATE_ID, RECOVER_STATE_KEY.to_vec(), state)
+            .map_err(transfer_error)?;
         self.0.write(&mut batch.0, true).map_err(transfer_error)?;
         Ok(())
     }
@@ -812,7 +807,6 @@ impl RaftEngine for RaftLogEngine {
             FLUSHED_SEQNO_KEY.to_vec(),
             result.as_bytes().to_vec(),
         );
-        self.0.write(&mut batch.0, true).map_err(transfer_error)?;
         Ok(())
     }
 }

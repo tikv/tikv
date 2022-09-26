@@ -93,14 +93,15 @@ impl<T> Ord for TimeoutTask<T> {
 }
 
 lazy_static! {
-    pub static ref GLOBAL_TIMER_HANDLE: Handle = start_global_timer();
+    pub static ref GLOBAL_TIMER_HANDLE: Handle = start_global_timer("timer");
 }
 
-fn start_global_timer() -> Handle {
+/// Create a global timer with specific thread name.
+pub fn start_global_timer(name: &str) -> Handle {
     let (tx, rx) = mpsc::channel();
     let props = crate::thread_group::current_properties();
     Builder::new()
-        .name(thd_name!("timer"))
+        .name(thd_name!(name))
         .spawn_wrapper(move || {
             crate::thread_group::set_properties(props);
             tikv_alloc::add_thread_memory_accessor();

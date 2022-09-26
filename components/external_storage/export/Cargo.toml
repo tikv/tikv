@@ -74,6 +74,7 @@ tokio = { version = "1.5", features = ["time", "rt", "net"], optional = true }
 tokio-util = { version = "0.7", features = ["compat"], optional = true }
 url = "2.0"
 async-trait = "0.1"
+async-compression = { version = "0.3.14", features = ["futures-io", "zstd"]}
 
 [dev-dependencies]
 matches = "0.1.8"

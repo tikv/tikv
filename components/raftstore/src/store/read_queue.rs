@@ -96,6 +96,7 @@ pub struct ReadIndexQueue<C> {
     contexts: HashMap<Uuid, usize>,
 
     retry_countdown: usize,
+    tag: String,
 }
 
 impl<C> Default for ReadIndexQueue<C> {
@@ -106,11 +107,22 @@ impl<C> Default for ReadIndexQueue<C> {
             handled_cnt: 0,
             contexts: HashMap::default(),
             retry_countdown: 0,
+            tag: "".to_string(),
         }
     }
 }
 
 impl<C: ErrorCallback> ReadIndexQueue<C> {
+    pub fn new(tag: String) -> ReadIndexQueue<C> {
+        ReadIndexQueue {
+            reads: VecDeque::new(),
+            ready_cnt: 0,
+            handled_cnt: 0,
+            contexts: HashMap::default(),
+            retry_countdown: 0,
+            tag,
+        }
+    }
     /// Check it's necessary to retry pending read requests or not.
     /// Return true if all such conditions are satisfied:
     /// 1. more than an election timeout elapsed from the last request push;
@@ -198,7 +210,7 @@ impl<C: ErrorCallback> ReadIndexQueue<C> {
         None
     }
 
-    pub fn advance_leader_reads<T>(&mut self, tag: &str, states: T)
+    pub fn advance_leader_reads<T>(&mut self, states: T)
     where
         T: IntoIterator<Item = (Uuid, Option<LockInfo>, u64)>,
     {
@@ -214,7 +226,7 @@ impl<C: ErrorCallback> ReadIndexQueue<C> {
                 None => None,
             };
 
-            error!("{} unexpected uuid detected", tag; "current_id" => ?invalid_id);
+            error!("{} unexpected uuid detected", &self.tag; "current_id" => ?invalid_id);
             let mut expect_id_track = vec![];
             for i in (0..self.ready_cnt).rev().take(10).rev() {
                 expect_id_track.push((i, self.reads.get(i).map(|r| (r.id, r.propose_time))));
@@ -229,7 +241,7 @@ impl<C: ErrorCallback> ReadIndexQueue<C> {
             error!("context around"; "expect_id_track" => ?expect_id_track, "actual_id_track" => ?actual_id_track);
             panic!(
                 "{} unexpected uuid detected {} != {:?} at {}",
-                tag, uuid, invalid_id, self.ready_cnt
+                &self.tag, uuid, invalid_id, self.ready_cnt
             );
         }
     }
@@ -573,7 +585,7 @@ mod tests {
 
         // After the peer becomes leader, `advance` could be called before
         // `clear_uncommitted_on_role_change`.
-        queue.advance_leader_reads("", vec![(id, None, 10)]);
+        queue.advance_leader_reads(vec![(id, None, 10)]);
         while let Some(mut read) = queue.pop_front() {
             read.cmds.clear();
         }
@@ -588,7 +600,7 @@ mod tests {
         );
         queue.push_back(req, true);
         let last_id = queue.reads.back().map(|t| t.id).unwrap();
-        queue.advance_leader_reads("", vec![(last_id, None, 10)]);
+        queue.advance_leader_reads(vec![(last_id, None, 10)]);
         assert_eq!(queue.ready_cnt, 1);
         while let Some(mut read) = queue.pop_front() {
             read.cmds.clear();
@@ -617,7 +629,7 @@ mod tests {
 
         // Advance on leader, but the peer is not ready to handle it (e.g. it's in
         // merging).
-        queue.advance_leader_reads("", vec![(id, None, 10)]);
+        queue.advance_leader_reads(vec![(id, None, 10)]);
 
         // The leader steps down to follower, clear uncommitted reads.
         queue.clear_uncommitted_on_role_change(10);
@@ -634,7 +646,7 @@ mod tests {
         queue.push_back(req, true);
 
         // Advance on leader again, shouldn't panic.
-        queue.advance_leader_reads("", vec![(id_1, None, 10)]);
+        queue.advance_leader_reads(vec![(id_1, None, 10)]);
         while let Some(mut read) = queue.pop_front() {
             read.cmds.clear();
         }

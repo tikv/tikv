@@ -2,26 +2,26 @@
 
 use std::{
     fmt::Debug,
-    sync::{atomic::Ordering, Arc, Mutex},
+    sync::{Arc, Mutex},
 };
 
+use engine_traits::util::{
+    fetch_add_memtable_version, max_synced_sequence_number, MemtableEventNotifier,
+};
 use parking_lot_core::SpinWait;
 use rocksdb::{EventListener, FlushJobInfo, MemTableInfo};
-use tikv_util::{
-    debug,
-    sequence_number::{Notifier, SYNCED_MAX_SEQUENCE_NUMBER, VERSION_COUNTER_ALLOCATOR},
-};
+use tikv_util::debug;
 
 use crate::RocksEngine;
 
 #[derive(Clone)]
 pub struct FlushListener {
-    notifier: Arc<Mutex<Box<dyn Notifier>>>,
+    notifier: Arc<Mutex<Box<dyn MemtableEventNotifier>>>,
     engine: Arc<Mutex<Option<RocksEngine>>>,
 }
 
 impl FlushListener {
-    pub fn new<N: Notifier + 'static>(notifier: N) -> Self {
+    pub fn new<N: MemtableEventNotifier + 'static>(notifier: N) -> Self {
         FlushListener {
             notifier: Arc::new(Mutex::new(Box::new(notifier))),
             engine: Arc::default(),
@@ -33,7 +33,7 @@ impl FlushListener {
         *e = Some(engine);
     }
 
-    pub fn update_notifier(&self, notifier: impl Notifier + 'static) {
+    pub fn update_notifier(&self, notifier: impl MemtableEventNotifier + 'static) {
         let mut n = self.notifier.lock().unwrap();
         *n = Box::new(notifier);
     }
@@ -49,7 +49,7 @@ impl EventListener for FlushListener {
         let flush_seqno = info.largest_seqno();
         let mut spin_wait = SpinWait::new();
         loop {
-            let max_seqno = SYNCED_MAX_SEQUENCE_NUMBER.load(Ordering::SeqCst);
+            let max_seqno = max_synced_sequence_number();
             if max_seqno >= flush_seqno {
                 break;
             }
@@ -68,7 +68,7 @@ impl EventListener for FlushListener {
     }
 
     fn on_memtable_sealed(&self, info: &MemTableInfo) {
-        let version = VERSION_COUNTER_ALLOCATOR.fetch_add(1, Ordering::SeqCst);
+        let version = fetch_add_memtable_version();
         debug!(
             "memtable sealed";
             "cf" => info.cf_name(),
@@ -97,18 +97,18 @@ impl Debug for FlushListener {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::Ordering;
-
-    use engine_traits::{MiscExt, Mutable, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT};
+    use engine_traits::{
+        util::{update_max_synced_sequence_number, MemtableEventNotifier},
+        MiscExt, Mutable, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
+    };
     use rocksdb::{ColumnFamilyOptions, DBOptions as RawDBOptions};
-    use tikv_util::sequence_number::{Notifier, SYNCED_MAX_SEQUENCE_NUMBER};
 
     use crate::{util::new_engine_opt, FlushListener, RocksCfOptions, RocksDbOptions};
 
     #[derive(Clone)]
     struct TestNotifier;
 
-    impl Notifier for TestNotifier {
+    impl MemtableEventNotifier for TestNotifier {
         fn notify_memtable_sealed(&self, _seqno: u64) {}
         fn notify_memtable_flushed(&self, _cf: &str, _seqno: u64) {}
         fn notify_flush_cfs(&self, _seqno: u64) {}
@@ -138,11 +138,11 @@ mod tests {
         write_opts.set_disable_wal(true);
         batch.write_opt(&write_opts).unwrap();
         batch.write_opt(&write_opts).unwrap();
-        let seq = batch.write_opt(&write_opts).unwrap();
-        SYNCED_MAX_SEQUENCE_NUMBER.store(seq, Ordering::SeqCst);
+        let seqno = batch.write_opt(&write_opts).unwrap();
+        update_max_synced_sequence_number(seqno);
         engine.flush_cfs(true).unwrap();
-        let seq = batch.write_opt(&write_opts).unwrap();
-        SYNCED_MAX_SEQUENCE_NUMBER.store(seq, Ordering::SeqCst);
+        let seqno = batch.write_opt(&write_opts).unwrap();
+        update_max_synced_sequence_number(seqno);
         engine.flush_cfs(true).unwrap();
     }
 }

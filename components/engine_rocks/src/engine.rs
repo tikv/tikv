@@ -78,6 +78,10 @@ impl RocksEngine {
         self.flush_listener = Some(listener);
     }
 
+    pub fn shared_block_cache(&self) -> bool {
+        self.shared_block_cache
+    }
+
     pub fn support_multi_batch_write(&self) -> bool {
         self.support_multi_batch_write
     }

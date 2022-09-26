@@ -26,7 +26,7 @@ use super::{
 // It's better to use a universal approach.
 const CPU_LIMITER_REFILL_DURATION: Duration = Duration::from_millis(100);
 
-// Limter can be issued to cpu, write and read bandwidth
+// Limiter can be issued to cpu, write and read bandwidth
 #[derive(Debug)]
 pub struct LimiterItems {
     cputime_limiter: Limiter,

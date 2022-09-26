@@ -26,9 +26,9 @@ use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{unbounded, TryRecvError, TrySendError};
 use engine_traits::{
-    CompactedEvent, DeleteStrategy, Engines, KvEngine, Mutable, PerfContextKind, RaftEngine,
-    RaftLogBatch, Range, Result as EngineTraitsResult, WriteBatch, WriteOptions, CF_DEFAULT,
-    CF_LOCK, CF_RAFT, CF_WRITE,
+    util::MemtableEventNotifier, CompactedEvent, DeleteStrategy, Engines, KvEngine, Mutable,
+    PerfContextKind, RaftEngine, RaftLogBatch, Range, Result as EngineTraitsResult, WriteBatch,
+    WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use fail::fail_point;
 use futures::{compat::Future01CompatExt, FutureExt};
@@ -39,7 +39,9 @@ use kvproto::{
     metapb::{self, Region, RegionEpoch},
     pdpb::{self, QueryStats, StoreStats},
     raft_cmdpb::{AdminCmdType, AdminRequest},
-    raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState},
+    raft_serverpb::{
+        ExtraMessageType, PeerState, RaftMessage, RegionLocalState, StoreRecoverState,
+    },
     replication_modepb::{ReplicationMode, ReplicationStatus},
 };
 use parking_lot_core::SpinWait;
@@ -50,14 +52,15 @@ use resource_metering::CollectorRegHandle;
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
-    box_err, box_try,
+    box_try,
     config::{Tracker, VersionTrack},
     debug, defer, error,
     future::poll_future_notify,
     info, is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver},
-    sequence_number::Notifier as SeqnoNotifier,
-    slow_log, sys as sys_util,
+    slow_log,
+    store::find_peer,
+    sys as sys_util,
     sys::disk::{get_disk_status, DiskUsage},
     time::{duration_to_sec, Instant as TiInstant},
     timer::SteadyTimer,
@@ -108,7 +111,7 @@ use crate::{
         PdTask, PeerMsg, PeerTick, RaftCommand, SeqnoRelationRunner, SignificantMsg, SnapManager,
         StoreMsg, StoreTick,
     },
-    Result,
+    Error, Result,
 };
 
 type Key = Vec<u8>;
@@ -514,7 +517,7 @@ where
     }
 }
 
-impl<EK, ER> SeqnoNotifier for ApplyResNotifier<EK, ER>
+impl<EK, ER> MemtableEventNotifier for ApplyResNotifier<EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
@@ -845,10 +848,20 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 StoreMsg::Tick(tick) => self.on_tick(tick),
                 StoreMsg::RaftMessage(msg) => {
                     if let Err(e) = self.on_raft_message(msg) {
-                        error!(?e;
-                            "handle raft message failed";
-                            "store_id" => self.fsm.store.id,
-                        );
+                        if matches!(&e, Error::RegionNotRegistered { .. }) {
+                            // This may happen in normal cases when add-peer runs slowly
+                            // occasionally after a region split. Avoid printing error
+                            // log here, which may confuse users.
+                            info!("handle raft message failed";
+                                "err" => ?e,
+                                "store_id" => self.fsm.store.id,
+                            );
+                        } else {
+                            error!(?e;
+                                "handle raft message failed";
+                                "store_id" => self.fsm.store.id,
+                            );
+                        }
                     }
                 }
                 StoreMsg::CompactedEvent(event) => self.on_compaction_finished(event),
@@ -1380,12 +1393,12 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
         let mut recover_from_raft_db = false;
         let kv_engine = self.engines.kv.clone();
         let raft_engine = self.engines.raft.clone();
-        if let Some(last_seqno) = raft_engine.recover_from_raft_db().unwrap() {
-            info!("start to recover states from raftdb"; "seqno" => last_seqno);
+        if let Some(last_recover_state) = raft_engine.get_recover_state().unwrap() {
+            info!("start to recover states from raftdb"; "last_recover_state" => ?last_recover_state);
             recover_from_raft_db = true;
             let flushed_seqnos = raft_engine.get_flushed_seqno().unwrap();
             let min_flushed_seqno = flushed_seqnos.as_ref().map(|seqnos| seqnos.min_seqno());
-            let start_seqno = min_flushed_seqno.unwrap_or(0).max(last_seqno);
+            let start_seqno = min_flushed_seqno.unwrap_or(0).max(last_recover_state.seqno);
             let end_seqno = kv_engine.get_latest_sequence_number();
             self.seqno_recover_range = Some(RangeInclusive::new(start_seqno, end_seqno));
             let mut raft_wb = raft_engine.log_batch(0);
@@ -1759,9 +1772,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let region_runner = RegionRunner::new(
             engines.clone(),
             mgr.clone(),
-            cfg.value().snap_apply_batch_size.0 as usize,
-            cfg.value().use_delete_range,
-            cfg.value().snap_generator_pool_size,
+            cfg.clone(),
             workers.coprocessor_host.clone(),
             self.router(),
             Some(Arc::clone(&pd_client)),
@@ -1948,10 +1959,12 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         }
         if raft_builder.cfg.value().disable_kv_wal {
             let seqno = raft_builder.engines.kv.get_latest_sequence_number();
+            let mut recover_state = StoreRecoverState::default();
+            recover_state.set_seqno(seqno);
             raft_builder
                 .engines
                 .raft
-                .put_recover_from_raft_db(seqno)
+                .put_recover_state(&recover_state)
                 .unwrap();
             let seqno_worker = workers.seqno_worker.as_ref().unwrap();
             let scheduler = seqno_worker.scheduler();
@@ -2375,11 +2388,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                     .message_dropped
                     .region_nonexistent
                     .inc();
-                return Err(box_err!(
-                    "[region {}] region not exist but not tombstone: {:?}",
+                return Err(Error::RegionNotRegistered {
                     region_id,
-                    local_state
-                ));
+                    local_state,
+                });
             }
             info!(
                 "region doesn't exist yet, wait for it to be split";
@@ -2402,7 +2414,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 "msg_type" => ?msg_type,
             );
 
-            let merge_target = if let Some(peer) = util::find_peer(region, from_store_id) {
+            let merge_target = if let Some(peer) = find_peer(region, from_store_id) {
                 // Maybe the target is promoted from learner to voter, but the follower
                 // doesn't know it. So we only compare peer id.
                 if peer.get_id() < msg.get_from_peer().get_id() {
@@ -2439,7 +2451,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 "current_region_epoch" => ?region_epoch,
                 "msg_type" => ?msg_type,
             );
-            if util::find_peer(region, from_store_id).is_none() {
+            if find_peer(region, from_store_id).is_none() {
                 self.ctx.handle_stale_msg(msg, region_epoch.clone(), None);
             } else {
                 let mut need_gc_msg = util::is_vote_msg(msg.get_message());
@@ -2476,9 +2488,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         // In this case, the local epoch is stale and the local peer can be found from
         // region. We can compare the local peer id with to_peer_id to verify whether it
         // is correct to create a new peer.
-        if let Some(local_peer_id) =
-            util::find_peer(region, self.ctx.store_id()).map(|r| r.get_id())
-        {
+        if let Some(local_peer_id) = find_peer(region, self.ctx.store_id()).map(|r| r.get_id()) {
             if to_peer_id <= local_peer_id {
                 self.ctx
                     .raft_metrics
@@ -3251,7 +3261,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             if target_region_id == 0 {
                 return;
             }
-            match util::find_peer(&meta.regions[&target_region_id], self.ctx.store_id()) {
+            match find_peer(&meta.regions[&target_region_id], self.ctx.store_id()) {
                 None => return,
                 Some(p) => p.clone(),
             }

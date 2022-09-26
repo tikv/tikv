@@ -1,8 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::{convert::TryInto, ops::Deref};
-
 use engine_traits::{
     util::FlushedSeqno, Error, Iterable, KvEngine, MiscExt, Mutable, Peekable, RaftEngine,
     RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch, RaftLogGcTask, Result, SyncMutable,
@@ -12,6 +10,7 @@ use kvproto::{
     metapb::Region,
     raft_serverpb::{
         RaftApplyState, RaftLocalState, RegionLocalState, RegionSequenceNumberRelation, StoreIdent,
+        StoreRecoverState,
     },
 };
 use protobuf::{parse_from_bytes, Message};
@@ -184,6 +183,10 @@ impl RaftEngineReadOnly for RocksEngine {
         self.get_msg_cf(CF_DEFAULT, &key)
     }
 
+    fn get_recover_state(&self) -> Result<Option<StoreRecoverState>> {
+        self.get_msg_cf(CF_DEFAULT, keys::RECOVER_STATE_KEY)
+    }
+
     fn get_flushed_seqno(&self) -> Result<Option<FlushedSeqno>> {
         let value = self.get_value_cf(CF_DEFAULT, keys::FLUSHED_SEQNO_KEY)?;
         Ok(value.map(|v| serde_json::from_slice(&v).unwrap()))
@@ -289,6 +292,8 @@ impl RaftEngine for RocksEngine {
         batch: &mut Self::LogBatch,
     ) -> Result<()> {
         batch.delete(&keys::raft_state_key(raft_group_id))?;
+        batch.delete(&keys::region_state_key(raft_group_id))?;
+        batch.delete(&keys::apply_state_key(raft_group_id))?;
         if first_index == 0 {
             let seek_key = keys::raft_log_key(raft_group_id, 0);
             let prefix = keys::raft_log_prefix(raft_group_id);
@@ -400,15 +405,8 @@ impl RaftEngine for RocksEngine {
         }
     }
 
-    fn recover_from_raft_db(&self) -> Result<Option<u64>> {
-        let seqno = self
-            .get_value(keys::RECOVER_FROM_RAFT_DB_KEY)?
-            .map(|v| u64::from_be_bytes(v.deref().try_into().unwrap()));
-        Ok(seqno)
-    }
-
-    fn put_recover_from_raft_db(&self, seqno: u64) -> Result<()> {
-        self.put(keys::RECOVER_FROM_RAFT_DB_KEY, &u64::to_be_bytes(seqno))
+    fn put_recover_state(&self, state: &StoreRecoverState) -> Result<()> {
+        self.put_msg(keys::RECOVER_STATE_KEY, state)
     }
 
     fn scan_seqno_relations<F>(

@@ -2,15 +2,13 @@
 
 use std::{
     cmp, fmt, mem,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
+    sync::{atomic::AtomicUsize, Arc},
 };
 
 use collections::{HashMap, HashMapEntry};
 use engine_traits::{
-    util::FlushedSeqno, Engines, KvEngine, RaftEngine, RaftLogBatch, Snapshot, DATA_CFS,
+    util::{update_max_synced_sequence_number, FlushedSeqno, SequenceNumberWindow},
+    Engines, KvEngine, RaftEngine, RaftLogBatch, Snapshot, DATA_CFS,
 };
 use kvproto::{
     metapb::Region,
@@ -19,9 +17,7 @@ use kvproto::{
     },
 };
 use tikv_util::{
-    debug, error, info,
-    sequence_number::{SequenceNumberWindow, SYNCED_MAX_SEQUENCE_NUMBER},
-    warn,
+    debug, error, info, warn,
     worker::{Runnable, Scheduler},
 };
 
@@ -167,11 +163,11 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             let seqno = res.write_seqno.iter().max().unwrap();
             let mut relation = RegionSequenceNumberRelation::default();
             relation.set_region_id(res.region_id);
-            relation.set_sequence_number(seqno.number);
+            relation.set_sequence_number(seqno.get_number());
             relation.set_apply_state(res.apply_state.clone());
             let mut relation = Some(relation);
 
-            for result in self.handle_exec_res(res.region_id, seqno.number, &res.exec_res) {
+            for result in self.handle_exec_res(res.region_id, seqno.get_number(), &res.exec_res) {
                 match result {
                     HandleExecResResult::RegionStateChanged(region_state) => {
                         info!("region state changed"; "region_id" => res.region_id, "region_state" => ?region_state, "apply_state" => ?res.apply_state);
@@ -212,7 +208,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         }
 
         self.consume_raft_wb(true);
-        SYNCED_MAX_SEQUENCE_NUMBER.store(self.seqno_window.committed_seqno(), Ordering::SeqCst);
+        update_max_synced_sequence_number(self.seqno_window.committed_seqno());
 
         SEQNO_UNCOMMITTED_COUNT.set(self.seqno_window.pending_count() as i64);
         debug!("pending seqno count"; "count" => self.seqno_window.pending_count());

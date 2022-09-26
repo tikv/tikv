@@ -28,9 +28,9 @@ use batch_system::{
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
-    DeleteStrategy, KvEngine, Mutable, PerfContext, PerfContextKind, RaftEngine,
-    RaftEngineReadOnly, Range as EngineRange, Snapshot, SstMetaInfo, WriteBatch, ALL_CFS,
-    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    util::SequenceNumber, DeleteStrategy, KvEngine, Mutable, PerfContext, PerfContextKind,
+    RaftEngine, RaftEngineReadOnly, Range as EngineRange, Snapshot, SstMetaInfo, WriteBatch,
+    ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use fail::fail_point;
 use kvproto::{
@@ -58,9 +58,8 @@ use tikv_util::{
     debug, error, info,
     memory::HeapSize,
     mpsc::{loose_bounded, LooseBoundedSender, Receiver},
-    safe_panic,
-    sequence_number::SequenceNumber,
-    slow_log,
+    safe_panic, slow_log,
+    store::{find_peer, find_peer_mut, is_learner, remove_peer},
     time::{duration_to_sec, Instant},
     warn,
     worker::Scheduler,
@@ -90,8 +89,8 @@ use crate::{
         peer_storage::{write_initial_apply_state, write_peer_state},
         util,
         util::{
-            admin_cmd_epoch_lookup, check_region_epoch, compare_region_epoch, is_learner,
-            ChangePeerI, ConfChangeKind, KeysInfoFormatter, LatencyInspector,
+            admin_cmd_epoch_lookup, check_region_epoch, compare_region_epoch, ChangePeerI,
+            ConfChangeKind, KeysInfoFormatter, LatencyInspector,
         },
         Config, RegionSnapshot, RegionTask, WriteCallback,
     },
@@ -425,6 +424,12 @@ where
 
     key_buffer: Vec<u8>,
 
+    /// A general apply progress for a delegate is:
+    /// `prepare_for` -> `commit` [-> `commit` ...] -> `finish_for`.
+    /// Sometimes an `ApplyRes` is created with an applied_index, but data
+    /// before the applied index is still not written to kvdb. Let's call the
+    /// `ApplyRes` uncommitted. Data will finally be written to kvdb in
+    /// `flush`.
     uncommitted_res_count: usize,
 
     // TODO: add a test
@@ -513,19 +518,9 @@ where
     fn commit_opt(&mut self, delegate: &mut ApplyDelegate<EK>, persistent: bool) {
         delegate.update_metrics(self);
         if persistent {
-            let (_, seqno) = self.write_to_db();
-            if let Some(seqno) = seqno {
-                delegate.last_write_seqno.push(seqno);
-                for res in self
-                    .apply_res
-                    .iter_mut()
-                    .rev()
-                    .take(self.uncommitted_res_count)
-                {
-                    res.write_seqno.push(seqno);
-                }
+            if let (_, Some(seqno)) = self.write_to_db() {
+                delegate.unfinished_write_seqno.push(seqno);
             }
-            self.uncommitted_res_count = 0;
             self.prepare_for(delegate);
             delegate.last_flush_applied_index = delegate.apply_state.get_applied_index()
         }
@@ -537,7 +532,7 @@ where
     /// If it returns true, all pending writes are persisted in engines.
     pub fn write_to_db(&mut self) -> (bool, Option<SequenceNumber>) {
         let need_sync = self.sync_log_hint && !self.disable_wal;
-        let mut sequence = None;
+        let mut seqno = None;
         // There may be put and delete requests after ingest request in the same fsm.
         // To guarantee the correct order, we must ingest the pending_sst first, and
         // then persist the kv write batch to engine.
@@ -559,14 +554,14 @@ where
             write_opts.set_sync(need_sync);
             write_opts.set_disable_wal(self.disable_wal);
             if self.disable_wal {
-                let sn = SequenceNumber::start();
-                sequence = Some(sn);
+                let sn = SequenceNumber::pre_write();
+                seqno = Some(sn);
             }
-            let seqno = self.kv_wb_mut().write_opt(&write_opts).unwrap_or_else(|e| {
+            let seq = self.kv_wb_mut().write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!("failed to write to engine: {:?}", e);
             });
-            if let Some(seq) = sequence.as_mut() {
-                seq.end(seqno)
+            if let Some(seqno) = seqno.as_mut() {
+                seqno.post_write(seq)
             }
             let trackers: Vec<_> = self
                 .applied_batch
@@ -618,7 +613,14 @@ where
         }
         self.apply_time.flush();
         self.apply_wait.flush();
-        (need_sync, sequence)
+        let res_count = self.uncommitted_res_count;
+        self.uncommitted_res_count = 0;
+        if let Some(seqno) = seqno {
+            for res in self.apply_res.iter_mut().rev().take(res_count) {
+                res.write_seqno.push(seqno);
+            }
+        }
+        (need_sync, seqno)
     }
 
     /// Finishes `Apply`s for the delegate.
@@ -627,14 +629,21 @@ where
         delegate: &mut ApplyDelegate<EK>,
         results: Vec<ExecResult<EK::Snapshot>>,
     ) {
-        if !delegate.pending_remove {
-            delegate.write_apply_state(self.kv_wb_mut());
+        if self.host.pre_persist(&delegate.region, true, None) {
+            if !delegate.pending_remove {
+                delegate.write_apply_state(self.kv_wb_mut());
+            }
+            self.commit_opt(delegate, false);
+        } else {
+            debug!("do not persist when finish_for";
+                "region" => ?delegate.region,
+                "tag" => &delegate.tag,
+            );
         }
-        self.commit_opt(delegate, false);
         self.apply_res.push(ApplyRes {
             region_id: delegate.region_id(),
             apply_state: delegate.apply_state.clone(),
-            write_seqno: mem::take(&mut delegate.last_write_seqno),
+            write_seqno: mem::take(&mut delegate.unfinished_write_seqno),
             exec_res: results,
             metrics: delegate.metrics.clone(),
             applied_term: delegate.applied_term,
@@ -679,17 +688,11 @@ where
         // take raft log gc for example, we write kv WAL first, then write raft WAL,
         // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
         // so we use sync-log flag here.
-        let (is_synced, seqno) = self.write_to_db();
+        let (is_synced, _) = self.write_to_db();
 
         if !self.apply_res.is_empty() {
             fail_point!("before_nofity_apply_res");
-            let mut apply_res = mem::take(&mut self.apply_res);
-            if let Some(seqno) = seqno {
-                for res in apply_res.iter_mut().rev().take(self.uncommitted_res_count) {
-                    res.write_seqno.push(seqno);
-                }
-            }
-            self.uncommitted_res_count = 0;
+            let apply_res = mem::take(&mut self.apply_res);
             self.notifier.notify(apply_res);
         }
 
@@ -969,7 +972,7 @@ where
 
     buckets: Option<BucketStat>,
 
-    last_write_seqno: Vec<SequenceNumber>,
+    unfinished_write_seqno: Vec<SequenceNumber>,
 }
 
 impl<EK> ApplyDelegate<EK>
@@ -1002,7 +1005,7 @@ where
             raft_engine: reg.raft_engine,
             trace: ApplyMemoryTrace::default(),
             buckets: None,
-            last_write_seqno: vec![],
+            unfinished_write_seqno: vec![],
         }
     }
 
@@ -1135,8 +1138,9 @@ where
             }
             let mut has_unflushed_data =
                 self.last_flush_applied_index != self.apply_state.get_applied_index();
-            if has_unflushed_data && should_write_to_engine(&cmd)
-                || apply_ctx.kv_wb().should_write_to_engine()
+            if (has_unflushed_data && should_write_to_engine(&cmd)
+                || apply_ctx.kv_wb().should_write_to_engine())
+                && apply_ctx.host.pre_persist(&self.region, false, Some(&cmd))
             {
                 apply_ctx.commit(self);
                 if let Some(start) = self.handle_start.as_ref() {
@@ -1942,7 +1946,7 @@ where
                     .inc();
 
                 let mut exists = false;
-                if let Some(p) = util::find_peer_mut(&mut region, store_id) {
+                if let Some(p) = find_peer_mut(&mut region, store_id) {
                     exists = true;
                     if !is_learner(p) || p.get_id() != peer.get_id() {
                         error!(
@@ -1982,7 +1986,7 @@ where
                     .with_label_values(&["remove_peer", "all"])
                     .inc();
 
-                if let Some(p) = util::remove_peer(&mut region, store_id) {
+                if let Some(p) = remove_peer(&mut region, store_id) {
                     // Considering `is_learner` flag in `Peer` here is by design.
                     if &p != peer {
                         error!(
@@ -2035,7 +2039,7 @@ where
                     .with_label_values(&["add_learner", "all"])
                     .inc();
 
-                if util::find_peer(&region, store_id).is_some() {
+                if find_peer(&region, store_id).is_some() {
                     error!(
                         "can't add duplicated learner";
                         "region_id" => self.region_id(),
@@ -2145,7 +2149,7 @@ where
 
             confchange_cmd_metric::inc_all(change_type);
 
-            if let Some(exist_peer) = util::find_peer(&region, store_id) {
+            if let Some(exist_peer) = find_peer(&region, store_id) {
                 let r = exist_peer.get_role();
                 if r == PeerRole::IncomingVoter || r == PeerRole::DemotingVoter {
                     panic!(
@@ -2154,7 +2158,7 @@ where
                     );
                 }
             }
-            match (util::find_peer_mut(&mut region, store_id), change_type) {
+            match (find_peer_mut(&mut region, store_id), change_type) {
                 (None, ConfChangeType::AddNode) => {
                     let mut peer = peer.clone();
                     match kind {
@@ -2246,7 +2250,7 @@ where
                             self.region
                         ));
                     }
-                    match util::remove_peer(&mut region, store_id) {
+                    match remove_peer(&mut region, store_id) {
                         Some(p) => {
                             if &p != peer {
                                 error!(
@@ -2426,7 +2430,7 @@ where
             new_split_regions.insert(
                 new_region.get_id(),
                 NewSplitPeer {
-                    peer_id: util::find_peer(&new_region, ctx.store_id).unwrap().get_id(),
+                    peer_id: find_peer(&new_region, ctx.store_id).unwrap().get_id(),
                     result: None,
                 },
             );
@@ -3149,6 +3153,19 @@ pub struct Proposal<C> {
     /// lease.
     pub propose_time: Option<Timespec>,
     pub must_pass_epoch_check: bool,
+}
+
+impl<C> Proposal<C> {
+    pub fn new(index: u64, term: u64, cb: C) -> Self {
+        Self {
+            index,
+            term,
+            cb,
+            propose_time: None,
+            must_pass_epoch_check: false,
+            is_conf_change: false,
+        }
+    }
 }
 
 impl<C> HeapSize for Proposal<C> {}
@@ -4651,18 +4668,17 @@ mod tests {
     use sst_importer::Config as ImportConfig;
     use tempfile::{Builder, TempDir};
     use test_sst_importer::*;
-    use tikv_util::{config::VersionTrack, worker::dummy_scheduler};
+    use tikv_util::{
+        config::VersionTrack,
+        store::{new_learner_peer, new_peer},
+        worker::dummy_scheduler,
+    };
     use uuid::Uuid;
 
     use super::*;
     use crate::{
         coprocessor::*,
-        store::{
-            msg::WriteResponse,
-            peer_storage::RAFT_INIT_LOG_INDEX,
-            util::{new_learner_peer, new_peer},
-            Config, RegionTask,
-        },
+        store::{msg::WriteResponse, peer_storage::RAFT_INIT_LOG_INDEX, Config, RegionTask},
     };
 
     impl GenSnapTask {
@@ -5254,6 +5270,7 @@ mod tests {
         cmd_sink: Option<Arc<Mutex<Sender<CmdBatch>>>>,
         filter_compact_log: Arc<AtomicBool>,
         filter_consistency_check: Arc<AtomicBool>,
+        skip_persist_when_pre_commit: Arc<AtomicBool>,
         delay_remove_ssts: Arc<AtomicBool>,
         last_delete_sst_count: Arc<AtomicU64>,
         last_pending_delete_sst_count: Arc<AtomicU64>,
@@ -5375,6 +5392,17 @@ mod tests {
         }
 
         fn on_applied_current_term(&self, _: raft::StateRole, _: &Region) {}
+    }
+
+    impl RegionChangeObserver for ApplyObserver {
+        fn pre_persist(
+            &self,
+            _: &mut ObserverContext<'_>,
+            _is_finished: bool,
+            _cmd: Option<&RaftCmdRequest>,
+        ) -> bool {
+            !self.skip_persist_when_pre_commit.load(Ordering::SeqCst)
+        }
     }
 
     #[test]
@@ -5999,6 +6027,8 @@ mod tests {
         host.registry
             .register_admin_observer(1, BoxAdminObserver::new(obs.clone()));
         host.registry
+            .register_region_change_observer(1, BoxRegionChangeObserver::new(obs.clone()));
+        host.registry
             .register_query_observer(1, BoxQueryObserver::new(obs.clone()));
 
         let (tx, rx) = mpsc::channel();
@@ -6033,6 +6063,8 @@ mod tests {
         reg.region.mut_region_epoch().set_version(3);
         router.schedule_task(1, Msg::Registration(reg));
 
+        obs.skip_persist_when_pre_commit
+            .store(true, Ordering::SeqCst);
         let mut index_id = 1;
         let put_entry = EntryBuilder::new(index_id, 1)
             .put(b"k1", b"v1")
@@ -6041,7 +6073,19 @@ mod tests {
             .epoch(1, 3)
             .build();
         router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![put_entry], vec![])));
-        fetch_apply_res(&rx);
+        let apply_res = fetch_apply_res(&rx);
+
+        // We don't persist at `finish_for`, since we disabled `pre_persist`.
+        let state: RaftApplyState = engine
+            .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
+            .unwrap()
+            .unwrap_or_default();
+        assert_eq!(
+            apply_res.apply_state.get_applied_index(),
+            state.get_applied_index() + 1
+        );
+        obs.skip_persist_when_pre_commit
+            .store(false, Ordering::SeqCst);
 
         // Phase 1: we test if pre_exec will filter execution of commands correctly.
         index_id += 1;
@@ -6062,6 +6106,16 @@ mod tests {
         // Executing CompactLog is filtered and takes no effect.
         assert_eq!(apply_res.exec_res.len(), 0);
         assert_eq!(apply_res.apply_state.get_truncated_state().get_index(), 0);
+
+        // We persist at `finish_for`, since we enabled `pre_persist`.
+        let state: RaftApplyState = engine
+            .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
+            .unwrap()
+            .unwrap_or_default();
+        assert_eq!(
+            apply_res.apply_state.get_applied_index(),
+            state.get_applied_index()
+        );
 
         index_id += 1;
         // Don't filter CompactLog

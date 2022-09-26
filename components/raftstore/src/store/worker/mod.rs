@@ -8,7 +8,6 @@ mod compact;
 mod consistency_check;
 mod metrics;
 mod pd;
-mod query_stats;
 mod raftlog_fetch;
 mod raftlog_gc;
 mod read;
@@ -19,6 +18,8 @@ mod split_check;
 mod split_config;
 mod split_controller;
 
+#[cfg(test)]
+pub use self::region::tests::make_raftstore_cfg as make_region_worker_raftstore_cfg;
 pub use self::{
     check_leader::{Runner as CheckLeaderRunner, Task as CheckLeaderTask},
     cleanup::{Runner as CleanupRunner, Task as CleanupTask},
@@ -30,7 +31,6 @@ pub use self::{
         new_change_peer_v2_request, FlowStatistics, FlowStatsReporter, HeartbeatTask,
         Runner as PdRunner, Task as PdTask,
     },
-    query_stats::QueryStats,
     raftlog_fetch::{
         FetchedLogs, LogFetchedNotifier, Runner as RaftlogFetchRunner, Task as RaftlogFetchTask,
     },

@@ -33,7 +33,7 @@ use backup_stream::{
     metadata::{ConnectionConfig, LazyEtcdClient},
     observer::BackupStreamObserver,
 };
-use causal_ts::{BatchTsoProvider, CausalTsProvider};
+use causal_ts::CausalTsProviderImpl;
 use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
@@ -58,7 +58,7 @@ use grpcio_health::HealthService;
 use kvproto::{
     brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
-    kvrpcpb::ApiVersion, logbackuppb::create_log_backup,
+    kvrpcpb::ApiVersion, logbackuppb::create_log_backup, recoverdatapb::create_recover_data,
     resource_usage_agent::create_resource_metering_pub_sub,
 };
 use pd_client::{PdClient, RpcClient};
@@ -84,6 +84,7 @@ use raftstore::{
     RaftRouterCompactedEventSender,
 };
 use security::SecurityManager;
+use snap_recovery::RecoveryService;
 use tikv::{
     config::{ConfigController, DbConfigManger, DbType, LogConfigManager, TikvConfig},
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
@@ -236,8 +237,9 @@ struct TikvServer<ER: RaftEngine> {
     sst_worker: Option<Box<LazyWorker<String>>>,
     seqno_worker: Option<LazyWorker<SeqnoRelationTask<RocksSnapshot>>>,
     quota_limiter: Arc<QuotaLimiter>,
-    causal_ts_provider: Option<Arc<BatchTsoProvider<RpcClient>>>, // used for rawkv apiv2
+    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_factory: Option<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
+    br_snap_recovery_mode: bool, // use for br snapshot recovery
 }
 
 struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
@@ -282,6 +284,30 @@ where
         );
         let pd_client =
             Self::connect_to_pd_cluster(&mut config, env.clone(), Arc::clone(&security_mgr));
+        // check if TiKV need to run in snapshot recovery mode
+        let is_recovering_marked = match pd_client.is_recovering_marked() {
+            Err(e) => {
+                warn!(
+                    "failed to get recovery mode from PD";
+                    "error" => ?e,
+                );
+                false
+            }
+            Ok(marked) => marked,
+        };
+
+        if is_recovering_marked {
+            // Run a TiKV server in recovery modeß
+            info!("TiKV running in Snapshot Recovery Mode");
+            snap_recovery::init_cluster::enter_snap_recovery_mode(&mut config);
+            // connect_to_pd_cluster retreived the cluster id from pd
+            let cluster_id = config.server.cluster_id;
+            snap_recovery::init_cluster::start_recovery(
+                config.clone(),
+                cluster_id,
+                pd_client.clone(),
+            );
+        }
 
         // Initialize and check config
         let cfg_controller = Self::init_config(config);
@@ -333,7 +359,7 @@ where
             if let Err(e) = tso {
                 fatal!("Causal timestamp provider initialize failed: {:?}", e);
             }
-            causal_ts_provider = Some(Arc::new(tso.unwrap()));
+            causal_ts_provider = Some(Arc::new(tso.unwrap().into()));
             info!("Causal timestamp provider startup.");
         }
 
@@ -364,6 +390,7 @@ where
             quota_limiter,
             causal_ts_provider,
             tablet_factory: None,
+            br_snap_recovery_mode: is_recovering_marked,
             seqno_worker: None,
         }
     }
@@ -616,7 +643,7 @@ where
     fn init_servers<F: KvFormat>(&mut self) -> Arc<VersionTrack<ServerConfig>> {
         let flow_controller = Arc::new(FlowController::Singleton(EngineFlowController::new(
             &self.config.storage.flow_control,
-            self.engines.as_ref().unwrap().engine.kv_engine(),
+            self.engines.as_ref().unwrap().engine.kv_engine().unwrap(),
             self.flow_info_receiver.take().unwrap(),
         )));
         let mut gc_worker = self.init_gc_worker();
@@ -732,7 +759,7 @@ where
             storage_read_pools.handle()
         };
 
-        let storage = create_raft_storage::<_, _, _, F>(
+        let storage = create_raft_storage::<_, _, _, F, _>(
             engines.engine.clone(),
             &self.config.storage,
             storage_read_pool_handle,
@@ -744,6 +771,7 @@ where
             resource_tag_factory.clone(),
             Arc::clone(&self.quota_limiter),
             self.pd_client.feature_gate().clone(),
+            self.causal_ts_provider.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
         cfg_controller.register(
@@ -800,16 +828,19 @@ where
             let (unified_read_pool_scale_notifier, rx) = mpsc::sync_channel(10);
             cfg_controller.register(
                 tikv::config::Module::Readpool,
-                Box::new(ReadPoolConfigManager(
+                Box::new(ReadPoolConfigManager::new(
                     unified_read_pool.as_ref().unwrap().handle(),
                     unified_read_pool_scale_notifier,
+                    &self.background_worker,
+                    self.config.readpool.unified.max_thread_count,
+                    self.config.readpool.unified.auto_adjust_pool_size,
                 )),
             );
             unified_read_pool_scale_receiver = Some(rx);
         }
 
         // Register cdc.
-        let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone(), F::TAG);
+        let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
         // Register cdc config manager.
         cfg_controller.register(
@@ -837,11 +868,14 @@ where
 
         // Register causal observer for RawKV API V2
         if let Some(provider) = self.causal_ts_provider.clone() {
-            let causal_ob = causal_ts::CausalObserver::new(provider, cdc_ob.clone());
+            let causal_ob = causal_ts::CausalObserver::new(provider);
             causal_ob.register_to(self.coprocessor_host.as_mut().unwrap());
         };
 
-        let check_leader_runner = CheckLeaderRunner::new(engines.store_meta.clone());
+        let check_leader_runner = CheckLeaderRunner::new(
+            engines.store_meta.clone(),
+            self.coprocessor_host.clone().unwrap(),
+        );
         let check_leader_scheduler = self
             .background_worker
             .start("check-leader", check_leader_runner);
@@ -1046,14 +1080,14 @@ where
                 self.concurrency_manager.clone(),
             )
             .unwrap_or_else(|e| fatal!("gc worker failed to observe lock apply: {}", e));
-        if let Err(e) = gc_worker.start_auto_gc(&engines.engines.kv, auto_gc_config, safe_point) {
+        if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point) {
             fatal!("failed to start auto_gc on storage, error: {}", e);
         }
 
         initial_metric(&self.config.metric);
         if self.config.storage.enable_ttl {
             ttl_checker.start_with_timer(TtlChecker::new(
-                self.engines.as_ref().unwrap().engine.kv_engine(),
+                self.engines.as_ref().unwrap().engine.kv_engine().unwrap(),
                 self.region_info_accessor.clone(),
                 self.config.storage.ttl_check_poll_interval.into(),
             ));
@@ -1076,9 +1110,7 @@ where
             server.env(),
             self.security_mgr.clone(),
             cdc_memory_quota.clone(),
-            self.causal_ts_provider
-                .clone()
-                .map(|provider| provider as Arc<dyn CausalTsProvider>),
+            self.causal_ts_provider.clone(),
         );
         cdc_worker.start_with_timer(cdc_endpoint);
         self.to_stop.push(cdc_worker);
@@ -1195,7 +1227,10 @@ where
         // Backup service.
         let mut backup_worker = Box::new(self.background_worker.lazy_build("backup-endpoint"));
         let backup_scheduler = backup_worker.scheduler();
-        let backup_service = backup::Service::new(backup_scheduler);
+        let backup_service = backup::Service::<RocksEngine, RaftRouter<RocksEngine, ER>>::new(
+            backup_scheduler,
+            self.router.clone(),
+        );
         if servers
             .server
             .register_service(create_backup(backup_service))
@@ -1212,9 +1247,7 @@ where
             self.config.backup.clone(),
             self.concurrency_manager.clone(),
             self.config.storage.api_version(),
-            self.causal_ts_provider
-                .clone()
-                .map(|provider| provider as Arc<dyn CausalTsProvider>),
+            self.causal_ts_provider.clone(),
         );
         self.cfg_controller.as_mut().unwrap().register(
             tikv::config::Module::Backup,
@@ -1251,6 +1284,20 @@ where
                 .is_some()
             {
                 fatal!("failed to register log backup service");
+            }
+        }
+
+        // the present tikv in recovery mode, start recovery service
+        if self.br_snap_recovery_mode {
+            let recovery_service =
+                RecoveryService::new(engines.engines.clone(), self.router.clone());
+
+            if servers
+                .server
+                .register_service(create_recover_data(recovery_service))
+                .is_some()
+            {
+                fatal!("failed to register recovery service");
             }
         }
     }
