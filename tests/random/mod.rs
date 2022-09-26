@@ -1,7 +1,10 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::atomic::{AtomicU16, AtomicUsize, Ordering},
+    sync::{
+        atomic::{AtomicU16, AtomicUsize, Ordering},
+        Arc, Mutex, RwLock,
+    },
     thread::{sleep, JoinHandle},
     time::Duration,
 };
@@ -53,7 +56,8 @@ fn test_random_workload() {
     for i in 0..CONCURRENCY {
         handles.push(spawn_write(i, cluster.new_client()));
     }
-    handles.push(spawn_move(cluster.new_scheduler()));
+    let two_nodes_down = Arc::new(RwLock::new(()));
+    handles.push(spawn_move(cluster.new_scheduler(), two_nodes_down.clone()));
     handles.push(spawn_transfer(cluster.new_scheduler()));
     let start_time = Instant::now();
     let pd_client = cluster.get_pd_client();
@@ -66,7 +70,9 @@ fn test_random_workload() {
         cluster.stop_node(node_id);
         info!("finish stop node {}", node_id);
         let mut node2_id = 0;
+        let mut guard = None;
         if node_idx == 0 {
+            guard = Some(two_nodes_down.write().unwrap());
             let node2_idx = rng.gen_range(1..nodes.len());
             node2_id = nodes[node2_idx];
             info!("stop node {}", node2_id);
@@ -80,6 +86,7 @@ fn test_random_workload() {
         if node2_id > 0 {
             info!("start node {}", node2_id);
             cluster.start_node(node2_id, update_conf_fn);
+            guard = None;
         }
         sleep(Duration::from_secs(5));
         pd_client.set_gc_safe_point(ts.into_inner());
@@ -126,12 +133,14 @@ fn spawn_write(idx: usize, mut client: ClusterClient) -> JoinHandle<()> {
     })
 }
 
-fn spawn_move(scheduler: Scheduler) -> JoinHandle<()> {
+fn spawn_move(scheduler: Scheduler, two_node_down: Arc<RwLock<()>>) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let start_time = Instant::now();
         while start_time.saturating_elapsed() < TIMEOUT {
             sleep(Duration::from_millis(1000));
+            let guard = two_node_down.read().unwrap();
             scheduler.move_random_region();
+            drop(guard);
             MOVE_COUNTER.fetch_add(1, Ordering::SeqCst);
         }
         info!("move thread exit");
