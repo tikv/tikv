@@ -154,7 +154,7 @@ impl MiscExt for RocksEngine {
                 let rocks_ranges: Vec<_> = ranges
                     .iter()
                     .filter_map(|r| {
-                        if r.start_key == r.end_key {
+                        if r.start_key >= r.end_key {
                             None
                         } else {
                             Some(RocksRange::new(r.start_key, r.end_key))
@@ -174,7 +174,7 @@ impl MiscExt for RocksEngine {
                     let rocks_ranges: Vec<_> = ranges
                         .iter()
                         .filter_map(|r| {
-                            if r.start_key == r.end_key {
+                            if r.start_key >= r.end_key {
                                 None
                             } else {
                                 Some(RocksRange::new(r.start_key, r.end_key))
