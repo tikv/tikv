@@ -64,12 +64,14 @@ fn test_random_workload() {
         let node_id = nodes[node_idx];
         info!("stop node {}", node_id);
         cluster.stop_node(node_id);
+        info!("finish stop node {}", node_id);
         let mut node2_id = 0;
         if node_idx == 0 {
             let node2_idx = rng.gen_range(1..nodes.len());
             node2_id = nodes[node2_idx];
             info!("stop node {}", node2_id);
             cluster.stop_node(node2_id);
+            info!("finish stop node {}", node_id);
         }
         let sleep_sec = rng.gen_range(1..5);
         sleep(Duration::from_secs(sleep_sec));

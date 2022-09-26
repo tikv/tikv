@@ -93,15 +93,6 @@ pub(crate) struct WorkerHandle {
     handle: Option<JoinHandle<()>>,
 }
 
-impl Drop for WorkerHandle {
-    fn drop(&mut self) {
-        if let Some(handle) = self.handle.take() {
-            self.task_sender.send(Task::Close).unwrap();
-            handle.join().unwrap();
-        }
-    }
-}
-
 impl RfEngine {
     pub fn open(dir: &Path, wal_size: usize) -> Result<Self> {
         maybe_create_recycle_dir(dir)?;
@@ -329,7 +320,7 @@ impl RfEngine {
         });
     }
 
-    pub fn stop_worker(&mut self) {
+    pub fn stop_worker(&self) {
         let mut handle_ref = self.worker_handle.lock().unwrap();
         if let Some(h) = handle_ref.handle.take() {
             handle_ref.task_sender.send(Task::Close).unwrap();

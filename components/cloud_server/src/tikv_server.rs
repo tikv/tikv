@@ -837,6 +837,7 @@ impl TiKVServer {
         servers.lock_mgr.stop();
 
         self.to_stop.into_iter().for_each(|s| s.stop());
+        self.raw_engines.raft.stop_worker();
     }
 
     pub fn get_kv_engine(&self) -> kvengine::Engine {
