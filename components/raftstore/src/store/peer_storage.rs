@@ -30,7 +30,8 @@ use raft::{
     Error as RaftError, GetEntriesContext, RaftState, Ready, Storage, StorageError,
 };
 use tikv_util::{
-    box_err, box_try, debug, defer, error, info, time::Instant, warn, worker::Scheduler,
+    box_err, box_try, debug, defer, error, info, store::find_peer_by_id, time::Instant, warn,
+    worker::Scheduler,
 };
 
 use super::{metrics::*, worker::RegionTask, SnapEntry, SnapKey, SnapManager};
@@ -437,7 +438,7 @@ where
     /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no
     /// unavailable snapshot.
     pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
-        let peer = util::find_peer_by_id(&self.region, self.peer_id).unwrap();
+        let peer = find_peer_by_id(&self.region, self.peer_id).unwrap();
         if peer.is_witness {
             // witness could be the leader for a while, do not generate snapshot now
             return Err(raft::Error::Store(
@@ -445,7 +446,7 @@ where
             ));
         }
 
-        let for_witness = util::find_peer_by_id(&self.region, to).unwrap().is_witness;
+        let for_witness = find_peer_by_id(&self.region, to).unwrap().is_witness;
         if for_witness {
             // generate an empty snapshot for witness directly
             let mut snapshot = Snapshot::default();
@@ -1170,7 +1171,10 @@ pub mod tests {
         Error as RaftError, GetEntriesContext, StorageError,
     };
     use tempfile::{Builder, TempDir};
-    use tikv_util::worker::{dummy_scheduler, LazyWorker, Scheduler, Worker};
+    use tikv_util::{
+        store::{new_peer, new_witness_peer},
+        worker::{dummy_scheduler, LazyWorker, Scheduler, Worker},
+    };
 
     use super::*;
     use crate::{
@@ -1181,7 +1185,6 @@ pub mod tests {
             entry_storage::tests::validate_cache,
             fsm::apply::compact_raft_log,
             initial_region, prepare_bootstrap_cluster,
-            util::{new_peer, new_witness_peer},
             worker::{
                 make_region_worker_raftstore_cfg, FetchedLogs, LogFetchedNotifier,
                 RaftlogFetchRunner, RegionRunner, RegionTask,
@@ -1910,7 +1913,10 @@ pub mod tests {
         let mut s2 = new_storage(sched.clone(), dummy_scheduler.clone(), &td2);
         assert_eq!(s2.first_index(), Ok(s2.applied_index() + 1));
         let mut write_task = WriteTask::new(s2.get_region_id(), s2.peer_id, 1);
-        if let HandleReadyResult::Snapshot { snap_region, .. } = s2.apply_snapshot(&snap1, &mut write_task, vec![], vec![]).unwrap() {
+        if let HandleReadyResult::Snapshot { snap_region, .. } = s2
+            .apply_snapshot(&snap1, &mut write_task, vec![], vec![])
+            .unwrap()
+        {
             let mut snap_data = RaftSnapshotData::default();
             snap_data.merge_from_bytes(snap1.get_data()).unwrap();
             assert_eq!(snap_region, snap_data.take_region());
@@ -1928,7 +1934,10 @@ pub mod tests {
         let mut s3 = new_storage_from_ents(sched, dummy_scheduler, &td3, ents);
         validate_cache(&s3, &ents[1..]);
         let mut write_task = WriteTask::new(s3.get_region_id(), s3.peer_id, 1);
-        if let HandleReadyResult::Snapshot { snap_region, .. } = s3.apply_snapshot(&snap1, &mut write_task, vec![], vec![]).unwrap() {
+        if let HandleReadyResult::Snapshot { snap_region, .. } = s3
+            .apply_snapshot(&snap1, &mut write_task, vec![], vec![])
+            .unwrap()
+        {
             let mut snap_data = RaftSnapshotData::default();
             snap_data.merge_from_bytes(snap1.get_data()).unwrap();
             assert_eq!(snap_region, snap_data.take_region());

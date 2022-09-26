@@ -743,9 +743,11 @@ name = "causal_ts"
 version = "0.0.1"
 dependencies = [
  "api_version",
+ "async-trait",
  "criterion",
  "engine_rocks",
  "engine_traits",
+ "enum_dispatch",
  "error_code",
  "fail",
  "futures 0.3.15",
@@ -1592,6 +1594,18 @@ dependencies = [
  "panic_hook",
  "tempfile",
  "tikv_alloc",
+]
+
+[[package]]
+name = "enum_dispatch"
+version = "0.3.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0eb359f1476bf611266ac1f5355bc14aeca37b299d0ebccc038ee7058891c9cb"
+dependencies = [
+ "once_cell",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -5744,7 +5758,6 @@ dependencies = [
  "log_wrappers",
  "pd_client",
  "raft",
- "raftstore",
  "slog",
  "slog-global",
  "tikv_util",

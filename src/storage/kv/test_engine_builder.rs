@@ -5,7 +5,6 @@ use std::{
     sync::Arc,
 };
 
-use causal_ts::tests::DummyRawTsTracker;
 use engine_rocks::RocksCfOptions;
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use file_system::IoRateLimiter;
@@ -67,18 +66,6 @@ impl TestEngineBuilder {
         self
     }
 
-    /// Register causal observer for RawKV API V2.
-    // TODO: `RocksEngine` is coupling with RawKV features including GC (compaction
-    // filter) & CausalObserver. Consider decoupling them.
-    fn register_causal_observer(engine: &mut RocksEngine) {
-        let causal_ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
-        let causal_ob =
-            causal_ts::CausalObserver::new(causal_ts_provider, DummyRawTsTracker::default());
-        engine.register_observer(|host| {
-            causal_ob.register_to(host);
-        });
-    }
-
     /// Build a `RocksEngine`.
     pub fn build(self) -> Result<RocksEngine> {
         let cfg_rocksdb = crate::config::DbConfig::default();
@@ -123,13 +110,8 @@ impl TestEngineBuilder {
                 _ => (*cf, RocksCfOptions::default()),
             })
             .collect();
-        let mut engine =
+        let engine =
             RocksEngine::new(&path, None, cfs_opts, cache.is_some(), self.io_rate_limiter)?;
-
-        if let ApiVersion::V2 = api_version {
-            Self::register_causal_observer(&mut engine);
-        }
-
         Ok(engine)
     }
 }

@@ -1,23 +1,46 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::VecDeque, mem, sync::Arc};
+use std::{mem, sync::Arc};
 
+use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory};
-use kvproto::{metapb, raft_serverpb::RegionLocalState};
-use raft::{RawNode, StateRole, INVALID_ID};
-use raftstore::store::{
-    util::find_peer, Config, EntryStorage, ProposalQueue, RaftlogFetchTask, WriteRouter,
+use fail::fail_point;
+use kvproto::{
+    metapb,
+    raft_cmdpb::{self, RaftCmdRequest},
+    raft_serverpb::RegionLocalState,
 };
-use slog::{o, Logger};
-use tikv_util::{box_err, config::ReadableSize, worker::Scheduler};
+use protobuf::Message;
+use raft::{RawNode, StateRole, INVALID_ID};
+use raftstore::{
+    store::{
+        fsm::Proposal,
+        metrics::PEER_PROPOSE_LOG_SIZE_HISTOGRAM,
+        util::{Lease, RegionReadProgress},
+        Config, EntryStorage, ProposalQueue, RaftlogFetchTask, ReadIndexQueue, ReadIndexRequest,
+        Transport, WriteRouter,
+    },
+    Error,
+};
+use slog::{debug, error, info, o, warn, Logger};
+use tikv_util::{
+    box_err,
+    config::ReadableSize,
+    time::{monotonic_raw_now, Instant as TiInstant},
+    worker::Scheduler,
+    Either,
+};
 
 use super::storage::Storage;
 use crate::{
+    batch::StoreContext,
     operation::{AsyncWriter, DestroyProgress, SimpleWriteEncoder},
-    router::CmdResChannel,
+    router::{CmdResChannel, QueryResChannel},
     tablet::{self, CachedTablet},
     Result,
 };
+
+const REGION_READ_PROGRESS_CAP: usize = 128;
 
 /// A peer that delegates commands between state machine and raft.
 pub struct Peer<EK: KvEngine, ER: RaftEngine> {
@@ -41,6 +64,9 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     destroy_progress: DestroyProgress,
 
     pub(crate) logger: Logger,
+    pending_reads: ReadIndexQueue<QueryResChannel>,
+    read_progress: Arc<RegionReadProgress>,
+    leader_lease: Lease,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -96,6 +122,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         };
 
         let raft_group = RawNode::new(&raft_cfg, storage, &logger)?;
+        let region = raft_group.store().region_state().get_region().clone();
+        let tag = format!("[region {}] {}", region.get_id(), peer_id);
         let mut peer = Peer {
             tablet: CachedTablet::new(tablet),
             peer_cache: vec![],
@@ -106,6 +134,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             destroy_progress: DestroyProgress::None,
             raft_group,
             logger,
+            pending_reads: ReadIndexQueue::new(tag.clone()),
+            read_progress: Arc::new(RegionReadProgress::new(
+                &region,
+                applied_index,
+                REGION_READ_PROGRESS_CAP,
+                tag,
+            )),
+            leader_lease: Lease::new(
+                cfg.raft_store_max_leader_lease(),
+                cfg.renew_leader_lease_advance_duration(),
+            ),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -115,6 +154,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             && tablet_index != 0
         {
             peer.raft_group.campaign()?;
+            peer.set_has_ready();
         }
 
         Ok(peer)
@@ -146,8 +186,33 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
+    pub fn read_progress(&self) -> &Arc<RegionReadProgress> {
+        &self.read_progress
+    }
+
+    #[inline]
+    pub fn leader_lease(&self) -> &Lease {
+        &self.leader_lease
+    }
+
+    #[inline]
+    pub fn leader_lease_mut(&mut self) -> &mut Lease {
+        &mut self.leader_lease
+    }
+
+    #[inline]
     pub fn storage_mut(&mut self) -> &mut Storage<ER> {
         self.raft_group.mut_store()
+    }
+
+    #[inline]
+    pub fn pending_reads(&self) -> &ReadIndexQueue<QueryResChannel> {
+        &self.pending_reads
+    }
+
+    #[inline]
+    pub fn pending_reads_mut(&mut self) -> &mut ReadIndexQueue<QueryResChannel> {
+        &mut self.pending_reads
     }
 
     #[inline]
@@ -257,6 +322,29 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
+    // TODO
+    pub fn is_splitting(&self) -> bool {
+        false
+    }
+
+    #[inline]
+    // TODO
+    pub fn is_merging(&self) -> bool {
+        false
+    }
+
+    #[inline]
+    // TODO
+    pub fn has_force_leader(&self) -> bool {
+        false
+    }
+
+    #[inline]
+    // TODO
+    pub fn has_pending_merge_state(&self) -> bool {
+        false
+    }
+
     pub fn serving(&self) -> bool {
         matches!(self.destroy_progress, DestroyProgress::None)
     }
@@ -272,6 +360,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
+    pub(crate) fn has_applied_to_current_term(&self) -> bool {
+        self.entry_storage().applied_term() == self.term()
+    }
+
     pub fn raw_write_encoder_mut(&mut self) -> &mut Option<SimpleWriteEncoder> {
         &mut self.raw_write_encoder
     }

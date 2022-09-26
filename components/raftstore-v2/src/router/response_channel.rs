@@ -27,7 +27,10 @@ use std::{
 
 use engine_traits::Snapshot;
 use futures::task::AtomicWaker;
-use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, raft_cmdpb::RaftCmdResponse};
+use kvproto::{
+    kvrpcpb::ExtraOp as TxnExtraOp,
+    raft_cmdpb::{RaftCmdResponse, Response},
+};
 use raftstore::store::{
     local_metrics::TimeTracker, msg::ErrorCallback, region_meta::RegionMeta, ReadCallback,
     RegionSnapshot, WriteCallback,
@@ -342,7 +345,17 @@ impl WriteCallback for CmdResChannel {
 /// need to be a field of the struct.
 #[derive(Clone, PartialEq, Debug)]
 pub struct ReadResponse {
+    pub read_index: u64,
     pub txn_extra_op: TxnExtraOp,
+}
+
+impl ReadResponse {
+    pub fn new(read_index: u64) -> Self {
+        ReadResponse {
+            read_index,
+            txn_extra_op: TxnExtraOp::Noop,
+        }
+    }
 }
 
 /// Possible result of a raft query.
@@ -401,6 +414,12 @@ impl ReadCallback for QueryResChannel {
 
 pub type QueryResSubscriber = BaseSubscriber<QueryResult>;
 
+impl fmt::Debug for QueryResChannel {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(fmt, "QueryResChannel")
+    }
+}
+
 pub type DebugInfoChannel = BaseChannel<RegionMeta>;
 pub type DebugInfoSubscriber = BaseSubscriber<RegionMeta>;
 
@@ -452,6 +471,7 @@ mod tests {
 
         let (mut chan, mut sub) = QueryResChannel::pair();
         let read = QueryResult::Read(ReadResponse {
+            read_index: 0,
             txn_extra_op: TxnExtraOp::ReadOldValue,
         });
         chan.set_result(read.clone());

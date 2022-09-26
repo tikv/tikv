@@ -25,6 +25,7 @@ use tikv_util::{
     codec::number::decode_u64,
     debug, error,
     lru::LruCache,
+    store::find_peer_by_id,
     time::{monotonic_raw_now, ThreadReadId},
 };
 use time::Timespec;
@@ -710,7 +711,7 @@ where
         }
 
         // Check witness
-        if util::find_peer_by_id(&delegate.region, delegate.peer_id)
+        if find_peer_by_id(&delegate.region, delegate.peer_id)
             .unwrap()
             .is_witness
         {

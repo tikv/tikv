@@ -9,7 +9,7 @@ use std::{
 };
 
 use api_version::{dispatch_api_version, KvFormat};
-use causal_ts::{tests::DummyRawTsTracker, CausalTsProvider};
+use causal_ts::CausalTsProviderImpl;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
@@ -155,7 +155,7 @@ pub struct ServerCluster {
     raft_client: RaftClient<AddressMap, RaftStoreBlackHole, RocksEngine>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     env: Arc<Environment>,
-    pub causal_ts_providers: HashMap<u64, Arc<dyn CausalTsProvider>>,
+    pub causal_ts_providers: HashMap<u64, Arc<CausalTsProviderImpl>>,
 }
 
 impl ServerCluster {
@@ -226,7 +226,7 @@ impl ServerCluster {
         self.concurrency_managers.get(&node_id).unwrap().clone()
     }
 
-    pub fn get_causal_ts_provider(&self, node_id: u64) -> Option<Arc<dyn CausalTsProvider>> {
+    pub fn get_causal_ts_provider(&self, node_id: u64) -> Option<Arc<CausalTsProviderImpl>> {
         self.causal_ts_providers.get(&node_id).cloned()
     }
 
@@ -370,7 +370,7 @@ impl ServerCluster {
         };
 
         if ApiVersion::V2 == F::TAG {
-            let causal_ts_provider = Arc::new(
+            let causal_ts_provider: Arc<CausalTsProviderImpl> = Arc::new(
                 block_on(causal_ts::BatchTsoProvider::new_opt(
                     self.pd_client.clone(),
                     cfg.causal_ts.renew_interval.0,
@@ -378,12 +378,12 @@ impl ServerCluster {
                     cfg.causal_ts.renew_batch_min_size,
                     cfg.causal_ts.renew_batch_max_size,
                 ))
-                .unwrap(),
+                .unwrap()
+                .into(),
             );
             self.causal_ts_providers
                 .insert(node_id, causal_ts_provider.clone());
-            let causal_ob =
-                causal_ts::CausalObserver::new(causal_ts_provider, DummyRawTsTracker::default());
+            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
             causal_ob.register_to(&mut coprocessor_host);
         }
 
@@ -418,6 +418,7 @@ impl ServerCluster {
             res_tag_factory.clone(),
             quota_limiter.clone(),
             self.pd_client.feature_gate().clone(),
+            self.get_causal_ts_provider(node_id),
         )?;
         self.storages.insert(node_id, raft_engine);
 
