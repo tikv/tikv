@@ -382,16 +382,21 @@ impl Applier {
         start_ts: u64,
         delete_lock: bool,
     ) {
-        let rollback_key = mvcc::encode_extra_txn_status_key(key, start_ts);
-        let user_meta = &mvcc::UserMeta::new(start_ts, 0).to_array()[..];
-        wb.put(
-            mvcc::EXTRA_CF,
-            rollback_key.chunk(),
-            &[0],
-            0,
-            user_meta,
-            start_ts,
-        );
+        if start_ts == 0 {
+            // start_ts == 0 means delete_lock only.
+            assert!(delete_lock);
+        } else {
+            let rollback_key = mvcc::encode_extra_txn_status_key(key, start_ts);
+            let user_meta = &mvcc::UserMeta::new(start_ts, 0).to_array()[..];
+            wb.put(
+                mvcc::EXTRA_CF,
+                rollback_key.chunk(),
+                &[0],
+                0,
+                user_meta,
+                start_ts,
+            );
+        }
         if delete_lock {
             wb.delete(mvcc::LOCK_CF, key, 0);
             self.lock_cache.remove(key);

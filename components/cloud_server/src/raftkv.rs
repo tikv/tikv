@@ -754,7 +754,12 @@ fn build_rollback(builder: &mut CustomBuilder, mut modifies: Vec<Modify>) {
             _ => unreachable!("unexpected modify: {:?}", m),
         }
     }
-    assert!(deleted_locks.is_empty());
+    // Non-pessimistic lock in a pessimistic transaction doesn't check write and rollback record
+    // during prewrite, so rollback record and lock may both exist. In this case, we delete the lock only.
+    for delete_only in deleted_locks {
+        let raw_key = delete_only.into_raw().unwrap();
+        builder.append_rollback(&raw_key, 0, true);
+    }
 }
 
 fn build_check_txn_status(builder: &mut CustomBuilder, modifies: Vec<Modify>) {

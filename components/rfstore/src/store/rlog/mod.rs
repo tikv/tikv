@@ -235,6 +235,7 @@ impl CustomBuilder {
         self.cnt += 1;
     }
 
+    // start_ts == 0 means delete_lock only.
     pub fn append_rollback(&mut self, key: &[u8], start_ts: u64, delete_lock: bool) {
         self.buf.put_u16_le(key.len() as u16);
         self.buf.extend_from_slice(key);
