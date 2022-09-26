@@ -3,7 +3,7 @@
 use std::{
     sync::{
         atomic::{AtomicU16, AtomicUsize, Ordering},
-        Arc, Mutex, RwLock,
+        Arc, RwLock,
     },
     thread::{sleep, JoinHandle},
     time::Duration,
@@ -70,9 +70,9 @@ fn test_random_workload() {
         cluster.stop_node(node_id);
         info!("finish stop node {}", node_id);
         let mut node2_id = 0;
-        let mut guard = None;
+        let mut _guard = None;
         if node_idx == 0 {
-            guard = Some(two_nodes_down.write().unwrap());
+            _guard = Some(two_nodes_down.write().unwrap());
             let node2_idx = rng.gen_range(1..nodes.len());
             node2_id = nodes[node2_idx];
             info!("stop node {}", node2_id);
@@ -86,7 +86,7 @@ fn test_random_workload() {
         if node2_id > 0 {
             info!("start node {}", node2_id);
             cluster.start_node(node2_id, update_conf_fn);
-            guard = None;
+            _guard = None;
         }
         sleep(Duration::from_secs(5));
         pd_client.set_gc_safe_point(ts.into_inner());

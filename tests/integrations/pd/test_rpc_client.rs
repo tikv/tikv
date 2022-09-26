@@ -506,8 +506,10 @@ fn test_pd_client_heartbeat_send_failed() {
         .build()
         .unwrap();
     let (tx, rx) = mpsc::channel();
-    let f =
-        client.handle_region_heartbeat_response(1, move |resp| tx.send(resp).unwrap_or_default());
+    let f = client.handle_region_heartbeat_response(
+        1,
+        Box::new(move |resp| tx.send(resp).unwrap_or_default()),
+    );
     poller.spawn(f);
 
     let heartbeat_send_fail = |ok| {

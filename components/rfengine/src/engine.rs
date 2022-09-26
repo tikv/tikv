@@ -601,7 +601,7 @@ mod tests {
         init_logger();
         let tmp_dir = tempfile::tempdir().unwrap();
         let wal_size = 128 * 1024_usize;
-        let mut engine = RfEngine::open(tmp_dir.path(), wal_size).unwrap();
+        let engine = RfEngine::open(tmp_dir.path(), wal_size).unwrap();
         let mut wb = WriteBatch::new();
         for region_id in 1..=10_u64 {
             let (key, val) = make_state_kv(2, 1);
@@ -1006,7 +1006,7 @@ mod tests {
         let tmp_dir = tempfile::tempdir().unwrap();
         let wal_size = 128 * 1024_usize;
         let dir_path = tmp_dir.path();
-        let mut engine = RfEngine::open(dir_path, wal_size).unwrap();
+        let engine = RfEngine::open(dir_path, wal_size).unwrap();
         let mut wb = WriteBatch::new();
         for region_id in 1..=10_u64 {
             let (key, val) = make_state_kv(2, 1);
@@ -1025,7 +1025,7 @@ mod tests {
         assert_eq!(engine.regions.len(), 10);
         engine.stop_worker();
         for _ in 0..2 {
-            let mut engine = RfEngine::open(dir_path, wal_size).unwrap();
+            let engine = RfEngine::open(dir_path, wal_size).unwrap();
             assert_eq!(engine.regions.len(), 10);
             engine.stop_worker();
         }
