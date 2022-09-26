@@ -656,28 +656,6 @@ lazy_static! {
             "Pending read index count."
         ).unwrap();
 
-    pub static ref APPLY_PERF_CONTEXT_TIME_HISTOGRAM: HistogramVec =
-        register_histogram_vec!(
-            "tikv_raftstore_apply_perf_context_time_duration_secs",
-            "Bucketed histogram of request wait time duration.",
-            &["type"],
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
-        ).unwrap();
-
-    pub static ref STORE_PERF_CONTEXT_TIME_HISTOGRAM: HistogramVec =
-        register_histogram_vec!(
-            "tikv_raftstore_store_perf_context_time_duration_secs",
-            "Bucketed histogram of request wait time duration.",
-            &["type"],
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
-        ).unwrap();
-
-    pub static ref APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC: PerfContextTimeDuration=
-        auto_flush_from!(APPLY_PERF_CONTEXT_TIME_HISTOGRAM, PerfContextTimeDuration);
-
-    pub static ref STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC: PerfContextTimeDuration=
-        auto_flush_from!(STORE_PERF_CONTEXT_TIME_HISTOGRAM, PerfContextTimeDuration);
-
     pub static ref READ_QPS_TOPN: GaugeVec =
         register_gauge_vec!(
             "tikv_read_qps_topn",
@@ -778,4 +756,10 @@ lazy_static! {
         "Sum of applying sst.",
         &["type"]
     ).unwrap();
+
+    pub static ref SNAPSHOT_LIMIT_GENERATE_BYTES: IntCounter = register_int_counter!(
+        "tikv_snapshot_limit_generate_bytes",
+        "Total snapshot generate limit used",
+    )
+    .unwrap();
 }
