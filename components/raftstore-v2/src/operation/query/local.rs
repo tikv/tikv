@@ -116,6 +116,8 @@ where
                         region,
                     );
 
+                    TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_requests.inc());
+
                     // Try renew lease in advance
                     self.maybe_renew_lease_in_advance(&delegate, &req, snapshot_ts);
                     Ok(Some(snap))
@@ -129,6 +131,8 @@ where
                         delegate.get_snapshot(None, &mut None),
                         region,
                     );
+
+                    TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_requests.inc());
 
                     delegate.check_stale_read_safe(read_ts)?;
 
@@ -227,7 +231,14 @@ where
         TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().renew_lease_advance.inc());
         // Send a read query which may renew the lease
         let (msg, sub) = PeerMsg::raft_query(req.clone());
-        let _ = MsgRouter::send(&self.router, region_id, msg);
+        if let Err(e) = MsgRouter::send(&self.router, region_id, msg) {
+            debug!(
+                self.logger,
+                "failed to send query for trying to renew lease";
+                "region" => region_id,
+                "error" => ?e
+            )
+        }
     }
 }
 

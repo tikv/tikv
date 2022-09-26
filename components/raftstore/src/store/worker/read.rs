@@ -540,8 +540,6 @@ where
 {
     pub store_id: Cell<Option<u64>>,
     store_meta: S,
-    // region id -> ReadDelegate
-    // The use of `Arc` here is a workaround, see the comment at `get_delegate`
     pub delegates: LruCache<u64, D>,
 }
 
