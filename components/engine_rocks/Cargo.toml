@@ -55,7 +55,8 @@ tracker = { path = "../tracker" }
 txn_types = { path = "../txn_types", default-features = false }
 
 [dependencies.rocksdb]
-git = "https://github.com/tikv/rust-rocksdb.git"
+git = "https://github.com/tabokie/rust-rocksdb.git"
+branch = "220926-fix-delete-ranges"
 package = "rocksdb"
 features = ["encryption"]
 
