@@ -164,13 +164,7 @@ mod tests {
         let key = b"rk";
 
         let encoded_key = F::encode_raw_key(key, None);
-        let ts_provider = if F::TAG == kvproto::kvrpcpb::ApiVersion::V2 {
-            let test_provider: causal_ts::CausalTsProviderImpl =
-                causal_ts::tests::TestProvider::default().into();
-            Some(Arc::new(test_provider))
-        } else {
-            None
-        };
+        let ts_provider = super::super::test_util::gen_ts_provider(F::TAG);
 
         let cmd = RawCompareAndSwap::new(
             CF_DEFAULT,
@@ -252,13 +246,7 @@ mod tests {
     }
 
     fn test_cas_process_write_impl<F: KvFormat>() {
-        let ts_provider = if F::TAG == kvproto::kvrpcpb::ApiVersion::V2 {
-            let test_provider: causal_ts::CausalTsProviderImpl =
-                causal_ts::tests::TestProvider::default().into();
-            Some(Arc::new(test_provider))
-        } else {
-            None
-        };
+        let ts_provider = super::super::test_util::gen_ts_provider(F::TAG);
         let engine = TestEngineBuilder::new().build().unwrap();
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
         let raw_key = b"rk";

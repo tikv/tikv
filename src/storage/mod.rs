@@ -1847,8 +1847,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         }
     }
 
-    async fn check_causal_ts_synced(ctx: &mut Context, api_version: ApiVersion) -> Result<()> {
-        if api_version == ApiVersion::V2 {
+    async fn check_causal_ts_synced(ctx: &mut Context) -> Result<()> {
+        if F::TAG == ApiVersion::V2 {
             let snap_ctx = SnapContext {
                 pb_ctx: ctx,
                 ..Default::default()
@@ -1902,7 +1902,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             }
             let command_duration = tikv_util::time::Instant::now();
 
-            if let Err(e) = Self::check_causal_ts_synced(&mut ctx, api_version).await {
+            if let Err(e) = Self::check_causal_ts_synced(&mut ctx).await {
                 return callback(Err(e));
             }
 
@@ -2015,7 +2015,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             }
             let command_duration = tikv_util::time::Instant::now();
 
-            if let Err(e) = Self::check_causal_ts_synced(&mut ctx, api_version).await {
+            if let Err(e) = Self::check_causal_ts_synced(&mut ctx).await {
                 return callback(Err(e));
             }
 
@@ -2081,7 +2081,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             }
             let command_duration = tikv_util::time::Instant::now();
 
-            if let Err(e) = Self::check_causal_ts_synced(&mut ctx, api_version).await {
+            if let Err(e) = Self::check_causal_ts_synced(&mut ctx).await {
                 return callback(Err(e));
             }
 
@@ -2191,7 +2191,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             }
             let command_duration = tikv_util::time::Instant::now();
 
-            if let Err(e) = Self::check_causal_ts_synced(&mut ctx, api_version).await {
+            if let Err(e) = Self::check_causal_ts_synced(&mut ctx).await {
                 return callback(Err(e));
             }
 

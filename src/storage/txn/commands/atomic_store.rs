@@ -61,11 +61,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
         let lock_guard = block_on(get_raw_key_guard(&provider, concurrency_manager)).map_err(
             |err: StorageError| ErrorInner::Other(box_err!("failed to key guard: {:?}", err)),
         )?;
-        let lock_guards = if let Some(lock_guard) = lock_guard {
-            vec![lock_guard]
-        } else {
-            vec![]
-        };
         let ts = block_on(get_causal_ts(&provider)).map_err(|err: StorageError| {
             ErrorInner::Other(box_err!("failed to get casual ts: {:?}", err))
         })?;
@@ -87,7 +82,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
             rows,
             pr: ProcessResult::Res,
             lock_info: None,
-            lock_guards,
+            lock_guards: lock_guard.into_iter().collect(),
             response_policy: ResponsePolicy::OnApplied,
         })
     }
@@ -113,13 +108,9 @@ mod tests {
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
         let raw_keys = vec![b"ra", b"rz"];
         let raw_values = vec![b"valuea", b"valuez"];
-        let ts_provider = if F::TAG == kvproto::kvrpcpb::ApiVersion::V2 {
-            let test_provider: causal_ts::CausalTsProviderImpl =
-                causal_ts::tests::TestProvider::default().into();
-            Some(Arc::new(test_provider))
-        } else {
-            None
-        };
+
+        let ts_provider = super::super::test_util::gen_ts_provider(F::TAG);
+
         let mut modifies = vec![];
         for i in 0..raw_keys.len() {
             let raw_value = RawValue {
