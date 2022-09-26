@@ -98,7 +98,8 @@ pub(crate) fn read_epoches(dir: &Path) -> Result<Vec<Epoch>> {
 impl RfEngine {
     pub(crate) fn load_epoch(&mut self, ep: &mut Epoch, prev_has_state_file: bool) -> Result<u64> {
         info!(
-            "load epoch {}, rlog files {}, has_wal {}, has_state {}",
+            "{}: load epoch {}, rlog files {}, has_wal {}, has_state {}",
+            self.get_engine_id(),
             ep.id,
             ep.raft_log_files.lock().unwrap().len(),
             ep.has_wal_file,

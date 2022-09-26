@@ -6,6 +6,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, BufMut, Bytes};
 use protobuf::ProtobufEnum;
 use raft_proto::eraftpb;
+use slog_global::info;
 
 /// `RaftLogOp` is identical to `eraftpb::Entry`. It implements custom
 /// serialization/deserialization for better performance than protobuf.
@@ -178,6 +179,14 @@ impl RaftLogs {
         match op_idx.cmp(&next_idx) {
             Ordering::Greater => {
                 // There is gap between existing logs and next log, clear all.
+                if self.last_index() != 0 {
+                    info!(
+                        "log gap exists, first: {}, last: {}, append: {}",
+                        self.first_index(),
+                        self.last_index(),
+                        op_idx
+                    );
+                }
                 truncated_blocks.extend(self.blocks.drain(..));
             }
             Ordering::Less => {

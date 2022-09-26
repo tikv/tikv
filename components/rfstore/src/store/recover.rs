@@ -13,8 +13,9 @@ use slog_global::info;
 use tikv_util::warn;
 
 use crate::store::{
-    parse_region_state_key, raft_state_key, rlog, Applier, ApplyContext, PeerTag, RaftApplyState,
-    RaftState, RegionIDVer, KV_ENGINE_META_KEY, REGION_META_KEY_BYTE, STORE_IDENT_KEY, TERM_KEY,
+    load_raft_truncated_state, parse_region_state_key, raft_state_key, rlog, Applier, ApplyContext,
+    PeerTag, RaftApplyState, RaftState, RegionIDVer, KV_ENGINE_META_KEY, REGION_META_KEY_BYTE,
+    STORE_IDENT_KEY, TERM_KEY,
 };
 
 #[derive(Clone)]
@@ -144,11 +145,13 @@ impl kvengine::RecoverHandler for RecoverHandler {
             .fetch_entries_to(shard.id, low_idx, high_idx, None, &mut entries)
             .map_err(|e| {
                 let stats = self.rf_engine.get_region_stats(shard.id);
+                let truncated_state = load_raft_truncated_state(&self.rf_engine, shard.id);
                 let err_msg = format!(
-                    "{} entries unavailable err: {:?}, stats {:?}, low: {}, high {}",
+                    "{} entries unavailable err: {:?}, stats {:?}, truncated_state: {:?}, low: {}, high {}",
                     shard.tag(),
                     e,
                     stats,
+                    truncated_state,
                     low_idx,
                     high_idx
                 );
