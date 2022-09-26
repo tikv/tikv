@@ -41,12 +41,12 @@ pub enum Error {
     InvalidRequest(String),
     ParseError(String),
     SearchError(String),
-    IOError(std::io::Error),
+    IoError(std::io::Error),
 }
 
 impl From<std::io::Error> for Error {
     fn from(err: std::io::Error) -> Self {
-        Error::IOError(err)
+        Error::IoError(err)
     }
 }
 

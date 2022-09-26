@@ -202,7 +202,9 @@ mod tests {
         util::new_engine_opt,
         RocksCfOptions, RocksDbOptions, RocksEngine, RocksSstPartitionerFactory, RocksSstReader,
     };
-    use engine_traits::{CompactExt, Iterator, MiscExt, SstReader, SyncMutable, CF_DEFAULT};
+    use engine_traits::{
+        CompactExt, IterOptions, Iterator, MiscExt, RefIterable, SstReader, SyncMutable, CF_DEFAULT,
+    };
     use keys::DATA_PREFIX_KEY;
     use kvproto::metapb::Region;
     use tempfile::TempDir;
@@ -399,7 +401,8 @@ mod tests {
     }
 
     fn collect_keys(path: &str) -> Vec<Vec<u8>> {
-        let mut sst_reader = RocksSstReader::open(path).unwrap().iter();
+        let reader = RocksSstReader::open(path).unwrap();
+        let mut sst_reader = reader.iter(IterOptions::default()).unwrap();
         let mut valid = sst_reader.seek_to_first().unwrap();
         let mut ret = vec![];
         while valid {
@@ -444,14 +447,14 @@ mod tests {
         db.put(b"za1", b"").unwrap();
         db.put(b"zb1", &value).unwrap();
         db.put(b"zc1", &value).unwrap();
-        db.flush(true /* sync */).unwrap();
+        db.flush_cfs(true /* wait */).unwrap();
         db.put(b"zb2", &value).unwrap();
         db.put(b"zc2", &value).unwrap();
         db.put(b"zc3", &value).unwrap();
         db.put(b"zc4", &value).unwrap();
         db.put(b"zc5", &value).unwrap();
         db.put(b"zc6", &value).unwrap();
-        db.flush(true /* sync */).unwrap();
+        db.flush_cfs(true /* wait */).unwrap();
         db.compact_range(
             CF_DEFAULT, None,  // start_key
             None,  // end_key

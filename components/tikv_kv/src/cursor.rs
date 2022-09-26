@@ -647,10 +647,8 @@ mod tests {
             iter.seek(&Key::from_encoded_slice(b"a3"), &mut statistics)
                 .unwrap()
         );
-        assert!(
-            iter.seek(&Key::from_encoded_slice(b"a9"), &mut statistics)
-                .is_err()
-        );
+        iter.seek(&Key::from_encoded_slice(b"a9"), &mut statistics)
+            .unwrap_err();
 
         assert!(
             !iter
@@ -661,10 +659,8 @@ mod tests {
             iter.seek_for_prev(&Key::from_encoded_slice(b"a3"), &mut statistics)
                 .unwrap()
         );
-        assert!(
-            iter.seek_for_prev(&Key::from_encoded_slice(b"a1"), &mut statistics)
-                .is_err()
-        );
+        iter.seek_for_prev(&Key::from_encoded_slice(b"a1"), &mut statistics)
+            .unwrap_err();
     }
 
     #[test]
@@ -705,14 +701,10 @@ mod tests {
                 .reverse_seek(&Key::from_encoded_slice(b"a3"), &mut statistics)
                 .unwrap()
         );
-        assert!(
-            iter.reverse_seek(&Key::from_encoded_slice(b"a1"), &mut statistics)
-                .is_err()
-        );
-        assert!(
-            iter.reverse_seek(&Key::from_encoded_slice(b"a8"), &mut statistics)
-                .is_err()
-        );
+        iter.reverse_seek(&Key::from_encoded_slice(b"a1"), &mut statistics)
+            .unwrap_err();
+        iter.reverse_seek(&Key::from_encoded_slice(b"a8"), &mut statistics)
+            .unwrap_err();
 
         assert!(iter.seek_to_last(&mut statistics));
         let mut res = vec![];

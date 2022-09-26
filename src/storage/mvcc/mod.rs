@@ -488,7 +488,7 @@ pub mod tests {
         if check_lock(&mut reader, key, ts).is_err() {
             return;
         }
-        assert!(reader.get(key, ts).is_err());
+        reader.get(key, ts).unwrap_err();
     }
 
     pub fn must_locked<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) -> Lock {

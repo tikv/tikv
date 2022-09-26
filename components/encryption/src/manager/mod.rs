@@ -194,7 +194,11 @@ impl Dicts {
 
     fn new_file(&self, fname: &str, method: EncryptionMethod) -> Result<FileInfo> {
         let mut file_dict_file = self.file_dict_file.lock().unwrap();
-        let iv = Iv::new_ctr();
+        let iv = if method != EncryptionMethod::Plaintext {
+            Iv::new_ctr()
+        } else {
+            Iv::Empty
+        };
         let file = FileInfo {
             iv: iv.as_slice().to_vec(),
             key_id: self.current_key_id.load(Ordering::SeqCst),
@@ -494,7 +498,7 @@ impl DataKeyManager {
             Dicts::open(
                 &args.dict_path,
                 args.rotation_period,
-                &*master_key,
+                master_key,
                 args.enable_file_dictionary_log,
                 args.file_dictionary_rewrite_threshold,
             ),
@@ -560,7 +564,7 @@ impl DataKeyManager {
             ))
         })?;
         // Rewrite key_dict after replace master key.
-        dicts.save_key_dict(&*master_key)?;
+        dicts.save_key_dict(master_key)?;
 
         info!("encryption: persisted result after replace master key.");
         Ok(dicts)
@@ -1334,6 +1338,114 @@ mod tests {
             let mut f = manager.open_file_for_read(&path).unwrap();
             assert_eq!(f.read_to_string(&mut buffer).unwrap(), content.len());
             assert_eq!(buffer, content);
+        }
+    }
+
+    fn generate_mock_file<P: AsRef<Path>>(dkm: Option<&DataKeyManager>, path: P, content: &String) {
+        use std::io::Write;
+        match dkm {
+            Some(manager) => {
+                // Encryption enabled. Use DataKeyManager to manage file.
+                let mut f = manager.create_file_for_write(&path).unwrap();
+                f.write_all(content.as_bytes()).unwrap();
+                f.sync_all().unwrap();
+            }
+            None => {
+                // Encryption disabled. Write content in plaintext.
+                let mut f = File::create(&path).unwrap();
+                f.write_all(content.as_bytes()).unwrap();
+                f.sync_all().unwrap();
+            }
+        }
+    }
+
+    fn check_mock_file_content<P: AsRef<Path>>(
+        dkm: Option<&DataKeyManager>,
+        path: P,
+        expected: &String,
+    ) {
+        use std::io::Read;
+
+        match dkm {
+            Some(manager) => {
+                let mut buffer = String::new();
+                let mut f = manager.open_file_for_read(&path).unwrap();
+                assert_eq!(f.read_to_string(&mut buffer).unwrap(), expected.len());
+                assert_eq!(buffer, expected.to_string());
+            }
+            None => {
+                let mut buffer = String::new();
+                let mut f = File::open(&path).unwrap();
+                assert_eq!(f.read_to_string(&mut buffer).unwrap(), expected.len());
+                assert_eq!(buffer, expected.to_string());
+            }
+        }
+    }
+
+    fn test_change_method(from: EncryptionMethod, to: EncryptionMethod) {
+        if from == to {
+            return;
+        }
+
+        let generate_file_name = |method| format!("{:?}", method);
+        let generate_file_content = |method| format!("Encrypted with {:?}", method);
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let (key_path, _tmp_key_dir) = create_key_file("key");
+        let master_key_backend =
+            Box::new(FileBackend::new(key_path.as_path()).unwrap()) as Box<dyn Backend>;
+        let previous = new_mock_backend() as Box<dyn Backend>;
+        let path_to_file1 = tmp_dir.path().join(generate_file_name(from));
+        let content1 = generate_file_content(from);
+
+        if from == EncryptionMethod::Plaintext {
+            // encryption not enabled.
+            let mut args = def_data_key_args(&tmp_dir);
+            args.method = EncryptionMethod::Plaintext;
+            let manager =
+                DataKeyManager::new(master_key_backend, Box::new(move || Ok(previous)), args)
+                    .unwrap();
+            assert!(manager.is_none());
+            generate_mock_file(None, &path_to_file1, &content1);
+            check_mock_file_content(None, &path_to_file1, &content1);
+        } else {
+            let manager =
+                new_key_manager(&tmp_dir, Some(from), master_key_backend, previous).unwrap();
+
+            generate_mock_file(Some(&manager), &path_to_file1, &content1);
+            check_mock_file_content(Some(&manager), &path_to_file1, &content1);
+            // Close old manager
+            drop(manager);
+        }
+
+        // re-open with new encryption/plaintext algorithm.
+        let master_key_backend =
+            Box::new(FileBackend::new(key_path.as_path()).unwrap()) as Box<dyn Backend>;
+        let previous = new_mock_backend() as Box<dyn Backend>;
+        let manager = new_key_manager(&tmp_dir, Some(to), master_key_backend, previous).unwrap();
+        let path_to_file2 = tmp_dir.path().join(generate_file_name(to));
+
+        let content2 = generate_file_content(to);
+        generate_mock_file(Some(&manager), &path_to_file2, &content2);
+        check_mock_file_content(Some(&manager), &path_to_file2, &content2);
+        // check old file content
+        check_mock_file_content(Some(&manager), &path_to_file1, &content1);
+    }
+
+    #[test]
+    fn test_encryption_algorithm_switch() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
+
+        let method_list = [
+            EncryptionMethod::Plaintext,
+            EncryptionMethod::Aes128Ctr,
+            EncryptionMethod::Aes192Ctr,
+            EncryptionMethod::Aes256Ctr,
+            EncryptionMethod::Sm4Ctr,
+        ];
+        for from in method_list {
+            for to in method_list {
+                test_change_method(from, to)
+            }
         }
     }
 }

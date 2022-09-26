@@ -178,7 +178,7 @@ impl PessimisticLockKeyResult {
     pub fn unwrap_value(self) -> Option<Value> {
         match self {
             Self::Value(v) => v,
-            x @ _ => panic!(
+            x => panic!(
                 "pessimistic lock key result expected to be a value, got {:?}",
                 x
             ),
@@ -188,7 +188,7 @@ impl PessimisticLockKeyResult {
     pub fn unwrap_existence(self) -> bool {
         match self {
             Self::Existence(e) => e,
-            x @ _ => panic!(
+            x => panic!(
                 "pessimistic lock key result expected to be existence, got {:?}",
                 x
             ),
@@ -231,10 +231,7 @@ impl PessimisticLockKeyResult {
         match self {
             Self::LockedWithConflict { value, conflict_ts }
                 if value.as_ref().map(|v| v.as_slice()) == expected_value
-                    && *conflict_ts == expected_conflict_ts =>
-            {
-                ()
-            }
+                    && *conflict_ts == expected_conflict_ts => {}
             x => panic!(
                 "pessimistic lock key result not match, expected LockedWithConflict{{ value: {:?}, conflict_ts: {} }}, got {:?}",
                 expected_value, expected_conflict_ts, x

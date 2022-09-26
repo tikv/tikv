@@ -151,8 +151,8 @@ impl RowSlice<'_> {
     #[inline]
     pub fn origin(&self) -> &[u8] {
         match self {
-            RowSlice::Big { origin, .. } => *origin,
-            RowSlice::Small { origin, .. } => *origin,
+            RowSlice::Big { origin, .. } => origin,
+            RowSlice::Small { origin, .. } => origin,
         }
     }
 

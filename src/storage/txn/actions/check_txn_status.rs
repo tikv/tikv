@@ -213,7 +213,7 @@ pub fn make_rollback(
     }
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum MissingLockAction {
     Rollback,
     ProtectedRollback,

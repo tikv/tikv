@@ -107,6 +107,8 @@ pub fn commit<S: Snapshot>(
 pub mod tests {
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
+    #[cfg(test)]
+    use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
     use txn_types::TimeStamp;
 
     use super::*;
@@ -151,7 +153,7 @@ pub mod tests {
         let cm = ConcurrencyManager::new(start_ts);
         let mut txn = MvccTxn::new(start_ts, cm);
         let mut reader = SnapshotReader::new(start_ts, snapshot, true);
-        assert!(commit(&mut txn, &mut reader, Key::from_raw(key), commit_ts.into()).is_err());
+        commit(&mut txn, &mut reader, Key::from_raw(key), commit_ts.into()).unwrap_err();
     }
 
     #[cfg(test)]
@@ -275,7 +277,7 @@ pub mod tests {
             k,
             &None,
             ts(60, 0),
-            true,
+            DoPessimisticCheck,
             50,
             ts(60, 0),
             1,

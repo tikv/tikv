@@ -22,7 +22,6 @@ use futures::{
 };
 use kvproto::{deadlock::WaitForEntry, metapb::RegionEpoch};
 use log_wrappers;
-use prometheus::HistogramTimer;
 use raft::StateRole;
 use raftstore::coprocessor::{
     BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
@@ -30,10 +29,12 @@ use raftstore::coprocessor::{
 };
 use tikv_util::{
     config::ReadableDuration,
+    time::{duration_to_sec, InstantExt},
     timer::GLOBAL_TIMER_HANDLE,
     worker::{FutureRunnable, FutureScheduler, Stopped},
 };
 use tokio::task::spawn_local;
+use tracker::GLOBAL_TRACKERS;
 use txn_types::Key;
 
 use super::{config::Config, deadlock::Scheduler as DetectorScheduler, metrics::*};
@@ -134,6 +135,7 @@ pub enum Task {
         timeout: WaitTimeout,
         cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
         diag_ctx: DiagnosticContext,
+        start_waiting_time: Instant,
     },
     RecordLegacyWakingUpKeys {
         events: Vec<KeyWakeUpEvent>,
@@ -257,7 +259,7 @@ pub(crate) struct Waiter {
     pub(crate) cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
     pub diag_ctx: DiagnosticContext,
     delay: Delay,
-    _lifetime_timer: HistogramTimer,
+    start_waiting_time: Instant,
 }
 
 impl Waiter {
@@ -270,6 +272,7 @@ impl Waiter {
         cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
         deadline: Instant,
         diag_ctx: DiagnosticContext,
+        start_waiting_time: Instant,
     ) -> Self {
         Self {
             region_id,
@@ -280,7 +283,7 @@ impl Waiter {
             cancel_callback,
             delay: Delay::new(deadline),
             diag_ctx,
-            _lifetime_timer: WAITER_LIFETIME_HISTOGRAM.start_coarse_timer(),
+            start_waiting_time,
         }
     }
 
@@ -304,6 +307,11 @@ impl Waiter {
     /// `Notify` consumes the `Waiter` to notify the corresponding transaction
     /// going on.
     fn cancel(self, error: Option<StorageError>) -> Vec<KeyLockWaitInfo> {
+        let elapsed = self.start_waiting_time.saturating_elapsed();
+        GLOBAL_TRACKERS.with_tracker(self.diag_ctx.tracker, |tracker| {
+            tracker.metrics.pessimistic_lock_wait_nanos = elapsed.as_nanos() as u64;
+        });
+        WAITER_LIFETIME_HISTOGRAM.observe(duration_to_sec(elapsed));
         // Cancel the delay timer to prevent removing the same `Waiter` earlier.
         self.delay.cancel();
         if let Some(error) = error {
@@ -803,6 +811,7 @@ impl Scheduler {
             timeout,
             cancel_callback,
             diag_ctx,
+            start_waiting_time: Instant::now(),
         });
     }
 
@@ -1151,6 +1160,7 @@ impl FutureRunnable<Task> for WaiterManager {
                 timeout,
                 cancel_callback,
                 diag_ctx,
+                start_waiting_time,
             } => {
                 let waiter = Waiter::new(
                     region_id,
@@ -1161,6 +1171,7 @@ impl FutureRunnable<Task> for WaiterManager {
                     cancel_callback,
                     self.normalize_deadline(timeout),
                     diag_ctx,
+                    start_waiting_time,
                 );
                 self.handle_wait_for(token, waiter);
                 TASK_COUNTER_METRICS.wait_for.inc();
@@ -1312,7 +1323,7 @@ pub mod tests {
             cancel_callback: Box::new(|_| ()),
             diag_ctx: DiagnosticContext::default(),
             delay: Delay::new(Instant::now()),
-            _lifetime_timer: WAITER_LIFETIME_HISTOGRAM.start_coarse_timer(),
+            start_waiting_time: Instant::now(),
         }
     }
 
@@ -1413,6 +1424,7 @@ pub mod tests {
             cb,
             Instant::now() + Duration::from_millis(3000),
             DiagnosticContext::default(),
+            Instant::now(),
         );
         (waiter, info, f)
     }
@@ -1634,7 +1646,7 @@ pub mod tests {
                 .take_waiter_by_lock_digest(
                     LockDigest {
                         ts: TimeStamp::zero(),
-                        hash: 0
+                        hash: 0,
                     },
                     TimeStamp::zero(),
                 )

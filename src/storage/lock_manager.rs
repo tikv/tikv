@@ -3,6 +3,7 @@
 use std::time::{Duration, Instant};
 
 use kvproto::{kvrpcpb::LockInfo, metapb::RegionEpoch};
+use tracker::TrackerToken;
 use txn_types::{Key, TimeStamp};
 
 use crate::{
@@ -39,6 +40,8 @@ pub struct DiagnosticContext {
     /// same statement) Currently it is the encoded SQL digest if the client
     /// is TiDB
     pub resource_group_tag: Vec<u8>,
+    /// The tracker is used to track and collect the lock wait details.
+    pub tracker: TrackerToken,
 }
 
 /// Time to wait for lock released when encountering locks.

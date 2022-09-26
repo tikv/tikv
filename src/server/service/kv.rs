@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-// #[PerformanceCriticalPath]: Tikv gRPC APIs implementation
+// #[PerformanceCriticalPath]: TiKV gRPC APIs implementation
 use std::{mem, sync::Arc};
 
 use api_version::KvFormat;
@@ -1334,7 +1334,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                         .map_err(|_| GRPC_MSG_FAIL_COUNTER.$metric_name.inc());
                     response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::$metric_name, source);
                 })*
-                Some(batch_commands_request::request::Cmd::Import(_)) => unimplemented!(),
+                Some(batch_commands_request::request::Cmd::Import(_) | batch_commands_request::request::Cmd::FlashbackToVersion(_)) => unimplemented!(),
             }
         }
     }
@@ -2084,7 +2084,7 @@ txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, Pes
     (req) {
         let mode = req.get_wait_lock_mode()
     };
-    (v, resp, tracker) {
+    (v, resp, tracker) {{
         match v {
             Ok(Ok(res)) => {
                 match mode {
@@ -2105,14 +2105,16 @@ txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, Pes
                     resp.set_not_founds(not_founds);
                     }
                 }
-                GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-                    tracker.write_scan_detail(resp.mut_exec_details_v2().mut_scan_detail_v2());
-                    tracker.write_write_detail(resp.mut_exec_details_v2().mut_write_detail());
-                });
             },
-            Err(e) | Ok(Err(e)) => resp.set_errors(vec![extract_key_error(&e)].into()),
+            Err(e) | Ok(Err(e)) => {
+                resp.set_errors(vec![extract_key_error(&e)].into())
+            },
         }
-    }
+        GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+            tracker.write_scan_detail(resp.mut_exec_details_v2().mut_scan_detail_v2());
+            tracker.write_write_detail(resp.mut_exec_details_v2().mut_write_detail());
+        });
+    }}
 );
 txn_command_future!(future_pessimistic_rollback, PessimisticRollbackRequest, PessimisticRollbackResponse, (v, resp) {
     resp.set_errors(extract_key_errors(v).into())

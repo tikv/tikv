@@ -100,7 +100,7 @@ use crate::{
 const ERR_CONVERT_FAILED: &str = "Can not covert from ";
 
 /// The types of `Json` which follows <https://tools.ietf.org/html/rfc7159#section-3>
-#[derive(Eq, PartialEq, FromPrimitive, Clone, Debug, Copy)]
+#[derive(PartialEq, FromPrimitive, Clone, Debug, Copy)]
 pub enum JsonType {
     Object = 0x01,
     Array = 0x03,
@@ -218,6 +218,19 @@ impl<'a> JsonRef<'a> {
             JsonType::Double => self.get_double() == 0f64,
             JsonType::String => false,
         }
+    }
+
+    // Returns whether the two JsonRef references to the same
+    // json object.
+    //
+    // As the JsonRef exists and holds the reference to the Json
+    // , the `Vec` inside the Json cannot be changed, so comparing
+    // the pointer is enough to represent the reference equality.
+    //
+    // PartialEq and PartialCmp have been implemented for JsonRef
+    // to compare the value.
+    pub(crate) fn ref_eq(&self, other: &JsonRef<'a>) -> bool {
+        std::ptr::eq(self.value, other.value)
     }
 }
 
@@ -536,7 +549,7 @@ mod tests {
             ],
         ];
         for d in cases {
-            assert!(json_object(d).is_err());
+            json_object(d).unwrap_err();
         }
 
         let cases = vec![

@@ -689,7 +689,7 @@ fn test_split_epoch_not_match<T: Simulator>(cluster: &mut Cluster<T>, right_deri
     cluster.must_split(&r, b"k4");
     let regions: Vec<_> = [b"k0", b"k2", b"k3", b"k4"]
         .iter()
-        .map(|k| pd_client.get_region(*k).unwrap())
+        .map(|&k| pd_client.get_region(k).unwrap())
         .collect();
 
     let new = regions[3].clone();
