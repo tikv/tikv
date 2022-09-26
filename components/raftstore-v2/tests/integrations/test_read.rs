@@ -222,8 +222,8 @@ fn test_local_read() {
     request_inner.set_cmd_type(CmdType::Snap);
     req.mut_requests().push(request_inner);
 
-    // Get snapshot from local reader, but it will fail as the leader has not
-    // applied in the current term.
+    // FIXME: Get snapshot from local reader, but it will fail as the leader has not
+    // applied in the current term (due to unimplementation of ApplyRes).
     let resp = block_on(async { router.get_snapshot(req.clone()).await.unwrap_err() });
     assert!(
         resp.get_header()
