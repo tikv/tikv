@@ -4507,11 +4507,13 @@ mod tests {
             None,
         )
         .unwrap();
-        let storage =
-            TestStorageBuilder::<_, _, F>::from_engine_and_lock_mgr(engine, DummyLockManager)
-                .config(cfg.storage.clone())
-                .build()
-                .unwrap();
+        let storage = TestStorageBuilder::<_, _, F>::from_engine_and_lock_mgr(
+            engine,
+            DummyLockManager::new(),
+        )
+        .config(cfg.storage.clone())
+        .build()
+        .unwrap();
         let engine = storage.get_engine().get_rocksdb();
         let (_tx, rx) = std::sync::mpsc::channel();
         let flow_controller = Arc::new(FlowController::Singleton(EngineFlowController::new(

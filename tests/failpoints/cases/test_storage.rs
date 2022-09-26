@@ -53,9 +53,10 @@ fn test_scheduler_leader_change_twice() {
     let peers = region0.get_peers();
     cluster.must_transfer_leader(region0.get_id(), peers[0].clone());
     let engine0 = cluster.sim.rl().storages[&peers[0].get_id()].clone();
-    let storage0 = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine0, DummyLockManager)
-        .build()
-        .unwrap();
+    let storage0 =
+        TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine0, DummyLockManager::new())
+            .build()
+            .unwrap();
 
     let mut ctx0 = Context::default();
     ctx0.set_region_id(region0.get_id());
@@ -247,10 +248,11 @@ fn test_scale_scheduler_pool() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
-        .config(cluster.cfg.tikv.storage.clone())
-        .build()
-        .unwrap();
+    let storage =
+        TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager::new())
+            .config(cluster.cfg.tikv.storage.clone())
+            .build()
+            .unwrap();
 
     let cfg = new_tikv_config(1);
     let kv_engine = storage.get_engine().kv_engine();
@@ -344,7 +346,7 @@ fn test_pipelined_pessimistic_lock() {
     let before_pipelined_write_finish_fp = "before_pipelined_write_finish";
 
     {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
             .pipelined_pessimistic_lock(false)
             .build()
             .unwrap();
@@ -371,7 +373,7 @@ fn test_pipelined_pessimistic_lock() {
         fail::remove(rockskv_write_modifies_fp);
     }
 
-    let storage = TestStorageBuilderApiV1::new(DummyLockManager)
+    let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
         .pipelined_pessimistic_lock(true)
         .build()
         .unwrap();
@@ -525,7 +527,7 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
         .unwrap()
         .clone();
     let storage =
-        TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine.clone(), DummyLockManager)
+        TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine.clone(), DummyLockManager::new())
             .build()
             .unwrap();
 
@@ -823,10 +825,11 @@ fn test_async_apply_prewrite() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
-        .async_apply_prewrite(true)
-        .build()
-        .unwrap();
+    let storage =
+        TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager::new())
+            .async_apply_prewrite(true)
+            .build()
+            .unwrap();
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);
@@ -921,10 +924,11 @@ fn test_async_apply_prewrite_fallback() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
-        .async_apply_prewrite(true)
-        .build()
-        .unwrap();
+    let storage =
+        TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager::new())
+            .async_apply_prewrite(true)
+            .build()
+            .unwrap();
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);
@@ -1109,10 +1113,11 @@ fn test_async_apply_prewrite_1pc() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
-        .async_apply_prewrite(true)
-        .build()
-        .unwrap();
+    let storage =
+        TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager::new())
+            .async_apply_prewrite(true)
+            .build()
+            .unwrap();
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);
@@ -1136,9 +1141,10 @@ fn test_atomic_cas_lock_by_latch() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
-        .build()
-        .unwrap();
+    let storage =
+        TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager::new())
+            .build()
+            .unwrap();
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);
@@ -1222,9 +1228,10 @@ fn test_before_async_write_deadline() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
-        .build()
-        .unwrap();
+    let storage =
+        TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager::new())
+            .build()
+            .unwrap();
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);
@@ -1254,9 +1261,10 @@ fn test_before_propose_deadline() {
     cluster.run();
 
     let engine = cluster.sim.read().unwrap().storages[&1].clone();
-    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
-        .build()
-        .unwrap();
+    let storage =
+        TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager::new())
+            .build()
+            .unwrap();
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);
@@ -1287,9 +1295,10 @@ fn test_resolve_lock_deadline() {
     cluster.run();
 
     let engine = cluster.sim.read().unwrap().storages[&1].clone();
-    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
-        .build()
-        .unwrap();
+    let storage =
+        TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager::new())
+            .build()
+            .unwrap();
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);

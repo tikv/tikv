@@ -13,7 +13,9 @@ use crate::storage::{
     lock_manager::LockManager,
     raw,
     txn::{
-        commands::{CommandExt, ResponsePolicy, WriteCommand, WriteContext, WriteResult},
+        commands::{
+            CommandExt, ReleasedLocks, ResponsePolicy, WriteCommand, WriteContext, WriteResult,
+        },
         Result,
     },
     ProcessResult, Snapshot,
@@ -91,7 +93,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
             to_be_write,
             rows,
             pr,
-            released_locks: None,
+            lock_info: None,
+            released_locks: ReleasedLocks::new(),
             new_acquired_locks: vec![],
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
@@ -177,7 +180,7 @@ mod tests {
         use kvproto::kvrpcpb::ExtraOp;
         let mut statistic = Statistics::default();
         let context = WriteContext {
-            lock_mgr: &DummyLockManager {},
+            lock_mgr: &DummyLockManager::new(),
             concurrency_manager: cm,
             extra_op: ExtraOp::Noop,
             statistics: &mut statistic,

@@ -1,6 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::{Duration, Instant};
+use std::{
+    fmt::{Debug, Formatter},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use kvproto::{kvrpcpb::LockInfo, metapb::RegionEpoch};
 use tracker::TrackerToken;
@@ -15,24 +22,17 @@ use crate::{
     },
 };
 
+pub mod lock_wait_context;
+pub mod lock_waiting_queue;
+
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct LockDigest {
     pub ts: TimeStamp,
     pub hash: u64,
 }
 
-impl LockDigest {
-    pub fn from_lock_info_pb(lock_info: &LockInfo) -> Self {
-        Self {
-            ts: lock_info.get_lock_version().into(),
-            hash: Key::from_raw(lock_info.get_key()).gen_hash(),
-        }
-    }
-}
-
 /// DiagnosticContext is for diagnosing problems about locks
-/// TODO: Avoid deriving Debug here which might cause security issue.
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default)]
 pub struct DiagnosticContext {
     /// The key we care about
     pub key: Vec<u8>,
@@ -42,6 +42,16 @@ pub struct DiagnosticContext {
     pub resource_group_tag: Vec<u8>,
     /// The tracker is used to track and collect the lock wait details.
     pub tracker: TrackerToken,
+}
+
+impl Debug for DiagnosticContext {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DiagnosticContext")
+            .field("key", &log_wrappers::Value::key(&self.key))
+            // TODO: Perhaps the resource group tag don't need to be a secret
+            .field("resource_group_tag", &log_wrappers::Value::key(&self.resource_group_tag))
+            .finish()
+    }
 }
 
 /// Time to wait for lock released when encountering locks.
@@ -86,6 +96,7 @@ pub struct KeyLockWaitInfo {
     pub lock_info: LockInfo,
 }
 
+/// Uniquely identifies a lock-waiting request in a `LockManager`.
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug)]
 pub struct LockWaitToken(pub Option<u64>);
 
@@ -117,12 +128,14 @@ pub struct UpdateWaitForEvent {
 /// transactions. It has responsibility to handle deadlocks between
 /// transactions.
 pub trait LockManager: Clone + Send + 'static {
-    fn set_key_wake_up_delay_callback(
-        &self,
-        cb: Box<dyn Fn(&Key, TimeStamp, TimeStamp, Instant) + Send>,
-    );
-
+    /// Allocates a token for identifying a specific lock-waiting relationship.
+    /// Use this to allocate a token before invoking `wait_for`.
+    ///
+    /// Since some information required by `wait_for` need to be initialized by
+    /// the token, allocating token is therefore separated to a single
+    /// function instead of internally allocated in `wait_for`.
     fn allocate_token(&self) -> LockWaitToken;
+
     /// Transaction with `start_ts` waits for `lock` released.
     ///
     /// If the lock is released or waiting times out or deadlock occurs, the
@@ -138,7 +151,7 @@ pub trait LockManager: Clone + Send + 'static {
         region_epoch: RegionEpoch,
         term: u64,
         start_ts: TimeStamp,
-        wait_info: Vec<KeyLockWaitInfo>,
+        wait_info: KeyLockWaitInfo,
         is_first_lock: bool,
         timeout: Option<WaitTimeout>,
         cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
@@ -165,17 +178,24 @@ pub trait LockManager: Clone + Send + 'static {
 
 // For test
 #[derive(Clone)]
-pub struct DummyLockManager;
+pub struct DummyLockManager(Arc<AtomicU64>);
+
+impl DummyLockManager {
+    pub fn new() -> Self {
+        Self(Arc::new(AtomicU64::new(1)))
+    }
+}
+
+// Make the linter happy.
+impl Default for DummyLockManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl LockManager for DummyLockManager {
-    fn set_key_wake_up_delay_callback(
-        &self,
-        _cb: Box<dyn Fn(&Key, TimeStamp, TimeStamp, Instant) + Send>,
-    ) {
-    }
-
     fn allocate_token(&self) -> LockWaitToken {
-        LockWaitToken(None)
+        LockWaitToken(Some(self.0.fetch_add(1, Ordering::SeqCst)))
     }
 
     fn wait_for(
@@ -185,16 +205,14 @@ impl LockManager for DummyLockManager {
         _region_epoch: RegionEpoch,
         _term: u64,
         _start_ts: TimeStamp,
-        wait_info: Vec<KeyLockWaitInfo>,
+        wait_info: KeyLockWaitInfo,
         _is_first_lock: bool,
         timeout: Option<WaitTimeout>,
         cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
         _diag_ctx: DiagnosticContext,
     ) {
         if timeout.is_none() {
-            let error = MvccError::from(MvccErrorInner::KeyIsLocked(
-                wait_info.into_iter().next().unwrap().lock_info,
-            ));
+            let error = MvccError::from(MvccErrorInner::KeyIsLocked(wait_info.lock_info));
             cancel_callback(StorageError::from(TxnError::from(error)));
         }
     }

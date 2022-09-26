@@ -42,7 +42,7 @@ use crossbeam::utils::CachePadded;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::compat::Future01CompatExt;
 use kvproto::{
-    kvrpcpb::{CommandPri, Context, DiskFullOpt, ExtraOp},
+    kvrpcpb::{self, CommandPri, Context, DiskFullOpt, ExtraOp},
     pdpb::QueryKind,
 };
 use parking_lot::{Mutex, MutexGuard, RwLockWriteGuard};
@@ -66,9 +66,12 @@ use crate::{
             Result as EngineResult, SnapContext, Statistics,
         },
         lock_manager::{
-            self, DiagnosticContext, LockDigest, LockManager, LockWaitToken, WaitTimeout,
+            self,
+            lock_wait_context::LockWaitContext,
+            lock_waiting_queue::{DelayedNotifyAllFuture, LockWaitEntry, LockWaitQueues},
+            DiagnosticContext, LockDigest, LockManager, LockWaitToken,
         },
-        metrics::{self, *},
+        metrics::*,
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, ReleasedLock},
         txn::{
             commands::{
@@ -257,7 +260,11 @@ struct SchedulerInner<L: LockManager> {
 
     enable_async_apply_prewrite: bool,
 
+    pessimistic_lock_wake_up_delay_duration_ms: Arc<AtomicU64>,
+
     resource_tag_factory: ResourceTagFactory,
+
+    lock_wait_queues: LockWaitQueues<L>,
 
     quota_limiter: Arc<QuotaLimiter>,
     feature_gate: FeatureGate,
@@ -414,6 +421,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             task_slots.push(Mutex::new(Default::default()).into());
         }
 
+        let lock_wait_queues = LockWaitQueues::new(lock_mgr.clone());
+
         let inner = Arc::new(SchedulerInner {
             task_slots,
             id_alloc: AtomicU64::new(0).into(),
@@ -438,8 +447,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             pipelined_pessimistic_lock: dynamic_configs.pipelined_pessimistic_lock,
             in_memory_pessimistic_lock: dynamic_configs.in_memory_pessimistic_lock,
             enable_async_apply_prewrite: config.enable_async_apply_prewrite,
+            pessimistic_lock_wake_up_delay_duration_ms: dynamic_configs.wake_up_delay_duration_ms,
             flow_controller,
             resource_tag_factory,
+            lock_wait_queues,
             quota_limiter,
             feature_gate,
         });
@@ -917,34 +928,29 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         &self,
         context: &Context,
         token: LockWaitToken,
-        start_ts: TimeStamp,
-        is_first_lock: bool,
-        lock_info: &[WriteResultLockInfo],
+        lock_wait_entry: &LockWaitEntry,
+        lock_info_pb: &kvrpcpb::LockInfo,
         cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
-        wait_timeout: Option<WaitTimeout>,
         diag_ctx: DiagnosticContext,
     ) {
         // debug!("command waits for lock released"; "cid" => cid);
-        let wait_info = lock_info
-            .iter()
-            .map(|lock| lock_manager::KeyLockWaitInfo {
-                key: lock.key.clone(),
-                lock_digest: LockDigest {
-                    ts: lock.last_found_lock.get_lock_version().into(),
-                    hash: lock.lock_hash,
-                },
-                lock_info: lock.last_found_lock.clone(),
-            })
-            .collect();
+        let wait_info = lock_manager::KeyLockWaitInfo {
+            key: lock_wait_entry.key.clone(),
+            lock_digest: LockDigest {
+                ts: lock_info_pb.get_lock_version().into(),
+                hash: lock_wait_entry.lock_hash,
+            },
+            lock_info: lock_info_pb.clone(),
+        };
         self.inner.lock_mgr.wait_for(
             token,
             context.get_region_id(),
             context.get_region_epoch().clone(),
             context.get_term(),
-            start_ts,
+            lock_wait_entry.parameters.start_ts,
             wait_info,
-            is_first_lock,
-            wait_timeout,
+            lock_wait_entry.parameters.is_first_lock,
+            lock_wait_entry.parameters.wait_timeout,
             cancel_callback,
             diag_ctx,
         );
@@ -1029,13 +1035,73 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         self.inner.lock_mgr.update_wait_for(events);
     }
 
-    fn need_wake_up_pessimistic_lock_on_error(_e: &EngineError) -> bool {
-        // TODO: If there's some cases that `engine.async_write` returns error but it's
-        // still possible that the data is successfully written, return true.
-        // However if it's caused by region leader transferring or epoch change, it
-        // doesn't need to return true because we'll have other way to cancel
-        // the waiting request.
-        false
+    fn on_release_locks(&self, released_locks: ReleasedLocks) {
+        let mut legacy_wake_up_list = vec![];
+        let mut delay_wake_up_futures = vec![];
+        let wake_up_delay_duration_ms = self
+            .inner
+            .pessimistic_lock_wake_up_delay_duration_ms
+            .load(Ordering::Relaxed);
+
+        released_locks.0.into_iter().for_each(|released_lock| {
+            let (lock_wait_entry, delay_wake_up_future) =
+                match self.inner.lock_wait_queues.pop_for_waking_up(
+                    &released_lock.key,
+                    released_lock.start_ts,
+                    released_lock.commit_ts,
+                    wake_up_delay_duration_ms,
+                ) {
+                    Some(e) => e,
+                    None => return,
+                };
+
+            legacy_wake_up_list.push((lock_wait_entry, released_lock));
+            if let Some(f) = delay_wake_up_future {
+                delay_wake_up_futures.push(f);
+            }
+        });
+
+        self.wake_up_legacy_pessimistic_locks(legacy_wake_up_list, delay_wake_up_futures);
+    }
+
+    fn wake_up_legacy_pessimistic_locks(
+        &self,
+        legacy_wake_up_list: Vec<(Box<LockWaitEntry>, ReleasedLock)>,
+        delayed_wake_up_futures: Vec<DelayedNotifyAllFuture>,
+    ) {
+        let self1 = self.clone();
+        self.get_sched_pool(CommandPri::High)
+            .pool
+            .spawn(async move {
+                for (lock_info, released_lock) in legacy_wake_up_list {
+                    let cb = lock_info.key_cb.unwrap().into_inner();
+                    let e = StorageError::from(Error::from(MvccError::from(
+                        MvccErrorInner::WriteConflict {
+                            start_ts: lock_info.parameters.start_ts,
+                            conflict_start_ts: released_lock.start_ts,
+                            conflict_commit_ts: released_lock.commit_ts,
+                            key: released_lock.key.into_raw().unwrap(),
+                            primary: lock_info.parameters.primary,
+                        },
+                    )));
+                    cb(Err(e.into()));
+                }
+
+                for f in delayed_wake_up_futures {
+                    self1
+                        .get_sched_pool(CommandPri::High)
+                        .pool
+                        .spawn(async move {
+                            let res = f.await;
+                            // It returns only None currently.
+                            // TODO: Handle not-none case when supporting resumable pessimistic lock
+                            // requests.
+                            assert!(res.is_none());
+                        })
+                        .unwrap();
+                }
+            })
+            .unwrap();
     }
 
     fn early_response(
@@ -1197,7 +1263,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             mut to_be_write,
             rows,
             pr,
-            mut released_locks,
+            lock_info,
+            released_locks,
             new_acquired_locks,
             lock_guards,
             response_policy,
@@ -1222,106 +1289,150 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
         let mut pr = Some(pr);
-        let mut lock_info = if tag == CommandKind::acquire_pessimistic_lock
-            || tag == CommandKind::acquire_pessimistic_lock_resumed
-        {
-            if let Some(cmd_meta) = pessimistic_lock_single_request_meta {
-                let conversion_start = Instant::now();
+        // let mut lock_info = if tag == CommandKind::acquire_pessimistic_lock
+        //     || tag == CommandKind::acquire_pessimistic_lock_resumed
+        // {
+        //     if let Some(cmd_meta) = pessimistic_lock_single_request_meta {
+        //         let conversion_start = Instant::now();
+        //
+        //         let mut lock_info_list =
+        //             
+        // Self::take_lock_info_from_pessimistic_lock_pr(pr.as_mut().unwrap());
+        //         // We currently do not allow multi-waiting in a single request.
+        //         assert!(lock_info_list.is_none() ||
+        // lock_info_list.as_ref().unwrap().len() == 1);         if let Some(l)
+        // = lock_info_list.as_mut() {             // Enter key-wise waiting
+        // state.             let diag_ctx = DiagnosticContext {
+        //                 key: l[0].key.to_raw().unwrap(),
+        //                 resource_group_tag: ctx.get_resource_group_tag().into(),
+        //                 tracker,
+        //             };
+        //             let wait_token = scheduler.inner.lock_mgr.allocate_token();
+        //
+        //             let first_batch_size = cmd_meta.keys_count - l.len();
+        //
+        //             if cmd_meta.allow_lock_with_conflict {
+        //                 // Only single-key requests are allowed in the new mode
+        // currently.                 assert_eq!(first_batch_size, 0);
+        //             }
+        //
+        //             let lock_req_ctx = scheduler.convert_to_keywise_callbacks(
+        //                 cid,
+        //                 wait_token,
+        //                 cmd_meta.start_ts,
+        //                 cmd_meta.for_update_ts,
+        //                 mem::replace(&mut pr, Some(ProcessResult::Res)).unwrap(),
+        //                 cmd_meta.keys_count,
+        //                 first_batch_size,
+        //                 cmd_meta.allow_lock_with_conflict,
+        //             );
+        //
+        //             scheduler.on_wait_for_lock(
+        //                 &ctx,
+        //                 wait_token,
+        //                 cmd_meta.start_ts,
+        //                 cmd_meta.is_first_lock,
+        //                 l,
+        //                 Box::new(lock_req_ctx.get_callback_for_cancellation()),
+        //                 l[0].parameters.wait_timeout,
+        //                 diag_ctx,
+        //             );
+        //             // It's possible that the request is cancelled immediately due to
+        // no timeout             // (non-blocking locking).
+        //             if lock_req_ctx.shared_states.finished.load(Ordering::Acquire) {
+        //                 lock_info_list = None;
+        //             } else {
+        //                 let mut key_callback_count = 0;
+        //                 for lock_info in l {
+        //                     assert!(lock_info.key_cb.is_none());
+        //                     // TODO: Check if there are paths that the cb is never
+        // invoked.                     lock_info.key_cb = Some(
+        //                         lock_req_ctx
+        //                             
+        // .get_callback_for_blocked_key(lock_info.index_in_request),
+        //                     );
+        //                     lock_info.lock_wait_token = wait_token;
+        //                     lock_info.req_states =
+        // Some(lock_req_ctx.get_shared_states());                     
+        // key_callback_count += 1;                 }
+        //                 assert_eq!(key_callback_count, 1);
+        //             }
+        //         }
+        //
+        //         STORAGE_KEYWISE_PESSIMISTIC_LOCK_HANDLE_DURATION_HISTOGRAM_STATIC
+        //             .convert_from_normal
+        //             .observe(conversion_start.saturating_elapsed_secs());
+        //         lock_info_list
+        //     } else {
+        //         // It's already in key-wise mode.
+        //         let start_time = Instant::now();
+        //         let lock_info_list =
+        //             scheduler.tidy_up_pessimistic_lock_result(cid,
+        // pr.as_mut().unwrap());
+        //
+        //         if let Some(l) = lock_info_list.as_ref() {
+        //             scheduler.update_wait_for_lock(l);
+        //         }
+        //         STORAGE_KEYWISE_PESSIMISTIC_LOCK_HANDLE_DURATION_HISTOGRAM_STATIC
+        //             .tidy_up_result
+        //             .observe(start_time.saturating_elapsed_secs());
+        //         lock_info_list
+        //     }
+        // } else {
+        //     None
+        // };
+        //
+        // if let Some(lock_info) = lock_info.as_mut() {
+        //     // Set the start time of lock waiting
+        //     let now = std::time::Instant::now();
+        //     lock_info
+        //         .iter_mut()
+        //         .for_each(|i| i.wait_start_time = Some(now));
+        // }
+        //
+        // if let Some(released_locks) = released_locks.as_mut() {
+        //     scheduler.on_release_locks_pre_persist(cid, released_locks);
 
-                let mut lock_info_list =
-                    Self::take_lock_info_from_pessimistic_lock_pr(pr.as_mut().unwrap());
-                // We currently do not allow multi-waiting in a single request.
-                assert!(lock_info_list.is_none() || lock_info_list.as_ref().unwrap().len() == 1);
-                if let Some(l) = lock_info_list.as_mut() {
-                    // Enter key-wise waiting state.
-                    let diag_ctx = DiagnosticContext {
-                        key: l[0].key.to_raw().unwrap(),
-                        resource_group_tag: ctx.get_resource_group_tag().into(),
-                        tracker,
-                    };
-                    let wait_token = scheduler.inner.lock_mgr.allocate_token();
+        // TODO: Lock wait handling here.
+        if let Some(lock_info) = lock_info {
+            assert_eq!(to_be_write.size(), 0);
+            // let cmd_meta = pessimistic_lock_single_request_meta.unwrap();
+            let diag_ctx = DiagnosticContext {
+                key: lock_info.key.to_raw().unwrap(),
+                resource_group_tag: ctx.get_resource_group_tag().into(),
+                tracker,
+            };
+            let wait_token = scheduler.inner.lock_mgr.allocate_token();
 
-                    let first_batch_size = cmd_meta.keys_count - l.len();
+            // allow_lock_with_conflict is not supported yet in this version.
+            assert!(!lock_info.parameters.allow_lock_with_conflict);
 
-                    if cmd_meta.allow_lock_with_conflict {
-                        // Only single-key requests are allowed in the new mode currently.
-                        assert_eq!(first_batch_size, 0);
-                    }
+            let (lock_req_ctx, lock_wait_entry, lock_info_pb) = scheduler.make_lock_waiting(
+                cid,
+                wait_token,
+                lock_info,
+                mem::replace(&mut pr, Some(ProcessResult::Res)).unwrap(),
+            );
 
-                    let lock_req_ctx = scheduler.convert_to_keywise_callbacks(
-                        cid,
-                        wait_token,
-                        cmd_meta.start_ts,
-                        cmd_meta.for_update_ts,
-                        mem::replace(&mut pr, Some(ProcessResult::Res)).unwrap(),
-                        cmd_meta.keys_count,
-                        first_batch_size,
-                        cmd_meta.allow_lock_with_conflict,
-                    );
-
-                    scheduler.on_wait_for_lock(
-                        &ctx,
-                        wait_token,
-                        cmd_meta.start_ts,
-                        cmd_meta.is_first_lock,
-                        l,
-                        Box::new(lock_req_ctx.get_callback_for_cancellation()),
-                        l[0].parameters.wait_timeout,
-                        diag_ctx,
-                    );
-                    // It's possible that the request is cancelled immediately due to no timeout
-                    // (non-blocking locking).
-                    if lock_req_ctx.shared_states.finished.load(Ordering::Acquire) {
-                        lock_info_list = None;
-                    } else {
-                        let mut key_callback_count = 0;
-                        for lock_info in l {
-                            assert!(lock_info.key_cb.is_none());
-                            // TODO: Check if there are paths that the cb is never invoked.
-                            lock_info.key_cb = Some(
-                                lock_req_ctx
-                                    .get_callback_for_blocked_key(lock_info.index_in_request),
-                            );
-                            lock_info.lock_wait_token = wait_token;
-                            lock_info.req_states = Some(lock_req_ctx.get_shared_states());
-                            key_callback_count += 1;
-                        }
-                        assert_eq!(key_callback_count, 1);
-                    }
-                }
-
-                STORAGE_KEYWISE_PESSIMISTIC_LOCK_HANDLE_DURATION_HISTOGRAM_STATIC
-                    .convert_from_normal
-                    .observe(conversion_start.saturating_elapsed_secs());
-                lock_info_list
-            } else {
-                // It's already in key-wise mode.
-                let start_time = Instant::now();
-                let lock_info_list =
-                    scheduler.tidy_up_pessimistic_lock_result(cid, pr.as_mut().unwrap());
-
-                if let Some(l) = lock_info_list.as_ref() {
-                    scheduler.update_wait_for_lock(l);
-                }
-                STORAGE_KEYWISE_PESSIMISTIC_LOCK_HANDLE_DURATION_HISTOGRAM_STATIC
-                    .tidy_up_result
-                    .observe(start_time.saturating_elapsed_secs());
-                lock_info_list
+            scheduler.on_wait_for_lock(
+                &ctx,
+                wait_token,
+                &lock_wait_entry,
+                &lock_info_pb,
+                Box::new(lock_req_ctx.get_callback_for_cancellation()),
+                diag_ctx,
+            );
+            // It's possible that the request is cancelled immediately due to no timeout
+            // (non-blocking locking).
+            if !lock_req_ctx.get_shared_states().is_finished() {
+                self.inner
+                    .lock_wait_queues
+                    .push_lock_wait(lock_wait_entry, lock_info_pb);
             }
-        } else {
-            None
-        };
-
-        if let Some(lock_info) = lock_info.as_mut() {
-            // Set the start time of lock waiting
-            let now = std::time::Instant::now();
-            lock_info
-                .iter_mut()
-                .for_each(|i| i.wait_start_time = Some(now));
         }
 
-        if let Some(released_locks) = released_locks.as_mut() {
-            scheduler.on_release_locks_pre_persist(cid, released_locks);
+        if !released_locks.is_empty() {
+            scheduler.on_release_locks(released_locks);
         }
 
         if to_be_write.modifies.is_empty() {
@@ -1687,130 +1798,41 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
-    fn on_release_locks_pre_persist(&self, cid: u64, released_locks: &mut ReleasedLocks) {
-        let mut wake_up_events = vec![];
-        let mut legacy_wakeup_list = vec![];
-
-        {
-            let mut slot = self.inner.get_task_slot(cid);
-            let wait_queues = &mut slot.get_mut(&cid).unwrap().lock.lock_wait_queues;
-            released_locks.0 = std::mem::take(&mut released_locks.0)
-                .into_iter()
-                .filter_map(|released_lock| {
-                    let key_queue_map = wait_queues.get_mut(&released_lock.hash_for_latch)?;
-                    let queue = key_queue_map.get_mut(&released_lock.key)?;
-
-                    // Lazy cleanup invalidated entries
-                    while let Some(front) = queue.peek() {
-                        if front
-                            .0
-                            .req_states
-                            .as_ref()
-                            .unwrap()
-                            .finished
-                            .load(Ordering::Acquire)
-                        {
-                            queue.pop();
-                            continue;
-                        }
-
-                        break;
-                    }
-
-                    if queue.is_empty() {
-                        // Unreachable, but keep it for safety.
-                        key_queue_map.remove(&released_lock.key);
-                        return None;
-                    }
-
-                    let front = queue.peek().unwrap();
-                    wake_up_events.push(lock_manager::KeyWakeUpEvent {
-                        key: released_lock.key.clone(),
-                        released_start_ts: released_lock.start_ts,
-                        released_commit_ts: released_lock.commit_ts,
-                        awakened_start_ts: front.0.parameters.start_ts,
-                        awakened_allow_resuming: front.0.allow_lock_with_conflict,
-                    });
-
-                    if front.0.allow_lock_with_conflict {
-                        Some(released_lock)
-                    } else {
-                        let lock_info = queue.pop().unwrap();
-                        if queue.is_empty() {
-                            key_queue_map.remove(&released_lock.key);
-                        }
-                        legacy_wakeup_list.push((lock_info.unwrap(), released_lock));
-                        None
-                    }
-                })
-                .collect();
-            // Release lock of the task slot.
-        }
-
-        self.inner.lock_mgr.on_keys_wakeup(wake_up_events);
-        self.wake_up_legacy_pessimistic_locks(legacy_wakeup_list);
-    }
-
-    fn wake_up_legacy_pessimistic_locks(
-        &self,
-        legacy_wakeup_list: impl IntoIterator<Item = (WriteResultLockInfo, ReleasedLock)>
-        + Send
-        + 'static,
-    ) {
-        self.get_sched_pool(CommandPri::High)
-            .pool
-            .spawn(async move {
-                for (mut lock_info, released_lock) in legacy_wakeup_list {
-                    let cb = lock_info.key_cb.unwrap();
-                    let e = StorageError::from(Error::from(MvccError::from(
-                        MvccErrorInner::WriteConflict {
-                            start_ts: lock_info.parameters.start_ts,
-                            conflict_start_ts: released_lock.start_ts,
-                            conflict_commit_ts: released_lock.commit_ts,
-                            key: released_lock.key.into_raw().unwrap(),
-                            primary: lock_info.last_found_lock.take_primary_lock(),
-                        },
-                    )));
-                    let res = Err(Arc::new(e));
-                    cb(res);
-                }
-            })
-            .unwrap();
-    }
-
-    fn convert_to_keywise_callbacks(
+    fn make_lock_waiting(
         &self,
         cid: u64,
         lock_wait_token: LockWaitToken,
-        start_ts: TimeStamp,
-        for_update_ts: TimeStamp,
+        lock_info: WriteResultLockInfo,
         first_batch_pr: ProcessResult,
-        total_size: usize,
-        first_batch_size: usize,
-        allow_lock_with_conflict: bool,
-    ) -> PartialPessimisticLockRequestContext<L> {
+    ) -> (LockWaitContext<L>, Box<LockWaitEntry>, kvrpcpb::LockInfo) {
         let mut slot = self.inner.get_task_slot(cid);
         let task_ctx = slot.get_mut(&cid).unwrap();
-        let cb = match task_ctx.cb.take() {
-            Some(SchedulerTaskCallback::NormalRequestCallback(cb)) => cb,
-            _ => unreachable!(),
-        };
+        let cb = task_ctx.cb.take().unwrap();
 
-        let ctx = PartialPessimisticLockRequestContext::new(
+        let ctx = LockWaitContext::new(
             self.inner.lock_mgr.clone(),
             lock_wait_token,
-            start_ts,
-            for_update_ts,
+            lock_info.parameters.start_ts,
+            lock_info.parameters.for_update_ts,
             first_batch_pr,
             cb,
-            total_size,
-            allow_lock_with_conflict,
+            lock_info.parameters.allow_lock_with_conflict,
         );
-        let first_batch_cb = ctx.get_callback_for_first_write_batch(first_batch_size);
-        // TODO: Do not use NormalRequestCallback and remove
-        // get_callback_for_first_write_batch
-        task_ctx.cb = Some(SchedulerTaskCallback::NormalRequestCallback(first_batch_cb));
-        ctx
+        let first_batch_cb = ctx.get_callback_for_first_write_batch();
+        task_ctx.cb = Some(first_batch_cb);
+        drop(slot);
+
+        let lock_wait_entry = Box::new(LockWaitEntry {
+            key: lock_info.key,
+            lock_hash: lock_info.lock.hash,
+            parameters: lock_info.parameters,
+            lock_wait_token,
+            req_states: Some(ctx.get_shared_states().clone()),
+            current_legacy_wake_up_cnt: None,
+            key_cb: Some(ctx.get_callback_for_blocked_key().into()),
+        });
+
+        (ctx, lock_wait_entry, lock_info.lock_info_pb)
     }
 
     fn tidy_up_pessimistic_lock_result(
@@ -1861,215 +1883,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             Some(lock_info_list)
         }
     }
-
-    fn take_lock_info_from_pessimistic_lock_pr(
-        pr: &mut ProcessResult,
-    ) -> Option<Vec<WriteResultLockInfo>> {
-        let res = match pr {
-            ProcessResult::PessimisticLockRes {
-                res: Ok(PessimisticLockResults(res)),
-            } => res
-                .iter_mut()
-                .filter_map(|l: &mut _| {
-                    if let PessimisticLockKeyResult::Waiting(lock_info) = l {
-                        Some(lock_info.take().unwrap())
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>(),
-            _ => unreachable!(),
-        };
-        if res.is_empty() { None } else { Some(res) }
-    }
-}
-
-pub struct PartialPessimisticLockRequestContextInner {
-    pr: ProcessResult,
-    cb: StorageCallback,
-    result_rx: std::sync::mpsc::Receiver<(
-        usize,
-        std::result::Result<PessimisticLockKeyResult, Arc<StorageError>>,
-    )>,
-    lock_wait_token: LockWaitToken,
-}
-
-pub struct PartialPessimisticLockRequestSharedState {
-    ctx_inner: Mutex<Option<PartialPessimisticLockRequestContextInner>>,
-    remaining_keys: AtomicUsize,
-    pub finished: AtomicBool,
-}
-
-#[derive(Clone)]
-struct PartialPessimisticLockRequestContext<L: LockManager> {
-    // (inner_ctx, remaining_count)
-    shared_states: Arc<PartialPessimisticLockRequestSharedState>,
-    tx: std::sync::mpsc::Sender<(
-        usize,
-        std::result::Result<PessimisticLockKeyResult, Arc<StorageError>>,
-    )>,
-
-    lock_manager: L,
-    allow_lock_with_conflict: bool,
-
-    // Fields for logging:
-    start_ts: TimeStamp,
-    for_update_ts: TimeStamp,
-}
-
-impl<L: LockManager> PartialPessimisticLockRequestContext<L> {
-    fn new(
-        lock_manager: L,
-        lock_wait_token: LockWaitToken,
-        start_ts: TimeStamp,
-        for_update_ts: TimeStamp,
-        first_batch_pr: ProcessResult,
-        cb: StorageCallback,
-        size: usize,
-        allow_lock_with_conflict: bool,
-    ) -> Self {
-        let (tx, rx) = channel();
-        let inner = PartialPessimisticLockRequestContextInner {
-            pr: first_batch_pr,
-            cb,
-            result_rx: rx,
-            lock_wait_token,
-        };
-        Self {
-            shared_states: Arc::new(PartialPessimisticLockRequestSharedState {
-                ctx_inner: Mutex::new(Some(inner)),
-                remaining_keys: AtomicUsize::new(size),
-                finished: AtomicBool::new(false),
-            }),
-            tx,
-            lock_manager,
-            allow_lock_with_conflict,
-            start_ts,
-            for_update_ts,
-        }
-    }
-
-    fn get_shared_states(&self) -> Arc<PartialPessimisticLockRequestSharedState> {
-        self.shared_states.clone()
-    }
-
-    fn get_callback_for_first_write_batch(&self, first_batch_size: usize) -> StorageCallback {
-        let ctx = self.clone();
-        if self.allow_lock_with_conflict {
-            StorageCallback::Boolean(Box::new(move |res| {
-                if first_batch_size != 0 {
-                    let prev = ctx
-                        .shared_states
-                        .remaining_keys
-                        .fetch_sub(first_batch_size, Ordering::SeqCst);
-                    if prev == first_batch_size {
-                        ctx.finish_request(res.err(), true);
-                    }
-                }
-            }))
-        } else {
-            StorageCallback::Boolean(Box::new(|res| {
-                res.unwrap();
-            }))
-        }
-    }
-
-    fn get_callback_for_blocked_key(&self, index: usize) -> PessimisticLockKeyCallback {
-        let ctx = self.clone();
-        if self.allow_lock_with_conflict {
-            Box::new(move |res| {
-                // TODO: Handle error.
-                if let Err(e) = ctx.tx.send((index, res)) {
-                    info!("sending partial pessimistic lock result to closed channel, maybe the request is already cancelled due to error";
-                        "start_ts" => ctx.start_ts,
-                        "for_update_ts" => ctx.for_update_ts,
-                        "err" => ?e
-                    );
-                    return;
-                }
-                let prev = ctx
-                    .shared_states
-                    .remaining_keys
-                    .fetch_sub(1, Ordering::SeqCst);
-                if prev == 1 {
-                    // All keys are finished.
-                    ctx.finish_request(None, false);
-                }
-            })
-        } else {
-            Box::new(move |res| {
-                ctx.finish_request(Some(Arc::try_unwrap(res.unwrap_err()).unwrap()), false);
-            })
-        }
-    }
-
-    fn get_callback_for_cancellation(&self) -> impl FnOnce(StorageError) {
-        let ctx = self.clone();
-        move |e| {
-            ctx.finish_request(Some(e), false);
-        }
-    }
-
-    fn finish_request(&self, external_error: Option<StorageError>, fail_all_on_error: bool) {
-        let start_time = Instant::now();
-        let mut ctx_inner = if let Some(inner) = self.shared_states.ctx_inner.lock().take() {
-            inner
-        } else {
-            info!("shared state for partial pessimistic lock already taken, perhaps due to error";
-                "start_ts" => self.start_ts,
-                "for_update_ts" => self.for_update_ts
-            );
-            return;
-        };
-
-        self.shared_states.finished.store(true, Ordering::Release);
-
-        self.lock_manager
-            .remove_lock_wait(ctx_inner.lock_wait_token);
-        let results = match ctx_inner.pr {
-            ProcessResult::PessimisticLockRes {
-                res: Ok(PessimisticLockResults(ref mut v)),
-            } => v,
-            _ => unreachable!(),
-        };
-
-        if !self.allow_lock_with_conflict {
-            assert_eq!(results.len(), 1);
-            assert!(matches!(
-                results[0],
-                PessimisticLockKeyResult::Waiting(None)
-            ));
-            ctx_inner.cb.execute(ProcessResult::Failed {
-                err: external_error.unwrap(),
-            });
-            return;
-        }
-
-        while let Ok((index, msg)) = ctx_inner.result_rx.try_recv() {
-            assert!(matches!(
-                results[index],
-                PessimisticLockKeyResult::Waiting(None)
-            ));
-            match msg {
-                Ok(lock_key_res) => results[index] = lock_key_res,
-                Err(e) => results[index] = PessimisticLockKeyResult::Failed(e), // ???
-            }
-        }
-
-        if let Some(e) = external_error {
-            let e = Arc::new(e);
-            for r in results {
-                if fail_all_on_error || matches!(r, PessimisticLockKeyResult::Waiting(_)) {
-                    *r = PessimisticLockKeyResult::Failed(e.clone());
-                }
-            }
-        }
-        STORAGE_KEYWISE_PESSIMISTIC_LOCK_HANDLE_DURATION_HISTOGRAM_STATIC
-            .finish_request
-            .observe(start_time.saturating_elapsed_secs());
-
-        ctx_inner.cb.execute(ctx_inner.pr);
-    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -2095,7 +1908,7 @@ mod tests {
     use super::*;
     use crate::storage::{
         kv::{Error as KvError, ErrorInner as KvErrorInner},
-        lock_manager::DummyLockManager,
+        lock_manager::{DummyLockManager, WaitTimeout},
         mvcc::{self, Mutation},
         test_util::latest_feature_gate,
         txn::{
@@ -2127,12 +1940,13 @@ mod tests {
         (
             Scheduler::new(
                 engine.clone(),
-                DummyLockManager,
+                DummyLockManager::new(),
                 ConcurrencyManager::new(1.into()),
                 &config,
                 DynamicConfigs {
                     pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
                     in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
+                    wake_up_delay_duration_ms: Arc::new(AtomicU64::new(0)),
                 },
                 Arc::new(FlowController::Singleton(EngineFlowController::empty())),
                 DummyReporter,
@@ -2272,12 +2086,13 @@ mod tests {
         };
         let scheduler = Scheduler::new(
             engine,
-            DummyLockManager,
+            DummyLockManager::new(),
             ConcurrencyManager::new(1.into()),
             &config,
             DynamicConfigs {
                 pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
                 in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
+                wake_up_delay_duration_ms: Arc::new(AtomicU64::new(0)),
             },
             Arc::new(FlowController::Singleton(EngineFlowController::empty())),
             DummyReporter,
@@ -2376,12 +2191,13 @@ mod tests {
         };
         let scheduler = Scheduler::new(
             engine,
-            DummyLockManager,
+            DummyLockManager::new(),
             ConcurrencyManager::new(1.into()),
             &config,
             DynamicConfigs {
                 pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
                 in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
+                wake_up_delay_duration_ms: Arc::new(AtomicU64::new(0)),
             },
             Arc::new(FlowController::Singleton(EngineFlowController::empty())),
             DummyReporter,
@@ -2434,12 +2250,13 @@ mod tests {
         };
         let scheduler = Scheduler::new(
             engine,
-            DummyLockManager,
+            DummyLockManager::new(),
             ConcurrencyManager::new(1.into()),
             &config,
             DynamicConfigs {
                 pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
                 in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
+                wake_up_delay_duration_ms: Arc::new(AtomicU64::new(0)),
             },
             Arc::new(FlowController::Singleton(EngineFlowController::empty())),
             DummyReporter,
@@ -2500,12 +2317,13 @@ mod tests {
         };
         let scheduler = Scheduler::new(
             engine,
-            DummyLockManager,
+            DummyLockManager::new(),
             ConcurrencyManager::new(1.into()),
             &config,
             DynamicConfigs {
                 pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
                 in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
+                wake_up_delay_duration_ms: Arc::new(AtomicU64::new(0)),
             },
             Arc::new(FlowController::Singleton(EngineFlowController::empty())),
             DummyReporter,
@@ -2561,12 +2379,13 @@ mod tests {
 
         let scheduler = Scheduler::new(
             engine,
-            DummyLockManager,
+            DummyLockManager::new(),
             ConcurrencyManager::new(1.into()),
             &config,
             DynamicConfigs {
                 pipelined_pessimistic_lock: Arc::new(AtomicBool::new(false)),
                 in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
+                wake_up_delay_duration_ms: Arc::new(AtomicU64::new(0)),
             },
             Arc::new(FlowController::Singleton(EngineFlowController::empty())),
             DummyReporter,

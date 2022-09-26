@@ -58,6 +58,7 @@ use txn_types::{Key, TimeStamp, Value, Write};
 
 use crate::storage::{
     kv::WriteData,
+    lock_manager,
     lock_manager::{LockManager, LockWaitToken, WaitTimeout},
     metrics,
     mvcc::{Lock as MvccLock, MvccReader, ReleasedLock, SnapshotReader},
@@ -66,8 +67,8 @@ use crate::storage::{
         scheduler::PartialPessimisticLockRequestSharedState, ProcessResult, Result,
     },
     types::{
-        MvccInfo, PessimisticLockKeyResult, PessimisticLockResults, PrewriteResult,
-        SecondaryLocksStatus, StorageCallbackType, TxnStatus,
+        MvccInfo, PessimisticLockKeyResult, PessimisticLockParameters, PessimisticLockRes,
+        PrewriteResult, SecondaryLocksStatus, StorageCallbackType, TxnStatus,
     },
     Error as StorageError, Result as StorageResult, Snapshot, Statistics,
 };
@@ -381,82 +382,32 @@ pub struct WriteResult {
     pub to_be_write: WriteData,
     pub rows: usize,
     pub pr: ProcessResult,
-    pub released_locks: Option<ReleasedLocks>,
+    pub lock_info: Option<WriteResultLockInfo>,
+    pub released_locks: ReleasedLocks,
     pub new_acquired_locks: Vec<(TimeStamp, Key)>,
     pub lock_guards: Vec<KeyHandleGuard>,
     pub response_policy: ResponsePolicy,
 }
 
-#[derive(Clone)]
-pub struct PessimisticLockParameters {
-    pub pb_ctx: Context,
-    pub primary: Vec<u8>,
-    pub start_ts: TimeStamp,
-    pub lock_ttl: u64,
-    pub for_update_ts: TimeStamp,
-    pub wait_timeout: Option<WaitTimeout>,
-    pub return_values: bool,
-    pub min_commit_ts: TimeStamp,
-    pub check_existence: bool,
-    pub is_first_lock: bool,
-}
-
-pub type CallbackWithArcError<T> =
-    Box<dyn FnOnce(std::result::Result<T, std::sync::Arc<StorageError>>) + Send>;
-
-pub type PessimisticLockKeyCallback = CallbackWithArcError<PessimisticLockKeyResult>;
-
 pub struct WriteResultLockInfo {
-    pub index_in_request: usize,
+    pub lock: lock_manager::LockDigest,
     pub key: Key,
-    pub should_not_exist: bool,
-    pub allow_lock_with_conflict: bool,
-    pub last_found_lock: LockInfo,
-    pub lock_hash: u64,
-    pub hash_for_latch: u64,
-    pub key_cb: Option<PessimisticLockKeyCallback>,
-    // pub locks: Vec<(usize, LockInfo, lock_manager::LockDigest,
-    // Option<Callback<PessimisticLockKeyResult>>)>,
-    pub term: Option<NonZeroU64>,
+    pub lock_info_pb: LockInfo,
     pub parameters: PessimisticLockParameters,
-    pub lock_wait_token: LockWaitToken,
-    pub req_states: Option<Arc<PartialPessimisticLockRequestSharedState>>,
-    pub wait_start_time: Option<Instant>,
-}
-
-impl Debug for WriteResultLockInfo {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{{WriteResultLockInfo...}}")
-    }
 }
 
 impl WriteResultLockInfo {
-    pub fn new(
-        index_in_request: usize,
-        key: Key,
-        should_not_exist: bool,
-        allow_lock_with_conflict: bool,
-        last_found_lock: LockInfo,
-        term: Option<NonZeroU64>,
-        parameters: PessimisticLockParameters,
-        lock_hash: u64,
-        hash_for_latch: u64,
-        key_cb: Option<CallbackWithArcError<PessimisticLockKeyResult>>,
-    ) -> Self {
+    pub fn new(lock_info_pb: LockInfo, parameters: PessimisticLockParameters) -> Self {
+        let lock = lock_manager::LockDigest {
+            ts: lock_info_pb.get_lock_version().into(),
+            hash: Key::from_raw(lock_info_pb.get_key()).gen_hash(),
+        };
+        let key = Key::from_raw(lock_info_pb.get_key());
         Self {
-            index_in_request,
+            lock,
             key,
-            should_not_exist,
-            allow_lock_with_conflict,
-            last_found_lock,
-            lock_hash,
-            hash_for_latch,
-            key_cb,
-            term,
+            lock_info_pb,
             parameters,
-            lock_wait_token: LockWaitToken(None),
-            req_states: None,
-            wait_start_time: None,
         }
     }
 
@@ -812,7 +763,7 @@ pub mod test_util {
     ) -> Result<PrewriteResult> {
         let snap = engine.snapshot(Default::default())?;
         let context = WriteContext {
-            lock_mgr: &DummyLockManager {},
+            lock_mgr: &DummyLockManager::new(),
             concurrency_manager: cm,
             extra_op: ExtraOp::Noop,
             statistics,
@@ -949,7 +900,7 @@ pub mod test_util {
         );
 
         let context = WriteContext {
-            lock_mgr: &DummyLockManager {},
+            lock_mgr: &DummyLockManager::new(),
             concurrency_manager,
             extra_op: ExtraOp::Noop,
             statistics,
@@ -973,7 +924,7 @@ pub mod test_util {
         let concurrency_manager = ConcurrencyManager::new(start_ts.into());
         let cmd = Rollback::new(keys, TimeStamp::from(start_ts), ctx);
         let context = WriteContext {
-            lock_mgr: &DummyLockManager {},
+            lock_mgr: &DummyLockManager::new(),
             concurrency_manager,
             extra_op: ExtraOp::Noop,
             statistics,

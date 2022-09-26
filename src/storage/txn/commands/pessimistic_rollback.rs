@@ -90,7 +90,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
             to_be_write: write_data,
             rows,
             pr: ProcessResult::MultiRes { results: vec![] },
-            released_locks: Some(released_locks),
+            lock_info: None,
+            released_locks,
             new_acquired_locks: vec![],
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
@@ -136,7 +137,7 @@ pub mod tests {
             for_update_ts,
             deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
         };
-        let lock_mgr = DummyLockManager;
+        let lock_mgr = DummyLockManager::new();
         let write_context = WriteContext {
             lock_mgr: &lock_mgr,
             concurrency_manager: cm,

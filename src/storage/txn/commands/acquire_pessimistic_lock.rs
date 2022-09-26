@@ -19,14 +19,15 @@ use crate::storage::{
     txn::{
         acquire_pessimistic_lock,
         commands::{
-            CommandExt, PessimisticLockParameters, ReaderWithStats, ResponsePolicy, TypedCommand,
-            WriteCommand, WriteContext, WriteResult, WriteResultLockInfo,
+            CommandExt, PessimisticLockParameters, ReaderWithStats, ReleasedLocks, ResponsePolicy,
+            TypedCommand, WriteCommand, WriteContext, WriteResult, WriteResultLockInfo,
         },
         scheduler::PartialPessimisticLockRequestSharedState,
         Error, ErrorInner, Result,
     },
-    types::PessimisticLockKeyResult,
-    PessimisticLockResults, ProcessResult, Result as StorageResult, Snapshot,
+    types::{PessimisticLockKeyResult, PessimisticLockParameters},
+    Error as StorageError, ErrorInner as StorageErrorInner, PessimisticLockRes, ProcessResult,
+    Result as StorageResult, Snapshot,
 };
 
 pub struct PessimisticLockKeyContext {
@@ -317,7 +318,7 @@ impl AcquirePessimisticLock {
             to_be_write,
             rows: written_rows,
             pr,
-            released_locks: None,
+            released_locks: ReleasedLocks::new(),
             new_acquired_locks: new_locked_keys,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnProposed,
@@ -457,7 +458,7 @@ impl AcquirePessimisticLock {
             to_be_write,
             rows: written_rows,
             pr,
-            released_locks: None,
+            released_locks: ReleasedLocks::new(),
             new_acquired_locks: new_locked_keys,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnProposed,

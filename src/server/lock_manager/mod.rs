@@ -12,7 +12,6 @@ use std::{
         Arc,
     },
     thread::JoinHandle,
-    time::Instant,
 };
 
 use engine_traits::KvEngine;
@@ -43,15 +42,6 @@ use crate::{
     },
 };
 
-// const DETECTED_SLOTS_NUM: usize = 128;
-//
-// #[inline]
-// fn detected_slot_idx(token: LockWaitToken) -> usize {
-//     let mut s = DefaultHasher::new();
-//     token.hash(&mut s);
-//     (s.finish() as usize) & (DETECTED_SLOTS_NUM - 1)
-// }
-
 /// `LockManager` has two components working in two threads:
 ///   * One is the `WaiterManager` which manages transactions waiting for locks.
 ///   * The other one is the `Detector` which detects deadlocks between
@@ -65,13 +55,13 @@ pub struct LockManager {
 
     waiter_count: Arc<AtomicUsize>,
 
-    /// Record transactions which have sent requests to detect deadlock.
-    // detected: Arc<[CachePadded<Mutex<HashSet<LockWaitToken>>>]>,
     token_allocator: Arc<AtomicU64>,
 
     pipelined: Arc<AtomicBool>,
 
     in_memory: Arc<AtomicBool>,
+
+    wake_up_delay_duration_ms: Arc<AtomicU64>,
 }
 
 impl Clone for LockManager {
@@ -82,10 +72,10 @@ impl Clone for LockManager {
             waiter_mgr_scheduler: self.waiter_mgr_scheduler.clone(),
             detector_scheduler: self.detector_scheduler.clone(),
             waiter_count: self.waiter_count.clone(),
-            // detected: self.detected.clone(),
             token_allocator: self.token_allocator.clone(),
             pipelined: self.pipelined.clone(),
             in_memory: self.in_memory.clone(),
+            wake_up_delay_duration_ms: self.wake_up_delay_duration_ms.clone(),
         }
     }
 }
@@ -94,9 +84,6 @@ impl LockManager {
     pub fn new(cfg: &Config) -> Self {
         let waiter_mgr_worker = FutureWorker::new("waiter-manager");
         let detector_worker = FutureWorker::new("deadlock-detector");
-        // let mut detected = Vec::with_capacity(DETECTED_SLOTS_NUM);
-        // detected.resize_with(DETECTED_SLOTS_NUM, ||
-        // Mutex::new(HashSet::default()).into());
 
         Self {
             waiter_mgr_scheduler: WaiterMgrScheduler::new(waiter_mgr_worker.scheduler()),
@@ -104,10 +91,12 @@ impl LockManager {
             detector_scheduler: DetectorScheduler::new(detector_worker.scheduler()),
             detector_worker: Some(detector_worker),
             waiter_count: Arc::new(AtomicUsize::new(0)),
-            // detected: detected.into(),
             token_allocator: Arc::new(AtomicU64::new(0)),
             pipelined: Arc::new(AtomicBool::new(cfg.pipelined)),
             in_memory: Arc::new(AtomicBool::new(cfg.in_memory)),
+            wake_up_delay_duration_ms: Arc::new(AtomicU64::new(
+                cfg.wake_up_delay_duration.as_millis(),
+            )),
         }
     }
 
@@ -213,10 +202,6 @@ impl LockManager {
         let role_change_notifier =
             deadlock::RoleChangeNotifier::new(self.detector_scheduler.clone());
         role_change_notifier.register(host);
-        let region_cancel_observer = waiter_manager::RegionLockWaitCancellationObserver::new(
-            self.waiter_mgr_scheduler.clone(),
-        );
-        region_cancel_observer.register(host);
     }
 
     /// Creates a `DeadlockService` to handle deadlock detect requests from
@@ -234,6 +219,7 @@ impl LockManager {
             self.detector_scheduler.clone(),
             self.pipelined.clone(),
             self.in_memory.clone(),
+            self.wake_up_delay_duration_ms.clone(),
         )
     }
 
@@ -241,28 +227,12 @@ impl LockManager {
         StorageDynamicConfigs {
             pipelined_pessimistic_lock: self.pipelined.clone(),
             in_memory_pessimistic_lock: self.in_memory.clone(),
+            wake_up_delay_duration_ms: self.wake_up_delay_duration_ms.clone(),
         }
     }
-
-    // fn add_to_detected(&self, token: LockWaitToken) {
-    //     let mut detected = self.detected[detected_slot_idx(token)].lock();
-    //     detected.insert(token);
-    // }
-    //
-    // fn remove_from_detected(&self, token: LockWaitToken) -> bool {
-    //     let mut detected = self.detected[detected_slot_idx(token)].lock();
-    //     detected.remove(&token)
-    // }
 }
 
 impl LockManagerTrait for LockManager {
-    fn set_key_wake_up_delay_callback(
-        &self,
-        cb: Box<dyn Fn(&txn_types::Key, TimeStamp, TimeStamp, Instant) + Send>,
-    ) {
-        self.waiter_mgr_scheduler.set_key_wake_up_delay_callback(cb);
-    }
-
     fn allocate_token(&self) -> LockWaitToken {
         LockWaitToken(Some(self.token_allocator.fetch_add(1, Ordering::SeqCst)))
     }
@@ -274,7 +244,7 @@ impl LockManagerTrait for LockManager {
         region_epoch: RegionEpoch,
         term: u64,
         start_ts: TimeStamp,
-        wait_info: Vec<KeyLockWaitInfo>,
+        wait_info: KeyLockWaitInfo,
         is_first_lock: bool,
         timeout: Option<WaitTimeout>,
         cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
@@ -295,9 +265,8 @@ impl LockManagerTrait for LockManager {
         // If it is the first lock the transaction tries to lock, it won't cause
         // deadlock.
         if !is_first_lock {
-            // self.add_to_detected(token);
             self.detector_scheduler
-                .detect(token, start_ts, wait_info.clone(), diag_ctx.clone()); // TODO: Try to avoid cloning.
+                .detect(start_ts, wait_info.clone(), diag_ctx.clone()); // TODO: Try to avoid cloning.
         }
         self.waiter_mgr_scheduler.wait_for(
             token,
@@ -316,10 +285,7 @@ impl LockManagerTrait for LockManager {
         self.waiter_mgr_scheduler.update_wait_for(updated_items);
     }
 
-    fn on_keys_wakeup(&self, wake_up_events: Vec<KeyWakeUpEvent>) {
-        self.waiter_mgr_scheduler
-            .record_legacy_waking_up_keys(wake_up_events);
-    }
+    fn on_keys_wakeup(&self, _wake_up_events: Vec<KeyWakeUpEvent>) {}
 
     fn remove_lock_wait(&self, token: LockWaitToken) {
         // If `hashes` is some, there may be some waiters waiting for these locks.
@@ -327,12 +293,6 @@ impl LockManagerTrait for LockManager {
         if self.has_waiter() {
             self.waiter_mgr_scheduler.remove_lock_wait(token);
         }
-        // If a pessimistic transaction is committed or rolled back and it once
-        // sent requests to detect deadlock, clean up its wait-for
-        // entries in the deadlock detector.
-        // if is_pessimistic_txn && self.remove_from_detected(token) {
-        //     self.detector_scheduler.clean_up(token);
-        // }
     }
 
     fn has_waiter(&self) -> bool {
@@ -356,6 +316,7 @@ mod tests {
     use security::SecurityConfig;
     use tikv_util::config::ReadableDuration;
     use tracker::{TrackerToken, INVALID_TRACKER_TOKEN};
+    use txn_types::Key;
 
     use self::{deadlock::tests::*, metrics::*, waiter_manager::tests::*};
     use super::*;
@@ -433,7 +394,7 @@ mod tests {
         );
         assert!(!lock_mgr.has_waiter());
 
-        // Wake up
+        // Removal
         let (waiter_ts, lock) = (
             10.into(),
             LockDigest {
@@ -441,7 +402,7 @@ mod tests {
                 hash: 20,
             },
         );
-        let (waiter, lock_info, f) = new_test_waiter(waiter_ts, lock.ts, lock.hash);
+        let (waiter, _lock_info, f) = new_test_waiter(waiter_ts, lock.ts, lock.hash);
         let token = lock_mgr.allocate_token();
         lock_mgr.wait_for(
             token,
@@ -456,19 +417,24 @@ mod tests {
             DiagnosticContext::default(),
         );
         assert!(lock_mgr.has_waiter());
-        // lock_mgr.wake_up(lock.ts, vec![lock.hash], 30.into(), false);
         lock_mgr.remove_lock_wait(token);
+        // The waiter will be directly dropped.
+        // In normal cases, when `remove_lock_wait` is invoked, the request's callback
+        // must be called somewhere else.
         assert_elapsed(
-            || expect_write_conflict(block_on(f).unwrap(), waiter_ts, lock_info, 30.into()),
+            || {
+                block_on(f).unwrap_err();
+            },
             0,
             500,
         );
         assert!(!lock_mgr.has_waiter());
 
         // Deadlock
-        let (waiter1, lock_info1, f1) = new_test_waiter(10.into(), 20.into(), 20);
+        let (waiter1, _lock_info1, f1) = new_test_waiter_with_key(10.into(), 20.into(), b"k1");
+        let token1 = lock_mgr.allocate_token();
         lock_mgr.wait_for(
-            lock_mgr.allocate_token(),
+            token1,
             1,
             RegionEpoch::default(),
             1,
@@ -480,10 +446,9 @@ mod tests {
             diag_ctx(b"k1", b"tag1", INVALID_TRACKER_TOKEN),
         );
         assert!(lock_mgr.has_waiter());
-        let (waiter2, lock_info2, f2) = new_test_waiter(20.into(), 10.into(), 10);
-        let token = lock_mgr.allocate_token();
+        let (waiter2, lock_info2, f2) = new_test_waiter_with_key(20.into(), 10.into(), b"k2");
         lock_mgr.wait_for(
-            token,
+            lock_mgr.allocate_token(),
             1,
             RegionEpoch::default(),
             1,
@@ -501,17 +466,19 @@ mod tests {
                     block_on(f2).unwrap(),
                     20.into(),
                     lock_info2,
-                    20,
+                    Key::from_raw(b"k1").gen_hash(),
                     &[(10, 20, b"k1", b"tag1"), (20, 10, b"k2", b"tag2")],
                 )
             },
             0,
             500,
         );
-        // Waiter2 releases its lock.
-        lock_mgr.remove_lock_wait(token);
+        // Simulating waiter2 releases its lock so that waiter1 is removed
+        lock_mgr.remove_lock_wait(token1);
         assert_elapsed(
-            || expect_write_conflict(block_on(f1).unwrap(), 10.into(), lock_info1, 20.into()),
+            || {
+                block_on(f1).unwrap_err();
+            },
             0,
             500,
         );
@@ -519,11 +486,29 @@ mod tests {
 
         // If it's the first lock, no detect.
         // If it's not, detect deadlock.
+        // Note that if txn 30 is writing its first lock, there should never be another
+        // transaction waiting for txn 30's lock. We added this waiter (40
+        // waiting for 30) just for checking whether the lock manager does the
+        // detection internally.
+        let (waiter1, _, f1) = new_test_waiter_with_key(40.into(), 30.into(), b"k1");
+        let token1 = lock_mgr.allocate_token();
+        lock_mgr.wait_for(
+            token1,
+            1,
+            RegionEpoch::default(),
+            1,
+            waiter1.start_ts,
+            waiter1.wait_info,
+            false,
+            Some(WaitTimeout::Default),
+            waiter1.cancel_callback,
+            diag_ctx(b"k1", b"tag1", INVALID_TRACKER_TOKEN),
+        );
         for is_first_lock in &[true, false] {
-            let (waiter, _, mut f) = new_test_waiter(30.into(), 40.into(), 40);
-            let token = lock_mgr.allocate_token();
+            let (waiter, lock_info2, f2) = new_test_waiter_with_key(30.into(), 40.into(), b"k2");
+            let token2 = lock_mgr.allocate_token();
             lock_mgr.wait_for(
-                token,
+                token2,
                 1,
                 RegionEpoch::default(),
                 1,
@@ -532,30 +517,31 @@ mod tests {
                 *is_first_lock,
                 Some(WaitTimeout::Default),
                 waiter.cancel_callback,
-                DiagnosticContext::default(),
+                diag_ctx(b"k2", b"tag2", INVALID_TRACKER_TOKEN),
             );
             assert!(lock_mgr.has_waiter());
-            // assert_eq!(lock_mgr.remove_from_detected(token), !is_first_lock);
-            lock_mgr.remove_lock_wait(token);
-            // block_on(f).unwrap();
-            f.try_recv().unwrap_err();
+            if *is_first_lock {
+                lock_mgr.remove_lock_wait(token2);
+                block_on(f2).unwrap_err();
+            } else {
+                assert_elapsed(
+                    || {
+                        expect_deadlock(
+                            block_on(f2).unwrap(),
+                            30.into(),
+                            lock_info2,
+                            Key::from_raw(b"k1").gen_hash(),
+                            &[(40, 30, b"k1", b"tag1"), (30, 40, b"k2", b"tag2")],
+                        )
+                    },
+                    0,
+                    500,
+                );
+            }
         }
+        lock_mgr.remove_lock_wait(token1);
+        block_on(f1).unwrap_err();
         assert!(!lock_mgr.has_waiter());
-
-        // // If key_hashes is empty, no wake up.
-        // let prev_wake_up = TASK_COUNTER_METRICS.wake_up.get();
-        // lock_mgr.wake_up(10.into(), vec![], 10.into(), false);
-        // assert_eq!(TASK_COUNTER_METRICS.wake_up.get(), prev_wake_up);
-        //
-        // // If it's non-pessimistic-txn, no clean up.
-        // let prev_clean_up = TASK_COUNTER_METRICS.clean_up.get();
-        // lock_mgr.wake_up(10.into(), vec![], 10.into(), false);
-        // assert_eq!(TASK_COUNTER_METRICS.clean_up.get(), prev_clean_up);
-        //
-        // // If the txn doesn't wait for locks, no clean up.
-        // let prev_clean_up = TASK_COUNTER_METRICS.clean_up.get();
-        // lock_mgr.wake_up(10.into(), vec![], 10.into(), true);
-        // assert_eq!(TASK_COUNTER_METRICS.clean_up.get(), prev_clean_up);
 
         // If timeout is none, no wait for.
         let (waiter, lock_info, f) = new_test_waiter(10.into(), 20.into(), 20);

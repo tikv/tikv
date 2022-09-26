@@ -7,7 +7,9 @@ use crate::storage::{
     kv::{Modify, WriteData},
     lock_manager::LockManager,
     txn::{
-        commands::{CommandExt, ResponsePolicy, WriteCommand, WriteContext, WriteResult},
+        commands::{
+            CommandExt, ReleasedLocks, ResponsePolicy, WriteCommand, WriteContext, WriteResult,
+        },
         Result,
     },
     ProcessResult, Snapshot,
@@ -46,7 +48,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
             to_be_write,
             rows,
             pr: ProcessResult::Res,
-            released_locks: None,
+            lock_info: None,
+            released_locks: ReleasedLocks::new(),
             new_acquired_locks: vec![],
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,

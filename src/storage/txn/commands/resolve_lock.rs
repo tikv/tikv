@@ -82,8 +82,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
 
         let mut scan_key = self.scan_key.take();
         let rows = key_locks.len();
-        // Map txn's start_ts to ReleasedLocks
-        // let mut released_locks = HashMap::default();
         let mut released_locks = ReleasedLocks::new();
         for (current_key, current_lock) in key_locks {
             txn.start_ts = current_lock.ts;
@@ -119,10 +117,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
                     commit_ts,
                 }));
             };
-            // released_locks
-            //     .entry(current_lock.ts)
-            //     .or_insert_with(|| ReleasedLocks::new(current_lock.ts, commit_ts))
-            //     .push(released);
             released_locks.push(released);
 
             if txn.write_size() >= MAX_TXN_WRITE_SIZE {
@@ -130,9 +124,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
                 break;
             }
         }
-        // released_locks
-        //     .into_iter()
-        //     .for_each(|(_, released_locks)| released_locks.wake_up(lock_mgr));
 
         let pr = if scan_key.is_none() {
             ProcessResult::Res
@@ -154,7 +145,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
             to_be_write: write_data,
             rows,
             pr,
-            released_locks: Some(released_locks),
+            lock_info: None,
+            released_locks,
             new_acquired_locks: vec![],
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,

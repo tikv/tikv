@@ -144,6 +144,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
         if let SecondaryLocksStatus::RolledBack = &result {
             // One row is mutated only when a secondary lock is rolled back.
             rows = 1;
+        } else {
+            released_locks.0.clear();
         }
         let pr = ProcessResult::SecondaryLocksStatus { status: result };
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
@@ -153,7 +155,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
             to_be_write: write_data,
             rows,
             pr,
-            released_locks: Some(released_locks),
+            lock_info: None,
+            released_locks,
             new_acquired_locks: vec![],
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
@@ -196,7 +199,7 @@ pub mod tests {
             .process_write(
                 snapshot,
                 WriteContext {
-                    lock_mgr: &DummyLockManager,
+                    lock_mgr: &DummyLockManager::new(),
                     concurrency_manager: cm,
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
@@ -232,7 +235,7 @@ pub mod tests {
                 .process_write(
                     snapshot,
                     WriteContext {
-                        lock_mgr: &DummyLockManager,
+                        lock_mgr: &DummyLockManager::new(),
                         concurrency_manager: cm.clone(),
                         extra_op: Default::default(),
                         statistics: &mut Default::default(),
