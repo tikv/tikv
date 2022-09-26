@@ -11,7 +11,7 @@ use std::{
     },
     iter::{FromIterator, Iterator},
     mem,
-    sync::{atomic::Ordering, Arc, Mutex},
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
     u64,
 };
@@ -2635,7 +2635,7 @@ where
         if !self.fsm.peer.is_leader() {
             let mut resp = ExtraMessage::default();
             resp.set_type(ExtraMessageType::MsgTracePeerAvailabilityInfo);
-            resp.miss_data = self.fsm.peer.unavailable.load(Ordering::SeqCst);
+            resp.miss_data = self.fsm.peer.unavailable;
             self.fsm
                 .peer
                 .send_extra_message(resp, &mut self.ctx.trans, from);

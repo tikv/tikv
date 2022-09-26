@@ -7,7 +7,7 @@ use std::{
     collections::VecDeque,
     fmt, mem,
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
         mpsc::SyncSender,
         Arc, Mutex,
     },
@@ -919,7 +919,7 @@ where
     /// the conversion operation is complete, and can continue to schedule
     /// other operators to prevent the existence of multiple witnesses in
     /// the same time period.
-    pub unavailable: Arc<AtomicBool>,
+    pub unavailable: bool,
 
     /// Force leader state is only used in online recovery when the majority of
     /// peers are missing. In this state, it forces one peer to become leader
@@ -1133,7 +1133,7 @@ where
             compaction_declined_bytes: 0,
             leader_unreachable: false,
             pending_remove: false,
-            unavailable: Arc::new(AtomicBool::new(false)),
+            unavailable: false,
             should_wake_up: false,
             force_leader: None,
             pending_merge_state: None,
