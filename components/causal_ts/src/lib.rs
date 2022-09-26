@@ -30,15 +30,15 @@ pub trait CausalTsProvider: Send + Sync {
         block_on(self.async_get_ts())
     }
 
-    /// Flush (cached) timestamps to keep causality on some events, such as
-    /// "leader transfer".
-    fn flush(&self) -> Result<()> {
+    /// Flush (cached) timestamps and return first timestamp to keep causality 
+    /// on some events, such as "leader transfer".
+    fn flush(&self) -> Result<TimeStamp> {
         block_on(self.async_flush())
     }
 
     async fn async_get_ts(&self) -> Result<TimeStamp>;
 
-    async fn async_flush(&self) -> Result<()>;
+    async fn async_flush(&self) -> Result<TimeStamp>;
 }
 
 #[enum_dispatch(CausalTsProvider)]
@@ -80,9 +80,9 @@ pub mod tests {
 
         // This is used for unit test. Add 100 from current.
         // Do not modify this value as several test cases depend on it.
-        async fn async_flush(&self) -> Result<()> {
+        async fn async_flush(&self) -> Result<TimeStamp> {
             self.ts.fetch_add(100, Ordering::Relaxed);
-            Ok(())
+            self.async_get_ts().await
         }
     }
 }

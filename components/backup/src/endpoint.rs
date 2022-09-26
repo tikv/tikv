@@ -982,7 +982,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             if let Err(e) = self
                 .causal_ts_provider
                 .as_ref()
-                .map_or(Ok(()), |provider| provider.flush())
+                .map_or(Ok(TimeStamp::new(0)), |provider| provider.flush())
             {
                 error!("backup flush causal timestamp failed"; "err" => ?e);
                 let mut response = BackupResponse::default();

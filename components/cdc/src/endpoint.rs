@@ -1025,7 +1025,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                 // RawKV write requests will get larger TSO after this point.
                 // RawKV CDC's resolved_ts is guaranteed by ConcurrencyManager::global_min_lock_ts,
                 // which lock flying keys's ts in raw put and delete interfaces in `Storage`.
-                Some(provider) => provider.get_ts().unwrap_or_default(),
+                Some(provider) => provider.async_get_ts().await.unwrap_or_default(),
                 None => pd_client.get_tso().await.unwrap_or_default(),
             };
             let mut min_ts = min_ts_pd;

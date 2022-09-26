@@ -19,6 +19,7 @@ use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
+use txn_types::TimeStamp;
 use futures::{compat::Future01CompatExt, FutureExt};
 use grpcio_health::{HealthService, ServingStatus};
 use kvproto::{
@@ -1621,25 +1622,23 @@ where
                     )
                     .is_ok();
             };
+
             while txn_ext.max_ts_sync_status.load(Ordering::SeqCst) == initial_status {
+                // `causal_ts_provier` need flush for rawkv apiv2. `causal_ts_provider`
+                // flsuh will fetch batch of tso to update its cache and return
+                // the first tso. So `concurrency_manager` can use the tso returned
+                // by `causal_ts_provider`.
                 if let Some(causal_ts_provider) = &causal_ts_provider {
-                    if let Err(e) = causal_ts_provider.async_flush().await {
-                        warn!(
-                            "failed to update max timestamp for region {}: {:?}",
-                            region_id, e
-                        );
-                    } else {
-                        match causal_ts_provider.async_get_ts().await {
-                            Ok(ts) => {
-                                update_ts(ts);
-                                break;
-                            }
-                            Err(e) => {
-                                warn!(
-                                    "failed to update max timestamp for region {}: {:?}",
-                                    region_id, e
-                                );
-                            }
+                    match causal_ts_provider.async_flush().await {
+                        Ok(ts) => {
+                            update_ts(ts);
+                            break;
+                        }
+                        Err(e) => {
+                            warn!(
+                                "failed to update max timestamp for region {}: {:?}",
+                                region_id, e
+                            );
                         }
                     }
                 } else {
