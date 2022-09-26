@@ -3659,15 +3659,6 @@ where
             let (store_id, peer_id) = (peer.get_store_id(), peer.get_id());
             match change_type {
                 ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
-                    if self.fsm.peer.is_leader() {
-                        if peer.is_witness {
-                            self.fsm.peer.peers_miss_data.insert(peer.id, false);
-                        } else {
-                            self.fsm.peer.peers_miss_data.insert(peer.id, true);
-                            self.register_track_non_witnesses_availability_tick();
-                        }
-                    }
-
                     let group_id = self
                         .ctx
                         .global_replication_state
@@ -3686,6 +3677,12 @@ where
                     // Add this peer to peer_heartbeats.
                     self.fsm.peer.peer_heartbeats.insert(peer_id, now);
                     if self.fsm.peer.is_leader() {
+                        if peer.is_witness {
+                            self.fsm.peer.peers_miss_data.insert(peer.id, false);
+                        } else {
+                            self.fsm.peer.peers_miss_data.insert(peer.id, true);
+                            self.register_track_non_witnesses_availability_tick();
+                        }
                         need_ping = true;
                         self.fsm.peer.peers_start_pending_time.push((peer_id, now));
                         // As `raft_max_inflight_msgs` may have been updated via online config

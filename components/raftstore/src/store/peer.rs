@@ -888,8 +888,7 @@ where
     peer_cache: RefCell<HashMap<u64, metapb::Peer>>,
     /// Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: HashMap<u64, Instant>,
-    /// Record the data status of each follower or learner peer,
-    /// used for witness -> non-witness conversion.
+    /// Record the data status of each follower or learner peer.
     pub peers_miss_data: HashMap<u64, bool>,
 
     proposals: ProposalQueue<Callback<EK::Snapshot>>,
@@ -2577,6 +2576,7 @@ where
                 // Update apply index to `last_applying_idx`
                 self.read_progress
                     .update_applied(self.last_applying_idx, &ctx.coprocessor_host);
+                self.notify_leader_non_witness_is_available(ctx);
             }
             CheckApplyingSnapStatus::Idle => {
                 // FIXME: It's possible that the snapshot applying task is canceled.
@@ -2591,6 +2591,30 @@ where
         }
         assert_eq!(self.apply_snap_ctx, None);
         true
+    }
+
+    fn notify_leader_non_witness_is_available<T: Transport>(
+        &mut self,
+        ctx: &mut PollContext<EK, ER, T>,
+    ) {
+        if self.unavailable {
+            self.unavailable = false;
+            fail_point!("ignore notify leader non-witness is available", |_| {});
+            let leader_id = self.leader_id();
+            let leader = self.get_peer_from_cache(leader_id);
+            if let Some(leader) = leader {
+                let mut msg = ExtraMessage::default();
+                msg.set_type(ExtraMessageType::MsgTracePeerAvailabilityInfo);
+                msg.miss_data = false;
+                msg.safe_ts = self.read_progress.safe_ts();
+                self.send_extra_message(msg, &mut ctx.trans, &leader);
+                info!(
+                    "notify leader non-witness is available";
+                    "region id" => self.region().get_id(),
+                    "peer id" => self.peer.id
+                );
+            }
+        }
     }
 
     pub fn handle_raft_ready_append<T: Transport>(
