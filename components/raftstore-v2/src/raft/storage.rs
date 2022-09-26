@@ -10,24 +10,26 @@ use std::{
     },
 };
 
-use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletFactory};
+use engine_traits::{KvEngine, Mutable, RaftEngine, RaftLogBatch, TabletFactory, CF_RAFT};
 use kvproto::{
     metapb::{self, Region},
-    raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState},
+    raft_serverpb::{
+        MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
+    },
 };
+use protobuf::Message;
 use raft::{
     eraftpb::{ConfState, Entry, HardState, Snapshot},
     GetEntriesContext, RaftState, INVALID_ID,
 };
 use raftstore::store::{
-    fsm::GenSnapTask,
     util::{self, find_peer},
     EntryStorage, RaftlogFetchTask, SnapState, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
 };
 use slog::{error, info, o, warn, Logger};
-use tikv_util::{box_err, worker::Scheduler};
+use tikv_util::{box_err, debug, worker::Scheduler};
 
-use crate::{worker::SnapshotTask, Result};
+use crate::{router::GenSnapTask, worker::RegionTask, Result};
 
 const MAX_SNAP_TRY_CNT: usize = 5;
 
@@ -58,6 +60,47 @@ pub fn write_initial_states(wb: &mut impl RaftLogBatch, region: Region) -> Resul
     Ok(())
 }
 
+pub fn write_peer_state<T: Mutable>(
+    kv_wb: &mut T,
+    region: &metapb::Region,
+    state: PeerState,
+    merge_state: Option<MergeState>,
+    suffix: u64,
+) -> Result<()> {
+    let region_id = region.get_id();
+    let mut region_state = RegionLocalState::default();
+    region_state.set_state(state);
+    region_state.set_region(region.clone());
+    if let Some(state) = merge_state {
+        region_state.set_merge_state(state);
+    }
+    region_state.set_tablet_index(suffix);
+
+    debug!(
+        "writing merge state";
+        "region_id" => region_id,
+        "state" => ?region_state,
+    );
+    kv_wb.put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state)?;
+    Ok(())
+}
+
+// When we bootstrap the region or handling split new region, we must
+// call this to initialize region apply state first.
+pub fn write_initial_apply_state<T: Mutable>(kv_wb: &mut T, region_id: u64) -> Result<()> {
+    let mut apply_state = RaftApplyState::default();
+    apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
+    apply_state
+        .mut_truncated_state()
+        .set_index(RAFT_INIT_LOG_INDEX);
+    apply_state
+        .mut_truncated_state()
+        .set_term(RAFT_INIT_LOG_TERM);
+
+    kv_wb.put_msg_cf(CF_RAFT, &keys::apply_state_key(region_id), &apply_state)?;
+    Ok(())
+}
+
 /// A storage for raft.
 ///
 /// It's similar to `PeerStorage` in v1.
@@ -74,8 +117,9 @@ pub struct Storage<ER> {
     /// Snapshot state
     snap_state: RefCell<SnapState>,
     gen_snap_task: RefCell<Option<GenSnapTask>>,
-    region_scheduler: Scheduler<SnapshotTask>,
+    region_scheduler: Scheduler<RegionTask>,
     snap_tried_cnt: RefCell<usize>,
+    tablet_suffix: Option<u64>,
 }
 
 impl<ER: RaftEngine> Debug for Storage<ER> {
@@ -133,7 +177,7 @@ where
         region: Region,
         engine: ER,
         log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
-        region_scheduler: Scheduler<SnapshotTask>,
+        region_scheduler: Scheduler<RegionTask>,
         logger: &Logger,
     ) -> Result<Self> {
         let mut region_state = RegionLocalState::default();
@@ -148,6 +192,7 @@ where
             region_scheduler,
             false,
             logger,
+            None,
         )
     }
 
@@ -160,7 +205,7 @@ where
         store_id: u64,
         engine: ER,
         log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
-        region_scheduler: Scheduler<SnapshotTask>,
+        region_scheduler: Scheduler<RegionTask>,
         logger: &Logger,
     ) -> Result<Option<Storage<ER>>> {
         let region_state = match engine.get_region_state(region_id) {
@@ -192,6 +237,17 @@ where
             }
         };
 
+        let suffix = match region_state.get_state() {
+            PeerState::Tombstone | PeerState::Applying => None,
+            _ => {
+                if region_state.get_tablet_index() != 0 {
+                    Some(region_state.get_tablet_index())
+                } else {
+                    None
+                }
+            }
+        };
+
         Self::create(
             store_id,
             region_state,
@@ -202,6 +258,7 @@ where
             region_scheduler,
             true,
             logger,
+            suffix,
         )
         .map(Some)
     }
@@ -213,9 +270,10 @@ where
         apply_state: RaftApplyState,
         engine: ER,
         log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
-        region_scheduler: Scheduler<SnapshotTask>,
+        region_scheduler: Scheduler<RegionTask>,
         persisted: bool,
         logger: &Logger,
+        suffix: Option<u64>,
     ) -> Result<Self> {
         let peer = find_peer(region_state.get_region(), store_id);
         let peer = match peer {
@@ -245,6 +303,7 @@ where
             gen_snap_task: RefCell::new(None),
             region_scheduler,
             snap_tried_cnt: RefCell::new(0),
+            tablet_suffix: suffix,
         })
     }
 
@@ -275,6 +334,55 @@ where
         self.gen_snap_task.get_mut().take()
     }
 
+    fn validate_snap(&self, snap: &Snapshot, request_index: u64) -> bool {
+        let idx = snap.get_metadata().get_index();
+        // TODO: add tuncated index
+        if
+        // idx < self.truncated_index() ||
+        idx < request_index {
+            // stale snapshot, should generate again.
+            info!(
+                self.logger(),
+                "snapshot is stale, generate again";
+                "region_id" => self.region_state.get_region().get_id(),
+                "peer_id" => self.peer.get_id(),
+                "snap_index" => idx,
+                "request_index" => request_index,
+            );
+            // STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.stale.inc();
+            return false;
+        }
+
+        let mut snap_data = RaftSnapshotData::default();
+        if let Err(e) = snap_data.merge_from_bytes(snap.get_data()) {
+            error!(
+                self.logger(),
+                "failed to decode snapshot, it may be corrupted";
+                "region_id" => self.region_state.get_region().get_id(),
+                "peer_id" => self.peer.get_id(),
+                "err" => ?e,
+            );
+            // STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.decode.inc();
+            return false;
+        }
+        let snap_epoch = snap_data.get_region().get_region_epoch();
+        let latest_epoch = self.region().get_region_epoch();
+        if snap_epoch.get_conf_ver() < latest_epoch.get_conf_ver() {
+            info!(
+                self.logger(),
+                "snapshot epoch is stale";
+                "region_id" => self.region_state.get_region().get_id(),
+                "peer_id" => self.peer.get_id(),
+                "snap_epoch" => ?snap_epoch,
+                "latest_epoch" => ?latest_epoch,
+            );
+            // STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.epoch.inc();
+            return false;
+        }
+
+        true
+    }
+
     /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no
     /// unavailable snapshot.
     pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
@@ -300,9 +408,9 @@ where
                 Ok(s) if !last_canceled => {
                     *snap_state = SnapState::Relax;
                     *tried_cnt = 0;
-                    // if self.validate_snap(&s, request_index) {
-                    //     return Ok(s);
-                    // }
+                    if self.validate_snap(&s, request_index) {
+                        return Ok(s);
+                    }
                 }
                 Err(TryRecvError::Disconnected) | Ok(_) => {
                     *snap_state = SnapState::Relax;
@@ -352,7 +460,7 @@ where
         let index = Arc::new(AtomicU64::new(0));
         *snap_state = SnapState::Generating {
             canceled: canceled.clone(),
-            index: index.clone(),
+            index,
             receiver,
         };
 
@@ -363,7 +471,13 @@ where
             .find(|p| p.id == to)
             .map(|p| p.store_id)
             .unwrap_or(0);
-        let task = GenSnapTask::new(self.region().get_id(), index, canceled, sender, store_id);
+        // FIXME: index?
+        let task = GenSnapTask::new(
+            self.region().get_id(),
+            self.tablet_suffix.unwrap(),
+            canceled,
+            sender,
+        );
 
         let mut gen_snap_task = self.gen_snap_task.borrow_mut();
         assert!(gen_snap_task.is_none());

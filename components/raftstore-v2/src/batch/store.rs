@@ -46,11 +46,10 @@ use super::apply::{create_apply_batch_system, ApplyPollerBuilder, ApplyRouter, A
 use crate::{
     fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate, StoreMeta},
     raft::{Peer, Storage},
-    router::{PeerMsg, PeerTick, QueryResChannel, StoreMsg},
-    worker::{SnapshotRunner, SnapshotTask},
+    router::{internal_message::ApplyTask, PeerMsg, PeerTick, QueryResChannel, StoreMsg},
+    worker::{RegionRunner, RegionTask},
     Error, Result,
 };
-use crate::router::internal_message::ApplyTask;
 
 /// A per-thread context shared by the [`StoreFsm`] and multiple [`PeerFsm`]s.
 pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
@@ -76,7 +75,7 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub engine: ER,
     pub tablet_factory: Arc<dyn TabletFactory<EK>>,
     pub log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
-    pub snapshot_scheduler: Scheduler<SnapshotTask>,
+    pub region_scheduler: Scheduler<RegionTask>,
 }
 
 impl<EK, ER, T> StoreContext<EK, ER, T>
@@ -237,7 +236,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     router: StoreRouter<EK, ER>,
     apply_router: ApplyRouter<EK>,
     log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
-    snapshot_scheduler: Scheduler<SnapshotTask>,
+    region_scheduler: Scheduler<RegionTask>,
     write_senders: WriteSenders<EK, ER>,
     logger: Logger,
     store_meta: Arc<Mutex<StoreMeta<EK>>>,
@@ -253,7 +252,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         router: StoreRouter<EK, ER>,
         apply_router: ApplyRouter<EK>,
         log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
-        snapshot_scheduler: Scheduler<SnapshotTask>,
+        region_scheduler: Scheduler<RegionTask>,
         store_writers: &mut StoreWriters<EK, ER>,
         logger: Logger,
         store_meta: Arc<Mutex<StoreMeta<EK>>>,
@@ -267,7 +266,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             router,
             apply_router,
             log_fetch_scheduler,
-            snapshot_scheduler,
+            region_scheduler,
             logger,
             write_senders: store_writers.senders(),
             store_meta,
@@ -286,7 +285,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                     self.store_id,
                     self.engine.clone(),
                     self.log_fetch_scheduler.clone(),
-                    self.snapshot_scheduler.clone(),
+                    self.region_scheduler.clone(),
                     &self.logger,
                 )? {
                     Some(p) => p,
@@ -340,7 +339,7 @@ where
             engine: self.engine.clone(),
             tablet_factory: self.tablet_factory.clone(),
             log_fetch_scheduler: self.log_fetch_scheduler.clone(),
-            snapshot_scheduler: self.snapshot_scheduler.clone(),
+            region_scheduler: self.region_scheduler.clone(),
         };
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
         StorePoller::new(poll_ctx, cfg_tracker)
@@ -408,8 +407,8 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
                 .unwrap()
                 .to_owned(),
         );
-
-        let snapshot_runner = SnapshotRunner::new(
+        snap_mgr.init()?;
+        let region_runner = RegionRunner::new(
             raft_engine.clone(),
             tablet_factory.clone(),
             snap_mgr,
@@ -419,10 +418,10 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             router.clone(),
         );
         // snapshot handler
-        let snapshot_scheduler = workers
+        let region_scheduler = workers
             .snapshot_worker
-            .start_with_timer("snapshot-worker", snapshot_runner);
-   
+            .start_with_timer("region-worker-v2", region_runner);
+
         let mut builder = StorePollerBuilder::new(
             cfg.clone(),
             store_id,
@@ -432,7 +431,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             router.clone(),
             self.apply_router.clone(),
             log_fetch_scheduler,
-            snapshot_scheduler,
+            region_scheduler.clone(),
             &mut workers.store_writers,
             self.logger.clone(),
             store_meta,
@@ -463,7 +462,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         }
         router.send_control(StoreMsg::Start).unwrap();
 
-        let apply_poller_builder = ApplyPollerBuilder::new(cfg);
+        let apply_poller_builder = ApplyPollerBuilder::new(cfg, region_scheduler);
         self.apply_system
             .spawn("apply".to_owned(), apply_poller_builder);
         Ok(())

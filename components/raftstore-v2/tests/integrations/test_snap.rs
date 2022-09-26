@@ -42,5 +42,6 @@ fn test_basic_generate_snapshot() {
     std::thread::sleep(Duration::from_secs(1));
     router1.send_raft_message(Box::new(raft_msg)).unwrap();
     // Check the snapshot message
-    let _first_snap_idx = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    let first_snap_idx = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert_eq!(first_snap_idx, 5);
 }

@@ -115,6 +115,7 @@ impl TestRouter {
         block_on(sub.result())
     }
 
+    #[allow(clippy::boxed_local)]
     fn send_raft_message(&self, msg: Box<RaftMessage>) -> raftstore_v2::Result<()> {
         filter_send(&self.recv_filters, *msg, |m| {
             self.router
@@ -180,7 +181,7 @@ impl ClusterBuilder {
         builder
     }
 
-    fn build_with_first_region(&self, cfg: Arc<VersionTrack<Config>>) -> Cluster {
+    fn build(&self, cfg: Arc<VersionTrack<Config>>) -> Cluster {
         let pd_client = test_pd::util::new_client(self.pd_server.bind_addrs(), None);
         {
             self.prepare_bootstrap_first_region(&pd_client);
@@ -324,13 +325,18 @@ impl RunningState {
                     .destroy_tablet(region.get_id(), RAFT_INIT_LOG_INDEX)
                     .unwrap();
             }
-            self.factory
+            let tablet = self
+                .factory
                 .open_tablet(
                     region.get_id(),
                     Some(RAFT_INIT_LOG_INDEX),
                     OpenOptions::default().set_create_new(true),
                 )
                 .unwrap();
+            bootstrap.initial_first_tablet(&tablet, &region).unwrap();
+            // bootstrap
+            //     .clear_prepare_bootstrap(Some(region.get_id()))
+            //     .unwrap();
         }
 
         let (router, mut system) = create_store_batch_system::<KvTestEngine, RaftTestEngine>(
@@ -526,7 +532,7 @@ impl Cluster {
     fn with_node_count(count: usize) -> Self {
         let mut cfg = v2_default_config();
         disable_all_auto_ticks(&mut cfg);
-        ClusterBuilder::new(count).build_with_first_region(Arc::new(VersionTrack::new(cfg.clone())))
+        ClusterBuilder::new(count).build(Arc::new(VersionTrack::new(cfg.clone())))
     }
 
     fn restart(&mut self, offset: usize) {

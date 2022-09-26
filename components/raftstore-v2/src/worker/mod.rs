@@ -2,4 +2,4 @@
 
 mod region;
 
-pub use region::{Runner as SnapshotRunner, Task as SnapshotTask};
+pub use region::{Runner as RegionRunner, Task as RegionTask};

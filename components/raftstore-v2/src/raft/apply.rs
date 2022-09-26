@@ -20,4 +20,12 @@ impl<EK: KvEngine> Apply<EK> {
             logger: peer.logger.clone(),
         }
     }
+
+    pub fn get_snapshot(&self) -> Option<EK::Snapshot> {
+        self.get_tablet().latest().map(|t| t.snapshot())
+    }
+
+    pub fn get_tablet(&self) -> CachedTablet<EK> {
+        self.tablet.clone()
+    }
 }

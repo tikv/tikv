@@ -2,20 +2,23 @@
 
 use std::{thread, time::Duration};
 
-use engine_traits::{RaftEngine, RaftLogBatch};
+use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, WriteBatch, CF_RAFT};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::{
     metapb::{Region, Store},
-    raft_serverpb::{RaftLocalState, RegionLocalState, StoreIdent},
+    raft_serverpb::{PeerState, RaftLocalState, RegionLocalState, StoreIdent},
 };
 use pd_client::PdClient;
 use raft::INVALID_ID;
-use raftstore::store::initial_region;
+use raftstore::store::{initial_region, RAFT_INIT_LOG_INDEX};
 use slog::{debug, error, info, warn, Logger};
 use tikv_util::{box_err, box_try};
 
-use crate::{raft::write_initial_states, Result};
+use crate::{
+    raft::{write_initial_apply_state, write_initial_states, write_peer_state},
+    Result,
+};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL: Duration = Duration::from_secs(3);
@@ -145,7 +148,7 @@ impl<'a, ER: RaftEngine> Bootstrap<'a, ER> {
         Err(box_err!("check cluster bootstrapped failed"))
     }
 
-    fn clear_prepare_bootstrap(&mut self, first_region_id: Option<u64>) -> Result<()> {
+    pub fn clear_prepare_bootstrap(&mut self, first_region_id: Option<u64>) -> Result<()> {
         let mut wb = self.engine.log_batch(10);
         wb.remove_prepare_bootstrap_region()?;
         if let Some(id) = first_region_id {
@@ -155,6 +158,23 @@ impl<'a, ER: RaftEngine> Bootstrap<'a, ER> {
             );
         }
         box_try!(self.engine.consume(&mut wb, true));
+        Ok(())
+    }
+
+    pub fn initial_first_tablet(&mut self, engine: &impl KvEngine, region: &Region) -> Result<()> {
+        let mut wb = engine.write_batch();
+        //  RegionLocalState
+        write_peer_state(
+            &mut wb,
+            region,
+            PeerState::Normal,
+            None,
+            RAFT_INIT_LOG_INDEX,
+        )?;
+        // apply state
+        write_initial_apply_state(&mut wb, region.get_id())?;
+        wb.write()?;
+        engine.flush_cf(CF_RAFT, true)?;
         Ok(())
     }
 

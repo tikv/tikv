@@ -31,22 +31,29 @@ use raftstore::store::{
 use slog::Logger;
 use tikv_util::{
     config::{Tracker, VersionTrack},
-    warn, Either,
+    info, warn,
+    worker::Scheduler,
+    Either,
 };
 
 use crate::{
     fsm::{ApplyFsm, ApplyFsmDelegate},
     raft::{Apply, Peer},
     router::ApplyTask,
+    worker::{RegionRunner, RegionTask},
 };
 
 pub struct ApplyContext {
     cfg: Config,
+    pub region_scheduler: Scheduler<RegionTask>,
 }
 
 impl ApplyContext {
-    pub fn new(cfg: Config) -> Self {
-        ApplyContext { cfg }
+    pub fn new(cfg: Config, region_scheduler: Scheduler<RegionTask>) -> Self {
+        ApplyContext {
+            cfg,
+            region_scheduler,
+        }
     }
 }
 
@@ -87,6 +94,9 @@ where
     where
         for<'a> F: FnOnce(&'a batch_system::Config),
     {
+        if self.apply_task_buf.capacity() == 0 {
+            self.apply_buf_capacity();
+        }
         let cfg = self.cfg_tracker.any_new().map(|c| c.clone());
         if let Some(cfg) = cfg {
             let last_messages_per_tick = self.messages_per_tick();
@@ -129,11 +139,15 @@ where
 
 pub struct ApplyPollerBuilder {
     cfg: Arc<VersionTrack<Config>>,
+    region_scheduler: Scheduler<RegionTask>,
 }
 
 impl ApplyPollerBuilder {
-    pub fn new(cfg: Arc<VersionTrack<Config>>) -> Self {
-        Self { cfg }
+    pub fn new(cfg: Arc<VersionTrack<Config>>, region_scheduler: Scheduler<RegionTask>) -> Self {
+        Self {
+            cfg,
+            region_scheduler,
+        }
     }
 }
 
@@ -141,7 +155,7 @@ impl<EK: KvEngine> HandlerBuilder<ApplyFsm<EK>, ControlFsm> for ApplyPollerBuild
     type Handler = ApplyPoller;
 
     fn build(&mut self, priority: batch_system::Priority) -> Self::Handler {
-        let apply_ctx = ApplyContext::new(self.cfg.value().clone());
+        let apply_ctx = ApplyContext::new(self.cfg.value().clone(), self.region_scheduler.clone());
         let cfg_tracker = self.cfg.clone().tracker("apply".to_string());
         ApplyPoller::new(apply_ctx, cfg_tracker)
     }
@@ -214,18 +228,18 @@ where
     EK: KvEngine,
 {
     pub fn schedule_task(&self, region_id: u64, msg: ApplyTask) {
-        let _reg = match self.try_send(region_id, msg) {
-            Either::Left(Ok(())) => return,
-            Either::Left(Err(TrySendError::Disconnected(msg))) | Either::Right(msg) => match msg {
+        match self.try_send(region_id, msg) {
+            Either::Left(Ok(())) => {}
+            Either::Right(msg) => match msg {
                 ApplyTask::Snapshot(_) => {
                     warn!(
                         "region is removed before taking snapshot, are we shutting down?";
                         "region_id" => region_id
                     );
-                    return;
                 }
-                _ => return,
+                _ => unreachable!(),
             },
+            Either::Left(Err(TrySendError::Disconnected(msg))) => unreachable!(),
             Either::Left(Err(TrySendError::Full(_))) => unreachable!(),
         };
     }

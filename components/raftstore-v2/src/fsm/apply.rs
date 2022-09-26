@@ -1,15 +1,26 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use batch_system::Fsm;
-use crossbeam::channel::TryRecvError;
-use engine_traits::KvEngine;
-use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
+use std::borrow::Cow;
 
-use crate::{batch::ApplyContext, raft::Apply, router::ApplyTask};
+use batch_system::{BasicMailbox, Fsm};
+use crossbeam::channel::TryRecvError;
+use engine_traits::{KvEngine, WriteBatch, CF_RAFT};
+use kvproto::raft_serverpb::RaftApplyState;
+use tikv_util::{
+    error, info,
+    mpsc::{self, LooseBoundedSender, Receiver},
+};
+
+use crate::{
+    batch::ApplyContext,
+    raft::Apply,
+    router::{ApplyTask, GenSnapTask},
+};
 
 pub struct ApplyFsm<EK: KvEngine> {
     apply: Apply<EK>,
     receiver: Receiver<ApplyTask>,
+    mailbox: Option<BasicMailbox<ApplyFsm<EK>>>,
     is_stopped: bool,
 }
 
@@ -21,6 +32,7 @@ impl<EK: KvEngine> ApplyFsm<EK> {
             Box::new(Self {
                 apply,
                 receiver: rx,
+                mailbox: None,
                 is_stopped: false,
             }),
         )
@@ -54,6 +66,23 @@ impl<EK: KvEngine> Fsm for ApplyFsm<EK> {
     fn is_stopped(&self) -> bool {
         self.is_stopped
     }
+
+    /// Set a mailbox to FSM, which should be used to send message to itself.
+    fn set_mailbox(&mut self, mailbox: Cow<'_, BasicMailbox<Self>>)
+    where
+        Self: Sized,
+    {
+        self.mailbox = Some(mailbox.into_owned());
+    }
+
+    /// Take the mailbox from FSM. Implementation should ensure there will be
+    /// no reference to mailbox after calling this method.
+    fn take_mailbox(&mut self) -> Option<BasicMailbox<Self>>
+    where
+        Self: Sized,
+    {
+        self.mailbox.take()
+    }
 }
 
 pub struct ApplyFsmDelegate<'a, EK: KvEngine> {
@@ -66,11 +95,28 @@ impl<'a, EK: KvEngine> ApplyFsmDelegate<'a, EK> {
         Self { fsm, apply_ctx }
     }
 
+    fn handle_snapshot(&self, apply_ctx: &ApplyContext, snap_task: GenSnapTask) {
+        // TODO: add pending remove or stopped
+        // TODO: sync and flush apply
+        let (region_id, tablet_suffix) = (snap_task.region_id, snap_task.tablet_suffix);
+        if let Err(e) = snap_task.generate_and_schedule_snapshot(&apply_ctx.region_scheduler) {
+            error!(
+                "schedule snapshot failed";
+                "error" => ?e,
+                "region_id" => region_id,
+                "tablet_suffix" => tablet_suffix,
+            );
+        }
+        // TODO: add metrics
+    }
+
     pub fn handle_msgs(&self, apply_task_buf: &mut Vec<ApplyTask>) {
         for task in apply_task_buf.drain(..) {
             // TODO: handle the tasks.
             match task {
-                ApplyTask::Snapshot(snap_task) => {unimplemented!()},
+                ApplyTask::Snapshot(snap_task) => {
+                    self.handle_snapshot(self.apply_ctx, snap_task);
+                }
             }
         }
     }

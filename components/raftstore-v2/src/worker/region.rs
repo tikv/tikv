@@ -81,7 +81,7 @@ pub enum Task {
 }
 
 impl fmt::Display for Task {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Task::Gen { region_id, .. } => write!(f, "Snapshot gen for {}", region_id),
             Task::Apply { region_id, .. } => write!(f, "Snap apply for {}", region_id),
@@ -188,9 +188,7 @@ where
             }
         }
     }
-    fn shutdown(&mut self) {
-        unimplemented!()
-    }
+    fn shutdown(&mut self) {}
 }
 
 impl<EK, ER, R> RunnableWithTimer for Runner<EK, ER, R>
@@ -199,14 +197,7 @@ where
     ER: RaftEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
 {
-    fn on_timeout(&mut self) {
-        // self.handle_pending_applies();
-        self.clean_stale_tick += 1;
-        if self.clean_stale_tick >= STALE_PEER_CHECK_TICK {
-            self.ctx.clean_stale_tablets();
-            self.clean_stale_tick = 0;
-        }
-    }
+    fn on_timeout(&mut self) {}
 
     fn get_interval(&self) -> Duration {
         self.clean_stale_check_interval
@@ -324,43 +315,6 @@ where
             .generate
             .observe(start.saturating_elapsed_secs());
     }
-
-    /// Applies snapshot data of the Region.
-    fn apply_snap(&mut self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<()> {
-        unimplemented!();
-    }
-
-    /// Tries to apply the snapshot of the specified Region. It calls
-    /// `apply_snap` to do the actual work.
-    fn handle_apply(&mut self, region_id: u64, status: Arc<AtomicUsize>) {
-        unimplemented!();
-    }
-
-    /// Cleans up the data within the range.
-    fn cleanup_range(
-        tablet: &EK,
-        ranges: &[Range],
-        mgr: &SnapManager,
-        use_delete_range: bool,
-    ) -> Result<()> {
-        unimplemented!()
-    }
-
-    /// Inserts a new pending range, and it will be cleaned up with some delay.
-    fn insert_pending_delete_range(
-        &mut self,
-        tablet: &EK,
-        region_id: u64,
-        tablet_suffix: u64,
-        start_key: &[u8],
-        end_key: &[u8],
-    ) {
-        unimplemented!()
-    }
-
-    fn clean_stale_tablets(&self) {
-        unimplemented!()
-    }
 }
 
 pub fn do_snapshot<EK, ER>(
@@ -402,13 +356,12 @@ where
             fs::remove_dir_all(&path).unwrap();
         }
     });
-    match tablet_factory.open_tablet(
-        region_id,
-        Some(tablet_suffix),
-        OpenOptions::default().set_cache_only(true),
-    ) {
+    match tablet_factory.open_tablet(region_id, Some(tablet_suffix), OpenOptions::default()) {
         // TODO: flush is not necessary if atomic flush is enabled.
-        Ok(tablet) => tablet.checkpoint_to(slice::from_ref(&path), 0).unwrap(),
+        Ok(tablet) => {
+            println!("path {:?}", &path.as_path().to_str());
+            tablet.checkpoint_to(slice::from_ref(&path), 0).unwrap()
+        }
         Err(e) => {
             return Err(storage_error(format!(
                 "{} {} don't exist anymore, error {}",

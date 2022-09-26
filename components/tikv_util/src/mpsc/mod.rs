@@ -248,7 +248,6 @@ impl<T> LooseBoundedSender<T> {
         } else {
             return Err(TrySendError::Full(t));
         }
-
         match self.sender.send(t) {
             Ok(()) => Ok(()),
             Err(SendError(t)) => Err(TrySendError::Disconnected(t)),

@@ -9,7 +9,7 @@ use crossbeam::channel::TryRecvError;
 use engine_traits::{KvEngine, Peekable, RaftEngine, TabletFactory};
 use kvproto::metapb;
 use raft::eraftpb::MessageType;
-use raftstore::store::{Config, Transport};
+use raftstore::store::{CasualMessage, Config, Transport};
 use slog::{debug, error, info, trace, Logger};
 use tikv_util::{
     is_zero_duration,
@@ -208,6 +208,13 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         }
     }
 
+    pub fn on_causal_msg(&mut self, msg: CasualMessage<EK>) {
+        match msg {
+            CasualMessage::SnapshotGenerated => self.fsm.peer_mut().set_has_ready(),
+            _ => unreachable!(),
+        }
+    }
+
     pub fn on_msgs(&mut self, peer_msgs_buf: &mut Vec<PeerMsg<EK>>) {
         for msg in peer_msgs_buf.drain(..) {
             match msg {
@@ -235,7 +242,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     self.fsm.peer_mut().on_fetched_logs(fetched_logs)
                 }
                 PeerMsg::QueryDebugInfo(ch) => self.fsm.peer_mut().on_query_debug_info(ch),
-                PeerMsg::CasualMessage(_) => unimplemented!(),
+                PeerMsg::CasualMessage(msg) => {}
             }
         }
         // TODO: instead of propose pending commands immediately, we should use timeout.
