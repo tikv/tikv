@@ -234,7 +234,7 @@ impl<L: LockManager> LockWaitQueues<L> {
     }
 
     /// Enqueues a lock wait entry. The key is indicated by the `key` field of
-    /// the `lock_wait_entry`. The caller also need to provide the
+    /// the `lock_wait_entry`. The caller also needs to provide the
     /// information of the current-holding lock.
     pub fn push_lock_wait(
         &self,
@@ -289,7 +289,7 @@ impl<L: LockManager> LockWaitQueues<L> {
     ) -> Option<(Box<LockWaitEntry>, Option<DelayedNotifyAllFuture>)> {
         let mut result = None;
 
-        // We don't want other thread insert insert any more entries between finding the
+        // We don't want other threads insert any more entries between finding the
         // queue is empty and removing the queue from the map. Wrap the logic
         // within a call to `remove_if_mut` to avoid releasing lock during the
         // procedure.
@@ -414,7 +414,7 @@ impl<L: LockManager> LockWaitQueues<L> {
         let mut conflicting_start_ts = TimeStamp::zero();
         let mut conflicting_commit_ts = TimeStamp::zero();
 
-        // We don't want other thread insert insert any more entries between finding the
+        // We don't want other threads insert any more entries between finding the
         // queue is empty and removing the queue from the map. Wrap the logic
         // within a call to `remove_if_mut` to avoid releasing lock during the
         // procedure.
