@@ -1631,7 +1631,7 @@ where
                 let res: crate::Result<TimeStamp> = if let Some(causal_ts_provider) = &causal_ts_provider {
                     causal_ts_provider.async_flush().await.map_err(|e| box_err!(e))
                 } else {
-                    pd_client.get_tso().await.map_err(|e| box_err!(e))
+                    pd_client.get_tso().await.map_err(Into::into)
                 };
 
                 match res {
