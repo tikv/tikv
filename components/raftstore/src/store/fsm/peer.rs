@@ -4947,16 +4947,6 @@ where
             return Err(e);
         }
 
-        // Forbid reads and writes when it's a witness except transfer leader
-        if self.fsm.peer.is_witness() {
-            if !(msg.has_admin_request()
-                && msg.get_admin_request().get_cmd_type() == AdminCmdType::TransferLeader)
-            {
-                self.ctx.raft_metrics.invalid_proposal.witness.inc();
-                return Err(Error::RecoveryInProgress(self.region_id()));
-            }
-        }
-
         if self.fsm.peer.force_leader.is_some() {
             self.ctx.raft_metrics.invalid_proposal.force_leader.inc();
             // in force leader state, forbid requests to make the recovery progress less
@@ -4992,6 +4982,16 @@ where
             self.fsm.reset_hibernate_state(GroupState::Chaos);
             self.register_raft_base_tick();
             return Err(Error::NotLeader(region_id, leader));
+        }
+
+        // Forbid reads and writes when it's a witness except transfer leader
+        if self.fsm.peer.is_witness() {
+            if !(msg.has_admin_request()
+                && msg.get_admin_request().get_cmd_type() == AdminCmdType::TransferLeader)
+            {
+                self.ctx.raft_metrics.invalid_proposal.witness.inc();
+                return Err(Error::RecoveryInProgress(self.region_id()));
+            }
         }
 
         // check whether the peer is initialized.

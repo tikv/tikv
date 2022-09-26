@@ -4346,6 +4346,36 @@ where
             }
         }
 
+        // compare peers' location and role
+        let target_region = req.get_admin_request().get_prepare_merge().get_target();
+        let mut source_peers = self.region().get_peers().iter().collect::<Vec<_>>();
+        source_peers.sort_by_key(|p| p.store_id);
+        let mut target_peers = target_region.get_peers().iter().collect::<Vec<_>>();
+        target_peers.sort_by_key(|p| p.store_id);
+        for (s, t) in source_peers.iter().zip(target_peers.iter()) {
+            if s.get_store_id() != t.get_store_id() {
+                return Err(box_err!(
+                    "mismatch store id, source peer {:?}, target peer {:?}",
+                    s,
+                    t
+                ));
+            }
+            if s.get_role() != t.get_role() {
+                return Err(box_err!(
+                    "mismatch peer role, source peer {:?}, target peer {:?}",
+                    s,
+                    t
+                ));
+            }
+            if s.get_is_witness() != t.get_is_witness() {
+                return Err(box_err!(
+                    "mismatch witness peer, source peer {:?}, target peer {:?}",
+                    s,
+                    t
+                ));
+            }
+        }
+
         let last_index = self.raft_group.raft.raft_log.last_index();
         let (min_matched, min_committed) = self.get_min_progress()?;
         if min_matched == 0

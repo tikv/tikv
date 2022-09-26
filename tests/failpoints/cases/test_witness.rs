@@ -2,14 +2,11 @@
 
 use std::{iter::FromIterator, sync::Arc, time::Duration};
 
-use collections::HashMap;
 use futures::executor::block_on;
-use kvproto::{metapb, pdpb, raft_serverpb::RaftApplyState};
+use kvproto::metapb;
 use pd_client::PdClient;
-use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::store::util::find_peer;
 use test_raftstore::*;
-use fail::fail_point;
 
 fn must_get_error_recovery_in_progress<T: Simulator>(
     cluster: &mut Cluster<T>,
@@ -48,13 +45,12 @@ fn test_witness_leader_down() {
     cluster.must_put(b"k0", b"v0");
 
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
-    let mut peer_on_store1 = find_peer(&region, nodes[0]).unwrap().clone();
-    cluster.must_transfer_leader(region.get_id(), peer_on_store1.clone());
+    let peer_on_store1 = find_peer(&region, nodes[0]).unwrap().clone();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1);
 
     let mut peer_on_store2 = find_peer(&region, nodes[1]).unwrap().clone();
     // nonwitness -> witness
     peer_on_store2.set_is_witness(true);
-
     cluster
         .pd_client
         .add_peer(region.get_id(), peer_on_store2.clone());
@@ -67,7 +63,7 @@ fn test_witness_leader_down() {
     // the leader is down
     cluster.stop_node(1);
 
-    fail::cfg("witness_transfer_leader", "return()");
+    fail::cfg("witness_transfer_leader", "return()").unwrap();
     // witness would help to replicate the logs
     cluster.clear_send_filters();
 
@@ -80,10 +76,10 @@ fn test_witness_leader_down() {
     // forbid read index
     let read_index = new_read_index_cmd();
     must_get_error_recovery_in_progress(&mut cluster, &region, read_index);
-    // forbid stale read 
 
     fail::remove("witness_transfer_leader");
     std::thread::sleep(Duration::from_millis(500));
+    cluster.must_put(b"k1", b"v1");
     assert_eq!(
         cluster.leader_of_region(region.get_id()).unwrap().store_id,
         nodes[2],
