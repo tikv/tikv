@@ -214,13 +214,7 @@ impl SequenceNumberWindow {
             .split_off(&(self.ack_start_counter + 1));
         std::mem::swap(&mut sequences, &mut self.pending_sequence);
         if let Some(sequence) = sequences.values().max() {
-            assert!(
-                self.committed_seqno <= sequence.number,
-                "committed_seqno {}, seqno{}",
-                self.committed_seqno,
-                sequence.number
-            );
-            self.committed_seqno = sequence.number;
+            self.committed_seqno = cmp::max(self.committed_seqno, sequence.number);
         }
     }
 
