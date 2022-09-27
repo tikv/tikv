@@ -1611,7 +1611,7 @@ where
             let mut success = false;
             while txn_ext.max_ts_sync_status.load(Ordering::SeqCst) == initial_status {
                 // On leader transfer / region merge, RawKV API v2 need to invoke
-                // causal_ts_provider.flush() to renew cached TSO, to ensure that 
+                // causal_ts_provider.flush() to renew cached TSO, to ensure that
                 // the next TSO returned by causal_ts_provider.get_ts() on current
                 // store must be larger than the store where the leader is on before.
                 //

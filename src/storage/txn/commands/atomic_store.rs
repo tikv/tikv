@@ -6,6 +6,7 @@ use std::sync::Arc;
 use causal_ts::CausalTsProviderImpl;
 use engine_traits::CfName;
 use futures::executor::block_on;
+use kvproto::kvrpcpb::ApiVersion;
 use tikv_kv::SnapshotExt;
 use txn_types::TimeStamp;
 
@@ -32,6 +33,7 @@ command! {
             /// The set of mutations to apply.
             cf: CfName,
             mutations: Vec<Modify>,
+            api_version: ApiVersion,
             causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
         }
 }
@@ -48,7 +50,7 @@ impl CommandExt for RawAtomicStore {
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
     fn process_write(self, snapshot: S, wctx: WriteContext<'_, L>) -> Result<WriteResult> {
-        if !snapshot.ext().is_max_ts_synced() {
+        if self.api_version == ApiVersion::V2 && !snapshot.ext().is_max_ts_synced() {
             return Err(ErrorInner::MaxTimestampNotSynced {
                 region_id: self.ctx.get_region_id(),
                 start_ts: TimeStamp::zero(),
@@ -124,7 +126,13 @@ mod tests {
                 F::encode_raw_value_owned(raw_value),
             ));
         }
-        let cmd = RawAtomicStore::new(CF_DEFAULT, modifies, ts_provider, Context::default());
+        let cmd = RawAtomicStore::new(
+            CF_DEFAULT,
+            modifies,
+            F::TAG,
+            ts_provider,
+            Context::default(),
+        );
         let mut statistic = Statistics::default();
         let snap = engine.snapshot(Default::default()).unwrap();
         let context = WriteContext {

@@ -58,26 +58,26 @@ impl CommandExt for RawCompareAndSwap {
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
     fn process_write(self, snapshot: S, wctx: WriteContext<'_, L>) -> Result<WriteResult> {
-        if !snapshot.ext().is_max_ts_synced() {
-            return Err(ErrorInner::MaxTimestampNotSynced {
-                region_id: self.ctx.get_region_id(),
-                start_ts: TimeStamp::zero(),
-            }
-            .into());
-        }
-
         let provider = self.causal_ts_provider.clone();
         let concurrency_manager = wctx.concurrency_manager;
         let (cf, mut key, value, previous_value, ctx) =
             (self.cf, self.key, self.value, self.previous_value, self.ctx);
         let mut data = vec![];
-        let old_value = RawStore::new(snapshot, self.api_version).raw_get_key_value(
+        let old_value = RawStore::new(snapshot.clone(), self.api_version).raw_get_key_value(
             cf,
             &key,
             &mut Statistics::default(),
         )?;
 
         let (pr, lock_guards) = if old_value == previous_value {
+            if self.api_version == ApiVersion::V2 && !snapshot.ext().is_max_ts_synced() {
+                return Err(ErrorInner::MaxTimestampNotSynced {
+                    region_id: ctx.get_region_id(),
+                    start_ts: TimeStamp::zero(),
+                }
+                .into());
+            }
+
             let raw_value = RawValue {
                 user_value: value,
                 expire_ts: ttl_to_expire_ts(self.ttl),

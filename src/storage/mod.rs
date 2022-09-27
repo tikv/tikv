@@ -1847,7 +1847,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         }
     }
 
-    async fn check_causal_ts_synced(ctx: &mut Context) -> Result<()> {
+    async fn check_causal_ts_flushed(ctx: &mut Context) -> Result<()> {
         if F::TAG == ApiVersion::V2 {
             let snap_ctx = SnapContext {
                 pb_ctx: ctx,
@@ -1902,7 +1902,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             }
             let command_duration = tikv_util::time::Instant::now();
 
-            if let Err(e) = Self::check_causal_ts_synced(&mut ctx).await {
+            if let Err(e) = Self::check_causal_ts_flushed(&mut ctx).await {
                 return callback(Err(e));
             }
 
@@ -2015,7 +2015,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             }
             let command_duration = tikv_util::time::Instant::now();
 
-            if let Err(e) = Self::check_causal_ts_synced(&mut ctx).await {
+            if let Err(e) = Self::check_causal_ts_flushed(&mut ctx).await {
                 return callback(Err(e));
             }
 
@@ -2081,7 +2081,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             }
             let command_duration = tikv_util::time::Instant::now();
 
-            if let Err(e) = Self::check_causal_ts_synced(&mut ctx).await {
+            if let Err(e) = Self::check_causal_ts_flushed(&mut ctx).await {
                 return callback(Err(e));
             }
 
@@ -2191,7 +2191,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             }
             let command_duration = tikv_util::time::Instant::now();
 
-            if let Err(e) = Self::check_causal_ts_synced(&mut ctx).await {
+            if let Err(e) = Self::check_causal_ts_flushed(&mut ctx).await {
                 return callback(Err(e));
             }
 
@@ -2657,21 +2657,22 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         callback: Callback<()>,
     ) -> Result<()> {
         const CMD: CommandKind = CommandKind::raw_atomic_store;
+        let api_version = self.api_version;
         Self::check_api_version(
-            self.api_version,
+            api_version,
             ctx.api_version,
             CMD,
             pairs.iter().map(|(ref k, _)| k),
         )?;
 
-        let cf = Self::rawkv_cf(&cf, self.api_version)?;
+        let cf = Self::rawkv_cf(&cf, api_version)?;
         Self::check_ttl_valid(pairs.len(), &ttls)?;
 
         let provider = self.causal_ts_provider.clone();
         let sched = self.get_scheduler();
         self.sched_raw_command(CMD, async move {
             let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls, None);
-            let cmd = RawAtomicStore::new(cf, modifies, provider, ctx);
+            let cmd = RawAtomicStore::new(cf, modifies, api_version, provider, ctx);
             Self::sched_raw_atomic_command(
                 sched,
                 cmd,
@@ -2688,9 +2689,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         callback: Callback<()>,
     ) -> Result<()> {
         const CMD: CommandKind = CommandKind::raw_atomic_store;
-        Self::check_api_version(self.api_version, ctx.api_version, CMD, &keys)?;
+        let api_version = self.api_version;
 
-        let cf = Self::rawkv_cf(&cf, self.api_version)?;
+        Self::check_api_version(api_version, ctx.api_version, CMD, &keys)?;
+        let cf = Self::rawkv_cf(&cf, api_version)?;
         let provider = self.causal_ts_provider.clone();
         let sched = self.get_scheduler();
         self.sched_raw_command(CMD, async move {
@@ -2699,7 +2701,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 .into_iter()
                 .map(|k| Self::raw_delete_request_to_modify(cf, k, None))
                 .collect();
-            let cmd = RawAtomicStore::new(cf, modifies, provider, ctx);
+            let cmd = RawAtomicStore::new(cf, modifies, api_version, provider, ctx);
             Self::sched_raw_atomic_command(
                 sched,
                 cmd,
