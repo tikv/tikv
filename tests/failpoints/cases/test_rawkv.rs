@@ -111,7 +111,7 @@ impl TestSuite {
         let mut merged;
         let timer = Instant::now();
         loop {
-            if timer.saturating_elapsed() > Duration::from_secs(5) {
+            if timer.saturating_elapsed() > Duration::from_secs(10) {
                 panic!("region merge failed");
             }
             merged = self.cluster.get_region(source_key);

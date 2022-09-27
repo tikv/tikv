@@ -513,6 +513,10 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
 }
 
 fn test_async_commit_prewrite_with_stale_max_ts_impl<F: KvFormat>() {
+    if F::TAG == ApiVersion::V1ttl {
+        return;
+    }
+
     let mut cluster = new_server_cluster_with_api_ver(0, 2, F::TAG);
     cluster.run();
 
