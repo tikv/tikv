@@ -14,7 +14,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use protobuf::Message;
 
 use collections::{HashMap, HashSet};
 use crossbeam::queue::ArrayQueue;
@@ -35,6 +34,7 @@ use kvproto::{
     raft_serverpb::{Done, RaftMessage, RaftSnapshotData},
     tikvpb::{BatchRaftMessage, TikvClient},
 };
+use protobuf::Message;
 use raft::SnapshotStatus;
 use raftstore::{errors::DiscardReason, router::RaftStoreRouter};
 use security::SecurityManager;
@@ -486,7 +486,9 @@ where
             };
             if msg.get_message().has_snapshot() {
                 let mut snapshot = RaftSnapshotData::default();
-                snapshot.merge_from_bytes(msg.get_message().get_snapshot().get_data()).unwrap();
+                snapshot
+                    .merge_from_bytes(msg.get_message().get_snapshot().get_data())
+                    .unwrap();
                 // Witness's snapshot must be empty, no need to send snapshot files
                 if !snapshot.get_meta().get_for_witness() {
                     self.send_snapshot_sock(msg);

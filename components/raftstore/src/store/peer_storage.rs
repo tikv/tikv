@@ -1804,13 +1804,12 @@ pub mod tests {
         let sched = worker.scheduler();
         let (dummy_scheduler, _) = dummy_scheduler();
         let mut s = new_storage_from_ents(sched.clone(), dummy_scheduler, &td, &ents);
+        let cfg = make_region_worker_raftstore_cfg(true);
         let (router, _) = mpsc::sync_channel(100);
         let runner = RegionRunner::new(
             s.engines.kv.clone(),
             mgr,
-            0,
-            true,
-            2,
+            cfg,
             CoprocessorHost::<KvTestEngine>::default(),
             router,
             Option::<Arc<TestPdClient>>::None,

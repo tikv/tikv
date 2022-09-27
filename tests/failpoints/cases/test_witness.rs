@@ -5,8 +5,8 @@ use std::{iter::FromIterator, sync::Arc, time::Duration};
 use futures::executor::block_on;
 use kvproto::metapb;
 use pd_client::PdClient;
-use raftstore::store::util::find_peer;
 use test_raftstore::*;
+use tikv_util::store::find_peer;
 
 fn must_get_error_recovery_in_progress<T: Simulator>(
     cluster: &mut Cluster<T>,

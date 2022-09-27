@@ -6,8 +6,8 @@ use collections::HashMap;
 use futures::executor::block_on;
 use kvproto::{metapb, raft_serverpb::RaftApplyState};
 use pd_client::PdClient;
-use raftstore::store::util::find_peer;
 use test_raftstore::*;
+use tikv_util::store::find_peer;
 
 // Test the case that region split or merge with witness peer
 #[test]
