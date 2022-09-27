@@ -258,8 +258,9 @@ pub enum ExecResult<S> {
         region: Region,
         commit: u64,
     },
-    PrepareFlashback {},
-    FinishFlashback {},
+    SetFlashbackState {
+        state: FlashbackState,
+    },
     ComputeHash {
         region: Region,
         index: u64,
@@ -1418,8 +1419,7 @@ where
                 | ExecResult::DeleteRange { .. }
                 | ExecResult::IngestSst { .. }
                 | ExecResult::TransferLeader { .. }
-                | ExecResult::PrepareFlashback {}
-                | ExecResult::FinishFlashback {} => {}
+                | ExecResult::SetFlashbackState { .. } => {}
                 ExecResult::SplitRegion { ref derived, .. } => {
                     self.region = derived.clone();
                     self.metrics.size_diff_hint = 0;
@@ -1553,18 +1553,12 @@ where
             AdminCmdType::PrepareMerge => self.exec_prepare_merge(ctx, request),
             AdminCmdType::CommitMerge => self.exec_commit_merge(ctx, request),
             AdminCmdType::RollbackMerge => self.exec_rollback_merge(ctx, request),
-            AdminCmdType::PrepareFlashback => self.exec_flashback_apply(
-                ctx,
-                request,
-                FlashbackState::Processing,
-                ExecResult::PrepareFlashback {},
-            ),
-            AdminCmdType::FinishFlashback => self.exec_flashback_apply(
-                ctx,
-                request,
-                FlashbackState::Finish,
-                ExecResult::FinishFlashback {},
-            ),
+            AdminCmdType::PrepareFlashback => {
+                self.set_flashback_state(ctx, request, FlashbackState::Processing)
+            }
+            AdminCmdType::FinishFlashback => {
+                self.set_flashback_state(ctx, request, FlashbackState::Finish)
+            }
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
         }?;
         response.set_cmd_type(cmd_type);
@@ -2813,29 +2807,38 @@ where
         ))
     }
 
-    fn exec_flashback_apply(
+    fn set_flashback_state(
         &self,
         ctx: &mut ApplyContext<EK>,
         _req: &AdminRequest,
         state: FlashbackState,
-        result: ExecResult<EK::Snapshot>,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
-        let region = self.region.clone();
-        write_peer_state(
-            ctx.kv_wb_mut(),
-            &region,
-            PeerState::Normal,
-            None,
-            Some(state),
-        )
-        .unwrap_or_else(|e| {
-            panic!(
-                "{} failed to exec flashback state {:?} for region {:?}: {:?}",
-                self.tag, state, region, e
-            )
-        });
+        let region_id = self.region_id();
+        let region_state_key = keys::region_state_key(region_id);
+        let mut old_state: RegionLocalState =
+            match ctx.engine.get_msg_cf(CF_RAFT, &region_state_key) {
+                Ok(Some(s)) => s,
+                e => panic!(
+                    "{} failed to get regions state of {:?}: {:?}",
+                    self.tag,
+                    self.region_id(),
+                    e
+                ),
+            };
+        old_state.set_flashback_state(state);
+        ctx.kv_wb_mut()
+            .put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &old_state)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{} failed to exec flashback state {:?} for region {}: {:?}",
+                    self.tag, state, region_id, e
+                )
+            });
 
-        Ok((AdminResponse::default(), ApplyResult::Res(result)))
+        Ok((
+            AdminResponse::default(),
+            ApplyResult::Res(ExecResult::SetFlashbackState { state }),
+        ))
     }
 
     fn exec_compact_log(

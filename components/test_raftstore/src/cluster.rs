@@ -19,7 +19,7 @@ use engine_traits::{
     WriteBatchExt, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IoRateLimiter;
-use futures::{self, channel::oneshot, executor::block_on};
+use futures::{self, executor::block_on};
 use kvproto::{
     errorpb::Error as PbError,
     kvrpcpb::{ApiVersion, Context},
@@ -1421,55 +1421,60 @@ impl<T: Simulator> Cluster<T> {
 
     pub async fn call_and_wait_prepare_flashback(&mut self, region_id: u64, store_id: u64) {
         let router = self.sim.rl().get_router(store_id).unwrap();
-        let (tx, rx) = oneshot::channel();
+        let (result_tx, result_rx) = crossbeam::channel::bounded(1);
 
-        let failed = Arc::new(Mutex::new(false));
-        let failed_clone_prep = failed.clone();
-        let failed_clone_wait = failed.clone();
         let raft_router_clone_wait = router.clone();
         let callback = Callback::write(Box::new(move |resp| {
+            let tx_clone = result_tx.clone();
             let cb = Callback::write(Box::new(move |resp| {
                 if resp.response.get_header().has_error() {
-                    *failed_clone_wait.lock().unwrap() = true;
+                    tx_clone.send(false).unwrap();
+                    println!(
+                        "call_and_wait_prepare_flashback failed, {:?}",
+                        resp.response.get_header().get_error()
+                    );
                     error!("send wait apply msg failed"; "region_id" => region_id);
                 }
-                tx.send(true).unwrap();
+                tx_clone.send(true).unwrap();
             }));
 
             raft_router_clone_wait
                 .significant_send(region_id, SignificantMsg::WaitApplyFlashback(cb))
                 .unwrap();
             if resp.response.get_header().has_error() {
-                *failed_clone_prep.lock().unwrap() = true;
+                result_tx.send(false).unwrap();
+                println!(
+                    "call_and_wait_prepare_flashback failed, {:?}",
+                    resp.response.get_header().get_error()
+                );
                 error!("send flashback prepare msg failed"; "region_id" => region_id);
             }
         }));
         router
             .significant_send(region_id, SignificantMsg::PrepareFlashback(callback))
             .unwrap();
-        if rx.await.unwrap() && *failed.lock().unwrap() {
+
+        if !result_rx.recv().unwrap() {
             panic!("Prepare Flashback failed");
         }
     }
 
     pub async fn call_finish_flashback(&mut self, region_id: u64, store_id: u64) {
         let router = self.sim.rl().get_router(store_id).unwrap();
-        let (tx, rx) = oneshot::channel();
-
-        let failed = Arc::new(Mutex::new(false));
-        let failed_clone = failed.clone();
+        let (result_tx, result_rx) = crossbeam::channel::bounded(1);
         let cb = Callback::write(Box::new(move |resp| {
             if resp.response.get_header().has_error() {
-                *failed_clone.lock().unwrap() = true;
-                error!("send finish flashback msg failed"; "region_id" => region_id);
+                result_tx.send(false).unwrap();
+                error!("send flashback finish msg failed"; "region_id" => region_id);
             }
-            tx.send(true).unwrap();
+            result_tx.send(true).unwrap();
         }));
+
         router
             .significant_send(region_id, SignificantMsg::FinishFlashback(cb))
             .unwrap();
-        if rx.await.unwrap() && *failed.lock().unwrap() {
-            panic!("Prepare Flashback failed");
+        if !result_rx.recv().unwrap() {
+            panic!("Finish Flashback failed");
         }
     }
 

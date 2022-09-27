@@ -1,15 +1,11 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]: TiKV gRPC APIs implementation
-use std::{
-    mem,
-    sync::{Arc, Mutex},
-};
+use std::{mem, sync::Arc};
 
 use api_version::KvFormat;
 use fail::fail_point;
 use futures::{
-    channel::oneshot,
     compat::Future01CompatExt,
     future::{self, Future, FutureExt, TryFutureExt},
     sink::SinkExt,
@@ -1707,41 +1703,31 @@ fn future_flashback_to_version<
         // operations and then wait for the latest Raft log to be applied before
         // we start the flashback command.
         let region_id = req.get_context().get_region_id();
-        let (result_tx, result_rx) = oneshot::channel();
-        let failed = Arc::new(Mutex::new(false));
-        let failed_clone_prep = failed.clone();
-        let failed_clone_wait = failed.clone();
+        let (result_tx, result_rx) = crossbeam::channel::bounded(1);
         let raft_router_clone_wait = raft_router_clone.clone();
-
         let callback = Callback::write(Box::new(move |resp| {
+            let tx_clone = result_tx.clone();
             let cb = Callback::write(Box::new(move |resp| {
                 if resp.response.get_header().has_error() {
-                    *failed_clone_prep.lock().unwrap() = true;
-                    error!(
-                        "Unsafe recovery, fail to exit residual joint state";
-                        "err" => ?resp.response.get_header().get_error(),
-                    );
+                    tx_clone.send(false).unwrap();
+                    error!("send wait apply msg failed"; "region_id" => region_id);
                 }
-                result_tx.send(true).unwrap();
+                tx_clone.send(true).unwrap();
             }));
 
             raft_router_clone_wait
                 .significant_send(region_id, SignificantMsg::WaitApplyFlashback(cb))
                 .unwrap();
             if resp.response.get_header().has_error() {
-                *failed_clone_wait.lock().unwrap() = true;
-                error!(
-                    "Unsafe recovery, fail to finish demotion";
-                    "err" => ?resp.response.get_header().get_error(),
-                );
+                result_tx.send(false).unwrap();
+                error!("send flashback prepare msg failed"; "region_id" => region_id);
             }
         }));
 
         raft_router_clone
             .significant_send(region_id, SignificantMsg::PrepareFlashback(callback))
             .unwrap();
-
-        if result_rx.await? && *failed.lock().unwrap() {
+        if !result_rx.recv().unwrap() {
             return Err(Error::Other(box_err!(
                 "failed to prepare the region {} for flashback",
                 region_id
@@ -1761,25 +1747,21 @@ fn future_flashback_to_version<
         });
         // Send a `SignificantMsg::FinishFlashback` to notify the raftstore that the
         // flashback has been finished.
-        let (result_tx, result_rx) = oneshot::channel();
-        let failed_clone_finish = failed.clone();
-        let cb = Callback::write(Box::new(move |resp| {
+        let (result_tx, result_rx) = crossbeam::channel::bounded(1);
+        let callback = Callback::write(Box::new(move |resp| {
             if resp.response.get_header().has_error() {
-                *failed_clone_finish.lock().unwrap() = true;
-                error!(
-                    "Unsafe recovery, fail to exit residual joint state";
-                    "err" => ?resp.response.get_header().get_error(),
-                );
+                result_tx.send(false).unwrap();
+                error!("send flashback finish msg failed"; "region_id" => region_id);
             }
             result_tx.send(true).unwrap();
         }));
 
         raft_router_clone
-            .significant_send(region_id, SignificantMsg::FinishFlashback(cb))
+            .significant_send(region_id, SignificantMsg::FinishFlashback(callback))
             .unwrap();
-        if result_rx.await? && *failed.lock().unwrap() {
+        if !result_rx.recv().unwrap() {
             return Err(Error::Other(box_err!(
-                "failed to prepare the region {} for flashback",
+                "failed to finish the region {} for flashback",
                 region_id
             )));
         }

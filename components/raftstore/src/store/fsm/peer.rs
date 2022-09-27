@@ -987,13 +987,12 @@ where
         syncer.report_for_self(self_report);
     }
 
-    // Call msg PrepareFlashback to stop the scheduling and RW tasks.
-    // Once called, it will wait for the channel's notification in FlashbackState to
-    // finish. We place a flag in the request, which is checked when the
-    // pre_propose_raft_command is called. Stopping tasks is done by applying
-    // the flashback-only command in this way, But for RW local reads which need
-    // to be considered, we let the leader lease to None to ensure that local reads
-    // are not executed.
+    // Call msg PrepareFlashback is to check if the persistent state is present in
+    // RegionLocalState. Once called, the persistent state and memory state will
+    // first be checked and if neither is found, then a Raft Admin Command will be
+    // proposed to persist the state in the RegionLocalState to lock the region.
+    // Once this command is submitted, a callback will be invoked to call msg
+    // WaitApplyFlashback to complete the stop read stop write stop scheduling.
     fn on_prepare_flashback(&mut self, cb: Callback<EK::Snapshot>) {
         let region_id = self.region().get_id();
         info!(
@@ -1011,14 +1010,14 @@ where
             .unwrap()
         {
             info!(
-                "Prepare Flashback, already has a flashback local state for {:?} ",
+                "Prepare Flashback, already has a flashback local state:{:?} for {:?} ",
+                target_state.get_flashback_state(),
                 self.region(),
             );
             if target_state.get_flashback_state() == FlashbackState::Processing {
-                info!("region is already in flashback state");
                 // check memory state
                 if self.fsm.peer.flashback_state.is_none() {
-                    info!("region is already in flashback state");
+                    info!("region is already has a flashback state in memory");
                     let cmd_resp = RaftCmdResponse::default();
                     cb.invoke_with_response(cmd_resp);
                 }
@@ -1027,8 +1026,7 @@ where
         }
         // set persist state
         let req = {
-            let mut request =
-                new_admin_request(region_id, self.fsm.peer.peer.clone());
+            let mut request = new_admin_request(region_id, self.fsm.peer.peer.clone());
             let mut admin = AdminRequest::default();
             admin.set_cmd_type(AdminCmdType::PrepareFlashback);
             request.set_admin_request(admin);
@@ -1037,6 +1035,13 @@ where
         self.propose_raft_command(req, cb, DiskFullOpt::AllowedOnAlmostFull);
     }
 
+    // Call msg WaitApplyFlashback to stop the scheduling and RW tasks, and write
+    // the persistent state in memory. Once called, the main thread will wait
+    // for the callback to complete. WWe place a flag in the request, which is
+    // checked when the pre_propose_raft_command is called. Stopping tasks is
+    // done by applying the flashback-only command in this way, But for RW local
+    // reads which need to be considered, we let the leader lease to None to
+    // ensure that local reads are not executed.
     fn on_wait_apply_flashback(&mut self, cb: Callback<EK::Snapshot>) {
         let region_id = self.region().get_id();
         info!(
@@ -1064,8 +1069,7 @@ where
         self.fsm.peer.flashback_state.take();
 
         let req = {
-            let mut request =
-                new_admin_request(self.region().get_id(), self.fsm.peer.peer.clone());
+            let mut request = new_admin_request(self.region().get_id(), self.fsm.peer.peer.clone());
             let mut admin = AdminRequest::default();
             admin.set_cmd_type(AdminCmdType::FinishFlashback);
             request.set_admin_request(admin);
@@ -4842,11 +4846,8 @@ where
                 }
                 ExecResult::IngestSst { ssts } => self.on_ingest_sst_result(ssts),
                 ExecResult::TransferLeader { term } => self.on_transfer_leader(term),
-                ExecResult::PrepareFlashback {} => {
-                    self.on_ready_check_flashback_state(FlashbackState::Processing)
-                }
-                ExecResult::FinishFlashback {} => {
-                    self.on_ready_check_flashback_state(FlashbackState::Finish)
+                ExecResult::SetFlashbackState { state } => {
+                    self.on_ready_check_flashback_state(state)
                 }
             }
         }

@@ -11,6 +11,7 @@ use txn_types::WriteBatchFlags;
 fn test_flahsback_for_applied_index() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
 
     // write for cluster.
     let value = vec![1_u8; 8096];
