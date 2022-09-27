@@ -21,7 +21,7 @@ use collections::{HashMap, HashSet};
 use engine_traits::{Engines, KvEngine, RaftEngine, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
-use futures::channel::{mpsc::UnboundedSender, oneshot::Sender};
+use futures::channel::mpsc::UnboundedSender;
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::{
     brpb::CheckAdminResponse,
@@ -35,8 +35,8 @@ use kvproto::{
         StatusCmdType, StatusResponse,
     },
     raft_serverpb::{
-        ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftMessage, RaftSnapshotData,
-        RaftTruncatedState, RegionLocalState,
+        ExtraMessage, ExtraMessageType, FlashbackState, MergeState, PeerState, RaftMessage,
+        RaftSnapshotData, RaftTruncatedState, RegionLocalState,
     },
     replication_modepb::{DrAutoSyncState, ReplicationMode},
 };
@@ -82,7 +82,7 @@ use crate::{
         metrics::*,
         msg::{Callback, ExtCallback, InspectedRaftMessage},
         peer::{
-            ConsistencyState, FlashbackState, ForceLeaderState, Peer, PersistSnapshotResult,
+            ConsistencyState, FlashbackMemoryState, ForceLeaderState, Peer, PersistSnapshotResult,
             SnapshotRecoveryState, SnapshotRecoveryWaitApplySyncer, StaleState,
             UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
             UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
@@ -994,29 +994,84 @@ where
     // the flashback-only command in this way, But for RW local reads which need
     // to be considered, we let the leader lease to None to ensure that local reads
     // are not executed.
-    fn on_prepare_flashback(&mut self, ch: Sender<bool>) {
+    fn on_prepare_flashback(&mut self, cb: Callback<EK::Snapshot>) {
+        let region_id = self.region().get_id();
         info!(
             "prepare flashback";
-            "region_id" => self.region().get_id(),
+            "region_id" => region_id,
+            "peer_id" => self.fsm.peer.peer_id(),
+        );
+        // check persist state
+        let state_key = keys::region_state_key(region_id);
+        if let Some(target_state) = self
+            .ctx
+            .engines
+            .kv
+            .get_msg_cf::<RegionLocalState>(CF_RAFT, &state_key)
+            .unwrap()
+        {
+            info!(
+                "Prepare Flashback, already has a flashback local state for {:?} ",
+                self.region(),
+            );
+            if target_state.get_flashback_state() == FlashbackState::Processing {
+                info!("region is already in flashback state");
+                // check memory state
+                if self.fsm.peer.flashback_state.is_none() {
+                    info!("region is already in flashback state");
+                    let cmd_resp = RaftCmdResponse::default();
+                    cb.invoke_with_response(cmd_resp);
+                }
+                return;
+            }
+        }
+        // set persist state
+        let req = {
+            let mut request =
+                new_admin_request(self.fsm.peer.region().get_id(), self.fsm.peer.peer.clone());
+            let mut admin = AdminRequest::default();
+            admin.set_cmd_type(AdminCmdType::PrepareFlashback);
+            request.set_admin_request(admin);
+            request
+        };
+        self.propose_raft_command(req, cb, DiskFullOpt::AllowedOnAlmostFull);
+    }
+
+    fn on_wait_apply_flashback(&mut self, cb: Callback<EK::Snapshot>) {
+        let region_id = self.region().get_id();
+        info!(
+            "wait apply flashback";
+            "region_id" => region_id,
             "peer_id" => self.fsm.peer.peer_id(),
         );
         if self.fsm.peer.flashback_state.is_some() {
-            ch.send(false).unwrap();
+            cb.invoke_with_response(new_error(Error::FlashbackInProgress(region_id)));
             return;
         }
-        self.fsm.peer.flashback_state = Some(FlashbackState::new(ch));
+
+        self.fsm.peer.flashback_state = Some(FlashbackMemoryState::new(cb));
         // Let the leader lease to None to ensure that local reads are not executed.
         self.fsm.peer.leader_lease_mut().expire_remote_lease();
         self.fsm.peer.maybe_finish_flashback_wait_apply();
     }
 
-    fn on_finish_flashback(&mut self) {
+    fn on_finish_flashback(&mut self, cb: Callback<EK::Snapshot>) {
         info!(
             "finish flashback";
             "region_id" => self.region().get_id(),
             "peer_id" => self.fsm.peer.peer_id(),
         );
         self.fsm.peer.flashback_state.take();
+
+        let req = {
+            let mut request =
+                new_admin_request(self.fsm.peer.region().get_id(), self.fsm.peer.peer.clone());
+            let mut admin = AdminRequest::default();
+            admin.set_cmd_type(AdminCmdType::FinishFlashback);
+            request.set_admin_request(admin);
+            request
+        };
+        self.propose_raft_command(req, cb, DiskFullOpt::AllowedOnAlmostFull);
     }
 
     fn on_check_pending_admin(&mut self, ch: UnboundedSender<CheckAdminResponse>) {
@@ -1464,8 +1519,9 @@ where
                 self.on_unsafe_recovery_fill_out_report(syncer)
             }
 
-            SignificantMsg::PrepareFlashback(ch) => self.on_prepare_flashback(ch),
-            SignificantMsg::FinishFlashback => self.on_finish_flashback(),
+            SignificantMsg::PrepareFlashback(cb) => self.on_prepare_flashback(cb),
+            SignificantMsg::WaitApplyFlashback(cb) => self.on_wait_apply_flashback(cb),
+            SignificantMsg::FinishFlashback(cb) => self.on_finish_flashback(cb),
             // for snapshot recovery (safe recovery)
             SignificantMsg::SnapshotRecoveryWaitApply(syncer) => {
                 self.on_snapshot_recovery_wait_apply(syncer)
@@ -4786,6 +4842,12 @@ where
                 }
                 ExecResult::IngestSst { ssts } => self.on_ingest_sst_result(ssts),
                 ExecResult::TransferLeader { term } => self.on_transfer_leader(term),
+                ExecResult::PrepareFlashback {} => {
+                    self.on_ready_check_flashback_state(FlashbackState::Processing)
+                }
+                ExecResult::FinishFlashback {} => {
+                    self.on_ready_check_flashback_state(FlashbackState::Finish)
+                }
             }
         }
 
@@ -6126,6 +6188,24 @@ where
             true,
         );
         self.fsm.has_ready = true;
+    }
+
+    fn on_ready_check_flashback_state(&mut self, state: FlashbackState) {
+        let state_key = keys::region_state_key(self.region().get_id());
+        if let Some(target_state) = self
+            .ctx
+            .engines
+            .kv
+            .get_msg_cf::<RegionLocalState>(CF_RAFT, &state_key)
+            .unwrap()
+        {
+            if target_state.get_flashback_state() != state {
+                panic!(
+                    "Prepare Flashback, already has a local state for {:?} but not a finish state",
+                    self.region(),
+                );
+            }
+        }
     }
 
     /// Verify and store the hash to state. return true means the hash has been

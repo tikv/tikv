@@ -2664,7 +2664,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#f6d05706948aa296cff4db060e0962d3720f32eb"
+source = "git+https://github.com/HuSharp/kvproto?branch=modify_flashback_to_2pc#9ba465dc7027ffae3881e0192bc6a980e7a964c4"
 dependencies = [
  "futures 0.3.15",
  "grpcio",

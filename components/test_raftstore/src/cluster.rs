@@ -1423,22 +1423,54 @@ impl<T: Simulator> Cluster<T> {
         let router = self.sim.rl().get_router(store_id).unwrap();
         let (tx, rx) = oneshot::channel();
 
-        router
-            .significant_send(region_id, SignificantMsg::PrepareFlashback(tx))
-            .unwrap();
+        let failed = Arc::new(Mutex::new(false));
+        let failed_clone_prep = failed.clone();
+        let failed_clone_wait = failed.clone();
+        let raft_router_clone_wait = router.clone();
+        let callback = Callback::write(Box::new(move |resp| {
+            let cb = Callback::write(Box::new(move |resp| {
+                if resp.response.get_header().has_error() {
+                    *failed_clone_wait.lock().unwrap() = true;
+                    error!("send wait apply msg failed"; "region_id" => region_id);
+                }
+                tx.send(true).unwrap();
+            }));
 
-        let prepared = rx.await.unwrap();
-        if !prepared {
-            panic!("prepare flashback failed");
+            raft_router_clone_wait
+                .significant_send(region_id, SignificantMsg::WaitApplyFlashback(cb))
+                .unwrap();
+            if resp.response.get_header().has_error() {
+                *failed_clone_prep.lock().unwrap() = true;
+                error!("send flashback prepare msg failed"; "region_id" => region_id);
+            }
+        }));
+        router
+            .significant_send(region_id, SignificantMsg::PrepareFlashback(callback))
+            .unwrap();
+        if rx.await.unwrap() && *failed.lock().unwrap() {
+            panic!("Prepare Flashback failed");
         }
     }
 
-    pub fn call_finish_flashback(&mut self, region_id: u64, store_id: u64) {
+    pub async fn call_finish_flashback(&mut self, region_id: u64, store_id: u64) {
         let router = self.sim.rl().get_router(store_id).unwrap();
+        let (tx, rx) = oneshot::channel();
 
+        let failed = Arc::new(Mutex::new(false));
+        let failed_clone = failed.clone();
+        let cb = Callback::write(Box::new(move |resp| {
+            if resp.response.get_header().has_error() {
+                *failed_clone.lock().unwrap() = true;
+                error!("send finish flashback msg failed"; "region_id" => region_id);
+            }
+            tx.send(true).unwrap();
+        }));
         router
-            .significant_send(region_id, SignificantMsg::FinishFlashback)
+            .significant_send(region_id, SignificantMsg::FinishFlashback(cb))
             .unwrap();
+        if rx.await.unwrap() && *failed.lock().unwrap() {
+            panic!("Prepare Flashback failed");
+        }
     }
 
     pub fn must_split(&mut self, region: &metapb::Region, split_key: &[u8]) {

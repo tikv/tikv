@@ -41,7 +41,9 @@ use kvproto::{
         AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
         RaftCmdRequest, RaftCmdResponse, Request,
     },
-    raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState},
+    raft_serverpb::{
+        FlashbackState, MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
+    },
 };
 use pd_client::{new_bucket_stats, BucketMeta, BucketStat};
 use prometheus::local::LocalHistogram;
@@ -256,6 +258,8 @@ pub enum ExecResult<S> {
         region: Region,
         commit: u64,
     },
+    PrepareFlashback {},
+    FinishFlashback {},
     ComputeHash {
         region: Region,
         index: u64,
@@ -1413,7 +1417,9 @@ where
                 | ExecResult::CompactLog { .. }
                 | ExecResult::DeleteRange { .. }
                 | ExecResult::IngestSst { .. }
-                | ExecResult::TransferLeader { .. } => {}
+                | ExecResult::TransferLeader { .. }
+                | ExecResult::PrepareFlashback {}
+                | ExecResult::FinishFlashback {} => {}
                 ExecResult::SplitRegion { ref derived, .. } => {
                     self.region = derived.clone();
                     self.metrics.size_diff_hint = 0;
@@ -1547,6 +1553,9 @@ where
             AdminCmdType::PrepareMerge => self.exec_prepare_merge(ctx, request),
             AdminCmdType::CommitMerge => self.exec_commit_merge(ctx, request),
             AdminCmdType::RollbackMerge => self.exec_rollback_merge(ctx, request),
+            // TODO: add flashback support.
+            AdminCmdType::PrepareFlashback => self.exec_prepare_flashback(ctx, request),
+            AdminCmdType::FinishFlashback => self.exec_finish_flashback(ctx, request),
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
         }?;
         response.set_cmd_type(cmd_type);
@@ -2053,7 +2062,7 @@ where
         } else {
             PeerState::Normal
         };
-        if let Err(e) = write_peer_state(ctx.kv_wb_mut(), &region, state, None) {
+        if let Err(e) = write_peer_state(ctx.kv_wb_mut(), &region, state, None, None) {
             panic!("{} failed to update region state: {:?}", self.tag, e);
         }
 
@@ -2098,7 +2107,7 @@ where
             PeerState::Normal
         };
 
-        if let Err(e) = write_peer_state(ctx.kv_wb_mut(), &region, state, None) {
+        if let Err(e) = write_peer_state(ctx.kv_wb_mut(), &region, state, None, None) {
             panic!("{} failed to update region state: {:?}", self.tag, e);
         }
 
@@ -2502,7 +2511,7 @@ where
                 );
                 continue;
             }
-            write_peer_state(kv_wb_mut, new_region, PeerState::Normal, None)
+            write_peer_state(kv_wb_mut, new_region, PeerState::Normal, None, None)
                 .and_then(|_| write_initial_apply_state(kv_wb_mut, new_region.get_id()))
                 .unwrap_or_else(|e| {
                     panic!(
@@ -2511,7 +2520,7 @@ where
                     )
                 });
         }
-        write_peer_state(kv_wb_mut, &derived, PeerState::Normal, None).unwrap_or_else(|e| {
+        write_peer_state(kv_wb_mut, &derived, PeerState::Normal, None, None).unwrap_or_else(|e| {
             panic!("{} fails to update region {:?}: {:?}", self.tag, derived, e)
         });
         let mut resp = AdminResponse::default();
@@ -2578,6 +2587,7 @@ where
             &region,
             PeerState::Merging,
             Some(merging_state.clone()),
+            None,
         )
         .unwrap_or_else(|e| {
             panic!(
@@ -2716,7 +2726,7 @@ where
             region.set_start_key(source_region.get_start_key().to_vec());
         }
         let kv_wb_mut = ctx.kv_wb_mut();
-        write_peer_state(kv_wb_mut, &region, PeerState::Normal, None)
+        write_peer_state(kv_wb_mut, &region, PeerState::Normal, None, None)
             .and_then(|_| {
                 // TODO: maybe all information needs to be filled?
                 let mut merging_state = MergeState::default();
@@ -2726,6 +2736,7 @@ where
                     source_region,
                     PeerState::Tombstone,
                     Some(merging_state),
+                    Some(state.get_flashback_state()),
                 )
             })
             .unwrap_or_else(|e| {
@@ -2773,12 +2784,14 @@ where
         let version = region.get_region_epoch().get_version();
         // Update version to avoid duplicated rollback requests.
         region.mut_region_epoch().set_version(version + 1);
-        write_peer_state(ctx.kv_wb_mut(), &region, PeerState::Normal, None).unwrap_or_else(|e| {
-            panic!(
-                "{} failed to rollback merge {:?}: {:?}",
-                self.tag, rollback, e
-            )
-        });
+        write_peer_state(ctx.kv_wb_mut(), &region, PeerState::Normal, None, None).unwrap_or_else(
+            |e| {
+                panic!(
+                    "{} failed to rollback merge {:?}: {:?}",
+                    self.tag, rollback, e
+                )
+            },
+        );
 
         PEER_ADMIN_CMD_COUNTER.rollback_merge.success.inc();
         let resp = AdminResponse::default();
@@ -2788,6 +2801,58 @@ where
                 region,
                 commit: rollback.get_commit(),
             }),
+        ))
+    }
+
+    fn exec_prepare_flashback(
+        &self,
+        ctx: &mut ApplyContext<EK>,
+        _req: &AdminRequest,
+    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+        let region = self.region.clone();
+        write_peer_state(
+            ctx.kv_wb_mut(),
+            &region,
+            PeerState::Normal,
+            None,
+            Some(FlashbackState::Processing),
+        )
+        .unwrap_or_else(|e| {
+            panic!(
+                "{} failed to persist flashback prepare state for region {:?}: {:?}",
+                self.tag, region, e
+            )
+        });
+
+        Ok((
+            AdminResponse::default(),
+            ApplyResult::Res(ExecResult::PrepareFlashback {}),
+        ))
+    }
+
+    fn exec_finish_flashback(
+        &self,
+        ctx: &mut ApplyContext<EK>,
+        _req: &AdminRequest,
+    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+        let region = self.region.clone();
+        write_peer_state(
+            ctx.kv_wb_mut(),
+            &region,
+            PeerState::Normal,
+            None,
+            Some(FlashbackState::Finish),
+        )
+        .unwrap_or_else(|e| {
+            panic!(
+                "{} failed to finish flashback state for region {:?}: {:?}",
+                self.tag, region, e
+            )
+        });
+
+        Ok((
+            AdminResponse::default(),
+            ApplyResult::Res(ExecResult::FinishFlashback {}),
         ))
     }
 

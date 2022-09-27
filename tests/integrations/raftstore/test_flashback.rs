@@ -73,7 +73,7 @@ fn test_flashback_for_schedule() {
         .unwrap();
     assert!(!resp.get_header().has_error());
 
-    cluster.call_finish_flashback(region.get_id(), 1);
+    block_on(cluster.call_finish_flashback(region.get_id(), 1));
     // transfer leader to (1, 1)
     cluster.must_transfer_leader(1, new_peer(1, 1));
 }
@@ -82,6 +82,7 @@ fn test_flashback_for_schedule() {
 fn test_flahsback_for_write() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
 
     // write for cluster
     let value = vec![1_u8; 8096];
@@ -101,7 +102,7 @@ fn test_flahsback_for_write() {
         new_put_cmd(b"k1", &value),
     );
 
-    cluster.call_finish_flashback(region.get_id(), 1);
+    block_on(cluster.call_finish_flashback(region.get_id(), 1));
 
     multi_do_cmd(&mut cluster, new_put_cf_cmd("write", b"k1", &value));
 }
@@ -110,6 +111,7 @@ fn test_flahsback_for_write() {
 fn test_flahsback_for_read() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
 
     // write for cluster
     let value = vec![1_u8; 8096];
@@ -132,7 +134,7 @@ fn test_flahsback_for_read() {
         new_get_cf_cmd("write", b"k1"),
     );
 
-    cluster.call_finish_flashback(region.get_id(), 1);
+    block_on(cluster.call_finish_flashback(region.get_id(), 1));
 
     multi_do_cmd(&mut cluster, new_get_cf_cmd("write", b"k1"));
 }
@@ -170,6 +172,10 @@ fn test_flahsback_for_local_read() {
     // prepare for flashback
     block_on(cluster.call_and_wait_prepare_flashback(region.get_id(), store_id));
 
+    // Check the leader does a local read.
+    let state = cluster.raft_local_state(region.get_id(), store_id);
+    assert_eq!(state.get_last_index(), last_index + 1);
+
     must_error_read_on_peer(
         &mut cluster,
         peer.clone(),
@@ -191,9 +197,9 @@ fn test_flahsback_for_local_read() {
 
     // Also check read by propose was blocked
     let state = cluster.raft_local_state(region.get_id(), store_id);
-    assert_eq!(state.get_last_index(), last_index);
+    assert_eq!(state.get_last_index(), last_index + 1);
 
-    cluster.call_finish_flashback(region.get_id(), store_id);
+    block_on(cluster.call_finish_flashback(region.get_id(), store_id));
 
     // check local read after finish flashback
     let state = cluster.raft_local_state(region.get_id(), store_id);
@@ -212,10 +218,10 @@ fn test_flahsback_for_status_cmd_as_region_detail() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.run();
 
-    let region = cluster.get_region(b"k1");
-    block_on(cluster.call_and_wait_prepare_flashback(region.get_id(), 1));
-
     let leader = cluster.leader_of_region(1).unwrap();
+    let region = cluster.get_region(b"k1");
+    block_on(cluster.call_and_wait_prepare_flashback(region.get_id(), leader.get_store_id()));
+
     let region_detail = cluster.region_detail(1, 1);
     assert!(region_detail.has_region());
     let region = region_detail.get_region();

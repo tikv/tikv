@@ -1,7 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]: TiKV gRPC APIs implementation
-use std::{mem, sync::Arc};
+use std::{
+    mem,
+    sync::{Arc, Mutex},
+};
 
 use api_version::KvFormat;
 use fail::fail_point;
@@ -1705,14 +1708,44 @@ fn future_flashback_to_version<
         // we start the flashback command.
         let region_id = req.get_context().get_region_id();
         let (result_tx, result_rx) = oneshot::channel();
+        let failed = Arc::new(Mutex::new(false));
+        let failed_clone_prep = failed.clone();
+        let failed_clone_wait = failed.clone();
+        let raft_router_clone_wait = raft_router_clone.clone();
+
+        let callback = Callback::write(Box::new(move |resp| {
+            let cb = Callback::write(Box::new(move |resp| {
+                if resp.response.get_header().has_error() {
+                    *failed_clone_prep.lock().unwrap() = true;
+                    error!(
+                        "Unsafe recovery, fail to exit residual joint state";
+                        "err" => ?resp.response.get_header().get_error(),
+                    );
+                }
+                result_tx.send(true).unwrap();
+            }));
+
+            raft_router_clone_wait
+                .significant_send(region_id, SignificantMsg::WaitApplyFlashback(cb)).unwrap();
+            if resp.response.get_header().has_error() {
+                *failed_clone_wait.lock().unwrap() = true;
+                error!(
+                    "Unsafe recovery, fail to finish demotion";
+                    "err" => ?resp.response.get_header().get_error(),
+                );
+            }
+        }));
+
         raft_router_clone
-            .significant_send(region_id, SignificantMsg::PrepareFlashback(result_tx))?;
-        if !result_rx.await? {
+            .significant_send(region_id, SignificantMsg::PrepareFlashback(callback)).unwrap();
+
+        if result_rx.await? && *failed.lock().unwrap() {
             return Err(Error::Other(box_err!(
                 "failed to prepare the region {} for flashback",
                 region_id
             )));
         }
+
         let (cb, f) = paired_future_callback();
         let res = storage_clone.sched_txn_command(req.into(), cb);
         // Avoid crossing `.await` to bypass the `Send` constraint.
@@ -1726,7 +1759,27 @@ fn future_flashback_to_version<
         });
         // Send a `SignificantMsg::FinishFlashback` to notify the raftstore that the
         // flashback has been finished.
-        raft_router_clone.significant_send(region_id, SignificantMsg::FinishFlashback)?;
+        let (result_tx, result_rx) = oneshot::channel();
+        let failed_clone_finish = failed.clone();
+        let cb = Callback::write(Box::new(move |resp| {
+            if resp.response.get_header().has_error() {
+                *failed_clone_finish.lock().unwrap() = true;
+                error!(
+                    "Unsafe recovery, fail to exit residual joint state";
+                    "err" => ?resp.response.get_header().get_error(),
+                );
+            }
+            result_tx.send(true).unwrap();
+        }));
+
+        raft_router_clone.significant_send(region_id, SignificantMsg::FinishFlashback(cb)).unwrap();
+        if result_rx.await? && *failed.lock().unwrap() {
+                return Err(Error::Other(box_err!(
+                    "failed to prepare the region {} for flashback",
+                    region_id
+                )));
+        }
+
         let mut resp = FlashbackToVersionResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);

@@ -20,7 +20,8 @@ use keys::{self, enc_end_key, enc_start_key};
 use kvproto::{
     metapb::{self, Region},
     raft_serverpb::{
-        MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
+        FlashbackState, MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData,
+        RegionLocalState,
     },
 };
 use protobuf::Message;
@@ -592,9 +593,9 @@ where
         }
         // Write its source peers' `RegionLocalState` together with itself for atomicity
         for r in destroy_regions {
-            write_peer_state(kv_wb, r, PeerState::Tombstone, None)?;
+            write_peer_state(kv_wb, r, PeerState::Tombstone, None, None)?;
         }
-        write_peer_state(kv_wb, &region, PeerState::Applying, None)?;
+        write_peer_state(kv_wb, &region, PeerState::Applying, None, None)?;
 
         let last_index = snap.get_metadata().get_index();
 
@@ -1087,6 +1088,7 @@ pub fn write_peer_state<T: Mutable>(
     region: &metapb::Region,
     state: PeerState,
     merge_state: Option<MergeState>,
+    flashback_state: Option<FlashbackState>,
 ) -> Result<()> {
     let region_id = region.get_id();
     let mut region_state = RegionLocalState::default();
@@ -1094,6 +1096,9 @@ pub fn write_peer_state<T: Mutable>(
     region_state.set_region(region.clone());
     if let Some(state) = merge_state {
         region_state.set_merge_state(state);
+    }
+    if let Some(state) = flashback_state {
+        region_state.set_flashback_state(state);
     }
 
     debug!(

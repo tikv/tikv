@@ -24,7 +24,6 @@ use engine_traits::{
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
-use futures::channel::oneshot::Sender;
 use getset::{Getters, MutGetters};
 use kvproto::{
     errorpb,
@@ -844,24 +843,22 @@ pub enum UnsafeRecoveryState {
 // it is checked every time this peer applies a new entry or a snapshot,
 // if the latest committed index is met, the syncer will be called to notify the
 // result.
-#[derive(Debug)]
-pub struct FlashbackState(Option<Sender<bool>>);
 
-impl FlashbackState {
-    pub fn new(ch: Sender<bool>) -> Self {
-        FlashbackState(Some(ch))
+// The applied command and their callback
+pub struct FlashbackMemoryState<S: Snapshot>(Option<Callback<S>>);
+
+impl<S: Snapshot> FlashbackMemoryState<S> {
+    pub fn new(cb: Callback<S>) -> Self {
+        FlashbackMemoryState(Some(cb))
     }
 
     pub fn finish_wait_apply(&mut self) {
         if self.0.is_none() {
             return;
         }
-        let ch = self.0.take().unwrap();
-        match ch.send(true) {
-            Ok(_) => {}
-            Err(e) => {
-                error!("Fail to notify flashback state"; "err" => ?e);
-            }
+        if let Some(cb) = self.0.take() {
+            let cmd_resp = RaftCmdResponse::default();
+            cb.invoke_with_response(cmd_resp);
         }
     }
 }
@@ -1047,7 +1044,7 @@ where
     /// lead_transferee if the peer is in a leadership transferring.
     pub lead_transferee: u64,
     pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
-    pub flashback_state: Option<FlashbackState>,
+    pub flashback_state: Option<FlashbackMemoryState<EK::Snapshot>>,
     pub snapshot_recovery_state: Option<SnapshotRecoveryState>,
 }
 
@@ -1488,6 +1485,7 @@ where
                 } else {
                     None
                 },
+                None,
             )?;
 
             // write kv rocksdb first in case of restart happen between two write
