@@ -1845,7 +1845,7 @@ pub mod tests {
         let (task, _) = Task::new(req, tx).unwrap();
         endpoint.handle_backup_task(task);
         let end_ts = ts_provider.get_ts().unwrap();
-        assert_eq!(end_ts.into_inner(), start_ts.next().into_inner() + 100);
+        assert_eq!(end_ts.into_inner(), start_ts.next().into_inner() + 101);
     }
 
     #[test]
