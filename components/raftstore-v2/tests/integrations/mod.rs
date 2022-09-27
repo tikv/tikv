@@ -45,7 +45,7 @@ use raftstore_v2::{
     router::{DebugInfoChannel, PeerMsg, QueryResult},
     Bootstrap, StoreMeta, StoreRouter, StoreSystem,
 };
-use slog::{o, Logger};
+use slog::{error, o, Logger};
 use tempfile::{TempDir, TempPath};
 use test_pd::mocker::Service;
 use test_raftstore::{filter_send, Filter};
@@ -269,11 +269,22 @@ impl RunningState {
             DbOptions::default(),
             cf_opts,
         ));
-        let raft_engine =
-            engine_test::raft::new_engine(&format!("{}", path.join("raft").display()), None)
-                .unwrap();
+        let mut rengine: Option<RaftTestEngine> = None;
+        for _ in 0..10 {
+            match engine_test::raft::new_engine(&format!("{}", path.join("raft").display()), None) {
+                Ok(engine) => {
+                    rengine = Some(engine);
+                    break;
+                }
+                Err(err) => {
+                    error!(logger, "failed to create raft engine"; "err" => ?err);
+                    thread::sleep(Duration::from_millis(500));
+                }
+            }
+        }
+
         let mut state = RunningState {
-            raft_engine,
+            raft_engine: rengine.unwrap(),
             factory,
             system: None,
             cfg,
@@ -335,9 +346,6 @@ impl RunningState {
                 )
                 .unwrap();
             bootstrap.initial_first_tablet(&tablet, &region).unwrap();
-            // bootstrap
-            //     .clear_prepare_bootstrap(Some(region.get_id()))
-            //     .unwrap();
         }
 
         let (router, mut system) = create_store_batch_system::<KvTestEngine, RaftTestEngine>(

@@ -35,6 +35,7 @@ use tikv_util::{
     config::{Tracker, VersionTrack},
     defer,
     future::poll_future_notify,
+    info,
     time::Instant as TiInstant,
     timer::SteadyTimer,
     worker::{Scheduler, Worker},
@@ -479,6 +480,9 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
 
         workers.store_writers.shutdown();
         workers.log_fetch_worker.stop();
+        info!("stopped log fetch worker");
+        workers.snapshot_worker.stop();
+        info!("stopped snapshot worker");
     }
 }
 

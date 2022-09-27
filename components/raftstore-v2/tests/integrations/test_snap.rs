@@ -18,7 +18,6 @@ use crate::Cluster;
 /// Test basic write flow.
 #[test]
 fn test_basic_generate_snapshot() {
-    test_util::init_log_for_test();
     let cluster = Cluster::with_node_count(2);
     let router1 = cluster.router(0);
     let mut router2 = cluster.router(1);

@@ -254,7 +254,7 @@ where
     ) -> Result<()> {
         // do we need to check leader here?
         let snap = box_try!(do_snapshot(
-            self.raft_engine.clone(),
+            &self.raft_engine,
             self.mgr.clone(),
             self.table_factory.clone(),
             region_id,
@@ -318,7 +318,7 @@ where
 }
 
 pub fn do_snapshot<EK, ER>(
-    raft_engine: ER,
+    raft_engine: &ER,
     mgr: SnapManager,
     tablet_factory: Arc<dyn TabletFactory<EK>>,
     region_id: u64,
