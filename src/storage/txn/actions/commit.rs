@@ -128,7 +128,7 @@ pub mod tests {
     };
 
     pub fn must_succeed<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
@@ -137,7 +137,7 @@ pub mod tests {
     }
 
     pub fn must_succeed_on_region<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         region_id: u64,
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
@@ -147,7 +147,7 @@ pub mod tests {
     }
 
     fn must_succeed_impl<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
@@ -171,7 +171,7 @@ pub mod tests {
     }
 
     pub fn must_err<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
@@ -193,16 +193,16 @@ pub mod tests {
         must_locked(&mut engine, k1, 10);
         must_locked(&mut engine, k2, 10);
         must_locked(&mut engine, k3, 10);
-        must_succeed(&engine, k1, 10, 15);
-        must_succeed(&engine, k2, 10, 15);
-        must_succeed(&engine, k3, 10, 15);
+        must_succeed(&mut engine, k1, 10, 15);
+        must_succeed(&mut engine, k2, 10, 15);
+        must_succeed(&mut engine, k3, 10, 15);
         must_written(&engine, k1, 10, 15, WriteType::Put);
         must_written(&engine, k2, 10, 15, WriteType::Lock);
         must_written(&engine, k3, 10, 15, WriteType::Delete);
         // commit should be idempotent
-        must_succeed(&engine, k1, 10, 15);
-        must_succeed(&engine, k2, 10, 15);
-        must_succeed(&engine, k3, 10, 15);
+        must_succeed(&mut engine, k1, 10, 15);
+        must_succeed(&mut engine, k2, 10, 15);
+        must_succeed(&mut engine, k3, 10, 15);
     }
 
     #[test]
@@ -218,13 +218,13 @@ pub mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
 
         // Not prewrite yet
-        must_err(&engine, k, 1, 2);
+        must_err(&mut engine, k, 1, 2);
         must_prewrite_put(&mut engine, k, v, k, 5);
         // start_ts not match
-        must_err(&engine, k, 4, 5);
+        must_err(&mut engine, k, 4, 5);
         must_rollback(&mut engine, k, 5, false);
         // commit after rollback
-        must_err(&engine, k, 5, 6);
+        must_err(&mut engine, k, 5, 6);
     }
 
     #[test]
@@ -266,9 +266,9 @@ pub mod tests {
             uncommitted(100, ts(20, 1)),
         );
         // The min_commit_ts should be ts(20, 1)
-        must_err(&engine, k, ts(10, 0), ts(15, 0));
-        must_err(&engine, k, ts(10, 0), ts(20, 0));
-        must_succeed(&engine, k, ts(10, 0), ts(20, 1));
+        must_err(&mut engine, k, ts(10, 0), ts(15, 0));
+        must_err(&mut engine, k, ts(10, 0), ts(20, 0));
+        must_succeed(&mut engine, k, ts(10, 0), ts(20, 1));
 
         must_prewrite_put_for_large_txn(&engine, k, v, k, ts(30, 0), 100, 0);
         check_txn_status::tests::must_success(
@@ -282,7 +282,7 @@ pub mod tests {
             false,
             uncommitted(100, ts(40, 1)),
         );
-        must_succeed(&engine, k, ts(30, 0), ts(50, 0));
+        must_succeed(&mut engine, k, ts(30, 0), ts(50, 0));
 
         // If the min_commit_ts of the pessimistic lock is greater than prewrite's, use
         // it.
@@ -317,7 +317,7 @@ pub mod tests {
         );
         // The min_commit_ts is ts(70, 0) other than ts(60, 1) in prewrite request.
         must_large_txn_locked(&mut engine, k, ts(60, 0), 100, ts(70, 1), false);
-        must_err(&engine, k, ts(60, 0), ts(65, 0));
-        must_succeed(&engine, k, ts(60, 0), ts(80, 0));
+        must_err(&mut engine, k, ts(60, 0), ts(65, 0));
+        must_succeed(&mut engine, k, ts(60, 0), ts(80, 0));
     }
 }

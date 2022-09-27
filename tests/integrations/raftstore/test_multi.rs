@@ -320,7 +320,7 @@ fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
     }
 
     let engine3 = cluster.get_engine(3);
-    must_get_none(&engine3, b"k1");
+    must_get_none(&mut engine3, b"k1");
 
     // now only peer 1 and peer 2 can step to leader.
 
@@ -423,7 +423,7 @@ fn test_node_leader_change_with_log_overlap() {
     }
 
     let engine3 = cluster.get_engine(3);
-    must_get_none(&engine3, b"k1");
+    must_get_none(&mut engine3, b"k1");
 
     // now only peer 1 and peer 2 can step to leader.
     // Make peer 1's msg won't be replicated,
@@ -682,7 +682,7 @@ fn test_node_dropped_proposal() {
     }
 
     let engine3 = cluster.get_engine(3);
-    must_get_none(&engine3, b"k1");
+    must_get_none(&mut engine3, b"k1");
 
     let put_msg = vec![new_put_cmd(b"k2", b"v2")];
     let region = cluster.get_region(b"");

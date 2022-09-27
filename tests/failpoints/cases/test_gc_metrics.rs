@@ -96,18 +96,18 @@ fn test_txn_mvcc_filtered() {
     must_prewrite_put(&mut engine, b"zkey", &value, b"zkey", 100);
     must_commit(&mut engine, b"zkey", 100, 110);
     gc_runner.safe_point(50).gc(&raw_engine);
-    must_get(&engine, b"zkey", 110, &value);
+    must_get(&mut engine, b"zkey", 110, &value);
 
     // GC can't delete keys before the safe ponit if they are latest versions.
     gc_runner.safe_point(200).gc(&raw_engine);
-    must_get(&engine, b"zkey", 110, &value);
+    must_get(&mut engine, b"zkey", 110, &value);
 
     must_prewrite_put(&mut engine, b"zkey", &value, b"zkey", 120);
     must_commit(&mut engine, b"zkey", 120, 130);
 
     // GC can't delete the latest version before the safe ponit.
     gc_runner.safe_point(115).gc(&raw_engine);
-    must_get(&engine, b"zkey", 110, &value);
+    must_get(&mut engine, b"zkey", 110, &value);
 
     // GC a version will also delete the key on default CF.
     gc_runner.safe_point(200).gc(&raw_engine);

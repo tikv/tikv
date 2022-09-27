@@ -1530,7 +1530,7 @@ mod latest_kv_tests {
         let (key5, val5) = (b"k5", b"val5");
         must_prewrite_put(&mut engine, key5, val5, key5, 57);
         must_commit(&mut engine, key5, 57, 58);
-        must_acquire_pessimistic_lock(&engine, key5, key5, 65, 65);
+        must_acquire_pessimistic_lock(&mut engine, key5, key5, 65, 65);
 
         let (key6, val6) = (b"k6", b"v6");
         must_prewrite_put(&mut engine, key6, val6, key6, 75);
@@ -2477,11 +2477,11 @@ mod delta_entry_tests {
             for (start_ts, commit_ts, write_type, value) in writes {
                 let value = make_value(value);
                 if *write_type != WriteType::Rollback {
-                    must_acquire_pessimistic_lock(&engine, key, key, start_ts, commit_ts - 1);
+                    must_acquire_pessimistic_lock(&mut engine, key, key, start_ts, commit_ts - 1);
                 }
                 match write_type {
                     WriteType::Put => must_pessimistic_prewrite_put(
-                        &engine,
+                        &mut engine,
                         key,
                         &value,
                         key,
@@ -2490,7 +2490,7 @@ mod delta_entry_tests {
                         DoPessimisticCheck,
                     ),
                     WriteType::Delete => must_pessimistic_prewrite_delete(
-                        &engine,
+                        &mut engine,
                         key,
                         key,
                         start_ts,
@@ -2498,7 +2498,7 @@ mod delta_entry_tests {
                         DoPessimisticCheck,
                     ),
                     WriteType::Lock => must_pessimistic_prewrite_lock(
-                        &engine,
+                        &mut engine,
                         key,
                         key,
                         start_ts,
@@ -2520,10 +2520,10 @@ mod delta_entry_tests {
                     .map(|(_, commit_ts, ..)| commit_ts)
                     .unwrap_or(0);
                 let for_update_ts = std::cmp::max(*ts, max_commit_ts + 1);
-                must_acquire_pessimistic_lock(&engine, key, key, *ts, for_update_ts);
+                must_acquire_pessimistic_lock(&mut engine, key, key, *ts, for_update_ts);
                 match lock_type {
                     LockType::Put => must_pessimistic_prewrite_put(
-                        &engine,
+                        &mut engine,
                         key,
                         &value,
                         key,
@@ -2532,7 +2532,7 @@ mod delta_entry_tests {
                         DoPessimisticCheck,
                     ),
                     LockType::Delete => must_pessimistic_prewrite_delete(
-                        &engine,
+                        &mut engine,
                         key,
                         key,
                         ts,
@@ -2540,7 +2540,7 @@ mod delta_entry_tests {
                         DoPessimisticCheck,
                     ),
                     LockType::Lock => must_pessimistic_prewrite_lock(
-                        &engine,
+                        &mut engine,
                         key,
                         key,
                         ts,
@@ -2641,14 +2641,14 @@ mod delta_entry_tests {
         must_commit(&mut engine, b"b", 10, 10);
 
         // Generate put for [b] at 15.
-        must_acquire_pessimistic_lock(&engine, b"b", b"b", 9, 15);
-        must_pessimistic_prewrite_put(&engine, b"b", b"b_15", b"b", 9, 15, DoPessimisticCheck);
+        must_acquire_pessimistic_lock(&mut engine, b"b", b"b", 9, 15);
+        must_pessimistic_prewrite_put(&mut engine, b"b", b"b_15", b"b", 9, 15, DoPessimisticCheck);
 
         must_prewrite_put(&mut engine, b"c", b"c_4", b"c", 4);
         must_commit(&mut engine, b"c", 4, 6);
-        must_acquire_pessimistic_lock(&engine, b"c", b"c", 5, 15);
-        must_pessimistic_prewrite_put(&engine, b"c", b"c_5", b"c", 5, 15, DoPessimisticCheck);
-        must_cleanup(&engine, b"c", 20, 0);
+        must_acquire_pessimistic_lock(&mut engine, b"c", b"c", 5, 15);
+        must_pessimistic_prewrite_put(&mut engine, b"c", b"c_5", b"c", 5, 15, DoPessimisticCheck);
+        must_cleanup(&mut engine, b"c", 20, 0);
 
         let entry_a_1 = EntryBuilder::default()
             .key(b"a")

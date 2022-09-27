@@ -78,8 +78,8 @@ fn test_stale_peer_out_of_region<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(cluster.get(key2), Some(value2.to_vec()));
 
     // Check whether peer(2, 2) and its data are destroyed.
-    must_get_none(&engine_2, key);
-    must_get_none(&engine_2, key2);
+    must_get_none(&mut engine_2, key);
+    must_get_none(&mut engine_2, key2);
     let state_key = keys::region_state_key(1);
     let state: RegionLocalState = engine_2.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);
@@ -128,11 +128,11 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>, right_de
 
     let engine3 = cluster.get_engine(3);
     if right_derive {
-        must_get_none(&engine3, b"k1");
+        must_get_none(&mut engine3, b"k1");
         must_get_equal(&engine3, b"k3", b"v3");
     } else {
         must_get_equal(&engine3, b"k1", b"v1");
-        must_get_none(&engine3, b"k3");
+        must_get_none(&mut engine3, b"k3");
     }
 
     let new_region = if right_derive {
@@ -160,9 +160,9 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>, right_de
 
     // There must be no data on store 3 belongs to new region
     if right_derive {
-        must_get_none(&engine3, b"k1");
+        must_get_none(&mut engine3, b"k1");
     } else {
-        must_get_none(&engine3, b"k3");
+        must_get_none(&mut engine3, b"k3");
     }
 
     // Check whether peer(3, 4) is destroyed.
@@ -250,7 +250,7 @@ fn test_stale_learner() {
     pd_client.must_remove_peer(r1, new_peer(3, 3));
 
     // Check not leader should fail, all data should be removed.
-    must_get_none(&engine3, b"k1");
+    must_get_none(&mut engine3, b"k1");
     let state_key = keys::region_state_key(r1);
     let state: RegionLocalState = engine3.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);
@@ -305,7 +305,7 @@ fn test_stale_learner_with_read_index() {
         .unwrap();
 
     // Stale learner should be destroyed due to interaction between leader
-    must_get_none(&engine3, b"k1");
+    must_get_none(&mut engine3, b"k1");
     let state_key = keys::region_state_key(r1);
     let state: RegionLocalState = engine3.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);

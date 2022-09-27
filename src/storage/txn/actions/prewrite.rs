@@ -805,7 +805,7 @@ pub mod tests {
 
     // Insert has a constraint that key should not exist
     pub fn try_prewrite_insert<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         key: &[u8],
         value: &[u8],
         pk: &[u8],
@@ -840,7 +840,7 @@ pub mod tests {
     }
 
     pub fn try_prewrite_check_not_exists<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         key: &[u8],
         pk: &[u8],
         ts: impl Into<TimeStamp>,
@@ -1087,7 +1087,7 @@ pub mod tests {
     }
 
     pub fn try_pessimistic_prewrite_check_not_exists<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         key: &[u8],
         pk: &[u8],
         ts: impl Into<TimeStamp>,

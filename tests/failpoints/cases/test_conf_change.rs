@@ -137,7 +137,7 @@ fn test_write_after_destroy() {
     let resp = rx1.recv_timeout(Duration::from_secs(2)).unwrap();
     assert!(!resp.get_header().has_error(), "{:?}", resp);
     std::thread::sleep(Duration::from_secs(3));
-    must_get_none(&engine_3, b"k5");
+    must_get_none(&mut engine_3, b"k5");
     must_region_cleared(&engines_3, &region);
 }
 

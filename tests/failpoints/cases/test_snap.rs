@@ -93,7 +93,7 @@ fn test_server_snapshot_on_resolve_failure() {
     notify_rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
     let engine2 = cluster.get_engine(2);
-    must_get_none(&engine2, b"k1");
+    must_get_none(&mut engine2, b"k1");
 
     // If snapshot status is reported correctly, sending snapshot should be retried.
     notify_rx.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -678,7 +678,7 @@ fn test_sending_fail_with_net_error() {
     // peer2 will not become learner so ti will has k1 key and receiving count will
     // zero
     let engine2 = cluster.get_engine(2);
-    must_get_none(&engine2, b"k1");
+    must_get_none(&mut engine2, b"k1");
     assert_eq!(cluster.get_snap_mgr(2).stats().receiving_count, 0);
 }
 

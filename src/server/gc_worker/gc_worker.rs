@@ -2154,10 +2154,10 @@ mod tests {
 
         for i in 0..100 {
             let k = format!("k{:02}", i).into_bytes();
-            must_prewrite_put(&prefixed_engine, &k, b"value", &k, 101);
-            must_commit(&prefixed_engine, &k, 101, 102);
-            must_prewrite_delete(&prefixed_engine, &k, &k, 151);
-            must_commit(&prefixed_engine, &k, 151, 152);
+            must_prewrite_put(&mut prefixed_engine, &k, b"value", &k, 101);
+            must_commit(&mut prefixed_engine, &k, 101, 102);
+            must_prewrite_delete(&mut prefixed_engine, &k, &k, 151);
+            must_commit(&mut prefixed_engine, &k, 151, 152);
         }
         db.flush_cf(cf, true).unwrap();
 
@@ -2229,10 +2229,10 @@ mod tests {
         let mut keys = vec![];
         for i in 0..100 {
             let k = format!("k{:02}", i).into_bytes();
-            must_prewrite_put(&prefixed_engine, &k, b"value", &k, 101);
-            must_commit(&prefixed_engine, &k, 101, 102);
-            must_prewrite_delete(&prefixed_engine, &k, &k, 151);
-            must_commit(&prefixed_engine, &k, 151, 152);
+            must_prewrite_put(&mut prefixed_engine, &k, b"value", &k, 101);
+            must_commit(&mut prefixed_engine, &k, 101, 102);
+            must_prewrite_delete(&mut prefixed_engine, &k, &k, 151);
+            must_commit(&mut prefixed_engine, &k, 151, 152);
             keys.push(Key::from_raw(&k));
         }
         db.flush_cf(cf, true).unwrap();
@@ -2362,7 +2362,7 @@ mod tests {
     #[test]
     fn test_gc_keys_scan_range_limit() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let prefixed_engine = PrefixedEngine(engine.clone());
+        let mut prefixed_engine = PrefixedEngine(engine.clone());
 
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
@@ -2393,10 +2393,10 @@ mod tests {
         let cf = get_cf_handle(&db, CF_WRITE).unwrap();
         // Generate some tombstone
         for i in 10u64..30 {
-            must_rollback(&prefixed_engine, b"k2\x00", i, true);
+            must_rollback(&mut prefixed_engine, b"k2\x00", i, true);
         }
         db.flush_cf(cf, true).unwrap();
-        must_gc(&prefixed_engine, b"k2\x00", 30);
+        must_gc(&mut prefixed_engine, b"k2\x00", 30);
 
         // Test tombstone counter works
         assert_eq!(runner.mut_stats(GcKeyMode::txn).write.seek_tombstone, 0);
@@ -2451,8 +2451,8 @@ mod tests {
         let versions = (MAX_TXN_WRITE_SIZE - 1) / key_size + 4;
         for start_ts in (1..versions).map(|x| x as u64 * 2) {
             let commit_ts = start_ts + 1;
-            must_prewrite_put(&prefixed_engine, b"k2", b"v2", b"k2", start_ts);
-            must_commit(&prefixed_engine, b"k2", start_ts, commit_ts);
+            must_prewrite_put(&mut prefixed_engine, b"k2", b"v2", b"k2", start_ts);
+            must_commit(&mut prefixed_engine, b"k2", start_ts, commit_ts);
         }
         db.flush_cf(cf, true).unwrap();
         let safepoint = versions as u64 * 2;
@@ -2691,11 +2691,17 @@ mod tests {
             }
             let k = format!("k{:02}", i).into_bytes();
             let v = format!("value-{:02}", i).into_bytes();
-            must_prewrite_put_on_region(&engine, region_id, &k, &v, &k, put_start_ts);
-            must_commit_on_region(&engine, region_id, &k, put_start_ts, put_start_ts + 1);
+            must_prewrite_put_on_region(&mut engine, region_id, &k, &v, &k, put_start_ts);
+            must_commit_on_region(&mut engine, region_id, &k, put_start_ts, put_start_ts + 1);
             if need_deletion {
-                must_prewrite_delete_on_region(&engine, region_id, &k, &k, delete_start_ts);
-                must_commit_on_region(&engine, region_id, &k, delete_start_ts, delete_start_ts + 1);
+                must_prewrite_delete_on_region(&mut engine, region_id, &k, &k, delete_start_ts);
+                must_commit_on_region(
+                    &mut engine,
+                    region_id,
+                    &k,
+                    delete_start_ts,
+                    delete_start_ts + 1,
+                );
             }
         }
 

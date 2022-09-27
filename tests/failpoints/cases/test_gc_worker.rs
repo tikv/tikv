@@ -339,8 +339,8 @@ fn test_error_in_compaction_filter() {
     }
 
     // Although versions on default CF is not cleaned, write CF is GCed correctly.
-    must_get_none(&engine, b"zkey", 102);
-    must_get_none(&engine, b"zkey", 104);
+    must_get_none(&mut engine, b"zkey", 102);
+    must_get_none(&mut engine, b"zkey", 104);
 
     fail::remove(fp);
 }

@@ -178,7 +178,7 @@ pub mod tests {
     };
 
     pub fn must_success<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         key: &[u8],
         lock_ts: impl Into<TimeStamp>,
         expect_status: SecondaryLocksStatus,

@@ -137,7 +137,7 @@ pub mod tests {
         RocksEngine, TestEngineBuilder,
     };
 
-    pub fn must_succeed<E: Engine>(engine: &E, key: &[u8], safe_point: impl Into<TimeStamp>) {
+    pub fn must_succeed<E: Engine>(engine: &mut E, key: &[u8], safe_point: impl Into<TimeStamp>) {
         let ctx = SnapContext::default();
         let snapshot = engine.snapshot(ctx).unwrap();
         let cm = ConcurrencyManager::new(1.into());
@@ -193,18 +193,18 @@ pub mod tests {
         // 5    x5
 
         gc(&engine, k, 12);
-        must_get(&engine, k, 12, v1);
+        must_get(&mut engine, k, 12, v1);
 
         gc(&engine, k, 22);
-        must_get(&engine, k, 22, v2);
-        must_get_none(&engine, k, 12);
+        must_get(&mut engine, k, 22, v2);
+        must_get_none(&mut engine, k, 12);
 
         gc(&engine, k, 32);
-        must_get_none(&engine, k, 22);
-        must_get_none(&engine, k, 35);
+        must_get_none(&mut engine, k, 22);
+        must_get_none(&mut engine, k, 35);
 
         gc(&engine, k, 60);
-        must_get(&engine, k, 62, v3);
+        must_get(&mut engine, k, 62, v3);
     }
 
     #[test]

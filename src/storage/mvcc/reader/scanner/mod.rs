@@ -638,7 +638,7 @@ mod tests {
         };
 
         let test_scanner_result =
-            move |engine: &RocksEngine, expected_result: Vec<(Vec<u8>, Option<Vec<u8>>)>| {
+            move |engine: &mut RocksEngine, expected_result: Vec<(Vec<u8>, Option<Vec<u8>>)>| {
                 let snapshot = engine.snapshot(Default::default()).unwrap();
 
                 let scanner = ScannerBuilder::new(snapshot, SCAN_TS)
@@ -659,7 +659,7 @@ mod tests {
         // Lock after write
         let mut engine = new_engine();
 
-        add_write_at_ts(POST_TS, &engine, b"a", b"a_value");
+        add_write_at_ts(POST_TS, &mut engine, b"a", b"a_value");
         add_lock_at_ts(PREV_TS, &mut engine, b"b");
 
         let expected_result = desc_map(vec![
@@ -667,27 +667,27 @@ mod tests {
             (b"b".to_vec(), None),
         ]);
 
-        test_scanner_result(&engine, expected_result);
+        test_scanner_result(&mut engine, expected_result);
 
         // Lock before write for same key
         let mut engine = new_engine();
-        add_write_at_ts(PREV_TS, &engine, b"a", b"a_value");
+        add_write_at_ts(PREV_TS, &mut engine, b"a", b"a_value");
         add_lock_at_ts(POST_TS, &mut engine, b"a");
 
         let expected_result = vec![(b"a".to_vec(), None)];
 
-        test_scanner_result(&engine, expected_result);
+        test_scanner_result(&mut engine, expected_result);
 
         // Lock before write in different keys
         let mut engine = new_engine();
         add_lock_at_ts(POST_TS, &mut engine, b"a");
-        add_write_at_ts(PREV_TS, &engine, b"b", b"b_value");
+        add_write_at_ts(PREV_TS, &mut engine, b"b", b"b_value");
 
         let expected_result = desc_map(vec![
             (b"a".to_vec(), None),
             (b"b".to_vec(), Some(b"b_value".to_vec())),
         ]);
-        test_scanner_result(&engine, expected_result);
+        test_scanner_result(&mut engine, expected_result);
 
         // Only a lock here
         let mut engine = new_engine();
@@ -695,14 +695,14 @@ mod tests {
 
         let expected_result = desc_map(vec![(b"a".to_vec(), None)]);
 
-        test_scanner_result(&engine, expected_result);
+        test_scanner_result(&mut engine, expected_result);
 
         // Write Only
         let engine = new_engine();
-        add_write_at_ts(PREV_TS, &engine, b"a", b"a_value");
+        add_write_at_ts(PREV_TS, &mut engine, b"a", b"a_value");
 
         let expected_result = desc_map(vec![(b"a".to_vec(), Some(b"a_value".to_vec()))]);
-        test_scanner_result(&engine, expected_result);
+        test_scanner_result(&mut engine, expected_result);
     }
 
     fn test_scan_with_lock_impl(desc: bool) {
@@ -715,9 +715,9 @@ mod tests {
             must_commit(&mut engine, &[i], 10, 100);
         }
 
-        must_acquire_pessimistic_lock(&engine, &[1], &[1], 20, 110);
-        must_acquire_pessimistic_lock(&engine, &[2], &[2], 50, 110);
-        must_acquire_pessimistic_lock(&engine, &[3], &[3], 105, 110);
+        must_acquire_pessimistic_lock(&mut engine, &[1], &[1], 20, 110);
+        must_acquire_pessimistic_lock(&mut engine, &[2], &[2], 50, 110);
+        must_acquire_pessimistic_lock(&mut engine, &[3], &[3], 105, 110);
         must_prewrite_put(&mut engine, &[4], b"a", &[4], 105);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -887,7 +887,7 @@ mod tests {
     }
 
     fn must_met_newer_ts_data<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         scanner_ts: impl Into<TimeStamp>,
         key: &[u8],
         value: Option<&[u8]>,
@@ -939,22 +939,22 @@ mod tests {
         must_commit(&mut engine, key, 300, 400);
 
         must_met_newer_ts_data(
-            &engine,
+            &mut engine,
             100,
             key,
             if deep_write_seek { Some(val1) } else { None },
             desc,
             true,
         );
-        must_met_newer_ts_data(&engine, 200, key, Some(val1), desc, true);
-        must_met_newer_ts_data(&engine, 300, key, Some(val1), desc, true);
-        must_met_newer_ts_data(&engine, 400, key, Some(val2), desc, false);
-        must_met_newer_ts_data(&engine, 500, key, Some(val2), desc, false);
+        must_met_newer_ts_data(&mut engine, 200, key, Some(val1), desc, true);
+        must_met_newer_ts_data(&mut engine, 300, key, Some(val1), desc, true);
+        must_met_newer_ts_data(&mut engine, 400, key, Some(val2), desc, false);
+        must_met_newer_ts_data(&mut engine, 500, key, Some(val2), desc, false);
 
         must_prewrite_lock(&mut engine, key, key, 600);
 
-        must_met_newer_ts_data(&engine, 500, key, Some(val2), desc, true);
-        must_met_newer_ts_data(&engine, 600, key, Some(val2), desc, true);
+        must_met_newer_ts_data(&mut engine, 500, key, Some(val2), desc, true);
+        must_met_newer_ts_data(&mut engine, 600, key, Some(val2), desc, true);
     }
 
     #[test]

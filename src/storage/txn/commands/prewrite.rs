@@ -1100,7 +1100,7 @@ mod tests {
         )
         .unwrap();
         must_unlocked(&mut engine, key);
-        must_get(&engine, key, 12, value);
+        must_get(&mut engine, key, 12, value);
         must_get_commit_ts(&mut engine, key, 10, 11);
 
         cm.update_max_ts(50.into());
@@ -1207,7 +1207,7 @@ mod tests {
         .unwrap();
 
         must_unlocked(&mut engine, key);
-        must_get(&engine, key, 12, value);
+        must_get(&mut engine, key, 12, value);
         must_get_commit_ts(&mut engine, key, 10, 11);
 
         let (k1, v1) = (b"k", b"v");
@@ -1240,8 +1240,8 @@ mod tests {
 
         must_unlocked(&mut engine, k1);
         must_unlocked(&mut engine, k2);
-        must_get(&engine, k1, 16, v1);
-        must_get(&engine, k2, 16, v2);
+        must_get(&mut engine, k1, 16, v1);
+        must_get(&mut engine, k2, 16, v2);
         must_get_commit_ts(&mut engine, k1, 8, 13);
         must_get_commit_ts(&mut engine, k2, 8, 13);
 
@@ -1309,7 +1309,7 @@ mod tests {
             Some(70),
         )
         .unwrap_err();
-        must_pessimistic_locked(&engine, k1, 60, 60);
+        must_pessimistic_locked(&mut engine, k1, 60, 60);
         must_locked(&mut engine, k2, 50);
         must_get_commit_ts_none(&mut engine, k1, 60);
         must_get_commit_ts_none(&mut engine, k2, 60);

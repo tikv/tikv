@@ -416,7 +416,7 @@ mod tests {
         must_commit(&mut engine, k, 7, 9);
 
         must_acquire_pessimistic_lock(&engine, k, k, 8, 10);
-        must_pessimistic_prewrite_put(&engine, k, b"v5", k, 8, 10, DoPessimisticCheck);
+        must_pessimistic_prewrite_put(&mut engine, k, b"v5", k, 8, 10, DoPessimisticCheck);
         must_get_eq(&kv_engine, &key, 10, Some(b"v4".to_vec()));
         must_commit(&mut engine, k, 8, 11);
     }

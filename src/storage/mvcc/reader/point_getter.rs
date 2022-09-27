@@ -403,12 +403,12 @@ mod tests {
         },
     };
 
-    fn new_point_getter<E: Engine>(engine: &E, ts: TimeStamp) -> PointGetter<E::Snap> {
+    fn new_point_getter<E: Engine>(engine: &mut E, ts: TimeStamp) -> PointGetter<E::Snap> {
         new_point_getter_with_iso(engine, ts, IsolationLevel::Si)
     }
 
     fn new_point_getter_with_iso<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         ts: TimeStamp,
         iso_level: IsolationLevel,
     ) -> PointGetter<E::Snap> {
@@ -504,7 +504,7 @@ mod tests {
         let suffix = "v".repeat(SHORT_VALUE_MAX_LEN + 1);
         let engine = TestEngineBuilder::new().build().unwrap();
         must_prewrite_put(
-            &engine,
+            &mut engine,
             b"foo1",
             &format!("foo1{}", suffix).into_bytes(),
             b"foo1",
@@ -512,14 +512,14 @@ mod tests {
         );
         must_commit(&mut engine, b"foo1", 2, 3);
         must_prewrite_put(
-            &engine,
+            &mut engine,
             b"foo2",
             &format!("foo2{}", suffix).into_bytes(),
             b"foo2",
             4,
         );
         must_prewrite_put(
-            &engine,
+            &mut engine,
             b"bar",
             &format!("bar{}", suffix).into_bytes(),
             b"foo2",
@@ -530,7 +530,7 @@ mod tests {
         must_prewrite_delete(&mut engine, b"xxx", b"xxx", 6);
         must_commit(&mut engine, b"xxx", 6, 7);
         must_prewrite_put(
-            &engine,
+            &mut engine,
             b"box",
             &format!("box{}", suffix).into_bytes(),
             b"box",
@@ -548,7 +548,7 @@ mod tests {
             }
         }
         must_prewrite_put(
-            &engine,
+            &mut engine,
             b"zz",
             &format!("zz{}", suffix).into_bytes(),
             b"zz",
@@ -568,7 +568,7 @@ mod tests {
         let suffix = "v".repeat(SHORT_VALUE_MAX_LEN + 1);
         let engine = TestEngineBuilder::new().build().unwrap();
         must_prewrite_put(
-            &engine,
+            &mut engine,
             b"foo1",
             &format!("foo1{}", suffix).into_bytes(),
             b"foo1",
@@ -579,7 +579,7 @@ mod tests {
         must_commit(&mut engine, b"bar", 2, 3);
 
         must_prewrite_put(
-            &engine,
+            &mut engine,
             b"foo2",
             &format!("foo2{}", suffix).into_bytes(),
             b"foo2",
@@ -594,7 +594,7 @@ mod tests {
     fn test_basic_1() {
         let engine = new_sample_engine();
 
-        let mut getter = new_point_getter(&engine, 200.into());
+        let mut getter = new_point_getter(&mut engine, 200.into());
 
         // Get a deleted key
         must_get_none(&mut getter, b"foo1");
@@ -666,10 +666,10 @@ mod tests {
         must_commit(&mut engine, b"foo1", 10, 20);
 
         // Mustn't get the next user key even if point getter doesn't compare user key.
-        let mut getter = new_point_getter(&engine, 30.into());
+        let mut getter = new_point_getter(&mut engine, 30.into());
         must_get_none(&mut getter, b"foo0");
 
-        let mut getter = new_point_getter(&engine, 30.into());
+        let mut getter = new_point_getter(&mut engine, 30.into());
         must_get_none(&mut getter, b"foo");
         must_get_none(&mut getter, b"foo0");
     }
@@ -691,12 +691,12 @@ mod tests {
         must_commit(&mut engine, b"foo1", 30, 40);
         must_commit(&mut engine, b"foo2", 30, 40);
 
-        must_gc(&engine, b"foo", 50);
-        must_gc(&engine, b"foo1", 50);
-        must_gc(&engine, b"foo2", 50);
-        must_gc(&engine, b"foo3", 50);
+        must_gc(&mut engine, b"foo", 50);
+        must_gc(&mut engine, b"foo1", 50);
+        must_gc(&mut engine, b"foo2", 50);
+        must_gc(&mut engine, b"foo3", 50);
 
-        let mut getter = new_point_getter(&engine, TimeStamp::max());
+        let mut getter = new_point_getter(&mut engine, TimeStamp::max());
         let perf_statistics = ReadPerfInstant::new();
         must_get_value(&mut getter, b"foo", b"bar");
         assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 0);
@@ -749,7 +749,7 @@ mod tests {
     fn test_basic_2() {
         let engine = new_sample_engine();
 
-        let mut getter = new_point_getter(&engine, 5.into());
+        let mut getter = new_point_getter(&mut engine, 5.into());
 
         must_get_value(&mut getter, b"bar", b"barv");
         let s = getter.take_statistics();
@@ -816,7 +816,7 @@ mod tests {
     fn test_basic_3() {
         let engine = new_sample_engine();
 
-        let mut getter = new_point_getter(&engine, 2.into());
+        let mut getter = new_point_getter(&mut engine, 2.into());
 
         must_get_none(&mut getter, b"foo1");
         let s = getter.take_statistics();
@@ -840,7 +840,7 @@ mod tests {
     fn test_locked() {
         let engine = new_sample_engine_2();
 
-        let mut getter = new_point_getter(&engine, 1.into());
+        let mut getter = new_point_getter(&mut engine, 1.into());
         must_get_none(&mut getter, b"a");
         must_get_none(&mut getter, b"bar");
         must_get_none(&mut getter, b"foo1");
@@ -849,7 +849,7 @@ mod tests {
         assert_seek_next_prev(&s.write, 4, 0, 0);
         assert_eq!(s.processed_size, 0);
 
-        let mut getter = new_point_getter(&engine, 3.into());
+        let mut getter = new_point_getter(&mut engine, 3.into());
         must_get_none(&mut getter, b"a");
         must_get_value(&mut getter, b"bar", b"barv");
         must_get_value(&mut getter, b"bar", b"barv");
@@ -868,7 +868,7 @@ mod tests {
                     * 2
         );
 
-        let mut getter = new_point_getter(&engine, 4.into());
+        let mut getter = new_point_getter(&mut engine, 4.into());
         must_get_none(&mut getter, b"a");
         must_get_err(&mut getter, b"bar");
         must_get_err(&mut getter, b"bar");
@@ -910,18 +910,18 @@ mod tests {
         must_prewrite_put(&mut engine, key, val, key, 10);
         must_commit(&mut engine, key, 10, 20);
 
-        let mut getter = new_point_getter(&engine, TimeStamp::max());
+        let mut getter = new_point_getter(&mut engine, TimeStamp::max());
         must_get_value(&mut getter, key, val);
 
         // Ignore the primary lock if read with max ts.
         must_prewrite_delete(&mut engine, key, key, 30);
-        let mut getter = new_point_getter(&engine, TimeStamp::max());
+        let mut getter = new_point_getter(&mut engine, TimeStamp::max());
         must_get_value(&mut getter, key, val);
         must_rollback(&mut engine, key, 30, false);
 
         // Should not ignore the secondary lock even though reading the latest version
         must_prewrite_delete(&mut engine, key, b"bar", 40);
-        let mut getter = new_point_getter(&engine, TimeStamp::max());
+        let mut getter = new_point_getter(&mut engine, TimeStamp::max());
         must_get_err(&mut getter, key);
         must_rollback(&mut engine, key, 40, false);
 
@@ -929,9 +929,9 @@ mod tests {
         // less than the latest Write's commit_ts.
         //
         // write.start_ts(10) < primary_lock.start_ts(15) < write.commit_ts(20)
-        must_acquire_pessimistic_lock(&engine, key, key, 15, 50);
-        must_pessimistic_prewrite_delete(&engine, key, key, 15, 50, DoPessimisticCheck);
-        let mut getter = new_point_getter(&engine, TimeStamp::max());
+        must_acquire_pessimistic_lock(&mut engine, key, key, 15, 50);
+        must_pessimistic_prewrite_delete(&mut engine, key, key, 15, 50, DoPessimisticCheck);
+        let mut getter = new_point_getter(&mut engine, TimeStamp::max());
         must_get_value(&mut getter, key, val);
     }
 
@@ -1007,12 +1007,12 @@ mod tests {
         must_get_value(&mut build_getter(65, vec![], vec![60]), key, val);
         must_commit(&mut engine, key, 60, 65);
         // LockType::Pessimistic
-        must_acquire_pessimistic_lock(&engine, key, key, 70, 70);
+        must_acquire_pessimistic_lock(&mut engine, key, key, 70, 70);
         must_get_value(&mut build_getter(75, vec![], vec![70]), key, val);
         must_rollback(&mut engine, key, 70, false);
         // lock's min_commit_ts > read's ts
         must_prewrite_put_impl(
-            &engine,
+            &mut engine,
             key,
             &val[..1],
             key,
@@ -1056,15 +1056,15 @@ mod tests {
         must_prewrite_put(&mut engine, key, val2, key, 30);
         must_commit(&mut engine, key, 30, 40);
 
-        must_met_newer_ts_data(&engine, 20, key, val1, true);
-        must_met_newer_ts_data(&engine, 30, key, val1, true);
-        must_met_newer_ts_data(&engine, 40, key, val2, false);
-        must_met_newer_ts_data(&engine, 50, key, val2, false);
+        must_met_newer_ts_data(&mut engine, 20, key, val1, true);
+        must_met_newer_ts_data(&mut engine, 30, key, val1, true);
+        must_met_newer_ts_data(&mut engine, 40, key, val2, false);
+        must_met_newer_ts_data(&mut engine, 50, key, val2, false);
 
         must_prewrite_lock(&mut engine, key, key, 60);
 
-        must_met_newer_ts_data(&engine, 50, key, val2, true);
-        must_met_newer_ts_data(&engine, 60, key, val2, true);
+        must_met_newer_ts_data(&mut engine, 50, key, val2, true);
+        must_met_newer_ts_data(&mut engine, 60, key, val2, true);
     }
 
     #[test]
@@ -1154,12 +1154,12 @@ mod tests {
         ];
 
         for (k, v) in expected_results.iter().copied() {
-            let mut single_getter = new_point_getter(&engine, 40.into());
+            let mut single_getter = new_point_getter(&mut engine, 40.into());
             let value = single_getter.get(&Key::from_raw(k)).unwrap();
             assert_eq!(value, v.map(|v| v.to_vec()));
         }
 
-        let mut getter = new_point_getter(&engine, 40.into());
+        let mut getter = new_point_getter(&mut engine, 40.into());
         for (k, v) in expected_results {
             let value = getter.get(&Key::from_raw(k)).unwrap();
             assert_eq!(value, v.map(|v| v.to_vec()));
@@ -1195,41 +1195,41 @@ mod tests {
         let (key5, val5) = (b"k5", b"val5");
         must_prewrite_put(&mut engine, key5, val5, key5, 57);
         must_commit(&mut engine, key5, 57, 58);
-        must_acquire_pessimistic_lock(&engine, key5, key5, 65, 65);
+        must_acquire_pessimistic_lock(&mut engine, key5, key5, 65, 65);
 
         // No more recent version.
         let mut getter_with_ts_ok =
-            new_point_getter_with_iso(&engine, 25.into(), IsolationLevel::RcCheckTs);
+            new_point_getter_with_iso(&mut engine, 25.into(), IsolationLevel::RcCheckTs);
         must_get_value(&mut getter_with_ts_ok, key1, val1);
 
         // The read_ts is stale error should be reported.
         let mut getter_not_ok =
-            new_point_getter_with_iso(&engine, 35.into(), IsolationLevel::RcCheckTs);
+            new_point_getter_with_iso(&mut engine, 35.into(), IsolationLevel::RcCheckTs);
         must_get_err(&mut getter_not_ok, key2);
 
         // Though lock.ts > read_ts error should still be reported.
         let mut getter_not_ok =
-            new_point_getter_with_iso(&engine, 45.into(), IsolationLevel::RcCheckTs);
+            new_point_getter_with_iso(&mut engine, 45.into(), IsolationLevel::RcCheckTs);
         must_get_err(&mut getter_not_ok, key3);
 
         // Error should not be reported if the lock type is rollback or lock.
         let mut getter_ok =
-            new_point_getter_with_iso(&engine, 70.into(), IsolationLevel::RcCheckTs);
+            new_point_getter_with_iso(&mut engine, 70.into(), IsolationLevel::RcCheckTs);
         must_get_value(&mut getter_ok, key4, val4);
         let mut getter_ok =
-            new_point_getter_with_iso(&engine, 70.into(), IsolationLevel::RcCheckTs);
+            new_point_getter_with_iso(&mut engine, 70.into(), IsolationLevel::RcCheckTs);
         must_get_value(&mut getter_ok, key5, val5);
 
         // Test batch point get. Report error if more recent version is met.
         let mut batch_getter =
-            new_point_getter_with_iso(&engine, 35.into(), IsolationLevel::RcCheckTs);
+            new_point_getter_with_iso(&mut engine, 35.into(), IsolationLevel::RcCheckTs);
         must_get_value(&mut batch_getter, key0, val0);
         must_get_value(&mut batch_getter, key1, val1);
         must_get_err(&mut batch_getter, key2);
 
         // Test batch point get. Report error if lock is met though lock.ts > read_ts.
         let mut batch_getter =
-            new_point_getter_with_iso(&engine, 45.into(), IsolationLevel::RcCheckTs);
+            new_point_getter_with_iso(&mut engine, 45.into(), IsolationLevel::RcCheckTs);
         must_get_value(&mut batch_getter, key0, val0);
         must_get_value(&mut batch_getter, key1, val1);
         must_get_value(&mut batch_getter, key2, val22);
@@ -1238,7 +1238,7 @@ mod tests {
         // Test batch point get. Error should not be reported if the lock type is
         // rollback or lock.
         let mut batch_getter_ok =
-            new_point_getter_with_iso(&engine, 70.into(), IsolationLevel::RcCheckTs);
+            new_point_getter_with_iso(&mut engine, 70.into(), IsolationLevel::RcCheckTs);
         must_get_value(&mut batch_getter_ok, key4, val4);
         must_get_value(&mut batch_getter_ok, key5, val5);
     }

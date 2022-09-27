@@ -321,8 +321,8 @@ fn test_node_check_merged_message() {
     let engine3 = cluster.get_engine(3);
     must_get_equal(&engine3, b"k1", b"v1");
     must_get_equal(&engine3, b"k4", b"v4");
-    must_get_none(&engine3, b"k3");
-    must_get_none(&engine3, b"v5");
+    must_get_none(&mut engine3, b"k3");
+    must_get_none(&mut engine3, b"v5");
 }
 
 #[test]

@@ -166,7 +166,7 @@ pub mod tests {
     };
 
     pub fn must_success<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         primary_key: &[u8],
         lock_ts: impl Into<TimeStamp>,
         caller_start_ts: impl Into<TimeStamp>,
@@ -567,7 +567,7 @@ pub mod tests {
             // A protected rollback record will be written.
             must_get_rollback_protected(&mut engine, k, ts(3, 0), true);
         } else {
-            must_err(&engine, k, ts(3, 0), ts(3, 1), ts(3, 2), r, false, false);
+            must_err(&mut engine, k, ts(3, 0), ts(3, 1), ts(3, 2), r, false, false);
         }
 
         // Lock the key with TTL=100.
@@ -734,7 +734,7 @@ pub mod tests {
                 WriteType::Rollback,
             );
         } else {
-            must_err(&engine, k, ts(6, 0), ts(12, 0), ts(12, 0), r, false, false);
+            must_err(&mut engine, k, ts(6, 0), ts(12, 0), ts(12, 0), r, false, false);
         }
 
         // TTL check is based on physical time (in ms). When logical time's difference
@@ -791,7 +791,7 @@ pub mod tests {
         must_large_txn_locked(&mut engine, k, ts(4, 0), 200, ts(135, 1), true);
 
         // Commit the key.
-        must_pessimistic_prewrite_put(&engine, k, v, k, ts(4, 0), ts(130, 0), DoPessimisticCheck);
+        must_pessimistic_prewrite_put(&mut engine, k, v, k, ts(4, 0), ts(130, 0), DoPessimisticCheck);
         must_commit(&mut engine, k, ts(4, 0), ts(140, 0));
         must_unlocked(&mut engine, k);
         must_get_commit_ts(&mut engine, k, ts(4, 0), ts(140, 0));
@@ -931,7 +931,7 @@ pub mod tests {
             uncommitted(100, TimeStamp::zero(), false),
         );
         must_large_txn_locked(&mut engine, k, ts(290, 0), 100, TimeStamp::zero(), true);
-        pessimistic_rollback::tests::must_success(&engine, k, ts(290, 0), ts(290, 0));
+        pessimistic_rollback::tests::must_success(&mut engine, k, ts(290, 0), ts(290, 0));
 
         must_prewrite_put_impl(
             &engine,
@@ -1026,11 +1026,11 @@ pub mod tests {
 
         // Path: there is no commit or rollback record, error should be reported if
         // rollback_if_not_exist is set to false.
-        must_err(&engine, k, ts(3, 0), ts(5, 0), ts(5, 0), false, false, true);
+        must_err(&mut engine, k, ts(3, 0), ts(5, 0), ts(5, 0), false, false, true);
 
         // Path: the pessimistic primary key lock does exist, and it's not expired yet.
         must_acquire_pessimistic_lock_with_ttl(&engine, k, k, ts(10, 0), ts(10, 0), 10);
-        must_pessimistic_locked(&engine, k, ts(10, 0), ts(10, 0));
+        must_pessimistic_locked(&mut engine, k, ts(10, 0), ts(10, 0));
         must_success(
             &engine,
             k,
@@ -1108,13 +1108,13 @@ pub mod tests {
             |s| s == TtlExpire,
         );
         must_unlocked(&mut engine, k);
-        must_get_rollback_ts(&engine, k, ts(30, 0));
+        must_get_rollback_ts(&mut engine, k, ts(30, 0));
 
         // Path: the resolving_pessimistic_lock is false and the primary key lock is
         // pessimistic lock, the transaction is in commit phase and the rollback
         // record should be written.
         must_acquire_pessimistic_lock_with_ttl(&engine, k, k, ts(50, 0), ts(50, 0), 10);
-        must_pessimistic_locked(&engine, k, ts(50, 0), ts(50, 0));
+        must_pessimistic_locked(&mut engine, k, ts(50, 0), ts(50, 0));
         must_success(
             &engine,
             k,
@@ -1128,6 +1128,6 @@ pub mod tests {
             |s| s == TtlExpire,
         );
         must_unlocked(&mut engine, k);
-        must_get_rollback_ts(&engine, k, ts(50, 0));
+        must_get_rollback_ts(&mut engine, k, ts(50, 0));
     }
 }

@@ -89,7 +89,7 @@ mod tests {
         must_rollback(&mut engine, k1, 10, false);
         must_rollback(&mut engine, k2, 10, false);
 
-        must_pessimistic_prewrite_put(&engine, k2, v, k1, 10, 10, SkipPessimisticCheck);
+        must_pessimistic_prewrite_put(&mut engine, k2, v, k1, 10, 10, SkipPessimisticCheck);
         must_rollback(&mut engine, k2, 10, false);
     }
 }

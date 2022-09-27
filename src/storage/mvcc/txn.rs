@@ -342,9 +342,9 @@ pub(crate) mod tests {
         // T2: start_ts = 23, commit_ts = 31
         must_prewrite_put(&mut engine, k1, v, k1, 25);
         must_commit(&mut engine, k1, 25, 27);
-        must_acquire_pessimistic_lock(&engine, k1, k1, 23, 29);
+        must_acquire_pessimistic_lock(&mut engine, k1, k1, 23, 29);
         must_get(&mut engine, k1, 30, v);
-        must_pessimistic_prewrite_delete(&engine, k1, k1, 23, 29, DoPessimisticCheck);
+        must_pessimistic_prewrite_delete(&mut engine, k1, k1, 23, 29, DoPessimisticCheck);
         must_get_err(&mut engine, k1, 30);
         // should read the latest record when `ts == u64::max_value()`
         // even if lock.start_ts(23) < latest write.commit_ts(27)
@@ -371,15 +371,15 @@ pub(crate) mod tests {
         // Retry prewrite.
         must_prewrite_put(&mut engine, k, v, k, 5);
         // Conflict.
-        must_prewrite_lock_err(&engine, k, k, 6);
+        must_prewrite_lock_err(&mut engine, k, k, 6);
 
         must_commit(&mut engine, k, 5, 10);
         must_written(&mut engine, k, 5, 10, WriteType::Put);
         // Delayed prewrite request after committing should do nothing.
-        must_prewrite_put_err(&engine, k, v, k, 5);
+        must_prewrite_put_err(&mut engine, k, v, k, 5);
         must_unlocked(&mut engine, k);
         // Write conflict.
-        must_prewrite_lock_err(&engine, k, k, 6);
+        must_prewrite_lock_err(&mut engine, k, k, 6);
         must_unlocked(&mut engine, k);
         // Not conflict.
         must_prewrite_lock(&mut engine, k, k, 12);
@@ -388,7 +388,7 @@ pub(crate) mod tests {
         must_unlocked(&mut engine, k);
         must_written(&mut engine, k, 12, 12, WriteType::Rollback);
         // Cannot retry Prewrite after rollback.
-        must_prewrite_lock_err(&engine, k, k, 12);
+        must_prewrite_lock_err(&mut engine, k, k, 12);
         // Can prewrite after rollback.
         must_prewrite_delete(&mut engine, k, k, 13);
         must_rollback(&mut engine, k, 13, false);
@@ -404,7 +404,7 @@ pub(crate) mod tests {
 
         // "k1" already exist, returns AlreadyExist error.
         assert!(matches!(
-            try_prewrite_insert(&engine, k1, v2, k1, 3),
+            try_prewrite_insert(&mut engine, k1, v2, k1, 3),
             Err(Error(box ErrorInner::AlreadyExist { .. }))
         ));
 
@@ -413,14 +413,14 @@ pub(crate) mod tests {
 
         // There is a lock, returns KeyIsLocked error.
         assert!(matches!(
-            try_prewrite_insert(&engine, k1, v2, k1, 6),
+            try_prewrite_insert(&mut engine, k1, v2, k1, 6),
             Err(Error(box ErrorInner::KeyIsLocked(_)))
         ));
 
         must_commit(&mut engine, k1, 4, 5);
 
         // After delete "k1", insert returns ok.
-        try_prewrite_insert(&engine, k1, v2, k1, 6).unwrap();
+        try_prewrite_insert(&mut engine, k1, v2, k1, 6).unwrap();
         must_commit(&mut engine, k1, 6, 7);
 
         // Rollback
@@ -428,7 +428,7 @@ pub(crate) mod tests {
         must_rollback(&mut engine, k1, 8, false);
 
         assert!(matches!(
-            try_prewrite_insert(&engine, k1, v3, k1, 9),
+            try_prewrite_insert(&mut engine, k1, v3, k1, 9),
             Err(Error(box ErrorInner::AlreadyExist { .. }))
         ));
 
@@ -441,7 +441,7 @@ pub(crate) mod tests {
         must_rollback(&mut engine, k1, 12, false);
 
         // After delete "k1", insert returns ok.
-        try_prewrite_insert(&engine, k1, v2, k1, 13).unwrap();
+        try_prewrite_insert(&mut engine, k1, v2, k1, 13).unwrap();
         must_commit(&mut engine, k1, 13, 14);
     }
 
@@ -453,22 +453,22 @@ pub(crate) mod tests {
         must_commit(&mut engine, k1, 1, 2);
 
         // "k1" already exist, returns AlreadyExist error.
-        try_prewrite_check_not_exists(&engine, k1, k1, 3).unwrap_err();
+        try_prewrite_check_not_exists(&mut engine, k1, k1, 3).unwrap_err();
 
         // Delete "k1"
         must_prewrite_delete(&mut engine, k1, k1, 4);
         must_commit(&mut engine, k1, 4, 5);
 
         // After delete "k1", check_not_exists returns ok.
-        try_prewrite_check_not_exists(&engine, k1, k1, 6).unwrap();
+        try_prewrite_check_not_exists(&mut engine, k1, k1, 6).unwrap();
 
-        try_prewrite_insert(&engine, k1, v2, k1, 7).unwrap();
+        try_prewrite_insert(&mut engine, k1, v2, k1, 7).unwrap();
         must_commit(&mut engine, k1, 7, 8);
 
         // Rollback
         must_prewrite_put(&mut engine, k1, v3, k1, 9);
         must_rollback(&mut engine, k1, 9, false);
-        try_prewrite_check_not_exists(&engine, k1, k1, 10).unwrap_err();
+        try_prewrite_check_not_exists(&mut engine, k1, k1, 10).unwrap_err();
 
         // Delete "k1" again
         must_prewrite_delete(&mut engine, k1, k1, 11);
@@ -479,14 +479,14 @@ pub(crate) mod tests {
         must_rollback(&mut engine, k1, 13, false);
 
         // After delete "k1", check_not_exists returns ok.
-        try_prewrite_check_not_exists(&engine, k1, k1, 14).unwrap();
+        try_prewrite_check_not_exists(&mut engine, k1, k1, 14).unwrap();
     }
 
     #[test]
     fn test_mvcc_txn_pessmistic_prewrite_check_not_exist() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let k = b"k1";
-        try_pessimistic_prewrite_check_not_exists(&engine, k, k, 3).unwrap_err();
+        try_pessimistic_prewrite_check_not_exists(&mut engine, k, k, 3).unwrap_err();
     }
 
     #[test]
@@ -513,8 +513,8 @@ pub(crate) mod tests {
 
         let (k1, k2, v) = (b"k1", b"k2", b"v1");
 
-        must_acquire_pessimistic_lock(&engine, k1, k1, 5, 5);
-        must_acquire_pessimistic_lock(&engine, k2, k1, 5, 7);
+        must_acquire_pessimistic_lock(&mut engine, k1, k1, 5, 5);
+        must_acquire_pessimistic_lock(&mut engine, k2, k1, 5, 7);
         must_rollback(&mut engine, k1, 5, false);
         must_rollback(&mut engine, k2, 5, false);
         // The rollback of the primary key should be protected
@@ -522,10 +522,10 @@ pub(crate) mod tests {
         // The rollback of the secondary key needn't be protected
         must_get_rollback_protected(&mut engine, k2, 5, false);
 
-        must_acquire_pessimistic_lock(&engine, k1, k1, 15, 15);
-        must_acquire_pessimistic_lock(&engine, k2, k1, 15, 17);
-        must_pessimistic_prewrite_put(&engine, k1, v, k1, 15, 17, DoPessimisticCheck);
-        must_pessimistic_prewrite_put(&engine, k2, v, k1, 15, 17, DoPessimisticCheck);
+        must_acquire_pessimistic_lock(&mut engine, k1, k1, 15, 15);
+        must_acquire_pessimistic_lock(&mut engine, k2, k1, 15, 17);
+        must_pessimistic_prewrite_put(&mut engine, k1, v, k1, 15, 17, DoPessimisticCheck);
+        must_pessimistic_prewrite_put(&mut engine, k2, v, k1, 15, 17, DoPessimisticCheck);
         must_rollback(&mut engine, k1, 15, false);
         must_rollback(&mut engine, k2, 15, false);
         // The rollback of the primary key should be protected
@@ -565,7 +565,7 @@ pub(crate) mod tests {
         assert!(!w1.has_overlapped_rollback);
         assert!(!w2.has_overlapped_rollback);
 
-        must_cleanup(&engine, k1, 20, 0);
+        must_cleanup(&mut engine, k1, 20, 0);
         must_rollback(&mut engine, k2, 20, false);
 
         let w1r = must_written(&mut engine, k1, 10, 20, WriteType::Put);
@@ -607,7 +607,7 @@ pub(crate) mod tests {
         must_commit(&mut engine, k, t1, t3);
         // The rollback should be failed since the transaction
         // was committed before.
-        must_rollback_err(&engine, k, t1);
+        must_rollback_err(&mut engine, k, t1);
         must_get(&mut engine, k, t4, v);
     }
 
@@ -628,8 +628,8 @@ pub(crate) mod tests {
         // Can't rollback committed transaction.
         must_prewrite_put(&mut engine, k, v, k, 25);
         must_commit(&mut engine, k, 25, 30);
-        must_rollback_err(&engine, k, 25);
-        must_rollback_err(&engine, k, 25);
+        must_rollback_err(&mut engine, k, 25);
+        must_rollback_err(&mut engine, k, 25);
 
         // Can't rollback other transaction's lock
         must_prewrite_delete(&mut engine, k, k, 35);
@@ -656,7 +656,7 @@ pub(crate) mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let key = b"key";
         must_rollback(&mut engine, key, 5, false);
-        must_prewrite_lock_err(&engine, key, key, 5);
+        must_prewrite_lock_err(&mut engine, key, key, 5);
     }
 
     fn test_write_imp(k: &[u8], v: &[u8], k2: &[u8]) {
@@ -880,7 +880,7 @@ pub(crate) mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
 
         must_prewrite_put(
-            &engine,
+            &mut engine,
             &[2],
             "v".repeat(SHORT_VALUE_MAX_LEN + 1).as_bytes(),
             &[2],
@@ -889,7 +889,7 @@ pub(crate) mod tests {
         must_commit(&mut engine, &[2], 3, 3);
 
         must_prewrite_put(
-            &engine,
+            &mut engine,
             &[3],
             "a".repeat(SHORT_VALUE_MAX_LEN + 1).as_bytes(),
             &[3],
@@ -898,7 +898,7 @@ pub(crate) mod tests {
         must_commit(&mut engine, &[3], 3, 4);
 
         must_prewrite_put(
-            &engine,
+            &mut engine,
             &[3],
             "b".repeat(SHORT_VALUE_MAX_LEN + 1).as_bytes(),
             &[3],
@@ -907,7 +907,7 @@ pub(crate) mod tests {
         must_commit(&mut engine, &[3], 5, 5);
 
         must_prewrite_put(
-            &engine,
+            &mut engine,
             &[6],
             "x".repeat(SHORT_VALUE_MAX_LEN + 1).as_bytes(),
             &[6],
@@ -938,7 +938,7 @@ pub(crate) mod tests {
         must_commit(&mut engine, &[2], 3, 3);
 
         must_prewrite_put(
-            &engine,
+            &mut engine,
             &[3],
             "a".repeat(SHORT_VALUE_MAX_LEN + 1).as_bytes(),
             &[3],
@@ -947,7 +947,7 @@ pub(crate) mod tests {
         must_commit(&mut engine, &[3], 4, 4);
 
         must_prewrite_put(
-            &engine,
+            &mut engine,
             &[5],
             "b".repeat(SHORT_VALUE_MAX_LEN + 1).as_bytes(),
             &[5],
@@ -975,18 +975,18 @@ pub(crate) mod tests {
 
         // Pessimistic prewrite keeps the larger TTL of the prewrite request and the
         // original pessimisitic lock.
-        must_acquire_pessimistic_lock_with_ttl(&engine, k, k, 10, 10, 100);
-        must_pessimistic_locked(&engine, k, 10, 10);
-        must_pessimistic_prewrite_put_with_ttl(&engine, k, v, k, 10, 10, DoPessimisticCheck, 110);
+        must_acquire_pessimistic_lock_with_ttl(&mut engine, k, k, 10, 10, 100);
+        must_pessimistic_locked(&mut engine, k, 10, 10);
+        must_pessimistic_prewrite_put_with_ttl(&mut engine, k, v, k, 10, 10, DoPessimisticCheck, 110);
         must_locked_with_ttl(&mut engine, k, 10, 110);
 
         must_rollback(&mut engine, k, 10, false);
 
         // TTL not changed if the pessimistic lock's TTL is larger than that provided in
         // the prewrite request.
-        must_acquire_pessimistic_lock_with_ttl(&engine, k, k, 20, 20, 100);
-        must_pessimistic_locked(&engine, k, 20, 20);
-        must_pessimistic_prewrite_put_with_ttl(&engine, k, v, k, 20, 20, DoPessimisticCheck, 90);
+        must_acquire_pessimistic_lock_with_ttl(&mut engine, k, k, 20, 20, 100);
+        must_pessimistic_locked(&mut engine, k, 20, 20);
+        must_pessimistic_prewrite_put_with_ttl(&mut engine, k, v, k, 20, 20, DoPessimisticCheck, 90);
         must_locked_with_ttl(&mut engine, k, 20, 100);
     }
 
@@ -999,8 +999,8 @@ pub(crate) mod tests {
 
         must_prewrite_put(&mut engine, k, v, k, 10);
         must_commit(&mut engine, k, 10, 11);
-        must_acquire_pessimistic_lock(&engine, k, k, 5, 12);
-        must_pessimistic_prewrite_lock(&engine, k, k, 5, 12, DoPessimisticCheck);
+        must_acquire_pessimistic_lock(&mut engine, k, k, 5, 12);
+        must_pessimistic_prewrite_lock(&mut engine, k, k, 5, 12, DoPessimisticCheck);
         must_commit(&mut engine, k, 5, 15);
 
         // Now in write cf:
@@ -1008,7 +1008,7 @@ pub(crate) mod tests {
         // start_ts = 5,  commit_ts = 15, Lock
 
         must_get(&mut engine, k, 19, v);
-        try_prewrite_insert(&engine, k, v, k, 20).unwrap_err();
+        try_prewrite_insert(&mut engine, k, v, k, 20).unwrap_err();
     }
 
     #[test]
@@ -1035,7 +1035,7 @@ pub(crate) mod tests {
                 expected_lock_info.set_lock_type(Op::Put);
                 // Write an optimistic lock.
                 must_prewrite_put_impl(
-                    &engine,
+                    &mut engine,
                     expected_lock_info.get_key(),
                     v,
                     expected_lock_info.get_primary_lock(),
@@ -1056,7 +1056,7 @@ pub(crate) mod tests {
                 expected_lock_info.set_lock_for_update_ts(10);
                 // Write a pessimistic lock.
                 must_acquire_pessimistic_lock_impl(
-                    &engine,
+                    &mut engine,
                     expected_lock_info.get_key(),
                     expected_lock_info.get_primary_lock(),
                     expected_lock_info.get_lock_version(),
@@ -1071,21 +1071,21 @@ pub(crate) mod tests {
             }
 
             assert_lock_info_eq(
-                must_prewrite_put_err(&engine, k, v, k, 20),
+                must_prewrite_put_err(&mut engine, k, v, k, 20),
                 &expected_lock_info,
             );
 
             assert_lock_info_eq(
-                must_acquire_pessimistic_lock_err(&engine, k, k, 30, 30),
+                must_acquire_pessimistic_lock_err(&mut engine, k, k, 30, 30),
                 &expected_lock_info,
             );
 
             // If the lock is not expired, cleanup will return the lock info.
-            assert_lock_info_eq(must_cleanup_err(&engine, k, 10, 1), &expected_lock_info);
+            assert_lock_info_eq(must_cleanup_err(&mut engine, k, 10, 1), &expected_lock_info);
 
             expected_lock_info.set_lock_ttl(0);
             assert_lock_info_eq(
-                must_pessimistic_prewrite_put_err(&engine, k, v, k, 40, 40, SkipPessimisticCheck),
+                must_pessimistic_prewrite_put_err(&mut engine, k, v, k, 40, 40, SkipPessimisticCheck),
                 &expected_lock_info,
             );
 
@@ -1094,7 +1094,7 @@ pub(crate) mod tests {
                 must_rollback(&mut engine, k, expected_lock_info.get_lock_version(), false);
             } else {
                 pessimistic_rollback::tests::must_success(
-                    &engine,
+                    &mut engine,
                     k,
                     expected_lock_info.get_lock_version(),
                     expected_lock_info.get_lock_for_update_ts(),
@@ -1112,8 +1112,8 @@ pub(crate) mod tests {
 
         must_prewrite_put(&mut engine, k, v, k, 2);
         must_locked(&mut engine, k, 2);
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 1, 1, SkipPessimisticCheck);
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 3, 3, SkipPessimisticCheck);
+        must_pessimistic_prewrite_put_err(&mut engine, k, v, k, 1, 1, SkipPessimisticCheck);
+        must_pessimistic_prewrite_put_err(&mut engine, k, v, k, 3, 3, SkipPessimisticCheck);
     }
 
     #[test]
@@ -1130,23 +1130,23 @@ pub(crate) mod tests {
         must_commit(&mut engine, k3, 1, 20);
 
         // Txn-10 acquires pessimistic locks on k1 and k3.
-        must_acquire_pessimistic_lock(&engine, k1, k1, 10, 10);
-        must_acquire_pessimistic_lock_err(&engine, k3, k1, 10, 10);
+        must_acquire_pessimistic_lock(&mut engine, k1, k1, 10, 10);
+        must_acquire_pessimistic_lock_err(&mut engine, k3, k1, 10, 10);
         // Update for_update_ts to 20 due to write conflict
-        must_acquire_pessimistic_lock(&engine, k3, k1, 10, 20);
-        must_pessimistic_prewrite_put(&engine, k1, v1, k1, 10, 20, DoPessimisticCheck);
-        must_pessimistic_prewrite_put(&engine, k3, v3, k1, 10, 20, DoPessimisticCheck);
+        must_acquire_pessimistic_lock(&mut engine, k3, k1, 10, 20);
+        must_pessimistic_prewrite_put(&mut engine, k1, v1, k1, 10, 20, DoPessimisticCheck);
+        must_pessimistic_prewrite_put(&mut engine, k3, v3, k1, 10, 20, DoPessimisticCheck);
         // Write a non-pessimistic lock with for_update_ts 20.
-        must_pessimistic_prewrite_put(&engine, k2, v2, k1, 10, 20, SkipPessimisticCheck);
+        must_pessimistic_prewrite_put(&mut engine, k2, v2, k1, 10, 20, SkipPessimisticCheck);
         // Roll back the primary key due to timeout, but the non-pessimistic lock is not
         // rolled back.
         must_rollback(&mut engine, k1, 10, false);
 
         // Txn-15 acquires pessimistic locks on k1.
-        must_acquire_pessimistic_lock(&engine, k1, k1, 15, 15);
-        must_pessimistic_prewrite_put(&engine, k1, v1, k1, 15, 15, DoPessimisticCheck);
+        must_acquire_pessimistic_lock(&mut engine, k1, k1, 15, 15);
+        must_pessimistic_prewrite_put(&mut engine, k1, v1, k1, 15, 15, DoPessimisticCheck);
         // There is a non-pessimistic lock conflict here.
-        match must_pessimistic_prewrite_put_err(&engine, k2, v2, k1, 15, 15, SkipPessimisticCheck) {
+        match must_pessimistic_prewrite_put_err(&mut engine, k2, v2, k1, 15, 15, SkipPessimisticCheck) {
             Error(box ErrorInner::KeyIsLocked(info)) => assert_eq!(info.get_lock_ttl(), 0),
             e => panic!("unexpected error: {}", e),
         };
@@ -1157,8 +1157,8 @@ pub(crate) mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
 
         let k = b"k";
-        must_acquire_pessimistic_lock(&engine, k, k, 10, 10);
-        must_commit_err(&engine, k, 20, 30);
+        must_acquire_pessimistic_lock(&mut engine, k, k, 10, 10);
+        must_commit_err(&mut engine, k, 20, 30);
         must_commit(&mut engine, k, 10, 20);
         must_seek_write(&mut engine, k, 30, 10, 20, WriteType::Lock);
     }
@@ -1166,7 +1166,7 @@ pub(crate) mod tests {
     #[test]
     fn test_amend_pessimistic_lock() {
         fn fail_to_write_pessimistic_lock<E: Engine>(
-            engine: &E,
+            engine: &mut E,
             key: &[u8],
             start_ts: impl Into<TimeStamp>,
             for_update_ts: impl Into<TimeStamp>,
@@ -1182,31 +1182,31 @@ pub(crate) mod tests {
         let (k, mut v) = (b"k", b"v".to_vec());
 
         // Key not exist; should succeed.
-        fail_to_write_pessimistic_lock(&engine, k, 10, 10);
-        must_pessimistic_prewrite_put(&engine, k, &v, k, 10, 10, DoPessimisticCheck);
+        fail_to_write_pessimistic_lock(&mut engine, k, 10, 10);
+        must_pessimistic_prewrite_put(&mut engine, k, &v, k, 10, 10, DoPessimisticCheck);
         must_commit(&mut engine, k, 10, 20);
         must_get(&mut engine, k, 20, &v);
 
         // for_update_ts(30) >= start_ts(30) > commit_ts(20); should succeed.
         v.push(0);
-        fail_to_write_pessimistic_lock(&engine, k, 30, 30);
-        must_pessimistic_prewrite_put(&engine, k, &v, k, 30, 30, DoPessimisticCheck);
+        fail_to_write_pessimistic_lock(&mut engine, k, 30, 30);
+        must_pessimistic_prewrite_put(&mut engine, k, &v, k, 30, 30, DoPessimisticCheck);
         must_commit(&mut engine, k, 30, 40);
         must_get(&mut engine, k, 40, &v);
 
         // for_update_ts(40) >= commit_ts(40) > start_ts(35); should fail.
-        fail_to_write_pessimistic_lock(&engine, k, 35, 40);
-        must_pessimistic_prewrite_put_err(&engine, k, &v, k, 35, 40, DoPessimisticCheck);
+        fail_to_write_pessimistic_lock(&mut engine, k, 35, 40);
+        must_pessimistic_prewrite_put_err(&mut engine, k, &v, k, 35, 40, DoPessimisticCheck);
 
         // KeyIsLocked; should fail.
-        must_acquire_pessimistic_lock(&engine, k, k, 50, 50);
-        must_pessimistic_prewrite_put_err(&engine, k, &v, k, 60, 60, DoPessimisticCheck);
-        pessimistic_rollback::tests::must_success(&engine, k, 50, 50);
+        must_acquire_pessimistic_lock(&mut engine, k, k, 50, 50);
+        must_pessimistic_prewrite_put_err(&mut engine, k, &v, k, 60, 60, DoPessimisticCheck);
+        pessimistic_rollback::tests::must_success(&mut engine, k, 50, 50);
 
         // The txn has been rolled back; should fail.
-        must_acquire_pessimistic_lock(&engine, k, k, 80, 80);
-        must_cleanup(&engine, k, 80, TimeStamp::max());
-        must_pessimistic_prewrite_put_err(&engine, k, &v, k, 80, 80, DoPessimisticCheck);
+        must_acquire_pessimistic_lock(&mut engine, k, k, 80, 80);
+        must_cleanup(&mut engine, k, 80, TimeStamp::max());
+        must_pessimistic_prewrite_put_err(&mut engine, k, &v, k, 80, 80, DoPessimisticCheck);
     }
 
     #[test]
@@ -1274,7 +1274,7 @@ pub(crate) mod tests {
         let ctx = Context::default();
         let cm = ConcurrencyManager::new(42.into());
 
-        must_acquire_pessimistic_lock(&engine, b"key", b"key", 2, 2);
+        must_acquire_pessimistic_lock(&mut engine, b"key", b"key", 2, 2);
 
         let do_pessimistic_prewrite = || {
             let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -1333,7 +1333,7 @@ pub(crate) mod tests {
 
         // Simulate that min_commit_ts is pushed forward larger than latest_ts
         must_acquire_pessimistic_lock_impl(
-            &engine, b"key", b"key", 2, false, 20000, 2, false, false, 100, false,
+            &mut engine, b"key", b"key", 2, false, 20000, 2, false, false, 100, false,
         );
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -1379,11 +1379,11 @@ pub(crate) mod tests {
         must_unlocked(&mut engine, k);
 
         // ...but it can be rejected by overlapped rollback flag.
-        must_cleanup(&engine, k, 30, 0);
+        must_cleanup(&mut engine, k, 30, 0);
         let w = must_written(&mut engine, k, 20, 30, WriteType::Put);
         assert!(w.has_overlapped_rollback);
         must_unlocked(&mut engine, k);
-        must_prewrite_put_err(&engine, k, v, k, 30);
+        must_prewrite_put_err(&mut engine, k, v, k, 30);
         must_unlocked(&mut engine, k);
 
         // Prepare a committed transaction.
@@ -1394,19 +1394,19 @@ pub(crate) mod tests {
         must_written(&mut engine, k, 40, 50, WriteType::Put);
 
         // Pessimistic transaction also works in the same case.
-        must_acquire_pessimistic_lock(&engine, k, k, 50, 50);
-        must_pessimistic_locked(&engine, k, 50, 50);
-        must_pessimistic_prewrite_put(&engine, k, v, k, 50, 50, DoPessimisticCheck);
+        must_acquire_pessimistic_lock(&mut engine, k, k, 50, 50);
+        must_pessimistic_locked(&mut engine, k, 50, 50);
+        must_pessimistic_prewrite_put(&mut engine, k, v, k, 50, 50, DoPessimisticCheck);
         must_commit(&mut engine, k, 50, 60);
         must_unlocked(&mut engine, k);
         must_written(&mut engine, k, 50, 60, WriteType::Put);
 
         // .. and it can also be rejected by overlapped rollback flag.
-        must_cleanup(&engine, k, 60, 0);
+        must_cleanup(&mut engine, k, 60, 0);
         let w = must_written(&mut engine, k, 50, 60, WriteType::Put);
         assert!(w.has_overlapped_rollback);
         must_unlocked(&mut engine, k);
-        must_acquire_pessimistic_lock_err(&engine, k, k, 60, 60);
+        must_acquire_pessimistic_lock_err(&mut engine, k, k, 60, 60);
         must_unlocked(&mut engine, k);
     }
 
@@ -1415,16 +1415,16 @@ pub(crate) mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let (k, v) = (b"k1", b"v1");
 
-        must_prewrite_put_async_commit(&engine, k, v, k, &Some(vec![]), 10, 0);
-        must_cleanup(&engine, k, 15, 0);
+        must_prewrite_put_async_commit(&mut engine, k, v, k, &Some(vec![]), 10, 0);
+        must_cleanup(&mut engine, k, 15, 0);
         must_commit(&mut engine, k, 10, 15);
         let w = must_written(&mut engine, k, 10, 15, WriteType::Put);
         assert!(w.has_overlapped_rollback);
         // GC fence shouldn't be set in this case.
         assert!(w.gc_fence.is_none());
 
-        must_prewrite_put_async_commit(&engine, k, v, k, &Some(vec![]), 20, 0);
-        check_txn_status::tests::must_success(&engine, k, 25, 0, 0, true, false, false, |s| {
+        must_prewrite_put_async_commit(&mut engine, k, v, k, &Some(vec![]), 20, 0);
+        check_txn_status::tests::must_success(&mut engine, k, 25, 0, 0, true, false, false, |s| {
             s == TxnStatus::LockNotExist
         });
         must_commit(&mut engine, k, 20, 25);
@@ -1432,9 +1432,9 @@ pub(crate) mod tests {
         assert!(w.has_overlapped_rollback);
         assert!(w.gc_fence.is_none());
 
-        must_prewrite_put_async_commit(&engine, k, v, k, &Some(vec![]), 30, 0);
+        must_prewrite_put_async_commit(&mut engine, k, v, k, &Some(vec![]), 30, 0);
         check_secondary_locks::tests::must_success(
-            &engine,
+            &mut engine,
             k,
             35,
             SecondaryLocksStatus::RolledBack,
@@ -1446,8 +1446,8 @@ pub(crate) mod tests {
 
         // Do not commit with overlapped_rollback if the rollback ts doesn't equal to
         // commit_ts.
-        must_prewrite_put_async_commit(&engine, k, v, k, &Some(vec![]), 40, 0);
-        must_cleanup(&engine, k, 44, 0);
+        must_prewrite_put_async_commit(&mut engine, k, v, k, &Some(vec![]), 40, 0);
+        must_cleanup(&mut engine, k, 44, 0);
         must_commit(&mut engine, k, 40, 45);
         let w = must_written(&mut engine, k, 40, 45, WriteType::Put);
         assert!(!w.has_overlapped_rollback);
@@ -1455,20 +1455,20 @@ pub(crate) mod tests {
         // Do not put rollback mark to the lock if the lock is not async commit or if
         // lock.ts is before start_ts or min_commit_ts.
         must_prewrite_put(&mut engine, k, v, k, 50);
-        must_cleanup(&engine, k, 55, 0);
+        must_cleanup(&mut engine, k, 55, 0);
         let l = must_locked(&mut engine, k, 50);
         assert!(l.rollback_ts.is_empty());
         must_commit(&mut engine, k, 50, 56);
 
-        must_prewrite_put_async_commit(&engine, k, v, k, &Some(vec![]), 60, 0);
-        must_cleanup(&engine, k, 59, 0);
+        must_prewrite_put_async_commit(&mut engine, k, v, k, &Some(vec![]), 60, 0);
+        must_cleanup(&mut engine, k, 59, 0);
         let l = must_locked(&mut engine, k, 60);
         assert!(l.rollback_ts.is_empty());
         must_commit(&mut engine, k, 60, 65);
 
-        must_prewrite_put_async_commit(&engine, k, v, k, &Some(vec![]), 70, 75);
-        must_cleanup(&engine, k, 74, 0);
-        must_cleanup(&engine, k, 75, 0);
+        must_prewrite_put_async_commit(&mut engine, k, v, k, &Some(vec![]), 70, 75);
+        must_cleanup(&mut engine, k, 74, 0);
+        must_cleanup(&mut engine, k, 75, 0);
         let l = must_locked(&mut engine, k, 70);
         assert_eq!(l.min_commit_ts, 75.into());
         assert_eq!(l.rollback_ts, vec![75.into()]);
@@ -1476,7 +1476,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_gc_fence() {
-        let rollback = |engine: &RocksEngine, k: &[u8], start_ts: u64| {
+        let rollback = |engine: &mut RocksEngine, k: &[u8], start_ts: u64| {
             must_cleanup(engine, k, start_ts, 0);
         };
         let check_status = |engine: &RocksEngine, k: &[u8], start_ts: u64| {
@@ -1492,7 +1492,7 @@ pub(crate) mod tests {
                 |_| true,
             );
         };
-        let check_secondary = |engine: &RocksEngine, k: &[u8], start_ts: u64| {
+        let check_secondary = |engine: &mut RocksEngine, k: &[u8], start_ts: u64| {
             check_secondary_locks::tests::must_success(
                 engine,
                 k,
@@ -1507,7 +1507,7 @@ pub(crate) mod tests {
             // Get gc fence without any newer versions.
             must_prewrite_put(&mut engine, b"k1", b"v1", b"k1", 101);
             must_commit(&mut engine, b"k1", 101, 102);
-            rollback(&engine, b"k1", 102);
+            rollback(&mut engine, b"k1", 102);
             must_get_overlapped_rollback(&mut engine, b"k1", 102, 101, WriteType::Put, Some(0));
 
             // Get gc fence with a newer put.
@@ -1515,7 +1515,7 @@ pub(crate) mod tests {
             must_commit(&mut engine, b"k1", 103, 104);
             must_prewrite_put(&mut engine, b"k1", b"v1", b"k1", 105);
             must_commit(&mut engine, b"k1", 105, 106);
-            rollback(&engine, b"k1", 104);
+            rollback(&mut engine, b"k1", 104);
             must_get_overlapped_rollback(&mut engine, b"k1", 104, 103, WriteType::Put, Some(106));
 
             // Get gc fence with a newer delete.
@@ -1523,7 +1523,7 @@ pub(crate) mod tests {
             must_commit(&mut engine, b"k1", 107, 108);
             must_prewrite_delete(&mut engine, b"k1", b"k1", 109);
             must_commit(&mut engine, b"k1", 109, 110);
-            rollback(&engine, b"k1", 108);
+            rollback(&mut engine, b"k1", 108);
             must_get_overlapped_rollback(&mut engine, b"k1", 108, 107, WriteType::Put, Some(110));
 
             // Get gc fence with a newer rollback and lock.
@@ -1533,7 +1533,7 @@ pub(crate) mod tests {
             must_rollback(&mut engine, b"k1", 113, false);
             must_prewrite_lock(&mut engine, b"k1", b"k1", 115);
             must_commit(&mut engine, b"k1", 115, 116);
-            rollback(&engine, b"k1", 112);
+            rollback(&mut engine, b"k1", 112);
             must_get_overlapped_rollback(&mut engine, b"k1", 112, 111, WriteType::Put, Some(0));
 
             // Get gc fence with a newer put after some rollbacks and locks.
@@ -1545,7 +1545,7 @@ pub(crate) mod tests {
             must_commit(&mut engine, b"k1", 125, 126);
             must_prewrite_put(&mut engine, b"k1", b"v1", b"k1", 127);
             must_commit(&mut engine, b"k1", 127, 128);
-            rollback(&engine, b"k1", 122);
+            rollback(&mut engine, b"k1", 122);
             must_get_overlapped_rollback(&mut engine, b"k1", 122, 121, WriteType::Put, Some(128));
 
             // A key's gc fence won't be another MVCC key.
@@ -1555,7 +1555,7 @@ pub(crate) mod tests {
             must_commit(&mut engine, b"k0", 133, 134);
             must_prewrite_put(&mut engine, b"k2", b"v1", b"k2", 133);
             must_commit(&mut engine, b"k2", 133, 134);
-            rollback(&engine, b"k1", 132);
+            rollback(&mut engine, b"k1", 132);
             must_get_overlapped_rollback(&mut engine, b"k1", 132, 131, WriteType::Put, Some(0));
         }
     }
@@ -1569,8 +1569,8 @@ pub(crate) mod tests {
         let secondaries = Some(vec![key2]);
 
         // T1, start_ts = 10, commit_ts = 20; write k1, k2
-        must_prewrite_put_async_commit(&engine, k1, v1, k1, &secondaries, 10, 0);
-        must_prewrite_put_async_commit(&engine, k2, v2, k1, &secondaries, 10, 0);
+        must_prewrite_put_async_commit(&mut engine, k1, v1, k1, &secondaries, 10, 0);
+        must_prewrite_put_async_commit(&mut engine, k2, v2, k1, &secondaries, 10, 0);
         must_commit(&mut engine, k1, 10, 20);
         must_commit(&mut engine, k2, 10, 20);
 
@@ -1578,15 +1578,15 @@ pub(crate) mod tests {
         assert!(!w.has_overlapped_rollback);
 
         // T2, start_ts = 20
-        must_acquire_pessimistic_lock(&engine, k2, k2, 20, 25);
-        must_pessimistic_prewrite_put(&engine, k2, v2, k2, 20, 25, DoPessimisticCheck);
+        must_acquire_pessimistic_lock(&mut engine, k2, k2, 20, 25);
+        must_pessimistic_prewrite_put(&mut engine, k2, v2, k2, 20, 25, DoPessimisticCheck);
 
-        must_cleanup(&engine, k2, 20, 0);
+        must_cleanup(&mut engine, k2, 20, 0);
 
         let w = must_written(&mut engine, k2, 10, 20, WriteType::Put);
         assert!(w.has_overlapped_rollback);
         must_get(&mut engine, k2, 30, v2);
-        must_acquire_pessimistic_lock_err(&engine, k2, k2, 20, 25);
+        must_acquire_pessimistic_lock_err(&mut engine, k2, k2, 20, 25);
     }
 
     #[test]
@@ -1598,12 +1598,12 @@ pub(crate) mod tests {
         let secondaries = Some(vec![key2]);
 
         // T1, start_ts = 10
-        must_prewrite_put_async_commit(&engine, k1, v1, k1, &secondaries, 10, 0);
-        must_prewrite_put_async_commit(&engine, k2, v2, k1, &secondaries, 10, 0);
+        must_prewrite_put_async_commit(&mut engine, k1, v1, k1, &secondaries, 10, 0);
+        must_prewrite_put_async_commit(&mut engine, k2, v2, k1, &secondaries, 10, 0);
 
         // T2, start_ts = 20
-        must_prewrite_put_err(&engine, k2, v2, k2, 20);
-        must_cleanup(&engine, k2, 20, 0);
+        must_prewrite_put_err(&mut engine, k2, v2, k2, 20);
+        must_cleanup(&mut engine, k2, 20, 0);
 
         // commit T1
         must_commit(&mut engine, k1, 10, 20);
@@ -1611,6 +1611,6 @@ pub(crate) mod tests {
 
         let w = must_written(&mut engine, k2, 10, 20, WriteType::Put);
         assert!(w.has_overlapped_rollback);
-        must_prewrite_put_err(&engine, k2, v2, k2, 20);
+        must_prewrite_put_err(&mut engine, k2, v2, k2, 20);
     }
 }

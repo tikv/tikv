@@ -806,7 +806,7 @@ mod tests {
     /// Case 1. prev out of bound, next_version is None.
     #[test]
     fn test_reverse_get_out_of_bound_1() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
         // Generate N/2 rollback for [b].
         for ts in 0..REVERSE_SEEK_BOUND / 2 {
@@ -825,7 +825,7 @@ mod tests {
         // Generate 1 put for [c].
         must_prewrite_put(&mut engine, b"c", b"value", b"c", REVERSE_SEEK_BOUND * 2);
         must_commit(
-            &engine,
+            &mut engine,
             b"c",
             REVERSE_SEEK_BOUND * 2,
             REVERSE_SEEK_BOUND * 2,
@@ -911,7 +911,7 @@ mod tests {
         // Generate 1 put for [c].
         must_prewrite_put(&mut engine, b"c", b"value_c", b"c", REVERSE_SEEK_BOUND * 2);
         must_commit(
-            &engine,
+            &mut engine,
             b"c",
             REVERSE_SEEK_BOUND * 2,
             REVERSE_SEEK_BOUND * 2,
@@ -1388,7 +1388,7 @@ mod tests {
                 must_rollback(&mut engine, pk, start_ts, false);
                 // Generate 254 RocksDB tombstones between [0,0] and [15,15].
                 if !((i == 0 && y == 0) || (i == 15 && y == 15)) {
-                    must_gc(&engine, pk, safe_point);
+                    must_gc(&mut engine, pk, safe_point);
                 }
             }
         }
@@ -1473,7 +1473,7 @@ mod tests {
         let (key5, val5) = (b"k5", b"val5");
         must_prewrite_put(&mut engine, key5, val5, key5, 1);
         must_commit(&mut engine, key5, 1, 2);
-        must_acquire_pessimistic_lock(&engine, key5, key5, 3, 3);
+        must_acquire_pessimistic_lock(&mut engine, key5, key5, 3, 3);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, 29.into())
