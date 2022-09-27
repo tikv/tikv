@@ -1217,7 +1217,7 @@ where
             PeerTick::ReactivateMemoryLock => self.on_reactivate_memory_lock_tick(),
             PeerTick::ReportBuckets => self.on_report_region_buckets_tick(),
             PeerTick::CheckLongUncommitted => self.on_check_long_uncommitted_tick(),
-            PeerTick::CheckNonWitnessesAvailability => self.on_check_non_witnesses_availability(),
+            PeerTick::CheckPeersAvailability => self.on_check_peers_availability(),
         }
     }
 
@@ -2635,12 +2635,12 @@ where
         if !self.fsm.peer.is_leader() {
             let mut resp = ExtraMessage::default();
             resp.set_type(ExtraMessageType::MsgTracePeerAvailabilityInfo);
-            resp.miss_data = self.fsm.peer.unavailable;
+            resp.miss_data = !self.fsm.peer.initialized;
             self.fsm
                 .peer
                 .send_extra_message(resp, &mut self.ctx.trans, from);
             info!(
-                "non-witness response availability info to leader";
+                "peer responses availability info to leader";
                 "region_id" => self.region().get_id(),
                 "peer_id" => self.fsm.peer.peer.get_id(),
                 "leader_id" => from.id,
@@ -2650,12 +2650,12 @@ where
         if !msg.miss_data {
             self.fsm.peer.peers_miss_data.remove(&from.get_id());
             info!(
-                "receive non-witness ready info";
+                "receive peer ready info";
                 "peer_id" => self.fsm.peer.peer.get_id(),
             );
             return;
         }
-        self.register_track_non_witnesses_availability_tick();
+        self.register_check_peers_availability_tick();
     }
 
     fn on_extra_message(&mut self, msg: &mut RaftMessage) {
@@ -3680,8 +3680,9 @@ where
                         if peer.is_witness {
                             self.fsm.peer.peers_miss_data.insert(peer.id, false);
                         } else {
+                            // TODO: add judgment condition: prew_peer_is_witness
                             self.fsm.peer.peers_miss_data.insert(peer.id, true);
-                            self.register_track_non_witnesses_availability_tick();
+                            self.register_check_peers_availability_tick();
                         }
                         need_ping = true;
                         self.fsm.peer.peers_start_pending_time.push((peer_id, now));
@@ -5900,15 +5901,12 @@ where
         self.schedule_tick(PeerTick::PdHeartbeat)
     }
 
-    fn register_track_non_witnesses_availability_tick(&mut self) {
-        fail_point!(
-            "ignore schedule check non-witness availability tick",
-            |_| {}
-        );
-        self.schedule_tick(PeerTick::CheckNonWitnessesAvailability)
+    fn register_check_peers_availability_tick(&mut self) {
+        fail_point!("ignore schedule check peers availability tick", |_| {});
+        self.schedule_tick(PeerTick::CheckPeersAvailability)
     }
 
-    fn on_check_non_witnesses_availability(&mut self) {
+    fn on_check_peers_availability(&mut self) {
         for (peer_id, miss_data) in self.fsm.peer.peers_miss_data.iter() {
             if *miss_data {
                 if let Some(peer) = self.fsm.peer.get_peer_from_cache(*peer_id) {

@@ -307,8 +307,8 @@ pub struct Config {
     #[doc(hidden)]
     #[serde(skip_serializing)]
     #[online_config(hidden)]
-    // Interval to check non-witness availability info.
-    pub check_non_witnesses_availability_interval: ReadableDuration,
+    // Interval to check peers availability info.
+    pub check_peers_availability_interval: ReadableDuration,
 }
 
 impl Default for Config {
@@ -414,7 +414,7 @@ impl Default for Config {
             max_snapshot_file_raw_size: ReadableSize::mb(100),
             unreachable_backoff: ReadableDuration::secs(10),
             // TODO: make its value reasonable
-            check_non_witnesses_availability_interval: ReadableDuration::secs(30),
+            check_peers_availability_interval: ReadableDuration::secs(30),
         }
     }
 }

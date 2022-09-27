@@ -918,7 +918,7 @@ where
     /// the conversion operation is complete, and can continue to schedule
     /// other operators to prevent the existence of multiple witnesses in
     /// the same time period.
-    pub unavailable: bool,
+    pub initialized: bool,
 
     /// Force leader state is only used in online recovery when the majority of
     /// peers are missing. In this state, it forces one peer to become leader
@@ -1132,7 +1132,7 @@ where
             compaction_declined_bytes: 0,
             leader_unreachable: false,
             pending_remove: false,
-            unavailable: false,
+            initialized: true,
             should_wake_up: false,
             force_leader: None,
             pending_merge_state: None,
@@ -1547,7 +1547,7 @@ where
 
     #[inline]
     pub fn is_initialized(&self) -> bool {
-        self.get_store().is_initialized()
+        self.get_store().is_initialized() && self.initialized
     }
 
     #[inline]
@@ -2576,7 +2576,7 @@ where
                 // Update apply index to `last_applying_idx`
                 self.read_progress
                     .update_applied(self.last_applying_idx, &ctx.coprocessor_host);
-                self.notify_leader_non_witness_is_available(ctx);
+                self.notify_leader_the_peer_is_available(ctx);
             }
             CheckApplyingSnapStatus::Idle => {
                 // FIXME: It's possible that the snapshot applying task is canceled.
@@ -2593,13 +2593,13 @@ where
         true
     }
 
-    fn notify_leader_non_witness_is_available<T: Transport>(
+    fn notify_leader_the_peer_is_available<T: Transport>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
     ) {
-        if self.unavailable {
-            self.unavailable = false;
-            fail_point!("ignore notify leader non-witness is available", |_| {});
+        if !self.is_initialized() {
+            self.initialized = true;
+            fail_point!("ignore notify leader the peer is available", |_| {});
             let leader_id = self.leader_id();
             let leader = self.get_peer_from_cache(leader_id);
             if let Some(leader) = leader {
@@ -2609,7 +2609,7 @@ where
                 msg.safe_ts = self.read_progress.safe_ts();
                 self.send_extra_message(msg, &mut ctx.trans, &leader);
                 info!(
-                    "notify leader non-witness is available";
+                    "notify leader the leader is available";
                     "region id" => self.region().get_id(),
                     "peer id" => self.peer.id
                 );
