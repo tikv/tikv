@@ -327,13 +327,13 @@ mod tests {
         assert!(ChangeLog::encode_rows(changes, false).is_empty());
 
         must_prewrite_put(&engine, b"k1", b"v1", b"k1", 1);
-        must_commit(&engine, b"k1", 1, 2);
+        must_commit(&mut engine, b"k1", 1, 2);
 
         must_prewrite_put(&engine, b"k1", b"v2", b"k1", 3);
         must_rollback(&engine, b"k1", 3, false);
 
         must_prewrite_put(&engine, b"k1", &[b'v'; 512], b"k1", 4);
-        must_commit(&engine, b"k1", 4, 5);
+        must_commit(&mut engine, b"k1", 4, 5);
 
         must_prewrite_put(&engine, b"k1", b"v3", b"k1", 5);
         must_rollback(&engine, b"k1", 5, false);

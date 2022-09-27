@@ -199,7 +199,7 @@ pub mod tests {
         must_locked(&engine, k, 3);
 
         // Do nothing if committed
-        must_commit(&engine, k, 3, 4);
+        must_commit(&mut engine, k, 3, 4);
         must_unlocked(&engine, k);
         must_get_commit_ts(&engine, k, 3, 4);
         must_success(&engine, k, 3, 3);

@@ -677,7 +677,7 @@ pub mod tests {
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(13, 3), false);
 
-        must_commit(&engine, k, ts(5, 0), ts(15, 0));
+        must_commit(&mut engine, k, ts(5, 0), ts(15, 0));
         must_unlocked(&engine, k);
 
         // Check committed key will get the commit ts.
@@ -792,7 +792,7 @@ pub mod tests {
 
         // Commit the key.
         must_pessimistic_prewrite_put(&engine, k, v, k, ts(4, 0), ts(130, 0), DoPessimisticCheck);
-        must_commit(&engine, k, ts(4, 0), ts(140, 0));
+        must_commit(&mut engine, k, ts(4, 0), ts(140, 0));
         must_unlocked(&engine, k);
         must_get_commit_ts(&engine, k, ts(4, 0), ts(140, 0));
 
@@ -981,7 +981,7 @@ pub mod tests {
             false,
             uncommitted(100, ts(310, 1), true),
         );
-        must_commit(&engine, k, ts(310, 0), ts(315, 0));
+        must_commit(&mut engine, k, ts(310, 0), ts(315, 0));
         must_success(
             &engine,
             k,

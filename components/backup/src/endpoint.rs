@@ -1537,7 +1537,7 @@ pub mod tests {
                     key.as_bytes(),
                     start,
                 );
-                must_commit(&engine, key.as_bytes(), start, commit);
+                must_commit(&mut engine, key.as_bytes(), start, commit);
                 backup_tss.push((alloc_ts(), len));
             }
         }
@@ -1890,7 +1890,7 @@ pub mod tests {
 
         // Commit the perwrite.
         let commit = alloc_ts();
-        must_commit(&engine, key.as_bytes(), start, commit);
+        must_commit(&mut engine, key.as_bytes(), start, commit);
 
         // Test whether it can correctly convert not leader to region error.
         engine.trigger_not_leader();
@@ -1935,7 +1935,7 @@ pub mod tests {
         );
         // Commit the perwrite.
         let commit = alloc_ts();
-        must_commit(&engine, key.as_bytes(), start, commit);
+        must_commit(&mut engine, key.as_bytes(), start, commit);
 
         let now = alloc_ts();
         let mut req = BackupRequest::default();

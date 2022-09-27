@@ -450,12 +450,12 @@ mod tests {
     fn test_mvcc_checksum() {
         let engine = TestEngineBuilder::new().build().unwrap();
         must_prewrite_put(&engine, b"zAAAAA", b"value", b"PRIMARY", 100);
-        must_commit(&engine, b"zAAAAA", 100, 101);
+        must_commit(&mut engine, b"zAAAAA", 100, 101);
         must_prewrite_put(&engine, b"zCCCCC", b"value", b"PRIMARY", 110);
-        must_commit(&engine, b"zCCCCC", 110, 111);
+        must_commit(&mut engine, b"zCCCCC", 110, 111);
 
         must_prewrite_put(&engine, b"zBBBBB", b"value", b"PRIMARY", 200);
-        must_commit(&engine, b"zBBBBB", 200, 201);
+        must_commit(&mut engine, b"zBBBBB", 200, 201);
         must_prewrite_put(&engine, b"zDDDDD", b"value", b"PRIMARY", 200);
         must_rollback(&engine, b"zDDDDD", 200, false);
         must_prewrite_put(&engine, b"zFFFFF", b"value", b"PRIMARY", 200);

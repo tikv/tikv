@@ -315,7 +315,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
     /// Get a snapshot of `engine`.
     fn snapshot(
-        engine: &E,
+        engine: &mut E,
         ctx: SnapContext<'_>,
     ) -> impl std::future::Future<Output = Result<E::Snap>> {
         kv::snapshot(engine, ctx)
@@ -349,7 +349,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     }
 
     #[inline]
-    fn with_tls_engine<R>(f: impl FnOnce(&E) -> R) -> R {
+    fn with_tls_engine<R>(f: impl FnOnce(&mut E) -> R) -> R {
         // Safety: the read pools ensure that a TLS engine exists.
         unsafe { with_tls_engine(f) }
     }
@@ -2971,7 +2971,7 @@ impl<E: Engine> Engine for TxnTestEngine<E> {
     }
 
     fn async_snapshot(
-        &self,
+        &mut self,
         ctx: SnapContext<'_>,
         cb: tikv_kv::Callback<Self::Snap>,
     ) -> tikv_kv::Result<()> {

@@ -811,9 +811,9 @@ mod tests {
 
         // Create the initial data with CF_WRITE L0: |zkey_110, zkey1_160|
         must_prewrite_put(&engine, b"zkey", &v_suffix(100), b"zkey", 100);
-        must_commit(&engine, b"zkey", 100, 110);
+        must_commit(&mut engine, b"zkey", 100, 110);
         must_prewrite_put(&engine, b"zzzz", &v_suffix(150), b"zzzz", 150);
-        must_commit(&engine, b"zzzz", 150, 160);
+        must_commit(&mut engine, b"zzzz", 150, 160);
         engine
             .kv_engine()
             .unwrap()
@@ -823,7 +823,7 @@ mod tests {
         check_handling_old_value_seek_write(); // For TxnEntry::Prewrite.
 
         // CF_WRITE L0: |zkey_110, zkey1_160|, |zkey_210|
-        must_commit(&engine, b"zkey", 200, 210);
+        must_commit(&mut engine, b"zkey", 200, 210);
         engine
             .kv_engine()
             .unwrap()

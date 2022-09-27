@@ -530,7 +530,7 @@ where
     }
 
     fn create_reader(
-        &self,
+        &mut self,
         key_count: usize,
         region: &Region,
         range_start_key: Key,
@@ -871,16 +871,17 @@ where
     }
 
     fn handle_physical_scan_lock(
-        &self,
+        &mut self,
         _: &Context,
         max_ts: TimeStamp,
         start_key: &Key,
         limit: usize,
         regions_provider: Arc<dyn RegionInfoProvider>,
     ) -> Result<Vec<LockInfo>> {
+        let store_id = self.store_id;
         let regions = box_try!(regions_provider.get_regions_in_range(start_key.as_encoded(), &[]))
             .into_iter()
-            .filter(move |r| find_peer(r, self.store_id).is_some());
+            .filter(move |r| find_peer(r, store_id).is_some());
 
         let mut first_round = true;
         let mut locks = Vec::new();
@@ -893,7 +894,7 @@ where
                     Key::from_raw(region.get_start_key())
                 }
             };
-            let snap = self.get_snapshot(self.store_id, &region)?;
+            let snap = self.get_snapshot(store_id, &region)?;
             let mut reader = MvccReader::new(snap, Some(ScanMode::Forward), false);
             let (locks_this_region, _) = reader
                 .scan_locks(Some(&start_key), None, |l| l.ts <= max_ts, limit)
@@ -937,7 +938,7 @@ where
         }
     }
 
-    fn get_snapshot(&self, store_id: u64, region: &Region) -> Result<<E as Engine>::Snap> {
+    fn get_snapshot(&mut self, store_id: u64, region: &Region) -> Result<<E as Engine>::Snap> {
         let ctx = init_snap_ctx(store_id, region);
         let snap_ctx = SnapContext {
             pb_ctx: &ctx,
@@ -945,7 +946,7 @@ where
         };
 
         Ok(block_on(async {
-            tikv_kv::snapshot(&self.engine, snap_ctx).await
+            tikv_kv::snapshot(&mut self.engine, snap_ctx).await
         })?)
     }
 }
@@ -1543,7 +1544,7 @@ pub mod test_gc_worker {
         }
 
         fn async_snapshot(
-            &self,
+            &mut self,
             ctx: SnapContext<'_>,
             callback: EngineCallback<Self::Snap>,
         ) -> EngineResult<()> {
@@ -1659,7 +1660,7 @@ pub mod test_gc_worker {
         }
 
         fn async_snapshot(
-            &self,
+            &mut self,
             ctx: SnapContext<'_>,
             callback: EngineCallback<Self::Snap>,
         ) -> EngineResult<()> {
@@ -2099,7 +2100,7 @@ mod tests {
     fn test_gc_keys_with_region_info_provider() {
         let store_id = 1;
         let engine = TestEngineBuilder::new().build().unwrap();
-        let prefixed_engine = PrefixedEngine(engine.clone());
+        let mut prefixed_engine = PrefixedEngine(engine.clone());
 
         let (tx, _rx) = mpsc::channel();
         let feature_gate = FeatureGate::default();
@@ -2165,7 +2166,7 @@ mod tests {
             let k = format!("k{:02}", i).into_bytes();
 
             // Stale MVCC-PUTs will be cleaned in write CF's compaction filter.
-            must_get_none(&prefixed_engine, &k, 150);
+            must_get_none(&mut prefixed_engine, &k, 150);
 
             // However, MVCC-DELETIONs will be kept.
             let mut raw_k = vec![b'z'];
@@ -2343,9 +2344,10 @@ mod tests {
         assert_eq!(7, runner.mut_stats(GcKeyMode::raw).data.next);
         assert_eq!(2, runner.mut_stats(GcKeyMode::raw).data.seek);
 
-        let snapshot =
-            block_on(async { tikv_kv::snapshot(&prefixed_engine, SnapContext::default()).await })
-                .unwrap();
+        let snapshot = block_on(async {
+            tikv_kv::snapshot(&mut prefixed_engine, SnapContext::default()).await
+        })
+        .unwrap();
 
         test_raws
             .clone()
@@ -2482,7 +2484,7 @@ mod tests {
         let store_id = 1;
         let engine = PrefixedEngine(TestEngineBuilder::new().build().unwrap());
         must_prewrite_put(&engine, b"key", b"value", b"key", 10);
-        must_commit(&engine, b"key", 10, 20);
+        must_commit(&mut engine, b"key", 10, 20);
         let db = engine.kv_engine().unwrap().as_inner().clone();
         let cf = get_cf_handle(&db, CF_WRITE).unwrap();
         db.flush_cf(cf, true).unwrap();
@@ -2546,7 +2548,7 @@ mod tests {
         // After the worker starts running, the destroy range task should run,
         // and the key in the range will be deleted.
         rx.recv_timeout(Duration::from_secs(10)).unwrap().unwrap();
-        must_get_none(&engine, b"key", 30);
+        must_get_none(&mut engine, b"key", 30);
     }
 
     #[test]
@@ -2713,7 +2715,7 @@ mod tests {
 
         let put_start_ts = 100;
         let delete_start_ts = 150;
-        let (factory, engine, _ri_provider, mut gc_runner, regions, _) =
+        let (factory, mut engine, _ri_provider, mut gc_runner, regions, _) =
             multi_gc_engine_setup(store_id, put_start_ts, delete_start_ts, true);
 
         gc_runner.gc(regions[0].clone(), 200.into()).unwrap();
@@ -2731,7 +2733,7 @@ mod tests {
                 let k = format!("k{:02}", i).into_bytes();
 
                 // Stale MVCC-PUTs will be cleaned in write CF's compaction filter.
-                must_get_none_on_region(&engine, region_id, &k, delete_start_ts - 1);
+                must_get_none_on_region(&mut engine, region_id, &k, delete_start_ts - 1);
 
                 // MVCC-DELETIONs is cleaned
                 let mut raw_k = vec![b'z'];
@@ -2748,7 +2750,7 @@ mod tests {
 
         let put_start_ts = 100;
         let delete_start_ts = 150;
-        let (factory, engine, ri_provider, mut gc_runner, ..) =
+        let (factory, mut engine, ri_provider, mut gc_runner, ..) =
             multi_gc_engine_setup(store_id, put_start_ts, delete_start_ts, true);
 
         let mut keys = Vec::new();
@@ -2782,10 +2784,10 @@ mod tests {
 
                 if i % 2 == 0 {
                     assert!(db.get_cf(cf, &raw_k).unwrap().is_some());
-                    must_get_on_region(&engine, region_id, &k, delete_start_ts - 1, &val);
+                    must_get_on_region(&mut engine, region_id, &k, delete_start_ts - 1, &val);
                 } else {
                     assert!(db.get_cf(cf, &raw_k).unwrap().is_none());
-                    must_get_none_on_region(&engine, region_id, &k, delete_start_ts - 1);
+                    must_get_none_on_region(&mut engine, region_id, &k, delete_start_ts - 1);
                 }
             }
         }
@@ -2915,7 +2917,8 @@ mod tests {
                 pb_ctx: &ctx,
                 ..Default::default()
             };
-            let snapshot = block_on(async { tikv_kv::snapshot(&engine, snap_ctx).await }).unwrap();
+            let snapshot =
+                block_on(async { tikv_kv::snapshot(&mut engine, snap_ctx).await }).unwrap();
 
             test_raws_region
                 .clone()
@@ -2938,7 +2941,7 @@ mod tests {
     ) {
         let store_id = 1;
         let put_start_ts = 100;
-        let (factory, engine, ri_provider, gc_runner, _, _rx) =
+        let (factory, mut engine, ri_provider, gc_runner, _, _rx) =
             multi_gc_engine_setup(store_id, put_start_ts, 0, false);
 
         let start_key = Key::from_raw(start_key);
@@ -2970,10 +2973,10 @@ mod tests {
                 if start_key <= key && key < end_key {
                     regions.insert(region_id);
                     assert!(db.get_cf(cf, &raw_k).unwrap().is_none());
-                    must_get_none_on_region(&engine, region_id, &k, put_start_ts + 10);
+                    must_get_none_on_region(&mut engine, region_id, &k, put_start_ts + 10);
                 } else {
                     assert!(db.get_cf(cf, &raw_k).unwrap().is_some());
-                    must_get_on_region(&engine, region_id, &k, put_start_ts + 10, &val);
+                    must_get_on_region(&mut engine, region_id, &k, put_start_ts + 10, &val);
                 }
             }
         }

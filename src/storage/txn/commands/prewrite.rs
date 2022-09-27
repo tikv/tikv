@@ -1694,7 +1694,7 @@ mod tests {
 
         // T1: start_ts = 3, commit_ts = 5, put key:value
         must_prewrite_put(&engine, key, value, key, 3);
-        must_commit(&engine, key, 3, 5);
+        must_commit(&mut engine, key, 3, 5);
 
         // T2: start_ts = 15, prewrite on k, with should_not_exist flag set.
         let res = prewrite_with_cm(
@@ -1719,7 +1719,7 @@ mod tests {
         // T3: start_ts = 8, commit_ts = max_ts + 1 = 16, prewrite a DELETE operation on
         // k
         must_prewrite_delete(&engine, key, key, 8);
-        must_commit(&engine, key, 8, cm.max_ts().into_inner() + 1);
+        must_commit(&mut engine, key, 8, cm.max_ts().into_inner() + 1);
 
         // T1: start_ts = 10, repeatedly prewrite on k, with should_not_exist flag set
         let res = prewrite_with_cm(
@@ -1750,7 +1750,7 @@ mod tests {
 
         // T1: start_ts = 5, commit_ts = 10, async commit
         must_prewrite_put_async_commit(&engine, key, b"v1", key, &Some(vec![]), 5, 10);
-        must_commit(&engine, key, 5, 10);
+        must_commit(&mut engine, key, 5, 10);
 
         // T2: start_ts = 15, commit_ts = 16, 1PC
         let cmd = Prewrite::with_1pc(
@@ -1764,7 +1764,7 @@ mod tests {
 
         // T3 is after T1 and T2
         must_prewrite_put(&engine, key, b"v3", key, 20);
-        must_commit(&engine, key, 20, 25);
+        must_commit(&mut engine, key, 20, 25);
 
         // Repeating the T1 prewrite request
         let cmd = Prewrite::new(
@@ -1850,7 +1850,7 @@ mod tests {
             DoPessimisticCheck,
             10,
         );
-        must_commit(&engine, key, 5, 10);
+        must_commit(&mut engine, key, 5, 10);
 
         // T2: start_ts = 15, commit_ts = 16, 1PC
         must_acquire_pessimistic_lock(&engine, key, key, 15, 15);
@@ -1869,7 +1869,7 @@ mod tests {
 
         // T3 is after T1 and T2
         must_prewrite_put(&engine, key, b"v3", key, 20);
-        must_commit(&engine, key, 20, 25);
+        must_commit(&mut engine, key, 20, 25);
 
         // Repeating the T1 prewrite request
         let cmd = PrewritePessimistic::new(
@@ -2050,8 +2050,8 @@ mod tests {
         );
 
         // The transaction may be committed by another reader.
-        must_commit(&engine, b"k1", 10, 20);
-        must_commit(&engine, b"k2", 10, 20);
+        must_commit(&mut engine, b"k1", 10, 20);
+        must_commit(&mut engine, b"k2", 10, 20);
 
         // This is a re-sent prewrite.
         prewrite_with_retry_flag(
@@ -2065,8 +2065,8 @@ mod tests {
         )
         .unwrap();
         // Commit repeatedly, these operations should have no effect.
-        must_commit(&engine, b"k1", 10, 25);
-        must_commit(&engine, b"k2", 10, 25);
+        must_commit(&mut engine, b"k1", 10, 25);
+        must_commit(&mut engine, b"k2", 10, 25);
 
         // Seek from 30, we should read commit_ts = 20 instead of 25.
         must_seek_write(&engine, b"k1", 30, 10, 20, WriteType::Put);
@@ -2075,8 +2075,8 @@ mod tests {
         // Write another version to the keys.
         must_prewrite_put(&engine, b"k1", b"v11", b"k1", 35);
         must_prewrite_put(&engine, b"k2", b"v22", b"k1", 35);
-        must_commit(&engine, b"k1", 35, 40);
-        must_commit(&engine, b"k2", 35, 40);
+        must_commit(&mut engine, b"k1", 35, 40);
+        must_commit(&mut engine, b"k2", 35, 40);
 
         // A retrying non-pessimistic-lock prewrite request should not skip constraint
         // checks. Here it should take no effect, even there's already a newer version
@@ -2097,7 +2097,7 @@ mod tests {
             .unwrap();
         must_unlocked(&engine, b"k2");
         // Committing still does nothing.
-        must_commit(&engine, b"k2", 10, 25);
+        must_commit(&mut engine, b"k2", 10, 25);
         // Try a different txn start ts (which haven't been successfully committed
         // before). It should report a PessimisticLockNotFound.
         let err =
@@ -2131,7 +2131,7 @@ mod tests {
         must_acquire_pessimistic_lock(&engine, k1, v1, 1, 1);
         must_rollback(&engine, k1, 1, true);
         must_prewrite_put(&engine, k1, v2, k1, 5);
-        must_commit(&engine, k1, 5, 6);
+        must_commit(&mut engine, k1, 5, 6);
         let prewrite_cmd = Prewrite::new(
             vec![Mutation::make_put(Key::from_raw(k1), v1.to_vec())],
             k1.to_vec(),
@@ -2244,8 +2244,8 @@ mod tests {
             Assertion::NotExist,
             AssertionLevel::Strict,
         );
-        must_commit(&engine, b"row", t2_start_ts, t2_commit_ts);
-        must_commit(&engine, b"index", t2_start_ts, t2_commit_ts);
+        must_commit(&mut engine, b"row", t2_start_ts, t2_commit_ts);
+        must_commit(&mut engine, b"index", t2_start_ts, t2_commit_ts);
 
         // Txn1 continues. If the two keys are sent in the single prewrite request, the
         // AssertionFailed error won't be returned since there are other error.
@@ -2349,7 +2349,7 @@ mod tests {
 
         must_prewrite_put_async_commit(&engine, k1, v1, k1, &Some(vec![]), 5, 10);
         // This commit may actually come from a ResolveLock command
-        must_commit(&engine, k1, 5, 15);
+        must_commit(&mut engine, k1, 5, 15);
 
         // Another transaction prewrites
         must_prewrite_put(&engine, k1, v2, k1, 20);
@@ -2423,8 +2423,8 @@ mod tests {
             Assertion::None,
             AssertionLevel::Off,
         );
-        must_commit(&engine, b"k1", 5, 18);
-        must_commit(&engine, b"k2", 5, 18);
+        must_commit(&mut engine, b"k1", 5, 18);
+        must_commit(&mut engine, b"k2", 5, 18);
 
         // Update max_ts to be larger than the max_commit_ts.
         cm.update_max_ts(50.into());

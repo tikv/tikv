@@ -252,10 +252,10 @@ pub mod tests {
         };
 
         must_prewrite_lock(&engine, b"k1", b"key", 1);
-        must_commit(&engine, b"k1", 1, 3);
+        must_commit(&mut engine, b"k1", 1, 3);
         must_rollback(&engine, b"k1", 5, false);
         must_prewrite_lock(&engine, b"k1", b"key", 7);
-        must_commit(&engine, b"k1", 7, 9);
+        must_commit(&mut engine, b"k1", 7, 9);
 
         // Lock CF has no lock
         //
@@ -317,7 +317,7 @@ pub mod tests {
 
         // ----------------------------
 
-        must_commit(&engine, b"k1", 13, 15);
+        must_commit(&mut engine, b"k1", 13, 15);
 
         // Lock CF has an optimistic lock
         //

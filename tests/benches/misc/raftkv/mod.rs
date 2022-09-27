@@ -119,7 +119,7 @@ impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
 
 impl LocalReadRouter<RocksEngine> for SyncBenchRouter {
     fn read(
-        &self,
+        &mut self,
         _: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
@@ -127,7 +127,7 @@ impl LocalReadRouter<RocksEngine> for SyncBenchRouter {
         self.send_command(req, cb, RaftCmdExtraOpts::default())
     }
 
-    fn release_snapshot_cache(&self) {}
+    fn release_snapshot_cache(&mut self) {}
 }
 
 fn new_engine() -> (TempDir, RocksEngine) {

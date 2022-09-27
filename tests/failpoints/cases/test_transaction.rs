@@ -49,7 +49,7 @@ fn test_txn_failpoints() {
     fail::remove("prewrite");
     must_prewrite_put(&engine, k, v, k, 10);
     fail::cfg("commit", "delay(100)").unwrap();
-    must_commit(&engine, k, 10, 20);
+    must_commit(&mut engine, k, 10, 20);
     fail::remove("commit");
 
     let v1 = b"v1";
@@ -60,8 +60,8 @@ fn test_txn_failpoints() {
     must_prewrite_put(&engine, k2, v2, k2, 31);
     fail::remove("pessimistic_prewrite");
     must_pessimistic_prewrite_put(&engine, k, v1, k, 30, 30, DoPessimisticCheck);
-    must_commit(&engine, k, 30, 40);
-    must_commit(&engine, k2, 31, 41);
+    must_commit(&mut engine, k, 30, 40);
+    must_commit(&mut engine, k2, 31, 41);
     must_get(&engine, k, 50, v1);
     must_get(&engine, k2, 50, v2);
 }

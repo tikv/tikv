@@ -219,7 +219,7 @@ pub mod tests {
         test(5);
 
         must_locked(&engine, k, 5);
-        must_commit(&engine, k, 5, 10);
+        must_commit(&mut engine, k, 5, 10);
         must_unlocked(&engine, k);
 
         // No lock.

@@ -179,7 +179,7 @@ mod tests {
                 start,
             );
             let commit = alloc_ts();
-            must_commit(&engine, key.as_bytes(), start, commit);
+            must_commit(&mut engine, key.as_bytes(), start, commit);
         }
 
         let now = alloc_ts();

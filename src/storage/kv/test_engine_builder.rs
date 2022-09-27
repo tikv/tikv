@@ -138,29 +138,29 @@ mod tests {
 
     #[test]
     fn test_rocksdb() {
-        let engine = TestEngineBuilder::new()
+        let mut engine = TestEngineBuilder::new()
             .cfs(TEST_ENGINE_CFS)
             .build()
             .unwrap();
-        test_base_curd_options(&engine)
+        test_base_curd_options(&mut engine)
     }
 
     #[test]
     fn test_rocksdb_linear() {
-        let engine = TestEngineBuilder::new()
+        let mut engine = TestEngineBuilder::new()
             .cfs(TEST_ENGINE_CFS)
             .build()
             .unwrap();
-        test_linear(&engine);
+        test_linear(&mut engine);
     }
 
     #[test]
     fn test_rocksdb_statistic() {
-        let engine = TestEngineBuilder::new()
+        let mut engine = TestEngineBuilder::new()
             .cfs(TEST_ENGINE_CFS)
             .build()
             .unwrap();
-        test_cfs_statistics(&engine);
+        test_cfs_statistics(&mut engine);
     }
 
     #[test]
@@ -178,12 +178,12 @@ mod tests {
             must_put_cf(&engine, "cf", b"k", b"v1");
         }
         {
-            let engine = TestEngineBuilder::new()
+            let mut engine = TestEngineBuilder::new()
                 .path(dir.path())
                 .cfs(TEST_ENGINE_CFS)
                 .build()
                 .unwrap();
-            assert_has_cf(&engine, "cf", b"k", b"v1");
+            assert_has_cf(&mut engine, "cf", b"k", b"v1");
         }
     }
 

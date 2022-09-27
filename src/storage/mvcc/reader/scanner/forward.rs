@@ -1005,7 +1005,7 @@ pub mod test_util {
 
     #[allow(clippy::type_complexity)]
     pub fn prepare_test_data_for_check_gc_fence(
-        engine: &impl Engine,
+        engine: &mut impl Engine,
     ) -> (TimeStamp, Vec<(Vec<u8>, Option<Vec<u8>>)>) {
         // Generates test data that is consistent after timestamp 40.
 
@@ -1125,7 +1125,7 @@ mod latest_kv_tests {
 
         // Generate 1 put for [a].
         must_prewrite_put(&engine, b"a", b"value", b"a", 7);
-        must_commit(&engine, b"a", 7, 7);
+        must_commit(&mut engine, b"a", 7, 7);
 
         // Generate 5 rollback for [b].
         for ts in 0..5 {
@@ -1193,7 +1193,7 @@ mod latest_kv_tests {
         let ctx = Context::default();
         // Generate 1 put for [a].
         must_prewrite_put(&engine, b"a", b"a_value", b"a", SEEK_BOUND * 2);
-        must_commit(&engine, b"a", SEEK_BOUND * 2, SEEK_BOUND * 2);
+        must_commit(&mut engine, b"a", SEEK_BOUND * 2, SEEK_BOUND * 2);
 
         // Generate SEEK_BOUND / 2 rollback and 1 put for [b] .
         for ts in 0..SEEK_BOUND / 2 {
@@ -1209,7 +1209,7 @@ mod latest_kv_tests {
             write(&engine, &ctx, modifies);
         }
         must_prewrite_put(&engine, b"b", b"b_value", b"a", SEEK_BOUND / 2);
-        must_commit(&engine, b"b", SEEK_BOUND / 2, SEEK_BOUND / 2);
+        must_commit(&mut engine, b"b", SEEK_BOUND / 2, SEEK_BOUND / 2);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into())
@@ -1276,7 +1276,7 @@ mod latest_kv_tests {
 
         // Generate 1 put for [a].
         must_prewrite_put(&engine, b"a", b"a_value", b"a", SEEK_BOUND * 2);
-        must_commit(&engine, b"a", SEEK_BOUND * 2, SEEK_BOUND * 2);
+        must_commit(&mut engine, b"a", SEEK_BOUND * 2, SEEK_BOUND * 2);
 
         // Generate SEEK_BOUND-1 rollback and 1 put for [b] .
         for ts in 1..SEEK_BOUND {
@@ -1292,7 +1292,7 @@ mod latest_kv_tests {
             write(&engine, &ctx, modifies);
         }
         must_prewrite_put(&engine, b"b", b"b_value", b"a", SEEK_BOUND);
-        must_commit(&engine, b"b", SEEK_BOUND, SEEK_BOUND);
+        must_commit(&mut engine, b"b", SEEK_BOUND, SEEK_BOUND);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into())
@@ -1359,15 +1359,15 @@ mod latest_kv_tests {
         for i in 1..7 {
             // ts = 1: value = []
             must_prewrite_put(&engine, &[i], &[], &[i], 1);
-            must_commit(&engine, &[i], 1, 1);
+            must_commit(&mut engine, &[i], 1, 1);
 
             // ts = 7: value = [ts]
             must_prewrite_put(&engine, &[i], &[i], &[i], 7);
-            must_commit(&engine, &[i], 7, 7);
+            must_commit(&mut engine, &[i], 7, 7);
 
             // ts = 14: value = []
             must_prewrite_put(&engine, &[i], &[], &[i], 14);
-            must_commit(&engine, &[i], 14, 14);
+            must_commit(&mut engine, &[i], 14, 14);
         }
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -1478,9 +1478,9 @@ mod latest_kv_tests {
 
     #[test]
     fn test_latest_kv_check_gc_fence() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
-        let (read_ts, expected_result) = prepare_test_data_for_check_gc_fence(&engine);
+        let (read_ts, expected_result) = prepare_test_data_for_check_gc_fence(&mut engine);
         let expected_result: Vec<_> = expected_result
             .into_iter()
             .filter_map(|(key, value)| value.map(|v| (key, v)))
@@ -1506,30 +1506,30 @@ mod latest_kv_tests {
 
         let (key0, val0) = (b"k0", b"v0");
         must_prewrite_put(&engine, key0, val0, key0, 1);
-        must_commit(&engine, key0, 1, 5);
+        must_commit(&mut engine, key0, 1, 5);
 
         let (key1, val1) = (b"k1", b"v1");
         must_prewrite_put(&engine, key1, val1, key1, 10);
-        must_commit(&engine, key1, 10, 20);
+        must_commit(&mut engine, key1, 10, 20);
 
         let (key2, val2, val22) = (b"k2", b"v2", b"v22");
         must_prewrite_put(&engine, key2, val2, key2, 30);
-        must_commit(&engine, key2, 30, 40);
+        must_commit(&mut engine, key2, 30, 40);
         must_prewrite_put(&engine, key2, val22, key2, 41);
-        must_commit(&engine, key2, 41, 42);
+        must_commit(&mut engine, key2, 41, 42);
 
         let (key3, val3) = (b"k3", b"v3");
         must_prewrite_put(&engine, key3, val3, key3, 50);
-        must_commit(&engine, key3, 50, 51);
+        must_commit(&mut engine, key3, 50, 51);
 
         let (key4, val4) = (b"k4", b"val4");
         must_prewrite_put(&engine, key4, val4, key4, 55);
-        must_commit(&engine, key4, 55, 56);
+        must_commit(&mut engine, key4, 55, 56);
         must_prewrite_lock(&engine, key4, key4, 60);
 
         let (key5, val5) = (b"k5", b"val5");
         must_prewrite_put(&engine, key5, val5, key5, 57);
-        must_commit(&engine, key5, 57, 58);
+        must_commit(&mut engine, key5, 57, 58);
         must_acquire_pessimistic_lock(&engine, key5, key5, 65, 65);
 
         let (key6, val6) = (b"k6", b"v6");
@@ -1612,7 +1612,7 @@ mod latest_entry_tests {
 
         // Generate 1 put for [a].
         must_prewrite_put(&engine, b"a", b"value", b"a", 7);
-        must_commit(&engine, b"a", 7, 7);
+        must_commit(&mut engine, b"a", 7, 7);
 
         // Generate 5 rollback for [b].
         for ts in 0..5 {
@@ -1683,7 +1683,7 @@ mod latest_entry_tests {
 
         // Generate 1 put for [a].
         must_prewrite_put(&engine, b"a", b"a_value", b"a", SEEK_BOUND * 2);
-        must_commit(&engine, b"a", SEEK_BOUND * 2, SEEK_BOUND * 2);
+        must_commit(&mut engine, b"a", SEEK_BOUND * 2, SEEK_BOUND * 2);
 
         // Generate SEEK_BOUND / 2 rollback and 1 put for [b] .
         for ts in 0..SEEK_BOUND / 2 {
@@ -1699,7 +1699,7 @@ mod latest_entry_tests {
             write(&engine, &ctx, modifies);
         }
         must_prewrite_put(&engine, b"b", b"b_value", b"a", SEEK_BOUND / 2);
-        must_commit(&engine, b"b", SEEK_BOUND / 2, SEEK_BOUND / 2);
+        must_commit(&mut engine, b"b", SEEK_BOUND / 2, SEEK_BOUND / 2);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into())
@@ -1767,7 +1767,7 @@ mod latest_entry_tests {
 
         // Generate 1 put for [a].
         must_prewrite_put(&engine, b"a", b"a_value", b"a", SEEK_BOUND * 2);
-        must_commit(&engine, b"a", SEEK_BOUND * 2, SEEK_BOUND * 2);
+        must_commit(&mut engine, b"a", SEEK_BOUND * 2, SEEK_BOUND * 2);
 
         // Generate SEEK_BOUND-1 rollback and 1 put for [b] .
         for ts in 1..SEEK_BOUND {
@@ -1783,7 +1783,7 @@ mod latest_entry_tests {
             write(&engine, &ctx, modifies);
         }
         must_prewrite_put(&engine, b"b", b"b_value", b"a", SEEK_BOUND);
-        must_commit(&engine, b"b", SEEK_BOUND, SEEK_BOUND);
+        must_commit(&mut engine, b"b", SEEK_BOUND, SEEK_BOUND);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into())
@@ -1852,15 +1852,15 @@ mod latest_entry_tests {
         for i in 1..7 {
             // ts = 1: value = []
             must_prewrite_put(&engine, &[i], &[], &[i], 1);
-            must_commit(&engine, &[i], 1, 1);
+            must_commit(&mut engine, &[i], 1, 1);
 
             // ts = 7: value = [ts]
             must_prewrite_put(&engine, &[i], &[i], &[i], 7);
-            must_commit(&engine, &[i], 7, 7);
+            must_commit(&mut engine, &[i], 7, 7);
 
             // ts = 14: value = []
             must_prewrite_put(&engine, &[i], &[], &[i], 14);
-            must_commit(&engine, &[i], 14, 14);
+            must_commit(&mut engine, &[i], 14, 14);
         }
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -1923,15 +1923,15 @@ mod latest_entry_tests {
 
         // Generate put for [a] at 3.
         must_prewrite_put(&engine, b"a", b"a_3", b"a", 3);
-        must_commit(&engine, b"a", 3, 3);
+        must_commit(&mut engine, b"a", 3, 3);
 
         // Generate put for [a] at 7.
         must_prewrite_put(&engine, b"a", b"a_7", b"a", 7);
-        must_commit(&engine, b"a", 7, 7);
+        must_commit(&mut engine, b"a", 7, 7);
 
         // Generate put for [b] at 1.
         must_prewrite_put(&engine, b"b", b"b_1", b"b", 1);
-        must_commit(&engine, b"b", 1, 1);
+        must_commit(&mut engine, b"b", 1, 1);
 
         // Generate rollbacks for [b] at 2, 3, 4.
         for ts in 2..5 {
@@ -1949,7 +1949,7 @@ mod latest_entry_tests {
 
         // Generate delete for [b] at 10.
         must_prewrite_delete(&engine, b"b", b"b", 10);
-        must_commit(&engine, b"b", 10, 10);
+        must_commit(&mut engine, b"b", 10, 10);
 
         let entry_a_3 = EntryBuilder::default()
             .key(b"a")
@@ -2003,9 +2003,9 @@ mod latest_entry_tests {
 
     #[test]
     fn test_latest_entry_check_gc_fence() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
-        let (read_ts, expected_result) = prepare_test_data_for_check_gc_fence(&engine);
+        let (read_ts, expected_result) = prepare_test_data_for_check_gc_fence(&mut engine);
         let expected_result: Vec<_> = expected_result
             .into_iter()
             .filter_map(|(key, value)| value.map(|v| (key, v)))
@@ -2044,7 +2044,7 @@ mod delta_entry_tests {
 
         // Generate 1 put for [a].
         must_prewrite_put(&engine, b"a", b"value", b"a", 7);
-        must_commit(&engine, b"a", 7, 7);
+        must_commit(&mut engine, b"a", 7, 7);
 
         // Generate 5 rollback for [b].
         for ts in 0..5 {
@@ -2114,7 +2114,7 @@ mod delta_entry_tests {
         let ctx = Context::default();
         // Generate 1 put for [a].
         must_prewrite_put(&engine, b"a", b"a_value", b"a", SEEK_BOUND * 2);
-        must_commit(&engine, b"a", SEEK_BOUND * 2, SEEK_BOUND * 2);
+        must_commit(&mut engine, b"a", SEEK_BOUND * 2, SEEK_BOUND * 2);
 
         // Generate SEEK_BOUND / 2 rollback and 1 put for [b] .
         for ts in 0..SEEK_BOUND / 2 {
@@ -2130,7 +2130,7 @@ mod delta_entry_tests {
             write(&engine, &ctx, modifies);
         }
         must_prewrite_put(&engine, b"b", b"b_value", b"a", SEEK_BOUND / 2);
-        must_commit(&engine, b"b", SEEK_BOUND / 2, SEEK_BOUND / 2);
+        must_commit(&mut engine, b"b", SEEK_BOUND / 2, SEEK_BOUND / 2);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into())
@@ -2198,7 +2198,7 @@ mod delta_entry_tests {
 
         // Generate 1 put for [a].
         must_prewrite_put(&engine, b"a", b"a_value", b"a", SEEK_BOUND * 2);
-        must_commit(&engine, b"a", SEEK_BOUND * 2, SEEK_BOUND * 2);
+        must_commit(&mut engine, b"a", SEEK_BOUND * 2, SEEK_BOUND * 2);
 
         // Generate SEEK_BOUND rollback and 1 put for [b] .
         // It differs from EntryScanner that this will try to fetch multiple versions of
@@ -2216,7 +2216,7 @@ mod delta_entry_tests {
             write(&engine, &ctx, modifies);
         }
         must_prewrite_put(&engine, b"b", b"b_value", b"a", SEEK_BOUND + 1);
-        must_commit(&engine, b"b", SEEK_BOUND + 1, SEEK_BOUND + 1);
+        must_commit(&mut engine, b"b", SEEK_BOUND + 1, SEEK_BOUND + 1);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into())
@@ -2285,15 +2285,15 @@ mod delta_entry_tests {
         for i in 1..7 {
             // ts = 1: value = []
             must_prewrite_put(&engine, &[i], &[], &[i], 1);
-            must_commit(&engine, &[i], 1, 1);
+            must_commit(&mut engine, &[i], 1, 1);
 
             // ts = 7: value = [ts]
             must_prewrite_put(&engine, &[i], &[i], &[i], 7);
-            must_commit(&engine, &[i], 7, 7);
+            must_commit(&mut engine, &[i], 7, 7);
 
             // ts = 14: value = []
             must_prewrite_put(&engine, &[i], &[], &[i], 14);
-            must_commit(&engine, &[i], 14, 14);
+            must_commit(&mut engine, &[i], 14, 14);
         }
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -2508,7 +2508,7 @@ mod delta_entry_tests {
                     WriteType::Rollback => must_rollback(&engine, key, start_ts, false),
                 }
                 if *write_type != WriteType::Rollback {
-                    must_commit(&engine, key, start_ts, commit_ts);
+                    must_commit(&mut engine, key, start_ts, commit_ts);
                 }
             }
 
@@ -2609,18 +2609,18 @@ mod delta_entry_tests {
 
         // Generate put for [a] at 1.
         must_prewrite_put(&engine, b"a", b"a_1", b"a", 1);
-        must_commit(&engine, b"a", 1, 1);
+        must_commit(&mut engine, b"a", 1, 1);
 
         // Generate put for [a] at 3.
         must_prewrite_put(&engine, b"a", b"a_3", b"a", 3);
-        must_commit(&engine, b"a", 3, 3);
+        must_commit(&mut engine, b"a", 3, 3);
 
         // Generate delete for [a] at 5.
         must_prewrite_delete(&engine, b"a", b"a", 5);
 
         // Generate put for [b] at 2.
         must_prewrite_put(&engine, b"b", b"b_2", b"b", 2);
-        must_commit(&engine, b"b", 2, 2);
+        must_commit(&mut engine, b"b", 2, 2);
 
         // Generate rollbacks for [b] at 6, 7, 8.
         for ts in 6..9 {
@@ -2638,14 +2638,14 @@ mod delta_entry_tests {
 
         // Generate delete for [b] at 10.
         must_prewrite_delete(&engine, b"b", b"b", 10);
-        must_commit(&engine, b"b", 10, 10);
+        must_commit(&mut engine, b"b", 10, 10);
 
         // Generate put for [b] at 15.
         must_acquire_pessimistic_lock(&engine, b"b", b"b", 9, 15);
         must_pessimistic_prewrite_put(&engine, b"b", b"b_15", b"b", 9, 15, DoPessimisticCheck);
 
         must_prewrite_put(&engine, b"c", b"c_4", b"c", 4);
-        must_commit(&engine, b"c", 4, 6);
+        must_commit(&mut engine, b"c", 4, 6);
         must_acquire_pessimistic_lock(&engine, b"c", b"c", 5, 15);
         must_pessimistic_prewrite_put(&engine, b"c", b"c_5", b"c", 5, 15, DoPessimisticCheck);
         must_cleanup(&engine, b"c", 20, 0);
@@ -2739,8 +2739,8 @@ mod delta_entry_tests {
 
     #[test]
     fn test_old_value_check_gc_fence() {
-        let engine = TestEngineBuilder::new().build().unwrap();
-        prepare_test_data_for_check_gc_fence(&engine);
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        prepare_test_data_for_check_gc_fence(&mut engine);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, TimeStamp::max())
@@ -2808,7 +2808,7 @@ mod delta_entry_tests {
         // Commit all the locks and check again.
         for i in b'1'..=b'8' {
             let key = &[b'k', i];
-            must_commit(&engine, key, 55, 56);
+            must_commit(&mut engine, key, 55, 56);
         }
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, TimeStamp::max())

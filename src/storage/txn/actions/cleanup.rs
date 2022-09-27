@@ -137,7 +137,7 @@ pub mod tests {
     }
 
     pub fn must_cleanup_with_gc_fence<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
         current_ts: impl Into<TimeStamp>,
@@ -185,7 +185,7 @@ pub mod tests {
         // Tests the test util
         let engine = TestEngineBuilder::new().build().unwrap();
         must_prewrite_put(&engine, b"k", b"v", b"k", 10);
-        must_commit(&engine, b"k", 10, 20);
+        must_commit(&mut engine, b"k", 10, 20);
         must_cleanup_with_gc_fence(&engine, b"k", 20, 0, 30, true);
         let w = must_written(&engine, b"k", 10, 20, WriteType::Put);
         assert!(w.has_overlapped_rollback);
