@@ -750,7 +750,7 @@ pub mod test_utils {
     use crate::storage::kv::RocksEngine as StorageRocksEngine;
 
     /// Do a global GC with the given safe point.
-    pub fn gc_by_compact(engine: &StorageRocksEngine, _: &[u8], safe_point: u64) {
+    pub fn gc_by_compact(engine: &mut StorageRocksEngine, _: &[u8], safe_point: u64) {
         let engine = engine.get_rocksdb();
         // Put a new key-value pair to ensure compaction can be triggered correctly.
         engine.delete_cf("write", b"znot-exists-key").unwrap();
@@ -976,7 +976,7 @@ pub mod tests {
     #[test]
     fn test_compaction_filter_handle_deleting() {
         let value = vec![b'v'; 512];
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let raw_engine = engine.get_rocksdb();
         let mut gc_runner = TestGcRunner::new(0);
 

@@ -503,7 +503,7 @@ mod tests {
 
     #[test]
     fn test_disk_read() {
-        let engine = TestEngineBuilder::new().build_without_cache().unwrap();
+        let mut engine = TestEngineBuilder::new().build_without_cache().unwrap();
         for i in 0..100 {
             let owned_key = format!("{:06}", i);
             let key = owned_key.as_bytes();
@@ -521,7 +521,7 @@ mod tests {
         r.set_end_key(b"".to_vec());
 
         let snap =
-            block_on(async { tikv_kv::snapshot(&engine, SnapContext::default()).await }).unwrap();
+            block_on(async { tikv_kv::snapshot(&mut engine, SnapContext::default()).await }).unwrap();
         let mut loader =
             EventLoader::load_from(snap, TimeStamp::zero(), TimeStamp::max(), &r).unwrap();
 

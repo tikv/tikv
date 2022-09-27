@@ -150,9 +150,9 @@ pub mod tests {
     #[cfg(test)]
     fn test_gc_imp<F>(k: &[u8], v1: &[u8], v2: &[u8], v3: &[u8], v4: &[u8], gc: F)
     where
-        F: Fn(&RocksEngine, &[u8], u64),
+        F: Fn(&mut RocksEngine, &[u8], u64),
     {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
         must_prewrite_put(&mut engine, k, v1, k, 5);
         must_commit(&mut engine, k, 5, 10);
@@ -192,18 +192,18 @@ pub mod tests {
         // 10             Commit(PUT,5)
         // 5    x5
 
-        gc(&engine, k, 12);
+        gc(&mut engine, k, 12);
         must_get(&mut engine, k, 12, v1);
 
-        gc(&engine, k, 22);
+        gc(&mut engine, k, 22);
         must_get(&mut engine, k, 22, v2);
         must_get_none(&mut engine, k, 12);
 
-        gc(&engine, k, 32);
+        gc(&mut engine, k, 32);
         must_get_none(&mut engine, k, 22);
         must_get_none(&mut engine, k, 35);
 
-        gc(&engine, k, 60);
+        gc(&mut engine, k, 60);
         must_get(&mut engine, k, 62, v3);
     }
 

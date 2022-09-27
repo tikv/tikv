@@ -43,8 +43,8 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     let engine_2 = cluster.get_engine(2);
-    must_get_none(&mut engine_2, b"k1");
-    must_get_none(&mut engine_2, b"k3");
+    must_get_none(&engine_2, b"k1");
+    must_get_none(&engine_2, b"k3");
     let mut existing_kvs = vec![];
     for cf in engine_2.cf_names() {
         engine_2
@@ -127,7 +127,7 @@ fn test_fast_destroy<T: Simulator>(cluster: &mut Cluster<T>) {
     // remove peer (3, 3)
     pd_client.must_remove_peer(1, new_peer(3, 3));
 
-    must_get_none(&mut engine_3, b"k1");
+    must_get_none(&engine_3, b"k1");
 
     cluster.stop_node(3);
 
@@ -148,7 +148,7 @@ fn test_fast_destroy<T: Simulator>(cluster: &mut Cluster<T>) {
 
     must_get_equal(&engine_3, b"k2", b"v2");
     // the dirty data must be cleared up.
-    must_get_none(&mut engine_3, b"k0");
+    must_get_none(&engine_3, b"k0");
 }
 
 #[test]

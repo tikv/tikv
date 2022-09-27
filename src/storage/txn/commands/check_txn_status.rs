@@ -285,7 +285,7 @@ pub mod tests {
     #[test]
     fn test_check_async_commit_txn_status() {
         let do_test = |rollback_if_not_exist: bool| {
-            let engine = TestEngineBuilder::new().build().unwrap();
+            let mut engine = TestEngineBuilder::new().build().unwrap();
             let r = rollback_if_not_exist;
 
             // case 1: primary is prewritten (optimistic)
@@ -543,7 +543,7 @@ pub mod tests {
     }
 
     fn test_check_txn_status_impl(rollback_if_not_exist: bool) {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
         let (k, v) = (b"k1", b"v1");
 
@@ -1003,7 +1003,7 @@ pub mod tests {
 
     #[test]
     fn test_check_txn_status_resolving_pessimistic_lock() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let k = b"k1";
         let v = b"v1";
         let ts = TimeStamp::compose;

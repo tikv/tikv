@@ -37,7 +37,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     let engine_2 = cluster.get_engine(2);
-    must_get_none(&mut engine_2, b"k1");
+    must_get_none(&engine_2, b"k1");
     // add peer (2,2) to region 1.
     pd_client.must_add_peer(r1, new_peer(2, 2));
 
@@ -56,7 +56,7 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // peer 5 must not exist
     let engine_5 = cluster.get_engine(5);
-    must_get_none(&mut engine_5, b"k1");
+    must_get_none(&engine_5, b"k1");
 
     // add peer (3, 3) to region 1.
     pd_client.must_add_peer(r1, new_peer(3, 3));
@@ -74,8 +74,8 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_3, b"k3", b"v3");
 
     // peer 2 has nothing
-    must_get_none(&mut engine_2, b"k1");
-    must_get_none(&mut engine_2, b"k2");
+    must_get_none(&engine_2, b"k1");
+    must_get_none(&engine_2, b"k2");
 
     // peer 3 must exist
     must_get_equal(&engine_3, b"k3", b"v3");
@@ -132,8 +132,8 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_2, b"k4", b"v4");
 
     // peer 3 has nothing, we check v1 and v4 here.
-    must_get_none(&mut engine_3, b"k1");
-    must_get_none(&mut engine_3, b"k4");
+    must_get_none(&engine_3, b"k1");
+    must_get_none(&engine_3, b"k4");
 
     // TODO: add more tests.
 }
@@ -209,8 +209,8 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_3, b"k3", b"v3");
 
     // peer 2 has nothing
-    must_get_none(&mut engine_2, b"k1");
-    must_get_none(&mut engine_2, b"k2");
+    must_get_none(&engine_2, b"k1");
+    must_get_none(&engine_2, b"k2");
     // add peer4 to first region 1.
     let peer4 = new_conf_change_peer(&stores[1], &pd_client);
     pd_client.must_add_peer(region_id, peer4.clone());
@@ -227,8 +227,8 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_2, b"k4", b"v4");
 
     // peer 3 has nothing, we check v1 and v4 here.
-    must_get_none(&mut engine_3, b"k1");
-    must_get_none(&mut engine_3, b"k4");
+    must_get_none(&engine_3, b"k1");
+    must_get_none(&engine_3, b"k4");
 
     // TODO: add more tests.
 }
@@ -309,7 +309,7 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     let mut peer = new_conf_change_peer(&stores[i], &pd_client);
     peer.set_role(PeerRole::Learner);
     let engine = cluster.get_engine(peer.get_store_id());
-    must_get_none(&mut engine, b"k1");
+    must_get_none(&engine, b"k1");
 
     pd_client.must_add_peer(region_id, peer.clone());
     wait_till_reach_count(Arc::clone(&pd_client), region_id, 6);
@@ -666,7 +666,7 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Remove learner (4, 10) from region 1.
     pd_client.must_remove_peer(r1, new_learner_peer(4, 10));
-    must_get_none(&mut engine_4, b"k2"); // Wait for the region is cleaned.
+    must_get_none(&engine_4, b"k2"); // Wait for the region is cleaned.
     pd_client.must_add_peer(r1, new_learner_peer(4, 12));
     must_get_equal(&engine_4, b"k2", b"v2");
 

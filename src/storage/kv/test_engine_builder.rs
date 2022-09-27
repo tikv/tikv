@@ -170,7 +170,7 @@ mod tests {
             .tempdir()
             .unwrap();
         {
-            let engine = TestEngineBuilder::new()
+            let mut engine = TestEngineBuilder::new()
                 .path(dir.path())
                 .cfs(TEST_ENGINE_CFS)
                 .build()
@@ -189,16 +189,16 @@ mod tests {
 
     #[test]
     fn test_rocksdb_perf_statistics() {
-        let engine = TestEngineBuilder::new()
+        let mut engine = TestEngineBuilder::new()
             .cfs(TEST_ENGINE_CFS)
             .build()
             .unwrap();
-        test_perf_statistics(&engine);
+        test_perf_statistics(&mut engine);
     }
 
     #[test]
     fn test_max_skippable_internal_keys_error() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         must_put(&engine, b"foo", b"bar");
         must_delete(&engine, b"foo");
         must_put(&engine, b"foo1", b"bar1");
@@ -224,7 +224,7 @@ mod tests {
         );
     }
 
-    fn test_perf_statistics<E: Engine>(engine: &E) {
+    fn test_perf_statistics<E: Engine>(engine: &mut E) {
         must_put(engine, b"foo", b"bar1");
         must_put(engine, b"foo2", b"bar2");
         must_put(engine, b"foo3", b"bar3"); // deleted
@@ -268,7 +268,7 @@ mod tests {
 
     #[test]
     fn test_prefix_seek_skip_tombstone() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         engine
             .put_cf(
                 &Context::default(),

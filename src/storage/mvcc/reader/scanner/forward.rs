@@ -1120,7 +1120,7 @@ mod latest_kv_tests {
     /// goes out of bound.
     #[test]
     fn test_get_out_of_bound() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
 
         // Generate 1 put for [a].
@@ -1189,7 +1189,7 @@ mod latest_kv_tests {
     /// Case 1. next() out of bound
     #[test]
     fn test_move_next_user_key_out_of_bound_1() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
         // Generate 1 put for [a].
         must_prewrite_put(&mut engine, b"a", b"a_value", b"a", SEEK_BOUND * 2);
@@ -1271,7 +1271,7 @@ mod latest_kv_tests {
     /// Case 2. seek() out of bound
     #[test]
     fn test_move_next_user_key_out_of_bound_2() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
 
         // Generate 1 put for [a].
@@ -1353,7 +1353,7 @@ mod latest_kv_tests {
     /// Range is left open right closed.
     #[test]
     fn test_range() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
         // Generate 1 put for [1], [2] ... [6].
         for i in 1..7 {
@@ -1502,7 +1502,7 @@ mod latest_kv_tests {
 
     #[test]
     fn test_rc_read_check_ts() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
         let (key0, val0) = (b"k0", b"v0");
         must_prewrite_put(&mut engine, key0, val0, key0, 1);
@@ -1607,7 +1607,7 @@ mod latest_entry_tests {
     /// out of bound.
     #[test]
     fn test_get_out_of_bound() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
 
         // Generate 1 put for [a].
@@ -1678,7 +1678,7 @@ mod latest_entry_tests {
     /// Case 1. next() out of bound
     #[test]
     fn test_move_next_user_key_out_of_bound_1() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
 
         // Generate 1 put for [a].
@@ -1762,7 +1762,7 @@ mod latest_entry_tests {
     /// Case 2. seek() out of bound
     #[test]
     fn test_move_next_user_key_out_of_bound_2() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
 
         // Generate 1 put for [a].
@@ -1846,7 +1846,7 @@ mod latest_entry_tests {
     /// Range is left open right closed.
     #[test]
     fn test_range() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
         // Generate 1 put for [1], [2] ... [6].
         for i in 1..7 {
@@ -1918,7 +1918,7 @@ mod latest_entry_tests {
 
     #[test]
     fn test_output_delete_and_after_ts() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
 
         // Generate put for [a] at 3.
@@ -1975,7 +1975,7 @@ mod latest_entry_tests {
             .commit_ts(10.into())
             .build_commit(WriteType::Delete, true);
 
-        let check = |ts: u64, after_ts: u64, output_delete, expected: Vec<&TxnEntry>| {
+        let mut check = |ts: u64, after_ts: u64, output_delete, expected: Vec<&TxnEntry>| {
             let snapshot = engine.snapshot(Default::default()).unwrap();
             let mut scanner = ScannerBuilder::new(snapshot, ts.into())
                 .range(None, None)
@@ -2039,7 +2039,7 @@ mod delta_entry_tests {
     /// bound.
     #[test]
     fn test_get_out_of_bound() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
 
         // Generate 1 put for [a].
@@ -2110,7 +2110,7 @@ mod delta_entry_tests {
     /// Case 1. next() out of bound
     #[test]
     fn test_move_next_user_key_out_of_bound_1() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
         // Generate 1 put for [a].
         must_prewrite_put(&mut engine, b"a", b"a_value", b"a", SEEK_BOUND * 2);
@@ -2193,7 +2193,7 @@ mod delta_entry_tests {
     /// Case 2. seek() out of bound
     #[test]
     fn test_move_next_user_key_out_of_bound_2() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
 
         // Generate 1 put for [a].
@@ -2279,7 +2279,7 @@ mod delta_entry_tests {
     /// Range is left open right closed.
     #[test]
     fn test_range() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
         // Generate 1 put for [1], [2] ... [6].
         for i in 1..7 {
@@ -2472,7 +2472,7 @@ mod delta_entry_tests {
                 .collect::<Vec<TxnEntry>>()
         };
 
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         for (key, lock, writes) in &test_data {
             for (start_ts, commit_ts, write_type, value) in writes {
                 let value = make_value(value);
@@ -2552,7 +2552,7 @@ mod delta_entry_tests {
             }
         }
 
-        let check = |from_key, to_key, from_ts, to_ts| {
+        let mut check = |from_key, to_key, from_ts, to_ts| {
             let expected = expected_entries(from_key, to_key, from_ts, to_ts);
 
             let from_key = if from_key.is_empty() {
@@ -2604,7 +2604,7 @@ mod delta_entry_tests {
 
     #[test]
     fn test_output_old_value() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
 
         // Generate put for [a] at 1.
@@ -2703,7 +2703,7 @@ mod delta_entry_tests {
             .old_value(b"c_4")
             .build_prewrite(LockType::Put, true);
 
-        let check = |after_ts: u64, expected: Vec<&TxnEntry>| {
+        let mut check = |after_ts: u64, expected: Vec<&TxnEntry>| {
             let snapshot = engine.snapshot(Default::default()).unwrap();
             let mut scanner = ScannerBuilder::new(snapshot, TimeStamp::max())
                 .range(None, None)

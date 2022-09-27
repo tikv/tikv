@@ -122,7 +122,7 @@ pub mod tests {
     }
 
     pub fn must_err<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
         current_ts: impl Into<TimeStamp>,
@@ -183,11 +183,11 @@ pub mod tests {
     #[test]
     fn test_must_cleanup_with_gc_fence() {
         // Tests the test util
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         must_prewrite_put(&mut engine, b"k", b"v", b"k", 10);
         must_commit(&mut engine, b"k", 10, 20);
         must_cleanup_with_gc_fence(&mut engine, b"k", 20, 0, 30, true);
-        let w = must_written(&engine, b"k", 10, 20, WriteType::Put);
+        let w = must_written(&mut engine, b"k", 10, 20, WriteType::Put);
         assert!(w.has_overlapped_rollback);
         assert_eq!(w.gc_fence.unwrap(), 30.into());
     }
@@ -196,7 +196,7 @@ pub mod tests {
     fn test_cleanup() {
         // Cleanup's logic is mostly similar to rollback, except the TTL check. Tests
         // that not related to TTL check should be covered by other test cases.
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
         // Shorthand for composing ts.
         let ts = TimeStamp::compose;
@@ -228,11 +228,11 @@ pub mod tests {
         must_get_rollback_ts(&mut engine, k, ts(10, 0));
 
         // Rollbacks of primary keys in pessimistic transactions should be protected
-        must_acquire_pessimistic_lock(&engine, k, k, ts(11, 1), ts(12, 1));
+        must_acquire_pessimistic_lock(&mut engine, k, k, ts(11, 1), ts(12, 1));
         must_succeed(&mut engine, k, ts(11, 1), ts(120, 0));
         must_get_rollback_protected(&mut engine, k, ts(11, 1), true);
 
-        must_acquire_pessimistic_lock(&engine, k, k, ts(13, 1), ts(14, 1));
+        must_acquire_pessimistic_lock(&mut engine, k, k, ts(13, 1), ts(14, 1));
         must_pessimistic_prewrite_put(&mut engine, k, v, k, ts(13, 1), ts(14, 1), DoPessimisticCheck);
         must_succeed(&mut engine, k, ts(13, 1), ts(120, 0));
         must_get_rollback_protected(&mut engine, k, ts(13, 1), true);

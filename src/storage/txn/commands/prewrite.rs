@@ -35,7 +35,6 @@ use crate::storage::{
     types::PrewriteResult,
     Context, Error as StorageError, ProcessResult, Snapshot,
 };
-
 pub(crate) const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
 
 command! {
@@ -918,9 +917,9 @@ mod tests {
             ));
         }
         let mut statistic = Statistics::default();
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         prewrite(
-            &engine,
+            &mut engine,
             &mut statistic,
             vec![Mutation::make_put(
                 Key::from_raw(&[pri_key_number]),
@@ -933,7 +932,7 @@ mod tests {
         .unwrap();
         assert_eq!(1, statistic.write.seek);
         let e = prewrite(
-            &engine,
+            &mut engine,
             &mut statistic,
             mutations.clone(),
             pri_key.to_vec(),
@@ -948,7 +947,7 @@ mod tests {
             _ => panic!("error type not match"),
         }
         commit(
-            &engine,
+            &mut engine,
             &mut statistic,
             vec![Key::from_raw(&[pri_key_number])],
             99,
@@ -957,7 +956,7 @@ mod tests {
         .unwrap();
         assert_eq!(3, statistic.write.seek);
         let e = prewrite(
-            &engine,
+            &mut engine,
             &mut statistic,
             mutations.clone(),
             pri_key.to_vec(),
@@ -973,7 +972,7 @@ mod tests {
             _ => panic!("error type not match"),
         }
         let e = prewrite(
-            &engine,
+            &mut engine,
             &mut statistic,
             mutations.clone(),
             pri_key.to_vec(),
@@ -997,7 +996,7 @@ mod tests {
             )
             .unwrap();
         prewrite(
-            &engine,
+            &mut engine,
             &mut statistic,
             mutations.clone(),
             pri_key.to_vec(),
@@ -1008,7 +1007,7 @@ mod tests {
         // All keys are prewritten successful with only one seek operations.
         assert_eq!(1, statistic.write.seek);
         let keys: Vec<Key> = mutations.iter().map(|m| m.key().clone()).collect();
-        commit(&engine, &mut statistic, keys.clone(), 104, 105).unwrap();
+        commit(&mut engine, &mut statistic, keys.clone(), 104, 105).unwrap();
         let snap = engine.snapshot(Default::default()).unwrap();
         for k in keys {
             let v = snap.get_cf(CF_WRITE, &k.append_ts(105.into())).unwrap();
@@ -1040,11 +1039,11 @@ mod tests {
                 b"100".to_vec(),
             ));
         }
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let keys: Vec<Key> = mutations.iter().map(|m| m.key().clone()).collect();
         let mut statistic = Statistics::default();
         prewrite(
-            &engine,
+            &mut engine,
             &mut statistic,
             mutations.clone(),
             pri_key.to_vec(),
@@ -1053,10 +1052,10 @@ mod tests {
         )
         .unwrap();
         // Rollback to make tombstones in lock-cf.
-        rollback(&engine, &mut statistic, keys, 100).unwrap();
+        rollback(&mut engine, &mut statistic, keys, 100).unwrap();
         // Gc rollback flags store in write-cf to make sure the next prewrite operation
         // will skip seek write cf.
-        gc_by_compact(&engine, pri_key, 101);
+        gc_by_compact(&mut engine, pri_key, 101);
         set_perf_level(PerfLevel::EnableTimeExceptForMutex);
         let perf = ReadPerfInstant::new();
         let mut statistic = Statistics::default();
@@ -1064,7 +1063,7 @@ mod tests {
             mutations.pop();
         }
         prewrite(
-            &engine,
+            &mut engine,
             &mut statistic,
             mutations,
             pri_key.to_vec(),
@@ -1081,7 +1080,7 @@ mod tests {
     fn test_prewrite_1pc() {
         use crate::storage::mvcc::tests::{must_get, must_get_commit_ts, must_unlocked};
 
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
 
         let key = b"k";
@@ -1090,7 +1089,7 @@ mod tests {
 
         let mut statistics = Statistics::default();
         prewrite_with_cm(
-            &engine,
+            &mut engine,
             cm.clone(),
             &mut statistics,
             mutations,
@@ -1111,7 +1110,7 @@ mod tests {
         // Test the idempotency of prewrite when falling back to 2PC.
         for _ in 0..2 {
             let res = prewrite_with_cm(
-                &engine,
+                &mut engine,
                 cm.clone(),
                 &mut statistics,
                 mutations.clone(),
@@ -1132,7 +1131,7 @@ mod tests {
         ];
         let mut statistics = Statistics::default();
         prewrite_with_cm(
-            &engine,
+            &mut engine,
             cm.clone(),
             &mut statistics,
             mutations,
@@ -1150,7 +1149,7 @@ mod tests {
         // Lock k2.
         let mut statistics = Statistics::default();
         prewrite_with_cm(
-            &engine,
+            &mut engine,
             cm.clone(),
             &mut statistics,
             vec![Mutation::make_put(Key::from_raw(k2), v2.to_vec())],
@@ -1165,7 +1164,7 @@ mod tests {
             Mutation::make_put(Key::from_raw(k2), v2.to_vec()),
         ];
         prewrite_with_cm(
-            &engine,
+            &mut engine,
             cm,
             &mut statistics,
             mutations,
@@ -1182,12 +1181,12 @@ mod tests {
 
     #[test]
     fn test_prewrite_pessimsitic_1pc() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
         let key = b"k";
         let value = b"v";
 
-        must_acquire_pessimistic_lock(&engine, key, key, 10, 10);
+        must_acquire_pessimistic_lock(&mut engine, key, key, 10, 10);
 
         let mutations = vec![(
             Mutation::make_put(Key::from_raw(key), value.to_vec()),
@@ -1195,7 +1194,7 @@ mod tests {
         )];
         let mut statistics = Statistics::default();
         pessimistic_prewrite_with_cm(
-            &engine,
+            &mut engine,
             cm.clone(),
             &mut statistics,
             mutations,
@@ -1213,7 +1212,7 @@ mod tests {
         let (k1, v1) = (b"k", b"v");
         let (k2, v2) = (b"k2", b"v2");
 
-        must_acquire_pessimistic_lock(&engine, k1, k1, 8, 12);
+        must_acquire_pessimistic_lock(&mut engine, k1, k1, 8, 12);
 
         let mutations = vec![
             (
@@ -1227,7 +1226,7 @@ mod tests {
         ];
         statistics = Statistics::default();
         pessimistic_prewrite_with_cm(
-            &engine,
+            &mut engine,
             cm.clone(),
             &mut statistics,
             mutations,
@@ -1246,7 +1245,7 @@ mod tests {
         must_get_commit_ts(&mut engine, k2, 8, 13);
 
         cm.update_max_ts(50.into());
-        must_acquire_pessimistic_lock(&engine, k1, k1, 20, 20);
+        must_acquire_pessimistic_lock(&mut engine, k1, k1, 20, 20);
 
         let mutations = vec![(
             Mutation::make_put(Key::from_raw(k1), v1.to_vec()),
@@ -1254,7 +1253,7 @@ mod tests {
         )];
         statistics = Statistics::default();
         let res = pessimistic_prewrite_with_cm(
-            &engine,
+            &mut engine,
             cm.clone(),
             &mut statistics,
             mutations,
@@ -1277,7 +1276,7 @@ mod tests {
         // Lock k2 with a optimistic lock.
         let mut statistics = Statistics::default();
         prewrite_with_cm(
-            &engine,
+            &mut engine,
             cm.clone(),
             &mut statistics,
             vec![Mutation::make_put(Key::from_raw(k2), v2.to_vec())],
@@ -1297,9 +1296,9 @@ mod tests {
                 SkipPessimisticCheck,
             ),
         ];
-        must_acquire_pessimistic_lock(&engine, k1, k1, 60, 60);
+        must_acquire_pessimistic_lock(&mut engine, k1, k1, 60, 60);
         pessimistic_prewrite_with_cm(
-            &engine,
+            &mut engine,
             cm,
             &mut statistics,
             mutations,
@@ -1317,7 +1316,7 @@ mod tests {
 
     #[test]
     fn test_prewrite_async_commit() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
 
         let key = b"k";
@@ -1340,7 +1339,7 @@ mod tests {
             Context::default(),
         );
 
-        let res = prewrite_command(&engine, cm.clone(), &mut statistics, cmd).unwrap();
+        let res = prewrite_command(&mut engine, cm.clone(), &mut statistics, cmd).unwrap();
         assert!(!res.min_commit_ts.is_zero());
         assert_eq!(res.one_pc_commit_ts, TimeStamp::zero());
         must_locked(&mut engine, key, 10);
@@ -1373,7 +1372,7 @@ mod tests {
                 Context::default(),
             );
 
-            let res = prewrite_command(&engine, cm.clone(), &mut statistics, cmd).unwrap();
+            let res = prewrite_command(&mut engine, cm.clone(), &mut statistics, cmd).unwrap();
             assert!(res.min_commit_ts.is_zero());
             assert!(res.one_pc_commit_ts.is_zero());
             assert!(!must_locked(&mut engine, k1, 20).use_async_commit);
@@ -1383,13 +1382,13 @@ mod tests {
 
     #[test]
     fn test_prewrite_pessimsitic_async_commit() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
 
         let key = b"k";
         let value = b"v";
 
-        must_acquire_pessimistic_lock(&engine, key, key, 10, 10);
+        must_acquire_pessimistic_lock(&mut engine, key, key, 10, 10);
 
         let mutations = vec![(
             Mutation::make_put(Key::from_raw(key), value.to_vec()),
@@ -1411,7 +1410,7 @@ mod tests {
             Context::default(),
         );
 
-        let res = prewrite_command(&engine, cm.clone(), &mut statistics, cmd).unwrap();
+        let res = prewrite_command(&mut engine, cm.clone(), &mut statistics, cmd).unwrap();
         assert!(!res.min_commit_ts.is_zero());
         assert_eq!(res.one_pc_commit_ts, TimeStamp::zero());
         must_locked(&mut engine, key, 10);
@@ -1421,8 +1420,8 @@ mod tests {
         let (k1, v1) = (b"k1", b"v1");
         let (k2, v2) = (b"k2", b"v2");
 
-        must_acquire_pessimistic_lock(&engine, k1, k1, 20, 20);
-        must_acquire_pessimistic_lock(&engine, k2, k1, 20, 20);
+        must_acquire_pessimistic_lock(&mut engine, k1, k1, 20, 20);
+        must_acquire_pessimistic_lock(&mut engine, k2, k1, 20, 20);
 
         let mutations = vec![
             (
@@ -1451,7 +1450,7 @@ mod tests {
             Context::default(),
         );
 
-        let res = prewrite_command(&engine, cm, &mut statistics, cmd).unwrap();
+        let res = prewrite_command(&mut engine, cm, &mut statistics, cmd).unwrap();
         assert!(res.min_commit_ts.is_zero());
         assert!(res.one_pc_commit_ts.is_zero());
         assert!(!must_locked(&mut engine, k1, 20).use_async_commit);
@@ -1675,7 +1674,7 @@ mod tests {
                 statistics: &mut statistics,
                 async_apply_prewrite: case.async_apply_prewrite,
             };
-            let engine = TestEngineBuilder::new().build().unwrap();
+            let mut engine = TestEngineBuilder::new().build().unwrap();
             let snap = engine.snapshot(Default::default()).unwrap();
             let result = cmd.cmd.process_write(snap, context).unwrap();
             assert_eq!(result.response_policy, case.expected);
@@ -1685,7 +1684,7 @@ mod tests {
     // this test for prewrite with should_not_exist flag
     #[test]
     fn test_prewrite_should_not_exist() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         // concurency_manager.max_tx = 5
         let cm = ConcurrencyManager::new(5.into());
         let mut statistics = Statistics::default();
@@ -1698,7 +1697,7 @@ mod tests {
 
         // T2: start_ts = 15, prewrite on k, with should_not_exist flag set.
         let res = prewrite_with_cm(
-            &engine,
+            &mut engine,
             cm.clone(),
             &mut statistics,
             vec![Mutation::make_check_not_exists(Key::from_raw(key))],
@@ -1723,7 +1722,7 @@ mod tests {
 
         // T1: start_ts = 10, repeatedly prewrite on k, with should_not_exist flag set
         let res = prewrite_with_cm(
-            &engine,
+            &mut engine,
             cm,
             &mut statistics,
             vec![Mutation::make_check_not_exists(Key::from_raw(key))],
@@ -1742,14 +1741,14 @@ mod tests {
 
     #[test]
     fn test_optimistic_prewrite_committed_transaction() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let cm = ConcurrencyManager::new(1.into());
         let mut statistics = Statistics::default();
 
         let key = b"k";
 
         // T1: start_ts = 5, commit_ts = 10, async commit
-        must_prewrite_put_async_commit(&engine, key, b"v1", key, &Some(vec![]), 5, 10);
+        must_prewrite_put_async_commit(&mut engine, key, b"v1", key, &Some(vec![]), 5, 10);
         must_commit(&mut engine, key, 5, 10);
 
         // T2: start_ts = 15, commit_ts = 16, 1PC
@@ -1759,7 +1758,7 @@ mod tests {
             15.into(),
             TimeStamp::default(),
         );
-        let result = prewrite_command(&engine, cm.clone(), &mut statistics, cmd).unwrap();
+        let result = prewrite_command(&mut engine, cm.clone(), &mut statistics, cmd).unwrap();
         let one_pc_commit_ts = result.one_pc_commit_ts;
 
         // T3 is after T1 and T2
@@ -1831,16 +1830,16 @@ mod tests {
 
     #[test]
     fn test_pessimistic_prewrite_committed_transaction() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let cm = ConcurrencyManager::new(1.into());
         let mut statistics = Statistics::default();
 
         let key = b"k";
 
         // T1: start_ts = 5, commit_ts = 10, async commit
-        must_acquire_pessimistic_lock(&engine, key, key, 5, 5);
+        must_acquire_pessimistic_lock(&mut engine, key, key, 5, 5);
         must_pessimistic_prewrite_put_async_commit(
-            &engine,
+            &mut engine,
             key,
             b"v1",
             key,
@@ -1853,7 +1852,7 @@ mod tests {
         must_commit(&mut engine, key, 5, 10);
 
         // T2: start_ts = 15, commit_ts = 16, 1PC
-        must_acquire_pessimistic_lock(&engine, key, key, 15, 15);
+        must_acquire_pessimistic_lock(&mut engine, key, key, 15, 15);
         let cmd = PrewritePessimistic::with_1pc(
             vec![(
                 Mutation::make_put(Key::from_raw(key), b"v2".to_vec()),
@@ -1864,7 +1863,7 @@ mod tests {
             15.into(),
             TimeStamp::default(),
         );
-        let result = prewrite_command(&engine, cm.clone(), &mut statistics, cmd).unwrap();
+        let result = prewrite_command(&mut engine, cm.clone(), &mut statistics, cmd).unwrap();
         let one_pc_commit_ts = result.one_pc_commit_ts;
 
         // T3 is after T1 and T2
@@ -1943,11 +1942,11 @@ mod tests {
 
     #[test]
     fn test_repeated_pessimistic_prewrite_1pc() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let cm = ConcurrencyManager::new(1.into());
         let mut statistics = Statistics::default();
 
-        must_acquire_pessimistic_lock(&engine, b"k2", b"k2", 5, 5);
+        must_acquire_pessimistic_lock(&mut engine, b"k2", b"k2", 5, 5);
         // The second key needs a pessimistic lock
         let mutations = vec![
             (
@@ -1960,7 +1959,7 @@ mod tests {
             ),
         ];
         let res = pessimistic_prewrite_with_cm(
-            &engine,
+            &mut engine,
             cm.clone(),
             &mut statistics,
             mutations.clone(),
@@ -1974,7 +1973,7 @@ mod tests {
         cm.update_max_ts(commit_ts.next());
         // repeate the prewrite
         let res = pessimistic_prewrite_with_cm(
-            &engine,
+            &mut engine,
             cm,
             &mut statistics,
             mutations,
@@ -1992,42 +1991,46 @@ mod tests {
 
     #[test]
     fn test_repeated_prewrite_non_pessimistic_lock() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let cm = ConcurrencyManager::new(1.into());
         let mut statistics = Statistics::default();
 
         let cm = &cm;
-        let mut prewrite_with_retry_flag =
-            |key: &[u8],
-             value: &[u8],
-             pk: &[u8],
-             secondary_keys,
-             ts: u64,
-             pessimistic_action,
-             is_retry_request| {
-                let mutation = Mutation::make_put(Key::from_raw(key), value.to_vec());
-                let mut ctx = Context::default();
-                ctx.set_is_retry_request(is_retry_request);
-                let cmd = PrewritePessimistic::new(
-                    vec![(mutation, pessimistic_action)],
-                    pk.to_vec(),
-                    ts.into(),
-                    100,
-                    ts.into(),
-                    1,
-                    (ts + 1).into(),
-                    0.into(),
-                    secondary_keys,
-                    false,
-                    AssertionLevel::Off,
-                    ctx,
-                );
-                prewrite_command(&engine, cm.clone(), &mut statistics, cmd)
-            };
+        fn prewrite_with_retry_flag<E: Engine>(
+            key: &[u8],
+            value: &[u8],
+            pk: &[u8],
+            secondary_keys: Option<Vec<Vec<u8>>>,
+            ts: u64,
+            pessimistic_action: PrewriteRequestPessimisticAction,
+            is_retry_request: bool,
+            engine: &mut E,
+            cm: &ConcurrencyManager,
+            statistics: &mut Statistics,
+        ) -> Result<PrewriteResult> {
+            let mutation = Mutation::make_put(Key::from_raw(key), value.to_vec());
+            let mut ctx = Context::default();
+            ctx.set_is_retry_request(is_retry_request);
+            let cmd = PrewritePessimistic::new(
+                vec![(mutation, pessimistic_action)],
+                pk.to_vec(),
+                ts.into(),
+                100,
+                ts.into(),
+                1,
+                (ts + 1).into(),
+                0.into(),
+                secondary_keys,
+                false,
+                AssertionLevel::Off,
+                ctx,
+            );
+            prewrite_command(engine, cm.clone(), statistics, cmd)
+        }
 
-        must_acquire_pessimistic_lock(&engine, b"k1", b"k1", 10, 10);
+        must_acquire_pessimistic_lock(&mut engine, b"k1", b"k1", 10, 10);
         must_pessimistic_prewrite_put_async_commit(
-            &engine,
+            &mut engine,
             b"k1",
             b"v1",
             b"k1",
@@ -2038,7 +2041,7 @@ mod tests {
             15,
         );
         must_pessimistic_prewrite_put_async_commit(
-            &engine,
+            &mut engine,
             b"k2",
             b"v2",
             b"k1",
@@ -2062,6 +2065,9 @@ mod tests {
             10,
             SkipPessimisticCheck,
             true,
+            &mut engine,
+            cm,
+            &mut statistics,
         )
         .unwrap();
         // Commit repeatedly, these operations should have no effect.
@@ -2089,20 +2095,44 @@ mod tests {
             10,
             SkipPessimisticCheck,
             true,
+            &mut engine,
+            cm,
+            &mut statistics,
         )
         .unwrap();
         must_unlocked(&mut engine, b"k2");
 
-        prewrite_with_retry_flag(b"k2", b"v2", b"k1", None, 10, SkipPessimisticCheck, true)
-            .unwrap();
+        prewrite_with_retry_flag(
+            b"k2",
+            b"v2",
+            b"k1",
+            None,
+            10,
+            SkipPessimisticCheck,
+            true,
+            &mut engine,
+            cm,
+            &mut statistics,
+        )
+        .unwrap();
         must_unlocked(&mut engine, b"k2");
         // Committing still does nothing.
         must_commit(&mut engine, b"k2", 10, 25);
         // Try a different txn start ts (which haven't been successfully committed
         // before). It should report a PessimisticLockNotFound.
-        let err =
-            prewrite_with_retry_flag(b"k2", b"v2", b"k1", None, 11, SkipPessimisticCheck, true)
-                .unwrap_err();
+        let err = prewrite_with_retry_flag(
+            b"k2",
+            b"v2",
+            b"k1",
+            None,
+            11,
+            SkipPessimisticCheck,
+            true,
+            &mut engine,
+            cm,
+            &mut statistics,
+        )
+        .unwrap_err();
         assert!(matches!(
             err,
             Error(box ErrorInner::Mvcc(MvccError(
@@ -2112,14 +2142,25 @@ mod tests {
         must_unlocked(&mut engine, b"k2");
         // However conflict still won't be checked if there's a non-retry request
         // arriving.
-        prewrite_with_retry_flag(b"k2", b"v2", b"k1", None, 10, SkipPessimisticCheck, false)
-            .unwrap();
+        prewrite_with_retry_flag(
+            b"k2",
+            b"v2",
+            b"k1",
+            None,
+            10,
+            SkipPessimisticCheck,
+            false,
+            &mut engine,
+            cm,
+            &mut statistics,
+        )
+        .unwrap();
         must_locked(&mut engine, b"k2", 10);
     }
 
     #[test]
     fn test_prewrite_rolledback_transaction() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let cm = ConcurrencyManager::new(1.into());
         let mut statistics = Statistics::default();
 
@@ -2128,7 +2169,7 @@ mod tests {
         let v2 = b"v2";
 
         // Test the write conflict path.
-        must_acquire_pessimistic_lock(&engine, k1, v1, 1, 1);
+        must_acquire_pessimistic_lock(&mut engine, k1, v1, 1, 1);
         must_rollback(&mut engine, k1, 1, true);
         must_prewrite_put(&mut engine, k1, v2, k1, 5);
         must_commit(&mut engine, k1, 5, 6);
@@ -2157,9 +2198,9 @@ mod tests {
         assert!(prewrite_cmd.cmd.process_write(snap, context).is_err());
 
         // Test the pessimistic lock is not found path.
-        must_acquire_pessimistic_lock(&engine, k1, v1, 10, 10);
+        must_acquire_pessimistic_lock(&mut engine, k1, v1, 10, 10);
         must_rollback(&mut engine, k1, 10, true);
-        must_acquire_pessimistic_lock(&engine, k1, v1, 15, 15);
+        must_acquire_pessimistic_lock(&mut engine, k1, v1, 15, 15);
         let prewrite_cmd = PrewritePessimistic::with_defaults(
             vec![(
                 Mutation::make_put(Key::from_raw(k1), v1.to_vec()),
@@ -2182,7 +2223,7 @@ mod tests {
 
     #[test]
     fn test_assertion_fail_on_conflicting_index_key() {
-        let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+        let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
 
         // Simulate two transactions that tries to insert the same row with a secondary
         // index, and the second one canceled the first one (by rolling back its lock).
@@ -2192,13 +2233,18 @@ mod tests {
         let t2_commit_ts = TimeStamp::compose(3, 0);
 
         // txn1 acquires lock on the row key.
-        must_acquire_pessimistic_lock(&engine, b"row", b"row", t1_start_ts, t1_start_ts);
+        must_acquire_pessimistic_lock(&mut engine, b"row", b"row", t1_start_ts, t1_start_ts);
         // txn2 rolls it back.
-        let err =
-            must_acquire_pessimistic_lock_err(&engine, b"row", b"row", t2_start_ts, t2_start_ts);
+        let err = must_acquire_pessimistic_lock_err(
+            &mut engine,
+            b"row",
+            b"row",
+            t2_start_ts,
+            t2_start_ts,
+        );
         assert!(matches!(err, MvccError(box MvccErrorInner::KeyIsLocked(_))));
         must_check_txn_status(
-            &engine,
+            &mut engine,
             b"row",
             t1_start_ts,
             t2_start_ts,
@@ -2209,9 +2255,9 @@ mod tests {
             |status| status == TxnStatus::PessimisticRollBack,
         );
         // And then txn2 acquire continues and finally commits
-        must_acquire_pessimistic_lock(&engine, b"row", b"row", t2_start_ts, t2_start_ts);
+        must_acquire_pessimistic_lock(&mut engine, b"row", b"row", t2_start_ts, t2_start_ts);
         must_prewrite_put_impl(
-            &engine,
+            &mut engine,
             b"row",
             b"value",
             b"row",
@@ -2228,7 +2274,7 @@ mod tests {
             AssertionLevel::Strict,
         );
         must_prewrite_put_impl(
-            &engine,
+            &mut engine,
             b"index",
             b"value",
             b"row",
@@ -2267,7 +2313,7 @@ mod tests {
             t1_start_ts,
             t2_start_ts,
         );
-        let err = prewrite_command(&engine, cm.clone(), &mut stat, cmd).unwrap_err();
+        let err = prewrite_command(&mut engine, cm.clone(), &mut stat, cmd).unwrap_err();
         assert!(matches!(
             err,
             Error(box ErrorInner::Mvcc(MvccError(
@@ -2290,7 +2336,7 @@ mod tests {
             t1_start_ts,
             t2_start_ts,
         );
-        let err = prewrite_command(&engine, cm, &mut stat, cmd).unwrap_err();
+        let err = prewrite_command(&mut engine, cm, &mut stat, cmd).unwrap_err();
         assert!(matches!(
             err,
             Error(box ErrorInner::Mvcc(MvccError(
@@ -2301,7 +2347,7 @@ mod tests {
         // If the two keys are sent in different requests, it would be the client's duty
         // to ignore the assertion error.
         let err = must_prewrite_put_err_impl(
-            &engine,
+            &mut engine,
             b"row",
             b"value",
             b"row",
@@ -2319,7 +2365,7 @@ mod tests {
             MvccError(box MvccErrorInner::PessimisticLockNotFound { .. })
         ));
         let err = must_prewrite_put_err_impl(
-            &engine,
+            &mut engine,
             b"index",
             b"value",
             b"row",
@@ -2340,14 +2386,14 @@ mod tests {
 
     #[test]
     fn test_prewrite_committed_encounter_newer_lock() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let mut statistics = Statistics::default();
 
         let k1 = b"k1";
         let v1 = b"v1";
         let v2 = b"v2";
 
-        must_prewrite_put_async_commit(&engine, k1, v1, k1, &Some(vec![]), 5, 10);
+        must_prewrite_put_async_commit(&mut engine, k1, v1, k1, &Some(vec![]), 5, 10);
         // This commit may actually come from a ResolveLock command
         must_commit(&mut engine, k1, 5, 15);
 
@@ -2389,14 +2435,14 @@ mod tests {
 
     #[test]
     fn test_repeated_prewrite_commit_ts_too_large() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let cm = ConcurrencyManager::new(1.into());
         let mut statistics = Statistics::default();
 
         // First, prewrite and commit normally.
-        must_acquire_pessimistic_lock(&engine, b"k1", b"k1", 5, 10);
+        must_acquire_pessimistic_lock(&mut engine, b"k1", b"k1", 5, 10);
         must_pessimistic_prewrite_put_async_commit(
-            &engine,
+            &mut engine,
             b"k1",
             b"v1",
             b"k1",
@@ -2407,7 +2453,7 @@ mod tests {
             15,
         );
         must_prewrite_put_impl(
-            &engine,
+            &mut engine,
             b"k2",
             b"v2",
             b"k1",
@@ -2446,7 +2492,7 @@ mod tests {
             AssertionLevel::Off,
             Context::default(),
         );
-        let res = prewrite_command(&engine, cm, &mut statistics, cmd).unwrap();
+        let res = prewrite_command(&mut engine, cm, &mut statistics, cmd).unwrap();
         // It should return the real commit TS as the min_commit_ts in the result.
         assert_eq!(res.min_commit_ts, 18.into(), "{:?}", res);
         must_unlocked(&mut engine, b"k2");

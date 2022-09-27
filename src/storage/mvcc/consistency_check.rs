@@ -448,7 +448,7 @@ mod tests {
 
     #[test]
     fn test_mvcc_checksum() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         must_prewrite_put(&mut engine, b"zAAAAA", b"value", b"PRIMARY", 100);
         must_commit(&mut engine, b"zAAAAA", 100, 101);
         must_prewrite_put(&mut engine, b"zCCCCC", b"value", b"PRIMARY", 110);

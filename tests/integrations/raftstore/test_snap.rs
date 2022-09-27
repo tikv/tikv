@@ -45,7 +45,7 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>, max_snapshot_file_
     let first_key: &[u8] = b"000";
 
     let engine_2 = cluster.get_engine(2);
-    must_get_none(&mut engine_2, first_key);
+    must_get_none(&engine_2, first_key);
     // add peer (2,2) to region 1.
     pd_client.must_add_peer(r1, new_peer(2, 2));
 
@@ -132,7 +132,7 @@ fn test_server_snap_gc_internal(version: &str) {
     }
 
     let engine3 = cluster.get_engine(3);
-    must_get_none(&mut engine3, b"k2");
+    must_get_none(&engine3, b"k2");
 
     for _ in 0..30 {
         // write many logs to force log GC for region 1 and region 2.

@@ -512,7 +512,7 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
     let mut cluster = new_server_cluster(0, 2);
     cluster.run();
 
-    let engine = cluster
+    let mut engine = cluster
         .sim
         .read()
         .unwrap()

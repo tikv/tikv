@@ -321,8 +321,8 @@ fn test_node_check_merged_message() {
     let engine3 = cluster.get_engine(3);
     must_get_equal(&engine3, b"k1", b"v1");
     must_get_equal(&engine3, b"k4", b"v4");
-    must_get_none(&mut engine3, b"k3");
-    must_get_none(&mut engine3, b"v5");
+    must_get_none(&engine3, b"k3");
+    must_get_none(&engine3, b"v5");
 }
 
 #[test]
@@ -1161,7 +1161,7 @@ fn test_sync_max_ts_after_region_merge() {
     let right = cluster.get_region(b"k3");
 
     let cm = cluster.sim.read().unwrap().get_concurrency_manager(1);
-    let storage = cluster
+    let mut storage = cluster
         .sim
         .read()
         .unwrap()
@@ -1169,7 +1169,7 @@ fn test_sync_max_ts_after_region_merge() {
         .get(&1)
         .unwrap()
         .clone();
-    let wait_for_synced = |cluster: &mut Cluster<ServerCluster>| {
+    let mut wait_for_synced = |cluster: &mut Cluster<ServerCluster>| {
         let region_id = right.get_id();
         let leader = cluster.leader_of_region(region_id).unwrap();
         let epoch = cluster.get_region_epoch(region_id);

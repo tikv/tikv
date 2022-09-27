@@ -53,7 +53,7 @@ fn test_txn_create_compaction_filter() {
     cfg.writecf.dynamic_level_bytes = false;
     let dir = tempfile::TempDir::new().unwrap();
     let builder = TestEngineBuilder::new().path(dir.path());
-    let engine = builder.build_with_cfg(&cfg).unwrap();
+    let mut engine = builder.build_with_cfg(&cfg).unwrap();
     let raw_engine = engine.get_rocksdb();
 
     let mut gc_runner = TestGcRunner::new(0);
@@ -87,7 +87,7 @@ fn test_txn_mvcc_filtered() {
     MVCC_VERSIONS_HISTOGRAM.reset();
     GC_COMPACTION_FILTERED.reset();
 
-    let engine = TestEngineBuilder::new().build().unwrap();
+    let mut engine = TestEngineBuilder::new().build().unwrap();
     let raw_engine = engine.get_rocksdb();
     let value = vec![b'v'; 512];
     let mut gc_runner = TestGcRunner::new(0);
@@ -134,8 +134,8 @@ fn test_txn_gc_keys_handled() {
     GC_COMPACTION_FILTER_MVCC_DELETION_MET.reset();
     GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.reset();
 
-    let engine = TestEngineBuilder::new().build().unwrap();
-    let prefixed_engine = PrefixedEngine(engine.clone());
+    let mut engine = TestEngineBuilder::new().build().unwrap();
+    let mut prefixed_engine = PrefixedEngine(engine.clone());
 
     let (tx, _rx) = mpsc::channel();
     let feature_gate = FeatureGate::default();
@@ -172,10 +172,10 @@ fn test_txn_gc_keys_handled() {
 
     for i in 0..3 {
         let k = format!("k{:02}", i).into_bytes();
-        must_prewrite_put(&prefixed_engine, &k, b"value", &k, 101);
-        must_commit(&prefixed_engine, &k, 101, 102);
-        must_prewrite_delete(&prefixed_engine, &k, &k, 151);
-        must_commit(&prefixed_engine, &k, 151, 152);
+        must_prewrite_put(&mut prefixed_engine, &k, b"value", &k, 101);
+        must_commit(&mut prefixed_engine, &k, 101, 102);
+        must_prewrite_delete(&mut prefixed_engine, &k, &k, 151);
+        must_commit(&mut prefixed_engine, &k, 151, 152);
     }
 
     db.flush_cf(cf, true).unwrap();
@@ -213,7 +213,7 @@ fn test_raw_mvcc_filtered() {
     cfg.defaultcf.disable_auto_compactions = true;
     cfg.defaultcf.dynamic_level_bytes = false;
 
-    let engine = TestEngineBuilder::new()
+    let mut engine = TestEngineBuilder::new()
         .api_version(ApiVersion::V2)
         .build_with_cfg(&cfg)
         .unwrap();
@@ -276,11 +276,11 @@ fn test_raw_gc_keys_handled() {
     GC_COMPACTION_FILTER_MVCC_DELETION_MET.reset();
     GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.reset();
 
-    let engine = TestEngineBuilder::new()
+    let mut engine = TestEngineBuilder::new()
         .api_version(ApiVersion::V2)
         .build()
         .unwrap();
-    let prefixed_engine = PrefixedEngine(engine.clone());
+    let mut prefixed_engine = PrefixedEngine(engine.clone());
 
     let (tx, _rx) = mpsc::channel();
     let feature_gate = FeatureGate::default();

@@ -196,9 +196,9 @@ pub mod tests {
         must_succeed(&mut engine, k1, 10, 15);
         must_succeed(&mut engine, k2, 10, 15);
         must_succeed(&mut engine, k3, 10, 15);
-        must_written(&engine, k1, 10, 15, WriteType::Put);
-        must_written(&engine, k2, 10, 15, WriteType::Lock);
-        must_written(&engine, k3, 10, 15, WriteType::Delete);
+        must_written(&mut engine, k1, 10, 15, WriteType::Put);
+        must_written(&mut engine, k2, 10, 15, WriteType::Lock);
+        must_written(&mut engine, k3, 10, 15, WriteType::Delete);
         // commit should be idempotent
         must_succeed(&mut engine, k1, 10, 15);
         must_succeed(&mut engine, k2, 10, 15);
@@ -253,9 +253,9 @@ pub mod tests {
             }
         };
 
-        must_prewrite_put_for_large_txn(&engine, k, v, k, ts(10, 0), 100, 0);
+        must_prewrite_put_for_large_txn(&mut engine, k, v, k, ts(10, 0), 100, 0);
         check_txn_status::tests::must_success(
-            &engine,
+            &mut engine,
             k,
             ts(10, 0),
             ts(20, 0),
@@ -270,9 +270,9 @@ pub mod tests {
         must_err(&mut engine, k, ts(10, 0), ts(20, 0));
         must_succeed(&mut engine, k, ts(10, 0), ts(20, 1));
 
-        must_prewrite_put_for_large_txn(&engine, k, v, k, ts(30, 0), 100, 0);
+        must_prewrite_put_for_large_txn(&mut engine, k, v, k, ts(30, 0), 100, 0);
         check_txn_status::tests::must_success(
-            &engine,
+            &mut engine,
             k,
             ts(30, 0),
             ts(40, 0),
@@ -286,9 +286,9 @@ pub mod tests {
 
         // If the min_commit_ts of the pessimistic lock is greater than prewrite's, use
         // it.
-        must_acquire_pessimistic_lock_for_large_txn(&engine, k, k, ts(60, 0), ts(60, 0), 100);
+        must_acquire_pessimistic_lock_for_large_txn(&mut engine, k, k, ts(60, 0), ts(60, 0), 100);
         check_txn_status::tests::must_success(
-            &engine,
+            &mut engine,
             k,
             ts(60, 0),
             ts(70, 0),
@@ -299,7 +299,7 @@ pub mod tests {
             uncommitted(100, ts(70, 1)),
         );
         must_prewrite_put_impl(
-            &engine,
+            &mut engine,
             k,
             v,
             k,

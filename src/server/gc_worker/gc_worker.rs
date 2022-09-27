@@ -1833,7 +1833,7 @@ mod tests {
         // Return Result from this function so we can use the `wait_op` macro here.
         let store_id = 1;
 
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let storage =
             TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine.clone(), DummyLockManager)
                 .build()
@@ -2017,7 +2017,7 @@ mod tests {
     #[test]
     fn test_physical_scan_lock() {
         let store_id = 1;
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let prefixed_engine = PrefixedEngine(engine);
         let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(
             prefixed_engine.clone(),
@@ -2099,7 +2099,7 @@ mod tests {
     #[test]
     fn test_gc_keys_with_region_info_provider() {
         let store_id = 1;
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let mut prefixed_engine = PrefixedEngine(engine.clone());
 
         let (tx, _rx) = mpsc::channel();
@@ -2196,8 +2196,8 @@ mod tests {
     #[test]
     fn test_gc_keys_statistics() {
         let store_id = 1;
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let prefixed_engine = PrefixedEngine(engine.clone());
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut prefixed_engine = PrefixedEngine(engine.clone());
 
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
@@ -2259,8 +2259,8 @@ mod tests {
         cfg.defaultcf.dynamic_level_bytes = false;
         let dir = tempfile::TempDir::new().unwrap();
         let builder = TestEngineBuilder::new().path(dir.path());
-        let engine = builder.build_with_cfg(&cfg).unwrap();
-        let prefixed_engine = PrefixedEngine(engine);
+        let mut engine = builder.build_with_cfg(&cfg).unwrap();
+        let mut prefixed_engine = PrefixedEngine(engine);
 
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
@@ -2361,7 +2361,7 @@ mod tests {
 
     #[test]
     fn test_gc_keys_scan_range_limit() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let mut prefixed_engine = PrefixedEngine(engine.clone());
 
         let (tx, _rx) = mpsc::channel();
@@ -2482,7 +2482,7 @@ mod tests {
     #[test]
     fn delete_range_when_worker_is_full() {
         let store_id = 1;
-        let engine = PrefixedEngine(TestEngineBuilder::new().build().unwrap());
+        let mut engine = PrefixedEngine(TestEngineBuilder::new().build().unwrap());
         must_prewrite_put(&mut engine, b"key", b"value", b"key", 10);
         must_commit(&mut engine, b"key", 10, 20);
         let db = engine.kv_engine().unwrap().as_inner().clone();
@@ -2657,7 +2657,7 @@ mod tests {
         region_info.insert(1, r1.clone());
         region_info.insert(2, r2.clone());
         region_info.insert(3, r3.clone());
-        let engine = MultiRocksEngine {
+        let mut engine = MultiRocksEngine {
             factory: factory.clone(),
             region_info,
         };
@@ -2825,7 +2825,7 @@ mod tests {
         let mut region_info = HashMap::default();
         region_info.insert(1, r1.clone());
         region_info.insert(2, r2.clone());
-        let engine = MultiRocksEngine {
+        let mut engine = MultiRocksEngine {
             factory,
             region_info,
         };

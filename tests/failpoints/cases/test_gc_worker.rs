@@ -315,7 +315,7 @@ fn test_collect_applying_locks() {
 // correctly.
 #[test]
 fn test_error_in_compaction_filter() {
-    let engine = TestEngineBuilder::new().build().unwrap();
+    let mut engine = TestEngineBuilder::new().build().unwrap();
     let raw_engine = engine.get_rocksdb();
 
     let large_value = vec![b'x'; 300];

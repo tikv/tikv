@@ -328,7 +328,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         self.engine.snapshot(Default::default()).unwrap()
     }
 
-    pub fn release_snapshot(&self) {
+    pub fn release_snapshot(&mut self) {
         self.engine.release_snapshot();
     }
 
@@ -3444,7 +3444,7 @@ mod tests {
     #[test]
     fn test_prewrite_blocks_read() {
         use kvproto::kvrpcpb::ExtraOp;
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
+        let mut storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
 
@@ -3538,7 +3538,7 @@ mod tests {
     #[test]
     fn test_cf_error() {
         // New engine lacks normal column families.
-        let engine = TestEngineBuilder::new()
+        let mut engine = TestEngineBuilder::new()
             .cfs([CF_DEFAULT, "foo"])
             .build()
             .unwrap();
@@ -3945,7 +3945,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let engine = {
+        let mut engine = {
             let path = "".to_owned();
             let cfg_rocksdb = db_config;
             let cache = BlockCacheConfig::default().build_shared_cache();
@@ -8682,7 +8682,7 @@ mod tests {
     // they should not have overlapped ts, which is an expected property.
     #[test]
     fn test_overlapped_ts_rollback_before_prewrite() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let storage =
             TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine.clone(), DummyLockManager)
                 .build()
@@ -8788,7 +8788,7 @@ mod tests {
         rx.recv().unwrap();
 
         must_unlocked(&mut engine, k2);
-        must_written(&engine, k2, 10, 10, WriteType::Rollback);
+        must_written(&mut engine, k2, 10, 10, WriteType::Rollback);
 
         // T1 prewrites, start_ts = 1, for_update_ts = 3
         storage
@@ -8859,7 +8859,7 @@ mod tests {
                 for expected_write in self.expected_writes {
                     builder = builder.add_expected_write(expected_write)
                 }
-                let engine = builder.build();
+                let mut engine = builder.build();
                 let mut builder =
                     TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager);
                 builder.config.enable_async_apply_prewrite = true;
@@ -9003,7 +9003,7 @@ mod tests {
 
     #[test]
     fn test_resolve_commit_pessimistic_locks() {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
+        let mut storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -9083,7 +9083,7 @@ mod tests {
         // Pessimistically rollback the k2 lock.
         // Non lite lock resolve on k1 and k2, there should no errors as lock on k2 is
         // pessimistic type.
-        must_rollback(&storage.engine, b"k2", 10, false);
+        must_rollback(&mut storage.engine, b"k2", 10, false);
         let mut temp_map = HashMap::default();
         temp_map.insert(10.into(), 20.into());
         storage
@@ -9169,7 +9169,7 @@ mod tests {
 
         // Unlock the k6 first.
         // Non lite lock resolve on k5 and k6, error should be reported.
-        must_rollback(&storage.engine, b"k6", 10, true);
+        must_rollback(&mut storage.engine, b"k6", 10, true);
         storage
             .sched_txn_command(
                 commands::ResolveLock::new(

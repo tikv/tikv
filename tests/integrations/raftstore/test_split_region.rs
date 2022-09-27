@@ -388,7 +388,7 @@ fn test_split_overlap_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     }
 
     let engine3 = cluster.get_engine(3);
-    must_get_none(&mut engine3, b"k2");
+    must_get_none(&engine3, b"k2");
 
     thread::sleep(Duration::from_secs(1));
     let snap_dir = cluster.get_snap_dir(3);
@@ -456,7 +456,7 @@ fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     }
 
     let engine3 = cluster.get_engine(3);
-    must_get_none(&mut engine3, b"k2");
+    must_get_none(&engine3, b"k2");
 
     // transfer leader to ease the preasure of store 1.
     cluster.must_transfer_leader(1, new_peer(2, 2));

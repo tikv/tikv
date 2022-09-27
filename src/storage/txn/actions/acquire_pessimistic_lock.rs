@@ -533,19 +533,19 @@ pub mod tests {
         // Lock conflict
         must_prewrite_put(&mut engine, k, v, k, 3);
         must_err(&mut engine, k, k, 4, 4);
-        must_cleanup(&engine, k, 3, 0);
+        must_cleanup(&mut engine, k, 3, 0);
         must_unlocked(&mut engine, k);
         must_succeed(&mut engine, k, k, 5, 5);
-        must_prewrite_lock_err(&engine, k, k, 6);
+        must_prewrite_lock_err(&mut engine, k, k, 6);
         must_err(&mut engine, k, k, 6, 6);
-        must_cleanup(&engine, k, 5, 0);
+        must_cleanup(&mut engine, k, 5, 0);
         must_unlocked(&mut engine, k);
 
         // Data conflict
         must_prewrite_put(&mut engine, k, v, k, 7);
         must_commit(&mut engine, k, 7, 9);
         must_unlocked(&mut engine, k);
-        must_prewrite_lock_err(&engine, k, k, 8);
+        must_prewrite_lock_err(&mut engine, k, k, 8);
         must_err(&mut engine, k, k, 8, 8);
         must_succeed(&mut engine, k, k, 8, 9);
         must_pessimistic_prewrite_put(&mut engine, k, v, k, 8, 8, DoPessimisticCheck);
@@ -555,19 +555,19 @@ pub mod tests {
         // Rollback
         must_succeed(&mut engine, k, k, 11, 11);
         must_pessimistic_locked(&mut engine, k, 11, 11);
-        must_cleanup(&engine, k, 11, 0);
+        must_cleanup(&mut engine, k, 11, 0);
         must_err(&mut engine, k, k, 11, 11);
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 11, 11, DoPessimisticCheck);
-        must_prewrite_lock_err(&engine, k, k, 11);
+        must_pessimistic_prewrite_put_err(&mut engine, k, v, k, 11, 11, DoPessimisticCheck);
+        must_prewrite_lock_err(&mut engine, k, k, 11);
         must_unlocked(&mut engine, k);
 
         must_succeed(&mut engine, k, k, 12, 12);
         must_pessimistic_prewrite_put(&mut engine, k, v, k, 12, 12, DoPessimisticCheck);
         must_locked(&mut engine, k, 12);
-        must_cleanup(&engine, k, 12, 0);
+        must_cleanup(&mut engine, k, 12, 0);
         must_err(&mut engine, k, k, 12, 12);
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 12, 12, DoPessimisticCheck);
-        must_prewrite_lock_err(&engine, k, k, 12);
+        must_pessimistic_prewrite_put_err(&mut engine, k, v, k, 12, 12, DoPessimisticCheck);
+        must_prewrite_lock_err(&mut engine, k, k, 12);
         must_unlocked(&mut engine, k);
 
         // Duplicated
@@ -605,10 +605,10 @@ pub mod tests {
         must_prewrite_put(&mut engine, k, v, k, 23);
         must_locked(&mut engine, k, 23);
         must_err(&mut engine, k, k, 23, 23);
-        must_cleanup(&engine, k, 23, 0);
+        must_cleanup(&mut engine, k, 23, 0);
         must_succeed(&mut engine, k, k, 24, 24);
         must_pessimistic_locked(&mut engine, k, 24, 24);
-        must_prewrite_put_err(&engine, k, v, k, 24);
+        must_prewrite_put_err(&mut engine, k, v, k, 24);
         must_rollback(&mut engine, k, 24, false);
 
         // Acquire lock on a prewritten key should fail.
@@ -627,7 +627,7 @@ pub mod tests {
         must_unlocked(&mut engine, k);
         must_get_none(&mut engine, k, 28);
         // Pessimistic prewrite on a committed key should fail.
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 26, 26, DoPessimisticCheck);
+        must_pessimistic_prewrite_put_err(&mut engine, k, v, k, 26, 26, DoPessimisticCheck);
         must_unlocked(&mut engine, k);
         must_get_none(&mut engine, k, 28);
         // Currently we cannot avoid this.
@@ -660,13 +660,13 @@ pub mod tests {
         must_pessimistic_locked(&mut engine, k, 35, 37);
 
         // Cannot prewrite when there is another transaction's pessimistic lock.
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 36, 36, DoPessimisticCheck);
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 36, 38, DoPessimisticCheck);
+        must_pessimistic_prewrite_put_err(&mut engine, k, v, k, 36, 36, DoPessimisticCheck);
+        must_pessimistic_prewrite_put_err(&mut engine, k, v, k, 36, 38, DoPessimisticCheck);
         must_pessimistic_locked(&mut engine, k, 35, 37);
         // Cannot prewrite when there is another transaction's non-pessimistic lock.
         must_pessimistic_prewrite_put(&mut engine, k, v, k, 35, 37, DoPessimisticCheck);
         must_locked(&mut engine, k, 35);
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 36, 38, DoPessimisticCheck);
+        must_pessimistic_prewrite_put_err(&mut engine, k, v, k, 36, 38, DoPessimisticCheck);
         must_locked(&mut engine, k, 35);
 
         // Commit pessimistic transaction's key but with smaller commit_ts than
@@ -708,7 +708,7 @@ pub mod tests {
         // prewrite will succeeed.
         must_pessimistic_prewrite_put(&mut engine, k, v, k, 47, 48, SkipPessimisticCheck);
         must_locked(&mut engine, k, 47);
-        must_cleanup(&engine, k, 47, 0);
+        must_cleanup(&mut engine, k, 47, 0);
         must_unlocked(&mut engine, k);
 
         // The rollback of the primary key in a pessimistic transaction should be
@@ -716,7 +716,7 @@ pub mod tests {
         must_succeed(&mut engine, k, k, 49, 60);
         must_pessimistic_prewrite_put(&mut engine, k, v, k, 49, 60, DoPessimisticCheck);
         must_locked(&mut engine, k, 49);
-        must_cleanup(&engine, k, 49, 0);
+        must_cleanup(&mut engine, k, 49, 0);
         must_get_rollback_protected(&mut engine, k, 49, true);
         must_prewrite_put(&mut engine, k, v, k, 51);
         must_rollback(&mut engine, k, 51, false);
@@ -728,7 +728,7 @@ pub mod tests {
         must_succeed(&mut engine, k, k, 50, 61);
         must_pessimistic_prewrite_put(&mut engine, k, v, k, 50, 61, DoPessimisticCheck);
         must_locked(&mut engine, k, 50);
-        must_cleanup(&engine, k, 50, 0);
+        must_cleanup(&mut engine, k, 50, 0);
         must_get_overlapped_rollback(&mut engine, k, 50, 46, WriteType::Put, Some(0));
 
         // start_ts and commit_ts interlacing
@@ -1074,7 +1074,7 @@ pub mod tests {
     #[test]
     fn test_old_value_put_delete_lock_insert() {
         let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
-        let start_ts = old_value_put_delete_lock_insert(&engine, b"k1");
+        let start_ts = old_value_put_delete_lock_insert(&mut engine, b"k1");
         let key = Key::from_raw(b"k1");
         for should_not_exist in &[true, false] {
             for need_value in &[true, false] {

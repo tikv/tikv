@@ -150,13 +150,13 @@ pub mod tests {
 
     #[test]
     fn test_pessimistic_rollback() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
         let k = b"k1";
         let v = b"v1";
 
         // Normal
-        must_acquire_pessimistic_lock(&engine, k, k, 1, 1);
+        must_acquire_pessimistic_lock(&mut engine, k, k, 1, 1);
         must_pessimistic_locked(&mut engine, k, 1, 1);
         must_success(&mut engine, k, 1, 1);
         must_unlocked(&mut engine, k);
@@ -170,7 +170,7 @@ pub mod tests {
         must_success(&mut engine, k, 2, 2);
 
         // Do nothing if meets other transaction's pessimistic lock
-        must_acquire_pessimistic_lock(&engine, k, k, 2, 3);
+        must_acquire_pessimistic_lock(&mut engine, k, k, 2, 3);
         must_success(&mut engine, k, 1, 1);
         must_success(&mut engine, k, 1, 2);
         must_success(&mut engine, k, 1, 3);

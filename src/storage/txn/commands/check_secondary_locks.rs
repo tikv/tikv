@@ -215,12 +215,13 @@ pub mod tests {
 
     #[test]
     fn test_check_async_commit_secondary_locks() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine_clone = engine.clone();
         let ctx = Context::default();
         let cm = ConcurrencyManager::new(1.into());
 
-        let check_secondary = |key, ts| {
-            let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut check_secondary = |key, ts| {
+            let snapshot = engine_clone.snapshot(Default::default()).unwrap();
             let key = Key::from_raw(key);
             let ts = TimeStamp::new(ts);
             let command = crate::storage::txn::commands::CheckSecondaryLocks {
@@ -242,7 +243,7 @@ pub mod tests {
                 )
                 .unwrap();
             if !result.to_be_write.modifies.is_empty() {
-                engine.write(&ctx, result.to_be_write).unwrap();
+                engine_clone.write(&ctx, result.to_be_write).unwrap();
             }
             if let ProcessResult::SecondaryLocksStatus { status } = result.pr {
                 status
@@ -282,7 +283,7 @@ pub mod tests {
 
         // ----------------------------
 
-        must_acquire_pessimistic_lock(&engine, b"k1", b"key", 11, 11);
+        must_acquire_pessimistic_lock(&mut engine, b"k1", b"key", 11, 11);
 
         // Lock CF has a pessimistic lock
         //
