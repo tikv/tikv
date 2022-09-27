@@ -200,7 +200,7 @@ fn test_snap_with_invalid_parameter() {
 #[test]
 fn test_local_read() {
     let cluster = Cluster::default();
-    let router = cluster.router(0);
+    let mut router = cluster.router(0);
     std::thread::sleep(std::time::Duration::from_millis(200));
     let region_id = 2;
     let mut req = RaftCmdRequest::default();

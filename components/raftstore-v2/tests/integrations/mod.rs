@@ -96,7 +96,7 @@ impl TestRouter {
     }
 
     async fn get_snapshot(
-        &self,
+        &mut self,
         req: RaftCmdRequest,
     ) -> std::result::Result<RegionSnapshot<<KvTestEngine as KvEngine>::Snapshot>, RaftCmdResponse>
     {

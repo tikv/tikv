@@ -30,7 +30,7 @@ where
     ER: RaftEngine,
 {
     router: StoreRouter<EK, ER>,
-    local_reader: RefCell<LocalReader<EK, StoreRouter<EK, ER>>>,
+    local_reader: LocalReader<EK, StoreRouter<EK, ER>>,
 }
 
 impl<EK, ER> Clone for ServerRaftStoreRouter<EK, ER>
@@ -52,10 +52,9 @@ impl<EK: KvEngine, ER: RaftEngine> ServerRaftStoreRouter<EK, ER> {
         router: StoreRouter<EK, ER>,
         logger: Logger,
     ) -> Self {
-        let local_reader = RefCell::new(LocalReader::new(store_meta, router.clone(), logger));
         ServerRaftStoreRouter {
-            router,
-            local_reader,
+            router: router.clone(),
+            local_reader: LocalReader::new(store_meta, router, logger),
         }
     }
 
@@ -70,12 +69,10 @@ impl<EK: KvEngine, ER: RaftEngine> ServerRaftStoreRouter<EK, ER> {
         self.router.send_raft_message(msg)
     }
 
-    #[allow(clippy::await_holding_refcell_ref)]
     pub async fn get_snapshot(
-        &self,
+        &mut self,
         req: RaftCmdRequest,
     ) -> std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse> {
-        let mut local_reader = self.local_reader.borrow_mut();
-        local_reader.snapshot(req).await
+        self.local_reader.snapshot(req).await
     }
 }
