@@ -2937,7 +2937,7 @@ impl<F: KvFormat> TestStorageBuilder<RocksEngine, DummyLockManager, F> {
     pub fn new(lock_mgr: DummyLockManager) -> Self {
         let engine = TestEngineBuilder::new()
             .api_version(F::TAG)
-            .build()
+            .build(0, 0)
             .unwrap();
 
         Self::from_engine_and_lock_mgr(engine, lock_mgr)
@@ -3537,7 +3537,7 @@ mod tests {
         // New engine lacks normal column families.
         let engine = TestEngineBuilder::new()
             .cfs([CF_DEFAULT, "foo"])
-            .build()
+            .build(0, 0)
             .unwrap();
         let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
             .build()
@@ -7980,7 +7980,7 @@ mod tests {
     fn validate_wait_for_lock_msg() {
         let (msg_tx, msg_rx) = channel();
         let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(
-            TestEngineBuilder::new().build().unwrap(),
+            TestEngineBuilder::new().build(0, 0).unwrap(),
             ProxyLockMgr::new(msg_tx),
         )
         .build()
@@ -8097,7 +8097,7 @@ mod tests {
         let mut lock_mgr = ProxyLockMgr::new(msg_tx);
         lock_mgr.set_has_waiter(true);
         let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(
-            TestEngineBuilder::new().build().unwrap(),
+            TestEngineBuilder::new().build(0, 0).unwrap(),
             lock_mgr,
         )
         .build()
@@ -8679,7 +8679,7 @@ mod tests {
     // they should not have overlapped ts, which is an expected property.
     #[test]
     fn test_overlapped_ts_rollback_before_prewrite() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let storage =
             TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine.clone(), DummyLockManager)
                 .build()
@@ -8851,8 +8851,9 @@ mod tests {
 
         impl<T: 'static + StorageCallbackType + Send> Case<T> {
             fn run(self) {
-                let mut builder =
-                    MockEngineBuilder::from_rocks_engine(TestEngineBuilder::new().build().unwrap());
+                let mut builder = MockEngineBuilder::from_rocks_engine(
+                    TestEngineBuilder::new().build(0, 0).unwrap(),
+                );
                 for expected_write in self.expected_writes {
                     builder = builder.add_expected_write(expected_write)
                 }

@@ -444,7 +444,7 @@ mod tests {
         let rocks = TestEngineBuilder::new()
             .path(temp.path())
             .cfs(&[engine_traits::CF_DEFAULT, engine_traits::CF_WRITE])
-            .build()
+            .build(0, 0)
             .unwrap();
         let db = rocks.get_rocksdb();
 
@@ -485,7 +485,7 @@ mod tests {
                 engine_traits::CF_LOCK,
                 engine_traits::CF_WRITE,
             ])
-            .build()
+            .build(0, 0)
             .unwrap();
         let db = rocks.get_rocksdb();
         let backend = external_storage_export::make_local_backend(temp.path());

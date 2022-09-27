@@ -119,7 +119,7 @@ pub fn init_data_with_commit(
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
 ) -> (Store<RocksEngine>, Endpoint<RocksEngine>, Arc<QuotaLimiter>) {
-    let engine = TestEngineBuilder::new().build().unwrap();
+    let engine = TestEngineBuilder::new().build(0, 0).unwrap();
     init_data_with_engine_and_commit(Context::default(), engine, tbl, vals, commit)
 }
 

@@ -506,7 +506,7 @@ mod tests {
 
     #[test]
     fn test_basic() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         let ctx = Context::default();
         // Generate REVERSE_SEEK_BOUND / 2 Put for key [10].
@@ -806,7 +806,7 @@ mod tests {
     /// Case 1. prev out of bound, next_version is None.
     #[test]
     fn test_reverse_get_out_of_bound_1() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let ctx = Context::default();
         // Generate N/2 rollback for [b].
         for ts in 0..REVERSE_SEEK_BOUND / 2 {
@@ -890,7 +890,7 @@ mod tests {
     /// Case 2. prev out of bound, next_version is Some.
     #[test]
     fn test_reverse_get_out_of_bound_2() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let ctx = Context::default();
         // Generate 1 put and N/2 rollback for [b].
         must_prewrite_put(&mut engine, b"b", b"value_b", b"b", 0);
@@ -983,7 +983,7 @@ mod tests {
     /// Case 1. prev() out of bound
     #[test]
     fn test_move_prev_user_key_out_of_bound_1() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         // Generate 1 put for [c].
         must_prewrite_put(&mut engine, b"c", b"value", b"c", 1);
@@ -1065,7 +1065,7 @@ mod tests {
     /// Case 2. seek_for_prev() out of bound
     #[test]
     fn test_move_prev_user_key_out_of_bound_2() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         // Generate 1 put for [c].
         must_prewrite_put(&mut engine, b"c", b"value", b"c", 1);
@@ -1153,7 +1153,7 @@ mod tests {
     /// Case 3. a more complicated case
     #[test]
     fn test_move_prev_user_key_out_of_bound_3() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         // N denotes for SEEK_BOUND, M denotes for REVERSE_SEEK_BOUND
 
@@ -1246,7 +1246,7 @@ mod tests {
     /// Range is left open right closed.
     #[test]
     fn test_range() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         // Generate 1 put for [1], [2] ... [6].
         for i in 1..7 {
@@ -1376,7 +1376,7 @@ mod tests {
 
     #[test]
     fn test_many_tombstones() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         // Generate RocksDB tombstones in write cf.
         let start_ts = 1;
@@ -1420,7 +1420,7 @@ mod tests {
 
     #[test]
     fn test_backward_scanner_check_gc_fence() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         let (read_ts, expected_result) = prepare_test_data_for_check_gc_fence(&mut engine);
         let expected_result: Vec<_> = expected_result
@@ -1446,7 +1446,7 @@ mod tests {
 
     #[test]
     fn test_rc_read_check_ts() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         let (key0, val0) = (b"k0", b"v0");
         must_prewrite_put(&mut engine, key0, val0, key0, 60);

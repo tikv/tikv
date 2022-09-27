@@ -626,7 +626,7 @@ mod tests {
         const PREV_TS: TimeStamp = TimeStamp::new(4);
         const POST_TS: TimeStamp = TimeStamp::new(5);
 
-        let new_engine = || TestEngineBuilder::new().build().unwrap();
+        let new_engine = || TestEngineBuilder::new().build(0, 0).unwrap();
         let add_write_at_ts = |commit_ts, engine: &mut _, key, value| {
             must_prewrite_put(engine, key, value, key, commit_ts);
             must_commit(engine, key, commit_ts, commit_ts);
@@ -706,7 +706,7 @@ mod tests {
     }
 
     fn test_scan_with_lock_impl(desc: bool) {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         for i in 0..5 {
             must_prewrite_put(&mut engine, &[i], &[b'v', i], &[i], 1);
@@ -778,7 +778,7 @@ mod tests {
     }
 
     fn test_scan_bypass_locks_impl(desc: bool) {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         for i in 0..5 {
             must_prewrite_put(&mut engine, &[i], &[b'v', i], &[i], 10);
@@ -821,7 +821,7 @@ mod tests {
     }
 
     fn test_scan_access_locks_impl(desc: bool, delete_bound: bool) {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         for i in 0..=8 {
             must_prewrite_put(&mut engine, &[i], &[b'v', i], &[i], 10);
@@ -922,7 +922,7 @@ mod tests {
     }
 
     fn test_met_newer_ts_data_impl(deep_write_seek: bool, desc: bool) {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let (key, val1) = (b"foo", b"bar1");
 
         if deep_write_seek {
@@ -967,7 +967,7 @@ mod tests {
 
     #[test]
     fn test_old_value_with_hint_min_ts() {
-        let mut engine = TestEngineBuilder::new().build_without_cache().unwrap();
+        let mut engine = TestEngineBuilder::new().build_without_cache(0, 0).unwrap();
         let mut engine_clone = engine.clone();
         let mut create_scanner = |from_ts: u64| {
             let snap = engine_clone.snapshot(Default::default()).unwrap();
@@ -1059,7 +1059,7 @@ mod tests {
     }
 
     fn test_rc_scan_skip_lock_impl(desc: bool) {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let (key1, val1, val12) = (b"foo1", b"bar1", b"bar12");
         let (key2, val2) = (b"foo2", b"bar2");
         let mut expected = vec![(key1, val1), (key2, val2)];

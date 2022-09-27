@@ -34,4 +34,9 @@ raft_log_engine = { workspace = true }
 tempfile = "3.0"
 tikv_alloc = { workspace = true }
 # FIXME: Remove this dep from the engine_traits interface
+<<<<<<< HEAD
 tikv_util = { workspace = true }
+=======
+tikv_util = { path = "../tikv_util", default-features = false }
+#tikv = {path = "../..", default-features = false}
+>>>>>>> f84f42812 (*: refactor TestTabletFactory)

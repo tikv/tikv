@@ -53,7 +53,7 @@ impl<F: KvFormat> SyncTestStorageBuilder<RocksEngine, F> {
         Self {
             engine: TestEngineBuilder::new()
                 .api_version(F::TAG)
-                .build()
+                .build(0, 0)
                 .unwrap(),
             config: None,
             gc_config: None,
@@ -148,7 +148,6 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
     ) {
         // Building a tablet factory
         let ops = DbOptions::default();
-        let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
         let path = Builder::new()
             .prefix("test_gc_keys_with_region_info_provider")
             .tempdir()
@@ -157,7 +156,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
             .start_auto_gc(
                 cfg,
                 Arc::new(AtomicU64::new(0)),
-                Arc::new(TestTabletFactory::new(path.path(), ops, cf_opts)),
+                Arc::new(TestTabletFactory::new(path.path(), ops)),
             )
             .unwrap();
     }

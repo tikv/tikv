@@ -1797,7 +1797,7 @@ mod tests {
         // Return Result from this function so we can use the `wait_op` macro here.
         let store_id = 1;
 
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let storage =
             TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine.clone(), DummyLockManager)
                 .build()
@@ -1981,7 +1981,7 @@ mod tests {
     #[test]
     fn test_physical_scan_lock() {
         let store_id = 1;
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let prefixed_engine = PrefixedEngine(engine);
         let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(
             prefixed_engine.clone(),
@@ -2063,8 +2063,8 @@ mod tests {
     #[test]
     fn test_gc_keys_with_region_info_provider() {
         let store_id = 1;
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let mut prefixed_engine = PrefixedEngine(engine.clone());
+        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let prefixed_engine = PrefixedEngine(engine.clone());
 
         let (tx, _rx) = mpsc::channel();
         let feature_gate = FeatureGate::default();
@@ -2110,7 +2110,6 @@ mod tests {
         let safe_point = Arc::new(AtomicU64::new(0));
         // Building a tablet factory
         let ops = DbOptions::default();
-        let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
         let path = Builder::new()
             .prefix("test_gc_keys_with_region_info_provider")
             .tempdir()
@@ -2120,7 +2119,7 @@ mod tests {
             .start_auto_gc(
                 auto_gc_cfg,
                 safe_point,
-                Arc::new(TestTabletFactory::new(path.path(), ops, cf_opts)),
+                Arc::new(TestTabletFactory::new(path.path(), ops)),
             )
             .unwrap();
         host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
@@ -2174,8 +2173,8 @@ mod tests {
     #[test]
     fn test_gc_keys_statistics() {
         let store_id = 1;
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let mut prefixed_engine = PrefixedEngine(engine.clone());
+        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let prefixed_engine = PrefixedEngine(engine.clone());
 
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
@@ -2237,8 +2236,8 @@ mod tests {
         cfg.defaultcf.dynamic_level_bytes = false;
         let dir = tempfile::TempDir::new().unwrap();
         let builder = TestEngineBuilder::new().path(dir.path());
-        let engine = builder.build_with_cfg(&cfg).unwrap();
-        let mut prefixed_engine = PrefixedEngine(engine);
+        let engine = builder.build_with_cfg(&cfg, 0, 0).unwrap();
+        let prefixed_engine = PrefixedEngine(engine);
 
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
@@ -2339,8 +2338,8 @@ mod tests {
 
     #[test]
     fn test_gc_keys_scan_range_limit() {
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let mut prefixed_engine = PrefixedEngine(engine.clone());
+        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let prefixed_engine = PrefixedEngine(engine.clone());
 
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
@@ -2460,9 +2459,9 @@ mod tests {
     #[test]
     fn delete_range_when_worker_is_full() {
         let store_id = 1;
-        let mut engine = PrefixedEngine(TestEngineBuilder::new().build().unwrap());
-        must_prewrite_put(&mut engine, b"key", b"value", b"key", 10);
-        must_commit(&mut engine, b"key", 10, 20);
+        let engine = PrefixedEngine(TestEngineBuilder::new().build(0, 0).unwrap());
+        must_prewrite_put(&engine, b"key", b"value", b"key", 10);
+        must_commit(&engine, b"key", 10, 20);
         let db = engine.kv_engine().unwrap().as_inner().clone();
         let cf = get_cf_handle(&db, CF_WRITE).unwrap();
         db.flush_cf(cf, true).unwrap();
@@ -2610,7 +2609,16 @@ mod tests {
         Vec<Region>,
         mpsc::Receiver<FlowInfo>,
     ) {
+<<<<<<< HEAD
         let mut engine = MultiRocksEngine::default();
+=======
+        // Building a tablet factory
+        let ops = DbOptions::default();
+        let cfg_rocksdb = crate::config::DbConfig::default();
+
+        let path = Builder::new().prefix("multi-rocks-gc").tempdir().unwrap();
+        let factory = Arc::new(TestTabletFactoryV2::new(path.path(), ops));
+>>>>>>> f84f42812 (*: refactor TestTabletFactory)
 
         // Note: as the tablet split is not supported yet, we artificially divide the
         // region to: 1 ["", "k10"], 2 ["k10", "k20"], 3["k20", "30"]
@@ -2823,6 +2831,7 @@ mod tests {
 
     #[test]
     fn test_raw_gc_keys_for_multi_rocksdb() {
+<<<<<<< HEAD
         let dir = Builder::new()
             .prefix("test_raw_gc_keys_for_multi_rocksdb")
             .tempdir()
@@ -2830,6 +2839,16 @@ mod tests {
         let store_id = 1;
 
         let mut engine = MultiRocksEngine::default();
+=======
+        let store_id = 1;
+        // Building a tablet factory
+        let ops = DbOptions::default();
+        let path = Builder::new()
+            .prefix("multi-rocks-raw-gc")
+            .tempdir()
+            .unwrap();
+        let factory = Arc::new(TestTabletFactoryV2::new(path.path(), ops));
+>>>>>>> f84f42812 (*: refactor TestTabletFactory)
 
         // Note: as the tablet split is not supported yet, we artificially divide the
         // region to: 1 ["", "k10"], 2 ["k10", ""]
@@ -3061,14 +3080,6 @@ mod tests {
         let put_start_ts = 100;
         let delete_start_ts = 150;
         let (_, engine, ..) = multi_gc_engine_setup(store_id, put_start_ts, delete_start_ts, true);
-
-        // gc_runner.gc(regions[0].clone(), 200.into()).unwrap();
-        // gc_runner.gc(regions[1].clone(), 200.into()).unwrap();
-        // gc_runner.gc(regions[2].clone(), 200.into()).unwrap();
-        // let engine = factory.
-        // let raw_engine = engine.get_rocksdb();
-        // let mut gc_runner = TestGcRunner::new(0);
-        // gc_runner.safe_point(200).gc(&raw_engine, false);
 
         for region_id in 1..=3 {
             let raw_engine = match get_rocksdb_from_factory(region_id, 10) {

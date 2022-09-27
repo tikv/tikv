@@ -1387,7 +1387,7 @@ mod tests {
             raft_router.clone(),
             engine.unwrap_or_else(|| {
                 TestEngineBuilder::new()
-                    .build_without_cache()
+                    .build_without_cache(0, 0)
                     .unwrap()
                     .kv_engine()
                     .unwrap()

@@ -58,7 +58,7 @@ fn test_txn_create_compaction_filter() {
     cfg.writecf.dynamic_level_bytes = false;
     let dir = tempfile::TempDir::new().unwrap();
     let builder = TestEngineBuilder::new().path(dir.path());
-    let mut engine = builder.build_with_cfg(&cfg).unwrap();
+    let mut engine = builder.build_with_cfg(&cfg, 0, 0).unwrap();
     let raw_engine = engine.get_rocksdb();
 
     let mut gc_runner = TestGcRunner::new(0);
@@ -92,7 +92,7 @@ fn test_txn_mvcc_filtered() {
     MVCC_VERSIONS_HISTOGRAM.reset();
     GC_COMPACTION_FILTERED.reset();
 
-    let mut engine = TestEngineBuilder::new().build().unwrap();
+    let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
     let raw_engine = engine.get_rocksdb();
     let value = vec![b'v'; 512];
     let mut gc_runner = TestGcRunner::new(0);
@@ -138,7 +138,7 @@ fn test_txn_gc_keys_handled() {
     GC_COMPACTION_FILTER_MVCC_DELETION_MET.reset();
     GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.reset();
 
-    let engine = TestEngineBuilder::new().build().unwrap();
+    let engine = TestEngineBuilder::new().build(0, 0).unwrap();
     let mut prefixed_engine = PrefixedEngine(engine.clone());
 
     let (tx, _rx) = mpsc::channel();
@@ -170,7 +170,6 @@ fn test_txn_gc_keys_handled() {
 
     // Building a tablet factory
     let ops = DbOptions::default();
-    let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
     let path = Builder::new()
         .prefix("test_gc_keys_with_region_info_provider")
         .tempdir()
@@ -179,7 +178,7 @@ fn test_txn_gc_keys_handled() {
         .start_auto_gc(
             auto_gc_cfg,
             safe_point,
-            Arc::new(TestTabletFactory::new(path.path(), ops, cf_opts)),
+            Arc::new(TestTabletFactory::new(path.path(), ops)),
         )
         .unwrap();
     host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
@@ -232,7 +231,7 @@ fn test_raw_mvcc_filtered() {
 
     let engine = TestEngineBuilder::new()
         .api_version(ApiVersion::V2)
-        .build_with_cfg(&cfg)
+        .build_with_cfg(&cfg, 0, 0)
         .unwrap();
     let raw_engine = engine.get_rocksdb();
     let mut gc_runner = TestGcRunner::new(0);
@@ -295,7 +294,7 @@ fn test_raw_gc_keys_handled() {
 
     let engine = TestEngineBuilder::new()
         .api_version(ApiVersion::V2)
-        .build()
+        .build(0, 0)
         .unwrap();
     let prefixed_engine = PrefixedEngine(engine.clone());
 
@@ -327,7 +326,6 @@ fn test_raw_gc_keys_handled() {
 
     // Building a tablet factory
     let ops = DbOptions::default();
-    let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
     let path = Builder::new()
         .prefix("test_gc_keys_with_region_info_provider")
         .tempdir()
@@ -337,7 +335,7 @@ fn test_raw_gc_keys_handled() {
         .start_auto_gc(
             auto_gc_cfg,
             safe_point,
-            Arc::new(TestTabletFactory::new(path.path(), ops, cf_opts)),
+            Arc::new(TestTabletFactory::new(path.path(), ops)),
         )
         .unwrap();
     host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);

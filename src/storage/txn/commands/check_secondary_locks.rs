@@ -216,7 +216,7 @@ pub mod tests {
 
     #[test]
     fn test_check_async_commit_secondary_locks() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let mut engine_clone = engine.clone();
         let ctx = Context::default();
         let cm = ConcurrencyManager::new(1.into());

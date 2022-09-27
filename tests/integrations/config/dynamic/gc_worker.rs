@@ -31,7 +31,7 @@ fn setup_cfg_controller(
     GcWorker<tikv::storage::kv::RocksEngine, RaftStoreBlackHole>,
     ConfigController,
 ) {
-    let engine = TestEngineBuilder::new().build().unwrap();
+    let engine = TestEngineBuilder::new().build(0, 0).unwrap();
     let (tx, _rx) = std::sync::mpsc::channel();
     let mut gc_worker = GcWorker::new(
         engine,

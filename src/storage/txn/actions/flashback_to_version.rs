@@ -222,7 +222,7 @@ pub mod tests {
 
     #[test]
     fn test_flashback_to_version() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let mut ts = TimeStamp::zero();
         let k = b"k";
         // Prewrite and commit Put(k -> v1) with stat_ts = 1, commit_ts = 2.
@@ -293,7 +293,7 @@ pub mod tests {
 
     #[test]
     fn test_flashback_to_version_deleted() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let mut ts = TimeStamp::zero();
         let (k, v) = (b"k", b"v");
         must_prewrite_put(&mut engine, k, v, k, *ts.incr());

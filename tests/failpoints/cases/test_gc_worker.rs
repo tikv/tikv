@@ -320,7 +320,7 @@ fn test_collect_applying_locks() {
 // correctly.
 #[test]
 fn test_error_in_compaction_filter() {
-    let mut engine = TestEngineBuilder::new().build().unwrap();
+    let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
     let raw_engine = engine.get_rocksdb();
 
     let large_value = vec![b'x'; 300];
@@ -454,13 +454,12 @@ fn init_compaction_filter(
     let kv_engine = cluster.get_engine(store_id);
     // Building a tablet factory
     let ops = DbOptions::default();
-    let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
     let path = Builder::new()
         .prefix("test_gc_keys_with_region_info_provider")
         .tempdir()
         .unwrap();
 
-    let factory = TestTabletFactory::new(path.path(), ops, cf_opts);
+    let factory = TestTabletFactory::new(path.path(), ops);
     {
         let arc_root_db = factory.get_root_db();
         let mut root_db = arc_root_db.lock().unwrap();

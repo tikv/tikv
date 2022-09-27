@@ -292,7 +292,7 @@ pub(crate) mod tests {
     };
 
     fn test_mvcc_txn_read_imp(k1: &[u8], k2: &[u8], v: &[u8]) {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         must_get_none(&mut engine, k1, 1);
 
@@ -363,7 +363,7 @@ pub(crate) mod tests {
     }
 
     fn test_mvcc_txn_prewrite_imp(k: &[u8], v: &[u8]) {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         must_prewrite_put(&mut engine, k, v, k, 5);
         // Key is locked.
@@ -397,7 +397,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_mvcc_txn_prewrite_insert() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let (k1, v1, v2, v3) = (b"k1", b"v1", b"v2", b"v3");
         must_prewrite_put(&mut engine, k1, v1, k1, 1);
         must_commit(&mut engine, k1, 1, 2);
@@ -447,7 +447,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_mvcc_txn_prewrite_check_not_exist() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let (k1, v1, v2, v3) = (b"k1", b"v1", b"v2", b"v3");
         must_prewrite_put(&mut engine, k1, v1, k1, 1);
         must_commit(&mut engine, k1, 1, 2);
@@ -484,14 +484,14 @@ pub(crate) mod tests {
 
     #[test]
     fn test_mvcc_txn_pessmistic_prewrite_check_not_exist() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let k = b"k1";
         try_pessimistic_prewrite_check_not_exists(&mut engine, k, k, 3).unwrap_err();
     }
 
     #[test]
     fn test_rollback_lock_optimistic() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         let (k, v) = (b"k1", b"v1");
         must_prewrite_put(&mut engine, k, v, k, 5);
@@ -509,7 +509,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_rollback_lock_pessimistic() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         let (k1, k2, v) = (b"k1", b"k2", b"v1");
 
@@ -536,7 +536,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_rollback_del() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0 ,0).unwrap();
 
         let (k, v) = (b"k1", b"v1");
         must_prewrite_put(&mut engine, k, v, k, 5);
@@ -552,7 +552,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_rollback_overlapped() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0 ,0).unwrap();
         let (k1, v1) = (b"key1", b"v1");
         let (k2, v2) = (b"key2", b"v2");
 
@@ -589,7 +589,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_mvcc_txn_rollback_after_commit() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         let k = b"k";
         let v = b"v";
@@ -612,7 +612,7 @@ pub(crate) mod tests {
     }
 
     fn test_mvcc_txn_rollback_imp(k: &[u8], v: &[u8]) {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         must_prewrite_put(&mut engine, k, v, k, 5);
         must_rollback(&mut engine, k, 5, false);
@@ -653,14 +653,14 @@ pub(crate) mod tests {
 
     #[test]
     fn test_mvcc_txn_rollback_before_prewrite() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let key = b"key";
         must_rollback(&mut engine, key, 5, false);
         must_prewrite_lock_err(&mut engine, key, key, 5);
     }
 
     fn test_write_imp(k: &[u8], v: &[u8], k2: &[u8]) {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         must_prewrite_put(&mut engine, k, v, k, 5);
         must_seek_write_none(&mut engine, k, 5);
@@ -698,7 +698,7 @@ pub(crate) mod tests {
     }
 
     fn test_scan_keys_imp(keys: Vec<&[u8]>, values: Vec<&[u8]>) {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         must_prewrite_put(&mut engine, keys[0], values[0], keys[0], 1);
         must_commit(&mut engine, keys[0], 1, 10);
         must_prewrite_lock(&mut engine, keys[1], keys[1], 1);
@@ -759,7 +759,7 @@ pub(crate) mod tests {
     }
 
     fn test_write_size_imp(k: &[u8], v: &[u8], pk: &[u8]) {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let cm = ConcurrencyManager::new(10.into());
@@ -802,7 +802,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_skip_constraint_check() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let (key, value) = (b"key", b"value");
 
         must_prewrite_put(&mut engine, key, value, key, 5);
@@ -838,7 +838,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_read_commit() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let (key, v1, v2) = (b"key", b"v1", b"v2");
 
         must_prewrite_put(&mut engine, key, v1, key, 5);
@@ -851,7 +851,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_collapse_prev_rollback() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let (key, value) = (b"key", b"value");
 
         // Add a Rollback whose start ts is 1.
@@ -877,7 +877,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_scan_values_in_default() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0 ,0).unwrap();
 
         must_prewrite_put(
             &mut engine,
@@ -932,7 +932,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_seek_ts() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0 ,0).unwrap();
 
         must_prewrite_put(&mut engine, &[2], b"vv", &[2], 3);
         must_commit(&mut engine, &[2], 3, 3);
@@ -969,7 +969,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_pessimistic_txn_ttl() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         let (k, v) = (b"k", b"v");
 
@@ -1010,7 +1010,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_constraint_check_with_overlapping_txn() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         let k = b"k1";
         let v = b"v1";
@@ -1033,7 +1033,7 @@ pub(crate) mod tests {
     fn test_lock_info_validation() {
         use kvproto::kvrpcpb::{LockInfo, Op};
 
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let k = b"k";
         let v = b"v";
 
@@ -1131,7 +1131,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_non_pessimistic_lock_conflict_with_optimistic_txn() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0 ,0).unwrap();
 
         let k = b"k1";
         let v = b"v1";
@@ -1144,7 +1144,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_non_pessimistic_lock_conflict_with_pessismitic_txn() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0 ,0).unwrap();
 
         // k1 is a row key, k2 is the corresponding index key.
         let (k1, v1) = (b"k1", b"v1");
@@ -1188,7 +1188,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_commit_pessimistic_lock() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         let k = b"k";
         must_acquire_pessimistic_lock(&mut engine, k, k, 10, 10);
@@ -1212,7 +1212,7 @@ pub(crate) mod tests {
             pessimistic_rollback::tests::must_success(engine, key, start_ts, for_update_ts);
         }
 
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let (k, mut v) = (b"k", b"v".to_vec());
 
         // Key not exist; should succeed.
@@ -1248,7 +1248,7 @@ pub(crate) mod tests {
         // copy must_prewrite_put_impl, check that the key is written with the correct
         // secondaries and the right timestamp
 
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let mut engine_clone = engine.clone();
         let ctx = Context::default();
         let cm = ConcurrencyManager::new(42.into());
@@ -1305,7 +1305,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_async_pessimistic_prewrite_primary() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let ctx = Context::default();
         let cm = ConcurrencyManager::new(42.into());
 
@@ -1363,7 +1363,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_async_commit_pushed_min_commit_ts() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0 ,0).unwrap();
         let cm = ConcurrencyManager::new(42.into());
 
         // Simulate that min_commit_ts is pushed forward larger than latest_ts
@@ -1406,7 +1406,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_txn_timestamp_overlapping() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0 ,0).unwrap();
         let (k, v) = (b"k1", b"v1");
 
         // Prepare a committed transaction.
@@ -1457,7 +1457,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_rollback_while_other_transaction_running() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let (k, v) = (b"k1", b"v1");
 
         must_prewrite_put_async_commit(&mut engine, k, v, k, &Some(vec![]), 10, 0);
@@ -1547,7 +1547,7 @@ pub(crate) mod tests {
         };
 
         for &rollback in &[rollback, check_status, check_secondary] {
-            let mut engine = TestEngineBuilder::new().build().unwrap();
+            let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
             // Get gc fence without any newer versions.
             must_prewrite_put(&mut engine, b"k1", b"v1", b"k1", 101);
@@ -1607,7 +1607,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_overlapped_ts_commit_before_rollback() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let (k1, v1) = (b"key1", b"v1");
         let (k2, v2) = (b"key2", b"v2");
         let key2 = k2.to_vec();
@@ -1636,7 +1636,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_overlapped_ts_prewrite_before_rollback() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let (k1, v1) = (b"key1", b"v1");
         let (k2, v2) = (b"key2", b"v2");
         let key2 = k2.to_vec();

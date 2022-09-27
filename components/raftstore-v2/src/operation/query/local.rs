@@ -715,12 +715,11 @@ mod tests {
     fn test_read_delegate() {
         // Building a tablet factory
         let ops = DbOptions::default();
-        let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
         let path = Builder::new()
             .prefix("test-local-reader")
             .tempdir()
             .unwrap();
-        let factory = Arc::new(TestTabletFactoryV2::new(path.path(), ops, cf_opts));
+        let factory = Arc::new(TestTabletFactoryV2::new(path.path(), ops));
 
         let store_meta =
             StoreMetaDelegate::new(Arc::new(Mutex::new(StoreMeta::<KvTestEngine>::new())));

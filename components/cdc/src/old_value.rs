@@ -381,7 +381,7 @@ mod tests {
 
     #[test]
     fn test_old_value_reader() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let kv_engine = engine.get_rocksdb();
         let k = b"k";
         let key = Key::from_raw(k);
@@ -423,7 +423,7 @@ mod tests {
 
     #[test]
     fn test_old_value_reader_check_gc_fence() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let kv_engine = engine.get_rocksdb();
 
         // PUT,      Read
@@ -515,7 +515,7 @@ mod tests {
 
     #[test]
     fn test_old_value_reuse_cursor() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let kv_engine = engine.get_rocksdb();
         let value = || vec![b'v'; 1024];
 
@@ -586,7 +586,7 @@ mod tests {
         let mut cfg = DbConfig::default();
         cfg.writecf.disable_auto_compactions = true;
         cfg.writecf.pin_l0_filter_and_index_blocks = false;
-        let mut engine = TestEngineBuilder::new().build_with_cfg(&cfg).unwrap();
+        let engine = TestEngineBuilder::new().build_with_cfg(&cfg, 0, 0).unwrap();
         let kv_engine = engine.get_rocksdb();
 
         // Key must start with `z` to pass `TsFilter`'s check.

@@ -918,7 +918,7 @@ mod tests {
             ));
         }
         let mut statistic = Statistics::default();
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         prewrite(
             &mut engine,
             &mut statistic,
@@ -1040,7 +1040,7 @@ mod tests {
                 b"100".to_vec(),
             ));
         }
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let keys: Vec<Key> = mutations.iter().map(|m| m.key().clone()).collect();
         let mut statistic = Statistics::default();
         prewrite(
@@ -1081,7 +1081,7 @@ mod tests {
     fn test_prewrite_1pc() {
         use crate::storage::mvcc::tests::{must_get, must_get_commit_ts, must_unlocked};
 
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
 
         let key = b"k";
@@ -1182,7 +1182,7 @@ mod tests {
 
     #[test]
     fn test_prewrite_pessimsitic_1pc() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
         let key = b"k";
         let value = b"v";
@@ -1317,7 +1317,7 @@ mod tests {
 
     #[test]
     fn test_prewrite_async_commit() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
 
         let key = b"k";
@@ -1383,7 +1383,7 @@ mod tests {
 
     #[test]
     fn test_prewrite_pessimsitic_async_commit() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
 
         let key = b"k";
@@ -1680,7 +1680,7 @@ mod tests {
                 async_apply_prewrite: case.async_apply_prewrite,
                 raw_ext: None,
             };
-            let mut engine = TestEngineBuilder::new().build().unwrap();
+            let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
             let snap = engine.snapshot(Default::default()).unwrap();
             let result = cmd.cmd.process_write(snap, context).unwrap();
             assert_eq!(result.response_policy, case.expected);
@@ -1690,7 +1690,7 @@ mod tests {
     // this test for prewrite with should_not_exist flag
     #[test]
     fn test_prewrite_should_not_exist() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         // concurency_manager.max_tx = 5
         let cm = ConcurrencyManager::new(5.into());
         let mut statistics = Statistics::default();
@@ -1747,7 +1747,7 @@ mod tests {
 
     #[test]
     fn test_optimistic_prewrite_committed_transaction() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let cm = ConcurrencyManager::new(1.into());
         let mut statistics = Statistics::default();
 
@@ -1838,7 +1838,7 @@ mod tests {
 
     #[test]
     fn test_pessimistic_prewrite_committed_transaction() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let cm = ConcurrencyManager::new(1.into());
         let mut statistics = Statistics::default();
 
@@ -1952,7 +1952,7 @@ mod tests {
 
     #[test]
     fn test_repeated_pessimistic_prewrite_1pc() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let cm = ConcurrencyManager::new(1.into());
         let mut statistics = Statistics::default();
 
@@ -2001,7 +2001,7 @@ mod tests {
 
     #[test]
     fn test_repeated_prewrite_non_pessimistic_lock() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0 ,0).unwrap();
         let cm = ConcurrencyManager::new(1.into());
         let mut statistics = Statistics::default();
 
@@ -2170,7 +2170,7 @@ mod tests {
 
     #[test]
     fn test_prewrite_rolledback_transaction() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let cm = ConcurrencyManager::new(1.into());
         let mut statistics = Statistics::default();
 
@@ -2235,7 +2235,7 @@ mod tests {
 
     #[test]
     fn test_assertion_fail_on_conflicting_index_key() {
-        let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+        let mut engine = crate::storage::TestEngineBuilder::new().build(0, 0).unwrap();
 
         // Simulate two transactions that tries to insert the same row with a secondary
         // index, and the second one canceled the first one (by rolling back its lock).
@@ -2398,7 +2398,7 @@ mod tests {
 
     #[test]
     fn test_prewrite_committed_encounter_newer_lock() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let mut statistics = Statistics::default();
 
         let k1 = b"k1";
@@ -2448,7 +2448,7 @@ mod tests {
 
     #[test]
     fn test_repeated_prewrite_commit_ts_too_large() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let cm = ConcurrencyManager::new(1.into());
         let mut statistics = Statistics::default();
 

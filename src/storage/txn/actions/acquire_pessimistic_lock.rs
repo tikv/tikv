@@ -514,7 +514,7 @@ pub mod tests {
 
     #[test]
     fn test_pessimistic_lock() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         let k = b"k1";
         let v = b"v1";
@@ -764,7 +764,7 @@ pub mod tests {
 
     #[test]
     fn test_pessimistic_lock_return_value() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let (k, v) = (b"k", b"v");
 
         assert_eq!(
@@ -835,7 +835,7 @@ pub mod tests {
 
     #[test]
     fn test_pessimistic_lock_only_if_exists() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let (k, v) = (b"k", b"v");
 
         // The key doesn't exist, no pessimistic lock is generated
@@ -920,7 +920,7 @@ pub mod tests {
 
     #[test]
     fn test_overwrite_pessimistic_lock() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         let k = b"k1";
 
@@ -936,7 +936,7 @@ pub mod tests {
     fn test_pessimistic_lock_check_gc_fence() {
         use pessimistic_rollback::tests::must_success as must_pessimistic_rollback;
 
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         // PUT,           Read
         //  `------^
@@ -1073,7 +1073,7 @@ pub mod tests {
 
     #[test]
     fn test_old_value_put_delete_lock_insert() {
-        let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+        let mut engine = crate::storage::TestEngineBuilder::new().build(0, 0).unwrap();
         let start_ts = old_value_put_delete_lock_insert(&mut engine, b"k1");
         let key = Key::from_raw(b"k1");
         for should_not_exist in &[true, false] {
@@ -1110,7 +1110,7 @@ pub mod tests {
 
     #[test]
     fn test_old_value_for_update_ts() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         let k = b"k1";
         let v1 = b"v1";
@@ -1247,7 +1247,7 @@ pub mod tests {
 
     #[test]
     fn test_acquire_pessimistic_lock_should_not_exist() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         let (key, value) = (b"k", b"val");
 
@@ -1322,7 +1322,7 @@ pub mod tests {
     #[test]
     fn test_check_existence() {
         use pessimistic_rollback::tests::must_success as must_pessimistic_rollback;
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         // k1: Not exists
 

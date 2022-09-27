@@ -883,9 +883,8 @@ pub mod test_utils {
             let mut gc_context_opt = GC_CONTEXT.lock().unwrap();
             // Building a tablet factory
             let ops = DbOptions::default();
-            let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
             let path = Builder::new().prefix("prepare_gc").tempdir().unwrap();
-            let factory = TestTabletFactory::new(path.path(), ops, cf_opts);
+            let factory = TestTabletFactory::new(path.path(), ops);
             *gc_context_opt = Some(GcContext {
                 store_id: 1,
                 safe_point,
@@ -1009,7 +1008,7 @@ pub mod tests {
     // Test compaction filter won't break basic GC rules.
     #[test]
     fn test_compaction_filter_basic() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let raw_engine = engine.get_rocksdb();
         let value = vec![b'v'; 512];
         let mut gc_runner = TestGcRunner::new(0);
@@ -1049,7 +1048,7 @@ pub mod tests {
     #[test]
     fn test_compaction_filter_handle_deleting() {
         let value = vec![b'v'; 512];
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let raw_engine = engine.get_rocksdb();
         let mut gc_runner = TestGcRunner::new(0);
 
@@ -1118,7 +1117,7 @@ pub mod tests {
         cfg.writecf.dynamic_level_bytes = false;
         let dir = tempfile::TempDir::new().unwrap();
         let builder = TestEngineBuilder::new().path(dir.path());
-        let mut engine = builder.build_with_cfg(&cfg).unwrap();
+        let engine = builder.build_with_cfg(&cfg, 0, 0).unwrap();
         let raw_engine = engine.get_rocksdb();
         let value = vec![b'v'; 512];
         let mut gc_runner = TestGcRunner::new(0);
@@ -1187,7 +1186,7 @@ pub mod tests {
 
         let dir = tempfile::TempDir::new().unwrap();
         let builder = TestEngineBuilder::new().path(dir.path());
-        let mut engine = builder.build_with_cfg(&cfg).unwrap();
+        let engine = builder.build_with_cfg(&cfg, 0, 0).unwrap();
         let raw_engine = engine.get_rocksdb();
         let mut gc_runner = TestGcRunner::new(0);
 
