@@ -1609,20 +1609,6 @@ where
 
         let f = async move {
             let mut success = false;
-            let mut update_ts = |ts| {
-                concurrency_manager.update_max_ts(ts);
-                // Set the least significant bit to 1 to mark it as synced.
-                success = txn_ext
-                    .max_ts_sync_status
-                    .compare_exchange(
-                        initial_status,
-                        initial_status | 1,
-                        Ordering::SeqCst,
-                        Ordering::SeqCst,
-                    )
-                    .is_ok();
-            };
-
             while txn_ext.max_ts_sync_status.load(Ordering::SeqCst) == initial_status {
                 // `causal_ts_provier` need flush for rawkv apiv2. `causal_ts_provider`
                 // flsuh will fetch batch of tso to update its cache and return
@@ -1640,8 +1626,17 @@ where
 
                 match res {
                     Ok(ts) => {
-                        update_ts(ts);
-                        break;
+                        concurrency_manager.update_max_ts(ts);
+                        // Set the least significant bit to 1 to mark it as synced.
+                        success = txn_ext
+                            .max_ts_sync_status
+                            .compare_exchange(
+                                initial_status,
+                                initial_status | 1,
+                                Ordering::SeqCst,
+                                Ordering::SeqCst,
+                            )
+                            .is_ok();
                     }
                     Err(e) => {
                         warn!(
