@@ -2489,9 +2489,6 @@ where
 
         if msg.has_extra_msg() {
             self.on_extra_message(&mut msg);
-        }
-
-        if !msg.has_message() {
             return Ok(());
         }
 

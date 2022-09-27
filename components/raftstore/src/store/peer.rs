@@ -1547,7 +1547,12 @@ where
 
     #[inline]
     pub fn is_initialized(&self) -> bool {
-        self.get_store().is_initialized() && self.initialized
+        self.get_store().is_initialized()
+    }
+
+    #[inline]
+    pub fn is_peer_initialized(&self) -> bool {
+        self.initialized
     }
 
     #[inline]
@@ -2597,7 +2602,7 @@ where
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
     ) {
-        if !self.is_initialized() {
+        if !self.is_peer_initialized() {
             self.initialized = true;
             fail_point!("ignore notify leader the peer is available", |_| {});
             let leader_id = self.leader_id();
