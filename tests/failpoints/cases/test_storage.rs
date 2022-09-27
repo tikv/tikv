@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use api_version::KvFormat;
+use api_version::{test_kv_format_impl, KvFormat};
 use causal_ts::CausalTsProvider;
 use collections::HashMap;
 use engine_traits::DummyFactory;
@@ -509,7 +509,11 @@ fn test_pipelined_pessimistic_lock() {
 
 #[test]
 fn test_async_commit_prewrite_with_stale_max_ts() {
-    let mut cluster = new_server_cluster(0, 2);
+    test_kv_format_impl!(test_async_commit_prewrite_with_stale_max_ts_impl);
+}
+
+fn test_async_commit_prewrite_with_stale_max_ts_impl<F: KvFormat>() {
+    let mut cluster = new_server_cluster_with_api_ver(0, 2, F::TAG);
     cluster.run();
 
     let engine = cluster
@@ -532,6 +536,7 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);
+    ctx.set_api_version(F::TAG);
     ctx.set_region_epoch(cluster.get_region_epoch(1));
     ctx.set_peer(cluster.leader_of_region(1).unwrap());
 

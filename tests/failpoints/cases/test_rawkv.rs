@@ -64,7 +64,7 @@ impl TestSuite {
         must_raw_put(&client, ctx, key.to_vec(), value.to_vec())
     }
 
-    pub fn raw_put_err(&mut self, key: &[u8], value: &[u8]) {
+    pub fn raw_put_err_by_timestamp_not_synced(&mut self, key: &[u8], value: &[u8]) {
         let region_id = self.cluster.get_region_id(key);
         let client = self.get_client(region_id);
         let ctx = self.get_context(region_id);
@@ -170,9 +170,9 @@ fn test_leader_transfer() {
         suite.must_leader_on_store(key1, 2);
 
         // Store 2 has a TSO batch smaller than store 1.
-        suite.raw_put_err(key1, b"v5");
+        suite.raw_put_err_by_timestamp_not_synced(key1, b"v5");
         assert_eq!(suite.must_raw_get(key1), Some(b"v4".to_vec()));
-        suite.raw_put_err(key1, b"v6");
+        suite.raw_put_err_by_timestamp_not_synced(key1, b"v6");
         assert_eq!(suite.must_raw_get(key1), Some(b"v4".to_vec()));
     }
 
@@ -244,9 +244,9 @@ fn test_region_merge() {
         suite.must_leader_on_store(keys[1], 2);
 
         // Write to store 2. Store 2 has a TSO batch smaller than store 1.
-        suite.raw_put_err(keys[1], b"v5");
+        suite.raw_put_err_by_timestamp_not_synced(keys[1], b"v5");
         assert_eq!(suite.must_raw_get(keys[1]), Some(b"v4".to_vec()));
-        suite.raw_put_err(keys[1], b"v6");
+        suite.raw_put_err_by_timestamp_not_synced(keys[1], b"v6");
         assert_eq!(suite.must_raw_get(keys[1]), Some(b"v4".to_vec()));
     }
 

@@ -1610,10 +1610,14 @@ where
         let f = async move {
             let mut success = false;
             while txn_ext.max_ts_sync_status.load(Ordering::SeqCst) == initial_status {
-                // `causal_ts_provier` need flush for rawkv apiv2. `causal_ts_provider`
-                // flsuh will fetch batch of tso to update its cache and return
-                // the first tso. So `concurrency_manager` can use the tso returned
-                // by `causal_ts_provider`.
+                // On leader transfer / region merge, RawKV API v2 need to invoke
+                // causal_ts_provider.flush() to renew cached TSO, to ensure that 
+                // the next TSO returned by causal_ts_provider.get_ts() on current
+                // store must be larger than the store where the leader is on before.
+                //
+                // And it won't break correctness of transaction commands, as
+                // causal_ts_provider.flush() is implemented as pd_client.get_tso() + renew TSO
+                // cached.
                 let res: crate::Result<TimeStamp> =
                     if let Some(causal_ts_provider) = &causal_ts_provider {
                         causal_ts_provider

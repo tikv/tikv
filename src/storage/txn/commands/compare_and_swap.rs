@@ -93,11 +93,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
             let lock_guard = block_on(get_raw_key_guard(&provider, concurrency_manager)).map_err(
                 |err: StorageError| ErrorInner::Other(box_err!("failed to key guard: {:?}", err)),
             )?;
-            let lock_guards = if let Some(lock_guard) = lock_guard {
-                vec![lock_guard]
-            } else {
-                vec![]
-            };
+            let lock_guards: Vec<_> = lock_guard.into_iter().collect();
             let ts = block_on(get_causal_ts(&provider)).map_err(|err: StorageError| {
                 ErrorInner::Other(box_err!("failed to get casual ts: {:?}", err))
             })?;
