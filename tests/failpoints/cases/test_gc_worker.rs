@@ -319,11 +319,11 @@ fn test_error_in_compaction_filter() {
     let raw_engine = engine.get_rocksdb();
 
     let large_value = vec![b'x'; 300];
-    must_prewrite_put(&engine, b"zkey", &large_value, b"zkey", 101);
+    must_prewrite_put(&mut engine, b"zkey", &large_value, b"zkey", 101);
     must_commit(&mut engine, b"zkey", 101, 102);
-    must_prewrite_put(&engine, b"zkey", &large_value, b"zkey", 103);
+    must_prewrite_put(&mut engine, b"zkey", &large_value, b"zkey", 103);
     must_commit(&mut engine, b"zkey", 103, 104);
-    must_prewrite_delete(&engine, b"zkey", b"zkey", 105);
+    must_prewrite_delete(&mut engine, b"zkey", b"zkey", 105);
     must_commit(&mut engine, b"zkey", 105, 106);
 
     let fp = "write_compaction_filter_flush_write_batch";

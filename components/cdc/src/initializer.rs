@@ -670,7 +670,7 @@ mod tests {
             total_bytes += k.len();
             total_bytes += v.len();
             let ts = TimeStamp::new(i as _);
-            must_prewrite_put(&engine, k, v, k, ts);
+            must_prewrite_put(&mut engine, k, v, k, ts);
             expected_locks
                 .entry(ts)
                 .or_default()
@@ -810,16 +810,16 @@ mod tests {
         };
 
         // Create the initial data with CF_WRITE L0: |zkey_110, zkey1_160|
-        must_prewrite_put(&engine, b"zkey", &v_suffix(100), b"zkey", 100);
+        must_prewrite_put(&mut engine, b"zkey", &v_suffix(100), b"zkey", 100);
         must_commit(&mut engine, b"zkey", 100, 110);
-        must_prewrite_put(&engine, b"zzzz", &v_suffix(150), b"zzzz", 150);
+        must_prewrite_put(&mut engine, b"zzzz", &v_suffix(150), b"zzzz", 150);
         must_commit(&mut engine, b"zzzz", 150, 160);
         engine
             .kv_engine()
             .unwrap()
             .flush_cf(CF_WRITE, true)
             .unwrap();
-        must_prewrite_delete(&engine, b"zkey", b"zkey", 200);
+        must_prewrite_delete(&mut engine, b"zkey", b"zkey", 200);
         check_handling_old_value_seek_write(); // For TxnEntry::Prewrite.
 
         // CF_WRITE L0: |zkey_110, zkey1_160|, |zkey_210|

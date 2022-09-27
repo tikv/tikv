@@ -512,14 +512,14 @@ mod tests {
         // Generate REVERSE_SEEK_BOUND / 2 Put for key [10].
         let k = &[10_u8];
         for ts in 0..REVERSE_SEEK_BOUND / 2 {
-            must_prewrite_put(&engine, k, &[ts as u8], k, ts);
+            must_prewrite_put(&mut engine, k, &[ts as u8], k, ts);
             must_commit(&mut engine, k, ts, ts);
         }
 
         // Generate REVERSE_SEEK_BOUND + 1 Put for key [9].
         let k = &[9_u8];
         for ts in 0..=REVERSE_SEEK_BOUND {
-            must_prewrite_put(&engine, k, &[ts as u8], k, ts);
+            must_prewrite_put(&mut engine, k, &[ts as u8], k, ts);
             must_commit(&mut engine, k, ts, ts);
         }
 
@@ -527,7 +527,7 @@ mod tests {
         // for key [8].
         let k = &[8_u8];
         for ts in 0..=REVERSE_SEEK_BOUND {
-            must_prewrite_put(&engine, k, &[ts as u8], k, ts);
+            must_prewrite_put(&mut engine, k, &[ts as u8], k, ts);
             if ts < REVERSE_SEEK_BOUND / 2 {
                 must_commit(&mut engine, k, ts, ts);
             } else {
@@ -548,16 +548,16 @@ mod tests {
         // Rollback for key [7].
         let k = &[7_u8];
         for ts in 0..REVERSE_SEEK_BOUND / 2 {
-            must_prewrite_put(&engine, k, &[ts as u8], k, ts);
+            must_prewrite_put(&mut engine, k, &[ts as u8], k, ts);
             must_commit(&mut engine, k, ts, ts);
         }
         {
             let ts = REVERSE_SEEK_BOUND / 2;
-            must_prewrite_delete(&engine, k, k, ts);
+            must_prewrite_delete(&mut engine, k, k, ts);
             must_commit(&mut engine, k, ts, ts);
         }
         for ts in REVERSE_SEEK_BOUND / 2 + 1..=REVERSE_SEEK_BOUND {
-            must_prewrite_put(&engine, k, &[ts as u8], k, ts);
+            must_prewrite_put(&mut engine, k, &[ts as u8], k, ts);
             let modifies = vec![
                 // ts is rather small, so it is ok to `as u8`
                 Modify::Put(
@@ -573,14 +573,14 @@ mod tests {
         // Generate 1 PUT for key [6].
         let k = &[6_u8];
         for ts in 0..1 {
-            must_prewrite_put(&engine, k, &[ts as u8], k, ts);
+            must_prewrite_put(&mut engine, k, &[ts as u8], k, ts);
             must_commit(&mut engine, k, ts, ts);
         }
 
         // Generate REVERSE_SEEK_BOUND + 1 Rollback for key [5].
         let k = &[5_u8];
         for ts in 0..=REVERSE_SEEK_BOUND {
-            must_prewrite_put(&engine, k, &[ts as u8], k, ts);
+            must_prewrite_put(&mut engine, k, &[ts as u8], k, ts);
             let modifies = vec![
                 // ts is rather small, so it is ok to `as u8`
                 Modify::Put(
@@ -597,7 +597,7 @@ mod tests {
         // with ts = REVERSE_SEEK_BOUND + 1 for key [4].
         let k = &[4_u8];
         for ts in REVERSE_SEEK_BOUND..REVERSE_SEEK_BOUND + 2 {
-            must_prewrite_put(&engine, k, &[ts as u8], k, ts);
+            must_prewrite_put(&mut engine, k, &[ts as u8], k, ts);
             must_commit(&mut engine, k, ts, ts);
         }
 
@@ -823,7 +823,7 @@ mod tests {
         }
 
         // Generate 1 put for [c].
-        must_prewrite_put(&engine, b"c", b"value", b"c", REVERSE_SEEK_BOUND * 2);
+        must_prewrite_put(&mut engine, b"c", b"value", b"c", REVERSE_SEEK_BOUND * 2);
         must_commit(
             &engine,
             b"c",
@@ -893,7 +893,7 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
         // Generate 1 put and N/2 rollback for [b].
-        must_prewrite_put(&engine, b"b", b"value_b", b"b", 0);
+        must_prewrite_put(&mut engine, b"b", b"value_b", b"b", 0);
         must_commit(&mut engine, b"b", 0, 0);
         for ts in 1..=REVERSE_SEEK_BOUND / 2 {
             let modifies = vec![
@@ -909,7 +909,7 @@ mod tests {
         }
 
         // Generate 1 put for [c].
-        must_prewrite_put(&engine, b"c", b"value_c", b"c", REVERSE_SEEK_BOUND * 2);
+        must_prewrite_put(&mut engine, b"c", b"value_c", b"c", REVERSE_SEEK_BOUND * 2);
         must_commit(
             &engine,
             b"c",
@@ -986,12 +986,12 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
 
         // Generate 1 put for [c].
-        must_prewrite_put(&engine, b"c", b"value", b"c", 1);
+        must_prewrite_put(&mut engine, b"c", b"value", b"c", 1);
         must_commit(&mut engine, b"c", 1, 1);
 
         // Generate N/2 put for [b] .
         for ts in 1..=SEEK_BOUND / 2 {
-            must_prewrite_put(&engine, b"b", &[ts as u8], b"b", ts);
+            must_prewrite_put(&mut engine, b"b", &[ts as u8], b"b", ts);
             must_commit(&mut engine, b"b", ts, ts);
         }
 
@@ -1068,12 +1068,12 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
 
         // Generate 1 put for [c].
-        must_prewrite_put(&engine, b"c", b"value", b"c", 1);
+        must_prewrite_put(&mut engine, b"c", b"value", b"c", 1);
         must_commit(&mut engine, b"c", 1, 1);
 
         // Generate N+1 put for [b] .
         for ts in 1..SEEK_BOUND + 2 {
-            must_prewrite_put(&engine, b"b", &[ts as u8], b"b", ts);
+            must_prewrite_put(&mut engine, b"b", &[ts as u8], b"b", ts);
             must_commit(&mut engine, b"b", ts, ts);
         }
 
@@ -1158,12 +1158,12 @@ mod tests {
         // N denotes for SEEK_BOUND, M denotes for REVERSE_SEEK_BOUND
 
         // Generate 1 put for [c].
-        must_prewrite_put(&engine, b"c", b"value", b"c", 1);
+        must_prewrite_put(&mut engine, b"c", b"value", b"c", 1);
         must_commit(&mut engine, b"c", 1, 1);
 
         // Generate N+M+1 put for [b] .
         for ts in 1..SEEK_BOUND + REVERSE_SEEK_BOUND + 2 {
-            must_prewrite_put(&engine, b"b", &[ts as u8], b"b", ts);
+            must_prewrite_put(&mut engine, b"b", &[ts as u8], b"b", ts);
             must_commit(&mut engine, b"b", ts, ts);
         }
 
@@ -1251,15 +1251,15 @@ mod tests {
         // Generate 1 put for [1], [2] ... [6].
         for i in 1..7 {
             // ts = 1: value = []
-            must_prewrite_put(&engine, &[i], &[], &[i], 1);
+            must_prewrite_put(&mut engine, &[i], &[], &[i], 1);
             must_commit(&mut engine, &[i], 1, 1);
 
             // ts = 7: value = [ts]
-            must_prewrite_put(&engine, &[i], &[i], &[i], 7);
+            must_prewrite_put(&mut engine, &[i], &[i], &[i], 7);
             must_commit(&mut engine, &[i], 7, 7);
 
             // ts = 14: value = []
-            must_prewrite_put(&engine, &[i], &[], &[i], 14);
+            must_prewrite_put(&mut engine, &[i], &[], &[i], 14);
             must_commit(&mut engine, &[i], 14, 14);
         }
 
@@ -1384,8 +1384,8 @@ mod tests {
         for i in 0..16 {
             for y in 0..16 {
                 let pk = &[i as u8, y as u8];
-                must_prewrite_put(&engine, pk, b"", pk, start_ts);
-                must_rollback(&engine, pk, start_ts, false);
+                must_prewrite_put(&mut engine, pk, b"", pk, start_ts);
+                must_rollback(&mut engine, pk, start_ts, false);
                 // Generate 254 RocksDB tombstones between [0,0] and [15,15].
                 if !((i == 0 && y == 0) || (i == 15 && y == 15)) {
                     must_gc(&engine, pk, safe_point);
@@ -1397,7 +1397,7 @@ mod tests {
         let start_ts = 3;
         for i in 0..16 {
             let pk = &[i as u8];
-            must_prewrite_put(&engine, pk, b"", pk, start_ts);
+            must_prewrite_put(&mut engine, pk, b"", pk, start_ts);
         }
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -1449,29 +1449,29 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
 
         let (key0, val0) = (b"k0", b"v0");
-        must_prewrite_put(&engine, key0, val0, key0, 60);
+        must_prewrite_put(&mut engine, key0, val0, key0, 60);
 
         let (key1, val1) = (b"k1", b"v1");
-        must_prewrite_put(&engine, key1, val1, key1, 25);
+        must_prewrite_put(&mut engine, key1, val1, key1, 25);
         must_commit(&mut engine, key1, 25, 30);
 
         let (key2, val2, val22) = (b"k2", b"v2", b"v22");
-        must_prewrite_put(&engine, key2, val2, key2, 6);
+        must_prewrite_put(&mut engine, key2, val2, key2, 6);
         must_commit(&mut engine, key2, 6, 9);
-        must_prewrite_put(&engine, key2, val22, key2, 10);
+        must_prewrite_put(&mut engine, key2, val22, key2, 10);
         must_commit(&mut engine, key2, 10, 20);
 
         let (key3, val3) = (b"k3", b"v3");
-        must_prewrite_put(&engine, key3, val3, key3, 5);
+        must_prewrite_put(&mut engine, key3, val3, key3, 5);
         must_commit(&mut engine, key3, 5, 6);
 
         let (key4, val4) = (b"k4", b"val4");
-        must_prewrite_put(&engine, key4, val4, key4, 3);
+        must_prewrite_put(&mut engine, key4, val4, key4, 3);
         must_commit(&mut engine, key4, 3, 4);
-        must_prewrite_lock(&engine, key4, key4, 5);
+        must_prewrite_lock(&mut engine, key4, key4, 5);
 
         let (key5, val5) = (b"k5", b"val5");
-        must_prewrite_put(&engine, key5, val5, key5, 1);
+        must_prewrite_put(&mut engine, key5, val5, key5, 1);
         must_commit(&mut engine, key5, 1, 2);
         must_acquire_pessimistic_lock(&engine, key5, key5, 3, 3);
 

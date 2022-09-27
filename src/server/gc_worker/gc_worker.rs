@@ -2483,7 +2483,7 @@ mod tests {
     fn delete_range_when_worker_is_full() {
         let store_id = 1;
         let engine = PrefixedEngine(TestEngineBuilder::new().build().unwrap());
-        must_prewrite_put(&engine, b"key", b"value", b"key", 10);
+        must_prewrite_put(&mut engine, b"key", b"value", b"key", 10);
         must_commit(&mut engine, b"key", 10, 20);
         let db = engine.kv_engine().unwrap().as_inner().clone();
         let cf = get_cf_handle(&db, CF_WRITE).unwrap();

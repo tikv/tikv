@@ -251,10 +251,10 @@ pub mod tests {
             }
         };
 
-        must_prewrite_lock(&engine, b"k1", b"key", 1);
+        must_prewrite_lock(&mut engine, b"k1", b"key", 1);
         must_commit(&mut engine, b"k1", 1, 3);
-        must_rollback(&engine, b"k1", 5, false);
-        must_prewrite_lock(&engine, b"k1", b"key", 7);
+        must_rollback(&mut engine, b"k1", 5, false);
+        must_prewrite_lock(&mut engine, b"k1", b"key", 7);
         must_commit(&mut engine, b"k1", 7, 9);
 
         // Lock CF has no lock
@@ -269,16 +269,16 @@ pub mod tests {
             check_secondary(b"k1", 7),
             SecondaryLocksStatus::Committed(9.into())
         );
-        must_get_commit_ts(&engine, b"k1", 7, 9);
+        must_get_commit_ts(&mut engine, b"k1", 7, 9);
         assert_eq!(check_secondary(b"k1", 5), SecondaryLocksStatus::RolledBack);
-        must_get_rollback_ts(&engine, b"k1", 5);
+        must_get_rollback_ts(&mut engine, b"k1", 5);
         assert_eq!(
             check_secondary(b"k1", 1),
             SecondaryLocksStatus::Committed(3.into())
         );
-        must_get_commit_ts(&engine, b"k1", 1, 3);
+        must_get_commit_ts(&mut engine, b"k1", 1, 3);
         assert_eq!(check_secondary(b"k1", 6), SecondaryLocksStatus::RolledBack);
-        must_get_rollback_protected(&engine, b"k1", 6, true);
+        must_get_rollback_protected(&mut engine, b"k1", 6, true);
 
         // ----------------------------
 
@@ -294,11 +294,11 @@ pub mod tests {
 
         let status = check_secondary(b"k1", 11);
         assert_eq!(status, SecondaryLocksStatus::RolledBack);
-        must_get_rollback_protected(&engine, b"k1", 11, true);
+        must_get_rollback_protected(&mut engine, b"k1", 11, true);
 
         // ----------------------------
 
-        must_prewrite_lock(&engine, b"k1", b"key", 13);
+        must_prewrite_lock(&mut engine, b"k1", b"key", 13);
 
         // Lock CF has an optimistic lock
         //
@@ -313,7 +313,7 @@ pub mod tests {
             SecondaryLocksStatus::Locked(_) => {}
             res => panic!("unexpected lock status: {:?}", res),
         }
-        must_locked(&engine, b"k1", 13);
+        must_locked(&mut engine, b"k1", 13);
 
         // ----------------------------
 
@@ -333,12 +333,12 @@ pub mod tests {
             SecondaryLocksStatus::RolledBack => {}
             res => panic!("unexpected lock status: {:?}", res),
         }
-        must_get_rollback_protected(&engine, b"k1", 14, true);
+        must_get_rollback_protected(&mut engine, b"k1", 14, true);
 
         match check_secondary(b"k1", 15) {
             SecondaryLocksStatus::RolledBack => {}
             res => panic!("unexpected lock status: {:?}", res),
         }
-        must_get_overlapped_rollback(&engine, b"k1", 15, 13, WriteType::Lock, Some(0));
+        must_get_overlapped_rollback(&mut engine, b"k1", 15, 13, WriteType::Lock, Some(0));
     }
 }

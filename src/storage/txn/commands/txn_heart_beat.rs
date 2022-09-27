@@ -212,15 +212,15 @@ pub mod tests {
         // Create a lock with TTL=100.
         // The initial TTL will be set to 0 after calling must_prewrite_put. Update it
         // first.
-        must_prewrite_put(&engine, k, v, k, 5);
-        must_locked(&engine, k, 5);
+        must_prewrite_put(&mut engine, k, v, k, 5);
+        must_locked(&mut engine, k, 5);
         must_success(&engine, k, 5, 100, 100);
 
         test(5);
 
-        must_locked(&engine, k, 5);
+        must_locked(&mut engine, k, 5);
         must_commit(&mut engine, k, 5, 10);
-        must_unlocked(&engine, k);
+        must_unlocked(&mut engine, k);
 
         // No lock.
         must_err(&engine, k, 5, 100);

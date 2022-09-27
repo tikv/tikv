@@ -154,18 +154,18 @@ pub mod tests {
     {
         let engine = TestEngineBuilder::new().build().unwrap();
 
-        must_prewrite_put(&engine, k, v1, k, 5);
+        must_prewrite_put(&mut engine, k, v1, k, 5);
         must_commit(&mut engine, k, 5, 10);
-        must_prewrite_put(&engine, k, v2, k, 15);
+        must_prewrite_put(&mut engine, k, v2, k, 15);
         must_commit(&mut engine, k, 15, 20);
-        must_prewrite_delete(&engine, k, k, 25);
+        must_prewrite_delete(&mut engine, k, k, 25);
         must_commit(&mut engine, k, 25, 30);
-        must_prewrite_put(&engine, k, v3, k, 35);
+        must_prewrite_put(&mut engine, k, v3, k, 35);
         must_commit(&mut engine, k, 35, 40);
-        must_prewrite_lock(&engine, k, k, 45);
+        must_prewrite_lock(&mut engine, k, k, 45);
         must_commit(&mut engine, k, 45, 50);
-        must_prewrite_put(&engine, k, v4, k, 55);
-        must_rollback(&engine, k, 55, false);
+        must_prewrite_put(&mut engine, k, v4, k, 55);
+        must_rollback(&mut engine, k, 55, false);
 
         // Transactions:
         // startTS commitTS Command

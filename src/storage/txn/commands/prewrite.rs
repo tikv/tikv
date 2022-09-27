@@ -1099,9 +1099,9 @@ mod tests {
             Some(15),
         )
         .unwrap();
-        must_unlocked(&engine, key);
+        must_unlocked(&mut engine, key);
         must_get(&engine, key, 12, value);
-        must_get_commit_ts(&engine, key, 10, 11);
+        must_get_commit_ts(&mut engine, key, 10, 11);
 
         cm.update_max_ts(50.into());
 
@@ -1122,10 +1122,10 @@ mod tests {
             .unwrap();
             assert!(res.min_commit_ts.is_zero());
             assert!(res.one_pc_commit_ts.is_zero());
-            must_locked(&engine, key, 20);
+            must_locked(&mut engine, key, 20);
         }
 
-        must_rollback(&engine, key, 20, false);
+        must_rollback(&mut engine, key, 20, false);
         let mutations = vec![
             Mutation::make_put(Key::from_raw(key), value.to_vec()),
             Mutation::make_check_not_exists(Key::from_raw(b"non_exist")),
@@ -1174,10 +1174,10 @@ mod tests {
             Some(70),
         )
         .unwrap_err();
-        must_unlocked(&engine, k1);
-        must_locked(&engine, k2, 50);
-        must_get_commit_ts_none(&engine, k1, 60);
-        must_get_commit_ts_none(&engine, k2, 60);
+        must_unlocked(&mut engine, k1);
+        must_locked(&mut engine, k2, 50);
+        must_get_commit_ts_none(&mut engine, k1, 60);
+        must_get_commit_ts_none(&mut engine, k2, 60);
     }
 
     #[test]
@@ -1206,9 +1206,9 @@ mod tests {
         )
         .unwrap();
 
-        must_unlocked(&engine, key);
+        must_unlocked(&mut engine, key);
         must_get(&engine, key, 12, value);
-        must_get_commit_ts(&engine, key, 10, 11);
+        must_get_commit_ts(&mut engine, key, 10, 11);
 
         let (k1, v1) = (b"k", b"v");
         let (k2, v2) = (b"k2", b"v2");
@@ -1238,12 +1238,12 @@ mod tests {
         )
         .unwrap();
 
-        must_unlocked(&engine, k1);
-        must_unlocked(&engine, k2);
+        must_unlocked(&mut engine, k1);
+        must_unlocked(&mut engine, k2);
         must_get(&engine, k1, 16, v1);
         must_get(&engine, k2, 16, v2);
-        must_get_commit_ts(&engine, k1, 8, 13);
-        must_get_commit_ts(&engine, k2, 8, 13);
+        must_get_commit_ts(&mut engine, k1, 8, 13);
+        must_get_commit_ts(&mut engine, k2, 8, 13);
 
         cm.update_max_ts(50.into());
         must_acquire_pessimistic_lock(&engine, k1, k1, 20, 20);
@@ -1266,9 +1266,9 @@ mod tests {
         .unwrap();
         assert!(res.min_commit_ts.is_zero());
         assert!(res.one_pc_commit_ts.is_zero());
-        must_locked(&engine, k1, 20);
+        must_locked(&mut engine, k1, 20);
 
-        must_rollback(&engine, k1, 20, true);
+        must_rollback(&mut engine, k1, 20, true);
 
         // Test a 1PC request should not be partially written when encounters error on
         // the halfway. If some of the keys are successfully written as committed state,
@@ -1310,9 +1310,9 @@ mod tests {
         )
         .unwrap_err();
         must_pessimistic_locked(&engine, k1, 60, 60);
-        must_locked(&engine, k2, 50);
-        must_get_commit_ts_none(&engine, k1, 60);
-        must_get_commit_ts_none(&engine, k2, 60);
+        must_locked(&mut engine, k2, 50);
+        must_get_commit_ts_none(&mut engine, k1, 60);
+        must_get_commit_ts_none(&mut engine, k2, 60);
     }
 
     #[test]
@@ -1343,7 +1343,7 @@ mod tests {
         let res = prewrite_command(&engine, cm.clone(), &mut statistics, cmd).unwrap();
         assert!(!res.min_commit_ts.is_zero());
         assert_eq!(res.one_pc_commit_ts, TimeStamp::zero());
-        must_locked(&engine, key, 10);
+        must_locked(&mut engine, key, 10);
 
         cm.update_max_ts(50.into());
 
@@ -1376,8 +1376,8 @@ mod tests {
             let res = prewrite_command(&engine, cm.clone(), &mut statistics, cmd).unwrap();
             assert!(res.min_commit_ts.is_zero());
             assert!(res.one_pc_commit_ts.is_zero());
-            assert!(!must_locked(&engine, k1, 20).use_async_commit);
-            assert!(!must_locked(&engine, k2, 20).use_async_commit);
+            assert!(!must_locked(&mut engine, k1, 20).use_async_commit);
+            assert!(!must_locked(&mut engine, k2, 20).use_async_commit);
         }
     }
 
@@ -1414,7 +1414,7 @@ mod tests {
         let res = prewrite_command(&engine, cm.clone(), &mut statistics, cmd).unwrap();
         assert!(!res.min_commit_ts.is_zero());
         assert_eq!(res.one_pc_commit_ts, TimeStamp::zero());
-        must_locked(&engine, key, 10);
+        must_locked(&mut engine, key, 10);
 
         cm.update_max_ts(50.into());
 
@@ -1454,8 +1454,8 @@ mod tests {
         let res = prewrite_command(&engine, cm, &mut statistics, cmd).unwrap();
         assert!(res.min_commit_ts.is_zero());
         assert!(res.one_pc_commit_ts.is_zero());
-        assert!(!must_locked(&engine, k1, 20).use_async_commit);
-        assert!(!must_locked(&engine, k2, 20).use_async_commit);
+        assert!(!must_locked(&mut engine, k1, 20).use_async_commit);
+        assert!(!must_locked(&mut engine, k2, 20).use_async_commit);
     }
 
     #[test]
@@ -1693,7 +1693,7 @@ mod tests {
         let (key, value) = (b"k", b"val");
 
         // T1: start_ts = 3, commit_ts = 5, put key:value
-        must_prewrite_put(&engine, key, value, key, 3);
+        must_prewrite_put(&mut engine, key, value, key, 3);
         must_commit(&mut engine, key, 3, 5);
 
         // T2: start_ts = 15, prewrite on k, with should_not_exist flag set.
@@ -1718,7 +1718,7 @@ mod tests {
 
         // T3: start_ts = 8, commit_ts = max_ts + 1 = 16, prewrite a DELETE operation on
         // k
-        must_prewrite_delete(&engine, key, key, 8);
+        must_prewrite_delete(&mut engine, key, key, 8);
         must_commit(&mut engine, key, 8, cm.max_ts().into_inner() + 1);
 
         // T1: start_ts = 10, repeatedly prewrite on k, with should_not_exist flag set
@@ -1763,7 +1763,7 @@ mod tests {
         let one_pc_commit_ts = result.one_pc_commit_ts;
 
         // T3 is after T1 and T2
-        must_prewrite_put(&engine, key, b"v3", key, 20);
+        must_prewrite_put(&mut engine, key, b"v3", key, 20);
         must_commit(&mut engine, key, 20, 25);
 
         // Repeating the T1 prewrite request
@@ -1868,7 +1868,7 @@ mod tests {
         let one_pc_commit_ts = result.one_pc_commit_ts;
 
         // T3 is after T1 and T2
-        must_prewrite_put(&engine, key, b"v3", key, 20);
+        must_prewrite_put(&mut engine, key, b"v3", key, 20);
         must_commit(&mut engine, key, 20, 25);
 
         // Repeating the T1 prewrite request
@@ -1986,8 +1986,8 @@ mod tests {
         .unwrap();
         // The new commit ts should be same as before.
         assert_eq!(res.one_pc_commit_ts, commit_ts);
-        must_seek_write(&engine, b"k1", 100, 5, commit_ts, WriteType::Put);
-        must_seek_write(&engine, b"k2", 100, 5, commit_ts, WriteType::Put);
+        must_seek_write(&mut engine, b"k1", 100, 5, commit_ts, WriteType::Put);
+        must_seek_write(&mut engine, b"k2", 100, 5, commit_ts, WriteType::Put);
     }
 
     #[test]
@@ -2069,12 +2069,12 @@ mod tests {
         must_commit(&mut engine, b"k2", 10, 25);
 
         // Seek from 30, we should read commit_ts = 20 instead of 25.
-        must_seek_write(&engine, b"k1", 30, 10, 20, WriteType::Put);
-        must_seek_write(&engine, b"k2", 30, 10, 20, WriteType::Put);
+        must_seek_write(&mut engine, b"k1", 30, 10, 20, WriteType::Put);
+        must_seek_write(&mut engine, b"k2", 30, 10, 20, WriteType::Put);
 
         // Write another version to the keys.
-        must_prewrite_put(&engine, b"k1", b"v11", b"k1", 35);
-        must_prewrite_put(&engine, b"k2", b"v22", b"k1", 35);
+        must_prewrite_put(&mut engine, b"k1", b"v11", b"k1", 35);
+        must_prewrite_put(&mut engine, b"k2", b"v22", b"k1", 35);
         must_commit(&mut engine, b"k1", 35, 40);
         must_commit(&mut engine, b"k2", 35, 40);
 
@@ -2091,11 +2091,11 @@ mod tests {
             true,
         )
         .unwrap();
-        must_unlocked(&engine, b"k2");
+        must_unlocked(&mut engine, b"k2");
 
         prewrite_with_retry_flag(b"k2", b"v2", b"k1", None, 10, SkipPessimisticCheck, true)
             .unwrap();
-        must_unlocked(&engine, b"k2");
+        must_unlocked(&mut engine, b"k2");
         // Committing still does nothing.
         must_commit(&mut engine, b"k2", 10, 25);
         // Try a different txn start ts (which haven't been successfully committed
@@ -2109,12 +2109,12 @@ mod tests {
                 box MvccErrorInner::PessimisticLockNotFound { .. }
             )))
         ));
-        must_unlocked(&engine, b"k2");
+        must_unlocked(&mut engine, b"k2");
         // However conflict still won't be checked if there's a non-retry request
         // arriving.
         prewrite_with_retry_flag(b"k2", b"v2", b"k1", None, 10, SkipPessimisticCheck, false)
             .unwrap();
-        must_locked(&engine, b"k2", 10);
+        must_locked(&mut engine, b"k2", 10);
     }
 
     #[test]
@@ -2129,8 +2129,8 @@ mod tests {
 
         // Test the write conflict path.
         must_acquire_pessimistic_lock(&engine, k1, v1, 1, 1);
-        must_rollback(&engine, k1, 1, true);
-        must_prewrite_put(&engine, k1, v2, k1, 5);
+        must_rollback(&mut engine, k1, 1, true);
+        must_prewrite_put(&mut engine, k1, v2, k1, 5);
         must_commit(&mut engine, k1, 5, 6);
         let prewrite_cmd = Prewrite::new(
             vec![Mutation::make_put(Key::from_raw(k1), v1.to_vec())],
@@ -2158,7 +2158,7 @@ mod tests {
 
         // Test the pessimistic lock is not found path.
         must_acquire_pessimistic_lock(&engine, k1, v1, 10, 10);
-        must_rollback(&engine, k1, 10, true);
+        must_rollback(&mut engine, k1, 10, true);
         must_acquire_pessimistic_lock(&engine, k1, v1, 15, 15);
         let prewrite_cmd = PrewritePessimistic::with_defaults(
             vec![(
@@ -2352,7 +2352,7 @@ mod tests {
         must_commit(&mut engine, k1, 5, 15);
 
         // Another transaction prewrites
-        must_prewrite_put(&engine, k1, v2, k1, 20);
+        must_prewrite_put(&mut engine, k1, v2, k1, 20);
 
         // A retried prewrite of the first transaction should be idempotent.
         let prewrite_cmd = Prewrite::new(
@@ -2449,6 +2449,6 @@ mod tests {
         let res = prewrite_command(&engine, cm, &mut statistics, cmd).unwrap();
         // It should return the real commit TS as the min_commit_ts in the result.
         assert_eq!(res.min_commit_ts, 18.into(), "{:?}", res);
-        must_unlocked(&engine, b"k2");
+        must_unlocked(&mut engine, b"k2");
     }
 }

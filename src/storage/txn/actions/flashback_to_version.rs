@@ -214,24 +214,24 @@ pub mod tests {
         let k = b"k";
         // Prewrite and commit Put(k -> v1) with stat_ts = 1, commit_ts = 2.
         let v1 = b"v1";
-        must_prewrite_put(&engine, k, v1, k, *ts.incr());
+        must_prewrite_put(&mut engine, k, v1, k, *ts.incr());
         must_commit(&mut engine, k, ts, *ts.incr());
         must_get(&engine, k, *ts.incr(), v1);
         // Prewrite and rollback Put(k -> v2) with stat_ts = 4.
         let v2 = b"v2";
-        must_prewrite_put(&engine, k, v2, k, *ts.incr());
-        must_rollback(&engine, k, ts, false);
+        must_prewrite_put(&mut engine, k, v2, k, *ts.incr());
+        must_rollback(&mut engine, k, ts, false);
         must_get(&engine, k, *ts.incr(), v1);
         // Prewrite and rollback Delete(k) with stat_ts = 6.
-        must_prewrite_delete(&engine, k, k, *ts.incr());
-        must_rollback(&engine, k, ts, false);
+        must_prewrite_delete(&mut engine, k, k, *ts.incr());
+        must_rollback(&mut engine, k, ts, false);
         must_get(&engine, k, *ts.incr(), v1);
         // Prewrite and commit Delete(k) with stat_ts = 8, commit_ts = 9.
-        must_prewrite_delete(&engine, k, k, *ts.incr());
+        must_prewrite_delete(&mut engine, k, k, *ts.incr());
         must_commit(&mut engine, k, ts, *ts.incr());
         must_get_none(&engine, k, *ts.incr());
         // Prewrite and commit Put(k -> v2) with stat_ts = 11, commit_ts = 12.
-        must_prewrite_put(&engine, k, v2, k, *ts.incr());
+        must_prewrite_put(&mut engine, k, v2, k, *ts.incr());
         must_commit(&mut engine, k, ts, *ts.incr());
         must_get(&engine, k, *ts.incr(), v2);
         // Flashback to version 1 with start_ts = 14, commit_ts = 15.
@@ -283,10 +283,10 @@ pub mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let mut ts = TimeStamp::zero();
         let (k, v) = (b"k", b"v");
-        must_prewrite_put(&engine, k, v, k, *ts.incr());
+        must_prewrite_put(&mut engine, k, v, k, *ts.incr());
         must_commit(&mut engine, k, ts, *ts.incr());
         must_get(&engine, k, ts, v);
-        must_prewrite_delete(&engine, k, k, *ts.incr());
+        must_prewrite_delete(&mut engine, k, k, *ts.incr());
         must_commit(&mut engine, k, ts, *ts.incr());
         // Since the key has been deleted, flashback to version 1 should not do
         // anything.

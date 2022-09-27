@@ -8787,7 +8787,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
 
-        must_unlocked(&engine, k2);
+        must_unlocked(&mut engine, k2);
         must_written(&engine, k2, 10, 10, WriteType::Rollback);
 
         // T1 prewrites, start_ts = 1, for_update_ts = 3

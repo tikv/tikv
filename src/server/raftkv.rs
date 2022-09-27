@@ -428,7 +428,11 @@ where
         })
     }
 
-    fn async_snapshot(&mut self, mut ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> kv::Result<()> {
+    fn async_snapshot(
+        &mut self,
+        mut ctx: SnapContext<'_>,
+        cb: Callback<Self::Snap>,
+    ) -> kv::Result<()> {
         fail_point!("raftkv_async_snapshot_err", |_| Err(box_err!(
             "injected error for async_snapshot"
         )));

@@ -509,7 +509,7 @@ mod tests {
             let key = owned_key.as_bytes();
             let owned_value = [i as u8; 512];
             let value = owned_value.as_slice();
-            must_prewrite_put(&engine, key, value, key, i * 2);
+            must_prewrite_put(&mut engine, key, value, key, i * 2);
             must_commit(&mut engine, key, i * 2, i * 2 + 1);
         }
         // let compact the memtable to disk so we can see the disk read.

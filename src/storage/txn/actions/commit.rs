@@ -187,12 +187,12 @@ pub mod tests {
     #[cfg(test)]
     fn test_commit_ok_imp(k1: &[u8], v1: &[u8], k2: &[u8], k3: &[u8]) {
         let engine = TestEngineBuilder::new().build().unwrap();
-        must_prewrite_put(&engine, k1, v1, k1, 10);
-        must_prewrite_lock(&engine, k2, k1, 10);
-        must_prewrite_delete(&engine, k3, k1, 10);
-        must_locked(&engine, k1, 10);
-        must_locked(&engine, k2, 10);
-        must_locked(&engine, k3, 10);
+        must_prewrite_put(&mut engine, k1, v1, k1, 10);
+        must_prewrite_lock(&mut engine, k2, k1, 10);
+        must_prewrite_delete(&mut engine, k3, k1, 10);
+        must_locked(&mut engine, k1, 10);
+        must_locked(&mut engine, k2, 10);
+        must_locked(&mut engine, k3, 10);
         must_succeed(&engine, k1, 10, 15);
         must_succeed(&engine, k2, 10, 15);
         must_succeed(&engine, k3, 10, 15);
@@ -219,10 +219,10 @@ pub mod tests {
 
         // Not prewrite yet
         must_err(&engine, k, 1, 2);
-        must_prewrite_put(&engine, k, v, k, 5);
+        must_prewrite_put(&mut engine, k, v, k, 5);
         // start_ts not match
         must_err(&engine, k, 4, 5);
-        must_rollback(&engine, k, 5, false);
+        must_rollback(&mut engine, k, 5, false);
         // commit after rollback
         must_err(&engine, k, 5, 6);
     }
@@ -316,7 +316,7 @@ pub mod tests {
             kvproto::kvrpcpb::AssertionLevel::Off,
         );
         // The min_commit_ts is ts(70, 0) other than ts(60, 1) in prewrite request.
-        must_large_txn_locked(&engine, k, ts(60, 0), 100, ts(70, 1), false);
+        must_large_txn_locked(&mut engine, k, ts(60, 0), 100, ts(70, 1), false);
         must_err(&engine, k, ts(60, 0), ts(65, 0));
         must_succeed(&engine, k, ts(60, 0), ts(80, 0));
     }

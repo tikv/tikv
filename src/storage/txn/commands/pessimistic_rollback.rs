@@ -159,12 +159,12 @@ pub mod tests {
         must_acquire_pessimistic_lock(&engine, k, k, 1, 1);
         must_pessimistic_locked(&engine, k, 1, 1);
         must_success(&engine, k, 1, 1);
-        must_unlocked(&engine, k);
-        must_get_commit_ts_none(&engine, k, 1);
+        must_unlocked(&mut engine, k);
+        must_get_commit_ts_none(&mut engine, k, 1);
         // Pessimistic rollback is idempotent
         must_success(&engine, k, 1, 1);
-        must_unlocked(&engine, k);
-        must_get_commit_ts_none(&engine, k, 1);
+        must_unlocked(&mut engine, k);
+        must_get_commit_ts_none(&mut engine, k, 1);
 
         // Succeed if the lock doesn't exist.
         must_success(&engine, k, 2, 2);
@@ -183,25 +183,25 @@ pub mod tests {
         must_success(&engine, k, 2, 2);
         must_pessimistic_locked(&engine, k, 2, 3);
         must_success(&engine, k, 2, 4);
-        must_unlocked(&engine, k);
+        must_unlocked(&mut engine, k);
 
         // Do nothing if rollbacks a non-pessimistic lock.
-        must_prewrite_put(&engine, k, v, k, 3);
-        must_locked(&engine, k, 3);
+        must_prewrite_put(&mut engine, k, v, k, 3);
+        must_locked(&mut engine, k, 3);
         must_success(&engine, k, 3, 3);
-        must_locked(&engine, k, 3);
+        must_locked(&mut engine, k, 3);
 
         // Do nothing if meets other transaction's optimistic lock
         must_success(&engine, k, 2, 2);
         must_success(&engine, k, 2, 3);
         must_success(&engine, k, 2, 4);
         must_success(&engine, k, 4, 4);
-        must_locked(&engine, k, 3);
+        must_locked(&mut engine, k, 3);
 
         // Do nothing if committed
         must_commit(&mut engine, k, 3, 4);
-        must_unlocked(&engine, k);
-        must_get_commit_ts(&engine, k, 3, 4);
+        must_unlocked(&mut engine, k);
+        must_get_commit_ts(&mut engine, k, 3, 4);
         must_success(&engine, k, 3, 3);
         must_success(&engine, k, 3, 4);
         must_success(&engine, k, 3, 5);

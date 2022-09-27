@@ -59,7 +59,7 @@ fn test_txn_create_compaction_filter() {
     let mut gc_runner = TestGcRunner::new(0);
     let value = vec![b'v'; 512];
 
-    must_prewrite_put(&engine, b"zkey", &value, b"zkey", 100);
+    must_prewrite_put(&mut engine, b"zkey", &value, b"zkey", 100);
     must_commit(&mut engine, b"zkey", 100, 110);
 
     gc_runner
@@ -93,7 +93,7 @@ fn test_txn_mvcc_filtered() {
     let mut gc_runner = TestGcRunner::new(0);
 
     // GC can't delete keys after the given safe point.
-    must_prewrite_put(&engine, b"zkey", &value, b"zkey", 100);
+    must_prewrite_put(&mut engine, b"zkey", &value, b"zkey", 100);
     must_commit(&mut engine, b"zkey", 100, 110);
     gc_runner.safe_point(50).gc(&raw_engine);
     must_get(&engine, b"zkey", 110, &value);
@@ -102,7 +102,7 @@ fn test_txn_mvcc_filtered() {
     gc_runner.safe_point(200).gc(&raw_engine);
     must_get(&engine, b"zkey", 110, &value);
 
-    must_prewrite_put(&engine, b"zkey", &value, b"zkey", 120);
+    must_prewrite_put(&mut engine, b"zkey", &value, b"zkey", 120);
     must_commit(&mut engine, b"zkey", 120, 130);
 
     // GC can't delete the latest version before the safe ponit.

@@ -527,7 +527,7 @@ mod tests {
         );
         must_commit(&mut engine, b"foo2", 4, 5);
         must_commit(&mut engine, b"bar", 4, 5);
-        must_prewrite_delete(&engine, b"xxx", b"xxx", 6);
+        must_prewrite_delete(&mut engine, b"xxx", b"xxx", 6);
         must_commit(&mut engine, b"xxx", 6, 7);
         must_prewrite_put(
             &engine,
@@ -536,14 +536,14 @@ mod tests {
             b"box",
             8,
         );
-        must_prewrite_delete(&engine, b"foo1", b"box", 8);
+        must_prewrite_delete(&mut engine, b"foo1", b"box", 8);
         must_commit(&mut engine, b"box", 8, 9);
         must_commit(&mut engine, b"foo1", 8, 9);
-        must_prewrite_lock(&engine, b"bar", b"bar", 10);
+        must_prewrite_lock(&mut engine, b"bar", b"bar", 10);
         must_commit(&mut engine, b"bar", 10, 11);
         for i in 20..100 {
             if i % 2 == 0 {
-                must_prewrite_lock(&engine, b"foo2", b"foo2", i);
+                must_prewrite_lock(&mut engine, b"foo2", b"foo2", i);
                 must_commit(&mut engine, b"foo2", i, i + 1);
             }
         }
@@ -574,7 +574,7 @@ mod tests {
             b"foo1",
             2,
         );
-        must_prewrite_put(&engine, b"bar", b"barval", b"foo1", 2);
+        must_prewrite_put(&mut engine, b"bar", b"barval", b"foo1", 2);
         must_commit(&mut engine, b"foo1", 2, 3);
         must_commit(&mut engine, b"bar", 2, 3);
 
@@ -585,7 +585,7 @@ mod tests {
             b"foo2",
             4,
         );
-        must_prewrite_delete(&engine, b"bar", b"foo2", 4);
+        must_prewrite_delete(&mut engine, b"bar", b"foo2", 4);
         engine
     }
 
@@ -662,7 +662,7 @@ mod tests {
     #[test]
     fn test_use_prefix_seek() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        must_prewrite_put(&engine, b"foo1", b"bar1", b"foo1", 10);
+        must_prewrite_put(&mut engine, b"foo1", b"bar1", b"foo1", 10);
         must_commit(&mut engine, b"foo1", 10, 20);
 
         // Mustn't get the next user key even if point getter doesn't compare user key.
@@ -678,16 +678,16 @@ mod tests {
     fn test_tombstone() {
         let engine = TestEngineBuilder::new().build().unwrap();
 
-        must_prewrite_put(&engine, b"foo", b"bar", b"foo", 10);
-        must_prewrite_put(&engine, b"foo1", b"bar1", b"foo", 10);
-        must_prewrite_put(&engine, b"foo2", b"bar2", b"foo", 10);
-        must_prewrite_put(&engine, b"foo3", b"bar3", b"foo", 10);
+        must_prewrite_put(&mut engine, b"foo", b"bar", b"foo", 10);
+        must_prewrite_put(&mut engine, b"foo1", b"bar1", b"foo", 10);
+        must_prewrite_put(&mut engine, b"foo2", b"bar2", b"foo", 10);
+        must_prewrite_put(&mut engine, b"foo3", b"bar3", b"foo", 10);
         must_commit(&mut engine, b"foo", 10, 20);
         must_commit(&mut engine, b"foo1", 10, 20);
         must_commit(&mut engine, b"foo2", 10, 20);
         must_commit(&mut engine, b"foo3", 10, 20);
-        must_prewrite_delete(&engine, b"foo1", b"foo1", 30);
-        must_prewrite_delete(&engine, b"foo2", b"foo1", 30);
+        must_prewrite_delete(&mut engine, b"foo1", b"foo1", 30);
+        must_prewrite_delete(&mut engine, b"foo2", b"foo1", 30);
         must_commit(&mut engine, b"foo1", 30, 40);
         must_commit(&mut engine, b"foo2", 30, 40);
 
@@ -717,7 +717,7 @@ mod tests {
     #[test]
     fn test_with_iter_lower_bound() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        must_prewrite_put(&engine, b"foo", b"bar", b"foo", 10);
+        must_prewrite_put(&mut engine, b"foo", b"bar", b"foo", 10);
         must_commit(&mut engine, b"foo", 10, 20);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -907,23 +907,23 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
 
         let (key, val) = (b"foo", b"bar");
-        must_prewrite_put(&engine, key, val, key, 10);
+        must_prewrite_put(&mut engine, key, val, key, 10);
         must_commit(&mut engine, key, 10, 20);
 
         let mut getter = new_point_getter(&engine, TimeStamp::max());
         must_get_value(&mut getter, key, val);
 
         // Ignore the primary lock if read with max ts.
-        must_prewrite_delete(&engine, key, key, 30);
+        must_prewrite_delete(&mut engine, key, key, 30);
         let mut getter = new_point_getter(&engine, TimeStamp::max());
         must_get_value(&mut getter, key, val);
-        must_rollback(&engine, key, 30, false);
+        must_rollback(&mut engine, key, 30, false);
 
         // Should not ignore the secondary lock even though reading the latest version
-        must_prewrite_delete(&engine, key, b"bar", 40);
+        must_prewrite_delete(&mut engine, key, b"bar", 40);
         let mut getter = new_point_getter(&engine, TimeStamp::max());
         must_get_err(&mut getter, key);
-        must_rollback(&engine, key, 40, false);
+        must_rollback(&mut engine, key, 40, false);
 
         // Should get the latest committed value if there is a primary lock with a ts
         // less than the latest Write's commit_ts.
@@ -940,10 +940,10 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
 
         let (key, val) = (b"foo", b"bar");
-        must_prewrite_put(&engine, key, val, key, 10);
+        must_prewrite_put(&mut engine, key, val, key, 10);
         must_commit(&mut engine, key, 10, 20);
 
-        must_prewrite_delete(&engine, key, key, 30);
+        must_prewrite_delete(&mut engine, key, key, 30);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut getter = PointGetterBuilder::new(snapshot, 60.into())
@@ -977,7 +977,7 @@ mod tests {
 
         // short value
         let (key, val) = (b"foo", b"bar");
-        must_prewrite_put(&engine, key, val, key, 10);
+        must_prewrite_put(&mut engine, key, val, key, 10);
         must_get_value(&mut build_getter(20, vec![], vec![10]), key, val);
         must_commit(&mut engine, key, 10, 15);
         must_get_value(&mut build_getter(20, vec![], vec![]), key, val);
@@ -985,13 +985,13 @@ mod tests {
         // load value from default cf.
         let val = "v".repeat(SHORT_VALUE_MAX_LEN + 1);
         let val = val.as_bytes();
-        must_prewrite_put(&engine, key, val, key, 20);
+        must_prewrite_put(&mut engine, key, val, key, 20);
         must_get_value(&mut build_getter(30, vec![], vec![20]), key, val);
         must_commit(&mut engine, key, 20, 25);
         must_get_value(&mut build_getter(30, vec![], vec![]), key, val);
 
         // delete
-        must_prewrite_delete(&engine, key, key, 30);
+        must_prewrite_delete(&mut engine, key, key, 30);
         must_get_none(&mut build_getter(40, vec![], vec![30]), key);
         must_commit(&mut engine, key, 30, 35);
         must_get_none(&mut build_getter(40, vec![], vec![]), key);
@@ -999,17 +999,17 @@ mod tests {
         // ignore locks not blocking read
         let (key, val) = (b"foo", b"bar");
         // lock's ts > read's ts
-        must_prewrite_put(&engine, key, val, key, 50);
+        must_prewrite_put(&mut engine, key, val, key, 50);
         must_get_none(&mut build_getter(45, vec![], vec![50]), key);
         must_commit(&mut engine, key, 50, 55);
         // LockType::Lock
-        must_prewrite_lock(&engine, key, key, 60);
+        must_prewrite_lock(&mut engine, key, key, 60);
         must_get_value(&mut build_getter(65, vec![], vec![60]), key, val);
         must_commit(&mut engine, key, 60, 65);
         // LockType::Pessimistic
         must_acquire_pessimistic_lock(&engine, key, key, 70, 70);
         must_get_value(&mut build_getter(75, vec![], vec![70]), key, val);
-        must_rollback(&engine, key, 70, false);
+        must_rollback(&mut engine, key, 70, false);
         // lock's min_commit_ts > read's ts
         must_prewrite_put_impl(
             &engine,
@@ -1029,19 +1029,19 @@ mod tests {
             AssertionLevel::Off,
         );
         must_get_value(&mut build_getter(85, vec![], vec![80]), key, val);
-        must_rollback(&engine, key, 80, false);
+        must_rollback(&mut engine, key, 80, false);
         // read'ts == max && lock is a primary lock.
-        must_prewrite_put(&engine, key, &val[..1], key, 90);
+        must_prewrite_put(&mut engine, key, &val[..1], key, 90);
         must_get_value(
             &mut build_getter(TimeStamp::max().into_inner(), vec![], vec![90]),
             key,
             val,
         );
-        must_rollback(&engine, key, 90, false);
+        must_rollback(&mut engine, key, 90, false);
         // lock in resolve_keys(it can't happen).
-        must_prewrite_put(&engine, key, &val[..1], key, 100);
+        must_prewrite_put(&mut engine, key, &val[..1], key, 100);
         must_get_value(&mut build_getter(105, vec![100], vec![100]), key, val);
-        must_rollback(&engine, key, 100, false);
+        must_rollback(&mut engine, key, 100, false);
     }
 
     #[test]
@@ -1049,11 +1049,11 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
 
         let (key, val1) = (b"foo", b"bar1");
-        must_prewrite_put(&engine, key, val1, key, 10);
+        must_prewrite_put(&mut engine, key, val1, key, 10);
         must_commit(&mut engine, key, 10, 20);
 
         let (key, val2) = (b"foo", b"bar2");
-        must_prewrite_put(&engine, key, val2, key, 30);
+        must_prewrite_put(&mut engine, key, val2, key, 30);
         must_commit(&mut engine, key, 30, 40);
 
         must_met_newer_ts_data(&engine, 20, key, val1, true);
@@ -1061,7 +1061,7 @@ mod tests {
         must_met_newer_ts_data(&engine, 40, key, val2, false);
         must_met_newer_ts_data(&engine, 50, key, val2, false);
 
-        must_prewrite_lock(&engine, key, key, 60);
+        must_prewrite_lock(&mut engine, key, key, 60);
 
         must_met_newer_ts_data(&engine, 50, key, val2, true);
         must_met_newer_ts_data(&engine, 60, key, val2, true);
@@ -1073,71 +1073,71 @@ mod tests {
 
         // PUT,      Read
         //  `--------------^
-        must_prewrite_put(&engine, b"k1", b"v1", b"k1", 10);
+        must_prewrite_put(&mut engine, b"k1", b"v1", b"k1", 10);
         must_commit(&mut engine, b"k1", 10, 20);
         must_cleanup_with_gc_fence(&mut engine, b"k1", 20, 0, 50, true);
 
         // PUT,      Read
         //  `---------^
-        must_prewrite_put(&engine, b"k2", b"v2", b"k2", 11);
+        must_prewrite_put(&mut engine, b"k2", b"v2", b"k2", 11);
         must_commit(&mut engine, b"k2", 11, 20);
         must_cleanup_with_gc_fence(&mut engine, b"k2", 20, 0, 40, true);
 
         // PUT,      Read
         //  `-----^
-        must_prewrite_put(&engine, b"k3", b"v3", b"k3", 12);
+        must_prewrite_put(&mut engine, b"k3", b"v3", b"k3", 12);
         must_commit(&mut engine, b"k3", 12, 20);
         must_cleanup_with_gc_fence(&mut engine, b"k3", 20, 0, 30, true);
 
         // PUT,   PUT,       Read
         //  `-----^ `----^
-        must_prewrite_put(&engine, b"k4", b"v4", b"k4", 13);
+        must_prewrite_put(&mut engine, b"k4", b"v4", b"k4", 13);
         must_commit(&mut engine, b"k4", 13, 14);
-        must_prewrite_put(&engine, b"k4", b"v4x", b"k4", 15);
+        must_prewrite_put(&mut engine, b"k4", b"v4x", b"k4", 15);
         must_commit(&mut engine, b"k4", 15, 20);
         must_cleanup_with_gc_fence(&mut engine, b"k4", 14, 0, 20, false);
         must_cleanup_with_gc_fence(&mut engine, b"k4", 20, 0, 30, true);
 
         // PUT,   DEL,       Read
         //  `-----^ `----^
-        must_prewrite_put(&engine, b"k5", b"v5", b"k5", 13);
+        must_prewrite_put(&mut engine, b"k5", b"v5", b"k5", 13);
         must_commit(&mut engine, b"k5", 13, 14);
-        must_prewrite_delete(&engine, b"k5", b"v5", 15);
+        must_prewrite_delete(&mut engine, b"k5", b"v5", 15);
         must_commit(&mut engine, b"k5", 15, 20);
         must_cleanup_with_gc_fence(&mut engine, b"k5", 14, 0, 20, false);
         must_cleanup_with_gc_fence(&mut engine, b"k5", 20, 0, 30, true);
 
         // PUT, LOCK, LOCK,   Read
         //  `------------------------^
-        must_prewrite_put(&engine, b"k6", b"v6", b"k6", 16);
+        must_prewrite_put(&mut engine, b"k6", b"v6", b"k6", 16);
         must_commit(&mut engine, b"k6", 16, 20);
-        must_prewrite_lock(&engine, b"k6", b"k6", 25);
+        must_prewrite_lock(&mut engine, b"k6", b"k6", 25);
         must_commit(&mut engine, b"k6", 25, 26);
-        must_prewrite_lock(&engine, b"k6", b"k6", 28);
+        must_prewrite_lock(&mut engine, b"k6", b"k6", 28);
         must_commit(&mut engine, b"k6", 28, 29);
         must_cleanup_with_gc_fence(&mut engine, b"k6", 20, 0, 50, true);
 
         // PUT, LOCK,   LOCK,   Read
         //  `---------^
-        must_prewrite_put(&engine, b"k7", b"v7", b"k7", 16);
+        must_prewrite_put(&mut engine, b"k7", b"v7", b"k7", 16);
         must_commit(&mut engine, b"k7", 16, 20);
-        must_prewrite_lock(&engine, b"k7", b"k7", 25);
+        must_prewrite_lock(&mut engine, b"k7", b"k7", 25);
         must_commit(&mut engine, b"k7", 25, 26);
         must_cleanup_with_gc_fence(&mut engine, b"k7", 20, 0, 27, true);
-        must_prewrite_lock(&engine, b"k7", b"k7", 28);
+        must_prewrite_lock(&mut engine, b"k7", b"k7", 28);
         must_commit(&mut engine, b"k7", 28, 29);
 
         // PUT,  Read
         //  * (GC fence ts is 0)
-        must_prewrite_put(&engine, b"k8", b"v8", b"k8", 17);
+        must_prewrite_put(&mut engine, b"k8", b"v8", b"k8", 17);
         must_commit(&mut engine, b"k8", 17, 30);
         must_cleanup_with_gc_fence(&mut engine, b"k8", 30, 0, 0, true);
 
         // PUT, LOCK,     Read
         // `-----------^
-        must_prewrite_put(&engine, b"k9", b"v9", b"k9", 18);
+        must_prewrite_put(&mut engine, b"k9", b"v9", b"k9", 18);
         must_commit(&mut engine, b"k9", 18, 20);
-        must_prewrite_lock(&engine, b"k9", b"k9", 25);
+        must_prewrite_lock(&mut engine, b"k9", b"k9", 25);
         must_commit(&mut engine, b"k9", 25, 26);
         must_cleanup_with_gc_fence(&mut engine, b"k9", 20, 0, 27, true);
 
@@ -1171,29 +1171,29 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
 
         let (key0, val0) = (b"k0", b"v0");
-        must_prewrite_put(&engine, key0, val0, key0, 1);
+        must_prewrite_put(&mut engine, key0, val0, key0, 1);
         must_commit(&mut engine, key0, 1, 5);
 
         let (key1, val1) = (b"k1", b"v1");
-        must_prewrite_put(&engine, key1, val1, key1, 10);
+        must_prewrite_put(&mut engine, key1, val1, key1, 10);
         must_commit(&mut engine, key1, 10, 20);
 
         let (key2, val2, val22) = (b"k2", b"v2", b"v22");
-        must_prewrite_put(&engine, key2, val2, key2, 30);
+        must_prewrite_put(&mut engine, key2, val2, key2, 30);
         must_commit(&mut engine, key2, 30, 40);
-        must_prewrite_put(&engine, key2, val22, key2, 41);
+        must_prewrite_put(&mut engine, key2, val22, key2, 41);
         must_commit(&mut engine, key2, 41, 42);
 
         let (key3, val3) = (b"k3", b"v3");
-        must_prewrite_put(&engine, key3, val3, key3, 50);
+        must_prewrite_put(&mut engine, key3, val3, key3, 50);
 
         let (key4, val4) = (b"k4", b"val4");
-        must_prewrite_put(&engine, key4, val4, key4, 55);
+        must_prewrite_put(&mut engine, key4, val4, key4, 55);
         must_commit(&mut engine, key4, 55, 56);
-        must_prewrite_lock(&engine, key4, key4, 60);
+        must_prewrite_lock(&mut engine, key4, key4, 60);
 
         let (key5, val5) = (b"k5", b"val5");
-        must_prewrite_put(&engine, key5, val5, key5, 57);
+        must_prewrite_put(&mut engine, key5, val5, key5, 57);
         must_commit(&mut engine, key5, 57, 58);
         must_acquire_pessimistic_lock(&engine, key5, key5, 65, 65);
 
