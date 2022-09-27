@@ -359,7 +359,7 @@ struct SnapRequestInspector<'r> {
     logger: &'r Logger,
 }
 
-impl<'r> RequestInspector for SnapRequestInspector<'r> {
+impl<'r> SnapRequestInspector<'r> {
     fn inspect(&mut self, req: &RaftCmdRequest) -> Result<RequestPolicy> {
         assert!(!req.has_admin_request());
         if req.get_requests().len() != 1
