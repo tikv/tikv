@@ -75,8 +75,7 @@ impl TestSuite {
         put_req.value = value.to_vec();
 
         let put_resp = client.raw_put(&put_req).unwrap();
-        assert!(put_resp.has_region_error());
-
+        assert!(put_resp.get_region_error().has_max_timestamp_not_synced());
         assert!(
             put_resp.get_error().is_empty(),
             "{:?}",
