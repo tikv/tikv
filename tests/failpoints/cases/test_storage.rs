@@ -525,7 +525,7 @@ fn test_async_commit_prewrite_with_stale_max_ts_impl<F: KvFormat>() {
         .unwrap()
         .clone();
     let storage =
-        TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine.clone(), DummyLockManager)
+        TestStorageBuilder::<_, _, F>::from_engine_and_lock_mgr(engine.clone(), DummyLockManager)
             .build()
             .unwrap();
 
