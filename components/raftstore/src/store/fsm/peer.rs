@@ -1028,7 +1028,7 @@ where
         // set persist state
         let req = {
             let mut request =
-                new_admin_request(self.fsm.peer.region().get_id(), self.fsm.peer.peer.clone());
+                new_admin_request(region_id, self.fsm.peer.peer.clone());
             let mut admin = AdminRequest::default();
             admin.set_cmd_type(AdminCmdType::PrepareFlashback);
             request.set_admin_request(admin);
@@ -1065,7 +1065,7 @@ where
 
         let req = {
             let mut request =
-                new_admin_request(self.fsm.peer.region().get_id(), self.fsm.peer.peer.clone());
+                new_admin_request(self.region().get_id(), self.fsm.peer.peer.clone());
             let mut admin = AdminRequest::default();
             admin.set_cmd_type(AdminCmdType::FinishFlashback);
             request.set_admin_request(admin);
