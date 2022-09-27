@@ -21,6 +21,7 @@ use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use fail::fail_point;
 use futures::compat::Future01CompatExt;
 use futures::FutureExt;
+use grpcio_health::HealthService;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::import_sstpb::SwitchMode;
 use kvproto::metapb::{self, Region, RegionEpoch};
@@ -89,7 +90,6 @@ use tikv_util::future::poll_future_notify;
 type Key = Vec<u8>;
 
 pub const PENDING_MSG_CAP: usize = 100;
-const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
 const ENTRY_CACHE_EVICT_TICK_DURATION: Duration = Duration::from_secs(1);
 
 pub struct StoreInfo<EK, ER> {
@@ -207,16 +207,21 @@ where
 {
     fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
         for r in apply_res {
-            self.router.try_send(
-                r.region_id,
+            let region_id = r.region_id;
+            if let Err(e) = self.router.force_send(
+                region_id,
                 PeerMsg::ApplyRes {
                     res: ApplyTaskRes::Apply(r),
                 },
-            );
+            ) {
+                error!("failed to send apply result"; "region_id" => region_id, "err" => ?e);
+            }
         }
     }
     fn notify_one(&self, region_id: u64, msg: PeerMsg<EK>) {
-        self.router.try_send(region_id, msg);
+        if let Err(e) = self.router.force_send(region_id, msg) {
+            error!("failed to notify apply msg"; "region_id" => region_id, "err" => ?e);
+        }
     }
 
     fn clone_box(&self) -> Box<dyn ApplyNotifier<EK>> {
@@ -692,6 +697,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
     for RaftPoller<EK, ER, T>
 {
     fn begin(&mut self, _batch_size: usize) {
+        fail_point!("begin_raft_poller");
         self.previous_metrics = self.poll_ctx.raft_metrics.ready.clone();
         self.poll_ctx.pending_count = 0;
         self.poll_ctx.ready_count = 0;
@@ -834,20 +840,48 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
     }
 
     fn end(&mut self, peers: &mut [Option<impl DerefMut<Target = PeerFsm<EK, ER>>>]) {
-        let dur = if self.poll_ctx.has_ready {
+        if self.poll_ctx.has_ready {
             // Only enable the fail point when the store id is equal to 3, which is
             // the id of slow store in tests.
             fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
+        }
+        let mut latency_inspect = std::mem::take(&mut self.poll_ctx.pending_latency_inspect);
+        let mut dur = self.timer.saturating_elapsed();
 
-            if let Some(write_worker) = &mut self.poll_ctx.sync_write_worker {
+        for inspector in &mut latency_inspect {
+            inspector.record_store_process(dur);
+        }
+        let write_begin = TiInstant::now();
+        if let Some(write_worker) = &mut self.poll_ctx.sync_write_worker {
+            if self.poll_ctx.has_ready {
                 write_worker.write_to_db(false);
+
+                for mut inspector in latency_inspect {
+                    inspector.record_store_write(write_begin.saturating_elapsed());
+                    inspector.finish();
+                }
 
                 for peer in peers.iter_mut().flatten() {
                     PeerFsmDelegate::new(peer, &mut self.poll_ctx).post_raft_ready_append();
                 }
+            } else {
+                for inspector in latency_inspect {
+                    inspector.finish();
+                }
             }
-
-            let dur = self.timer.saturating_elapsed();
+        } else {
+            let writer_id = rand::random::<usize>() % self.poll_ctx.cfg.store_io_pool_size;
+            if let Err(err) =
+                self.poll_ctx.write_senders[writer_id].try_send(WriteMsg::LatencyInspect {
+                    send_time: write_begin,
+                    inspector: latency_inspect,
+                })
+            {
+                warn!("send latency inspecting to write workers failed"; "err" => ?err);
+            }
+        }
+        dur = self.timer.saturating_elapsed();
+        if self.poll_ctx.has_ready {
             if !self.poll_ctx.store_stat.is_busy {
                 let election_timeout = Duration::from_millis(
                     self.poll_ctx.cfg.raft_base_tick_interval.as_millis()
@@ -869,40 +903,13 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 self.poll_ctx.raft_metrics.ready.message - self.previous_metrics.message,
                 self.poll_ctx.raft_metrics.ready.snapshot - self.previous_metrics.snapshot
             );
-            dur
-        } else {
-            self.timer.saturating_elapsed()
-        };
+        }
 
         self.poll_ctx.current_time = None;
         self.poll_ctx
             .raft_metrics
             .process_ready
             .observe(duration_to_sec(dur));
-
-        if !self.poll_ctx.pending_latency_inspect.is_empty() {
-            let mut latency_inspect = std::mem::take(&mut self.poll_ctx.pending_latency_inspect);
-            for inspector in &mut latency_inspect {
-                inspector.record_store_process(dur);
-            }
-            if self.poll_ctx.sync_write_worker.is_some() {
-                for mut inspector in latency_inspect {
-                    inspector.record_store_write(dur);
-                    inspector.finish();
-                }
-            } else {
-                let now = TiInstant::now();
-                let writer_id = rand::random::<usize>() % self.poll_ctx.cfg.store_io_pool_size;
-                if let Err(err) =
-                    self.poll_ctx.write_senders[writer_id].try_send(WriteMsg::LatencyInspect {
-                        send_time: now,
-                        inspector: latency_inspect,
-                    })
-                {
-                    warn!("send latency inspecting to write workers failed"; "err" => ?err);
-                }
-            }
-        }
     }
 
     fn pause(&mut self) {
@@ -1296,6 +1303,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         global_replication_state: Arc<Mutex<GlobalReplicationState>>,
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
+        health_service: Option<HealthService>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1411,6 +1419,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 mgr,
                 pd_client,
                 collector_reg_handle,
+                health_service,
             )?;
         } else {
             self.start_system::<T, C, <EK as WriteBatchExt>::WriteBatch>(
@@ -1422,6 +1431,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 mgr,
                 pd_client,
                 collector_reg_handle,
+                health_service,
             )?;
         }
         Ok(())
@@ -1437,6 +1447,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         snap_mgr: SnapManager,
         pd_client: Arc<C>,
         collector_reg_handle: CollectorRegHandle,
+        health_service: Option<HealthService>,
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
@@ -1514,6 +1525,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             snap_mgr,
             workers.pd_worker.remote(),
             collector_reg_handle,
+            health_service,
         );
         assert!(workers.pd_worker.start_with_timer(pd_runner));
 
@@ -2554,13 +2566,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
     fn on_store_unreachable(&mut self, store_id: u64) {
         let now = Instant::now();
+        let unreachable_backoff = self.ctx.cfg.unreachable_backoff.0;
         if self
             .fsm
             .store
             .last_unreachable_report
             .get(&store_id)
-            .map_or(UNREACHABLE_BACKOFF, |t| now.saturating_duration_since(*t))
-            < UNREACHABLE_BACKOFF
+            .map_or(unreachable_backoff, |t| now.saturating_duration_since(*t))
+            < unreachable_backoff
         {
             return;
         }
@@ -2569,11 +2582,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             "store_id" => self.fsm.store.id,
             "unreachable_store_id" => store_id,
         );
-        self.fsm.store.last_unreachable_report.insert(store_id, now);
         // It's possible to acquire the lock and only send notification to
         // involved regions. However loop over all the regions can take a
         // lot of time, which may block other operations.
         self.ctx.router.report_unreachable(store_id);
+        self.fsm
+            .store
+            .last_unreachable_report
+            .insert(store_id, Instant::now());
     }
 
     fn on_update_replication_mode(&mut self, status: ReplicationStatus) {

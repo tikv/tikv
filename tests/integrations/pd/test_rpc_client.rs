@@ -5,6 +5,7 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
+use error_code::ErrorCodeExt;
 use futures::executor::block_on;
 use grpcio::EnvBuilder;
 use grpcio::{Error as GrpcError, RpcStatus, RpcStatusCode};
@@ -229,6 +230,37 @@ fn test_get_tombstone_stores() {
 }
 
 #[test]
+fn test_get_tombstone_store() {
+    let eps_count = 1;
+    let server = MockServer::new(eps_count);
+    let eps = server.bind_addrs();
+    let client = new_client(eps, None);
+
+    let mut all_stores = vec![];
+    let store_id = client.alloc_id().unwrap();
+    let mut store = metapb::Store::default();
+    store.set_id(store_id);
+    let region_id = client.alloc_id().unwrap();
+    let mut region = metapb::Region::default();
+    region.set_id(region_id);
+    client.bootstrap_cluster(store.clone(), region).unwrap();
+
+    all_stores.push(store);
+    assert_eq!(client.is_cluster_bootstrapped().unwrap(), true);
+    let s = client.get_all_stores(false).unwrap();
+    assert_eq!(s, all_stores);
+
+    // Add tombstone store.
+    let mut store99 = metapb::Store::default();
+    store99.set_id(99);
+    store99.set_state(metapb::StoreState::Tombstone);
+    server.default_handler().add_store(store99.clone());
+
+    let r = block_on(client.get_store_async(99));
+    assert_eq!(r.unwrap_err().error_code(), error_code::pd::STORE_TOMBSTONE);
+}
+
+#[test]
 fn test_reboot() {
     let eps_count = 1;
     let server = MockServer::with_case(eps_count, Arc::new(AlreadyBootstrapped));
@@ -433,6 +465,59 @@ fn test_change_leader_async() {
     }
 
     panic!("failed, leader should changed");
+}
+
+#[test]
+fn test_pd_client_heartbeat_send_failed() {
+    let pd_client_send_fail_fp = "region_heartbeat_send_failed";
+    fail::cfg(pd_client_send_fail_fp, "return()").unwrap();
+    let server = MockServer::with_case(1, Arc::new(AlreadyBootstrapped));
+    let eps = server.bind_addrs();
+
+    let client = new_client(eps, None);
+    let poller = Builder::new_multi_thread()
+        .thread_name(thd_name!("poller"))
+        .worker_threads(1)
+        .build()
+        .unwrap();
+    let (tx, rx) = mpsc::channel();
+    let f =
+        client.handle_region_heartbeat_response(1, move |resp| tx.send(resp).unwrap_or_default());
+    poller.spawn(f);
+
+    let heartbeat_send_fail = |ok| {
+        let mut region = metapb::Region::default();
+        region.set_id(1);
+        poller.spawn(client.region_heartbeat(
+            store::RAFT_INIT_LOG_TERM,
+            region,
+            metapb::Peer::default(),
+            RegionStat::default(),
+            None,
+        ));
+        let rsp = rx.recv_timeout(Duration::from_millis(100));
+        if ok {
+            assert!(rsp.is_ok());
+            assert_eq!(rsp.unwrap().get_region_id(), 1);
+        } else {
+            assert!(rsp.is_err());
+        }
+
+        let region = block_on(client.get_region_by_id(1));
+        if ok {
+            assert!(region.is_ok());
+            let r = region.unwrap();
+            assert!(r.is_some());
+            assert_eq!(1, r.unwrap().get_id());
+        } else {
+            assert!(region.is_err());
+        }
+    };
+    // send fail if network is block.
+    heartbeat_send_fail(false);
+    fail::remove(pd_client_send_fail_fp);
+    // send success after network recovered.
+    heartbeat_send_fail(true);
 }
 
 #[test]

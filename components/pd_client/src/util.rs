@@ -413,11 +413,14 @@ where
     fn should_not_retry(resp: &Result<Resp>) -> bool {
         match resp {
             Ok(_) => true,
-            // Error::Incompatible is returned by response header from PD, no need to retry
-            Err(Error::Incompatible) => true,
             Err(err) => {
-                error!(?*err; "request failed, retry");
-                false
+                // these errors are not caused by network, no need to retry
+                if err.retryable() {
+                    error!(?*err; "request failed, retry");
+                    false
+                } else {
+                    true
+                }
             }
         }
     }
@@ -439,18 +442,30 @@ where
     }
 }
 
+pub fn call_option_inner(inner: &Inner) -> CallOption {
+    inner
+        .target_info()
+        .call_option()
+        .timeout(Duration::from_secs(REQUEST_TIMEOUT))
+}
+
 /// Do a request in synchronized fashion.
 pub fn sync_request<F, R>(client: &Client, mut retry: usize, func: F) -> Result<R>
 where
-    F: Fn(&PdClientStub) -> GrpcResult<R>,
+    F: Fn(&PdClientStub, CallOption) -> GrpcResult<R>,
 {
     loop {
         let ret = {
-            // Drop the read lock immediately to prevent the deadlock between the caller thread
-            // which may hold the read lock and wait for PD client thread completing the request
-            // and the PD client thread which may block on acquiring the write lock.
-            let client_stub = client.inner.rl().client_stub.clone();
-            func(&client_stub).map_err(Error::Grpc)
+            // Drop the read lock immediately to prevent the deadlock between the caller
+            // thread which may hold the read lock and wait for PD client thread
+            // completing the request and the PD client thread which may block
+            // on acquiring the write lock.
+            let (client_stub, option) = {
+                let inner = client.inner.rl();
+                (inner.client_stub.clone(), call_option_inner(&inner))
+            };
+
+            func(&client_stub, option).map_err(Error::Grpc)
         };
         match ret {
             Ok(r) => {

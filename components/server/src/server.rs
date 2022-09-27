@@ -40,6 +40,7 @@ use file_system::{
 };
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
+use grpcio_health::HealthService;
 use kvproto::{
     brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
@@ -127,7 +128,7 @@ pub fn run_tikv(config: TiKvConfig) {
             let mut tikv = TiKVServer::<$ER>::init(config);
 
             // Must be called after `TiKVServer::init`.
-            let memory_limit = tikv.config.memory_usage_limit.0.unwrap().0;
+            let memory_limit = tikv.config.memory_usage_limit.unwrap().0;
             let high_water = (tikv.config.memory_usage_high_water * memory_limit as f64) as u64;
             register_memory_usage_high_water(high_water);
 
@@ -749,6 +750,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             .validate()
             .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
         let raft_store = Arc::new(VersionTrack::new(self.config.raft_store.clone()));
+        let health_service = HealthService::default();
         let mut node = Node::new(
             self.system.take().unwrap(),
             &server_config.value().clone(),
@@ -757,6 +759,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.pd_client.clone(),
             self.state.clone(),
             self.background_worker.clone(),
+            Some(health_service.clone()),
         );
         node.try_bootstrap_store(engines.engines.clone())
             .unwrap_or_else(|e| fatal!("failed to bootstrap node id: {}", e));
@@ -784,6 +787,7 @@ impl<ER: RaftEngine> TiKVServer<ER> {
             self.env.clone(),
             unified_read_pool,
             debug_thread_pool,
+            health_service,
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
         cfg_controller.register(
