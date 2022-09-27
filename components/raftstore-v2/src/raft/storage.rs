@@ -23,11 +23,10 @@ use raft::{
     GetEntriesContext, RaftState, INVALID_ID,
 };
 use raftstore::store::{
-    util::{self, find_peer},
-    EntryStorage, RaftlogFetchTask, SnapState, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+    util, EntryStorage, RaftlogFetchTask, SnapState, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
 };
 use slog::{error, info, o, warn, Logger};
-use tikv_util::{box_err, debug, worker::Scheduler};
+use tikv_util::{box_err, debug, store::find_peer, worker::Scheduler};
 
 use crate::{router::GenSnapTask, worker::RegionTask, Result};
 

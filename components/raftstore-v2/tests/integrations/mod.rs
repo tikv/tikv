@@ -36,8 +36,8 @@ use kvproto::{
 use pd_client::{PdClient, RpcClient};
 use raft::eraftpb::MessageType;
 use raftstore::store::{
-    region_meta::RegionMeta, util::new_peer, Config, Transport, INIT_EPOCH_CONF_VER,
-    INIT_EPOCH_VER, RAFT_INIT_LOG_INDEX,
+    region_meta::RegionMeta, Config, Transport, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
+    RAFT_INIT_LOG_INDEX,
 };
 use raftstore_v2::{
     create_store_batch_system,
@@ -52,6 +52,7 @@ use test_raftstore::{filter_send, Filter};
 use tikv_util::{
     box_err,
     config::{ReadableDuration, VersionTrack},
+    store::new_peer,
     HandyRwLock,
 };
 

@@ -16,16 +16,18 @@ use kvproto::{
 use pd_client::{merge_bucket_stats, new_bucket_stats, BucketMeta, BucketStat};
 use rand::Rng;
 use resource_metering::RawRecords;
-use tikv_util::{config::Tracker, debug, info, metrics::ThreadInfoStatistics, warn};
+use tikv_util::{
+    config::Tracker,
+    debug, info,
+    metrics::ThreadInfoStatistics,
+    store::{is_read_query, QueryStats},
+    warn,
+};
 
 use crate::store::{
     metrics::*,
     util::build_key_range,
-    worker::{
-        query_stats::{is_read_query, QueryStats},
-        split_config::get_sample_num,
-        FlowStatistics, SplitConfig, SplitConfigManager,
-    },
+    worker::{split_config::get_sample_num, FlowStatistics, SplitConfig, SplitConfigManager},
 };
 
 const DEFAULT_MAX_SAMPLE_LOOP_COUNT: usize = 10000;

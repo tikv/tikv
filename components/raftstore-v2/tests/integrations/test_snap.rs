@@ -8,9 +8,10 @@ use kvproto::{
     raft_serverpb::RaftMessage,
 };
 use raft::eraftpb::MessageType;
-use raftstore::store::{util::new_peer, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
+use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
 use raftstore_v2::router::PeerMsg;
 use test_raftstore::DropSnapshotFilter;
+use tikv_util::store::new_peer;
 
 use crate::Cluster;
 

@@ -232,7 +232,7 @@ fn test_sync_max_ts_after_leader_transfer() {
     cluster.run();
 
     let cm = cluster.sim.read().unwrap().get_concurrency_manager(1);
-    let storage = cluster
+    let mut storage = cluster
         .sim
         .read()
         .unwrap()
@@ -240,7 +240,7 @@ fn test_sync_max_ts_after_leader_transfer() {
         .get(&1)
         .unwrap()
         .clone();
-    let wait_for_synced = |cluster: &mut Cluster<ServerCluster>| {
+    let mut wait_for_synced = |cluster: &mut Cluster<ServerCluster>| {
         let region_id = 1;
         let leader = cluster.leader_of_region(region_id).unwrap();
         let epoch = cluster.get_region_epoch(region_id);
