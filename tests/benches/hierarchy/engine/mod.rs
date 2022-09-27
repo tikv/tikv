@@ -40,9 +40,9 @@ fn bench_engine_snapshot<E: Engine, F: EngineFactory<E>>(
     bencher: &mut Bencher<'_>,
     config: &BenchConfig<F>,
 ) {
-    let engine = config.engine_factory.build();
+    let mut engine = config.engine_factory.build();
     bencher.iter(|| {
-        black_box(&engine)
+        black_box(&mut engine)
             .snapshot(black_box(Default::default()))
             .unwrap()
     });
@@ -53,7 +53,7 @@ fn bench_engine_get<E: Engine, F: EngineFactory<E>>(
     bencher: &mut Bencher<'_>,
     config: &BenchConfig<F>,
 ) {
-    let engine = config.engine_factory.build();
+    let mut engine = config.engine_factory.build();
     let test_kvs: Vec<Key> = KvGenerator::with_seed(
         config.key_length,
         config.value_length,

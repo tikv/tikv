@@ -473,7 +473,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .pool
             .spawn(async move {
                 match unsafe {
-                    with_tls_engine(|engine: &E| engine.precheck_write_with_ctx(&cmd_ctx))
+                    with_tls_engine(|engine: &mut E| engine.precheck_write_with_ctx(&cmd_ctx))
                 } {
                     // Precheck failed, try to return err early.
                     Err(e) => {
@@ -577,7 +577,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 }
                 // The program is currently in scheduler worker threads.
                 // Safety: `self.inner.worker_pool` should ensure that a TLS engine exists.
-                match unsafe { with_tls_engine(|engine: &E| kv::snapshot(engine, snap_ctx)) }.await
+                match unsafe { with_tls_engine(|engine: &mut E| kv::snapshot(engine, snap_ctx)) }
+                    .await
                 {
                     Ok(snapshot) => {
                         SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
@@ -943,7 +944,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         {
             // Safety: `self.sched_pool` ensures a TLS engine exists.
             unsafe {
-                with_tls_engine(|engine: &E| {
+                with_tls_engine(|engine: &mut E| {
                     // We skip writing the raftstore, but to improve CDC old value hit rate,
                     // we should send the old values to the CDC scheduler.
                     engine.schedule_txn_extra(to_be_write.extra);
@@ -1152,7 +1153,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         // Safety: `self.sched_pool` ensures a TLS engine exists.
         unsafe {
-            with_tls_engine(|engine: &E| {
+            with_tls_engine(|engine: &mut E| {
                 if let Err(e) =
                     engine.async_write_ext(&ctx, to_be_write, engine_cb, proposed_cb, committed_cb)
                 {
