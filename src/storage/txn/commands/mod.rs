@@ -756,7 +756,7 @@ pub mod test_util {
     // Some utils for tests that may be used in multiple source code files.
 
     pub fn prewrite_command<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         cm: ConcurrencyManager,
         statistics: &mut Statistics,
         cmd: TypedCommand<PrewriteResult>,
@@ -790,7 +790,7 @@ pub mod test_util {
     }
 
     pub fn prewrite<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         statistics: &mut Statistics,
         mutations: Vec<Mutation>,
         primary: Vec<u8>,
@@ -810,7 +810,7 @@ pub mod test_util {
     }
 
     pub fn prewrite_with_cm<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         cm: ConcurrencyManager,
         statistics: &mut Statistics,
         mutations: Vec<Mutation>,
@@ -832,7 +832,7 @@ pub mod test_util {
     }
 
     pub fn pessimistic_prewrite<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         statistics: &mut Statistics,
         mutations: Vec<(Mutation, PrewriteRequestPessimisticAction)>,
         primary: Vec<u8>,
@@ -854,7 +854,7 @@ pub mod test_util {
     }
 
     pub fn pessimistic_prewrite_with_cm<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         cm: ConcurrencyManager,
         statistics: &mut Statistics,
         mutations: Vec<(Mutation, PrewriteRequestPessimisticAction)>,
@@ -883,7 +883,7 @@ pub mod test_util {
     }
 
     pub fn commit<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         statistics: &mut Statistics,
         keys: Vec<Key>,
         lock_ts: u64,
@@ -914,7 +914,7 @@ pub mod test_util {
     }
 
     pub fn rollback<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         statistics: &mut Statistics,
         keys: Vec<Key>,
         start_ts: u64,

@@ -516,7 +516,7 @@ fn test_async_commit_prewrite_with_stale_max_ts_impl<F: KvFormat>() {
     let mut cluster = new_server_cluster_with_api_ver(0, 2, F::TAG);
     cluster.run();
 
-    let engine = cluster
+    let mut engine = cluster
         .sim
         .read()
         .unwrap()

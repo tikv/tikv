@@ -1166,7 +1166,7 @@ fn test_sync_max_ts_after_region_merge_impl<F: KvFormat>() {
     let right = cluster.get_region(b"k3");
 
     let cm = cluster.sim.read().unwrap().get_concurrency_manager(1);
-    let storage = cluster
+    let mut storage = cluster
         .sim
         .read()
         .unwrap()
@@ -1174,7 +1174,7 @@ fn test_sync_max_ts_after_region_merge_impl<F: KvFormat>() {
         .get(&1)
         .unwrap()
         .clone();
-    let wait_for_synced = |cluster: &mut Cluster<ServerCluster>| {
+    let mut wait_for_synced = |cluster: &mut Cluster<ServerCluster>| {
         let region_id = right.get_id();
         let leader = cluster.leader_of_region(region_id).unwrap();
         let epoch = cluster.get_region_epoch(region_id);
