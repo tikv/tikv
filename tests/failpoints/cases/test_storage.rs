@@ -550,15 +550,15 @@ fn test_async_commit_prewrite_with_stale_max_ts_impl<F: KvFormat>() {
         storage
             .sched_txn_command(
                 commands::Prewrite::new(
-                    vec![Mutation::make_put(Key::from_raw(b"k1"), b"v".to_vec())],
-                    b"k1".to_vec(),
+                    vec![Mutation::make_put(Key::from_raw(b"xk1"), b"v".to_vec())],
+                    b"xk1".to_vec(),
                     10.into(),
                     100,
                     false,
                     2,
                     TimeStamp::default(),
                     TimeStamp::default(),
-                    Some(vec![b"k2".to_vec()]),
+                    Some(vec![b"xk2".to_vec()]),
                     false,
                     AssertionLevel::Off,
                     ctx.clone(),
@@ -583,17 +583,17 @@ fn test_async_commit_prewrite_with_stale_max_ts_impl<F: KvFormat>() {
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
                     vec![(
-                        Mutation::make_put(Key::from_raw(b"k1"), b"v".to_vec()),
+                        Mutation::make_put(Key::from_raw(b"xk1"), b"v".to_vec()),
                         DoPessimisticCheck,
                     )],
-                    b"k1".to_vec(),
+                    b"xk1".to_vec(),
                     10.into(),
                     100,
                     20.into(),
                     2,
                     TimeStamp::default(),
                     TimeStamp::default(),
-                    Some(vec![b"k2".to_vec()]),
+                    Some(vec![b"xk2".to_vec()]),
                     false,
                     AssertionLevel::Off,
                     ctx.clone(),
