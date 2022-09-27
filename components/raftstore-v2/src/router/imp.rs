@@ -1,9 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    cell::RefCell,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine};
@@ -24,7 +21,7 @@ impl<EK: KvEngine, ER: RaftEngine> LogFetchedNotifier for StoreRouter<EK, ER> {
 }
 
 /// A router that routes messages to the raftstore
-pub struct ServerRaftStoreRouter<EK, ER>
+pub struct RaftRouter<EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
@@ -33,33 +30,42 @@ where
     local_reader: LocalReader<EK, StoreRouter<EK, ER>>,
 }
 
-impl<EK, ER> Clone for ServerRaftStoreRouter<EK, ER>
+impl<EK, ER> Clone for RaftRouter<EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
 {
     fn clone(&self) -> Self {
-        ServerRaftStoreRouter {
+        RaftRouter {
             router: self.router.clone(),
             local_reader: self.local_reader.clone(),
         }
     }
 }
 
-impl<EK: KvEngine, ER: RaftEngine> ServerRaftStoreRouter<EK, ER> {
-    pub fn new(
-        store_meta: Arc<Mutex<StoreMeta<EK>>>,
-        router: StoreRouter<EK, ER>,
-        logger: Logger,
-    ) -> Self {
-        ServerRaftStoreRouter {
+impl<EK: KvEngine, ER: RaftEngine> RaftRouter<EK, ER> {
+    pub fn new(store_id: u64, router: StoreRouter<EK, ER>) -> Self {
+        let mut store_meta = StoreMeta::new();
+        store_meta.store_id = Some(store_id);
+        let store_meta = Arc::new(Mutex::new(store_meta));
+
+        let logger = router.logger().clone();
+        RaftRouter {
             router: router.clone(),
             local_reader: LocalReader::new(store_meta, router, logger),
         }
     }
 
+    pub fn store_router(&self) -> &StoreRouter<EK, ER> {
+        &self.router
+    }
+
     pub fn send(&self, addr: u64, msg: PeerMsg) -> Result<(), TrySendError<PeerMsg>> {
         self.router.send(addr, msg)
+    }
+
+    pub fn store_meta(&self) -> &Arc<Mutex<StoreMeta<EK>>> {
+        self.local_reader.store_meta()
     }
 
     pub fn send_raft_message(

@@ -38,7 +38,7 @@ use raftstore::store::{
 };
 use raftstore_v2::{
     create_store_batch_system,
-    router::{DebugInfoChannel, PeerMsg, QueryResult, ServerRaftStoreRouter},
+    router::{DebugInfoChannel, PeerMsg, QueryResult, RaftRouter},
     Bootstrap, StoreMeta, StoreRouter, StoreSystem,
 };
 use slog::{o, Logger};
@@ -52,10 +52,10 @@ mod test_read;
 mod test_status;
 
 #[derive(Clone)]
-struct TestRouter(ServerRaftStoreRouter<KvTestEngine, RaftTestEngine>);
+struct TestRouter(RaftRouter<KvTestEngine, RaftTestEngine>);
 
 impl Deref for TestRouter {
-    type Target = ServerRaftStoreRouter<KvTestEngine, RaftTestEngine>;
+    type Target = RaftRouter<KvTestEngine, RaftTestEngine>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -160,9 +160,8 @@ impl RunningState {
             logger.clone(),
         );
 
-        let mut store_meta = StoreMeta::new();
-        store_meta.store_id = Some(store_id);
-        let store_meta = Arc::new(Mutex::new(store_meta));
+        let router = RaftRouter::new(store_id, router);
+        let store_meta = router.store_meta().clone();
 
         system
             .start(
@@ -171,12 +170,10 @@ impl RunningState {
                 raft_engine.clone(),
                 factory.clone(),
                 transport.clone(),
-                &router,
+                router.store_router(),
                 store_meta.clone(),
             )
             .unwrap();
-
-        let router = ServerRaftStoreRouter::new(store_meta.clone(), router, logger.clone());
 
         let state = Self {
             raft_engine,

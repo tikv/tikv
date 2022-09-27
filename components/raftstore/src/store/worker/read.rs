@@ -17,7 +17,7 @@ use fail::fail_point;
 use kvproto::{
     errorpb,
     kvrpcpb::ExtraOp as TxnExtraOp,
-    metapb,
+    metapb::{self, Region},
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request, Response},
 };
 use pd_client::BucketMeta;
@@ -153,28 +153,6 @@ pub trait ReadExecutor {
     }
 }
 
-/// #[RaftstoreCommon]: A read only delegate of `Peer`.
-#[derive(Clone, Debug)]
-pub struct ReadDelegate {
-    pub region: Arc<metapb::Region>,
-    pub peer_id: u64,
-    pub term: u64,
-    pub applied_term: u64,
-    pub leader_lease: Option<RemoteLease>,
-    pub last_valid_ts: Timespec,
-
-    pub tag: String,
-    pub bucket_meta: Option<Arc<BucketMeta>>,
-    pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
-    pub txn_ext: Arc<TxnExt>,
-    pub read_progress: Arc<RegionReadProgress>,
-    pub pending_remove: bool,
-
-    // `track_ver` used to keep the local `ReadDelegate` in `LocalReader`
-    // up-to-date with the global `ReadDelegate` stored at `StoreMeta`
-    pub track_ver: TrackVer,
-}
-
 /// CachedReadDelegate is a wrapper the ReadDelegate and kv_engine. LocalReader
 /// dispatch local read requests to ReadDeleage according to the region_id where
 /// ReadDelegate needs kv_engine to read data or fetch snapshot.
@@ -228,12 +206,15 @@ impl Drop for ReadDelegate {
 /// #[RaftstoreCommon]
 pub trait ReadExecutorProvider: Send + Clone + 'static {
     type Executor: ReadExecutor;
+    type StoreMeta;
 
     fn store_id(&self) -> Option<u64>;
 
     /// get the ReadDelegate with region_id and the number of delegates in the
     /// StoreMeta
     fn get_executor_and_len(&self, region_id: u64) -> (usize, Option<Self::Executor>);
+
+    fn store_meta(&self) -> &Self::StoreMeta;
 }
 
 #[derive(Clone)]
@@ -262,6 +243,7 @@ where
     E: KvEngine,
 {
     type Executor = CachedReadDelegate<E>;
+    type StoreMeta = Arc<Mutex<StoreMeta>>;
 
     fn store_id(&self) -> Option<u64> {
         self.store_meta.as_ref().lock().unwrap().store_id
@@ -282,6 +264,10 @@ where
             );
         }
         (meta.readers.len(), None)
+    }
+
+    fn store_meta(&self) -> &Self::StoreMeta {
+        &self.store_meta
     }
 }
 
@@ -335,8 +321,30 @@ impl Clone for TrackVer {
     }
 }
 
+/// #[RaftstoreCommon]: A read only delegate of `Peer`.
+#[derive(Clone, Debug)]
+pub struct ReadDelegate {
+    pub region: Arc<metapb::Region>,
+    pub peer_id: u64,
+    pub term: u64,
+    pub applied_term: u64,
+    pub leader_lease: Option<RemoteLease>,
+    pub last_valid_ts: Timespec,
+
+    pub tag: String,
+    pub bucket_meta: Option<Arc<BucketMeta>>,
+    pub txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+    pub txn_ext: Arc<TxnExt>,
+    pub read_progress: Arc<RegionReadProgress>,
+    pub pending_remove: bool,
+
+    // `track_ver` used to keep the local `ReadDelegate` in `LocalReader`
+    // up-to-date with the global `ReadDelegate` stored at `StoreMeta`
+    pub track_ver: TrackVer,
+}
+
 impl ReadDelegate {
-    pub fn from_peer<EK: KvEngine, ER: RaftEngine>(peer: &Peer<EK, ER>) -> ReadDelegate {
+    pub fn from_peer<EK: KvEngine, ER: RaftEngine>(peer: &Peer<EK, ER>) -> Self {
         let region = peer.region().clone();
         let region_id = region.get_id();
         let peer_id = peer.peer.get_id();
@@ -353,6 +361,34 @@ impl ReadDelegate {
             read_progress: peer.read_progress.clone(),
             pending_remove: false,
             bucket_meta: peer.region_buckets.as_ref().map(|b| b.meta.clone()),
+            track_ver: TrackVer::new(),
+        }
+    }
+
+    pub fn new(
+        peer_id: u64,
+        term: u64,
+        region: Region,
+        applied_term: u64,
+        txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+        txn_ext: Arc<TxnExt>,
+        read_progress: Arc<RegionReadProgress>,
+        bucket_meta: Option<Arc<BucketMeta>>,
+    ) -> Self {
+        let region_id = region.id;
+        ReadDelegate {
+            region: Arc::new(region),
+            peer_id,
+            term,
+            applied_term,
+            leader_lease: None,
+            last_valid_ts: Timespec::new(0, 0),
+            tag: format!("[region {}] {}", region_id, peer_id),
+            txn_extra_op,
+            txn_ext,
+            read_progress,
+            pending_remove: false,
+            bucket_meta,
             track_ver: TrackVer::new(),
         }
     }
@@ -554,6 +590,10 @@ where
             store_id: Cell::new(None),
             delegates: LruCache::with_capacity_and_sample(0, 7),
         }
+    }
+
+    pub fn store_meta(&self) -> &S::StoreMeta {
+        self.store_meta.store_meta()
     }
 
     // Ideally `get_delegate` should return `Option<&ReadDelegate>`, but if so the

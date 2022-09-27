@@ -376,23 +376,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     pub fn generate_read_delegate(&self) -> ReadDelegate {
-        let region = self.region().clone();
-        let region_id = region.get_id();
         let peer_id = self.peer().get_id();
-        ReadDelegate {
-            region: Arc::new(region),
+
+        ReadDelegate::new(
             peer_id,
-            term: self.term(),
-            applied_term: self.storage().entry_storage().applied_term(),
-            leader_lease: None,
-            last_valid_ts: Timespec::new(0, 0),
-            tag: format!("[region {}] {}", region_id, peer_id),
-            txn_extra_op: self.txn_extra_op.clone(),
-            txn_ext: self.txn_ext.clone(),
-            read_progress: self.read_progress().clone(),
-            pending_remove: false,
-            bucket_meta: self.region_buckets.as_ref().map(|b| b.meta.clone()),
-            track_ver: TrackVer::new(),
-        }
+            self.term(),
+            self.region().clone(),
+            self.storage().entry_storage().applied_term(),
+            self.txn_extra_op.clone(),
+            self.txn_ext.clone(),
+            self.read_progress().clone(),
+            self.region_buckets.as_ref().map(|b| b.meta.clone()),
+        )
     }
 }

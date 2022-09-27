@@ -77,6 +77,10 @@ where
         }
     }
 
+    pub fn store_meta(&self) -> &Arc<Mutex<StoreMeta<E>>> {
+        self.local_reader.store_meta()
+    }
+
     pub fn pre_propose_raft_command(
         &mut self,
         req: &RaftCmdRequest,
@@ -320,6 +324,7 @@ where
     E: KvEngine,
 {
     type Executor = CachedReadDelegate<E>;
+    type StoreMeta = Arc<Mutex<StoreMeta<E>>>;
 
     fn store_id(&self) -> Option<u64> {
         self.store_meta.as_ref().lock().unwrap().store_id
@@ -342,6 +347,10 @@ where
             );
         }
         (meta.readers.len(), None)
+    }
+
+    fn store_meta(&self) -> &Self::StoreMeta {
+        &self.store_meta
     }
 }
 
