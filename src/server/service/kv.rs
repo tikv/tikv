@@ -1726,7 +1726,8 @@ fn future_flashback_to_version<
             }));
 
             raft_router_clone_wait
-                .significant_send(region_id, SignificantMsg::WaitApplyFlashback(cb)).unwrap();
+                .significant_send(region_id, SignificantMsg::WaitApplyFlashback(cb))
+                .unwrap();
             if resp.response.get_header().has_error() {
                 *failed_clone_wait.lock().unwrap() = true;
                 error!(
@@ -1737,7 +1738,8 @@ fn future_flashback_to_version<
         }));
 
         raft_router_clone
-            .significant_send(region_id, SignificantMsg::PrepareFlashback(callback)).unwrap();
+            .significant_send(region_id, SignificantMsg::PrepareFlashback(callback))
+            .unwrap();
 
         if result_rx.await? && *failed.lock().unwrap() {
             return Err(Error::Other(box_err!(
@@ -1772,12 +1774,14 @@ fn future_flashback_to_version<
             result_tx.send(true).unwrap();
         }));
 
-        raft_router_clone.significant_send(region_id, SignificantMsg::FinishFlashback(cb)).unwrap();
+        raft_router_clone
+            .significant_send(region_id, SignificantMsg::FinishFlashback(cb))
+            .unwrap();
         if result_rx.await? && *failed.lock().unwrap() {
-                return Err(Error::Other(box_err!(
-                    "failed to prepare the region {} for flashback",
-                    region_id
-                )));
+            return Err(Error::Other(box_err!(
+                "failed to prepare the region {} for flashback",
+                region_id
+            )));
         }
 
         let mut resp = FlashbackToVersionResponse::default();
