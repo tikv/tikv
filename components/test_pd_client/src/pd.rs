@@ -39,11 +39,8 @@ use pd_client::{
     BucketStat, Error, FeatureGate, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result,
 };
 use raft::eraftpb::ConfChangeType;
-use raftstore::store::{
-    util::{check_key_in_region, find_peer, is_learner, new_peer},
-    QueryStats, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
-};
 use tikv_util::{
+    store::{check_key_in_region, find_peer, is_learner, new_peer, QueryStats},
     time::{Instant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
     Either, HandyRwLock,
@@ -52,6 +49,9 @@ use tokio_timer::timer::Handle;
 use txn_types::{TimeStamp, TSO_PHYSICAL_SHIFT_BITS};
 
 use super::*;
+
+pub const INIT_EPOCH_CONF_VER: u64 = 1;
+pub const INIT_EPOCH_VER: u64 = 1;
 
 struct Store {
     store: metapb::Store,
@@ -1468,7 +1468,7 @@ impl PdClient for TestPdClient {
         for _ in 1..500 {
             sleep_ms(10);
             if let Some(region) = self.cluster.rl().get_region(data_key(key)) {
-                if check_key_in_region(key, &region).is_ok() {
+                if check_key_in_region(key, &region) {
                     return Ok(region);
                 }
             }

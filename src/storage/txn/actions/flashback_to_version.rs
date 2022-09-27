@@ -75,14 +75,13 @@ pub fn flashback_to_version_read_write<S: Snapshot>(
     Ok((key_old_writes, has_remain_writes))
 }
 
-pub fn flashback_to_version<S: Snapshot>(
+pub fn flashback_to_version(
     txn: &mut MvccTxn,
-    reader: &mut SnapshotReader<S>,
+    reader: &mut SnapshotReader<impl Snapshot>,
     next_lock_key: &mut Option<Key>,
     next_write_key: &mut Option<Key>,
     key_locks: Vec<(Key, Lock)>,
     key_old_writes: Vec<(Key, Option<Write>)>,
-    version: TimeStamp,
     start_ts: TimeStamp,
     commit_ts: TimeStamp,
 ) -> TxnResult<usize> {
@@ -123,10 +122,12 @@ pub fn flashback_to_version<S: Snapshot>(
             // If it's not a short value and it's a `WriteType::Put`, we should put the old
             // value in `CF_DEFAULT` with `self.start_ts` as well.
             if old_write.short_value.is_none() && old_write.write_type == WriteType::Put {
-                if let Some(old_value) = reader.get(&key, version)? {
-                    txn.put_value(key.clone(), start_ts, old_value);
-                    rows += 1;
-                }
+                txn.put_value(
+                    key.clone(),
+                    start_ts,
+                    reader.load_data(&key, old_write.clone())?,
+                );
+                rows += 1;
             }
             Write::new(old_write.write_type, start_ts, old_write.short_value)
         } else {
@@ -163,7 +164,7 @@ pub mod tests {
     };
 
     fn must_flashback_write<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         key: &[u8],
         version: impl Into<TimeStamp>,
         start_ts: impl Into<TimeStamp>,
@@ -198,7 +199,6 @@ pub mod tests {
             &mut Some(key),
             vec![],
             key_old_writes,
-            version,
             start_ts,
             commit_ts,
         )
@@ -209,91 +209,91 @@ pub mod tests {
 
     #[test]
     fn test_flashback_to_version() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let mut ts = TimeStamp::zero();
         let k = b"k";
         // Prewrite and commit Put(k -> v1) with stat_ts = 1, commit_ts = 2.
         let v1 = b"v1";
-        must_prewrite_put(&engine, k, v1, k, *ts.incr());
-        must_commit(&engine, k, ts, *ts.incr());
-        must_get(&engine, k, *ts.incr(), v1);
+        must_prewrite_put(&mut engine, k, v1, k, *ts.incr());
+        must_commit(&mut engine, k, ts, *ts.incr());
+        must_get(&mut engine, k, *ts.incr(), v1);
         // Prewrite and rollback Put(k -> v2) with stat_ts = 4.
         let v2 = b"v2";
-        must_prewrite_put(&engine, k, v2, k, *ts.incr());
-        must_rollback(&engine, k, ts, false);
-        must_get(&engine, k, *ts.incr(), v1);
+        must_prewrite_put(&mut engine, k, v2, k, *ts.incr());
+        must_rollback(&mut engine, k, ts, false);
+        must_get(&mut engine, k, *ts.incr(), v1);
         // Prewrite and rollback Delete(k) with stat_ts = 6.
-        must_prewrite_delete(&engine, k, k, *ts.incr());
-        must_rollback(&engine, k, ts, false);
-        must_get(&engine, k, *ts.incr(), v1);
+        must_prewrite_delete(&mut engine, k, k, *ts.incr());
+        must_rollback(&mut engine, k, ts, false);
+        must_get(&mut engine, k, *ts.incr(), v1);
         // Prewrite and commit Delete(k) with stat_ts = 8, commit_ts = 9.
-        must_prewrite_delete(&engine, k, k, *ts.incr());
-        must_commit(&engine, k, ts, *ts.incr());
-        must_get_none(&engine, k, *ts.incr());
+        must_prewrite_delete(&mut engine, k, k, *ts.incr());
+        must_commit(&mut engine, k, ts, *ts.incr());
+        must_get_none(&mut engine, k, *ts.incr());
         // Prewrite and commit Put(k -> v2) with stat_ts = 11, commit_ts = 12.
-        must_prewrite_put(&engine, k, v2, k, *ts.incr());
-        must_commit(&engine, k, ts, *ts.incr());
-        must_get(&engine, k, *ts.incr(), v2);
+        must_prewrite_put(&mut engine, k, v2, k, *ts.incr());
+        must_commit(&mut engine, k, ts, *ts.incr());
+        must_get(&mut engine, k, *ts.incr(), v2);
         // Flashback to version 1 with start_ts = 14, commit_ts = 15.
         assert_eq!(
-            must_flashback_write(&engine, k, 1, *ts.incr(), *ts.incr()),
+            must_flashback_write(&mut engine, k, 1, *ts.incr(), *ts.incr()),
             1
         );
-        must_get_none(&engine, k, *ts.incr());
+        must_get_none(&mut engine, k, *ts.incr());
         // Flashback to version 2 with start_ts = 17, commit_ts = 18.
         assert_eq!(
-            must_flashback_write(&engine, k, 2, *ts.incr(), *ts.incr()),
+            must_flashback_write(&mut engine, k, 2, *ts.incr(), *ts.incr()),
             1
         );
-        must_get(&engine, k, *ts.incr(), v1);
+        must_get(&mut engine, k, *ts.incr(), v1);
         // Flashback to version 5 with start_ts = 20, commit_ts = 21.
         assert_eq!(
-            must_flashback_write(&engine, k, 5, *ts.incr(), *ts.incr()),
+            must_flashback_write(&mut engine, k, 5, *ts.incr(), *ts.incr()),
             1
         );
-        must_get(&engine, k, *ts.incr(), v1);
+        must_get(&mut engine, k, *ts.incr(), v1);
         // Flashback to version 7 with start_ts = 23, commit_ts = 24.
         assert_eq!(
-            must_flashback_write(&engine, k, 7, *ts.incr(), *ts.incr()),
+            must_flashback_write(&mut engine, k, 7, *ts.incr(), *ts.incr()),
             1
         );
-        must_get(&engine, k, *ts.incr(), v1);
+        must_get(&mut engine, k, *ts.incr(), v1);
         // Flashback to version 10 with start_ts = 26, commit_ts = 27.
         assert_eq!(
-            must_flashback_write(&engine, k, 10, *ts.incr(), *ts.incr()),
+            must_flashback_write(&mut engine, k, 10, *ts.incr(), *ts.incr()),
             1
         );
-        must_get_none(&engine, k, *ts.incr());
+        must_get_none(&mut engine, k, *ts.incr());
         // Flashback to version 13 with start_ts = 29, commit_ts = 30.
         assert_eq!(
-            must_flashback_write(&engine, k, 13, *ts.incr(), *ts.incr()),
+            must_flashback_write(&mut engine, k, 13, *ts.incr(), *ts.incr()),
             1
         );
-        must_get(&engine, k, *ts.incr(), v2);
+        must_get(&mut engine, k, *ts.incr(), v2);
         // Flashback to version 27 with start_ts = 32, commit_ts = 33.
         assert_eq!(
-            must_flashback_write(&engine, k, 27, *ts.incr(), *ts.incr()),
+            must_flashback_write(&mut engine, k, 27, *ts.incr(), *ts.incr()),
             1
         );
-        must_get_none(&engine, k, *ts.incr());
+        must_get_none(&mut engine, k, *ts.incr());
     }
 
     #[test]
     fn test_flashback_to_version_deleted() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let mut ts = TimeStamp::zero();
         let (k, v) = (b"k", b"v");
-        must_prewrite_put(&engine, k, v, k, *ts.incr());
-        must_commit(&engine, k, ts, *ts.incr());
-        must_get(&engine, k, ts, v);
-        must_prewrite_delete(&engine, k, k, *ts.incr());
-        must_commit(&engine, k, ts, *ts.incr());
+        must_prewrite_put(&mut engine, k, v, k, *ts.incr());
+        must_commit(&mut engine, k, ts, *ts.incr());
+        must_get(&mut engine, k, ts, v);
+        must_prewrite_delete(&mut engine, k, k, *ts.incr());
+        must_commit(&mut engine, k, ts, *ts.incr());
         // Since the key has been deleted, flashback to version 1 should not do
         // anything.
         assert_eq!(
-            must_flashback_write(&engine, k, ts, *ts.incr(), *ts.incr()),
+            must_flashback_write(&mut engine, k, ts, *ts.incr(), *ts.incr()),
             0
         );
-        must_get_none(&engine, k, ts);
+        must_get_none(&mut engine, k, ts);
     }
 }

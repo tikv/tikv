@@ -30,7 +30,7 @@ fn table_lookup_gen_data() -> (SnapshotStore<Arc<RocksSnapshot>>, Vec<Key>) {
         .unwrap();
     store.commit(Context::default(), keys, 1, 2).unwrap();
 
-    let engine = store.get_engine();
+    let mut engine = store.get_engine();
     let db = engine.get_rocksdb().get_sync_db();
     db.compact_range_cf(db.cf_handle("write").unwrap(), None, None);
     db.compact_range_cf(db.cf_handle("default").unwrap(), None, None);
