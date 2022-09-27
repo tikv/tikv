@@ -19,7 +19,6 @@ use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
-use txn_types::TimeStamp;
 use futures::{compat::Future01CompatExt, FutureExt};
 use grpcio_health::{HealthService, ServingStatus};
 use kvproto::{
@@ -49,6 +48,7 @@ use tikv_util::{
     warn,
     worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler},
 };
+use txn_types::TimeStamp;
 use yatp::Remote;
 
 use crate::{
@@ -1628,11 +1628,15 @@ where
                 // flsuh will fetch batch of tso to update its cache and return
                 // the first tso. So `concurrency_manager` can use the tso returned
                 // by `causal_ts_provider`.
-                let res: crate::Result<TimeStamp> = if let Some(causal_ts_provider) = &causal_ts_provider {
-                    causal_ts_provider.async_flush().await.map_err(|e| box_err!(e))
-                } else {
-                    pd_client.get_tso().await.map_err(Into::into)
-                };
+                let res: crate::Result<TimeStamp> =
+                    if let Some(causal_ts_provider) = &causal_ts_provider {
+                        causal_ts_provider
+                            .async_flush()
+                            .await
+                            .map_err(|e| box_err!(e))
+                    } else {
+                        pd_client.get_tso().await.map_err(Into::into)
+                    };
 
                 match res {
                     Ok(ts) => {

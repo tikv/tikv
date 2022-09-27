@@ -30,7 +30,7 @@ pub trait CausalTsProvider: Send + Sync {
         block_on(self.async_get_ts())
     }
 
-    /// Flush (cached) timestamps and return first timestamp to keep causality 
+    /// Flush (cached) timestamps and return first timestamp to keep causality
     /// on some events, such as "leader transfer".
     fn flush(&self) -> Result<TimeStamp> {
         block_on(self.async_flush())
