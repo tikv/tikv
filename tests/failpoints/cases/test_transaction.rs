@@ -294,7 +294,7 @@ lock_release_test!(
 #[test]
 fn test_max_commit_ts_error() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let mut storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
         .build()
         .unwrap();
     let cm = storage.get_concurrency_manager();

@@ -170,7 +170,7 @@ mod tests {
             .tempdir()
             .unwrap();
         {
-            let mut engine = TestEngineBuilder::new()
+            let engine = TestEngineBuilder::new()
                 .path(dir.path())
                 .cfs(TEST_ENGINE_CFS)
                 .build()

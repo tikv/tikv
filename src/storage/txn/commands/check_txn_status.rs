@@ -567,7 +567,16 @@ pub mod tests {
             // A protected rollback record will be written.
             must_get_rollback_protected(&mut engine, k, ts(3, 0), true);
         } else {
-            must_err(&mut engine, k, ts(3, 0), ts(3, 1), ts(3, 2), r, false, false);
+            must_err(
+                &mut engine,
+                k,
+                ts(3, 0),
+                ts(3, 1),
+                ts(3, 2),
+                r,
+                false,
+                false,
+            );
         }
 
         // Lock the key with TTL=100.
@@ -734,7 +743,16 @@ pub mod tests {
                 WriteType::Rollback,
             );
         } else {
-            must_err(&mut engine, k, ts(6, 0), ts(12, 0), ts(12, 0), r, false, false);
+            must_err(
+                &mut engine,
+                k,
+                ts(6, 0),
+                ts(12, 0),
+                ts(12, 0),
+                r,
+                false,
+                false,
+            );
         }
 
         // TTL check is based on physical time (in ms). When logical time's difference
@@ -791,7 +809,15 @@ pub mod tests {
         must_large_txn_locked(&mut engine, k, ts(4, 0), 200, ts(135, 1), true);
 
         // Commit the key.
-        must_pessimistic_prewrite_put(&mut engine, k, v, k, ts(4, 0), ts(130, 0), DoPessimisticCheck);
+        must_pessimistic_prewrite_put(
+            &mut engine,
+            k,
+            v,
+            k,
+            ts(4, 0),
+            ts(130, 0),
+            DoPessimisticCheck,
+        );
         must_commit(&mut engine, k, ts(4, 0), ts(140, 0));
         must_unlocked(&mut engine, k);
         must_get_commit_ts(&mut engine, k, ts(4, 0), ts(140, 0));
@@ -1026,7 +1052,16 @@ pub mod tests {
 
         // Path: there is no commit or rollback record, error should be reported if
         // rollback_if_not_exist is set to false.
-        must_err(&mut engine, k, ts(3, 0), ts(5, 0), ts(5, 0), false, false, true);
+        must_err(
+            &mut engine,
+            k,
+            ts(3, 0),
+            ts(5, 0),
+            ts(5, 0),
+            false,
+            false,
+            true,
+        );
 
         // Path: the pessimistic primary key lock does exist, and it's not expired yet.
         must_acquire_pessimistic_lock_with_ttl(&mut engine, k, k, ts(10, 0), ts(10, 0), 10);

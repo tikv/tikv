@@ -520,8 +520,8 @@ mod tests {
         r.set_start_key(b"".to_vec());
         r.set_end_key(b"".to_vec());
 
-        let snap =
-            block_on(async { tikv_kv::snapshot(&mut engine, SnapContext::default()).await }).unwrap();
+        let snap = block_on(async { tikv_kv::snapshot(&mut engine, SnapContext::default()).await })
+            .unwrap();
         let mut loader =
             EventLoader::load_from(snap, TimeStamp::zero(), TimeStamp::max(), &r).unwrap();
 

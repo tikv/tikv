@@ -125,7 +125,7 @@ mod tests {
     /// to key. The full test of `RawCompareAndSwap` is in
     /// `src/storage/mod.rs`.
     fn test_cas_basic_impl<F: KvFormat>() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
         let key = b"rk";
 
@@ -146,7 +146,7 @@ mod tests {
             ts,
             Context::default(),
         );
-        let (prev_val, succeed) = sched_command(&engine, cm.clone(), cmd).unwrap();
+        let (prev_val, succeed) = sched_command(&mut engine, cm.clone(), cmd).unwrap();
         assert!(prev_val.is_none());
         assert!(succeed);
 
@@ -161,7 +161,7 @@ mod tests {
             ts,
             Context::default(),
         );
-        let (prev_val, succeed) = sched_command(&engine, cm.clone(), cmd).unwrap();
+        let (prev_val, succeed) = sched_command(&mut engine, cm.clone(), cmd).unwrap();
         assert_eq!(prev_val, Some(b"v1".to_vec()));
         assert!(!succeed);
 
@@ -176,13 +176,13 @@ mod tests {
             ts,
             Context::default(),
         );
-        let (prev_val, succeed) = sched_command(&engine, cm, cmd).unwrap();
+        let (prev_val, succeed) = sched_command(&mut engine, cm, cmd).unwrap();
         assert_eq!(prev_val, Some(b"v1".to_vec()));
         assert!(succeed);
     }
 
     pub fn sched_command<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         cm: ConcurrencyManager,
         cmd: TypedCommand<(Option<Value>, bool)>,
     ) -> Result<(Option<Value>, bool)> {
@@ -218,7 +218,7 @@ mod tests {
     }
 
     fn test_cas_process_write_impl<F: KvFormat>() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
         let raw_key = b"rk";
         let raw_value = b"valuek";

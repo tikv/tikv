@@ -164,7 +164,7 @@ pub mod tests {
     };
 
     fn must_flashback_write<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         key: &[u8],
         version: impl Into<TimeStamp>,
         start_ts: impl Into<TimeStamp>,
@@ -236,43 +236,43 @@ pub mod tests {
         must_get(&mut engine, k, *ts.incr(), v2);
         // Flashback to version 1 with start_ts = 14, commit_ts = 15.
         assert_eq!(
-            must_flashback_write(&engine, k, 1, *ts.incr(), *ts.incr()),
+            must_flashback_write(&mut engine, k, 1, *ts.incr(), *ts.incr()),
             1
         );
         must_get_none(&mut engine, k, *ts.incr());
         // Flashback to version 2 with start_ts = 17, commit_ts = 18.
         assert_eq!(
-            must_flashback_write(&engine, k, 2, *ts.incr(), *ts.incr()),
+            must_flashback_write(&mut engine, k, 2, *ts.incr(), *ts.incr()),
             1
         );
         must_get(&mut engine, k, *ts.incr(), v1);
         // Flashback to version 5 with start_ts = 20, commit_ts = 21.
         assert_eq!(
-            must_flashback_write(&engine, k, 5, *ts.incr(), *ts.incr()),
+            must_flashback_write(&mut engine, k, 5, *ts.incr(), *ts.incr()),
             1
         );
         must_get(&mut engine, k, *ts.incr(), v1);
         // Flashback to version 7 with start_ts = 23, commit_ts = 24.
         assert_eq!(
-            must_flashback_write(&engine, k, 7, *ts.incr(), *ts.incr()),
+            must_flashback_write(&mut engine, k, 7, *ts.incr(), *ts.incr()),
             1
         );
         must_get(&mut engine, k, *ts.incr(), v1);
         // Flashback to version 10 with start_ts = 26, commit_ts = 27.
         assert_eq!(
-            must_flashback_write(&engine, k, 10, *ts.incr(), *ts.incr()),
+            must_flashback_write(&mut engine, k, 10, *ts.incr(), *ts.incr()),
             1
         );
         must_get_none(&mut engine, k, *ts.incr());
         // Flashback to version 13 with start_ts = 29, commit_ts = 30.
         assert_eq!(
-            must_flashback_write(&engine, k, 13, *ts.incr(), *ts.incr()),
+            must_flashback_write(&mut engine, k, 13, *ts.incr(), *ts.incr()),
             1
         );
         must_get(&mut engine, k, *ts.incr(), v2);
         // Flashback to version 27 with start_ts = 32, commit_ts = 33.
         assert_eq!(
-            must_flashback_write(&engine, k, 27, *ts.incr(), *ts.incr()),
+            must_flashback_write(&mut engine, k, 27, *ts.incr(), *ts.incr()),
             1
         );
         must_get_none(&mut engine, k, *ts.incr());
@@ -291,7 +291,7 @@ pub mod tests {
         // Since the key has been deleted, flashback to version 1 should not do
         // anything.
         assert_eq!(
-            must_flashback_write(&engine, k, ts, *ts.incr(), *ts.incr()),
+            must_flashback_write(&mut engine, k, ts, *ts.incr(), *ts.incr()),
             0
         );
         must_get_none(&mut engine, k, ts);

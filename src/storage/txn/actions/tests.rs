@@ -752,7 +752,12 @@ fn must_prewrite_lock_impl<E: Engine>(
         .unwrap();
 }
 
-pub fn must_prewrite_lock<E: Engine>(engine: &mut E, key: &[u8], pk: &[u8], ts: impl Into<TimeStamp>) {
+pub fn must_prewrite_lock<E: Engine>(
+    engine: &mut E,
+    key: &[u8],
+    pk: &[u8],
+    ts: impl Into<TimeStamp>,
+) {
     must_prewrite_lock_impl(engine, key, pk, ts, TimeStamp::zero(), SkipPessimisticCheck);
 }
 

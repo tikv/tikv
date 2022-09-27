@@ -324,7 +324,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     }
 
     #[cfg(test)]
-    pub fn get_snapshot(&self) -> E::Snap {
+    pub fn get_snapshot(&mut self) -> E::Snap {
         self.engine.snapshot(Default::default()).unwrap()
     }
 
@@ -3538,7 +3538,7 @@ mod tests {
     #[test]
     fn test_cf_error() {
         // New engine lacks normal column families.
-        let mut engine = TestEngineBuilder::new()
+        let engine = TestEngineBuilder::new()
             .cfs([CF_DEFAULT, "foo"])
             .build()
             .unwrap();
@@ -3945,7 +3945,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let mut engine = {
+        let engine = {
             let path = "".to_owned();
             let cfg_rocksdb = db_config;
             let cache = BlockCacheConfig::default().build_shared_cache();
@@ -8859,7 +8859,7 @@ mod tests {
                 for expected_write in self.expected_writes {
                     builder = builder.add_expected_write(expected_write)
                 }
-                let mut engine = builder.build();
+                let engine = builder.build();
                 let mut builder =
                     TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager);
                 builder.config.enable_async_apply_prewrite = true;

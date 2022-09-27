@@ -752,6 +752,8 @@ pub mod tests {
     #[cfg(test)]
     use rand::{Rng, SeedableRng};
     #[cfg(test)]
+    use tikv_kv::RocksEngine;
+    #[cfg(test)]
     use txn_types::OldValue;
 
     use super::*;
@@ -1605,7 +1607,7 @@ pub mod tests {
 
     #[test]
     fn test_old_value_rollback_and_lock() {
-        let engine_rollback = crate::storage::TestEngineBuilder::new().build().unwrap();
+        let mut engine_rollback = crate::storage::TestEngineBuilder::new().build().unwrap();
 
         must_prewrite_put(&mut engine_rollback, b"k1", b"v1", b"k1", 10);
         must_commit(&mut engine_rollback, b"k1", 10, 30);
@@ -1621,7 +1623,7 @@ pub mod tests {
         must_prewrite_lock(&mut engine_lock, b"k1", b"k1", 40);
         must_commit(&mut engine_lock, b"k1", 40, 45);
 
-        for engine in &[engine_rollback, engine_lock] {
+        for engine in &mut [engine_rollback, engine_lock] {
             let start_ts = TimeStamp::from(50);
             let txn_props = TransactionProperties {
                 start_ts,
@@ -1882,19 +1884,21 @@ pub mod tests {
     #[test]
     fn test_prewrite_with_assertion() {
         let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
-        let mut engine_clone = engine.clone();
 
-        let mut prewrite_put = |key: &'_ _,
-                                value,
-                                ts: u64,
-                                pessimistic_action,
-                                for_update_ts: u64,
-                                assertion,
-                                assertion_level,
-                                expect_success| {
+        fn prewrite_put<E: Engine>(
+            engine: &mut E,
+            key: &[u8],
+            value: &[u8],
+            ts: u64,
+            pessimistic_action: PrewriteRequestPessimisticAction,
+            for_update_ts: u64,
+            assertion: Assertion,
+            assertion_level: AssertionLevel,
+            expect_success: bool,
+        ) {
             if expect_success {
                 must_prewrite_put_impl(
-                    &mut engine_clone,
+                    engine,
                     key,
                     value,
                     key,
@@ -1912,7 +1916,7 @@ pub mod tests {
                 );
             } else {
                 let err = must_prewrite_put_err_impl(
-                    &mut engine_clone,
+                    engine,
                     key,
                     value,
                     key,
@@ -1927,21 +1931,24 @@ pub mod tests {
                 );
                 assert!(matches!(err, Error(box ErrorInner::AssertionFailed { .. })));
             }
-        };
+        }
 
         let mut test =
-            |key_prefix: &[u8], assertion_level, prepare: &dyn for<'a> FnMut(&'a [u8])| {
+            |key_prefix: &[u8],
+             assertion_level,
+             prepare: &mut dyn for<'a> FnMut(&mut RocksEngine, &'a [u8])| {
                 let k1 = [key_prefix, b"k1"].concat();
                 let k2 = [key_prefix, b"k2"].concat();
                 let k3 = [key_prefix, b"k3"].concat();
                 let k4 = [key_prefix, b"k4"].concat();
 
                 for k in &[&k1, &k2, &k3, &k4] {
-                    prepare(k.as_slice());
+                    prepare(&mut engine, k.as_slice());
                 }
 
                 // Assertion passes (optimistic).
                 prewrite_put(
+                    &mut engine,
                     &k1,
                     b"v1",
                     10,
@@ -1954,6 +1961,7 @@ pub mod tests {
                 must_commit(&mut engine, &k1, 10, 15);
 
                 prewrite_put(
+                    &mut engine,
                     &k1,
                     b"v1",
                     20,
@@ -1967,6 +1975,7 @@ pub mod tests {
 
                 // Assertion passes (pessimistic).
                 prewrite_put(
+                    &mut engine,
                     &k2,
                     b"v2",
                     10,
@@ -1979,6 +1988,7 @@ pub mod tests {
                 must_commit(&mut engine, &k2, 10, 15);
 
                 prewrite_put(
+                    &mut engine,
                     &k2,
                     b"v2",
                     20,
@@ -1993,6 +2003,7 @@ pub mod tests {
                 // Optimistic transaction assertion fail on fast/strict level.
                 let pass = assertion_level == AssertionLevel::Off;
                 prewrite_put(
+                    &mut engine,
                     &k1,
                     b"v1",
                     30,
@@ -2003,6 +2014,7 @@ pub mod tests {
                     pass,
                 );
                 prewrite_put(
+                    &mut engine,
                     &k3,
                     b"v3",
                     30,
@@ -2019,6 +2031,7 @@ pub mod tests {
                 // happens during amending pessimistic lock.
                 let pass = assertion_level == AssertionLevel::Off;
                 prewrite_put(
+                    &mut engine,
                     &k2,
                     b"v2",
                     30,
@@ -2029,6 +2042,7 @@ pub mod tests {
                     pass,
                 );
                 prewrite_put(
+                    &mut engine,
                     &k4,
                     b"v4",
                     30,
@@ -2045,6 +2059,7 @@ pub mod tests {
                 // `pessimistic_action` is.
                 let pass = assertion_level != AssertionLevel::Strict;
                 prewrite_put(
+                    &mut engine,
                     &k1,
                     b"v1",
                     40,
@@ -2055,6 +2070,7 @@ pub mod tests {
                     pass,
                 );
                 prewrite_put(
+                    &mut engine,
                     &k3,
                     b"v3",
                     40,
@@ -2070,6 +2086,7 @@ pub mod tests {
                 must_acquire_pessimistic_lock(&mut engine, &k2, &k2, 40, 41);
                 must_acquire_pessimistic_lock(&mut engine, &k4, &k4, 40, 41);
                 prewrite_put(
+                    &mut engine,
                     &k2,
                     b"v2",
                     40,
@@ -2080,6 +2097,7 @@ pub mod tests {
                     pass,
                 );
                 prewrite_put(
+                    &mut engine,
                     &k4,
                     b"v4",
                     40,
@@ -2093,28 +2111,29 @@ pub mod tests {
                 must_rollback(&mut engine, &k3, 40, true);
             };
 
-        let prepare_rollback = |k: &'_ _| must_rollback(&mut engine, k, 3, true);
-        let prepare_lock_record = |k: &'_ _| {
-            must_prewrite_lock(&mut engine, k, k, 3);
-            must_commit(&mut engine, k, 3, 5);
+        let mut prepare_rollback =
+            |engine: &mut RocksEngine, k: &'_ _| must_rollback(engine, k, 3, true);
+        let mut prepare_lock_record = |engine: &mut RocksEngine, k: &'_ _| {
+            must_prewrite_lock(engine, k, k, 3);
+            must_commit(engine, k, 3, 5);
         };
-        let prepare_delete = |k: &'_ _| {
-            must_prewrite_put(&mut engine, k, b"deleted-value", k, 3);
-            must_commit(&mut engine, k, 3, 5);
-            must_prewrite_delete(&mut engine, k, k, 7);
-            must_commit(&mut engine, k, 7, 9);
+        let mut prepare_delete = |engine: &mut RocksEngine, k: &'_ _| {
+            must_prewrite_put(engine, k, b"deleted-value", k, 3);
+            must_commit(engine, k, 3, 5);
+            must_prewrite_delete(engine, k, k, 7);
+            must_commit(engine, k, 7, 9);
         };
-        let prepare_gc_fence = |k: &'_ _| {
-            must_prewrite_put(&mut engine, k, b"deleted-value", k, 3);
-            must_commit(&mut engine, k, 3, 5);
-            must_cleanup_with_gc_fence(&mut engine, k, 5, 0, 7, true);
+        let mut prepare_gc_fence = |engine: &mut RocksEngine, k: &'_ _| {
+            must_prewrite_put(engine, k, b"deleted-value", k, 3);
+            must_commit(engine, k, 3, 5);
+            must_cleanup_with_gc_fence(engine, k, 5, 0, 7, true);
         };
 
         // Test multiple cases without recreating the engine. So use a increasing key
         // prefix to avoid each case interfering each other.
         let mut key_prefix = b'a';
 
-        let mut test_all_levels = |prepare| {
+        let mut test_all_levels = |prepare: &mut dyn for<'a> FnMut(&mut RocksEngine, &'a [u8])| {
             test(&[key_prefix], AssertionLevel::Off, prepare);
             key_prefix += 1;
             test(&[key_prefix], AssertionLevel::Fast, prepare);
@@ -2123,11 +2142,11 @@ pub mod tests {
             key_prefix += 1;
         };
 
-        test_all_levels(&|_| ());
-        test_all_levels(&prepare_rollback);
-        test_all_levels(&prepare_lock_record);
-        test_all_levels(&prepare_delete);
-        test_all_levels(&prepare_gc_fence);
+        test_all_levels(&mut |_, _| ());
+        test_all_levels(&mut prepare_rollback);
+        test_all_levels(&mut prepare_lock_record);
+        test_all_levels(&mut prepare_delete);
+        test_all_levels(&mut prepare_gc_fence);
     }
 
     #[test]

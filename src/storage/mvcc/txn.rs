@@ -1311,7 +1311,7 @@ pub(crate) mod tests {
 
         must_acquire_pessimistic_lock(&mut engine, b"key", b"key", 2, 2);
 
-        let mut do_pessimistic_prewrite = |engine: &mut RocksEngine| {
+        let do_pessimistic_prewrite = |engine: &mut RocksEngine| {
             let snapshot = engine.snapshot(Default::default()).unwrap();
             let mut txn = MvccTxn::new(TimeStamp::new(2), cm.clone());
             let mut reader = SnapshotReader::new(TimeStamp::new(2), snapshot, true);

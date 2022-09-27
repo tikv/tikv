@@ -233,7 +233,15 @@ pub mod tests {
         must_get_rollback_protected(&mut engine, k, ts(11, 1), true);
 
         must_acquire_pessimistic_lock(&mut engine, k, k, ts(13, 1), ts(14, 1));
-        must_pessimistic_prewrite_put(&mut engine, k, v, k, ts(13, 1), ts(14, 1), DoPessimisticCheck);
+        must_pessimistic_prewrite_put(
+            &mut engine,
+            k,
+            v,
+            k,
+            ts(13, 1),
+            ts(14, 1),
+            DoPessimisticCheck,
+        );
         must_succeed(&mut engine, k, ts(13, 1), ts(120, 0));
         must_get_rollback_protected(&mut engine, k, ts(13, 1), true);
     }

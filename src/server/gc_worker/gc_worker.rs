@@ -1833,7 +1833,7 @@ mod tests {
         // Return Result from this function so we can use the `wait_op` macro here.
         let store_id = 1;
 
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let storage =
             TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine.clone(), DummyLockManager)
                 .build()
@@ -2017,7 +2017,7 @@ mod tests {
     #[test]
     fn test_physical_scan_lock() {
         let store_id = 1;
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let prefixed_engine = PrefixedEngine(engine);
         let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(
             prefixed_engine.clone(),
@@ -2099,7 +2099,7 @@ mod tests {
     #[test]
     fn test_gc_keys_with_region_info_provider() {
         let store_id = 1;
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let mut prefixed_engine = PrefixedEngine(engine.clone());
 
         let (tx, _rx) = mpsc::channel();
@@ -2196,7 +2196,7 @@ mod tests {
     #[test]
     fn test_gc_keys_statistics() {
         let store_id = 1;
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let mut prefixed_engine = PrefixedEngine(engine.clone());
 
         let (tx, _rx) = mpsc::channel();
@@ -2259,7 +2259,7 @@ mod tests {
         cfg.defaultcf.dynamic_level_bytes = false;
         let dir = tempfile::TempDir::new().unwrap();
         let builder = TestEngineBuilder::new().path(dir.path());
-        let mut engine = builder.build_with_cfg(&cfg).unwrap();
+        let engine = builder.build_with_cfg(&cfg).unwrap();
         let mut prefixed_engine = PrefixedEngine(engine);
 
         let (tx, _rx) = mpsc::channel();
@@ -2361,7 +2361,7 @@ mod tests {
 
     #[test]
     fn test_gc_keys_scan_range_limit() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let mut prefixed_engine = PrefixedEngine(engine.clone());
 
         let (tx, _rx) = mpsc::channel();

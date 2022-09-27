@@ -186,7 +186,7 @@ pub mod tests {
 
     #[cfg(test)]
     fn test_commit_ok_imp(k1: &[u8], v1: &[u8], k2: &[u8], k3: &[u8]) {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         must_prewrite_put(&mut engine, k1, v1, k1, 10);
         must_prewrite_lock(&mut engine, k2, k1, 10);
         must_prewrite_delete(&mut engine, k3, k1, 10);
@@ -215,7 +215,7 @@ pub mod tests {
 
     #[cfg(test)]
     fn test_commit_err_imp(k: &[u8], v: &[u8]) {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
         // Not prewrite yet
         must_err(&mut engine, k, 1, 2);
@@ -237,7 +237,7 @@ pub mod tests {
 
     #[test]
     fn test_min_commit_ts() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
         let (k, v) = (b"k", b"v");
 

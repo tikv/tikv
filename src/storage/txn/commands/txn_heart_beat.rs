@@ -113,7 +113,7 @@ pub mod tests {
     };
 
     pub fn must_success<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         primary_key: &[u8],
         start_ts: impl Into<TimeStamp>,
         advise_ttl: u64,
@@ -154,7 +154,7 @@ pub mod tests {
     }
 
     pub fn must_err<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         primary_key: &[u8],
         start_ts: impl Into<TimeStamp>,
         advise_ttl: u64,
