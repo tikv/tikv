@@ -2596,6 +2596,7 @@ mod tests {
         assert!(ks.is_empty());
     }
 
+    #[allow(non_snake_case)]
     fn multi_gc_engine_setup(
         path: &Path,
         store_id: u64,
@@ -2680,7 +2681,7 @@ mod tests {
                         CF_WRITE,
                         cfg_rocksdb.writecf.build_opt(&cache, None, region_id, 10),
                     ),
-                    CF_RAFT => (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
+                    CF_RAFT=> (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
                 })
                 .collect();
             let tablet_path = factory.tablet_path(region_id, 10);
