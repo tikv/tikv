@@ -90,6 +90,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
                 }
             );
 
+            // Raw atomic cmd has two locks, one is concurrency_manager and the other is txn
+            // latch. Now, concurrency_manager lock key with ts encoded, it aims
+            // to "lock" resolved-ts to be less than its timestamp, rather than
+            // to "lock" other concurrent requests.
             let lock_guard = block_on(get_raw_key_guard(&provider, concurrency_manager)).map_err(
                 |err: StorageError| ErrorInner::Other(box_err!("failed to key guard: {:?}", err)),
             )?;

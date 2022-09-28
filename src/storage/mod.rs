@@ -2629,13 +2629,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let provider = self.causal_ts_provider.clone();
         let sched = self.get_scheduler();
         self.sched_raw_command(CMD, async move {
-            // Raw atomic cmd has two locks, one is concurrency_manager and the other is txn
-            // latch. Now, concurrency_manager lock key with ts encoded, it aims
-            // to "lock" resolved-ts to be less than its timestamp, rather than
-            // to "lock" other concurrent requests. TODO: Merge the two locks
-            // into one to simplify the process. Same to other raw atomic
-            // commands.
-            // Do NOT encode ts here as RawCompareAndSwap use key to gen lock.
             let key = F::encode_raw_key_owned(key, None);
             let cmd = RawCompareAndSwap::new(
                 cf,
