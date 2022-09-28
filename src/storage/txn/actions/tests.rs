@@ -18,7 +18,7 @@ use crate::storage::{
 };
 
 pub fn must_prewrite_put_impl<E: Engine>(
-    engine: &E,
+    engine: &mut E,
     key: &[u8],
     value: &[u8],
     pk: &[u8],
@@ -56,7 +56,7 @@ pub fn must_prewrite_put_impl<E: Engine>(
 }
 
 pub fn must_prewrite_insert_impl<E: Engine>(
-    engine: &E,
+    engine: &mut E,
     key: &[u8],
     value: &[u8],
     pk: &[u8],
@@ -94,7 +94,7 @@ pub fn must_prewrite_insert_impl<E: Engine>(
 }
 
 pub fn must_prewrite_put_impl_with_should_not_exist<E: Engine>(
-    engine: &E,
+    engine: &mut E,
     key: &[u8],
     value: &[u8],
     pk: &[u8],
@@ -164,7 +164,7 @@ pub fn must_prewrite_put_impl_with_should_not_exist<E: Engine>(
 }
 
 pub fn must_prewrite_put<E: Engine>(
-    engine: &E,
+    engine: &mut E,
     key: &[u8],
     value: &[u8],
     pk: &[u8],
@@ -190,7 +190,7 @@ pub fn must_prewrite_put<E: Engine>(
 }
 
 pub fn must_prewrite_put_on_region<E: Engine>(
-    engine: &E,
+    engine: &mut E,
     region_id: u64,
     key: &[u8],
     value: &[u8],
@@ -219,7 +219,7 @@ pub fn must_prewrite_put_on_region<E: Engine>(
 }
 
 pub fn must_pessimistic_prewrite_put<E: Engine>(
-    engine: &E,
+    engine: &mut E,
     key: &[u8],
     value: &[u8],
     pk: &[u8],
@@ -247,7 +247,7 @@ pub fn must_pessimistic_prewrite_put<E: Engine>(
 }
 
 pub fn must_pessimistic_prewrite_insert<E: Engine>(
-    engine: &E,
+    engine: &mut E,
     key: &[u8],
     value: &[u8],
     pk: &[u8],
@@ -275,7 +275,7 @@ pub fn must_pessimistic_prewrite_insert<E: Engine>(
 }
 
 pub fn must_pessimistic_prewrite_put_with_ttl<E: Engine>(
-    engine: &E,
+    engine: &mut E,
     key: &[u8],
     value: &[u8],
     pk: &[u8],
@@ -304,7 +304,7 @@ pub fn must_pessimistic_prewrite_put_with_ttl<E: Engine>(
 }
 
 pub fn must_prewrite_put_for_large_txn<E: Engine>(
-    engine: &E,
+    engine: &mut E,
     key: &[u8],
     value: &[u8],
     pk: &[u8],
@@ -341,7 +341,7 @@ pub fn must_prewrite_put_for_large_txn<E: Engine>(
 }
 
 pub fn must_prewrite_put_async_commit<E: Engine>(
-    engine: &E,
+    engine: &mut E,
     key: &[u8],
     value: &[u8],
     pk: &[u8],
@@ -370,7 +370,7 @@ pub fn must_prewrite_put_async_commit<E: Engine>(
 }
 
 pub fn must_pessimistic_prewrite_put_async_commit<E: Engine>(
-    engine: &E,
+    engine: &mut E,
     key: &[u8],
     value: &[u8],
     pk: &[u8],
@@ -426,7 +426,7 @@ fn default_txn_props(
 }
 
 pub fn must_prewrite_put_err_impl<E: Engine>(
-    engine: &E,
+    engine: &mut E,
     key: &[u8],
     value: &[u8],
     pk: &[u8],
@@ -457,7 +457,7 @@ pub fn must_prewrite_put_err_impl<E: Engine>(
 }
 
 pub fn must_prewrite_insert_err_impl<E: Engine>(
-    engine: &E,
+    engine: &mut E,
     key: &[u8],
     value: &[u8],
     pk: &[u8],
@@ -488,7 +488,7 @@ pub fn must_prewrite_insert_err_impl<E: Engine>(
 }
 
 pub fn must_prewrite_put_err_impl_with_should_not_exist<E: Engine>(
-    engine: &E,
+    engine: &mut E,
     key: &[u8],
     value: &[u8],
     pk: &[u8],
@@ -535,7 +535,7 @@ pub fn must_prewrite_put_err_impl_with_should_not_exist<E: Engine>(
 }
 
 pub fn must_prewrite_put_err<E: Engine>(
-    engine: &E,
+    engine: &mut E,
     key: &[u8],
     value: &[u8],
     pk: &[u8],
@@ -558,7 +558,7 @@ pub fn must_prewrite_put_err<E: Engine>(
 }
 
 pub fn must_pessimistic_prewrite_put_err<E: Engine>(
-    engine: &E,
+    engine: &mut E,
     key: &[u8],
     value: &[u8],
     pk: &[u8],
@@ -583,7 +583,7 @@ pub fn must_pessimistic_prewrite_put_err<E: Engine>(
 }
 
 pub fn must_pessimistic_prewrite_insert_err<E: Engine>(
-    engine: &E,
+    engine: &mut E,
     key: &[u8],
     value: &[u8],
     pk: &[u8],
@@ -608,7 +608,7 @@ pub fn must_pessimistic_prewrite_insert_err<E: Engine>(
 }
 
 pub fn must_retry_pessimistic_prewrite_put_err<E: Engine>(
-    engine: &E,
+    engine: &mut E,
     key: &[u8],
     value: &[u8],
     pk: &[u8],
@@ -635,7 +635,7 @@ pub fn must_retry_pessimistic_prewrite_put_err<E: Engine>(
 }
 
 fn must_prewrite_delete_impl<E: Engine>(
-    engine: &E,
+    engine: &mut E,
     key: &[u8],
     pk: &[u8],
     ts: impl Into<TimeStamp>,
@@ -675,7 +675,7 @@ fn must_prewrite_delete_impl<E: Engine>(
 }
 
 pub fn must_prewrite_delete<E: Engine>(
-    engine: &E,
+    engine: &mut E,
     key: &[u8],
     pk: &[u8],
     ts: impl Into<TimeStamp>,
@@ -692,7 +692,7 @@ pub fn must_prewrite_delete<E: Engine>(
 }
 
 pub fn must_prewrite_delete_on_region<E: Engine>(
-    engine: &E,
+    engine: &mut E,
     region_id: u64,
     key: &[u8],
     pk: &[u8],
@@ -710,7 +710,7 @@ pub fn must_prewrite_delete_on_region<E: Engine>(
 }
 
 pub fn must_pessimistic_prewrite_delete<E: Engine>(
-    engine: &E,
+    engine: &mut E,
     key: &[u8],
     pk: &[u8],
     ts: impl Into<TimeStamp>,
@@ -721,7 +721,7 @@ pub fn must_pessimistic_prewrite_delete<E: Engine>(
 }
 
 fn must_prewrite_lock_impl<E: Engine>(
-    engine: &E,
+    engine: &mut E,
     key: &[u8],
     pk: &[u8],
     ts: impl Into<TimeStamp>,
@@ -752,12 +752,17 @@ fn must_prewrite_lock_impl<E: Engine>(
         .unwrap();
 }
 
-pub fn must_prewrite_lock<E: Engine>(engine: &E, key: &[u8], pk: &[u8], ts: impl Into<TimeStamp>) {
+pub fn must_prewrite_lock<E: Engine>(
+    engine: &mut E,
+    key: &[u8],
+    pk: &[u8],
+    ts: impl Into<TimeStamp>,
+) {
     must_prewrite_lock_impl(engine, key, pk, ts, TimeStamp::zero(), SkipPessimisticCheck);
 }
 
 pub fn must_prewrite_lock_err<E: Engine>(
-    engine: &E,
+    engine: &mut E,
     key: &[u8],
     pk: &[u8],
     ts: impl Into<TimeStamp>,
@@ -780,7 +785,7 @@ pub fn must_prewrite_lock_err<E: Engine>(
 }
 
 pub fn must_pessimistic_prewrite_lock<E: Engine>(
-    engine: &E,
+    engine: &mut E,
     key: &[u8],
     pk: &[u8],
     ts: impl Into<TimeStamp>,
@@ -791,7 +796,7 @@ pub fn must_pessimistic_prewrite_lock<E: Engine>(
 }
 
 pub fn must_rollback<E: Engine>(
-    engine: &E,
+    engine: &mut E,
     key: &[u8],
     start_ts: impl Into<TimeStamp>,
     protect_rollback: bool,
@@ -813,7 +818,7 @@ pub fn must_rollback<E: Engine>(
     write(engine, &ctx, txn.into_modifies());
 }
 
-pub fn must_rollback_err<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) {
+pub fn must_rollback_err<E: Engine>(engine: &mut E, key: &[u8], start_ts: impl Into<TimeStamp>) {
     let snapshot = engine.snapshot(Default::default()).unwrap();
     let start_ts = start_ts.into();
     let cm = ConcurrencyManager::new(start_ts);

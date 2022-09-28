@@ -119,7 +119,7 @@ impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
 
 impl LocalReadRouter<RocksEngine> for SyncBenchRouter {
     fn read(
-        &self,
+        &mut self,
         _: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
@@ -127,7 +127,7 @@ impl LocalReadRouter<RocksEngine> for SyncBenchRouter {
         self.send_command(req, cb, RaftCmdExtraOpts::default())
     }
 
-    fn release_snapshot_cache(&self) {}
+    fn release_snapshot_cache(&mut self) {}
 }
 
 fn new_engine() -> (TempDir, RocksEngine) {
@@ -180,7 +180,7 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
     region.mut_region_epoch().set_version(2);
     region.mut_region_epoch().set_conf_ver(5);
     let (_tmp, db) = new_engine();
-    let kv = RaftKv::new(
+    let mut kv = RaftKv::new(
         SyncBenchRouter::new(region.clone(), db.clone()),
         db,
         Arc::new(RwLock::new(HashSet::default())),
