@@ -59,8 +59,8 @@ pub struct Runner<EK: KvEngine, ER: RaftEngine> {
     inflight_seqno_relations: HashMap<u64, RegionSequenceNumberRelation>,
     last_persisted_seqno: u64,
     flushed_seqno: FlushedSeqno,
-    raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
-    region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+    _raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
+    _region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     started: bool,
 }
 
@@ -79,8 +79,8 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             seqno_window: SequenceNumberWindow::default(),
             inflight_seqno_relations: HashMap::default(),
             last_persisted_seqno: 0,
-            raftlog_gc_scheduler,
-            region_scheduler,
+            _raftlog_gc_scheduler: raftlog_gc_scheduler,
+            _region_scheduler: region_scheduler,
             started: false,
         }
     }

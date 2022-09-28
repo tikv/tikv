@@ -303,6 +303,10 @@ pub struct Config {
     pub max_snapshot_file_raw_size: ReadableSize,
 
     pub unreachable_backoff: ReadableDuration,
+
+    /// Disable WAL for kvdb. After this option was enabled, TiKV would replay
+    /// raft logs after restart, so the time of startup would be longer.
+    pub disable_kv_wal: bool,
 }
 
 impl Default for Config {
@@ -407,6 +411,7 @@ impl Default for Config {
             report_region_buckets_tick_interval: ReadableDuration::secs(10),
             max_snapshot_file_raw_size: ReadableSize::mb(100),
             unreachable_backoff: ReadableDuration::secs(10),
+            disable_kv_wal: false,
         }
     }
 }

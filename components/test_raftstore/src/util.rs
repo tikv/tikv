@@ -13,11 +13,11 @@ use collections::HashMap;
 use encryption_export::{
     data_key_manager_from_config, DataKeyManager, FileConfig, MasterKeyConfig,
 };
-use engine_rocks::{config::BlobRunMode, RocksEngine, RocksSnapshot};
+use engine_rocks::{config::BlobRunMode, FlushListener, RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    Engines, Iterable, Peekable, RaftEngineDebug, RaftEngineReadOnly, TabletFactory, ALL_CFS,
-    CF_DEFAULT, CF_RAFT,
+    util::MemtableEventNotifier, Engines, Iterable, Peekable, RaftEngineDebug, RaftEngineReadOnly,
+    TabletFactory, ALL_CFS, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IoRateLimiter;
 use futures::executor::block_on;
@@ -567,6 +567,16 @@ pub fn must_contains_error(resp: &RaftCmdResponse, msg: &str) {
     assert!(err_msg.contains(msg), "{:?}", resp);
 }
 
+#[derive(Clone)]
+struct TestNotifier;
+
+impl MemtableEventNotifier for TestNotifier {
+    fn notify_memtable_sealed(&self, _seqno: u64) {}
+    fn notify_memtable_flushed(&self, _cf: &str, _seqno: u64) {}
+    fn notify_flush_cfs(&self, _seqno: u64) {}
+}
+
+#[allow(clippy::type_complexity)]
 pub fn create_test_engine(
     // TODO: pass it in for all cases.
     router: Option<RaftRouter<RocksEngine, RaftTestEngine>>,
@@ -577,6 +587,7 @@ pub fn create_test_engine(
     Option<Arc<DataKeyManager>>,
     TempDir,
     LazyWorker<String>,
+    Option<FlushListener>,
 ) {
     let dir = test_util::temp_dir("test_cluster", cfg.prefer_mem);
     let mut cfg = cfg.clone();
@@ -607,10 +618,17 @@ pub fn create_test_engine(
             router: Mutex::new(router),
         }));
     }
+    let flush_listener = if cfg.raft_store.disable_kv_wal {
+        let listener = FlushListener::new(TestNotifier);
+        builder = builder.flush_listener(listener.clone());
+        Some(listener)
+    } else {
+        None
+    };
     let factory = builder.build();
     let engine = factory.create_shared_db().unwrap();
     let engines = Engines::new(engine, raft_engine);
-    (engines, key_manager, dir, sst_worker)
+    (engines, key_manager, dir, sst_worker, flush_listener)
 }
 
 pub fn configure_for_request_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {

@@ -23,8 +23,9 @@ use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{unbounded, TryRecvError, TrySendError};
 use engine_traits::{
-    CompactedEvent, DeleteStrategy, Engines, KvEngine, Mutable, PerfContextKind, RaftEngine,
-    RaftLogBatch, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    util::MemtableEventNotifier, CompactedEvent, DeleteStrategy, Engines, KvEngine, Mutable,
+    PerfContextKind, RaftEngine, RaftLogBatch, Range, WriteBatch, WriteOptions, CF_DEFAULT,
+    CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use fail::fail_point;
 use futures::{compat::Future01CompatExt, FutureExt};
@@ -96,7 +97,7 @@ use crate::{
             CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
             GcSnapshotRunner, GcSnapshotTask, PdRunner, RaftlogFetchRunner, RaftlogFetchTask,
             RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RefreshConfigRunner, RefreshConfigTask,
-            RegionRunner, RegionTask, SplitCheckTask,
+            RegionRunner, RegionTask, SeqnoRelationRunner, SeqnoRelationTask, SplitCheckTask,
         },
         Callback, CasualMessage, GlobalReplicationState, InspectedRaftMessage, MergeResultKind,
         PdTask, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapManager, StoreMsg, StoreTick,
@@ -285,35 +286,6 @@ where
     }
 }
 
-impl<EK, ER> ApplyNotifier<EK> for RaftRouter<EK, ER>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-{
-    fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
-        for r in apply_res {
-            let region_id = r.region_id;
-            if let Err(e) = self.router.force_send(
-                region_id,
-                PeerMsg::ApplyRes {
-                    res: ApplyTaskRes::Apply(r),
-                },
-            ) {
-                error!("failed to send apply result"; "region_id" => region_id, "err" => ?e);
-            }
-        }
-    }
-    fn notify_one(&self, region_id: u64, msg: PeerMsg<EK>) {
-        if let Err(e) = self.router.force_send(region_id, msg) {
-            error!("failed to notify apply msg"; "region_id" => region_id, "err" => ?e);
-        }
-    }
-
-    fn clone_box(&self) -> Box<dyn ApplyNotifier<EK>> {
-        Box::new(self.clone())
-    }
-}
-
 impl<EK, ER> RaftRouter<EK, ER>
 where
     EK: KvEngine,
@@ -426,6 +398,125 @@ where
         let router_trace = self.router.trace();
         MEMTRACE_RAFT_ROUTER_ALIVE.trace(TraceEvent::Reset(router_trace.alive));
         MEMTRACE_RAFT_ROUTER_LEAK.trace(TraceEvent::Reset(router_trace.leak));
+    }
+}
+
+pub struct ApplyResNotifier<EK: KvEngine, ER: RaftEngine> {
+    router: RaftRouter<EK, ER>,
+    seqno_scheduler: Option<Scheduler<SeqnoRelationTask<EK::Snapshot>>>,
+}
+
+impl<EK, ER> ApplyResNotifier<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    pub fn new(
+        router: RaftRouter<EK, ER>,
+        seqno_scheduler: Option<Scheduler<SeqnoRelationTask<EK::Snapshot>>>,
+    ) -> ApplyResNotifier<EK, ER> {
+        ApplyResNotifier {
+            router,
+            seqno_scheduler,
+        }
+    }
+}
+
+impl<EK, ER> Clone for ApplyResNotifier<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    fn clone(&self) -> Self {
+        Self {
+            router: self.router.clone(),
+            seqno_scheduler: self.seqno_scheduler.clone(),
+        }
+    }
+}
+
+impl<EK, ER> ApplyNotifier<EK> for ApplyResNotifier<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
+        if let Some(scheduler) = self.seqno_scheduler.as_ref() {
+            if let Err(e) = scheduler.schedule(SeqnoRelationTask::ApplyRes(apply_res)) {
+                error!(
+                    "failed to schedule apply res to seqno relation worker";
+                    "err" => ?e,
+                );
+            }
+        } else {
+            for r in apply_res {
+                let _ = self.router.force_send(
+                    r.region_id,
+                    PeerMsg::ApplyRes {
+                        res: ApplyTaskRes::Apply(r),
+                    },
+                );
+            }
+        }
+    }
+
+    fn notify_one(&self, region_id: u64, msg: PeerMsg<EK>) {
+        let _ = self.router.force_send(region_id, msg);
+    }
+
+    fn clone_box(&self) -> Box<dyn ApplyNotifier<EK>> {
+        Box::new(self.clone())
+    }
+}
+
+impl<EK, ER> MemtableEventNotifier for ApplyResNotifier<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    fn notify_memtable_sealed(&self, seqno: u64) {
+        if let Err(e) = self
+            .seqno_scheduler
+            .as_ref()
+            .unwrap()
+            .schedule(SeqnoRelationTask::MemtableSealed(seqno))
+        {
+            warn!(
+                "failed to schedule memtable sealed seqno to seqno relation worker";
+                "err" => ?e,
+            );
+        }
+    }
+
+    fn notify_memtable_flushed(&self, cf: &str, seqno: u64) {
+        if let Err(e) =
+            self.seqno_scheduler
+                .as_ref()
+                .unwrap()
+                .schedule(SeqnoRelationTask::MemtableFlushed {
+                    cf: Some(cf.to_string()),
+                    seqno,
+                })
+        {
+            warn!(
+                "failed to schedule memtable flushed seqno to seqno relation worker";
+                "err" => ?e,
+            );
+        }
+    }
+
+    fn notify_flush_cfs(&self, seqno: u64) {
+        if let Err(e) = self
+            .seqno_scheduler
+            .as_ref()
+            .unwrap()
+            .schedule(SeqnoRelationTask::MemtableFlushed { cf: None, seqno })
+        {
+            warn!(
+                "failed to schedule memtable flushed seqno to seqno relation worker";
+                "err" => ?e,
+            );
+        }
     }
 }
 
@@ -1079,6 +1170,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     cleanup_scheduler: Scheduler<CleanupTask>,
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+    seqno_scheduler: Option<Scheduler<SeqnoRelationTask<EK::Snapshot>>>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
@@ -1377,6 +1469,7 @@ where
             raftlog_gc_scheduler: self.raftlog_gc_scheduler.clone(),
             raftlog_fetch_scheduler: self.raftlog_fetch_scheduler.clone(),
             region_scheduler: self.region_scheduler.clone(),
+            seqno_scheduler: self.seqno_scheduler.clone(),
             apply_router: self.apply_router.clone(),
             router: self.router.clone(),
             importer: self.importer.clone(),
@@ -1412,6 +1505,8 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     coprocessor_host: CoprocessorHost<EK>,
 
     refresh_config_worker: LazyWorker<RefreshConfigTask>,
+
+    seqno_worker: Option<LazyWorker<SeqnoRelationTask<EK::Snapshot>>>,
 }
 
 pub struct RaftBatchSystem<EK: KvEngine, ER: RaftEngine> {
@@ -1461,6 +1556,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         health_service: Option<HealthService>,
+        seqno_worker: Option<LazyWorker<SeqnoRelationTask<EK::Snapshot>>>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1494,7 +1590,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             None
         };
 
-        let workers = Workers {
+        let mut workers = Workers {
             pd_worker,
             background_worker,
             cleanup_worker: Worker::new("cleanup-worker"),
@@ -1503,6 +1599,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             raftlog_fetch_worker: Worker::new("raftlog-fetch-worker"),
             coprocessor_host: coprocessor_host.clone(),
             refresh_config_worker: LazyWorker::new("refreash-config-worker"),
+            seqno_worker,
         };
         mgr.init()?;
         let region_runner = RegionRunner::new(
@@ -1524,6 +1621,16 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let raftlog_gc_scheduler = workers
             .background_worker
             .start_with_timer("raft-gc-worker", raftlog_gc_runner);
+
+        if let Some(seqno_worker) = workers.seqno_worker.as_mut() {
+            let seqno_runner = SeqnoRelationRunner::new(
+                self.router.clone(),
+                engines.clone(),
+                raftlog_gc_scheduler.clone(),
+                region_scheduler.clone(),
+            );
+            seqno_worker.start(seqno_runner);
+        }
 
         let raftlog_fetch_scheduler = workers.raftlog_fetch_worker.start(
             "raftlog-fetch-worker",
@@ -1586,6 +1693,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             pending_create_peers: Arc::new(Mutex::new(HashMap::default())),
             feature_gate: pd_client.feature_gate().clone(),
             write_senders: self.store_writers.senders(),
+            seqno_scheduler: workers.seqno_worker.as_ref().map(|w| w.scheduler()),
         };
         let region_peers = builder.init()?;
         self.start_system::<T, C>(
@@ -1621,7 +1729,10 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
 
         let apply_poller_builder = ApplyPollerBuilder::<EK>::new(
             &builder,
-            Box::new(self.router.clone()),
+            Box::new(ApplyResNotifier::new(
+                self.router.clone(),
+                workers.seqno_worker.as_ref().map(|w| w.scheduler()),
+            )),
             self.apply_router.clone(),
         );
         self.apply_system

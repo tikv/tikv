@@ -8,7 +8,7 @@ use std::{
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{FlushListener, RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{Engines, MiscExt, Peekable};
 use kvproto::{
@@ -25,7 +25,10 @@ use raftstore::{
     router::{LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter},
     store::{
         config::RaftstoreConfigManager,
-        fsm::{store::StoreMeta, RaftBatchSystem, RaftRouter},
+        fsm::{
+            store::{ApplyResNotifier, StoreMeta},
+            RaftBatchSystem, RaftRouter,
+        },
         SnapManagerBuilder, *,
     },
     Result,
@@ -229,6 +232,7 @@ impl Simulator for NodeCluster {
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
+        flush_listener: Option<FlushListener>,
     ) -> ServerResult<u64> {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
         let pd_worker = LazyWorker::new("test-pd-worker");
@@ -312,6 +316,14 @@ impl Simulator for NodeCluster {
             Box::new(SplitCheckConfigManager(split_scheduler.clone())),
         );
 
+        let seqno_worker = flush_listener.map(|listener| {
+            let worker = LazyWorker::new("seqno_relation");
+            let scheduler = worker.scheduler();
+            let notifier = ApplyResNotifier::new(router.clone(), Some(scheduler));
+            listener.update_notifier(notifier);
+            worker
+        });
+
         node.try_bootstrap_store(engines.clone())?;
         node.start(
             engines.clone(),
@@ -325,6 +337,7 @@ impl Simulator for NodeCluster {
             AutoSplitController::default(),
             cm,
             CollectorRegHandle::new_for_test(),
+            seqno_worker,
         )?;
         assert!(
             engines

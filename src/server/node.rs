@@ -22,7 +22,7 @@ use raftstore::{
         self,
         fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
         initial_region, AutoSplitController, Config as StoreConfig, GlobalReplicationState, PdTask,
-        RefreshConfigTask, SnapManager, SplitCheckTask, Transport,
+        RefreshConfigTask, SeqnoRelationTask, SnapManager, SplitCheckTask, Transport,
     },
 };
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
@@ -222,6 +222,7 @@ where
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
+        seqno_worker: Option<LazyWorker<SeqnoRelationTask<EK::Snapshot>>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -258,6 +259,7 @@ where
             auto_split_controller,
             concurrency_manager,
             collector_reg_handle,
+            seqno_worker,
         )?;
 
         Ok(())
@@ -504,6 +506,7 @@ where
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
+        seqno_worker: Option<LazyWorker<SeqnoRelationTask<EK::Snapshot>>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -536,6 +539,7 @@ where
             concurrency_manager,
             collector_reg_handle,
             self.health_service.clone(),
+            seqno_worker,
         )?;
         Ok(())
     }

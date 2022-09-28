@@ -13,7 +13,7 @@ use causal_ts::CausalTs;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{FlushListener, RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{Engines, MiscExt};
 use futures::executor::block_on;
@@ -35,7 +35,10 @@ use raftstore::{
     errors::Error as RaftError,
     router::{LocalReadRouter, RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter},
     store::{
-        fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
+        fsm::{
+            store::{ApplyResNotifier, StoreMeta},
+            ApplyRouter, RaftBatchSystem, RaftRouter,
+        },
         msg::RaftCmdExtraOpts,
         AutoSplitController, Callback, CheckLeaderRunner, LocalReader, RegionSnapshot, SnapManager,
         SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
@@ -264,6 +267,7 @@ impl ServerCluster {
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
+        flush_listener: Option<FlushListener>,
     ) -> ServerResult<u64> {
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
             let p = test_util::temp_dir("test_cluster", cfg.prefer_mem);
@@ -583,6 +587,13 @@ impl ServerCluster {
             max_unified_read_pool_thread_count,
             None,
         );
+        let seqno_worker = flush_listener.map(|listener| {
+            let worker = LazyWorker::new("seqno-relation");
+            let scheduler = worker.scheduler();
+            let notifier = ApplyResNotifier::new(router.clone(), Some(scheduler));
+            listener.update_notifier(notifier);
+            worker
+        });
         node.start(
             engines,
             simulate_trans.clone(),
@@ -595,6 +606,7 @@ impl ServerCluster {
             auto_split_controller,
             concurrency_manager.clone(),
             collector_reg_handle,
+            seqno_worker,
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
@@ -650,6 +662,7 @@ impl Simulator for ServerCluster {
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
+        flush_listener: Option<FlushListener>,
     ) -> ServerResult<u64> {
         dispatch_api_version!(
             cfg.storage.api_version(),
@@ -661,6 +674,7 @@ impl Simulator for ServerCluster {
                 key_manager,
                 router,
                 system,
+                flush_listener,
             )
         )
     }
