@@ -1871,7 +1871,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 }
                 Err(err) => {
                     SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();
-                    info!("get snapshot failed"; "tag" => tag, "err" => ?err);
+                    info!("get snapshot failed"; "tag" => ?tag, "err" => ?err);
                 }
             }
         }
@@ -1909,7 +1909,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             }
             let command_duration = tikv_util::time::Instant::now();
 
-            if let Err(e) = Self::check_causal_ts_flushed(&mut ctx).await {
+            if let Err(e) = Self::check_causal_ts_flushed(&mut ctx, CMD).await {
                 return callback(Err(e));
             }
 
@@ -2022,7 +2022,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             }
             let command_duration = tikv_util::time::Instant::now();
 
-            if let Err(e) = Self::check_causal_ts_flushed(&mut ctx).await {
+            if let Err(e) = Self::check_causal_ts_flushed(&mut ctx, CMD).await {
                 return callback(Err(e));
             }
 
@@ -2088,7 +2088,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             }
             let command_duration = tikv_util::time::Instant::now();
 
-            if let Err(e) = Self::check_causal_ts_flushed(&mut ctx).await {
+            if let Err(e) = Self::check_causal_ts_flushed(&mut ctx, CMD).await {
                 return callback(Err(e));
             }
 
@@ -2198,7 +2198,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             }
             let command_duration = tikv_util::time::Instant::now();
 
-            if let Err(e) = Self::check_causal_ts_flushed(&mut ctx).await {
+            if let Err(e) = Self::check_causal_ts_flushed(&mut ctx, CMD).await {
                 return callback(Err(e));
             }
 
