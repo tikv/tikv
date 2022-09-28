@@ -509,14 +509,11 @@ fn test_pipelined_pessimistic_lock() {
 
 #[test]
 fn test_async_commit_prewrite_with_stale_max_ts() {
-    test_kv_format_impl!(test_async_commit_prewrite_with_stale_max_ts_impl);
+    test_async_commit_prewrite_with_stale_max_ts_impl::<ApiVersion::ApiV1>();
+    test_async_commit_prewrite_with_stale_max_ts_impl::<ApiVersion::ApiV2>();
 }
 
 fn test_async_commit_prewrite_with_stale_max_ts_impl<F: KvFormat>() {
-    if F::TAG == ApiVersion::V1ttl {
-        return;
-    }
-
     let mut cluster = new_server_cluster_with_api_ver(0, 2, F::TAG);
     cluster.run();
 

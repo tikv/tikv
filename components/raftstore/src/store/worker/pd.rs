@@ -1641,6 +1641,7 @@ where
                                 Ordering::SeqCst,
                             )
                             .is_ok();
+                        break;
                     }
                     Err(e) => {
                         warn!(
