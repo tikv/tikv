@@ -199,6 +199,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
             PeerTick::ReactivateMemoryLock => unimplemented!(),
             PeerTick::ReportBuckets => unimplemented!(),
             PeerTick::CheckLongUncommitted => unimplemented!(),
+            PeerTick::PreBecomeLeaderState => unimplemented!(),
         }
     }
 

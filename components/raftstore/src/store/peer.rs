@@ -866,6 +866,58 @@ impl FlashbackState {
     }
 }
 
+/// When a peer(follower) receives a TransferLeaderMsg, it enters the
+/// PreBecomeLeaderState. When the peer becomes leader or it doesn't
+/// become leader before a deadline, it exits the state.
+#[derive(Clone, Debug)]
+pub struct PreBecomeLeaderState {
+    pub ticks: usize,
+    entry_cache_warmup_range: (u64, u64),
+    started_at: TiInstant,
+    /// Has the TransferLeaderMsg been acked.
+    is_msg_acked: bool,
+}
+
+impl PreBecomeLeaderState {
+    pub fn new() -> Self {
+        PreBecomeLeaderState::new_with_warmup_range(INVALID_INDEX, INVALID_INDEX)
+    }
+
+    pub fn new_with_warmup_range(low: u64, high: u64) -> Self {
+        PreBecomeLeaderState {
+            ticks: 0,
+            entry_cache_warmup_range: (low, high),
+            started_at: TiInstant::now(),
+            is_msg_acked: false,
+        }
+    }
+
+    pub fn entry_cache_warmup_range(&self) -> (u64, u64) {
+        self.entry_cache_warmup_range
+    }
+
+    /// How long has it been in this state.
+    pub fn elapsed(&self) -> Duration {
+        self.started_at.saturating_elapsed()
+    }
+
+    /// Has the TransferLeaderMsg been acked.
+    pub fn is_msg_acked(&self) -> bool {
+        self.is_msg_acked
+    }
+
+    /// Mark thart the TransferLeaderMsg has been acked.
+    pub fn acked(&mut self) {
+        self.is_msg_acked = true;
+    }
+}
+
+impl Default for PreBecomeLeaderState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Getters, MutGetters)]
 pub struct Peer<EK, ER>
 where
@@ -1044,8 +1096,13 @@ where
     /// region buckets.
     pub region_buckets: Option<BucketStat>,
     pub last_region_buckets: Option<BucketStat>,
-    /// lead_transferee if the peer is in a leadership transferring.
+    /// lead_transferee if this peer(leader) is in a leadership transferring.
     pub lead_transferee: u64,
+    /// The state indicates this peer(follower) just receives a
+    /// TransferLeaderMsg and this peer may become leader in the near future.
+    /// Currently, this state is set only when
+    /// cfg.raft_entry_cache_max_warmup_time is not 0.
+    pub pre_become_leader_state: Option<PreBecomeLeaderState>,
     pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
     pub flashback_state: Option<FlashbackState>,
     pub snapshot_recovery_state: Option<SnapshotRecoveryState>,
@@ -1180,6 +1237,7 @@ where
             region_buckets: None,
             last_region_buckets: None,
             lead_transferee: raft::INVALID_ID,
+            pre_become_leader_state: None,
             unsafe_recovery_state: None,
             flashback_state: None,
             snapshot_recovery_state: None,
@@ -3432,7 +3490,7 @@ where
             self.raft_group.store().region(),
         );
 
-        if !self.is_leader() {
+        if !self.is_leader() && self.pre_become_leader_state.is_none() {
             self.mut_store()
                 .compact_entry_cache(apply_state.applied_index + 1);
         }
@@ -3850,10 +3908,12 @@ where
         // Broadcast heartbeat to make sure followers commit the entries immediately.
         // It's only necessary to ping the target peer, but ping all for simplicity.
         self.raft_group.ping();
+
         let mut msg = eraftpb::Message::new();
         msg.set_to(peer.get_id());
         msg.set_msg_type(eraftpb::MessageType::MsgTransferLeader);
         msg.set_from(self.peer_id());
+        msg.set_index(self.get_store().entry_cache_first_index().unwrap_or(0));
         // log term here represents the term of last log. For leader, the term of last
         // log is always its current term. Not just set term because raft library
         // forbids setting it for MsgTransferLeader messages.
@@ -4513,33 +4573,107 @@ where
         Ok(Either::Left(propose_index))
     }
 
-    pub fn execute_transfer_leader<T>(
+    /// Before ack the transfer leader message sent by the leader.
+    ///
+    /// This peer can warm up it's entry cache before ack the message.
+    /// Return true means the message can be acked immediately.
+    pub fn pre_ack_transfer_leader_msg<T>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
-        from: u64,
+        msg: eraftpb::Message,
         peer_disk_usage: DiskUsage,
-        reply_cmd: bool, // whether it is a reply to a TransferLeader command
-    ) {
+    ) -> bool {
         let pending_snapshot = self.is_handling_snapshot() || self.has_pending_snapshot();
         if pending_snapshot
-            || from != self.leader_id()
+            || msg.get_from() != self.leader_id()
             // Transfer leader to node with disk full will lead to write availablity downback.
             // But if the current leader is disk full, and send such request, we should allow it,
             // because it may be a read leader balance request.
             || (!matches!(ctx.self_disk_usage, DiskUsage::Normal) &&
-            matches!(peer_disk_usage,DiskUsage::Normal))
+            matches!(peer_disk_usage, DiskUsage::Normal))
         {
             info!(
                 "reject transferring leader";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
-                "from" => from,
+                "from" => msg.get_from(),
                 "pending_snapshot" => pending_snapshot,
                 "disk_usage" => ?ctx.self_disk_usage,
             );
-            return;
+            return false;
         }
 
+        // When the max warmup time is 0, skip the warmup process.
+        if ctx.cfg.raft_entry_cache_max_warmup_time.0 <= Duration::from_millis(0) {
+            return true;
+        }
+
+        // Check if this peer is already in PreBecomeLeaderState.
+        // By default, PD resends the transfer leader command every 2s for 5 times.
+        if let Some(state) = &self.pre_become_leader_state {
+            // Return true if it is timeout, so that this peer could ack
+            // the message and the leadership transfer process can continue.
+            // Though it may be timeout, the warmup operation may succeeded lator.
+            let is_timeout = state.elapsed() >= ctx.cfg.raft_entry_cache_max_warmup_time.0;
+            if is_timeout {
+                WARM_UP_ENTRY_CACHE_COUNTER.timeout.inc();
+            }
+            return is_timeout;
+        }
+
+        // Sometimes, it needs not to fetch raft logs from raftdb and
+        // it just needs to prevent the current cache from compacted
+        let mut need_fetch_to_warmup = true;
+
+        // The start index of warmup range is leader's entry_cache_start_index,
+        // and it is equal to the lowest matched index in general.
+        // Need not to warm up when the index is 0.
+        //
+        // There are two cases where index can be 0
+        // 1. During rolling upgrade, old instances doesn't support warmup.
+        // 2. The leader's entry cache is empty.
+        let warmup_range_start = msg.get_index();
+        if warmup_range_start == 0 {
+            need_fetch_to_warmup = false;
+        }
+
+        let last_index = self.get_store().last_index();
+        // warmup_range_start should not be large than the last index.
+        // Since the index is leader's entry_cache_first_index, so this is
+        // unlikely to happen.
+        if warmup_range_start > last_index {
+            warn!(
+                "the start index of warmup range is too large";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+                "warmup_range_start" => warmup_range_start,
+                "last_index" => last_index,
+            );
+            need_fetch_to_warmup = false;
+        }
+
+        if need_fetch_to_warmup {
+            let low = if warmup_range_start > self.last_compacted_idx {
+                warmup_range_start
+            } else {
+                self.last_compacted_idx + 1
+            };
+            if let Some(high) = self.get_store().async_warm_up_entry_cache(low) {
+                self.pre_become_leader_state =
+                    Some(PreBecomeLeaderState::new_with_warmup_range(low, high));
+                return false;
+            }
+        }
+
+        WARM_UP_ENTRY_CACHE_COUNTER.already.inc();
+        self.pre_become_leader_state = Some(PreBecomeLeaderState::new());
+        true
+    }
+
+    pub fn ack_transfer_leader_msg(
+        &mut self,
+        reply_cmd: bool, // whether it is a reply to a TransferLeader command
+    ) {
         let mut msg = eraftpb::Message::new();
         msg.set_from(self.peer_id());
         msg.set_to(self.leader_id());
@@ -4550,6 +4684,12 @@ where
             msg.set_context(Bytes::from_static(TRANSFER_LEADER_COMMAND_REPLY_CTX));
         }
         self.raft_group.raft.msgs.push(msg);
+        // The state should be already set when reply_cmd is true.
+        if !reply_cmd {
+            if let Some(state) = self.pre_become_leader_state.as_mut() {
+                state.acked();
+            }
+        }
     }
 
     /// Return true to if the transfer leader request is accepted.
@@ -4560,10 +4700,23 @@ where
     ///
     /// 1. pre_transfer_leader on leader:
     ///     Leader will send a MsgTransferLeader to follower.
-    /// 2. execute_transfer_leader on follower
-    ///     If follower passes all necessary checks, it will reply an
-    ///     ACK with type MsgTransferLeader and its promised persistent index.
-    /// 3. ready_to_transfer_leader on leader:
+    /// 2. pre_ack_transfer_leader_msg on follower:
+    ///     If follower passes all necessary checks, it will try to warmup
+    ///     the entry cache.
+    /// 3. ack_transfer_leader_msg on follower:
+    ///     When the entry cache has been warmed up or the operator is timeout,
+    ///     the follower reply an ACK with type MsgTransferLeader and
+    ///     its promised persistent index.
+    ///
+    /// (Condition: when there are remaining pessimistic locks to propose)
+    ///    1. ready_to_transfer_leader on leader:
+    ///        Leader firstly proposes pessimistic locks and then proposes a
+    ///        TransferLeader command.
+    ///    2. ack_transfer_leader_msg on follower:
+    ///        The follower applies the TransferLeader command and replies an
+    ///        ACK with special context TRANSFER_LEADER_COMMAND_REPLY_CTX.
+    ///
+    /// 4. ready_to_transfer_leader on leader:
     ///     Leader checks if it's appropriate to transfer leadership. If it
     ///     does, it calls raft transfer_leader API to do the remaining work.
     ///

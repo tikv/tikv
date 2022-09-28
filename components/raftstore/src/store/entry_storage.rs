@@ -23,7 +23,7 @@ use kvproto::{
 use protobuf::Message;
 use raft::{prelude::*, util::limit_size, GetEntriesContext, StorageError};
 use tikv_alloc::TraceEvent;
-use tikv_util::{box_err, debug, info, time::Instant, warn, worker::Scheduler};
+use tikv_util::{box_err, debug, error, info, time::Instant, warn, worker::Scheduler};
 
 use super::{
     metrics::*, peer_storage::storage_error, WriteTask, MEMTRACE_ENTRY_CACHE, RAFT_INIT_LOG_INDEX,
@@ -145,6 +145,48 @@ impl EntryCache {
             mem_size_change += self.shrink_if_necessary();
             self.flush_mem_size_change(mem_size_change);
         }
+    }
+
+    /// Append entries to the left.
+    ///
+    /// Index of the last entry in entries should exactly equal to
+    ///    `start index of the cached entries - 1` when cache is not empty.
+    ///
+    /// Return true when entries are appended successfully.
+    fn appendleft(&mut self, entries: &[Entry]) -> bool {
+        if let Some(entry_last_index) = entries.last().map(|e| e.get_index()) {
+            // Check if the entries are valid to append.
+            let mut is_valid = true;
+            if let Some(first_index) = self.first_index() {
+                if first_index != entry_last_index + 1 {
+                    is_valid = false;
+                }
+            } else {
+                // The entry_last_index should be equal to the last index,
+                // which also means it must be large than the persisted index.
+                if entry_last_index < self.persisted {
+                    is_valid = false;
+                }
+            }
+
+            // Append the entries to the left and update used memory size.
+            if is_valid {
+                let mut mem_size_change = 0;
+                let old_capacity = self.cache.capacity();
+                for e in entries.iter().rev() {
+                    self.cache.push_front(e.to_owned());
+                    mem_size_change +=
+                        (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64;
+                }
+                let new_capacity = self.cache.capacity();
+                mem_size_change += Self::cache_vec_mem_size_change(new_capacity, old_capacity);
+                mem_size_change += self.shrink_if_necessary();
+                self.flush_mem_size_change(mem_size_change);
+                return true;
+            }
+            return false;
+        }
+        true
     }
 
     fn append_impl(&mut self, region_id: u64, peer_id: u64, entries: &[Entry]) -> i64 {
@@ -980,6 +1022,73 @@ impl<ER: RaftEngine> EntryStorage<ER> {
         self.last_term = last_term;
     }
 
+    /// Trigger a task to warm up the entry cache.
+    ///
+    /// This will ensure the range [low, last_index] are loaded into cache.
+    /// Return the high index of the warmup range if a task is successfully
+    /// triggered.
+    pub fn async_warm_up_entry_cache(&self, low: u64) -> Option<u64> {
+        let high = if let Some(first_index) = self.entry_cache_first_index() {
+            if low >= first_index {
+                // Already warmed up.
+                return None;
+            }
+            // Partially warmed up.
+            first_index
+        } else {
+            self.last_index() + 1
+        };
+
+        // Fetch entries [low, high) to trigger an async fetch task in background.
+        match self.entries(low, high, u64::MAX, GetEntriesContext::empty(true)) {
+            Ok(_) => {
+                // This should not happen, but it's OK :)
+                WARM_UP_ENTRY_CACHE_COUNTER.unexpected_err.inc();
+                error!("entries are fetched unexpectedly during warming up");
+                return None;
+            }
+            Err(raft::Error::Store(raft::StorageError::LogTemporarilyUnavailable)) => {
+                WARM_UP_ENTRY_CACHE_COUNTER.started.inc();
+            }
+            Err(e) => {
+                WARM_UP_ENTRY_CACHE_COUNTER.unexpected_err.inc();
+                error!(
+                    "fetching entries met unexpected error during warming up";
+                    "err" => ?e,
+                );
+                return None;
+            }
+        }
+        Some(high)
+    }
+
+    pub fn on_warmup_range_fetched(&mut self, range: (u64, u64)) {
+        WARM_UP_ENTRY_CACHE_COUNTER.finished.inc();
+        let (low, high) = range;
+        match self.entries(low, high, u64::MAX, GetEntriesContext::empty(true)) {
+            Ok(entries) => {
+                let ok = self.cache.appendleft(&entries);
+                debug_assert!(ok);
+                if !ok {
+                    WARM_UP_ENTRY_CACHE_COUNTER.unexpected_err.inc();
+                    warn!(
+                        "appendleft to entry cache failed during warming up";
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer_id,
+                        "low" => low,
+                        "high" => high,
+                        "last_index" => self.last_index(),
+                        "cache_first_index" => self.entry_cache_first_index().unwrap_or(0),
+                    );
+                }
+            }
+            Err(_) => {
+                WARM_UP_ENTRY_CACHE_COUNTER.unexpected_err.inc();
+                debug_assert!(false, "please ensure entries in the range are fetched");
+            }
+        }
+    }
+
     pub fn compact_entry_cache(&mut self, idx: u64) {
         self.cache.compact_to(idx);
     }
@@ -1090,6 +1199,12 @@ pub mod tests {
             &[new_padded_entry(101, 1, 1), new_padded_entry(102, 1, 2)],
         );
         assert_eq!(rx.try_recv().unwrap(), 3);
+
+        assert!(cache.appendleft(&[new_padded_entry(100, 1, 1)]));
+        assert_eq!(rx.try_recv().unwrap(), 1);
+        cache.persisted = 100;
+        cache.compact_to(101);
+        assert_eq!(rx.try_recv().unwrap(), -1);
 
         // Test size change for one overlapped entry.
         cache.append(0, 0, &[new_padded_entry(102, 2, 3)]);
@@ -1522,6 +1637,7 @@ pub mod tests {
         entries = vec![new_entry(6, 6), new_entry(7, 6)];
         append_ents(&mut store, &entries);
         validate_cache(&store, &entries);
+        assert!(!store.cache.appendleft(&[new_entry(6, 5)]));
 
         // rewrite old entry
         entries = vec![new_entry(5, 6), new_entry(6, 6)];
@@ -1563,5 +1679,20 @@ pub mod tests {
         validate_cache(&store, &[]);
         // invalid compaction should be ignored.
         store.compact_entry_cache(6);
+    }
+
+    #[test]
+    fn test_storage_cache_appendleft() {
+        let mut cache = EntryCache::default();
+        let ents1 = vec![new_entry(4, 4), new_entry(5, 4)];
+        let ents2 = vec![new_entry(3, 3)];
+        let ents3 = vec![new_entry(1, 3)];
+        cache.append(0, 0, &ents1);
+        assert!(cache.appendleft(&ents2));
+        assert_eq!(cache.first_index().unwrap(), 3);
+        // Appendleft overlapped entries should fail.
+        assert!(!cache.appendleft(&ents2));
+        // Appendleft should fail when there is a hole.
+        assert!(!cache.appendleft(&ents3));
     }
 }

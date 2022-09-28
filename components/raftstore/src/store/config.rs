@@ -299,6 +299,15 @@ pub struct Config {
     #[doc(hidden)]
     pub long_uncommitted_base_threshold: ReadableDuration,
 
+    /// Interval to check pre become leader.
+    #[doc(hidden)]
+    pub pre_become_leader_state_tick_interval: ReadableDuration,
+    #[doc(hidden)]
+    pub exit_pre_become_leader_state_ticks: usize,
+    /// Max time for the entry cache to be warmed up before a follower becomes
+    /// leader.
+    pub raft_entry_cache_max_warmup_time: ReadableDuration,
+
     #[doc(hidden)]
     pub max_snapshot_file_raw_size: ReadableSize,
 
@@ -395,6 +404,9 @@ impl Default for Config {
             /// the log commit duration is less than 1s. Feel free to adjust
             /// this config :)
             long_uncommitted_base_threshold: ReadableDuration::secs(20),
+            pre_become_leader_state_tick_interval: ReadableDuration::secs(1),
+            exit_pre_become_leader_state_ticks: 10,
+            raft_entry_cache_max_warmup_time: ReadableDuration::secs(1),
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
