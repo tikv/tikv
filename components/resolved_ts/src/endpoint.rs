@@ -134,6 +134,7 @@ impl ObserveRegion {
                                 }),
                                 // One pc command do not contains any lock, so just skip it
                                 ChangeRow::OnePc { .. } => {}
+                                ChangeRow::IngestSsT => {}
                             });
                             assert!(
                                 *tracked_index < *index,
@@ -191,6 +192,9 @@ impl ObserveRegion {
                                     .untrack_lock(&key.to_raw().unwrap(), Some(*index)),
                                 // One pc command do not contains any lock, so just skip it
                                 ChangeRow::OnePc { .. } => {}
+                                ChangeRow::IngestSsT => {
+                                    self.resolver.update_tracked_index(*index);
+                                }
                             });
                         }
                     }
@@ -495,7 +499,7 @@ where
         for region_id in regions.iter() {
             if let Some(observe_region) = self.regions.get_mut(region_id) {
                 if let ResolverStatus::Ready = observe_region.resolver_status {
-                    let resolved_ts = observe_region.resolver.resolve(ts).min();
+                    let resolved_ts = observe_region.resolver.resolve(ts);
                     if resolved_ts < min_ts {
                         min_ts = resolved_ts;
                     }

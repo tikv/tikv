@@ -198,15 +198,20 @@ rusoto_mock = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr
 rusoto_s3 = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
 rusoto_sts = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
 
+snappy-sys = { git = "https://github.com/busyjay/rust-snappy.git", branch = "static-link" }
+
 # remove this when https://github.com/danburkert/fs2-rs/pull/42 is merged.
 fs2 = { git = "https://github.com/tabokie/fs2-rs", branch = "tikv" }
+
+# Remove this when a new version is release. We need to solve rust-lang/cmake-rs#143.
+cmake = { git = "https://github.com/rust-lang/cmake-rs" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229b2c1fcc44118bef7eff127128" }
 # When you modify TiKV cooperatively with kvproto, this will be useful to submit the PR to TiKV and the PR to
 # kvproto at the same time.
 # After the PR to kvproto is merged, remember to comment this out and run `cargo update -p kvproto`.
-# [patch.'https://github.com/pingcap/kvproto']
+[patch.'https://github.com/pingcap/kvproto']
 # kvproto = { git = "https://github.com/your_github_id/kvproto", branch="your_branch" }
 
 [workspace]
@@ -236,6 +241,9 @@ members = [
   "components/encryption",
   "components/encryption/export",
   "components/engine_rocks_helper",
+# Only enable tirocks in local development, otherwise it can slow down compilation.
+# TODO: always enable tirocks and remove engine_rocks.
+#  "components/engine_tirocks",
   "components/error_code",
   "components/external_storage",
   "components/external_storage/export",
@@ -252,11 +260,13 @@ members = [
   "components/resource_metering",
   "components/server",
   "components/server",
+  "components/snap_recovery",
   "components/sst_importer",
   "components/test_backup",
   "components/test_coprocessor",
   "components/test_coprocessor_plugin/example_plugin",
   "components/test_pd",
+  "components/test_pd_client",
   "components/test_raftstore",
   "components/test_sst_importer",
   "components/test_storage",
@@ -289,6 +299,10 @@ debug = false
 opt-level = 1
 
 [profile.dev.package.libtitan_sys]
+debug = false
+opt-level = 1
+
+[profile.dev.package.tirocks-sys]
 debug = false
 opt-level = 1
 

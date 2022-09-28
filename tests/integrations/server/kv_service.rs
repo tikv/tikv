@@ -660,6 +660,10 @@ fn test_mvcc_flashback() {
     // Flashback
     let mut flashback_to_version_req = FlashbackToVersionRequest::default();
     flashback_to_version_req.set_context(ctx.clone());
+    ts += 1;
+    flashback_to_version_req.set_start_ts(ts);
+    ts += 1;
+    flashback_to_version_req.set_commit_ts(ts);
     flashback_to_version_req.version = 5;
     flashback_to_version_req.start_key = b"a".to_vec();
     flashback_to_version_req.end_key = b"z".to_vec();
@@ -680,6 +684,8 @@ fn test_mvcc_flashback_block_rw() {
     // Flashback
     let mut flashback_to_version_req = FlashbackToVersionRequest::default();
     flashback_to_version_req.set_context(ctx.clone());
+    flashback_to_version_req.set_start_ts(1);
+    flashback_to_version_req.set_commit_ts(2);
     flashback_to_version_req.version = 0;
     flashback_to_version_req.start_key = b"a".to_vec();
     flashback_to_version_req.end_key = b"z".to_vec();
@@ -727,6 +733,8 @@ fn test_mvcc_flashback_block_scheduling() {
     // Flashback
     let mut flashback_to_version_req = FlashbackToVersionRequest::default();
     flashback_to_version_req.set_context(ctx);
+    flashback_to_version_req.set_start_ts(1);
+    flashback_to_version_req.set_commit_ts(2);
     flashback_to_version_req.version = 0;
     flashback_to_version_req.start_key = b"a".to_vec();
     flashback_to_version_req.end_key = b"z".to_vec();
@@ -2191,7 +2199,9 @@ fn test_commands_write_detail() {
         assert!(wd.get_commit_log_nanos() > 0);
         assert!(wd.get_apply_batch_wait_nanos() > 0);
         assert!(wd.get_apply_log_nanos() > 0);
-        assert!(wd.get_apply_mutex_lock_nanos() > 0);
+        // Mutex has been removed from write path.
+        // Ref https://github.com/facebook/rocksdb/pull/7516
+        // assert!(wd.get_apply_mutex_lock_nanos() > 0);
         assert!(wd.get_apply_write_wal_nanos() > 0);
         assert!(wd.get_apply_write_memtable_nanos() > 0);
     };

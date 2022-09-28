@@ -586,7 +586,6 @@ max-sorted-runs = 100
 enable = false
 dir = "test-dir"
 batch-compression-threshold = "1KB"
-bytes-per-sync = "64KB"
 target-file-size = "1MB"
 purge-threshold = "1GB"
 recovery-mode = "tolerate-tail-corruption"

@@ -14,6 +14,7 @@ mod write;
 use std::io;
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
+use kvproto::kvrpcpb;
 pub use lock::{Lock, LockType, PessimisticLock};
 use thiserror::Error;
 pub use timestamp::{TimeStamp, TsSet, TSO_PHYSICAL_SHIFT_BITS};
@@ -36,9 +37,9 @@ pub enum ErrorInner {
     #[error("key is locked (backoff or cleanup) {0:?}")]
     KeyIsLocked(kvproto::kvrpcpb::LockInfo),
     #[error(
-        "write conflict, start_ts: {}, conflict_start_ts: {}, conflict_commit_ts: {}, key: {}, primary: {}",
+        "write conflict, start_ts: {}, conflict_start_ts: {}, conflict_commit_ts: {}, key: {}, primary: {}, reason: {:?}",
         .start_ts, .conflict_start_ts, .conflict_commit_ts,
-        log_wrappers::Value::key(.key), log_wrappers::Value::key(.primary)
+        log_wrappers::Value::key(.key), log_wrappers::Value::key(.primary), .reason
     )]
     WriteConflict {
         start_ts: TimeStamp,
@@ -46,6 +47,7 @@ pub enum ErrorInner {
         conflict_commit_ts: TimeStamp,
         key: Vec<u8>,
         primary: Vec<u8>,
+        reason: kvrpcpb::WriteConflictReason,
     },
 }
 
@@ -63,12 +65,14 @@ impl ErrorInner {
                 conflict_commit_ts,
                 key,
                 primary,
+                reason,
             } => Some(ErrorInner::WriteConflict {
                 start_ts: *start_ts,
                 conflict_start_ts: *conflict_start_ts,
                 conflict_commit_ts: *conflict_commit_ts,
                 key: key.to_owned(),
                 primary: primary.to_owned(),
+                reason: reason.to_owned(),
             }),
         }
     }

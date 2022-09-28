@@ -46,6 +46,7 @@ use raftstore::{
     Error, Result,
 };
 use tempfile::TempDir;
+use test_pd_client::TestPdClient;
 use tikv::server::Result as ServerResult;
 use tikv_util::{
     thread_group::GroupProperties,
@@ -110,7 +111,7 @@ pub trait Simulator {
     }
 
     fn read(
-        &self,
+        &mut self,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
         timeout: Duration,
@@ -123,7 +124,7 @@ pub trait Simulator {
     }
 
     fn async_read(
-        &self,
+        &mut self,
         node_id: u64,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
@@ -414,7 +415,7 @@ impl<T: Simulator> Cluster<T> {
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
-        match self.sim.rl().read(batch_id, request.clone(), timeout) {
+        match self.sim.wl().read(batch_id, request.clone(), timeout) {
             Err(e) => {
                 warn!("failed to read {:?}: {:?}", request, e);
                 Err(e)
@@ -438,7 +439,7 @@ impl<T: Simulator> Cluster<T> {
             }
         }
         let ret = if is_read {
-            self.sim.rl().read(None, request.clone(), timeout)
+            self.sim.wl().read(None, request.clone(), timeout)
         } else {
             self.sim.rl().call_command(request.clone(), timeout)
         };

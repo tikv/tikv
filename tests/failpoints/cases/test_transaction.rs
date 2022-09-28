@@ -18,7 +18,7 @@ use kvproto::{
     },
     tikvpb::TikvClient,
 };
-use raftstore::store::{util::new_peer, LocksStatus};
+use raftstore::store::LocksStatus;
 use storage::{
     mvcc::{
         self,
@@ -37,33 +37,33 @@ use tikv::storage::{
     },
     Snapshot, TestEngineBuilder, TestStorageBuilderApiV1,
 };
-use tikv_util::HandyRwLock;
+use tikv_util::{store::new_peer, HandyRwLock};
 use txn_types::{Key, Mutation, PessimisticLock, TimeStamp};
 
 #[test]
 fn test_txn_failpoints() {
-    let engine = TestEngineBuilder::new().build().unwrap();
+    let mut engine = TestEngineBuilder::new().build().unwrap();
     let (k, v) = (b"k", b"v");
     fail::cfg("prewrite", "return(WriteConflict)").unwrap();
-    must_prewrite_put_err(&engine, k, v, k, 10);
+    must_prewrite_put_err(&mut engine, k, v, k, 10);
     fail::remove("prewrite");
-    must_prewrite_put(&engine, k, v, k, 10);
+    must_prewrite_put(&mut engine, k, v, k, 10);
     fail::cfg("commit", "delay(100)").unwrap();
-    must_commit(&engine, k, 10, 20);
+    must_commit(&mut engine, k, 10, 20);
     fail::remove("commit");
 
     let v1 = b"v1";
     let (k2, v2) = (b"k2", b"v2");
-    must_acquire_pessimistic_lock(&engine, k, k, 30, 30);
+    must_acquire_pessimistic_lock(&mut engine, k, k, 30, 30);
     fail::cfg("pessimistic_prewrite", "return()").unwrap();
-    must_pessimistic_prewrite_put_err(&engine, k, v1, k, 30, 30, DoPessimisticCheck);
-    must_prewrite_put(&engine, k2, v2, k2, 31);
+    must_pessimistic_prewrite_put_err(&mut engine, k, v1, k, 30, 30, DoPessimisticCheck);
+    must_prewrite_put(&mut engine, k2, v2, k2, 31);
     fail::remove("pessimistic_prewrite");
-    must_pessimistic_prewrite_put(&engine, k, v1, k, 30, 30, DoPessimisticCheck);
-    must_commit(&engine, k, 30, 40);
-    must_commit(&engine, k2, 31, 41);
-    must_get(&engine, k, 50, v1);
-    must_get(&engine, k2, 50, v2);
+    must_pessimistic_prewrite_put(&mut engine, k, v1, k, 30, 30, DoPessimisticCheck);
+    must_commit(&mut engine, k, 30, 40);
+    must_commit(&mut engine, k2, 31, 41);
+    must_get(&mut engine, k, 50, v1);
+    must_get(&mut engine, k2, 50, v2);
 }
 
 #[test]
@@ -338,8 +338,8 @@ fn test_max_commit_ts_error() {
     cm.read_range_check(None, None, |_, _| Err(())).unwrap();
 
     // Two locks should be written, the second one does not async commit.
-    let l1 = must_locked(&storage.get_engine(), b"k1", 10);
-    let l2 = must_locked(&storage.get_engine(), b"k2", 10);
+    let l1 = must_locked(&mut storage.get_engine(), b"k1", 10);
+    let l2 = must_locked(&mut storage.get_engine(), b"k2", 10);
     assert!(l1.use_async_commit);
     assert!(!l2.use_async_commit);
 }

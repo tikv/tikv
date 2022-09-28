@@ -113,8 +113,8 @@ fn bench_crossbeam_channel(b: &mut Bencher) {
 }
 
 #[bench]
-fn bench_receiver_stream_batch(b: &mut Bencher) {
-    let (tx, rx) = mpsc::batch::bounded::<i32>(128, 8);
+fn bench_receiver_stream_unbounded_batch(b: &mut Bencher) {
+    let (tx, rx) = mpsc::future::unbounded::<i32>(mpsc::future::WakePolicy::TillReach(8));
     for _ in 0..1 {
         let tx1 = tx.clone();
         thread::spawn(move || {
@@ -124,12 +124,9 @@ fn bench_receiver_stream_batch(b: &mut Bencher) {
         });
     }
 
-    let mut rx = Some(mpsc::batch::BatchReceiver::new(
-        rx,
-        32,
-        Vec::new,
-        mpsc::batch::VecCollector,
-    ));
+    let rx = mpsc::future::BatchReceiver::new(rx, 32, Vec::new, Vec::push);
+
+    let mut rx = Some(block_on(rx.into_future()).1);
 
     b.iter(|| {
         let mut count = 0;
@@ -150,8 +147,8 @@ fn bench_receiver_stream_batch(b: &mut Bencher) {
 }
 
 #[bench]
-fn bench_receiver_stream(b: &mut Bencher) {
-    let (tx, rx) = mpsc::batch::bounded::<i32>(128, 1);
+fn bench_receiver_stream_unbounded_nobatch(b: &mut Bencher) {
+    let (tx, rx) = mpsc::future::unbounded::<i32>(mpsc::future::WakePolicy::Immediately);
     for _ in 0..1 {
         let tx1 = tx.clone();
         thread::spawn(move || {
@@ -161,7 +158,7 @@ fn bench_receiver_stream(b: &mut Bencher) {
         });
     }
 
-    let mut rx = Some(rx);
+    let mut rx = Some(block_on(rx.into_future()).1);
     b.iter(|| {
         let mut count = 0;
         let mut rx1 = rx.take().unwrap();

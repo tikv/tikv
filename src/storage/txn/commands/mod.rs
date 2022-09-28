@@ -40,7 +40,7 @@ pub use commit::Commit;
 pub use compare_and_swap::RawCompareAndSwap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 pub use flashback_to_version::FlashbackToVersion;
-pub use flashback_to_version_read_phase::{FlashbackToVersionReadPhase, FLASHBACK_BATCH_SIZE};
+pub use flashback_to_version_read_phase::FlashbackToVersionReadPhase;
 use kvproto::kvrpcpb::*;
 pub use mvcc_by_key::MvccByKey;
 pub use mvcc_by_start_ts::MvccByStartTs;
@@ -354,6 +354,8 @@ impl From<MvccGetByStartTsRequest> for TypedCommand<Option<(Key, MvccInfo)>> {
 impl From<FlashbackToVersionRequest> for TypedCommand<()> {
     fn from(mut req: FlashbackToVersionRequest) -> Self {
         FlashbackToVersionReadPhase::new(
+            req.get_start_ts().into(),
+            req.get_commit_ts().into(),
             req.get_version().into(),
             Some(Key::from_raw(req.get_end_key())),
             Some(Key::from_raw(req.get_start_key())),
@@ -750,7 +752,7 @@ pub mod test_util {
     // Some utils for tests that may be used in multiple source code files.
 
     pub fn prewrite_command<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         cm: ConcurrencyManager,
         statistics: &mut Statistics,
         cmd: TypedCommand<PrewriteResult>,
@@ -784,7 +786,7 @@ pub mod test_util {
     }
 
     pub fn prewrite<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         statistics: &mut Statistics,
         mutations: Vec<Mutation>,
         primary: Vec<u8>,
@@ -804,7 +806,7 @@ pub mod test_util {
     }
 
     pub fn prewrite_with_cm<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         cm: ConcurrencyManager,
         statistics: &mut Statistics,
         mutations: Vec<Mutation>,
@@ -826,7 +828,7 @@ pub mod test_util {
     }
 
     pub fn pessimistic_prewrite<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         statistics: &mut Statistics,
         mutations: Vec<(Mutation, PrewriteRequestPessimisticAction)>,
         primary: Vec<u8>,
@@ -848,7 +850,7 @@ pub mod test_util {
     }
 
     pub fn pessimistic_prewrite_with_cm<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         cm: ConcurrencyManager,
         statistics: &mut Statistics,
         mutations: Vec<(Mutation, PrewriteRequestPessimisticAction)>,
@@ -877,7 +879,7 @@ pub mod test_util {
     }
 
     pub fn commit<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         statistics: &mut Statistics,
         keys: Vec<Key>,
         lock_ts: u64,
@@ -908,7 +910,7 @@ pub mod test_util {
     }
 
     pub fn rollback<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         statistics: &mut Statistics,
         keys: Vec<Key>,
         start_ts: u64,
