@@ -1551,11 +1551,6 @@ where
     }
 
     #[inline]
-    pub fn is_peer_miss_data(&self) -> bool {
-        self.miss_data
-    }
-
-    #[inline]
     pub fn region(&self) -> &metapb::Region {
         self.get_store().region()
     }
@@ -2602,7 +2597,7 @@ where
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
     ) {
-        if self.is_peer_miss_data() {
+        if self.miss_data {
             self.miss_data = false;
             fail_point!("ignore notify leader the peer is available", |_| {});
             let leader_id = self.leader_id();
@@ -2611,7 +2606,6 @@ where
                 let mut msg = ExtraMessage::default();
                 msg.set_type(ExtraMessageType::MsgTracePeerAvailabilityInfo);
                 msg.miss_data = false;
-                msg.safe_ts = self.read_progress.safe_ts();
                 self.send_extra_message(msg, &mut ctx.trans, &leader);
                 info!(
                     "notify leader the leader is available";

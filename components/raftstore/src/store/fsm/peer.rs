@@ -5913,7 +5913,7 @@ where
                         .peer
                         .send_extra_message(msg, &mut self.ctx.trans, &peer);
                     info!(
-                        "check non-witness availability";
+                        "check peer availability";
                         "target peer id" => *peer_id,
                     );
                     continue;
