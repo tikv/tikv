@@ -118,6 +118,9 @@ impl<EK: KvEngine, R> Apply<EK, R> {
                 e
             );
         });
+        fail::fail_point!("APPLY_PUT", |_| Err(raftstore::Error::Other(
+            "aborted by failpoint".into()
+        )));
         Ok(())
     }
 

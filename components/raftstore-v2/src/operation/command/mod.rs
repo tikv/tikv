@@ -252,20 +252,31 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     #[inline]
     pub async fn apply_committed_entries(&mut self, ce: CommittedEntries) {
+        fail::fail_point!("APPLY_COMMITTED_ENTRIES");
         for (e, ch) in ce.entry_and_proposals {
-            if let Some(wb) = self.write_batch_mut() {
-                wb.set_save_point();
-            }
-            let resp = match self.apply_entry(&e).await {
-                Ok(resp) => resp,
-                Err(e) => {
-                    if let Some(wb) = self.write_batch_mut() {
-                        wb.rollback_to_save_point().unwrap();
-                    }
-                    cmd_resp::new_error(e)
+            if !e.get_data().is_empty() {
+                let mut set_save_point = false;
+                if let Some(wb) = self.write_batch_mut() {
+                    wb.set_save_point();
+                    set_save_point = true;
                 }
-            };
-            self.callbacks_mut().push((ch, resp));
+                let resp = match self.apply_entry(&e).await {
+                    Ok(resp) => resp,
+                    Err(e) => {
+                        if let Some(wb) = self.write_batch_mut() {
+                            if set_save_point {
+                                wb.rollback_to_save_point().unwrap();
+                            } else {
+                                wb.clear();
+                            }
+                        }
+                        cmd_resp::new_error(e)
+                    }
+                };
+                self.callbacks_mut().push((ch, resp));
+            } else {
+                assert!(ch.is_empty());
+            }
             // Flush may be triggerred in the middle, so always update the index and term.
             self.set_apply_progress(e.index, e.term);
         }
