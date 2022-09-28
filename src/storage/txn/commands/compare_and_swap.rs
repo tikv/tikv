@@ -94,6 +94,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
                 |err: StorageError| ErrorInner::Other(box_err!("failed to key guard: {:?}", err)),
             )?;
             let lock_guards: Vec<_> = lock_guard.into_iter().collect();
+            // Note: ts that is appended to key must be acquired after the old_value has
+            // been obtained,  See issue #13550
             let ts = block_on(get_causal_ts(&provider)).map_err(|err: StorageError| {
                 ErrorInner::Other(box_err!("failed to get casual ts: {:?}", err))
             })?;
