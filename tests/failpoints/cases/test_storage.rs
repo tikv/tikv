@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use api_version::KvFormat;
+use api_version::{ApiV1, ApiV2, KvFormat};
 use causal_ts::CausalTsProvider;
 use collections::HashMap;
 use engine_traits::DummyFactory;
@@ -509,8 +509,8 @@ fn test_pipelined_pessimistic_lock() {
 
 #[test]
 fn test_async_commit_prewrite_with_stale_max_ts() {
-    test_async_commit_prewrite_with_stale_max_ts_impl::<ApiVersion::ApiV1>();
-    test_async_commit_prewrite_with_stale_max_ts_impl::<ApiVersion::ApiV2>();
+    test_async_commit_prewrite_with_stale_max_ts_impl::<ApiV1>();
+    test_async_commit_prewrite_with_stale_max_ts_impl::<ApiV2>();
 }
 
 fn test_async_commit_prewrite_with_stale_max_ts_impl<F: KvFormat>() {
