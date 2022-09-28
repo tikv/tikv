@@ -1847,25 +1847,32 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         }
     }
 
-    async fn check_causal_ts_flushed(ctx: &mut Context) -> Result<()> {
+    async fn check_causal_ts_flushed(ctx: &mut Context, tag: CommandKind) -> Result<()> {
         if F::TAG == ApiVersion::V2 {
             let snap_ctx = SnapContext {
                 pb_ctx: ctx,
                 ..Default::default()
             };
-            let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
-
-            if !snapshot.ext().is_max_ts_synced() {
-                return Err(Error::from(txn::Error::from(
-                    TxnError::MaxTimestampNotSynced {
-                        region_id: ctx.get_region_id(),
-                        start_ts: TimeStamp::zero(),
-                    },
-                )));
-            }
-            let term = snapshot.ext().get_term();
-            if let Some(term) = term {
-                ctx.set_term(term.get());
+            match Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await {
+                Ok(snapshot) => {
+                    SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
+                    if !snapshot.ext().is_max_ts_synced() {
+                        return Err(Error::from(txn::Error::from(
+                            TxnError::MaxTimestampNotSynced {
+                                region_id: ctx.get_region_id(),
+                                start_ts: TimeStamp::zero(),
+                            },
+                        )));
+                    }
+                    let term = snapshot.ext().get_term();
+                    if let Some(term) = term {
+                        ctx.set_term(term.get());
+                    }
+                }
+                Err(err) => {
+                    SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();
+                    info!("get snapshot failed"; "tag" => tag, "err" => ?err);
+                }
             }
         }
         Ok(())
