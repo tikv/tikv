@@ -74,10 +74,7 @@ impl RunningState {
         transport: TestTransport,
         logger: &Logger,
     ) -> (TestRouter, Self) {
-        let factory = Arc::new(TestTabletFactoryV2::new(
-            path,
-            DbOptions::default(),
-        ));
+        let factory = Arc::new(TestTabletFactoryV2::new(path, DbOptions::default()));
         let raft_engine =
             engine_test::raft::new_engine(&format!("{}", path.join("raft").display()), None)
                 .unwrap();

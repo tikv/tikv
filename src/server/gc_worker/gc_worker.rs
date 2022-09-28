@@ -1638,12 +1638,16 @@ mod tests {
     };
 
     use api_version::{ApiV2, KvFormat, RawValue};
+<<<<<<< HEAD
     use engine_rocks::{util::get_cf_handle, RocksEngine};
 <<<<<<< HEAD
     use engine_traits::Peekable as _;
 =======
+=======
+    use engine_rocks::{util::get_cf_handle, RocksDbOptions, RocksEngine};
+>>>>>>> 6ade98003 (*: fix case dependancy issue)
     use engine_test::{
-        ctor::{CfOptions, DbOptions},
+        ctor::DbOptions,
         kv::{TestTabletFactory, TestTabletFactoryV2},
     };
     use engine_traits::{OpenOptions, TabletFactory, ALL_CFS};
@@ -1684,6 +1688,7 @@ mod tests {
             MockSafePointProvider, PrefixedEngine, TestGcRunner,
         },
         storage::{
+            config::BlockCacheConfig,
             kv::{metrics::GcKeyMode, Modify, TestEngineBuilder, WriteData},
             lock_manager::DummyLockManager,
             mvcc::{
@@ -2591,11 +2596,6 @@ mod tests {
         assert!(ks.is_empty());
     }
 
-    // setup engine and prepare some data:
-    //  three regions:
-    //  region 1: includes ("k00", "value-00") to ("k09", "value-09")
-    //  region 2: includes ("k10", "value-10") to ("k19", "value-19")
-    //  region 3: includes ("k20", "value-20") to ("k29", "value-29")
     fn multi_gc_engine_setup(
         path: &Path,
         store_id: u64,
@@ -2614,7 +2614,6 @@ mod tests {
 =======
         // Building a tablet factory
         let ops = DbOptions::default();
-        let cfg_rocksdb = crate::config::DbConfig::default();
 
         let path = Builder::new().prefix("multi-rocks-gc").tempdir().unwrap();
         let factory = Arc::new(TestTabletFactoryV2::new(path.path(), ops));
@@ -2645,6 +2644,7 @@ mod tests {
             ),
         );
         let r3 = init_region(b"k20", b"", 3, Some(store_id));
+<<<<<<< HEAD
         engine.region_info.insert(3, r3.clone());
         engine.engines.lock().unwrap().insert(
             3,
@@ -2655,6 +2655,53 @@ mod tests {
                     .unwrap(),
             ),
         );
+=======
+
+        for region_id in 1..=3 {
+            let cfg_rocksdb = DbConfig::default();
+            let cfs = ALL_CFS.to_vec();
+            let cache_opt = BlockCacheConfig::default();
+            let cache = cache_opt.build_shared_cache();
+            let cf_opts = cfs
+                .iter()
+                .map(|cf| match *cf {
+                    CF_DEFAULT => (
+                        CF_DEFAULT,
+                        cfg_rocksdb.defaultcf.build_opt(
+                            &cache,
+                            None,
+                            ApiVersion::V1,
+                            region_id,
+                            10,
+                        ),
+                    ),
+                    CF_LOCK => (CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
+                    CF_WRITE => (
+                        CF_WRITE,
+                        cfg_rocksdb.writecf.build_opt(&cache, None, region_id, 10),
+                    ),
+                    CF_RAFT => (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
+                })
+                .collect();
+            let tablet_path = factory.tablet_path(region_id, 10);
+            let tablet = engine_rocks::util::new_engine_opt(
+                tablet_path.to_str().unwrap(),
+                RocksDbOptions::default(),
+                cf_opts,
+            )
+            .unwrap();
+
+            factory.register_tablet(region_id, 10, tablet);
+        }
+        let mut region_info = HashMap::default();
+        region_info.insert(1, r1.clone());
+        region_info.insert(2, r2.clone());
+        region_info.insert(3, r3.clone());
+        let mut engine = MultiRocksEngine {
+            factory: factory.clone(),
+            region_info,
+        };
+>>>>>>> 6ade98003 (*: fix case dependancy issue)
 
         let (tx, rx) = mpsc::channel();
         let feature_gate = FeatureGate::default();

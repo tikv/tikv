@@ -7,11 +7,7 @@ use std::{
 
 use api_version::{ApiV1, KvFormat};
 use collections::HashMap;
-use engine_test::{
-    ctor::{CfOptions, DbOptions},
-    kv::TestTabletFactory,
-};
-use engine_traits::ALL_CFS;
+use engine_test::{ctor::DbOptions, kv::TestTabletFactory};
 use futures::executor::block_on;
 use kvproto::{
     kvrpcpb::{ChecksumAlgorithm, Context, GetRequest, KeyRange, LockInfo, RawGetRequest},

@@ -85,7 +85,6 @@ pub mod kv {
         PanicEngine as KvTestEngine, PanicEngineIterator as KvTestEngineIterator,
         PanicSnapshot as KvTestSnapshot, PanicWriteBatch as KvTestWriteBatch,
     };
-    use engine_rocks::RocksCfOptions;
     #[cfg(feature = "test-engine-kv-rocksdb")]
     pub use engine_rocks::{
         RocksEngine as KvTestEngine, RocksEngineIterator as KvTestEngineIterator,
@@ -100,7 +99,6 @@ pub mod kv {
         CF_DEFAULT,
     };
     use tikv_util::box_err;
-    use crate::ctor;
 
     use crate::ctor::{CfOptions as KvTestCfOptions, DbOptions, KvEngineConstructorExt};
 
@@ -126,10 +124,7 @@ pub mod kv {
     }
 
     impl TestTabletFactory {
-        pub fn new(
-            root_path: &Path,
-            db_opt: DbOptions,
-        ) -> Self {
+        pub fn new(root_path: &Path, db_opt: DbOptions) -> Self {
             Self {
                 root_path: root_path.to_path_buf(),
                 db_opt,
@@ -137,46 +132,15 @@ pub mod kv {
             }
         }
 
-        fn create_tablet(
-            &self,
-            tablet_path: &Path,
-            region_id: u64,
-            suffix: u64,
-        ) -> Result<KvTestEngine> {
-            let cfg_rocksdb = DbConfig::default();
-            let cfs = ALL_CFS.to_vec();
-            let mut cache_opt = BlockCacheConfig::default();
-            let cache = cache_opt.build_shared_cache();
-            let cfs_opts = cfs
+        fn create_tablet(&self, tablet_path: &Path) -> Result<KvTestEngine> {
+            let cf_opts = ALL_CFS
                 .iter()
-                .map(|cf| match *cf {
-                    CF_DEFAULT => (
-                        CF_DEFAULT,
-                        cfg_rocksdb.defaultcf.build_opt(
-                            &cache,
-                            None,
-                            ApiVersion::V1,
-                            region_id,
-                            suffix,
-                        ),
-                    ),
-                    CF_LOCK => (CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
-                    CF_WRITE => (
-                        CF_WRITE,
-                        cfg_rocksdb
-                            .writecf
-                            .build_opt(&cache, None, region_id, suffix),
-                    ),
-                    CF_RAFT => (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
-                    _ => (*cf, RocksCfOptions::default()),
-                })
+                .map(|cf| (*cf, KvTestCfOptions::new()))
                 .collect();
-            let cf_opts = ALL_CFS.iter().map(|cf| (*cf, KvTestCfOptions::new())).collect();
             KvTestEngine::new_kv_engine_opt(
                 tablet_path.to_str().unwrap(),
                 self.db_opt.clone(),
                 cf_opts,
-                //cfs_opts,
             )
         }
 
@@ -188,7 +152,7 @@ pub mod kv {
     impl TabletFactory<KvTestEngine> for TestTabletFactory {
         fn create_shared_db(&self) -> Result<KvTestEngine> {
             let tablet_path = self.tablet_path(0, 0);
-            let tablet = self.create_tablet(&tablet_path, 0, 0)?;
+            let tablet = self.create_tablet(&tablet_path)?;
             let mut root_db = self.root_db.lock().unwrap();
             root_db.replace(tablet.clone());
             Ok(tablet)
@@ -272,14 +236,16 @@ pub mod kv {
     }
 
     impl TestTabletFactoryV2 {
-        pub fn new(
-            root_path: &Path,
-            db_opt: DbOptions
-        ) -> Self {
+        pub fn new(root_path: &Path, db_opt: DbOptions) -> Self {
             Self {
                 inner: TestTabletFactory::new(root_path, db_opt),
                 registry: Arc::default(),
             }
+        }
+
+        pub fn register_tablet(&self, region_id: u64, suffix: u64, tablet: KvTestEngine) {
+            let mut reg = self.registry.lock().unwrap();
+            reg.insert((region_id, suffix), tablet);
         }
     }
 
@@ -342,7 +308,7 @@ pub mod kv {
             &self,
             path: &Path,
             id: u64,
-            suffix: u64,
+            _suffix: u64,
             options: OpenOptions,
         ) -> Result<KvTestEngine> {
             let engine_exist = KvTestEngine::exists(path.to_str().unwrap_or_default());
@@ -365,7 +331,7 @@ pub mod kv {
                 ));
             }
 
-            self.inner.create_tablet(path, id, suffix)
+            self.inner.create_tablet(path)
         }
 
         #[inline]

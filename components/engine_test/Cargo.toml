@@ -38,5 +38,8 @@ tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
 =======
 tikv_util = { path = "../tikv_util", default-features = false }
+<<<<<<< HEAD
 #tikv = {path = "../..", default-features = false}
 >>>>>>> f84f42812 (*: refactor TestTabletFactory)
+=======
+>>>>>>> 6ade98003 (*: fix case dependancy issue)

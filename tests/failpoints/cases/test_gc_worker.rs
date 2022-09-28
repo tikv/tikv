@@ -7,11 +7,8 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_test::{
-    ctor::{CfOptions, DbOptions},
-    kv::TestTabletFactory,
-};
-use engine_traits::{Peekable, WriteBatch, ALL_CFS};
+use engine_test::{ctor::DbOptions, kv::TestTabletFactory};
+use engine_traits::{Peekable, WriteBatch};
 use grpcio::{ChannelBuilder, Environment};
 use keys::data_key;
 use kvproto::{kvrpcpb::*, metapb::Region, tikvpb::TikvClient};

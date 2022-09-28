@@ -794,11 +794,8 @@ pub mod test_utils {
         util::get_cf_handle,
         RocksEngine,
     };
-    use engine_test::{
-        ctor::{CfOptions, DbOptions},
-        kv::TestTabletFactory,
-    };
-    use engine_traits::{SyncMutable, ALL_CFS, CF_DEFAULT, CF_WRITE};
+    use engine_test::{ctor::DbOptions, kv::TestTabletFactory};
+    use engine_traits::{SyncMutable, CF_DEFAULT, CF_WRITE};
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use tempfile::Builder;
     use tikv_util::{
