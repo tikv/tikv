@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use api_version::{test_kv_format_impl, KvFormat};
+use api_version::KvFormat;
 use causal_ts::CausalTsProvider;
 use collections::HashMap;
 use engine_traits::DummyFactory;
