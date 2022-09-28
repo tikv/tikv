@@ -1704,28 +1704,8 @@ fn future_flashback_to_version<
         // we start the flashback command.
         let region_id = req.get_context().get_region_id();
         let (result_tx, result_rx) = crossbeam::channel::bounded(1);
-        let raft_router_clone_wait = raft_router_clone.clone();
-        let callback = Callback::write(Box::new(move |resp| {
-            let tx_clone = result_tx.clone();
-            let cb = Callback::write(Box::new(move |resp| {
-                if resp.response.get_header().has_error() {
-                    tx_clone.send(false).unwrap();
-                    error!("send wait apply msg failed"; "region_id" => region_id);
-                }
-                tx_clone.send(true).unwrap();
-            }));
-
-            raft_router_clone_wait
-                .significant_send(region_id, SignificantMsg::WaitApplyFlashback(cb))
-                .unwrap();
-            if resp.response.get_header().has_error() {
-                result_tx.send(false).unwrap();
-                error!("send flashback prepare msg failed"; "region_id" => region_id);
-            }
-        }));
-
         raft_router_clone
-            .significant_send(region_id, SignificantMsg::PrepareFlashback(callback))
+            .significant_send(region_id, SignificantMsg::PrepareFlashback(result_tx))
             .unwrap();
         if !result_rx.recv().unwrap() {
             return Err(Error::Other(box_err!(
@@ -1748,16 +1728,8 @@ fn future_flashback_to_version<
         // Send a `SignificantMsg::FinishFlashback` to notify the raftstore that the
         // flashback has been finished.
         let (result_tx, result_rx) = crossbeam::channel::bounded(1);
-        let callback = Callback::write(Box::new(move |resp| {
-            if resp.response.get_header().has_error() {
-                result_tx.send(false).unwrap();
-                error!("send flashback finish msg failed"; "region_id" => region_id);
-            }
-            result_tx.send(true).unwrap();
-        }));
-
         raft_router_clone
-            .significant_send(region_id, SignificantMsg::FinishFlashback(callback))
+            .significant_send(region_id, SignificantMsg::FinishFlashback(result_tx))
             .unwrap();
         if !result_rx.recv().unwrap() {
             return Err(Error::Other(box_err!(

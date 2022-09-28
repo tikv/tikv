@@ -1423,37 +1423,9 @@ impl<T: Simulator> Cluster<T> {
         let router = self.sim.rl().get_router(store_id).unwrap();
         let (result_tx, result_rx) = crossbeam::channel::bounded(1);
 
-        let raft_router_clone_wait = router.clone();
-        let callback = Callback::write(Box::new(move |resp| {
-            let tx_clone = result_tx.clone();
-            let cb = Callback::write(Box::new(move |resp| {
-                if resp.response.get_header().has_error() {
-                    tx_clone.send(false).unwrap();
-                    println!(
-                        "call_and_wait_prepare_flashback failed, {:?}",
-                        resp.response.get_header().get_error()
-                    );
-                    error!("send wait apply msg failed"; "region_id" => region_id);
-                }
-                tx_clone.send(true).unwrap();
-            }));
-
-            raft_router_clone_wait
-                .significant_send(region_id, SignificantMsg::WaitApplyFlashback(cb))
-                .unwrap();
-            if resp.response.get_header().has_error() {
-                result_tx.send(false).unwrap();
-                println!(
-                    "call_and_wait_prepare_flashback failed, {:?}",
-                    resp.response.get_header().get_error()
-                );
-                error!("send flashback prepare msg failed"; "region_id" => region_id);
-            }
-        }));
         router
-            .significant_send(region_id, SignificantMsg::PrepareFlashback(callback))
+            .significant_send(region_id, SignificantMsg::PrepareFlashback(result_tx))
             .unwrap();
-
         if !result_rx.recv().unwrap() {
             panic!("Prepare Flashback failed");
         }
@@ -1462,16 +1434,8 @@ impl<T: Simulator> Cluster<T> {
     pub async fn call_finish_flashback(&mut self, region_id: u64, store_id: u64) {
         let router = self.sim.rl().get_router(store_id).unwrap();
         let (result_tx, result_rx) = crossbeam::channel::bounded(1);
-        let cb = Callback::write(Box::new(move |resp| {
-            if resp.response.get_header().has_error() {
-                result_tx.send(false).unwrap();
-                error!("send flashback finish msg failed"; "region_id" => region_id);
-            }
-            result_tx.send(true).unwrap();
-        }));
-
         router
-            .significant_send(region_id, SignificantMsg::FinishFlashback(cb))
+            .significant_send(region_id, SignificantMsg::FinishFlashback(result_tx))
             .unwrap();
         if !result_rx.recv().unwrap() {
             panic!("Finish Flashback failed");

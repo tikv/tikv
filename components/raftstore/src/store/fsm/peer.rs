@@ -18,6 +18,7 @@ use std::{
 
 use batch_system::{BasicMailbox, Fsm};
 use collections::{HashMap, HashSet};
+use crossbeam::channel::Sender;
 use engine_traits::{Engines, KvEngine, RaftEngine, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
@@ -992,8 +993,9 @@ where
     // first be checked and if neither is found, then a Raft Admin Command will be
     // proposed to persist the state in the RegionLocalState to lock the region.
     // Once this command is submitted, a callback will be invoked to call msg
-    // WaitApplyFlashback to complete the stop read stop write stop scheduling.
-    fn on_prepare_flashback(&mut self, cb: Callback<EK::Snapshot>) {
+    // PrepareFlashback again to wait for the new change to be applied completely.
+    // So we can perform the flashback safely later.
+    fn on_prepare_flashback(&mut self, ch: Sender<bool>) {
         let region_id = self.region().get_id();
         info!(
             "prepare flashback";
@@ -1014,58 +1016,57 @@ where
                 target_state.get_flashback_state(),
                 self.region(),
             );
-            if target_state.get_flashback_state() == FlashbackState::Processing {
-                // check memory state
-                if self.fsm.peer.flashback_state.is_none() {
-                    info!("region is already has a flashback state in memory");
-                    let cmd_resp = RaftCmdResponse::default();
-                    cb.invoke_with_response(cmd_resp);
-                }
+            if target_state.get_flashback_state() == FlashbackState::Prepare {
+                // callback itself to wait for the new change to be applied completely.
+                let raft_router_clone = self.ctx.router.clone();
+                let ch_clone = ch.clone();
+                let cb = Callback::write(Box::new(move |resp| {
+                    raft_router_clone
+                        .force_send(
+                            region_id,
+                            PeerMsg::SignificantMsg(SignificantMsg::PrepareFlashback(ch_clone)),
+                        )
+                        .unwrap();
+                    if resp.response.get_header().has_error() {
+                        ch.send(false).unwrap();
+                        error!("send flashback prepare msg failed"; "region_id" => region_id);
+                    }
+                }));
+                // set persist state by a Raft Admin Command
+                let req = {
+                    let mut request = new_admin_request(region_id, self.fsm.peer.peer.clone());
+                    let mut admin = AdminRequest::default();
+                    admin.set_cmd_type(AdminCmdType::PrepareFlashback);
+                    request.set_admin_request(admin);
+                    request
+                };
+                self.propose_raft_command(req, cb, DiskFullOpt::AllowedOnAlmostFull);
                 return;
             }
+            // check memory state
+            if self.fsm.peer.flashback_state.is_none() {
+                self.fsm.peer.flashback_state = Some(FlashbackMemoryState::new(ch));
+            }
         }
-        // set persist state
-        let req = {
-            let mut request = new_admin_request(region_id, self.fsm.peer.peer.clone());
-            let mut admin = AdminRequest::default();
-            admin.set_cmd_type(AdminCmdType::PrepareFlashback);
-            request.set_admin_request(admin);
-            request
-        };
-        self.propose_raft_command(req, cb, DiskFullOpt::AllowedOnAlmostFull);
-    }
-
-    // Call msg WaitApplyFlashback to stop the scheduling and RW tasks, and write
-    // the persistent state in memory. Once called, the main thread will wait
-    // for the callback to complete. WWe place a flag in the request, which is
-    // checked when the pre_propose_raft_command is called. Stopping tasks is
-    // done by applying the flashback-only command in this way, But for RW local
-    // reads which need to be considered, we let the leader lease to None to
-    // ensure that local reads are not executed.
-    fn on_wait_apply_flashback(&mut self, cb: Callback<EK::Snapshot>) {
-        let region_id = self.region().get_id();
-        info!(
-            "wait apply flashback";
-            "region_id" => region_id,
-            "peer_id" => self.fsm.peer.peer_id(),
-        );
-        if self.fsm.peer.flashback_state.is_some() {
-            cb.invoke_with_response(new_error(Error::FlashbackInProgress(region_id)));
-            return;
-        }
-
-        self.fsm.peer.flashback_state = Some(FlashbackMemoryState::new(cb));
         // Let the leader lease to None to ensure that local reads are not executed.
         self.fsm.peer.leader_lease_mut().expire_remote_lease();
         self.fsm.peer.maybe_finish_flashback_wait_apply();
     }
 
-    fn on_finish_flashback(&mut self, cb: Callback<EK::Snapshot>) {
+    fn on_finish_flashback(&mut self, ch: Sender<bool>) {
+        let region_id = self.region().get_id();
         info!(
             "finish flashback";
-            "region_id" => self.region().get_id(),
+            "region_id" => region_id,
             "peer_id" => self.fsm.peer.peer_id(),
         );
+        let cb = Callback::write(Box::new(move |resp| {
+            if resp.response.get_header().has_error() {
+                ch.send(false).unwrap();
+                error!("send flashback finish msg failed"; "region_id" => region_id);
+            }
+            ch.send(true).unwrap();
+        }));
         self.fsm.peer.flashback_state.take();
 
         let req = {
@@ -1523,9 +1524,8 @@ where
                 self.on_unsafe_recovery_fill_out_report(syncer)
             }
 
-            SignificantMsg::PrepareFlashback(cb) => self.on_prepare_flashback(cb),
-            SignificantMsg::WaitApplyFlashback(cb) => self.on_wait_apply_flashback(cb),
-            SignificantMsg::FinishFlashback(cb) => self.on_finish_flashback(cb),
+            SignificantMsg::PrepareFlashback(ch) => self.on_prepare_flashback(ch),
+            SignificantMsg::FinishFlashback(ch) => self.on_finish_flashback(ch),
             // for snapshot recovery (safe recovery)
             SignificantMsg::SnapshotRecoveryWaitApply(syncer) => {
                 self.on_snapshot_recovery_wait_apply(syncer)

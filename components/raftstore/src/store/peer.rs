@@ -18,7 +18,10 @@ use std::{
 use bitflags::bitflags;
 use bytes::Bytes;
 use collections::{HashMap, HashSet};
-use crossbeam::{atomic::AtomicCell, channel::TrySendError};
+use crossbeam::{
+    atomic::AtomicCell,
+    channel::{Sender, TrySendError},
+};
 use engine_traits::{
     Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions, CF_LOCK,
 };
@@ -845,20 +848,23 @@ pub enum UnsafeRecoveryState {
 // result.
 
 // The applied command and their callback
-pub struct FlashbackMemoryState<S: Snapshot>(Option<Callback<S>>);
+pub struct FlashbackMemoryState(Option<Sender<bool>>);
 
-impl<S: Snapshot> FlashbackMemoryState<S> {
-    pub fn new(cb: Callback<S>) -> Self {
-        FlashbackMemoryState(Some(cb))
+impl FlashbackMemoryState {
+    pub fn new(ch: Sender<bool>) -> Self {
+        FlashbackMemoryState(Some(ch))
     }
 
     pub fn finish_wait_apply(&mut self) {
         if self.0.is_none() {
             return;
         }
-        if let Some(cb) = self.0.take() {
-            let cmd_resp = RaftCmdResponse::default();
-            cb.invoke_with_response(cmd_resp);
+        let ch = self.0.take().unwrap();
+        match ch.send(true) {
+            Ok(_) => {}
+            Err(e) => {
+                error!("Fail to notify flashback state"; "err" => ?e);
+            }
         }
     }
 }
@@ -1044,7 +1050,7 @@ where
     /// lead_transferee if the peer is in a leadership transferring.
     pub lead_transferee: u64,
     pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
-    pub flashback_state: Option<FlashbackMemoryState<EK::Snapshot>>,
+    pub flashback_state: Option<FlashbackMemoryState>,
     pub snapshot_recovery_state: Option<SnapshotRecoveryState>,
 }
 
