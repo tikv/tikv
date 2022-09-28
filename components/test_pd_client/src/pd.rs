@@ -26,7 +26,10 @@ use futures::{
 use keys::{self, data_key, enc_end_key, enc_start_key};
 use kvproto::{
     metapb::{self, PeerRole},
-    pdpb,
+    pdpb::{
+        self, ChangePeer, ChangePeerV2, CheckPolicy, Merge, RegionHeartbeatResponse, SplitRegion,
+        TransferLeader,
+    },
     replication_modepb::{
         DrAutoSyncState, RegionReplicationStatus, ReplicationMode, ReplicationStatus,
         StoreDrAutoSyncStatus,
@@ -36,19 +39,19 @@ use pd_client::{
     BucketStat, Error, FeatureGate, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result,
 };
 use raft::eraftpb::ConfChangeType;
-use raftstore::store::{
-    util::{check_key_in_region, find_peer, is_learner},
-    QueryStats, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
-};
 use tikv_util::{
+    store::{check_key_in_region, find_peer, is_learner, new_peer, QueryStats},
     time::{Instant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
     Either, HandyRwLock,
 };
 use tokio_timer::timer::Handle;
-use txn_types::TimeStamp;
+use txn_types::{TimeStamp, TSO_PHYSICAL_SHIFT_BITS};
 
 use super::*;
+
+pub const INIT_EPOCH_CONF_VER: u64 = 1;
+pub const INIT_EPOCH_VER: u64 = 1;
 
 struct Store {
     store: metapb::Store,
@@ -134,11 +137,68 @@ enum Operator {
     },
 }
 
+pub fn sleep_ms(ms: u64) {
+    std::thread::sleep(Duration::from_millis(ms));
+}
+
 fn change_peer(change_type: ConfChangeType, peer: metapb::Peer) -> pdpb::ChangePeer {
     let mut cp = pdpb::ChangePeer::default();
     cp.set_change_type(change_type);
     cp.set_peer(peer);
     cp
+}
+
+pub fn new_pd_change_peer(
+    change_type: ConfChangeType,
+    peer: metapb::Peer,
+) -> RegionHeartbeatResponse {
+    let mut change_peer = ChangePeer::default();
+    change_peer.set_change_type(change_type);
+    change_peer.set_peer(peer);
+
+    let mut resp = RegionHeartbeatResponse::default();
+    resp.set_change_peer(change_peer);
+    resp
+}
+
+pub fn new_pd_change_peer_v2(changes: Vec<ChangePeer>) -> RegionHeartbeatResponse {
+    let mut change_peer = ChangePeerV2::default();
+    change_peer.set_changes(changes.into());
+
+    let mut resp = RegionHeartbeatResponse::default();
+    resp.set_change_peer_v2(change_peer);
+    resp
+}
+
+pub fn new_split_region(policy: CheckPolicy, keys: Vec<Vec<u8>>) -> RegionHeartbeatResponse {
+    let mut split_region = SplitRegion::default();
+    split_region.set_policy(policy);
+    split_region.set_keys(keys.into());
+    let mut resp = RegionHeartbeatResponse::default();
+    resp.set_split_region(split_region);
+    resp
+}
+
+pub fn new_pd_transfer_leader(
+    peer: metapb::Peer,
+    peers: Vec<metapb::Peer>,
+) -> RegionHeartbeatResponse {
+    let mut transfer_leader = TransferLeader::default();
+    transfer_leader.set_peer(peer);
+    transfer_leader.set_peers(peers.into());
+
+    let mut resp = RegionHeartbeatResponse::default();
+    resp.set_transfer_leader(transfer_leader);
+    resp
+}
+
+pub fn new_pd_merge_region(target_region: metapb::Region) -> RegionHeartbeatResponse {
+    let mut merge = Merge::default();
+    merge.set_target(target_region);
+
+    let mut resp = RegionHeartbeatResponse::default();
+    resp.set_merge(merge);
+    resp
 }
 
 impl Operator {
@@ -1408,7 +1468,7 @@ impl PdClient for TestPdClient {
         for _ in 1..500 {
             sleep_ms(10);
             if let Some(region) = self.cluster.rl().get_region(data_key(key)) {
-                if check_key_in_region(key, &region).is_ok() {
+                if check_key_in_region(key, &region) {
                     return Ok(region);
                 }
             }
@@ -1698,8 +1758,38 @@ impl PdClient for TestPdClient {
                 )),
             )));
         }
-        let tso = self.tso.fetch_add(count as u64, Ordering::SeqCst);
-        Box::pin(ok(TimeStamp::new(tso + count as u64)))
+
+        assert!(count > 0);
+        assert!(count < (1 << TSO_PHYSICAL_SHIFT_BITS));
+
+        let mut old_tso = self.tso.load(Ordering::SeqCst);
+        loop {
+            let ts: TimeStamp = old_tso.into();
+
+            // Add to logical part first.
+            let (mut physical, mut logical) = (ts.physical(), ts.logical() + count as u64);
+
+            // When logical part is overflow, add to physical part.
+            // Moreover, logical part must not less than `count-1`, as the
+            // generated batch of TSO is treated as of the same physical time.
+            // Refer to real PD's implementation:
+            // https://github.com/tikv/pd/blob/v6.2.0/server/tso/tso.go#L361
+            if logical >= (1 << TSO_PHYSICAL_SHIFT_BITS) {
+                physical += 1;
+                logical = (count - 1) as u64;
+            }
+
+            let new_tso = TimeStamp::compose(physical, logical);
+            match self.tso.compare_exchange_weak(
+                old_tso,
+                new_tso.into_inner(),
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return Box::pin(ok(new_tso)),
+                Err(x) => old_tso = x,
+            }
+        }
     }
 
     fn update_service_safe_point(

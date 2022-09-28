@@ -253,6 +253,18 @@ pub trait PdClient: Send + Sync {
         unimplemented!();
     }
 
+    /// Returns whether the cluster is marked to start with snapshot recovery.
+    ///
+    /// Cluster is marked as recovering data before start up
+    /// Nomally, marker has been set by BR (from now), and tikv have to run in
+    /// recovery mode recovery mode will do
+    /// 1. update tikv cluster id from pd
+    /// 2. all peer apply the log to last of the leader peer which has the most
+    /// log appended. 3. delete data to some point of time (resolved_ts)
+    fn is_recovering_marked(&self) -> Result<bool> {
+        unimplemented!();
+    }
+
     /// Informs PD when the store starts or some store information changes.
     fn put_store(&self, _store: metapb::Store) -> Result<Option<ReplicationStatus>> {
         unimplemented!();

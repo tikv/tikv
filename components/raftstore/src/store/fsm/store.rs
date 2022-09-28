@@ -45,13 +45,15 @@ use resource_metering::CollectorRegHandle;
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
-    box_err, box_try,
+    box_try,
     config::{Tracker, VersionTrack},
     debug, defer, error,
     future::poll_future_notify,
     info, is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver},
-    slow_log, sys as sys_util,
+    slow_log,
+    store::find_peer,
+    sys as sys_util,
     sys::disk::{get_disk_status, DiskUsage},
     time::{duration_to_sec, Instant as TiInstant},
     timer::SteadyTimer,
@@ -99,7 +101,7 @@ use crate::{
         Callback, CasualMessage, GlobalReplicationState, InspectedRaftMessage, MergeResultKind,
         PdTask, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapManager, StoreMsg, StoreTick,
     },
-    Result,
+    Error, Result,
 };
 
 type Key = Vec<u8>;
@@ -706,10 +708,20 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 StoreMsg::Tick(tick) => self.on_tick(tick),
                 StoreMsg::RaftMessage(msg) => {
                     if let Err(e) = self.on_raft_message(msg) {
-                        error!(?e;
-                            "handle raft message failed";
-                            "store_id" => self.fsm.store.id,
-                        );
+                        if matches!(&e, Error::RegionNotRegistered { .. }) {
+                            // This may happen in normal cases when add-peer runs slowly
+                            // occasionally after a region split. Avoid printing error
+                            // log here, which may confuse users.
+                            info!("handle raft message failed";
+                                "err" => ?e,
+                                "store_id" => self.fsm.store.id,
+                            );
+                        } else {
+                            error!(?e;
+                                "handle raft message failed";
+                                "store_id" => self.fsm.store.id,
+                            );
+                        }
                     }
                 }
                 StoreMsg::CompactedEvent(event) => self.on_compaction_finished(event),
@@ -1239,8 +1251,14 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
             last_start_key = keys::enc_end_key(region);
         }
         ranges.push((last_start_key, keys::DATA_MAX_KEY.to_vec()));
+        let ranges: Vec<_> = ranges
+            .iter()
+            .map(|(start, end)| Range::new(start, end))
+            .collect();
 
-        self.engines.kv.roughly_cleanup_ranges(&ranges)?;
+        self.engines
+            .kv
+            .delete_ranges_cfs(DeleteStrategy::DeleteFiles, &ranges)?;
 
         info!(
             "cleans up garbage data";
@@ -1385,9 +1403,9 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     // blocking operation, which can take an extensive amount of time.
     cleanup_worker: Worker,
     region_worker: Worker,
-    // Used for calling `purge_expired_files`, which can be time-consuming for certain
-    // engine implementations.
-    purge_worker: Worker,
+    // Used for calling `manual_purge` if the specific engine implementation requires it
+    // (`need_manual_purge`).
+    purge_worker: Option<Worker>,
 
     raftlog_fetch_worker: Worker,
 
@@ -1452,12 +1470,36 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .registry
             .register_admin_observer(100, BoxAdminObserver::new(SplitObserver));
 
+        let purge_worker = if engines.raft.need_manual_purge() {
+            let worker = Worker::new("purge-worker");
+            let raft_clone = engines.raft.clone();
+            let router_clone = self.router();
+            worker.spawn_interval_task(cfg.value().raft_engine_purge_interval.0, move || {
+                match raft_clone.manual_purge() {
+                    Ok(regions) => {
+                        for region_id in regions {
+                            let _ = router_clone.send(
+                                region_id,
+                                PeerMsg::CasualMessage(CasualMessage::ForceCompactRaftLogs),
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        warn!("purge expired files"; "err" => %e);
+                    }
+                };
+            });
+            Some(worker)
+        } else {
+            None
+        };
+
         let workers = Workers {
             pd_worker,
             background_worker,
             cleanup_worker: Worker::new("cleanup-worker"),
             region_worker: Worker::new("region-worker"),
-            purge_worker: Worker::new("purge-worker"),
+            purge_worker,
             raftlog_fetch_worker: Worker::new("raftlog-fetch-worker"),
             coprocessor_host: coprocessor_host.clone(),
             refresh_config_worker: LazyWorker::new("refreash-config-worker"),
@@ -1466,9 +1508,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let region_runner = RegionRunner::new(
             engines.kv.clone(),
             mgr.clone(),
-            cfg.value().snap_apply_batch_size.0 as usize,
-            cfg.value().use_delete_range,
-            cfg.value().snap_generator_pool_size,
+            cfg.clone(),
             workers.coprocessor_host.clone(),
             self.router(),
             Some(Arc::clone(&pd_client)),
@@ -1484,26 +1524,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let raftlog_gc_scheduler = workers
             .background_worker
             .start_with_timer("raft-gc-worker", raftlog_gc_runner);
-        let router_clone = self.router();
-        let engines_clone = engines.clone();
-        workers.purge_worker.spawn_interval_task(
-            cfg.value().raft_engine_purge_interval.0,
-            move || {
-                match engines_clone.raft.purge_expired_files() {
-                    Ok(regions) => {
-                        for region_id in regions {
-                            let _ = router_clone.send(
-                                region_id,
-                                PeerMsg::CasualMessage(CasualMessage::ForceCompactRaftLogs),
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        warn!("purge expired files"; "err" => %e);
-                    }
-                };
-            },
-        );
 
         let raftlog_fetch_scheduler = workers.raftlog_fetch_worker.start(
             "raftlog-fetch-worker",
@@ -1711,7 +1731,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         workers.cleanup_worker.stop();
         workers.region_worker.stop();
         workers.background_worker.stop();
-        workers.purge_worker.stop();
+        if let Some(w) = workers.purge_worker {
+            w.stop();
+        }
         workers.refresh_config_worker.stop();
         workers.raftlog_fetch_worker.stop();
     }
@@ -1773,11 +1795,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                     .message_dropped
                     .region_nonexistent
                     .inc();
-                return Err(box_err!(
-                    "[region {}] region not exist but not tombstone: {:?}",
+                return Err(Error::RegionNotRegistered {
                     region_id,
-                    local_state
-                ));
+                    local_state,
+                });
             }
             info!(
                 "region doesn't exist yet, wait for it to be split";
@@ -1800,7 +1821,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 "msg_type" => ?msg_type,
             );
 
-            let merge_target = if let Some(peer) = util::find_peer(region, from_store_id) {
+            let merge_target = if let Some(peer) = find_peer(region, from_store_id) {
                 // Maybe the target is promoted from learner to voter, but the follower
                 // doesn't know it. So we only compare peer id.
                 if peer.get_id() < msg.get_from_peer().get_id() {
@@ -1837,7 +1858,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 "current_region_epoch" => ?region_epoch,
                 "msg_type" => ?msg_type,
             );
-            if util::find_peer(region, from_store_id).is_none() {
+            if find_peer(region, from_store_id).is_none() {
                 self.ctx.handle_stale_msg(msg, region_epoch.clone(), None);
             } else {
                 let mut need_gc_msg = util::is_vote_msg(msg.get_message());
@@ -1874,9 +1895,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         // In this case, the local epoch is stale and the local peer can be found from
         // region. We can compare the local peer id with to_peer_id to verify whether it
         // is correct to create a new peer.
-        if let Some(local_peer_id) =
-            util::find_peer(region, self.ctx.store_id()).map(|r| r.get_id())
-        {
+        if let Some(local_peer_id) = find_peer(region, self.ctx.store_id()).map(|r| r.get_id()) {
             if to_peer_id <= local_peer_id {
                 self.ctx
                     .raft_metrics
@@ -2648,7 +2667,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             if target_region_id == 0 {
                 return;
             }
-            match util::find_peer(&meta.regions[&target_region_id], self.ctx.store_id()) {
+            match find_peer(&meta.regions[&target_region_id], self.ctx.store_id()) {
                 None => return,
                 Some(p) => p.clone(),
             }
@@ -2845,7 +2864,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
         drop(meta);
 
-        if let Err(e) = self.ctx.engines.kv.delete_all_in_range(
+        if let Err(e) = self.ctx.engines.kv.delete_ranges_cfs(
             DeleteStrategy::DeleteByKey,
             &[Range::new(&start_key, &end_key)],
         ) {

@@ -392,7 +392,7 @@ impl TwoPhaseResolver {
             return min_ts.min(stable_ts);
         }
 
-        self.resolver.resolve(min_ts).min()
+        self.resolver.resolve(min_ts)
     }
 
     pub fn resolved_ts(&self) -> TimeStamp {

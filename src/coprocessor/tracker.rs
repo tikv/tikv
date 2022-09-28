@@ -82,7 +82,7 @@ impl<E: Engine> Tracker<E> {
     /// factory context, because the future pool might be full and we need
     /// to wait it. This kind of wait time has to be recorded.
     pub fn new(req_ctx: ReqContext, slow_log_threshold: Duration) -> Self {
-        let now = Instant::now_coarse();
+        let now = Instant::now();
         Tracker {
             request_begin_at: now,
             current_stage: TrackerState::Initialized,
@@ -106,14 +106,18 @@ impl<E: Engine> Tracker<E> {
 
     pub fn on_scheduled(&mut self) {
         assert_eq!(self.current_stage, TrackerState::Initialized);
-        let now = Instant::now_coarse();
+        let now = Instant::now();
         self.schedule_wait_time = now - self.request_begin_at;
+        with_tls_tracker(|tracker| {
+            tracker.metrics.read_pool_schedule_wait_nanos =
+                self.schedule_wait_time.as_nanos() as u64;
+        });
         self.current_stage = TrackerState::Scheduled(now);
     }
 
     pub fn on_snapshot_finished(&mut self) {
         if let TrackerState::Scheduled(at) = self.current_stage {
-            let now = Instant::now_coarse();
+            let now = Instant::now();
             self.snapshot_wait_time = now - at;
             self.wait_time = now - self.request_begin_at;
             self.current_stage = TrackerState::SnapshotRetrieved(now);
@@ -124,7 +128,7 @@ impl<E: Engine> Tracker<E> {
 
     pub fn on_begin_all_items(&mut self) {
         if let TrackerState::SnapshotRetrieved(at) = self.current_stage {
-            let now = Instant::now_coarse();
+            let now = Instant::now();
             self.handler_build_time = now - at;
             self.current_stage = TrackerState::AllItemsBegan;
         } else {
@@ -133,7 +137,7 @@ impl<E: Engine> Tracker<E> {
     }
 
     pub fn on_begin_item(&mut self) {
-        let now = Instant::now_coarse();
+        let now = Instant::now();
         match self.current_stage {
             TrackerState::AllItemsBegan => {}
             TrackerState::ItemFinished(at) => {
@@ -149,7 +153,7 @@ impl<E: Engine> Tracker<E> {
 
     pub fn on_finish_item(&mut self, some_storage_stats: Option<Statistics>) {
         if let TrackerState::ItemBegan(at) = self.current_stage {
-            let now = Instant::now_coarse();
+            let now = Instant::now();
             self.item_process_time = now - at;
             self.total_process_time += self.item_process_time;
             if let Some(storage_stats) = some_storage_stats {
@@ -227,7 +231,7 @@ impl<E: Engine> Tracker<E> {
             _ => unreachable!(),
         }
 
-        self.req_lifetime = Instant::now_coarse() - self.request_begin_at;
+        self.req_lifetime = Instant::now() - self.request_begin_at;
         self.current_stage = TrackerState::AllItemFinished;
         self.track();
     }
@@ -377,7 +381,7 @@ impl<E: Engine> Tracker<E> {
             let mut c = c.borrow_mut();
             let perf_context = c.get_or_insert_with(|| unsafe {
                 with_tls_engine::<E, _, _>(|engine| {
-                    Box::new(engine.kv_engine().get_perf_context(
+                    Box::new(engine.kv_engine().unwrap().get_perf_context(
                         PerfLevel::Uninitialized,
                         PerfContextKind::Coprocessor(self.req_ctx.tag.get_str()),
                     ))

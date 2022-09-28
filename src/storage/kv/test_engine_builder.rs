@@ -5,7 +5,6 @@ use std::{
     sync::Arc,
 };
 
-use causal_ts::tests::DummyRawTsTracker;
 use engine_rocks::RocksCfOptions;
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use file_system::IoRateLimiter;
@@ -67,18 +66,6 @@ impl TestEngineBuilder {
         self
     }
 
-    /// Register causal observer for RawKV API V2.
-    // TODO: `RocksEngine` is coupling with RawKV features including GC (compaction
-    // filter) & CausalObserver. Consider decoupling them.
-    fn register_causal_observer(engine: &mut RocksEngine) {
-        let causal_ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
-        let causal_ob =
-            causal_ts::CausalObserver::new(causal_ts_provider, DummyRawTsTracker::default());
-        engine.register_observer(|host| {
-            causal_ob.register_to(host);
-        });
-    }
-
     /// Build a `RocksEngine`.
     pub fn build(self) -> Result<RocksEngine> {
         let cfg_rocksdb = crate::config::DbConfig::default();
@@ -123,13 +110,8 @@ impl TestEngineBuilder {
                 _ => (*cf, RocksCfOptions::default()),
             })
             .collect();
-        let mut engine =
+        let engine =
             RocksEngine::new(&path, None, cfs_opts, cache.is_some(), self.io_rate_limiter)?;
-
-        if let ApiVersion::V2 = api_version {
-            Self::register_causal_observer(&mut engine);
-        }
-
         Ok(engine)
     }
 }
@@ -156,29 +138,29 @@ mod tests {
 
     #[test]
     fn test_rocksdb() {
-        let engine = TestEngineBuilder::new()
+        let mut engine = TestEngineBuilder::new()
             .cfs(TEST_ENGINE_CFS)
             .build()
             .unwrap();
-        test_base_curd_options(&engine)
+        test_base_curd_options(&mut engine)
     }
 
     #[test]
     fn test_rocksdb_linear() {
-        let engine = TestEngineBuilder::new()
+        let mut engine = TestEngineBuilder::new()
             .cfs(TEST_ENGINE_CFS)
             .build()
             .unwrap();
-        test_linear(&engine);
+        test_linear(&mut engine);
     }
 
     #[test]
     fn test_rocksdb_statistic() {
-        let engine = TestEngineBuilder::new()
+        let mut engine = TestEngineBuilder::new()
             .cfs(TEST_ENGINE_CFS)
             .build()
             .unwrap();
-        test_cfs_statistics(&engine);
+        test_cfs_statistics(&mut engine);
     }
 
     #[test]
@@ -196,27 +178,27 @@ mod tests {
             must_put_cf(&engine, "cf", b"k", b"v1");
         }
         {
-            let engine = TestEngineBuilder::new()
+            let mut engine = TestEngineBuilder::new()
                 .path(dir.path())
                 .cfs(TEST_ENGINE_CFS)
                 .build()
                 .unwrap();
-            assert_has_cf(&engine, "cf", b"k", b"v1");
+            assert_has_cf(&mut engine, "cf", b"k", b"v1");
         }
     }
 
     #[test]
     fn test_rocksdb_perf_statistics() {
-        let engine = TestEngineBuilder::new()
+        let mut engine = TestEngineBuilder::new()
             .cfs(TEST_ENGINE_CFS)
             .build()
             .unwrap();
-        test_perf_statistics(&engine);
+        test_perf_statistics(&mut engine);
     }
 
     #[test]
     fn test_max_skippable_internal_keys_error() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         must_put(&engine, b"foo", b"bar");
         must_delete(&engine, b"foo");
         must_put(&engine, b"foo1", b"bar1");
@@ -242,7 +224,7 @@ mod tests {
         );
     }
 
-    fn test_perf_statistics<E: Engine>(engine: &E) {
+    fn test_perf_statistics<E: Engine>(engine: &mut E) {
         must_put(engine, b"foo", b"bar1");
         must_put(engine, b"foo2", b"bar2");
         must_put(engine, b"foo3", b"bar3"); // deleted
@@ -286,7 +268,7 @@ mod tests {
 
     #[test]
     fn test_prefix_seek_skip_tombstone() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         engine
             .put_cf(
                 &Context::default(),
