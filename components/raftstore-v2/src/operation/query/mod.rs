@@ -362,7 +362,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             GroupState::Ordered,
             self.raft_group().status(),
         );
-        // V2 doesn't persist commit term, so fill it on demand.
+        // V2 doesn't persist commit index and term, fill them with in-memory values.
         meta.raft_apply.commit_index = cmp::min(
             self.raft_group().raft.raft_log.committed,
             self.raft_group().raft.raft_log.persisted,
