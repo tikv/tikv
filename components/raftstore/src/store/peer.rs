@@ -918,7 +918,7 @@ where
     /// the conversion operation is complete, and can continue to schedule
     /// other operators to prevent the existence of multiple witnesses in
     /// the same time period.
-    pub initialized: bool,
+    pub miss_data: bool,
 
     /// Force leader state is only used in online recovery when the majority of
     /// peers are missing. In this state, it forces one peer to become leader
@@ -1132,7 +1132,7 @@ where
             compaction_declined_bytes: 0,
             leader_unreachable: false,
             pending_remove: false,
-            initialized: true,
+            miss_data: false,
             should_wake_up: false,
             force_leader: None,
             pending_merge_state: None,
@@ -1551,8 +1551,8 @@ where
     }
 
     #[inline]
-    pub fn is_peer_initialized(&self) -> bool {
-        self.initialized
+    pub fn is_peer_miss_data(&self) -> bool {
+        self.miss_data
     }
 
     #[inline]
@@ -2602,8 +2602,8 @@ where
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
     ) {
-        if !self.is_peer_initialized() {
-            self.initialized = true;
+        if self.is_peer_miss_data() {
+            self.miss_data = false;
             fail_point!("ignore notify leader the peer is available", |_| {});
             let leader_id = self.leader_id();
             let leader = self.get_peer_from_cache(leader_id);

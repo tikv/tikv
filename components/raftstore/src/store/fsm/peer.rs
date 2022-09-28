@@ -2488,7 +2488,7 @@ where
         }
 
         if msg.has_extra_msg() {
-            self.on_extra_message(&mut msg);
+            self.on_extra_message(msg);
             return Ok(());
         }
 
@@ -2632,7 +2632,7 @@ where
         if !self.fsm.peer.is_leader() {
             let mut resp = ExtraMessage::default();
             resp.set_type(ExtraMessageType::MsgTracePeerAvailabilityInfo);
-            resp.miss_data = !self.fsm.peer.initialized;
+            resp.miss_data = self.fsm.peer.miss_data;
             self.fsm
                 .peer
                 .send_extra_message(resp, &mut self.ctx.trans, from);
@@ -2655,7 +2655,7 @@ where
         self.register_check_peers_availability_tick();
     }
 
-    fn on_extra_message(&mut self, msg: &mut RaftMessage) {
+    fn on_extra_message(&mut self, mut msg: RaftMessage) {
         match msg.get_extra_msg().get_type() {
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
                 if self.fsm.hibernate_state.group_state() == GroupState::Idle {
