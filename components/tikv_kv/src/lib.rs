@@ -278,7 +278,7 @@ pub trait Engine: Send + Clone + 'static {
     /// region_modifies records each region's modifications.
     fn modify_on_kv_engine(&self, region_modifies: HashMap<u64, Vec<Modify>>) -> Result<()>;
 
-    fn async_snapshot(&self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()>;
+    fn async_snapshot(&mut self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()>;
 
     /// Precheck request which has write with it's context.
     fn precheck_write_with_ctx(&self, _ctx: &Context) -> Result<()> {
@@ -308,9 +308,9 @@ pub trait Engine: Send + Clone + 'static {
             .unwrap_or_else(|| Err(Error::from(ErrorInner::Timeout(timeout))))
     }
 
-    fn release_snapshot(&self) {}
+    fn release_snapshot(&mut self) {}
 
-    fn snapshot(&self, ctx: SnapContext<'_>) -> Result<Self::Snap> {
+    fn snapshot(&mut self, ctx: SnapContext<'_>) -> Result<Self::Snap> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
         wait_op!(|cb| self.async_snapshot(ctx, cb), timeout)
             .unwrap_or_else(|| Err(Error::from(ErrorInner::Timeout(timeout))))
@@ -538,10 +538,10 @@ thread_local! {
 /// Precondition: `TLS_ENGINE_ANY` is non-null.
 pub unsafe fn with_tls_engine<E: Engine, F, R>(f: F) -> R
 where
-    F: FnOnce(&E) -> R,
+    F: FnOnce(&mut E) -> R,
 {
     TLS_ENGINE_ANY.with(|e| {
-        let engine = &*(*e.get() as *const E);
+        let engine = &mut *(*e.get() as *mut E);
         f(engine)
     })
 }
@@ -583,7 +583,7 @@ pub unsafe fn destroy_tls_engine<E: Engine>() {
 
 /// Get a snapshot of `engine`.
 pub fn snapshot<E: Engine>(
-    engine: &E,
+    engine: &mut E,
     ctx: SnapContext<'_>,
 ) -> impl std::future::Future<Output = Result<E::Snap>> {
     let begin = Instant::now();
@@ -697,12 +697,12 @@ pub mod tests {
             .unwrap();
     }
 
-    pub fn assert_has<E: Engine>(engine: &E, key: &[u8], value: &[u8]) {
+    pub fn assert_has<E: Engine>(engine: &mut E, key: &[u8], value: &[u8]) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         assert_eq!(snapshot.get(&Key::from_raw(key)).unwrap().unwrap(), value);
     }
 
-    pub fn assert_has_cf<E: Engine>(engine: &E, cf: CfName, key: &[u8], value: &[u8]) {
+    pub fn assert_has_cf<E: Engine>(engine: &mut E, cf: CfName, key: &[u8], value: &[u8]) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         assert_eq!(
             snapshot.get_cf(cf, &Key::from_raw(key)).unwrap().unwrap(),
@@ -710,17 +710,17 @@ pub mod tests {
         );
     }
 
-    pub fn assert_none<E: Engine>(engine: &E, key: &[u8]) {
+    pub fn assert_none<E: Engine>(engine: &mut E, key: &[u8]) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         assert_eq!(snapshot.get(&Key::from_raw(key)).unwrap(), None);
     }
 
-    pub fn assert_none_cf<E: Engine>(engine: &E, cf: CfName, key: &[u8]) {
+    pub fn assert_none_cf<E: Engine>(engine: &mut E, cf: CfName, key: &[u8]) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         assert_eq!(snapshot.get_cf(cf, &Key::from_raw(key)).unwrap(), None);
     }
 
-    fn assert_seek<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
+    fn assert_seek<E: Engine>(engine: &mut E, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut cursor = Cursor::new(
             snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
@@ -733,7 +733,7 @@ pub mod tests {
         assert_eq!(cursor.value(&mut statistics), pair.1);
     }
 
-    fn assert_reverse_seek<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
+    fn assert_reverse_seek<E: Engine>(engine: &mut E, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut cursor = Cursor::new(
             snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
@@ -778,7 +778,7 @@ pub mod tests {
         assert_eq!(cursor.value(&mut statistics), pair.1);
     }
 
-    pub fn test_base_curd_options<E: Engine>(engine: &E) {
+    pub fn test_base_curd_options<E: Engine>(engine: &mut E) {
         test_get_put(engine);
         test_batch(engine);
         test_empty_seek(engine);
@@ -788,7 +788,7 @@ pub mod tests {
         test_empty_write(engine);
     }
 
-    fn test_get_put<E: Engine>(engine: &E) {
+    fn test_get_put<E: Engine>(engine: &mut E) {
         assert_none(engine, b"x");
         must_put(engine, b"x", b"1");
         assert_has(engine, b"x", b"1");
@@ -796,7 +796,7 @@ pub mod tests {
         assert_has(engine, b"x", b"2");
     }
 
-    fn test_batch<E: Engine>(engine: &E) {
+    fn test_batch<E: Engine>(engine: &mut E) {
         engine
             .write(
                 &Context::default(),
@@ -822,7 +822,7 @@ pub mod tests {
         assert_none(engine, b"y");
     }
 
-    fn test_seek<E: Engine>(engine: &E) {
+    fn test_seek<E: Engine>(engine: &mut E) {
         must_put(engine, b"x", b"1");
         assert_seek(engine, b"x", (b"x", b"1"));
         assert_seek(engine, b"a", (b"x", b"1"));
@@ -853,7 +853,7 @@ pub mod tests {
         must_delete(engine, b"z");
     }
 
-    fn test_near_seek<E: Engine>(engine: &E) {
+    fn test_near_seek<E: Engine>(engine: &mut E) {
         must_put(engine, b"x", b"1");
         must_put(engine, b"z", b"2");
         let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -897,7 +897,7 @@ pub mod tests {
         }
     }
 
-    fn test_empty_seek<E: Engine>(engine: &E) {
+    fn test_empty_seek<E: Engine>(engine: &mut E) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut cursor = Cursor::new(
             snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
@@ -1042,7 +1042,7 @@ pub mod tests {
         }
     }
 
-    pub fn test_linear<E: Engine>(engine: &E) {
+    pub fn test_linear<E: Engine>(engine: &mut E) {
         for i in 50..50 + SEEK_BOUND * 10 {
             let key = format!("key_{}", i * 2);
             let value = format!("value_{}", i);
@@ -1090,7 +1090,7 @@ pub mod tests {
         }
     }
 
-    fn test_cf<E: Engine>(engine: &E) {
+    fn test_cf<E: Engine>(engine: &mut E) {
         assert_none_cf(engine, "cf", b"key");
         must_put_cf(engine, "cf", b"key", b"value");
         assert_has_cf(engine, "cf", b"key", b"value");
@@ -1104,7 +1104,7 @@ pub mod tests {
             .unwrap_err();
     }
 
-    pub fn test_cfs_statistics<E: Engine>(engine: &E) {
+    pub fn test_cfs_statistics<E: Engine>(engine: &mut E) {
         must_put(engine, b"foo", b"bar1");
         must_put(engine, b"foo2", b"bar2");
         must_put(engine, b"foo3", b"bar3"); // deleted
