@@ -3,6 +3,7 @@
 use std::{sync::Arc, time::Duration};
 
 use causal_ts::CausalTsProvider;
+use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     kvrpcpb::*,
@@ -91,13 +92,15 @@ impl TestSuite {
     }
 
     pub fn flush_timestamp(&mut self, node_id: u64) {
-        self.cluster
-            .sim
-            .rl()
-            .get_causal_ts_provider(node_id)
-            .unwrap()
-            .flush()
-            .unwrap();
+        block_on(
+            self.cluster
+                .sim
+                .rl()
+                .get_causal_ts_provider(node_id)
+                .unwrap()
+                .async_flush(),
+        )
+        .unwrap();
     }
 
     pub fn must_merge_region_by_key(&mut self, source_key: &[u8], target_key: &[u8]) {

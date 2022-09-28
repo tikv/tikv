@@ -31,6 +31,8 @@ use std::{
 };
 
 use async_trait::async_trait;
+#[cfg(test)]
+use futures::executor::block_on;
 use parking_lot::RwLock;
 use pd_client::PdClient;
 use tikv_util::{
@@ -560,6 +562,16 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
     pub fn tso_usage(&self) -> u32 {
         self.batch_list.usage()
     }
+
+    #[cfg(test)]
+    pub fn get_ts(&self) -> Result<TimeStamp> {
+        block_on(self.async_get_ts())
+    }
+
+    #[cfg(test)]
+    pub fn flush(&self) -> Result<TimeStamp> {
+        block_on(self.async_flush())
+    }
 }
 
 const GET_TS_MAX_RETRY: u32 = 3;
@@ -864,7 +876,7 @@ pub mod tests {
         let provider = SimpleTsoProvider::new(pd_cli.clone());
 
         pd_cli.set_tso(100.into());
-        let ts = provider.get_ts().unwrap();
+        let ts = block_on(provider.async_get_ts()).unwrap();
         assert_eq!(ts, 101.into(), "ts: {:?}", ts);
     }
 

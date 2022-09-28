@@ -15,7 +15,6 @@ pub use tso::*;
 mod metrics;
 use async_trait::async_trait;
 use enum_dispatch::enum_dispatch;
-use futures::executor::block_on;
 pub use metrics::*;
 use test_pd_client::TestPdClient;
 use txn_types::TimeStamp;
@@ -26,18 +25,10 @@ pub use crate::errors::Result;
 #[enum_dispatch]
 pub trait CausalTsProvider: Send + Sync {
     /// Get a new timestamp.
-    fn get_ts(&self) -> Result<TimeStamp> {
-        block_on(self.async_get_ts())
-    }
+    async fn async_get_ts(&self) -> Result<TimeStamp>;
 
     /// Flush (cached) timestamps and return first timestamp to keep causality
     /// on some events, such as "leader transfer".
-    fn flush(&self) -> Result<TimeStamp> {
-        block_on(self.async_flush())
-    }
-
-    async fn async_get_ts(&self) -> Result<TimeStamp>;
-
     async fn async_flush(&self) -> Result<TimeStamp>;
 }
 

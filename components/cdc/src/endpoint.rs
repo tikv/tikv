@@ -1285,6 +1285,7 @@ mod tests {
     use std::ops::{Deref, DerefMut};
 
     use engine_rocks::RocksEngine;
+    use futures::executor::block_on;
     use kvproto::{
         cdcpb::{ChangeDataRequestKvApi, Header},
         errorpb::Error as ErrorHeader,
@@ -1893,7 +1894,7 @@ mod tests {
         };
         let ts_provider: Arc<CausalTsProviderImpl> =
             Arc::new(causal_ts::tests::TestProvider::default().into());
-        let start_ts = ts_provider.get_ts().unwrap();
+        let start_ts = block_on(ts_provider.async_get_ts()).unwrap();
         let mut suite =
             mock_endpoint_with_ts_provider(&cfg, None, ApiVersion::V2, Some(ts_provider.clone()));
         suite.run(Task::RegisterMinTsEvent);
@@ -1902,7 +1903,7 @@ mod tests {
             .recv_timeout(Duration::from_millis(1500))
             .unwrap()
             .unwrap();
-        let end_ts = ts_provider.get_ts().unwrap();
+        let end_ts = block_on(ts_provider.async_get_ts()).unwrap();
         assert!(end_ts.into_inner() > start_ts.next().into_inner()); // may trigger more than once.
     }
 

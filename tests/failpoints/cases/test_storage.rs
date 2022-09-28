@@ -1491,7 +1491,7 @@ fn test_raw_put_key_guard() {
     let node_id = leader.get_id();
     let leader_cm = cluster.sim.rl().get_concurrency_manager(node_id);
     let ts_provider = cluster.sim.rl().get_causal_ts_provider(node_id).unwrap();
-    let ts = ts_provider.get_ts().unwrap();
+    let ts = block_on(ts_provider.async_get_ts()).unwrap();
 
     let env = Arc::new(Environment::new(1));
     let channel =
