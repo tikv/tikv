@@ -258,8 +258,8 @@ impl<L: LockManager> LockWaitQueues<L> {
         }
         key_state.value_mut().queue.push(lock_wait_entry);
 
-        let len = entry.value_mut().queue.len();
-        drop(entry);
+        let len = key_state.value_mut().queue.len();
+        drop(key_state);
         LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.waiters.inc();
         LOCK_WAIT_QUEUE_LENGTH_HISTOGRAM.observe(len as f64);
         if new_key {
