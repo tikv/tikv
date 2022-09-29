@@ -1901,7 +1901,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             return Err(Error::from(ErrorInner::TtlNotEnabled));
         }
         let deadline = Self::get_deadline(&ctx);
-        let cf = Self::rawkv_cf(&cf, api_version)?;
+        let cf = Self::rawkv_cf(&cf, self.api_version)?;
         let provider = self.causal_ts_provider.clone();
         let engine = self.engine.clone();
         let concurrency_manager = self.concurrency_manager.clone();
@@ -1997,15 +1997,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         callback: Callback<()>,
     ) -> Result<()> {
         const CMD: CommandKind = CommandKind::raw_batch_put;
-        let api_version = self.api_version;
         Self::check_api_version(
-            api_version,
+            self.api_version,
             ctx.api_version,
             CMD,
             pairs.iter().map(|(ref k, _)| k),
         )?;
 
-        let cf = Self::rawkv_cf(&cf, api_version)?;
+        let cf = Self::rawkv_cf(&cf, self.api_version)?;
 
         check_key_size!(
             pairs.iter().map(|(ref k, _)| k),
@@ -2075,11 +2074,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         callback: Callback<()>,
     ) -> Result<()> {
         const CMD: CommandKind = CommandKind::raw_delete;
-        let api_version = self.api_version;
-        Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
+        Self::check_api_version(self.api_version, ctx.api_version, CMD, [&key])?;
 
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
-        let cf = Self::rawkv_cf(&cf, api_version)?;
+        let cf = Self::rawkv_cf(&cf, self.api_version)?;
         let provider = self.causal_ts_provider.clone();
         let engine = self.engine.clone();
         let concurrency_manager = self.concurrency_manager.clone();
@@ -2185,10 +2183,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         callback: Callback<()>,
     ) -> Result<()> {
         const CMD: CommandKind = CommandKind::raw_batch_delete;
-        let api_version = self.api_version;
-        Self::check_api_version(api_version, ctx.api_version, CMD, &keys)?;
+        Self::check_api_version(self.api_version, ctx.api_version, CMD, &keys)?;
 
-        let cf = Self::rawkv_cf(&cf, api_version)?;
+        let cf = Self::rawkv_cf(&cf, self.api_version)?;
         check_key_size!(keys.iter(), self.max_key_size, callback);
         let provider = self.causal_ts_provider.clone();
         let engine = self.engine.clone();
@@ -2649,21 +2646,20 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         callback: Callback<()>,
     ) -> Result<()> {
         const CMD: CommandKind = CommandKind::raw_atomic_store;
-        let api_version = self.api_version;
         Self::check_api_version(
-            api_version,
+            self.api_version,
             ctx.api_version,
             CMD,
             pairs.iter().map(|(ref k, _)| k),
         )?;
 
-        let cf = Self::rawkv_cf(&cf, api_version)?;
+        let cf = Self::rawkv_cf(&cf, self.api_version)?;
         Self::check_ttl_valid(pairs.len(), &ttls)?;
 
         let sched = self.get_scheduler();
         self.sched_raw_command(CMD, async move {
             let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls, None);
-            let cmd = RawAtomicStore::new(cf, modifies, api_version, ctx);
+            let cmd = RawAtomicStore::new(cf, modifies, ctx);
             Self::sched_raw_atomic_command(
                 sched,
                 cmd,
@@ -2680,10 +2676,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         callback: Callback<()>,
     ) -> Result<()> {
         const CMD: CommandKind = CommandKind::raw_atomic_store;
-        let api_version = self.api_version;
 
-        Self::check_api_version(api_version, ctx.api_version, CMD, &keys)?;
-        let cf = Self::rawkv_cf(&cf, api_version)?;
+        Self::check_api_version(self.api_version, ctx.api_version, CMD, &keys)?;
+        let cf = Self::rawkv_cf(&cf, self.api_version)?;
         let sched = self.get_scheduler();
         self.sched_raw_command(CMD, async move {
             // Do NOT encode ts here as RawAtomicStore use key to gen lock
@@ -2691,7 +2686,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 .into_iter()
                 .map(|k| Self::raw_delete_request_to_modify(cf, k, None))
                 .collect();
-            let cmd = RawAtomicStore::new(cf, modifies, api_version, ctx);
+            let cmd = RawAtomicStore::new(cf, modifies, ctx);
             Self::sched_raw_atomic_command(
                 sched,
                 cmd,

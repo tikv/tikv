@@ -1272,7 +1272,7 @@ async fn get_apiv2_ctx(
     if causal_ts_provider.is_some() {
         match cmd {
             Command::RawCompareAndSwap(_) | Command::RawAtomicStore(_) => {
-                if max_ts_synced {
+                if !max_ts_synced {
                     return Err(ErrorInner::MaxTimestampNotSynced {
                         region_id: cmd.ctx().get_region_id(),
                         start_ts: TimeStamp::zero(),

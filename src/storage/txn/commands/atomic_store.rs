@@ -3,7 +3,6 @@
 // #[PerformanceCriticalPath]
 
 use engine_traits::CfName;
-use kvproto::kvrpcpb::ApiVersion;
 
 use crate::storage::{
     kv::{Modify, WriteData},
@@ -27,7 +26,6 @@ command! {
             /// The set of mutations to apply.
             cf: CfName,
             mutations: Vec<Modify>,
-            api_version: ApiVersion,
         }
 }
 
@@ -103,7 +101,7 @@ mod tests {
                 F::encode_raw_value_owned(raw_value),
             ));
         }
-        let cmd = RawAtomicStore::new(CF_DEFAULT, modifies, F::TAG, Context::default());
+        let cmd = RawAtomicStore::new(CF_DEFAULT, modifies, Context::default());
         let mut statistic = Statistics::default();
         let snap = engine.snapshot(Default::default()).unwrap();
         let apiv2_ctx = super::super::test_util::get_apiv2_ctx(F::TAG);
