@@ -364,11 +364,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &mut self.destroy_progress
     }
 
-    #[inline]
-    pub(crate) fn has_applied_to_current_term(&self) -> bool {
-        self.entry_storage().applied_term() == self.term()
-    }
-
     pub fn raw_write_encoder_mut(&mut self) -> &mut Option<SimpleWriteEncoder> {
         &mut self.raw_write_encoder
     }
@@ -391,5 +386,23 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn proposals(&self) -> &ProposalQueue<Vec<CmdResChannel>> {
         &self.proposals
+    }
+
+    #[inline]
+    pub fn ready_to_handle_read(&self) -> bool {
+        // TODO: It may cause read index to wait a long time.
+
+        // There may be some values that are not applied by this leader yet but the old
+        // leader, if applied_term isn't equal to current term.
+        self.applied_to_current_term()
+            // There may be stale read if the old leader splits really slow,
+            // the new region may already elected a new leader while
+            // the old leader still think it owns the split range.
+            && !self.is_splitting()
+            // There may be stale read if a target leader is in another store and
+            // applied commit merge, written new values, but the sibling peer in
+            // this store does not apply commit merge, so the leader is not ready
+            // to read, until the merge is rollbacked.
+            && !self.is_merging()
     }
 }
