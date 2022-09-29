@@ -119,7 +119,7 @@ pub mod tests {
     };
 
     pub fn must_success<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
         for_update_ts: impl Into<TimeStamp>,
@@ -150,60 +150,60 @@ pub mod tests {
 
     #[test]
     fn test_pessimistic_rollback() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
         let k = b"k1";
         let v = b"v1";
 
         // Normal
-        must_acquire_pessimistic_lock(&engine, k, k, 1, 1);
-        must_pessimistic_locked(&engine, k, 1, 1);
-        must_success(&engine, k, 1, 1);
-        must_unlocked(&engine, k);
-        must_get_commit_ts_none(&engine, k, 1);
+        must_acquire_pessimistic_lock(&mut engine, k, k, 1, 1);
+        must_pessimistic_locked(&mut engine, k, 1, 1);
+        must_success(&mut engine, k, 1, 1);
+        must_unlocked(&mut engine, k);
+        must_get_commit_ts_none(&mut engine, k, 1);
         // Pessimistic rollback is idempotent
-        must_success(&engine, k, 1, 1);
-        must_unlocked(&engine, k);
-        must_get_commit_ts_none(&engine, k, 1);
+        must_success(&mut engine, k, 1, 1);
+        must_unlocked(&mut engine, k);
+        must_get_commit_ts_none(&mut engine, k, 1);
 
         // Succeed if the lock doesn't exist.
-        must_success(&engine, k, 2, 2);
+        must_success(&mut engine, k, 2, 2);
 
         // Do nothing if meets other transaction's pessimistic lock
-        must_acquire_pessimistic_lock(&engine, k, k, 2, 3);
-        must_success(&engine, k, 1, 1);
-        must_success(&engine, k, 1, 2);
-        must_success(&engine, k, 1, 3);
-        must_success(&engine, k, 1, 4);
-        must_success(&engine, k, 3, 3);
-        must_success(&engine, k, 4, 4);
+        must_acquire_pessimistic_lock(&mut engine, k, k, 2, 3);
+        must_success(&mut engine, k, 1, 1);
+        must_success(&mut engine, k, 1, 2);
+        must_success(&mut engine, k, 1, 3);
+        must_success(&mut engine, k, 1, 4);
+        must_success(&mut engine, k, 3, 3);
+        must_success(&mut engine, k, 4, 4);
 
         // Succeed if for_update_ts is larger; do nothing if for_update_ts is smaller.
-        must_pessimistic_locked(&engine, k, 2, 3);
-        must_success(&engine, k, 2, 2);
-        must_pessimistic_locked(&engine, k, 2, 3);
-        must_success(&engine, k, 2, 4);
-        must_unlocked(&engine, k);
+        must_pessimistic_locked(&mut engine, k, 2, 3);
+        must_success(&mut engine, k, 2, 2);
+        must_pessimistic_locked(&mut engine, k, 2, 3);
+        must_success(&mut engine, k, 2, 4);
+        must_unlocked(&mut engine, k);
 
         // Do nothing if rollbacks a non-pessimistic lock.
-        must_prewrite_put(&engine, k, v, k, 3);
-        must_locked(&engine, k, 3);
-        must_success(&engine, k, 3, 3);
-        must_locked(&engine, k, 3);
+        must_prewrite_put(&mut engine, k, v, k, 3);
+        must_locked(&mut engine, k, 3);
+        must_success(&mut engine, k, 3, 3);
+        must_locked(&mut engine, k, 3);
 
         // Do nothing if meets other transaction's optimistic lock
-        must_success(&engine, k, 2, 2);
-        must_success(&engine, k, 2, 3);
-        must_success(&engine, k, 2, 4);
-        must_success(&engine, k, 4, 4);
-        must_locked(&engine, k, 3);
+        must_success(&mut engine, k, 2, 2);
+        must_success(&mut engine, k, 2, 3);
+        must_success(&mut engine, k, 2, 4);
+        must_success(&mut engine, k, 4, 4);
+        must_locked(&mut engine, k, 3);
 
         // Do nothing if committed
-        must_commit(&engine, k, 3, 4);
-        must_unlocked(&engine, k);
-        must_get_commit_ts(&engine, k, 3, 4);
-        must_success(&engine, k, 3, 3);
-        must_success(&engine, k, 3, 4);
-        must_success(&engine, k, 3, 5);
+        must_commit(&mut engine, k, 3, 4);
+        must_unlocked(&mut engine, k);
+        must_get_commit_ts(&mut engine, k, 3, 4);
+        must_success(&mut engine, k, 3, 3);
+        must_success(&mut engine, k, 3, 4);
+        must_success(&mut engine, k, 3, 5);
     }
 }

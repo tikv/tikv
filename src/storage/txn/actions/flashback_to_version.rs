@@ -75,9 +75,9 @@ pub fn flashback_to_version_read_write<S: Snapshot>(
     Ok((key_old_writes, has_remain_writes))
 }
 
-pub fn flashback_to_version<S: Snapshot>(
+pub fn flashback_to_version(
     txn: &mut MvccTxn,
-    reader: &mut SnapshotReader<S>,
+    reader: &mut SnapshotReader<impl Snapshot>,
     next_lock_key: &mut Option<Key>,
     next_write_key: &mut Option<Key>,
     key_locks: Vec<(Key, Lock)>,
@@ -167,7 +167,7 @@ pub mod tests {
     };
 
     fn must_flashback_to_version<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         key: &[u8],
         version: impl Into<TimeStamp>,
         start_ts: impl Into<TimeStamp>,
@@ -216,119 +216,119 @@ pub mod tests {
 
     #[test]
     fn test_flashback_to_version() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let mut ts = TimeStamp::zero();
         let k = b"k";
         // Prewrite and commit Put(k -> v1) with stat_ts = 1, commit_ts = 2.
         let v1 = b"v1";
-        must_prewrite_put(&engine, k, v1, k, *ts.incr());
-        must_commit(&engine, k, ts, *ts.incr());
-        must_get(&engine, k, *ts.incr(), v1);
+        must_prewrite_put(&mut engine, k, v1, k, *ts.incr());
+        must_commit(&mut engine, k, ts, *ts.incr());
+        must_get(&mut engine, k, *ts.incr(), v1);
         // Prewrite and rollback Put(k -> v2) with stat_ts = 4.
         let v2 = b"v2";
-        must_prewrite_put(&engine, k, v2, k, *ts.incr());
-        must_rollback(&engine, k, ts, false);
-        must_get(&engine, k, *ts.incr(), v1);
+        must_prewrite_put(&mut engine, k, v2, k, *ts.incr());
+        must_rollback(&mut engine, k, ts, false);
+        must_get(&mut engine, k, *ts.incr(), v1);
         // Prewrite and rollback Delete(k) with stat_ts = 6.
-        must_prewrite_delete(&engine, k, k, *ts.incr());
-        must_rollback(&engine, k, ts, false);
-        must_get(&engine, k, *ts.incr(), v1);
+        must_prewrite_delete(&mut engine, k, k, *ts.incr());
+        must_rollback(&mut engine, k, ts, false);
+        must_get(&mut engine, k, *ts.incr(), v1);
         // Prewrite and commit Delete(k) with stat_ts = 8, commit_ts = 9.
-        must_prewrite_delete(&engine, k, k, *ts.incr());
-        must_commit(&engine, k, ts, *ts.incr());
-        must_get_none(&engine, k, *ts.incr());
+        must_prewrite_delete(&mut engine, k, k, *ts.incr());
+        must_commit(&mut engine, k, ts, *ts.incr());
+        must_get_none(&mut engine, k, *ts.incr());
         // Prewrite and commit Put(k -> v2) with stat_ts = 11, commit_ts = 12.
-        must_prewrite_put(&engine, k, v2, k, *ts.incr());
-        must_commit(&engine, k, ts, *ts.incr());
-        must_get(&engine, k, *ts.incr(), v2);
+        must_prewrite_put(&mut engine, k, v2, k, *ts.incr());
+        must_commit(&mut engine, k, ts, *ts.incr());
+        must_get(&mut engine, k, *ts.incr(), v2);
         // Flashback to version 1 with start_ts = 14, commit_ts = 15.
         assert_eq!(
-            must_flashback_to_version(&engine, k, 1, *ts.incr(), *ts.incr()),
+            must_flashback_to_version(&mut engine, k, 1, *ts.incr(), *ts.incr()),
             1
         );
-        must_get_none(&engine, k, *ts.incr());
+        must_get_none(&mut engine, k, *ts.incr());
         // Flashback to version 2 with start_ts = 17, commit_ts = 18.
         assert_eq!(
-            must_flashback_to_version(&engine, k, 2, *ts.incr(), *ts.incr()),
+            must_flashback_to_version(&mut engine, k, 2, *ts.incr(), *ts.incr()),
             1
         );
-        must_get(&engine, k, *ts.incr(), v1);
+        must_get(&mut engine, k, *ts.incr(), v1);
         // Flashback to version 5 with start_ts = 20, commit_ts = 21.
         assert_eq!(
-            must_flashback_to_version(&engine, k, 5, *ts.incr(), *ts.incr()),
+            must_flashback_to_version(&mut engine, k, 5, *ts.incr(), *ts.incr()),
             1
         );
-        must_get(&engine, k, *ts.incr(), v1);
+        must_get(&mut engine, k, *ts.incr(), v1);
         // Flashback to version 7 with start_ts = 23, commit_ts = 24.
         assert_eq!(
-            must_flashback_to_version(&engine, k, 7, *ts.incr(), *ts.incr()),
+            must_flashback_to_version(&mut engine, k, 7, *ts.incr(), *ts.incr()),
             1
         );
-        must_get(&engine, k, *ts.incr(), v1);
+        must_get(&mut engine, k, *ts.incr(), v1);
         // Flashback to version 10 with start_ts = 26, commit_ts = 27.
         assert_eq!(
-            must_flashback_to_version(&engine, k, 10, *ts.incr(), *ts.incr()),
+            must_flashback_to_version(&mut engine, k, 10, *ts.incr(), *ts.incr()),
             1
         );
-        must_get_none(&engine, k, *ts.incr());
+        must_get_none(&mut engine, k, *ts.incr());
         // Flashback to version 13 with start_ts = 29, commit_ts = 30.
         assert_eq!(
-            must_flashback_to_version(&engine, k, 13, *ts.incr(), *ts.incr()),
+            must_flashback_to_version(&mut engine, k, 13, *ts.incr(), *ts.incr()),
             1
         );
-        must_get(&engine, k, *ts.incr(), v2);
+        must_get(&mut engine, k, *ts.incr(), v2);
         // Flashback to version 27 with start_ts = 32, commit_ts = 33.
         assert_eq!(
-            must_flashback_to_version(&engine, k, 27, *ts.incr(), *ts.incr()),
+            must_flashback_to_version(&mut engine, k, 27, *ts.incr(), *ts.incr()),
             1
         );
-        must_get_none(&engine, k, *ts.incr());
+        must_get_none(&mut engine, k, *ts.incr());
     }
 
     #[test]
     fn test_flashback_to_version_deleted() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let mut ts = TimeStamp::zero();
         let (k, v) = (b"k", b"v");
-        must_prewrite_put(&engine, k, v, k, *ts.incr());
-        must_commit(&engine, k, ts, *ts.incr());
-        must_get(&engine, k, ts, v);
-        must_prewrite_delete(&engine, k, k, *ts.incr());
-        must_commit(&engine, k, ts, *ts.incr());
+        must_prewrite_put(&mut engine, k, v, k, *ts.incr());
+        must_commit(&mut engine, k, ts, *ts.incr());
+        must_get(&mut engine, k, ts, v);
+        must_prewrite_delete(&mut engine, k, k, *ts.incr());
+        must_commit(&mut engine, k, ts, *ts.incr());
         // Since the key has been deleted, flashback to version 1 should not do
         // anything.
         assert_eq!(
-            must_flashback_to_version(&engine, k, ts, *ts.incr(), *ts.incr()),
+            must_flashback_to_version(&mut engine, k, ts, *ts.incr(), *ts.incr()),
             0
         );
-        must_get_none(&engine, k, ts);
+        must_get_none(&mut engine, k, ts);
     }
 
     #[test]
     fn test_flashback_to_version_pessimistic() {
         use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
 
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let k = b"k";
         let (v1, v2, v3) = (b"v1", b"v2", b"v3");
         // Prewrite and commit Put(k -> v1) with stat_ts = 10, commit_ts = 15.
-        must_prewrite_put(&engine, k, v1, k, 10);
-        must_commit(&engine, k, 10, 15);
+        must_prewrite_put(&mut engine, k, v1, k, 10);
+        must_commit(&mut engine, k, 10, 15);
         // Prewrite and commit Put(k -> v2) with stat_ts = 20, commit_ts = 25.
-        must_prewrite_put(&engine, k, v2, k, 20);
-        must_commit(&engine, k, 20, 25);
+        must_prewrite_put(&mut engine, k, v2, k, 20);
+        must_commit(&mut engine, k, 20, 25);
 
-        must_acquire_pessimistic_lock(&engine, k, k, 30, 30);
-        must_pessimistic_locked(&engine, k, 30, 30);
+        must_acquire_pessimistic_lock(&mut engine, k, k, 30, 30);
+        must_pessimistic_locked(&mut engine, k, 30, 30);
 
         // Flashback to version 17 with start_ts = 35, commit_ts = 40.
         // Distinguish from pessimistic start_ts 30 to make sure rollback ts is by lock
         // ts.
-        assert_eq!(must_flashback_to_version(&engine, k, 17, 35, 40), 3);
+        assert_eq!(must_flashback_to_version(&mut engine, k, 17, 35, 40), 3);
 
         // Pessimistic Prewrite Put(k -> v3) with stat_ts = 30 will be error with
         // Rollback.
-        must_pessimistic_prewrite_put_err(&engine, k, v3, k, 30, 30, DoPessimisticCheck);
-        must_get(&engine, k, 45, v1);
+        must_pessimistic_prewrite_put_err(&mut engine, k, v3, k, 30, 30, DoPessimisticCheck);
+        must_get(&mut engine, k, 45, v1);
     }
 }

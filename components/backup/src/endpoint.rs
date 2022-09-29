@@ -9,7 +9,7 @@ use std::{
 };
 
 use async_channel::SendError;
-use causal_ts::CausalTsProvider;
+use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
 use engine_traits::{name_to_cf, raw_ttl::ttl_current_ts, CfName, SstCompressionType};
@@ -290,7 +290,7 @@ impl BackupRange {
     async fn backup<E: Engine>(
         &self,
         writer_builder: BackupWriterBuilder,
-        engine: E,
+        mut engine: E,
         concurrency_manager: ConcurrencyManager,
         backup_ts: TimeStamp,
         begin_ts: TimeStamp,
@@ -507,7 +507,7 @@ impl BackupRange {
 
     async fn backup_raw_kv_to_file<E: Engine>(
         &self,
-        engine: E,
+        mut engine: E,
         db: RocksEngine,
         limiter: &Limiter,
         file_name: String,
@@ -667,7 +667,7 @@ pub struct Endpoint<E: Engine, R: RegionInfoProvider + Clone + 'static> {
     concurrency_manager: ConcurrencyManager,
     softlimit: SoftLimitKeeper,
     api_version: ApiVersion,
-    causal_ts_provider: Option<Arc<dyn CausalTsProvider>>, // used in rawkv apiv2 only
+    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used in rawkv apiv2 only
 
     pub(crate) engine: E,
     pub(crate) region_info: R,
@@ -789,7 +789,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         config: BackupConfig,
         concurrency_manager: ConcurrencyManager,
         api_version: ApiVersion,
-        causal_ts_provider: Option<Arc<dyn CausalTsProvider>>,
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
     ) -> Endpoint<E, R> {
         let pool = ControlThreadPool::new();
         let rt = utils::create_tokio_runtime(config.io_thread_size, "backup-io").unwrap();
@@ -1272,7 +1272,7 @@ pub mod tests {
         limiter: Option<Arc<IoRateLimiter>>,
         api_version: ApiVersion,
         is_raw_kv: bool,
-        causal_ts_provider: Option<Arc<dyn CausalTsProvider>>,
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
     ) -> (TempDir, Endpoint<RocksEngine, MockRegionInfoProvider>) {
         let temp = TempDir::new().unwrap();
         let rocks = TestEngineBuilder::new()
@@ -1515,7 +1515,7 @@ pub mod tests {
         let limiter = Arc::new(IoRateLimiter::new_for_test());
         let stats = limiter.statistics().unwrap();
         let (tmp, endpoint) = new_endpoint_with_limiter(Some(limiter), ApiVersion::V1, false, None);
-        let engine = endpoint.engine.clone();
+        let mut engine = endpoint.engine.clone();
 
         endpoint
             .region_info
@@ -1531,13 +1531,13 @@ pub mod tests {
                 let commit = alloc_ts();
                 let key = format!("{}", i);
                 must_prewrite_put(
-                    &engine,
+                    &mut engine,
                     key.as_bytes(),
                     &vec![i; *len],
                     key.as_bytes(),
                     start,
                 );
-                must_commit(&engine, key.as_bytes(), start, commit);
+                must_commit(&mut engine, key.as_bytes(), start, commit);
                 backup_tss.push((alloc_ts(), len));
             }
         }
@@ -1824,7 +1824,8 @@ pub mod tests {
     #[test]
     fn test_backup_raw_apiv2_causal_ts() {
         let limiter = Arc::new(IoRateLimiter::new_for_test());
-        let ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
+        let ts_provider: Arc<CausalTsProviderImpl> =
+            Arc::new(causal_ts::tests::TestProvider::default().into());
         let start_ts = ts_provider.get_ts().unwrap();
         let (tmp, endpoint) = new_endpoint_with_limiter(
             Some(limiter),
@@ -1850,7 +1851,7 @@ pub mod tests {
     #[test]
     fn test_scan_error() {
         let (tmp, endpoint) = new_endpoint();
-        let engine = endpoint.engine.clone();
+        let mut engine = endpoint.engine.clone();
 
         endpoint
             .region_info
@@ -1861,7 +1862,7 @@ pub mod tests {
         let start = alloc_ts();
         let key = format!("{}", start);
         must_prewrite_put(
-            &engine,
+            &mut engine,
             key.as_bytes(),
             key.as_bytes(),
             key.as_bytes(),
@@ -1889,7 +1890,7 @@ pub mod tests {
 
         // Commit the perwrite.
         let commit = alloc_ts();
-        must_commit(&engine, key.as_bytes(), start, commit);
+        must_commit(&mut engine, key.as_bytes(), start, commit);
 
         // Test whether it can correctly convert not leader to region error.
         engine.trigger_not_leader();
@@ -1915,7 +1916,7 @@ pub mod tests {
     #[test]
     fn test_cancel() {
         let (temp, mut endpoint) = new_endpoint();
-        let engine = endpoint.engine.clone();
+        let mut engine = endpoint.engine.clone();
 
         endpoint
             .region_info
@@ -1926,7 +1927,7 @@ pub mod tests {
         let start = alloc_ts();
         let key = format!("{}", start);
         must_prewrite_put(
-            &engine,
+            &mut engine,
             key.as_bytes(),
             key.as_bytes(),
             key.as_bytes(),
@@ -1934,7 +1935,7 @@ pub mod tests {
         );
         // Commit the perwrite.
         let commit = alloc_ts();
-        must_commit(&engine, key.as_bytes(), start, commit);
+        must_commit(&mut engine, key.as_bytes(), start, commit);
 
         let now = alloc_ts();
         let mut req = BackupRequest::default();
