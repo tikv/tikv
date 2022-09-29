@@ -526,7 +526,10 @@ pub trait CommandExt: Display {
     fn gen_lock(&self) -> latch::Lock;
 }
 
-type ApiV2Context = (Option<TimeStamp>, Option<KeyHandleGuard>);
+pub struct RawExt {
+    pub ts: TimeStamp,
+    pub key_guard: KeyHandleGuard,
+}
 
 pub struct WriteContext<'a, L: LockManager> {
     pub lock_mgr: &'a L,
@@ -534,7 +537,7 @@ pub struct WriteContext<'a, L: LockManager> {
     pub extra_op: ExtraOp,
     pub statistics: &'a mut Statistics,
     pub async_apply_prewrite: bool,
-    pub apiv2_ctx: Option<ApiV2Context>, // use for apiv2
+    pub raw_ext: Option<RawExt>, // use for apiv2
 }
 
 pub struct ReaderWithStats<'a, S: Snapshot> {
@@ -743,8 +746,9 @@ pub trait WriteCommand<S: Snapshot, L: LockManager>: CommandExt {
 
 #[cfg(test)]
 pub mod test_util {
+    use api_version::{ApiV2, KvFormat};
     use kvproto::kvrpcpb::ApiVersion;
-    use txn_types::Mutation;
+    use txn_types::{Lock, LockType, Mutation};
 
     use super::*;
     use crate::storage::{
@@ -768,7 +772,7 @@ pub mod test_util {
             extra_op: ExtraOp::Noop,
             statistics,
             async_apply_prewrite: false,
-            apiv2_ctx: None,
+            raw_ext: None,
         };
         let ret = cmd.cmd.process_write(snap, context)?;
         let res = match ret.pr {
@@ -906,7 +910,7 @@ pub mod test_util {
             extra_op: ExtraOp::Noop,
             statistics,
             async_apply_prewrite: false,
-            apiv2_ctx: None,
+            raw_ext: None,
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
@@ -931,7 +935,7 @@ pub mod test_util {
             extra_op: ExtraOp::Noop,
             statistics,
             async_apply_prewrite: false,
-            apiv2_ctx: None,
+            raw_ext: None,
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
@@ -940,9 +944,20 @@ pub mod test_util {
         Ok(())
     }
 
-    pub fn get_apiv2_ctx(api_version: ApiVersion) -> Option<ApiV2Context> {
-        if api_version == ApiVersion::V2 {
-            Some((Some(100.into()), None))
+    pub async fn mock_raw_ext(
+        api_ver: ApiVersion,
+        concurrency_manager: ConcurrencyManager,
+    ) -> Option<RawExt> {
+        if api_ver == ApiVersion::V2 {
+            let raw_key = vec![api_version::api_v2::RAW_KEY_PREFIX];
+            let ts = 100.into();
+
+            let encode_key = ApiV2::encode_raw_key(&raw_key, Some(ts));
+            let key_guard = concurrency_manager.lock_key(&encode_key).await;
+            let lock = Lock::new(LockType::Put, raw_key, ts, 0, None, 0.into(), 1, ts);
+            key_guard.with_lock(|l| *l = Some(lock));
+
+            Some(RawExt { ts, key_guard })
         } else {
             None
         }

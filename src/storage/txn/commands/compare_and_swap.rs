@@ -53,10 +53,14 @@ impl CommandExt for RawCompareAndSwap {
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
     fn process_write(self, snapshot: S, wctx: WriteContext<'_, L>) -> Result<WriteResult> {
-        let (cf, mut key, value, previous_value, ctx) =
-            (self.cf, self.key, self.value, self.previous_value, self.ctx);
-
-        let (ts, lock_guard) = wctx.apiv2_ctx.unwrap_or_default();
+        let (cf, mut key, value, previous_value, ctx, raw_ext) = (
+            self.cf,
+            self.key,
+            self.value,
+            self.previous_value,
+            self.ctx,
+            wctx.raw_ext,
+        );
 
         let mut data = vec![];
         let old_value = RawStore::new(snapshot, self.api_version).raw_get_key_value(
@@ -78,8 +82,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
                 }
             );
 
-            if let Some(ts) = ts {
-                key = key.append_ts(ts);
+            if let Some(ref raw_ext) = raw_ext {
+                key = key.append_ts(raw_ext.ts);
             }
 
             let m = Modify::Put(cf, key, encoded_raw_value);
@@ -89,7 +93,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
                     previous_value: old_value,
                     succeed: true,
                 },
-                lock_guard.into_iter().collect(),
+                raw_ext
+                    .into_iter()
+                    .map(|raw_ext| raw_ext.key_guard)
+                    .collect(),
             )
         } else {
             (
@@ -121,6 +128,7 @@ mod tests {
     use api_version::test_kv_format_impl;
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_DEFAULT;
+    use futures::executor::block_on;
     use kvproto::kvrpcpb::Context;
 
     use super::*;
@@ -191,14 +199,17 @@ mod tests {
         let snap = engine.snapshot(Default::default())?;
         use kvproto::kvrpcpb::ExtraOp;
         let mut statistic = Statistics::default();
-        let apiv2_ctx = super::super::test_util::get_apiv2_ctx(api_version);
+        let raw_ext = block_on(super::super::test_util::mock_raw_ext(
+            api_version,
+            cm.clone(),
+        ));
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
             concurrency_manager: cm,
             extra_op: ExtraOp::Noop,
             statistics: &mut statistic,
             async_apply_prewrite: false,
-            apiv2_ctx,
+            raw_ext,
         };
         let ret = cmd.cmd.process_write(snap, context)?;
         match ret.pr {
@@ -244,14 +255,14 @@ mod tests {
         );
         let mut statistic = Statistics::default();
         let snap = engine.snapshot(Default::default()).unwrap();
-        let apiv2_ctx = super::super::test_util::get_apiv2_ctx(F::TAG);
+        let raw_ext = block_on(super::super::test_util::mock_raw_ext(F::TAG, cm.clone()));
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
             concurrency_manager: cm,
             extra_op: kvproto::kvrpcpb::ExtraOp::Noop,
             statistics: &mut statistic,
             async_apply_prewrite: false,
-            apiv2_ctx,
+            raw_ext,
         };
         let cmd: Command = cmd.into();
         let write_result = cmd.process_write(snap, context).unwrap();

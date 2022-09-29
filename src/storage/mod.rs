@@ -3461,7 +3461,7 @@ mod tests {
                     extra_op: ExtraOp::Noop,
                     statistics: &mut Statistics::default(),
                     async_apply_prewrite: false,
-                    apiv2_ctx: None,
+                    raw_ext: None,
                 },
             )
             .unwrap();

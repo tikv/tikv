@@ -68,7 +68,9 @@ use crate::{
         lock_manager::{self, DiagnosticContext, LockManager, WaitTimeout},
         metrics::*,
         txn::{
-            commands::{Command, ResponsePolicy, WriteContext, WriteResult, WriteResultLockInfo},
+            commands::{
+                Command, RawExt, ResponsePolicy, WriteContext, WriteResult, WriteResultLockInfo,
+            },
             flow_controller::FlowController,
             latch::{Latches, Lock},
             sched_pool::{tls_collect_query, tls_collect_scan_details, SchedPool},
@@ -854,22 +856,22 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let causal_ts_provider = self.inner.causal_ts_provider.clone();
         let concurrency_manager = self.inner.concurrency_manager.clone();
 
-        let apiv2_ctx = get_apiv2_ctx(
+        let raw_ext = get_raw_ext(
             causal_ts_provider,
             concurrency_manager.clone(),
             max_ts_synced,
             &task.cmd,
         )
         .await;
-        if let Err(err) = apiv2_ctx {
+        if let Err(err) = raw_ext {
             debug!("get apiv2 context failed"; "cid" => cid, "err" => ?err);
             scheduler.finish_with_err(cid, err);
             return;
         }
+        let raw_ext = raw_ext.unwrap();
 
         let deadline = task.cmd.deadline();
         let write_result = {
-            let apiv2_ctx = apiv2_ctx.unwrap();
             let _guard = sample.observe_cpu();
             let context = WriteContext {
                 lock_mgr: &self.inner.lock_mgr,
@@ -877,7 +879,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 extra_op: task.extra_op,
                 statistics,
                 async_apply_prewrite: self.inner.enable_async_apply_prewrite,
-                apiv2_ctx: Some(apiv2_ctx),
+                raw_ext,
             };
             let begin_instant = Instant::now();
             let res = unsafe {
@@ -1263,12 +1265,12 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     }
 }
 
-async fn get_apiv2_ctx(
+async fn get_raw_ext(
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
     concurrency_manager: ConcurrencyManager,
     max_ts_synced: bool,
     cmd: &Command,
-) -> Result<(Option<TimeStamp>, Option<KeyHandleGuard>), Error> {
+) -> Result<Option<RawExt>, Error> {
     if causal_ts_provider.is_some() {
         match cmd {
             Command::RawCompareAndSwap(_) | Command::RawAtomicStore(_) => {
@@ -1279,7 +1281,7 @@ async fn get_apiv2_ctx(
                     }
                     .into());
                 }
-                let lock_guard = get_raw_key_guard(&causal_ts_provider, concurrency_manager)
+                let key_guard = get_raw_key_guard(&causal_ts_provider, concurrency_manager)
                     .await
                     .map_err(|err: StorageError| {
                         ErrorInner::Other(box_err!("failed to key guard: {:?}", err))
@@ -1290,12 +1292,15 @@ async fn get_apiv2_ctx(
                         .map_err(|err: StorageError| {
                             ErrorInner::Other(box_err!("failed to get casual ts: {:?}", err))
                         })?;
-                return Ok((ts, lock_guard));
+                return Ok(Some(RawExt {
+                    ts: ts.unwrap(),
+                    key_guard: key_guard.unwrap(),
+                }));
             }
             _ => {}
         }
     }
-    Ok((None, None))
+    Ok(None)
 }
 
 #[derive(Debug, PartialEq)]

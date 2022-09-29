@@ -42,17 +42,16 @@ impl CommandExt for RawAtomicStore {
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
     fn process_write(self, _: S, wctx: WriteContext<'_, L>) -> Result<WriteResult> {
         let rows = self.mutations.len();
-        let (mut mutations, ctx) = (self.mutations, self.ctx);
+        let (mut mutations, ctx, raw_ext) = (self.mutations, self.ctx, wctx.raw_ext);
 
-        let (ts, lock_guard) = wctx.apiv2_ctx.unwrap_or_default();
-
-        if let Some(ts) = ts {
+        if let Some(ref raw_ext) = raw_ext {
             for mutation in &mut mutations {
                 if let Modify::Put(_, ref mut key, _) = mutation {
-                    key.append_ts_inplace(ts);
+                    key.append_ts_inplace(raw_ext.ts);
                 }
             }
         };
+
         let mut to_be_write = WriteData::from_modifies(mutations);
         to_be_write.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
@@ -61,7 +60,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
             rows,
             pr: ProcessResult::Res,
             lock_info: None,
-            lock_guards: lock_guard.into_iter().collect(),
+            lock_guards: raw_ext
+                .into_iter()
+                .map(|raw_ext| raw_ext.key_guard)
+                .collect(),
             response_policy: ResponsePolicy::OnApplied,
         })
     }
@@ -71,6 +73,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
 mod tests {
     use api_version::{test_kv_format_impl, KvFormat, RawValue};
     use engine_traits::CF_DEFAULT;
+    use futures::executor::block_on;
     use kvproto::kvrpcpb::Context;
     use tikv_kv::Engine;
 
@@ -104,14 +107,14 @@ mod tests {
         let cmd = RawAtomicStore::new(CF_DEFAULT, modifies, Context::default());
         let mut statistic = Statistics::default();
         let snap = engine.snapshot(Default::default()).unwrap();
-        let apiv2_ctx = super::super::test_util::get_apiv2_ctx(F::TAG);
+        let raw_ext = block_on(super::super::test_util::mock_raw_ext(F::TAG, cm.clone()));
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
             concurrency_manager: cm,
             extra_op: kvproto::kvrpcpb::ExtraOp::Noop,
             statistics: &mut statistic,
             async_apply_prewrite: false,
-            apiv2_ctx,
+            raw_ext,
         };
         let cmd: Command = cmd.into();
         let write_result = cmd.process_write(snap, context).unwrap();
