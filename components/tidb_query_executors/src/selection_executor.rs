@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use tidb_query_common::{storage::IntervalRange, Result};
 use tidb_query_datatype::{
     codec::data_type::*,
@@ -164,6 +165,7 @@ where
     err_result
 }
 
+#[async_trait]
 impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
     type StorageStats = Src::StorageStats;
 
@@ -174,8 +176,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
     }
 
     #[inline]
-    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        let mut src_result = self.src.next_batch(scan_rows);
+    async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        let mut src_result = self.src.next_batch(scan_rows).await;
 
         if let Err(e) = self.handle_src_result(&mut src_result) {
             // TODO: Rows before we meeting an evaluation error are innocent.
@@ -213,6 +215,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
 
 #[cfg(test)]
 mod tests {
+    use futures::executor::block_on;
     use tidb_query_codegen::rpn_fn;
     use tidb_query_datatype::{codec::batch::LazyBatchColumnVec, expr::EvalWarnings, FieldTypeTp};
 
@@ -267,7 +270,7 @@ mod tests {
         // correctly. No errors should be generated and the predicate function
         // should not be called.
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         // The scan rows parameter has no effect for mock executor. We don't care.
         // FIXME: A compiler bug prevented us write:
         //    |         assert_eq!(r.logical_rows.as_slice(), &[]);
@@ -275,11 +278,11 @@ mod tests {
         assert!(r.logical_rows.is_empty());
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert!(r.is_drained.unwrap());
     }
@@ -359,15 +362,15 @@ mod tests {
 
             // The selection executor should return data as it is.
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert_eq!(&r.logical_rows, &[2, 0]);
             assert!(!r.is_drained.unwrap());
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert!(!r.is_drained.unwrap());
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert_eq!(&r.logical_rows, &[1]);
             assert!(r.is_drained.unwrap());
         }
@@ -385,15 +388,15 @@ mod tests {
 
         // The selection executor should always return empty rows.
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert!(r.is_drained.unwrap());
     }
@@ -479,15 +482,15 @@ mod tests {
             .build_for_test();
         let mut exec = BatchSelectionExecutor::new_for_test(src_exec, vec![predicate]);
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[3, 0]);
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert!(r.is_drained.unwrap());
     }
@@ -504,15 +507,15 @@ mod tests {
             .build_for_test();
         let mut exec = BatchSelectionExecutor::new_for_test(src_exec, vec![predicate]);
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[0, 2]);
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert!(r.is_drained.unwrap());
     }
@@ -542,15 +545,15 @@ mod tests {
             let src_exec = make_src_executor_using_fixture_2();
             let mut exec = BatchSelectionExecutor::new_for_test(src_exec, predicates);
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert_eq!(&r.logical_rows, &[0]);
             assert!(!r.is_drained.unwrap());
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert!(!r.is_drained.unwrap());
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert!(r.is_drained.unwrap());
         }
@@ -577,15 +580,15 @@ mod tests {
             let src_exec = make_src_executor_using_fixture_2();
             let mut exec = BatchSelectionExecutor::new_for_test(src_exec, predicates);
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert!(!r.is_drained.unwrap());
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert!(!r.is_drained.unwrap());
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert!(r.is_drained.unwrap());
         }
@@ -653,7 +656,7 @@ mod tests {
         // TODO: A more precise result is that the first two rows are returned and error
         // starts from the third row.
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         r.is_drained.unwrap_err();
     }

@@ -663,7 +663,7 @@ mod tests {
 
     impl TestStore {
         fn new(key_num: u64) -> TestStore {
-            let engine = TestEngineBuilder::new().build().unwrap();
+            let mut engine = TestEngineBuilder::new().build().unwrap();
             let keys: Vec<String> = (START_ID..START_ID + key_num)
                 .map(|i| format!("{}{}", KEY_PREFIX, i))
                 .collect();
@@ -809,21 +809,27 @@ mod tests {
         fn get(&self, _: &Key) -> EngineResult<Option<Value>> {
             Ok(None)
         }
+
         fn get_cf(&self, _: CfName, _: &Key) -> EngineResult<Option<Value>> {
             Ok(None)
         }
+
         fn get_cf_opt(&self, _: ReadOptions, _: CfName, _: &Key) -> EngineResult<Option<Value>> {
             Ok(None)
         }
+
         fn iter(&self, _: CfName, _: IterOptions) -> EngineResult<Self::Iter> {
             Ok(MockRangeSnapshotIter::default())
         }
+
         fn lower_bound(&self) -> Option<&[u8]> {
             Some(self.start.as_slice())
         }
+
         fn upper_bound(&self) -> Option<&[u8]> {
             Some(self.end.as_slice())
         }
+
         fn ext(&self) -> DummySnapshotExt {
             DummySnapshotExt
         }

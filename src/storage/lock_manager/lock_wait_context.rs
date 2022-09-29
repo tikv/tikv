@@ -24,26 +24,40 @@ use parking_lot::Mutex;
 use txn_types::TimeStamp;
 
 use crate::storage::{
-    lock_manager::{
-        lock_waiting_queue::{PessimisticLockKeyCallback, SharedError},
-        LockManager, LockWaitToken,
-    },
+    errors::SharedError,
+    lock_manager::{lock_waiting_queue::PessimisticLockKeyCallback, LockManager, LockWaitToken},
     Error as StorageError, PessimisticLockRes, ProcessResult, StorageCallback,
 };
 
 pub struct LockWaitContextInner {
-    #[allow(dead_code)]
-    pr: ProcessResult,
+    /// The callback for finishing the current AcquirePessimisticLock request.
+    /// Usually, requests are accepted from RPC, and in this case calling
+    /// the callback means returning the response to the client via RPC.
     cb: StorageCallback,
+
+    /// The token of the corresponding waiter in `LockManager`.
     lock_wait_token: LockWaitToken,
 }
 
+/// The content of the `LockWaitContext` that needs to be shared among all
+/// clones.
+///
+/// When a AcquirePessimisticLock request meets lock and enters lock waiting
+/// state, a `LockWaitContext` will be created, and the
+/// `LockWaitContextSharedState` will be shared in these places:
+/// * Callbacks created from the `lockWaitContext` and distributed to the lock
+///   waiting queue and the `LockManager`. When one of the callbacks is called
+///   and the request is going to be finished, they need to take the
+///   [`LockWaitContextInner`] to call the callback.
+/// * The [`LockWaitEntry`](crate::storage::lock_manager::lock_waiting_queue::LockWaitEntry), for
+///   checking whether the request is already finished (cancelled).
 pub struct LockWaitContextSharedState {
     ctx_inner: Mutex<Option<LockWaitContextInner>>,
     pub finished: AtomicBool,
 }
 
 impl LockWaitContextSharedState {
+    /// Checks whether the lock-waiting request is already finished.
     pub fn is_finished(&self) -> bool {
         self.finished.load(Ordering::Acquire)
     }
@@ -66,12 +80,10 @@ impl<L: LockManager> LockWaitContext<L> {
         lock_wait_token: LockWaitToken,
         start_ts: TimeStamp,
         for_update_ts: TimeStamp,
-        first_batch_pr: ProcessResult,
         cb: StorageCallback,
         allow_lock_with_conflict: bool,
     ) -> Self {
         let inner = LockWaitContextInner {
-            pr: first_batch_pr,
             cb,
             lock_wait_token,
         };
@@ -192,7 +204,6 @@ mod tests {
             lock_mgr.allocate_token(),
             1.into(),
             1.into(),
-            ProcessResult::Res,
             cb,
             false,
         );
@@ -209,6 +220,7 @@ mod tests {
                     conflict_commit_ts: 2.into(),
                     key: b"k1".to_vec(),
                     primary: b"k1".to_vec(),
+                    reason: kvproto::kvrpcpb::WriteConflictReason::PessimisticRetry,
                 },
             ))))
         };
@@ -230,6 +242,7 @@ mod tests {
                 box TxnErrorInner::Mvcc(MvccError(box MvccErrorInner::WriteConflict { .. }))
             )))
         ));
+        // The tx should be dropped.
         rx.recv().unwrap_err();
         // Nothing happens if the callback is double-called.
         (ctx.get_callback_for_cancellation())(StorageError::from(key_is_locked()));
@@ -245,6 +258,7 @@ mod tests {
         ));
         // Nothing happens if the callback is double-called.
         (ctx.get_callback_for_blocked_key())(Err(SharedError::from(write_conflict())));
+        // The tx should be dropped.
         rx.recv().unwrap_err();
     }
 }

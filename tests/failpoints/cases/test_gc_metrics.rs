@@ -16,7 +16,9 @@ use kvproto::{
 use pd_client::FeatureGate;
 use raft::StateRole;
 use raftstore::{
-    coprocessor::{CoprocessorHost, RegionChangeEvent},
+    coprocessor::{
+        region_info_accessor::MockRegionInfoProvider, CoprocessorHost, RegionChangeEvent,
+    },
     router::RaftStoreBlackHole,
     RegionInfoAccessor,
 };
@@ -51,14 +53,14 @@ fn test_txn_create_compaction_filter() {
     cfg.writecf.dynamic_level_bytes = false;
     let dir = tempfile::TempDir::new().unwrap();
     let builder = TestEngineBuilder::new().path(dir.path());
-    let engine = builder.build_with_cfg(&cfg).unwrap();
+    let mut engine = builder.build_with_cfg(&cfg).unwrap();
     let raw_engine = engine.get_rocksdb();
 
     let mut gc_runner = TestGcRunner::new(0);
     let value = vec![b'v'; 512];
 
-    must_prewrite_put(&engine, b"zkey", &value, b"zkey", 100);
-    must_commit(&engine, b"zkey", 100, 110);
+    must_prewrite_put(&mut engine, b"zkey", &value, b"zkey", 100);
+    must_commit(&mut engine, b"zkey", 100, 110);
 
     gc_runner
         .safe_point(TimeStamp::new(1).into_inner())
@@ -85,27 +87,27 @@ fn test_txn_mvcc_filtered() {
     MVCC_VERSIONS_HISTOGRAM.reset();
     GC_COMPACTION_FILTERED.reset();
 
-    let engine = TestEngineBuilder::new().build().unwrap();
+    let mut engine = TestEngineBuilder::new().build().unwrap();
     let raw_engine = engine.get_rocksdb();
     let value = vec![b'v'; 512];
     let mut gc_runner = TestGcRunner::new(0);
 
     // GC can't delete keys after the given safe point.
-    must_prewrite_put(&engine, b"zkey", &value, b"zkey", 100);
-    must_commit(&engine, b"zkey", 100, 110);
+    must_prewrite_put(&mut engine, b"zkey", &value, b"zkey", 100);
+    must_commit(&mut engine, b"zkey", 100, 110);
     gc_runner.safe_point(50).gc(&raw_engine);
-    must_get(&engine, b"zkey", 110, &value);
+    must_get(&mut engine, b"zkey", 110, &value);
 
     // GC can't delete keys before the safe ponit if they are latest versions.
     gc_runner.safe_point(200).gc(&raw_engine);
-    must_get(&engine, b"zkey", 110, &value);
+    must_get(&mut engine, b"zkey", 110, &value);
 
-    must_prewrite_put(&engine, b"zkey", &value, b"zkey", 120);
-    must_commit(&engine, b"zkey", 120, 130);
+    must_prewrite_put(&mut engine, b"zkey", &value, b"zkey", 120);
+    must_commit(&mut engine, b"zkey", 120, 130);
 
     // GC can't delete the latest version before the safe ponit.
     gc_runner.safe_point(115).gc(&raw_engine);
-    must_get(&engine, b"zkey", 110, &value);
+    must_get(&mut engine, b"zkey", 110, &value);
 
     // GC a version will also delete the key on default CF.
     gc_runner.safe_point(200).gc(&raw_engine);
@@ -128,11 +130,12 @@ fn test_txn_mvcc_filtered() {
 
 #[test]
 fn test_txn_gc_keys_handled() {
+    let store_id = 1;
     GC_COMPACTION_FILTER_MVCC_DELETION_MET.reset();
     GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.reset();
 
     let engine = TestEngineBuilder::new().build().unwrap();
-    let prefixed_engine = PrefixedEngine(engine.clone());
+    let mut prefixed_engine = PrefixedEngine(engine.clone());
 
     let (tx, _rx) = mpsc::channel();
     let feature_gate = FeatureGate::default();
@@ -143,8 +146,9 @@ fn test_txn_gc_keys_handled() {
         tx,
         GcConfig::default(),
         feature_gate,
+        Arc::new(MockRegionInfoProvider::new(vec![])),
     );
-    gc_worker.start().unwrap();
+    gc_worker.start(store_id).unwrap();
 
     let mut r1 = Region::default();
     r1.set_id(1);
@@ -152,25 +156,26 @@ fn test_txn_gc_keys_handled() {
     r1.set_start_key(b"".to_vec());
     r1.set_end_key(b"".to_vec());
     r1.mut_peers().push(Peer::default());
-    r1.mut_peers()[0].set_store_id(1);
+    r1.mut_peers()[0].set_store_id(store_id);
 
     let sp_provider = MockSafePointProvider(200);
     let mut host = CoprocessorHost::<RocksEngine>::default();
     let ri_provider = RegionInfoAccessor::new(&mut host);
     let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, 1);
     let safe_point = Arc::new(AtomicU64::new(500));
+
     gc_worker.start_auto_gc(auto_gc_cfg, safe_point).unwrap();
     host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
 
-    let db = engine.kv_engine().as_inner().clone();
+    let db = engine.kv_engine().unwrap().as_inner().clone();
     let cf = get_cf_handle(&db, CF_WRITE).unwrap();
 
     for i in 0..3 {
         let k = format!("k{:02}", i).into_bytes();
-        must_prewrite_put(&prefixed_engine, &k, b"value", &k, 101);
-        must_commit(&prefixed_engine, &k, 101, 102);
-        must_prewrite_delete(&prefixed_engine, &k, &k, 151);
-        must_commit(&prefixed_engine, &k, 151, 152);
+        must_prewrite_put(&mut prefixed_engine, &k, b"value", &k, 101);
+        must_commit(&mut prefixed_engine, &k, 101, 102);
+        must_prewrite_delete(&mut prefixed_engine, &k, &k, 151);
+        must_commit(&mut prefixed_engine, &k, 151, 152);
     }
 
     db.flush_cf(cf, true).unwrap();
@@ -267,6 +272,7 @@ fn test_raw_mvcc_filtered() {
 
 #[test]
 fn test_raw_gc_keys_handled() {
+    let store_id = 1;
     GC_COMPACTION_FILTER_MVCC_DELETION_MET.reset();
     GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.reset();
 
@@ -278,15 +284,15 @@ fn test_raw_gc_keys_handled() {
 
     let (tx, _rx) = mpsc::channel();
     let feature_gate = FeatureGate::default();
-    feature_gate.set_version("5.0.0").unwrap();
     let mut gc_worker = GcWorker::new(
         prefixed_engine,
         RaftStoreBlackHole,
         tx,
         GcConfig::default(),
         feature_gate,
+        Arc::new(MockRegionInfoProvider::new(vec![])),
     );
-    gc_worker.start().unwrap();
+    gc_worker.start(store_id).unwrap();
 
     let mut r1 = Region::default();
     r1.set_id(1);
@@ -294,17 +300,18 @@ fn test_raw_gc_keys_handled() {
     r1.set_start_key(b"".to_vec());
     r1.set_end_key(b"".to_vec());
     r1.mut_peers().push(Peer::default());
-    r1.mut_peers()[0].set_store_id(1);
+    r1.mut_peers()[0].set_store_id(store_id);
 
     let sp_provider = MockSafePointProvider(200);
     let mut host = CoprocessorHost::<RocksEngine>::default();
     let ri_provider = RegionInfoAccessor::new(&mut host);
-    let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, 1);
+    let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, store_id);
     let safe_point = Arc::new(AtomicU64::new(500));
+
     gc_worker.start_auto_gc(auto_gc_cfg, safe_point).unwrap();
     host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
 
-    let db = engine.kv_engine().as_inner().clone();
+    let db = engine.kv_engine().unwrap().as_inner().clone();
 
     let user_key_del = b"r\0aaaaaaaaaaa";
 

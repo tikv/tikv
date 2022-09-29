@@ -5,9 +5,8 @@ use std::{iter::FromIterator, sync::Arc, time::Duration};
 use futures::executor::block_on;
 use kvproto::{metapb, pdpb};
 use pd_client::PdClient;
-use raftstore::store::util::find_peer;
 use test_raftstore::*;
-use tikv_util::{config::ReadableDuration, mpsc};
+use tikv_util::{config::ReadableDuration, mpsc, store::find_peer};
 
 #[test]
 fn test_unsafe_recovery_send_report() {

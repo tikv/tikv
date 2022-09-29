@@ -11,6 +11,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use collections::HashMap;
 use engine_panic::PanicEngine;
 use engine_traits::{CfName, IterOptions, ReadOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;
@@ -77,15 +78,11 @@ impl Engine for BTreeEngine {
     type Snap = BTreeEngineSnapshot;
     type Local = PanicEngine;
 
-    fn kv_engine(&self) -> PanicEngine {
+    fn kv_engine(&self) -> Option<PanicEngine> {
         unimplemented!();
     }
 
-    fn snapshot_on_kv_engine(&self, _: &[u8], _: &[u8]) -> EngineResult<Self::Snap> {
-        unimplemented!();
-    }
-
-    fn modify_on_kv_engine(&self, _: Vec<Modify>) -> EngineResult<()> {
+    fn modify_on_kv_engine(&self, _: HashMap<u64, Vec<Modify>>) -> EngineResult<()> {
         unimplemented!();
     }
 
@@ -106,7 +103,7 @@ impl Engine for BTreeEngine {
     /// warning: It returns a fake snapshot whose content will be affected by
     /// the later modifies!
     fn async_snapshot(
-        &self,
+        &mut self,
         _ctx: SnapContext<'_>,
         cb: EngineCallback<Self::Snap>,
     ) -> EngineResult<()> {
@@ -237,6 +234,7 @@ impl Snapshot for BTreeEngineSnapshot {
     fn get(&self, key: &Key) -> EngineResult<Option<Value>> {
         self.get_cf(CF_DEFAULT, key)
     }
+
     fn get_cf(&self, cf: CfName, key: &Key) -> EngineResult<Option<Value>> {
         let tree_cf = self.inner_engine.get_cf(cf);
         let tree = tree_cf.read().unwrap();
@@ -246,14 +244,17 @@ impl Snapshot for BTreeEngineSnapshot {
             Some(v) => Ok(Some(v.clone())),
         }
     }
+
     fn get_cf_opt(&self, _: ReadOptions, cf: CfName, key: &Key) -> EngineResult<Option<Value>> {
         self.get_cf(cf, key)
     }
+
     #[inline]
     fn iter(&self, cf: CfName, iter_opt: IterOptions) -> EngineResult<Self::Iter> {
         let tree = self.inner_engine.get_cf(cf);
         Ok(BTreeEngineIterator::new(tree, iter_opt))
     }
+
     fn ext(&self) -> DummySnapshotExt {
         DummySnapshotExt
     }
@@ -306,25 +307,25 @@ pub mod tests {
 
     #[test]
     fn test_btree_engine() {
-        let engine = BTreeEngine::new(TEST_ENGINE_CFS);
-        test_base_curd_options(&engine)
+        let mut engine = BTreeEngine::new(TEST_ENGINE_CFS);
+        test_base_curd_options(&mut engine)
     }
 
     #[test]
     fn test_linear_of_btree_engine() {
-        let engine = BTreeEngine::default();
-        test_linear(&engine);
+        let mut engine = BTreeEngine::default();
+        test_linear(&mut engine);
     }
 
     #[test]
     fn test_statistic_of_btree_engine() {
-        let engine = BTreeEngine::default();
-        test_cfs_statistics(&engine);
+        let mut engine = BTreeEngine::default();
+        test_cfs_statistics(&mut engine);
     }
 
     #[test]
     fn test_bounds_of_btree_engine() {
-        let engine = BTreeEngine::default();
+        let mut engine = BTreeEngine::default();
         let test_data = vec![
             (b"a1".to_vec(), b"v1".to_vec()),
             (b"a3".to_vec(), b"v3".to_vec()),

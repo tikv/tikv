@@ -33,7 +33,7 @@ pub use self::{
     dispatcher::{
         BoxAdminObserver, BoxApplySnapshotObserver, BoxCmdObserver, BoxConsistencyCheckObserver,
         BoxPdTaskObserver, BoxQueryObserver, BoxRegionChangeObserver, BoxRoleObserver,
-        BoxSplitCheckObserver, CoprocessorHost, Registry,
+        BoxSplitCheckObserver, BoxUpdateSafeTsObserver, CoprocessorHost, Registry,
     },
     error::{Error, Result},
     region_info_accessor::{
@@ -310,6 +310,17 @@ pub enum RegionChangeEvent {
 pub trait RegionChangeObserver: Coprocessor {
     /// Hook to call when a region changed on this TiKV
     fn on_region_changed(&self, _: &mut ObserverContext<'_>, _: RegionChangeEvent, _: StateRole) {}
+
+    /// Should be called everytime before we write a WriteBatch into
+    /// KvEngine. Returns false if we can't commit at this time.
+    fn pre_persist(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _is_finished: bool,
+        _cmd: Option<&RaftCmdRequest>,
+    ) -> bool {
+        true
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -529,6 +540,11 @@ pub trait CmdObserver<E>: Coprocessor {
 pub trait ReadIndexObserver: Coprocessor {
     // Hook to call when stepping in raft and the message is a read index message.
     fn on_step(&self, _msg: &mut eraftpb::Message, _role: StateRole) {}
+}
+
+pub trait UpdateSafeTsObserver: Coprocessor {
+    /// Hook after update self safe_ts and received leader safe_ts.
+    fn on_update_safe_ts(&self, _: u64, _: u64, _: u64) {}
 }
 
 #[cfg(test)]

@@ -4,6 +4,7 @@ use std::sync::{Arc, RwLock};
 
 use engine_traits::Peekable;
 use kvproto::{kvrpcpb::ApiVersion, metapb, raft_serverpb};
+use test_pd_client::TestPdClient;
 use test_raftstore::*;
 
 fn test_bootstrap_half_way_failure(fp: &str) {

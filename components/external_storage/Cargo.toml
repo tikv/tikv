@@ -16,6 +16,7 @@ cloud-storage-grpc = [
 failpoints = ["fail/failpoints"]
 
 [dependencies]
+async-compression = { version = "0.3.14", features = ["futures-io", "zstd"] }
 async-trait = "0.1"
 bytes = "1.0"
 encryption = { path = "../encryption" }
