@@ -247,7 +247,7 @@ mod tests {
         let mut statistic = Statistics::default();
         let snap = engine.snapshot(Default::default()).unwrap();
         let context = WriteContext {
-            lock_mgr: &DummyLockManager {},
+            lock_mgr: &DummyLockManager::new(),
             concurrency_manager: cm,
             extra_op: kvproto::kvrpcpb::ExtraOp::Noop,
             statistics: &mut statistic,

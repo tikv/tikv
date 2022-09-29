@@ -807,6 +807,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                             conflict_commit_ts: released_lock.commit_ts,
                             key: released_lock.key.into_raw().unwrap(),
                             primary: lock_info.parameters.primary,
+                            reason: kvrpcpb::WriteConflictReason::PessimisticRetry,
                         },
                     )));
                     cb(Err(e.into()));
@@ -1020,12 +1021,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             // allow_lock_with_conflict is not supported yet in this version.
             assert!(!lock_info.parameters.allow_lock_with_conflict);
 
-            let (lock_req_ctx, lock_wait_entry, lock_info_pb) = scheduler.make_lock_waiting(
-                cid,
-                wait_token,
-                lock_info,
-                mem::replace(&mut pr, Some(ProcessResult::Res)).unwrap(),
-            );
+            pr = Some(ProcessResult::Res);
+            let (lock_req_ctx, lock_wait_entry, lock_info_pb) =
+                scheduler.make_lock_waiting(cid, wait_token, lock_info);
 
             scheduler.on_wait_for_lock(
                 &ctx,
@@ -1361,7 +1359,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         cid: u64,
         lock_wait_token: LockWaitToken,
         lock_info: WriteResultLockInfo,
-        first_batch_pr: ProcessResult,
     ) -> (LockWaitContext<L>, Box<LockWaitEntry>, kvrpcpb::LockInfo) {
         let mut slot = self.inner.get_task_slot(cid);
         let task_ctx = slot.get_mut(&cid).unwrap();
@@ -1372,7 +1369,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             lock_wait_token,
             lock_info.parameters.start_ts,
             lock_info.parameters.for_update_ts,
-            first_batch_pr,
             cb,
             lock_info.parameters.allow_lock_with_conflict,
         );
@@ -1386,7 +1382,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             parameters: lock_info.parameters,
             lock_wait_token,
             req_states: Some(ctx.get_shared_states().clone()),
-            current_legacy_wake_up_cnt: None,
+            legacy_wake_up_index: None,
             key_cb: Some(ctx.get_callback_for_blocked_key().into()),
         });
 

@@ -4597,7 +4597,7 @@ mod tests {
 
     #[test]
     fn test_flashback_to_version() {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
             .build()
             .unwrap();
         let mut ts = TimeStamp::zero();
@@ -4728,7 +4728,7 @@ mod tests {
 
     #[test]
     fn test_flashback_to_version_lock() {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -4832,7 +4832,7 @@ mod tests {
 
     #[test]
     fn test_flashback_to_version_in_multi_batch() {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -8133,6 +8133,7 @@ mod tests {
                             false,
                             (lock_ts + 1).into(),
                             OldValues::default(),
+                            false,
                             false,
                             Context::default(),
                         ),
