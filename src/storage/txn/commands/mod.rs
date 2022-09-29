@@ -526,12 +526,15 @@ pub trait CommandExt: Display {
     fn gen_lock(&self) -> latch::Lock;
 }
 
+type ApiV2Context = (Option<TimeStamp>, Option<KeyHandleGuard>);
+
 pub struct WriteContext<'a, L: LockManager> {
     pub lock_mgr: &'a L,
     pub concurrency_manager: ConcurrencyManager,
     pub extra_op: ExtraOp,
     pub statistics: &'a mut Statistics,
     pub async_apply_prewrite: bool,
+    pub apiv2_ctx: Option<ApiV2Context>, // use for apiv2
 }
 
 pub struct ReaderWithStats<'a, S: Snapshot> {
@@ -740,9 +743,6 @@ pub trait WriteCommand<S: Snapshot, L: LockManager>: CommandExt {
 
 #[cfg(test)]
 pub mod test_util {
-    use std::sync::Arc;
-
-    use causal_ts::CausalTsProviderImpl;
     use kvproto::kvrpcpb::ApiVersion;
     use txn_types::Mutation;
 
@@ -768,6 +768,7 @@ pub mod test_util {
             extra_op: ExtraOp::Noop,
             statistics,
             async_apply_prewrite: false,
+            apiv2_ctx: None,
         };
         let ret = cmd.cmd.process_write(snap, context)?;
         let res = match ret.pr {
@@ -905,6 +906,7 @@ pub mod test_util {
             extra_op: ExtraOp::Noop,
             statistics,
             async_apply_prewrite: false,
+            apiv2_ctx: None,
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
@@ -929,6 +931,7 @@ pub mod test_util {
             extra_op: ExtraOp::Noop,
             statistics,
             async_apply_prewrite: false,
+            apiv2_ctx: None,
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
@@ -937,11 +940,9 @@ pub mod test_util {
         Ok(())
     }
 
-    pub fn gen_ts_provider(api_version: ApiVersion) -> Option<Arc<CausalTsProviderImpl>> {
+    pub fn get_apiv2_ctx(api_version: ApiVersion) -> Option<ApiV2Context> {
         if api_version == ApiVersion::V2 {
-            let test_provider: causal_ts::CausalTsProviderImpl =
-                causal_ts::tests::TestProvider::default().into();
-            Some(Arc::new(test_provider))
+            Some((Some(100.into()), None))
         } else {
             None
         }

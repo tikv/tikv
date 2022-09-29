@@ -1,17 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::sync::Arc;
 
-use causal_ts::CausalTsProviderImpl;
 use engine_traits::CfName;
-use futures::executor::block_on;
 use kvproto::kvrpcpb::ApiVersion;
-use tikv_kv::SnapshotExt;
-use txn_types::TimeStamp;
 
 use crate::storage::{
-    get_causal_ts, get_raw_key_guard,
     kv::{Modify, WriteData},
     lock_manager::LockManager,
     txn::{
@@ -19,9 +13,9 @@ use crate::storage::{
             Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
             WriteResult,
         },
-        ErrorInner, Result,
+        Result,
     },
-    Error as StorageError, ProcessResult, Snapshot,
+    ProcessResult, Snapshot,
 };
 
 command! {
@@ -34,7 +28,6 @@ command! {
             cf: CfName,
             mutations: Vec<Modify>,
             api_version: ApiVersion,
-            causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
         }
 }
 
@@ -49,26 +42,12 @@ impl CommandExt for RawAtomicStore {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
-    fn process_write(self, snapshot: S, wctx: WriteContext<'_, L>) -> Result<WriteResult> {
-        if self.api_version == ApiVersion::V2 && !snapshot.ext().is_max_ts_synced() {
-            return Err(ErrorInner::MaxTimestampNotSynced {
-                region_id: self.ctx.get_region_id(),
-                start_ts: TimeStamp::zero(),
-            }
-            .into());
-        }
-
-        let provider = self.causal_ts_provider.clone();
-        let concurrency_manager = wctx.concurrency_manager;
-        let lock_guard = block_on(get_raw_key_guard(&provider, concurrency_manager)).map_err(
-            |err: StorageError| ErrorInner::Other(box_err!("failed to key guard: {:?}", err)),
-        )?;
-        let ts = block_on(get_causal_ts(&provider)).map_err(|err: StorageError| {
-            ErrorInner::Other(box_err!("failed to get casual ts: {:?}", err))
-        })?;
-
+    fn process_write(self, _: S, wctx: WriteContext<'_, L>) -> Result<WriteResult> {
         let rows = self.mutations.len();
         let (mut mutations, ctx) = (self.mutations, self.ctx);
+
+        let (ts, lock_guard) = wctx.apiv2_ctx.unwrap_or_default();
+
         if let Some(ts) = ts {
             for mutation in &mut mutations {
                 if let Modify::Put(_, ref mut key, _) = mutation {
@@ -111,8 +90,6 @@ mod tests {
         let raw_keys = vec![b"ra", b"rz"];
         let raw_values = vec![b"valuea", b"valuez"];
 
-        let ts_provider = super::super::test_util::gen_ts_provider(F::TAG);
-
         let mut modifies = vec![];
         for i in 0..raw_keys.len() {
             let raw_value = RawValue {
@@ -126,21 +103,17 @@ mod tests {
                 F::encode_raw_value_owned(raw_value),
             ));
         }
-        let cmd = RawAtomicStore::new(
-            CF_DEFAULT,
-            modifies,
-            F::TAG,
-            ts_provider,
-            Context::default(),
-        );
+        let cmd = RawAtomicStore::new(CF_DEFAULT, modifies, F::TAG, Context::default());
         let mut statistic = Statistics::default();
         let snap = engine.snapshot(Default::default()).unwrap();
+        let apiv2_ctx = super::super::test_util::get_apiv2_ctx(F::TAG);
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
             concurrency_manager: cm,
             extra_op: kvproto::kvrpcpb::ExtraOp::Noop,
             statistics: &mut statistic,
             async_apply_prewrite: false,
+            apiv2_ctx,
         };
         let cmd: Command = cmd.into();
         let write_result = cmd.process_write(snap, context).unwrap();
@@ -153,7 +126,7 @@ mod tests {
             };
             modifies_with_ts.push(Modify::Put(
                 CF_DEFAULT,
-                F::encode_raw_key_owned(raw_keys[i].to_vec(), Some(101.into())),
+                F::encode_raw_key_owned(raw_keys[i].to_vec(), Some(100.into())),
                 F::encode_raw_value_owned(raw_value),
             ));
         }

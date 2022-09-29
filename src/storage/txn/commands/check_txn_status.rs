@@ -201,6 +201,7 @@ pub mod tests {
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
                     async_apply_prewrite: false,
+                    apiv2_ctx: None,
                 },
             )
             .unwrap();
@@ -248,6 +249,7 @@ pub mod tests {
                         extra_op: Default::default(),
                         statistics: &mut Default::default(),
                         async_apply_prewrite: false,
+                        apiv2_ctx: None,
                     },
                 )
                 .is_err()

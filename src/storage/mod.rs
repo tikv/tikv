@@ -273,6 +273,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             config,
             dynamic_switches,
             flow_controller,
+            causal_ts_provider.clone(),
             reporter,
             resource_tag_factory.clone(),
             Arc::clone(&quota_limiter),
@@ -2627,7 +2628,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         if !F::IS_TTL_ENABLED && ttl != 0 {
             return Err(Error::from(ErrorInner::TtlNotEnabled));
         }
-        let provider = self.causal_ts_provider.clone();
         let sched = self.get_scheduler();
         self.sched_raw_command(CMD, async move {
             let key = F::encode_raw_key_owned(key, None);
@@ -2638,7 +2638,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 value,
                 ttl,
                 api_version,
-                provider,
                 ctx,
             );
             Self::sched_raw_atomic_command(
@@ -2669,11 +2668,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let cf = Self::rawkv_cf(&cf, api_version)?;
         Self::check_ttl_valid(pairs.len(), &ttls)?;
 
-        let provider = self.causal_ts_provider.clone();
         let sched = self.get_scheduler();
         self.sched_raw_command(CMD, async move {
             let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls, None);
-            let cmd = RawAtomicStore::new(cf, modifies, api_version, provider, ctx);
+            let cmd = RawAtomicStore::new(cf, modifies, api_version, ctx);
             Self::sched_raw_atomic_command(
                 sched,
                 cmd,
@@ -2694,7 +2692,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
         Self::check_api_version(api_version, ctx.api_version, CMD, &keys)?;
         let cf = Self::rawkv_cf(&cf, api_version)?;
-        let provider = self.causal_ts_provider.clone();
         let sched = self.get_scheduler();
         self.sched_raw_command(CMD, async move {
             // Do NOT encode ts here as RawAtomicStore use key to gen lock
@@ -2702,7 +2699,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 .into_iter()
                 .map(|k| Self::raw_delete_request_to_modify(cf, k, None))
                 .collect();
-            let cmd = RawAtomicStore::new(cf, modifies, api_version, provider, ctx);
+            let cmd = RawAtomicStore::new(cf, modifies, api_version, ctx);
             Self::sched_raw_atomic_command(
                 sched,
                 cmd,
@@ -3477,6 +3474,7 @@ mod tests {
                     extra_op: ExtraOp::Noop,
                     statistics: &mut Statistics::default(),
                     async_apply_prewrite: false,
+                    apiv2_ctx: None,
                 },
             )
             .unwrap();

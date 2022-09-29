@@ -1,19 +1,15 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::sync::Arc;
 
 use api_version::{match_template_api_version, KvFormat, RawValue};
-use causal_ts::CausalTsProviderImpl;
 use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName};
-use futures::executor::block_on;
 use kvproto::kvrpcpb::ApiVersion;
 use raw::RawStore;
-use tikv_kv::{SnapshotExt, Statistics};
-use txn_types::{Key, TimeStamp, Value};
+use tikv_kv::Statistics;
+use txn_types::{Key, Value};
 
 use crate::storage::{
-    get_causal_ts, get_raw_key_guard,
     kv::{Modify, WriteData},
     lock_manager::LockManager,
     raw,
@@ -22,9 +18,9 @@ use crate::storage::{
             Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
             WriteResult,
         },
-        ErrorInner, Result,
+        Result,
     },
-    Error as StorageError, ProcessResult, Snapshot,
+    ProcessResult, Snapshot,
 };
 
 // TODO: consider add `KvFormat` generic parameter.
@@ -42,7 +38,6 @@ command! {
             value: Value,
             ttl: u64,
             api_version: ApiVersion,
-            causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
         }
 }
 
@@ -58,26 +53,19 @@ impl CommandExt for RawCompareAndSwap {
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
     fn process_write(self, snapshot: S, wctx: WriteContext<'_, L>) -> Result<WriteResult> {
-        let provider = self.causal_ts_provider.clone();
-        let concurrency_manager = wctx.concurrency_manager;
         let (cf, mut key, value, previous_value, ctx) =
             (self.cf, self.key, self.value, self.previous_value, self.ctx);
+
+        let (ts, lock_guard) = wctx.apiv2_ctx.unwrap_or_default();
+
         let mut data = vec![];
-        let old_value = RawStore::new(snapshot.clone(), self.api_version).raw_get_key_value(
+        let old_value = RawStore::new(snapshot, self.api_version).raw_get_key_value(
             cf,
             &key,
             &mut Statistics::default(),
         )?;
 
         let (pr, lock_guards) = if old_value == previous_value {
-            if self.api_version == ApiVersion::V2 && !snapshot.ext().is_max_ts_synced() {
-                return Err(ErrorInner::MaxTimestampNotSynced {
-                    region_id: ctx.get_region_id(),
-                    start_ts: TimeStamp::zero(),
-                }
-                .into());
-            }
-
             let raw_value = RawValue {
                 user_value: value,
                 expire_ts: ttl_to_expire_ts(self.ttl),
@@ -90,19 +78,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
                 }
             );
 
-            // Raw atomic cmd has two locks, one is concurrency_manager and the other is txn
-            // latch. Now, concurrency_manager lock key with ts encoded, it aims
-            // to "lock" resolved-ts to be less than its timestamp, rather than
-            // to "lock" other concurrent requests.
-            let lock_guard = block_on(get_raw_key_guard(&provider, concurrency_manager)).map_err(
-                |err: StorageError| ErrorInner::Other(box_err!("failed to key guard: {:?}", err)),
-            )?;
-            let lock_guards: Vec<_> = lock_guard.into_iter().collect();
-            // Note: ts that is appended to key must be acquired after the old_value has
-            // been obtained. See issue #13550.
-            let ts = block_on(get_causal_ts(&provider)).map_err(|err: StorageError| {
-                ErrorInner::Other(box_err!("failed to get casual ts: {:?}", err))
-            })?;
             if let Some(ts) = ts {
                 key = key.append_ts(ts);
             }
@@ -114,7 +89,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
                     previous_value: old_value,
                     succeed: true,
                 },
-                lock_guards,
+                lock_guard.into_iter().collect(),
             )
         } else {
             (
@@ -166,7 +141,6 @@ mod tests {
         let key = b"rk";
 
         let encoded_key = F::encode_raw_key(key, None);
-        let ts_provider = super::super::test_util::gen_ts_provider(F::TAG);
 
         let cmd = RawCompareAndSwap::new(
             CF_DEFAULT,
@@ -175,10 +149,9 @@ mod tests {
             b"v1".to_vec(),
             0,
             F::TAG,
-            ts_provider.clone(),
             Context::default(),
         );
-        let (prev_val, succeed) = sched_command(&mut engine, cm.clone(), cmd).unwrap();
+        let (prev_val, succeed) = sched_command(&mut engine, cm.clone(), cmd, F::TAG).unwrap();
         assert!(prev_val.is_none());
         assert!(succeed);
 
@@ -189,10 +162,9 @@ mod tests {
             b"v2".to_vec(),
             1,
             F::TAG,
-            ts_provider.clone(),
             Context::default(),
         );
-        let (prev_val, succeed) = sched_command(&mut engine, cm.clone(), cmd).unwrap();
+        let (prev_val, succeed) = sched_command(&mut engine, cm.clone(), cmd, F::TAG).unwrap();
         assert_eq!(prev_val, Some(b"v1".to_vec()));
         assert!(!succeed);
 
@@ -203,10 +175,9 @@ mod tests {
             b"v3".to_vec(),
             2,
             F::TAG,
-            ts_provider,
             Context::default(),
         );
-        let (prev_val, succeed) = sched_command(&mut engine, cm, cmd).unwrap();
+        let (prev_val, succeed) = sched_command(&mut engine, cm, cmd, F::TAG).unwrap();
         assert_eq!(prev_val, Some(b"v1".to_vec()));
         assert!(succeed);
     }
@@ -215,16 +186,19 @@ mod tests {
         engine: &mut E,
         cm: ConcurrencyManager,
         cmd: TypedCommand<(Option<Value>, bool)>,
+        api_version: ApiVersion,
     ) -> Result<(Option<Value>, bool)> {
         let snap = engine.snapshot(Default::default())?;
         use kvproto::kvrpcpb::ExtraOp;
         let mut statistic = Statistics::default();
+        let apiv2_ctx = super::super::test_util::get_apiv2_ctx(api_version);
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
             concurrency_manager: cm,
             extra_op: ExtraOp::Noop,
             statistics: &mut statistic,
             async_apply_prewrite: false,
+            apiv2_ctx,
         };
         let ret = cmd.cmd.process_write(snap, context)?;
         match ret.pr {
@@ -248,7 +222,6 @@ mod tests {
     }
 
     fn test_cas_process_write_impl<F: KvFormat>() {
-        let ts_provider = super::super::test_util::gen_ts_provider(F::TAG);
         let mut engine = TestEngineBuilder::new().build().unwrap();
 
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
@@ -267,23 +240,24 @@ mod tests {
             raw_value.to_vec(),
             ttl,
             F::TAG,
-            ts_provider,
             Context::default(),
         );
         let mut statistic = Statistics::default();
         let snap = engine.snapshot(Default::default()).unwrap();
+        let apiv2_ctx = super::super::test_util::get_apiv2_ctx(F::TAG);
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
             concurrency_manager: cm,
             extra_op: kvproto::kvrpcpb::ExtraOp::Noop,
             statistics: &mut statistic,
             async_apply_prewrite: false,
+            apiv2_ctx,
         };
         let cmd: Command = cmd.into();
         let write_result = cmd.process_write(snap, context).unwrap();
         let modifies_with_ts = vec![Modify::Put(
             CF_DEFAULT,
-            F::encode_raw_key(raw_key, Some(101.into())),
+            F::encode_raw_key(raw_key, Some(100.into())),
             F::encode_raw_value_owned(encode_value),
         )];
         assert_eq!(write_result.to_be_write.modifies, modifies_with_ts)
