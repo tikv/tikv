@@ -11,15 +11,15 @@ use std::{
 
 use kvproto::metapb::Region;
 use raft::StateRole;
-use raftstore::{
-    coprocessor::{
-        BoxRegionChangeObserver, Coprocessor, ObserverContext, RegionChangeEvent,
-        RegionChangeObserver, RegionChangeReason,
-    },
-    store::util::{find_peer, new_peer},
+use raftstore::coprocessor::{
+    BoxRegionChangeObserver, Coprocessor, ObserverContext, RegionChangeEvent, RegionChangeObserver,
+    RegionChangeReason,
 };
 use test_raftstore::{new_node_cluster, Cluster, NodeCluster};
-use tikv_util::HandyRwLock;
+use tikv_util::{
+    store::{find_peer, new_peer},
+    HandyRwLock,
+};
 
 #[derive(Clone)]
 struct TestObserver {

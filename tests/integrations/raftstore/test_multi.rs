@@ -360,7 +360,7 @@ fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
     // peer 1 must have committed, but peer 2 has not.
     must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
 
-    cluster.must_transfer_leader(1, util::new_peer(2, 2));
+    cluster.must_transfer_leader(1, new_peer(2, 2));
 
     must_get_none(&cluster.get_engine(2), b"k2");
 
@@ -540,7 +540,7 @@ fn test_read_leader_with_unapplied_log<T: Simulator>(cluster: &mut Cluster<T>) {
     // peer 1 must have committed, but peer 2 has not.
     must_get_equal(&cluster.get_engine(1), k, v);
 
-    cluster.must_transfer_leader(1, util::new_peer(2, 2));
+    cluster.must_transfer_leader(1, new_peer(2, 2));
 
     // leader's term not equal applied index's term, if we read local, we may get
     // old value in this situation we need use raft read

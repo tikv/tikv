@@ -38,6 +38,7 @@ use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecord
 use tikv_util::{
     box_err, debug, error, info,
     metrics::ThreadInfoStatistics,
+    store::QueryStats,
     sys::thread::StdThreadBuildWrapper,
     thd_name,
     time::{Instant as TiInstant, UnixSecs},
@@ -57,7 +58,6 @@ use crate::{
         transport::SignificantRouter,
         util::{is_epoch_stale, KeysInfoFormatter, LatencyInspector, RaftstoreDuration},
         worker::{
-            query_stats::QueryStats,
             split_controller::{SplitInfo, TOP_N},
             AutoSplitController, ReadStats, SplitConfigChange, WriteStats,
         },
