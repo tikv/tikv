@@ -4,7 +4,7 @@
 
 use std::{convert::TryInto, sync::Arc};
 
-use engine_traits::{TabletFactory, CF_DEFAULT};
+use engine_traits::{KvEngine, TabletFactory, CF_DEFAULT};
 use file_system::{get_io_rate_limiter, IoPriority, IoType};
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
 use strum::IntoEnumIterator;
@@ -19,7 +19,7 @@ use crate::{
     storage::{lock_manager::LockManager, txn::flow_controller::FlowController, TxnScheduler},
 };
 
-pub struct StorageConfigManger<E: Engine, EL: engine_traits::KvEngine, L: LockManager> {
+pub struct StorageConfigManger<E: Engine, EL: KvEngine, L: LockManager> {
     tablet_factory: Arc<dyn TabletFactory<EL> + Send + Sync>,
     shared_block_cache: bool,
     ttl_checker_scheduler: Scheduler<TtlCheckerTask>,
@@ -27,16 +27,16 @@ pub struct StorageConfigManger<E: Engine, EL: engine_traits::KvEngine, L: LockMa
     scheduler: TxnScheduler<E, L>,
 }
 
-unsafe impl<E: Engine, EL: engine_traits::KvEngine, L: LockManager> Send
+unsafe impl<E: Engine, EL: KvEngine, L: LockManager> Send
     for StorageConfigManger<E, EL, L>
 {
 }
-unsafe impl<E: Engine, EL: engine_traits::KvEngine, L: LockManager> Sync
+unsafe impl<E: Engine, EL: KvEngine, L: LockManager> Sync
     for StorageConfigManger<E, EL, L>
 {
 }
 
-impl<E: Engine, EL: engine_traits::KvEngine, L: LockManager> StorageConfigManger<E, EL, L> {
+impl<E: Engine, EL: KvEngine, L: LockManager> StorageConfigManger<E, EL, L> {
     pub fn new(
         tablet_factory: Arc<dyn TabletFactory<EL> + Send + Sync>,
         shared_block_cache: bool,
@@ -54,7 +54,7 @@ impl<E: Engine, EL: engine_traits::KvEngine, L: LockManager> StorageConfigManger
     }
 }
 
-impl<EK: Engine, EL: engine_traits::KvEngine, L: LockManager> ConfigManager
+impl<EK: Engine, EL: KvEngine, L: LockManager> ConfigManager
     for StorageConfigManger<EK, EL, L>
 {
     fn dispatch(&mut self, mut change: ConfigChange) -> CfgResult<()> {
