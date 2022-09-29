@@ -16,6 +16,7 @@ mod metrics;
 use async_trait::async_trait;
 use enum_dispatch::enum_dispatch;
 pub use metrics::*;
+#[cfg(any(test, feature = "testexport"))]
 use test_pd_client::TestPdClient;
 use txn_types::TimeStamp;
 

@@ -60,7 +60,7 @@ use crate::{
     server::lock_manager::waiter_manager,
     storage::{
         config::Config,
-        get_priority_tag, get_causal_ts, get_raw_key_guard,
+        get_causal_ts, get_priority_tag, get_raw_key_guard,
         kv::{
             self, with_tls_engine, Engine, ExtCallback, FlowStatsReporter, Result as EngineResult,
             SnapContext, Statistics,
@@ -854,12 +854,18 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let causal_ts_provider = self.inner.causal_ts_provider.clone();
         let concurrency_manager = self.inner.concurrency_manager.clone();
 
-        let apiv2_ctx = get_apiv2_ctx(causal_ts_provider, concurrency_manager.clone(), max_ts_synced, &task.cmd).await;
+        let apiv2_ctx = get_apiv2_ctx(
+            causal_ts_provider,
+            concurrency_manager.clone(),
+            max_ts_synced,
+            &task.cmd,
+        )
+        .await;
         if let Err(err) = apiv2_ctx {
             debug!("get apiv2 context failed"; "cid" => cid, "err" => ?err);
             scheduler.finish_with_err(cid, err);
             return;
-        } 
+        }
 
         let deadline = task.cmd.deadline();
         let write_result = {
@@ -1255,12 +1261,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             PessimisticLockMode::Sync
         }
     }
-
 }
 
-async fn get_apiv2_ctx(causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, 
-            concurrency_manager: ConcurrencyManager,
-    max_ts_synced: bool, cmd: &Command) -> Result<(Option<TimeStamp>, Option<KeyHandleGuard>), Error> {
+async fn get_apiv2_ctx(
+    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
+    concurrency_manager: ConcurrencyManager,
+    max_ts_synced: bool,
+    cmd: &Command,
+) -> Result<(Option<TimeStamp>, Option<KeyHandleGuard>), Error> {
     if causal_ts_provider.is_some() {
         match cmd {
             Command::RawCompareAndSwap(_) | Command::RawAtomicStore(_) => {
@@ -1271,12 +1279,17 @@ async fn get_apiv2_ctx(causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
                     }
                     .into());
                 }
-                let lock_guard = get_raw_key_guard(&causal_ts_provider, concurrency_manager).await.map_err(
-                     |err: StorageError| ErrorInner::Other(box_err!("failed to key guard: {:?}", err)),
-                )?;
-                let ts = get_causal_ts(&causal_ts_provider).await.map_err(|err: StorageError| {
-                    ErrorInner::Other(box_err!("failed to get casual ts: {:?}", err))
-                })?;
+                let lock_guard = get_raw_key_guard(&causal_ts_provider, concurrency_manager)
+                    .await
+                    .map_err(|err: StorageError| {
+                        ErrorInner::Other(box_err!("failed to key guard: {:?}", err))
+                    })?;
+                let ts =
+                    get_causal_ts(&causal_ts_provider)
+                        .await
+                        .map_err(|err: StorageError| {
+                            ErrorInner::Other(box_err!("failed to get casual ts: {:?}", err))
+                        })?;
                 return Ok((ts, lock_guard));
             }
             _ => {}

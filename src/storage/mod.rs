@@ -2631,15 +2631,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let sched = self.get_scheduler();
         self.sched_raw_command(CMD, async move {
             let key = F::encode_raw_key_owned(key, None);
-            let cmd = RawCompareAndSwap::new(
-                cf,
-                key,
-                previous_value,
-                value,
-                ttl,
-                api_version,
-                ctx,
-            );
+            let cmd = RawCompareAndSwap::new(cf, key, previous_value, value, ttl, api_version, ctx);
             Self::sched_raw_atomic_command(
                 sched,
                 cmd,
