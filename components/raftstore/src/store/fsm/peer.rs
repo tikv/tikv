@@ -3280,14 +3280,14 @@ where
                 }
             }
         } else {
-            let (should_ack, should_tick) = self
-                .fsm
-                .peer
-                .pre_ack_transfer_leader_msg(self.ctx, msg.clone(), peer_disk_usage);
+            let (should_ack, should_tick) =
+                self.fsm
+                    .peer
+                    .pre_ack_transfer_leader_msg(self.ctx, msg.clone(), peer_disk_usage);
             if should_tick {
                 self.register_pre_become_leader_state_tick();
             }
-            if should_ack{
+            if should_ack {
                 self.fsm.peer.ack_transfer_leader_msg(false);
             }
         }
@@ -5399,9 +5399,7 @@ where
                 return;
             }
 
-            if state.ticks >= self.ctx.cfg.warm_up_raft_entry_cache_ticks
-                && !state.is_msg_acked()
-            {
+            if state.ticks >= self.ctx.cfg.warm_up_raft_entry_cache_ticks && !state.is_msg_acked() {
                 WARM_UP_ENTRY_CACHE_COUNTER.timeout.inc();
                 self.fsm.peer.ack_transfer_leader_msg(false);
             }

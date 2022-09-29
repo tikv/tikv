@@ -1024,9 +1024,9 @@ impl<ER: RaftEngine> EntryStorage<ER> {
 
     /// Trigger a task to warm up the entry cache.
     ///
-    /// This will ensure the range [low..high..last_index] are loaded into cache.
-    /// Return the high index of the warmup range if a task is successfully
-    /// triggered.
+    /// This will ensure the range [low..high..last_index] are loaded into
+    /// cache. Return the high index of the warmup range if a task is
+    /// successfully triggered.
     pub fn async_warm_up_entry_cache(&self, low: u64) -> Option<u64> {
         let high = if let Some(first_index) = self.entry_cache_first_index() {
             if low >= first_index {
@@ -1715,13 +1715,13 @@ pub mod tests {
         // The high index should be equal to the entry_cache_first_index.
         assert_eq!(store.async_warm_up_entry_cache(5).unwrap(), 6);
 
-        store.cache.compact_to(7);  // Clean cache.
+        store.cache.compact_to(7); // Clean cache.
         // The high index should be equal to the last_index + 1.
         assert_eq!(store.async_warm_up_entry_cache(5).unwrap(), 7);
     }
 
     #[test]
-    fn test_on_warmup_range_fetched(){
+    fn test_on_warmup_range_fetched() {
         let ents = vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)];
 
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
