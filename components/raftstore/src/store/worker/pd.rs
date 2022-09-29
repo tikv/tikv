@@ -148,7 +148,7 @@ where
     Heartbeat(HeartbeatTask),
     StoreHeartbeat {
         stats: pdpb::StoreStats,
-        store_info: StoreInfo<EK, ER>,
+        store_info: Option<StoreInfo<EK, ER>>,
         report: Option<pdpb::StoreReport>,
         dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     },
@@ -826,6 +826,10 @@ impl SlowScore {
         self.last_update_time = Instant::now();
         self.value
     }
+
+    fn should_force_report_slow_store(&self) -> bool {
+        self.value >= OrderedFloat(100.0)
+    }
 }
 
 // RegionCpuMeteringCollector is used to collect the region-related CPU info.
@@ -880,6 +884,7 @@ where
     // calls Runner's run() on Task received.
     scheduler: Scheduler<Task<EK, ER>>,
     stats_monitor: StatsMonitor<EK, ER>,
+    store_heartbeat_interval: Duration,
 
     collector_reg_handle: CollectorRegHandle,
     region_cpu_records_collector: Option<CollectorGuard>,
@@ -953,6 +958,7 @@ where
             store_stat: StoreStat::default(),
             start_ts: UnixSecs::now(),
             scheduler,
+            store_heartbeat_interval,
             stats_monitor,
             collector_reg_handle,
             region_cpu_records_collector,
@@ -1170,7 +1176,7 @@ where
     fn handle_store_heartbeat(
         &mut self,
         mut stats: pdpb::StoreStats,
-        store_info: StoreInfo<EK, ER>,
+        store_info: Option<StoreInfo<EK, ER>>,
         store_report: Option<pdpb::StoreReport>,
         dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     ) {
@@ -1201,13 +1207,17 @@ where
         }
 
         stats = collect_report_read_peer_stats(HOTSPOT_REPORT_CAPACITY, report_peers, stats);
-        let (capacity, used_size, available) = match collect_engine_size(
-            &self.coprocessor_host,
-            Some(&store_info),
-            self.snap_mgr.get_total_snap_size().unwrap(),
-        ) {
-            Some((capacity, used_size, available)) => (capacity, used_size, available),
-            None => return,
+        let (capacity, used_size, available) = if store_info.is_some() {
+            match collect_engine_size(
+                &self.coprocessor_host,
+                store_info.as_ref(),
+                self.snap_mgr.get_total_snap_size().unwrap(),
+            ) {
+                Some((capacity, used_size, available)) => (capacity, used_size, available),
+                None => return,
+            }
+        } else {
+            (0, 0, 0)
         };
 
         stats.set_capacity(capacity);
@@ -1760,6 +1770,47 @@ where
             health_service.set_serving_status("", status);
         }
     }
+
+    /// Force to send a special heartbeat to pd when current store is hung on
+    /// some special circumstances, i.e. disk busy, handler busy and others.
+    fn force_report_store_heartbeat(&mut self) {
+        let mut stats = pdpb::StoreStats::default();
+        stats.set_store_id(self.store_id);
+        stats.set_region_count(self.region_peers.len() as u32);
+
+        let snap_stats = self.snap_mgr.stats();
+        stats.set_sending_snap_count(snap_stats.sending_count as u32);
+        stats.set_receiving_snap_count(snap_stats.receiving_count as u32);
+        STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
+            .with_label_values(&["sending"])
+            .set(snap_stats.sending_count as i64);
+        STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
+            .with_label_values(&["receiving"])
+            .set(snap_stats.receiving_count as i64);
+
+        stats.set_start_time(self.start_ts.into_inner() as u32);
+
+        // This calling means that the current node cannot report heartbeat in normaly
+        // scheduler. That is, the current node must in `busy` state.
+        stats.set_is_busy(true);
+
+        let task = Task::StoreHeartbeat {
+            stats,
+            store_info: None,
+            report: None,
+            dr_autosync_status: None,
+        };
+        if let Err(e) = self.scheduler.schedule(task) {
+            error!("force report store heartbeat failed";
+                "store_id" => self.store_id,
+                "err" => ?e
+            );
+        } else {
+            info!("force report store slow score to pd.";
+                "store_id" => self.store_id,
+            );
+        }
+    }
 }
 
 fn calculate_region_cpu_records(
@@ -2039,6 +2090,15 @@ where
         }
         if !self.slow_score.last_tick_finished {
             self.slow_score.record_timeout();
+            // TODO: insert a judgement whether the last slow_score is delayed for reporting
+            // to PD.
+            let now = UnixSecs::now();
+            let interval_second = now.into_inner() - self.store_stat.last_report_ts.into_inner();
+            if self.slow_score.should_force_report_slow_store()
+                || interval_second >= self.store_heartbeat_interval.as_secs()
+            {
+                self.force_report_store_heartbeat();
+            }
         }
         let scheduler = self.scheduler.clone();
         let id = self.slow_score.last_tick_id + 1;

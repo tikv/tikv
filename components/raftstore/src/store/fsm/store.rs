@@ -2431,11 +2431,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         );
         stats.set_query_stats(query_stats);
 
-        let store_info = StoreInfo {
+        let store_info = Some(StoreInfo {
             kv_engine: self.ctx.engines.kv.clone(),
             raft_engine: self.ctx.engines.raft.clone(),
             capacity: self.ctx.cfg.capacity.0,
-        };
+        });
 
         let task = PdTask::StoreHeartbeat {
             stats,
