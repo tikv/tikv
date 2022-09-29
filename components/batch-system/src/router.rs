@@ -2,7 +2,7 @@
 
 use crate::fsm::{Fsm, FsmScheduler};
 use crate::mailbox::{BasicMailbox, Mailbox};
-use crate::metrics::{CHANNEL_FULL_COUNTER_VEC, ROUTER_CACHE_MISS, ROUTER_MAILBOX_DURATION_HISTOGRAM},
+use crate::metrics::{CHANNEL_FULL_COUNTER_VEC, ROUTER_CACHE_MISS, ROUTER_MAILBOX_DURATION_HISTOGRAM};
 
 use crossbeam::channel::{SendError, TrySendError};
 use std::cell::Cell;
@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use tikv_util::collections::HashMap;
 use tikv_util::lru::LruCache;
 use tikv_util::Either;
+use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 
 enum CheckDoResult<T> {
     NotExist,
@@ -97,7 +98,7 @@ where
         }
 
         ROUTER_CACHE_MISS.inc();
-        let now = Instant::now();
+        let now = TiInstant::now_coarse();
 
         let (cnt, mailbox) = {
             let mut boxes = self.normals.lock().unwrap();
@@ -119,7 +120,7 @@ where
         }
 
         let res = f(&mailbox);
-        ROUTER_MAILBOX_DURATION_HISTOGRAM.observe(duration_to_sec(now.saturating_elapsed()));
+        ROUTER_MAILBOX_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()));
 
         match res {
             Some(r) => {
