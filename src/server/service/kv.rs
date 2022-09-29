@@ -1737,7 +1737,6 @@ fn future_flashback_to_version<
                 region_id
             )));
         }
-
         let mut resp = FlashbackToVersionResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);

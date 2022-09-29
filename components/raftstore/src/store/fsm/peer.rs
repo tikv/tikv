@@ -1,6 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use core::panic;
 // #[PerformanceCriticalPath]
 use std::{
     borrow::Cow,
@@ -1026,6 +1025,7 @@ where
                     if resp.response.get_header().has_error() {
                         ch.send(false).unwrap();
                         error!("send flashback prepare msg failed"; "region_id" => region_id);
+                        return;
                     }
                     raft_router_clone
                         .force_send(
