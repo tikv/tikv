@@ -381,7 +381,7 @@ impl<ER: RaftEngine> Debugger<ER> {
                 continue;
             }
             let region = &region_state.get_region();
-            write_peer_state(&mut wb, region, PeerState::Tombstone, None, None).unwrap();
+            write_peer_state(&mut wb, region, PeerState::Tombstone, None, false).unwrap();
         }
 
         let mut write_opts = WriteOptions::new();
@@ -1369,7 +1369,7 @@ fn set_region_tombstone(
         &region,
         PeerState::Tombstone,
         None,
-        None
+        false
     ));
     Ok(())
 }

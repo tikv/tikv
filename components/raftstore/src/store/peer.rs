@@ -1489,7 +1489,7 @@ where
                 } else {
                     None
                 },
-                None,
+                false,
             )?;
 
             // write kv rocksdb first in case of restart happen between two write

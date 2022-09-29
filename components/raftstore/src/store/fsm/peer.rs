@@ -36,8 +36,8 @@ use kvproto::{
         StatusCmdType, StatusResponse,
     },
     raft_serverpb::{
-        ExtraMessage, ExtraMessageType, FlashbackState, MergeState, PeerState, RaftMessage,
-        RaftSnapshotData, RaftTruncatedState, RegionLocalState,
+        ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftMessage, RaftSnapshotData,
+        RaftTruncatedState, RegionLocalState,
     },
     replication_modepb::{DrAutoSyncState, ReplicationMode},
 };
@@ -1012,11 +1012,11 @@ where
             .unwrap()
         {
             info!(
-                "Prepare Flashback, already has a flashback local state:{:?} for {:?} ",
-                target_state.get_flashback_state(),
+                "Prepare Flashback, a flashback persist state is: {} for {:?} ",
+                target_state.get_is_in_flashback(),
                 self.region(),
             );
-            if target_state.get_flashback_state() == FlashbackState::NotStart {
+            if !target_state.get_is_in_flashback() {
                 // callback itself to wait for the new change to be applied completely.
                 let raft_router_clone = self.ctx.router.clone();
                 let ch_clone = ch.clone();
@@ -1036,8 +1036,7 @@ where
                 let req = {
                     let mut request = new_admin_request(region_id, self.fsm.peer.peer.clone());
                     let mut admin = AdminRequest::default();
-                    admin.set_cmd_type(AdminCmdType::SetFlashbackState);
-                    admin.mut_set_flashback().set_state(FlashbackState::Prepare);
+                    admin.set_cmd_type(AdminCmdType::PrepareFlashback);
                     request.set_admin_request(admin);
                     request
                 };
@@ -1068,18 +1067,18 @@ where
                     ch_clone.send(false).unwrap();
                     error!("send flashback prepare msg failed"; "region_id" => region_id);
                 }
-            }), 
-        None, 
-        Some(Box::new(move || {
-            ch.send(true).unwrap();
-        })));
+            }),
+            None,
+            Some(Box::new(move || {
+                ch.send(true).unwrap();
+            })),
+        );
         self.fsm.peer.flashback_state.take();
 
         let req = {
             let mut request = new_admin_request(self.region().get_id(), self.fsm.peer.peer.clone());
             let mut admin = AdminRequest::default();
-            admin.set_cmd_type(AdminCmdType::SetFlashbackState);
-            admin.mut_set_flashback().set_state(FlashbackState::Finish);
+            admin.set_cmd_type(AdminCmdType::FinishFlashback);
             request.set_admin_request(admin);
             request
         };
@@ -4853,8 +4852,8 @@ where
                 }
                 ExecResult::IngestSst { ssts } => self.on_ingest_sst_result(ssts),
                 ExecResult::TransferLeader { term } => self.on_transfer_leader(term),
-                ExecResult::SetFlashbackState { state } => {
-                    self.on_ready_check_flashback_state(state)
+                ExecResult::IsInFlashback { is_in_flashback } => {
+                    self.on_ready_check_flashback_persist(is_in_flashback)
                 }
             }
         }
@@ -6198,7 +6197,7 @@ where
         self.fsm.has_ready = true;
     }
 
-    fn on_ready_check_flashback_state(&mut self, state: FlashbackState) {
+    fn on_ready_check_flashback_persist(&mut self, should_in_flashback: bool) {
         let state_key = keys::region_state_key(self.region().get_id());
         if let Some(target_state) = self
             .ctx
@@ -6207,9 +6206,9 @@ where
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &state_key)
             .unwrap()
         {
-            if target_state.get_flashback_state() != state {
+            if target_state.get_is_in_flashback() != should_in_flashback {
                 panic!(
-                    "Prepare Flashback, already has a local state for {:?} but not a finish state",
+                    "Check for Flashback whether in persist for {:?}",
                     self.region(),
                 );
             }

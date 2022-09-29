@@ -192,7 +192,9 @@ pub fn admin_cmd_epoch_lookup(admin_cmp_type: AdminCmdType) -> AdminCmdEpochStat
         AdminCmdType::RollbackMerge => AdminCmdEpochState::new(true, true, true, false),
         // Transfer leader
         AdminCmdType::TransferLeader => AdminCmdEpochState::new(true, true, false, false),
-        AdminCmdType::SetFlashbackState => AdminCmdEpochState::new(false, false, false, false)
+        AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => {
+            AdminCmdEpochState::new(false, false, false, false)
+        }
     }
 }
 
