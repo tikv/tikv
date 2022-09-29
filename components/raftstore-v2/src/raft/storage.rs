@@ -29,7 +29,7 @@ use raftstore::store::{
 use slog::{error, info, o, warn, Logger};
 use tikv_util::{box_err, store::find_peer, worker::Scheduler};
 
-use crate::{router::GenSnapTask, worker::RegionTask, Result};
+use crate::{router::GenSnapTask, Result};
 
 const MAX_SNAP_TRY_CNT: usize = 5;
 
@@ -495,7 +495,9 @@ mod tests {
         raft_serverpb::PeerState,
     };
     use raft::{eraftpb::Snapshot as RaftSnapshot, Error as RaftError, StorageError};
-    use raftstore::store::{RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
+    use raftstore::store::{
+        RaftlogFetchTask as RegionTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+    };
     use slog::o;
     use tempfile::TempDir;
     use tikv_util::worker::{dummy_scheduler, Runnable, Worker};
@@ -507,7 +509,7 @@ mod tests {
         type Task = RegionTask;
         fn run(&mut self, task: RegionTask) {
             match task {
-                RegionTask::Gen { notifier, .. } => {
+                RegionTask::GenTabletSnapshot { notifier, .. } => {
                     notifier.send(RaftSnapshot::default()).unwrap();
                 }
                 _ => unreachable!(),
@@ -528,7 +530,6 @@ mod tests {
     }
 
     #[test]
-
     fn test_write_initial_states() {
         let region = new_region();
         let path = TempDir::new().unwrap();

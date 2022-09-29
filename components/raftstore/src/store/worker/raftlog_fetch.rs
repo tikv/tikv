@@ -1,10 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt;
+use std::{
+    fmt,
+    sync::{atomic::AtomicBool, mpsc::SyncSender, Arc},
+};
 
 use engine_traits::RaftEngine;
 use fail::fail_point;
-use raft::GetEntriesContext;
+use raft::{eraftpb::Snapshot as RaftSnapshot, GetEntriesContext};
 use tikv_util::worker::Runnable;
 
 use crate::store::{RaftlogFetchResult, MAX_INIT_ENTRY_COUNT};
@@ -19,7 +22,15 @@ pub enum Task {
         tried_cnt: usize,
         term: u64,
     },
-    // More to support, suck as fetch entries ayschronously when apply and schedule merge
+
+    // GenTabletSnapshot is used to generate tablet snapshot.
+    GenTabletSnapshot {
+        region_id: u64,
+        tablet_index: u64,
+        canceled: Arc<AtomicBool>,
+        notifier: SyncSender<RaftSnapshot>,
+        for_balance: bool,
+    },
 }
 
 impl fmt::Display for Task {
@@ -38,6 +49,9 @@ impl fmt::Display for Task {
                 "Fetch Raft Logs [region: {}, low: {}, high: {}, max_size: {}] for sending with context {:?}, tried: {}, term: {}",
                 region_id, low, high, max_size, context, tried_cnt, term,
             ),
+            Task::GenTabletSnapshot { region_id, .. } => {
+                write!(f, "Snapshot gen for {}", region_id)
+            }
         }
     }
 }
@@ -119,6 +133,7 @@ where
                     },
                 );
             }
+            Task::GenTabletSnapshot { .. } => unimplemented!(),
         }
     }
 }

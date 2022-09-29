@@ -31,7 +31,6 @@ mod operation;
 mod raft;
 pub mod router;
 mod tablet;
-mod worker;
 
 pub(crate) use batch::StoreContext;
 pub use batch::{create_store_batch_system, StoreRouter, StoreSystem};
