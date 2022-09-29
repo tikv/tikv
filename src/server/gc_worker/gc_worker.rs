@@ -3166,7 +3166,7 @@ mod tests {
                 Err(_) => panic!("rocksdb retrieval fails!"),
             };
 
-            //let db = raw_engine.as_inner();
+            // let db = raw_engine.as_inner();
             let mut gc_runner = TestGcRunner::new(0);
             gc_runner.safe_point(200).gc(&raw_engine, true);
             // let cf = get_cf_handle(db, CF_WRITE).unwrap();
@@ -3177,10 +3177,11 @@ mod tests {
                 must_get_none_on_region(&engine, region_id, &k, delete_start_ts - 1);
 
                 // MVCC-DELETIONs is cleaned
-                //let mut raw_k = vec![b'z'];
-                //let suffix = Key::from_raw(&k).append_ts((delete_start_ts + 1).into());
-                //raw_k.extend_from_slice(suffix.as_encoded());
-                // assert!(db.get_cf(cf, &raw_k).unwrap().is_none());
+                // let mut raw_k = vec![b'z'];
+                // let suffix = Key::from_raw(&k).append_ts((delete_start_ts +
+                // 1).into()); raw_k.extend_from_slice(suffix.
+                // as_encoded()); assert!(db.get_cf(cf,
+                // &raw_k).unwrap().is_none());
             }
         }
     }
