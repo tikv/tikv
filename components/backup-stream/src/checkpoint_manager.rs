@@ -199,7 +199,7 @@ impl<PD: PdClient + 'static> FlushObserver for BasicFlushObserver<PD> {
             .pd_cli
             .update_service_safe_point(
                 format!("backup-stream-{}-{}", task, self.store_id),
-                TimeStamp::new(rts),
+                TimeStamp::new(rts - 1),
                 // Add a service safe point for 30 mins (6x the default flush interval).
                 // It would probably be safe.
                 Duration::from_secs(1800),
