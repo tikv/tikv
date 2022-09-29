@@ -905,6 +905,16 @@ pub mod test_utils {
             let _guard = LOCK.lock().unwrap();
             if !gc_context_ready {
                 self.prepare_gc(engine);
+            } else {
+                let gc_context_option = GC_CONTEXT.lock().unwrap();
+                let gc_context = match *gc_context_option {
+                    Some(ref ctx) => ctx,
+                    None => panic!("gc_context retrieval fails!"),
+                };
+
+                gc_context
+                    .safe_point
+                    .store(self.safe_point, Ordering::Relaxed);
             }
 
             let db = engine.as_inner();
