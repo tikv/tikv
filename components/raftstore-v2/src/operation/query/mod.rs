@@ -16,14 +16,16 @@ use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
     errorpb,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, StatusCmdType},
+    raft_serverpb::RaftApplyState,
 };
 use raft::Ready;
 use raftstore::{
     errors::RAFTSTORE_IS_BUSY,
     store::{
-        cmd_resp, local_metrics::RaftMetrics, metrics::RAFT_READ_INDEX_PENDING_COUNT,
-        msg::ErrorCallback, region_meta::RegionMeta, util, util::LeaseState, GroupState,
-        ReadCallback, ReadIndexContext, RequestPolicy, Transport,
+        cmd_resp, fsm::ApplyMetrics, local_metrics::RaftMetrics,
+        metrics::RAFT_READ_INDEX_PENDING_COUNT, msg::ErrorCallback, region_meta::RegionMeta, util,
+        util::LeaseState, GroupState, ReadCallback, ReadIndexContext, ReadProgress, RequestPolicy,
+        Transport,
     },
     Error, Result,
 };
@@ -361,5 +363,48 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.raft_group().status(),
         );
         ch.set_result(meta);
+    }
+
+    pub fn post_apply<T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        apply_state: RaftApplyState,
+        applied_term: u64,
+        apply_metrics: &ApplyMetrics,
+    ) -> bool {
+        let mut has_ready = false;
+        // TODO: add is_handling_snapshot check
+        // it could update has_ready
+
+        let applied_index = apply_state.get_applied_index();
+        self.raft_group_mut().advance_apply_to(applied_index);
+
+        // TODO: add cmd_epoch_checker.advance_apply
+        self.entry_storage_mut().set_applied_state(apply_state);
+        self.entry_storage_mut().set_applied_term(applied_term);
+
+        // TODO: add peer_stat(for PD hotspot scheduling) and deleted_keys_hint
+        if !self.is_leader() {
+            self.post_pending_read_index_on_replica(ctx)
+        } else {
+            // TODO: add ready_to_handle_read for splitting and merging
+            while let Some(mut read) = self.pending_reads_mut().pop_front() {
+                self.respond_read_index(&mut read, ctx);
+            }
+        }
+        self.pending_reads_mut().gc();
+
+        self.read_progress_mut().update_applied_core(applied_index);
+
+        // Only leaders need to update applied_term.
+        let progress_to_be_updated = self.entry_storage().applied_term() != applied_term;
+        if progress_to_be_updated && self.is_leader() {
+            // TODO: add coprocessor_host hook
+            let progress = ReadProgress::applied_term(applied_term);
+            let mut meta = ctx.store_meta.lock().unwrap();
+            let reader = meta.readers.get_mut(&self.region_id()).unwrap();
+            self.maybe_update_read_progress(reader, progress);
+        }
+        has_ready
     }
 }

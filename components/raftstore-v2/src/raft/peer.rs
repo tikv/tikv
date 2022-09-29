@@ -191,6 +191,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
+    pub fn read_progress_mut(&mut self) -> &mut Arc<RegionReadProgress> {
+        &mut self.read_progress
+    }
+
+    #[inline]
     pub fn leader_lease(&self) -> &Lease {
         &self.leader_lease
     }
@@ -381,5 +386,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn proposals_mut(&mut self) -> &mut ProposalQueue<Vec<CmdResChannel>> {
         &mut self.proposals
+    }
+
+    #[inline]
+    pub fn proposals(&self) -> &ProposalQueue<Vec<CmdResChannel>> {
+        &self.proposals
     }
 }
