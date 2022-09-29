@@ -1872,7 +1872,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 Err(err) => {
                     SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();
                     info!("get snapshot failed"; "tag" => ?tag, "err" => ?err);
-                    return Err(box_err!("Fail to get snapshot: {}", err));
+                    return Err(err);
                 }
             }
         }
