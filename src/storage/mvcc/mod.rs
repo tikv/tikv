@@ -439,10 +439,42 @@ pub mod tests {
         }
     }
 
-    pub fn must_get<E: Engine>(engine: &E, key: &[u8], ts: impl Into<TimeStamp>, expect: &[u8]) {
+    pub fn must_get<E: Engine>(
+        engine: &mut E,
+        key: &[u8],
+        ts: impl Into<TimeStamp>,
+        expect: &[u8],
+    ) {
+        must_get_impl(engine, None, key, ts, expect);
+    }
+
+    pub fn must_get_on_region<E: Engine>(
+        engine: &mut E,
+        region_id: u64,
+        key: &[u8],
+        ts: impl Into<TimeStamp>,
+        expect: &[u8],
+    ) {
+        must_get_impl(engine, Some(region_id), key, ts, expect);
+    }
+
+    fn must_get_impl<E: Engine>(
+        engine: &mut E,
+        region_id: Option<u64>,
+        key: &[u8],
+        ts: impl Into<TimeStamp>,
+        expect: &[u8],
+    ) {
         let ts = ts.into();
-        let ctx = SnapContext::default();
-        let snapshot = engine.snapshot(ctx).unwrap();
+        let mut ctx = Context::default();
+        if let Some(region_id) = region_id {
+            ctx.region_id = region_id;
+        }
+        let snap_ctx = SnapContext {
+            pb_ctx: &ctx,
+            ..Default::default()
+        };
+        let snapshot = engine.snapshot(snap_ctx).unwrap();
         let mut reader = SnapshotReader::new(ts, snapshot, true);
         let key = &Key::from_raw(key);
 
@@ -451,7 +483,7 @@ pub mod tests {
     }
 
     pub fn must_get_no_lock_check<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         key: &[u8],
         ts: impl Into<TimeStamp>,
         expect: &[u8],
@@ -487,17 +519,42 @@ pub mod tests {
         Ok(())
     }
 
-    pub fn must_get_none<E: Engine>(engine: &E, key: &[u8], ts: impl Into<TimeStamp>) {
+    pub fn must_get_none<E: Engine>(engine: &mut E, key: &[u8], ts: impl Into<TimeStamp>) {
+        must_get_none_impl(engine, key, ts, None);
+    }
+
+    pub fn must_get_none_on_region<E: Engine>(
+        engine: &mut E,
+        region_id: u64,
+        key: &[u8],
+        ts: impl Into<TimeStamp>,
+    ) {
+        must_get_none_impl(engine, key, ts, Some(region_id));
+    }
+
+    fn must_get_none_impl<E: Engine>(
+        engine: &mut E,
+        key: &[u8],
+        ts: impl Into<TimeStamp>,
+        region_id: Option<u64>,
+    ) {
+        let mut ctx = Context::default();
+        if let Some(region_id) = region_id {
+            ctx.region_id = region_id;
+        }
+        let snap_ctx = SnapContext {
+            pb_ctx: &ctx,
+            ..Default::default()
+        };
+        let snapshot = engine.snapshot(snap_ctx).unwrap();
         let ts = ts.into();
-        let ctx = SnapContext::default();
-        let snapshot = engine.snapshot(ctx).unwrap();
         let mut reader = SnapshotReader::new(ts, snapshot, true);
         let key = &Key::from_raw(key);
         check_lock(&mut reader, key, ts).unwrap();
         assert!(reader.get(key, ts).unwrap().is_none());
     }
 
-    pub fn must_get_err<E: Engine>(engine: &E, key: &[u8], ts: impl Into<TimeStamp>) {
+    pub fn must_get_err<E: Engine>(engine: &mut E, key: &[u8], ts: impl Into<TimeStamp>) {
         let ts = ts.into();
         let ctx = SnapContext::default();
         let snapshot = engine.snapshot(ctx).unwrap();
@@ -509,7 +566,11 @@ pub mod tests {
         reader.get(key, ts).unwrap_err();
     }
 
-    pub fn must_locked<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) -> Lock {
+    pub fn must_locked<E: Engine>(
+        engine: &mut E,
+        key: &[u8],
+        start_ts: impl Into<TimeStamp>,
+    ) -> Lock {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true);
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
@@ -519,7 +580,7 @@ pub mod tests {
     }
 
     pub fn must_locked_with_ttl<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
         ttl: u64,
@@ -533,7 +594,7 @@ pub mod tests {
     }
 
     pub fn must_large_txn_locked<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
         ttl: u64,
@@ -553,14 +614,14 @@ pub mod tests {
         }
     }
 
-    pub fn must_unlocked<E: Engine>(engine: &E, key: &[u8]) {
+    pub fn must_unlocked<E: Engine>(engine: &mut E, key: &[u8]) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true);
         assert!(reader.load_lock(&Key::from_raw(key)).unwrap().is_none());
     }
 
     pub fn must_written<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
@@ -576,7 +637,7 @@ pub mod tests {
     }
 
     pub fn must_have_write<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         key: &[u8],
         commit_ts: impl Into<TimeStamp>,
     ) -> Write {
@@ -587,14 +648,18 @@ pub mod tests {
         write.to_owned()
     }
 
-    pub fn must_not_have_write<E: Engine>(engine: &E, key: &[u8], commit_ts: impl Into<TimeStamp>) {
+    pub fn must_not_have_write<E: Engine>(
+        engine: &mut E,
+        key: &[u8],
+        commit_ts: impl Into<TimeStamp>,
+    ) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let k = Key::from_raw(key).append_ts(commit_ts.into());
         let v = snapshot.get_cf(CF_WRITE, &k).unwrap();
         assert!(v.is_none());
     }
 
-    pub fn must_seek_write_none<E: Engine>(engine: &E, key: &[u8], ts: impl Into<TimeStamp>) {
+    pub fn must_seek_write_none<E: Engine>(engine: &mut E, key: &[u8], ts: impl Into<TimeStamp>) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true);
         assert!(
@@ -606,7 +671,7 @@ pub mod tests {
     }
 
     pub fn must_seek_write<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         key: &[u8],
         ts: impl Into<TimeStamp>,
         start_ts: impl Into<TimeStamp>,
@@ -625,7 +690,7 @@ pub mod tests {
     }
 
     pub fn must_get_commit_ts<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
@@ -642,7 +707,7 @@ pub mod tests {
     }
 
     pub fn must_get_commit_ts_none<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
     ) {
@@ -658,7 +723,11 @@ pub mod tests {
         }
     }
 
-    pub fn must_get_rollback_ts<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) {
+    pub fn must_get_rollback_ts<E: Engine>(
+        engine: &mut E,
+        key: &[u8],
+        start_ts: impl Into<TimeStamp>,
+    ) {
         let start_ts = start_ts.into();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = SnapshotReader::new(start_ts, snapshot, true);
@@ -673,7 +742,7 @@ pub mod tests {
     }
 
     pub fn must_get_rollback_ts_none<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
     ) {
@@ -688,7 +757,7 @@ pub mod tests {
     }
 
     pub fn must_get_rollback_protected<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
         protected: bool,
@@ -707,7 +776,7 @@ pub mod tests {
     }
 
     pub fn must_get_overlapped_rollback<E: Engine, T: Into<TimeStamp>>(
-        engine: &E,
+        engine: &mut E,
         key: &[u8],
         start_ts: T,
         overlapped_start_ts: T,
@@ -731,7 +800,7 @@ pub mod tests {
     }
 
     pub fn must_scan_keys<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         start: Option<&[u8]>,
         limit: usize,
         keys: Vec<&[u8]>,

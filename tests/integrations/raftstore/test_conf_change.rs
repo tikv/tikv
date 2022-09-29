@@ -18,10 +18,10 @@ use kvproto::{
 };
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
-use raftstore::{store::util::is_learner, Result};
+use raftstore::Result;
 use test_pd_client::TestPdClient;
 use test_raftstore::*;
-use tikv_util::{config::ReadableDuration, time::Instant, HandyRwLock};
+use tikv_util::{config::ReadableDuration, store::is_learner, time::Instant, HandyRwLock};
 
 fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);

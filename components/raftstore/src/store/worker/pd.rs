@@ -38,6 +38,7 @@ use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecord
 use tikv_util::{
     box_err, debug, error, info,
     metrics::ThreadInfoStatistics,
+    store::QueryStats,
     sys::thread::StdThreadBuildWrapper,
     thd_name,
     time::{Instant as TiInstant, UnixSecs},
@@ -57,7 +58,6 @@ use crate::{
         transport::SignificantRouter,
         util::{is_epoch_stale, KeysInfoFormatter, LatencyInspector, RaftstoreDuration},
         worker::{
-            query_stats::QueryStats,
             split_controller::{SplitInfo, TOP_N},
             AutoSplitController, ReadStats, SplitConfigChange, WriteStats,
         },
@@ -672,17 +672,9 @@ where
         store_id: u64,
         scheduler: &Scheduler<Task<EK, ER>>,
     ) {
-        let min_resolved_ts = region_read_progress.with(|registry| {
-            registry
-            .iter()
-            .map(|(_, rrp)| rrp.safe_ts())
-            .filter(|ts| *ts != 0) // ts == 0 means the peer is uninitialized
-            .min()
-            .unwrap_or(0)
-        });
         let task = Task::ReportMinResolvedTs {
             store_id,
-            min_resolved_ts,
+            min_resolved_ts: region_read_progress.get_min_resolved_ts(),
         };
         if let Err(e) = scheduler.schedule(task) {
             error!(

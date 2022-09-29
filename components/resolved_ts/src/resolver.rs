@@ -1,39 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    cmp,
-    cmp::Reverse,
-    collections::{BTreeMap, BinaryHeap},
-    sync::Arc,
-};
+use std::{cmp, collections::BTreeMap, sync::Arc};
 
 use collections::{HashMap, HashSet};
 use raftstore::store::RegionReadProgress;
 use txn_types::TimeStamp;
 
 use crate::metrics::RTS_RESOLVED_FAIL_ADVANCE_VEC;
-
-#[derive(Debug, Clone, Copy)]
-pub struct ResolvedTs {
-    pub raw_ts: TimeStamp,
-    pub txn_ts: TimeStamp,
-}
-
-impl ResolvedTs {
-    pub fn default() -> ResolvedTs {
-        ResolvedTs {
-            raw_ts: TimeStamp::zero(),
-            txn_ts: TimeStamp::zero(),
-        }
-    }
-    pub fn min(&self) -> TimeStamp {
-        cmp::min(self.raw_ts, self.txn_ts)
-    }
-
-    pub fn is_min_ts_from_raw(&self) -> bool {
-        self.raw_ts < self.txn_ts
-    }
-}
 
 // Resolver resolves timestamps that guarantee no more commit will happen before
 // the timestamp.
@@ -43,11 +16,8 @@ pub struct Resolver {
     locks_by_key: HashMap<Arc<[u8]>, TimeStamp>,
     // start_ts -> locked keys.
     lock_ts_heap: BTreeMap<TimeStamp, HashSet<Arc<[u8]>>>,
-    // raw ts, depend on "non-decreasing" of entries' timestamp in the same region.
-    // BinaryHeap is max heap, so reverse order to get a min heap. Only used in rawkv.
-    raw_lock_ts_heap: BinaryHeap<Reverse<TimeStamp>>,
     // The timestamps that guarantees no more commit will happen before.
-    resolved_ts: ResolvedTs,
+    resolved_ts: TimeStamp,
     // The highest index `Resolver` had been tracked
     tracked_index: u64,
     // The region read progress used to utilize `resolved_ts` to serve stale read request
@@ -90,10 +60,9 @@ impl Resolver {
     ) -> Resolver {
         Resolver {
             region_id,
-            resolved_ts: ResolvedTs::default(),
+            resolved_ts: TimeStamp::zero(),
             locks_by_key: HashMap::default(),
             lock_ts_heap: BTreeMap::new(),
-            raw_lock_ts_heap: BinaryHeap::new(),
             read_progress,
             tracked_index: 0,
             min_ts: TimeStamp::zero(),
@@ -102,7 +71,7 @@ impl Resolver {
     }
 
     pub fn resolved_ts(&self) -> TimeStamp {
-        self.resolved_ts.min()
+        self.resolved_ts
     }
 
     pub fn size(&self) -> usize {
@@ -176,28 +145,11 @@ impl Resolver {
         }
     }
 
-    pub fn raw_track_lock(&mut self, ts: TimeStamp) {
-        debug!("raw track ts {}, region {}", ts, self.region_id);
-        self.raw_lock_ts_heap.push(Reverse(ts));
-    }
-
-    // untrack all timestamps smaller than input ts, depend on the raw ts in one
-    // region is non-decreasing
-    pub fn raw_untrack_lock(&mut self, ts: TimeStamp) {
-        debug!("raw untrack ts before {}, region {}", ts, self.region_id);
-        while let Some(&Reverse(min_ts)) = self.raw_lock_ts_heap.peek() {
-            if min_ts > ts {
-                break;
-            }
-            self.raw_lock_ts_heap.pop();
-        }
-    }
-
     /// Try to advance resolved ts.
     ///
     /// `min_ts` advances the resolver even if there is no write.
     /// Return None means the resolver is not initialized.
-    pub fn resolve(&mut self, min_ts: TimeStamp) -> ResolvedTs {
+    pub fn resolve(&mut self, min_ts: TimeStamp) -> TimeStamp {
         // The `Resolver` is stopped, not need to advance, just return the current
         // `resolved_ts`
         if self.stopped {
@@ -209,8 +161,8 @@ impl Resolver {
         let min_start_ts = min_lock.unwrap_or(min_ts);
 
         // No more commit happens before the ts.
-        let new_txn_resolved_ts = cmp::min(min_start_ts, min_ts);
-        if self.resolved_ts.txn_ts >= new_txn_resolved_ts {
+        let new_resolved_ts = cmp::min(min_start_ts, min_ts);
+        if self.resolved_ts >= new_resolved_ts {
             let label = if has_lock { "has_lock" } else { "stale_ts" };
             RTS_RESOLVED_FAIL_ADVANCE_VEC
                 .with_label_values(&[label])
@@ -218,25 +170,18 @@ impl Resolver {
         }
 
         // Resolved ts never decrease.
-        self.resolved_ts.txn_ts = cmp::max(self.resolved_ts.txn_ts, new_txn_resolved_ts);
+        self.resolved_ts = cmp::max(self.resolved_ts, new_resolved_ts);
 
         // Publish an `(apply index, safe ts)` item into the region read progress
         if let Some(rrp) = &self.read_progress {
-            rrp.update_safe_ts(self.tracked_index, self.resolved_ts.txn_ts.into_inner());
+            rrp.update_safe_ts(self.tracked_index, self.resolved_ts.into_inner());
         }
-
-        let min_raw_ts = self
-            .raw_lock_ts_heap
-            .peek()
-            .map_or(min_ts, |ts| ts.to_owned().0);
-        // Resolved ts never decrease.
-        self.resolved_ts.raw_ts = cmp::max(self.resolved_ts.raw_ts, min_raw_ts);
 
         let new_min_ts = if has_lock {
             // If there are some lock, the min_ts must be smaller than
             // the min start ts, so it guarantees to be smaller than
             // any late arriving commit ts.
-            new_txn_resolved_ts // cmp::min(min_start_ts, min_ts)
+            new_resolved_ts // cmp::min(min_start_ts, min_ts)
         } else {
             min_ts
         };
@@ -259,10 +204,6 @@ mod tests {
         Lock(u64, Key),
         // key
         Unlock(Key),
-        // raw ts
-        RawLock(u64),
-        // raw ts
-        RawUnlock(u64),
         // min_ts, expect
         Resolve(u64, u64),
     }
@@ -316,40 +257,6 @@ mod tests {
                 Event::Unlock(Key::from_raw(b"b")),
                 Event::Unlock(Key::from_raw(b"a")),
             ],
-            // raw track lock
-            vec![Event::RawLock(1), Event::Resolve(2, 1)],
-            vec![Event::RawLock(1), Event::RawUnlock(1), Event::Resolve(2, 2)],
-            vec![Event::RawLock(1), Event::RawUnlock(2), Event::Resolve(5, 5)],
-            vec![
-                Event::RawLock(1),
-                Event::RawUnlock(2),
-                Event::RawLock(3),
-                Event::Resolve(5, 3),
-            ],
-            vec![
-                Event::RawLock(1),
-                Event::RawUnlock(2),
-                Event::RawLock(3),
-                Event::RawLock(4),
-                Event::Resolve(5, 3),
-            ],
-            // raw and txn mixed
-            vec![
-                Event::Lock(1, Key::from_raw(b"a")),
-                Event::RawLock(2),
-                Event::RawUnlock(3),
-                Event::Resolve(5, 1),
-                Event::Unlock(Key::from_raw(b"a")),
-                Event::Resolve(6, 6),
-            ],
-            vec![
-                Event::Lock(1, Key::from_raw(b"a")),
-                Event::RawLock(2),
-                Event::RawLock(3),
-                Event::Resolve(5, 1),
-                Event::Unlock(Key::from_raw(b"a")),
-                Event::Resolve(6, 2),
-            ],
         ];
 
         for (i, case) in cases.into_iter().enumerate() {
@@ -360,15 +267,8 @@ mod tests {
                         resolver.track_lock(start_ts.into(), key.into_raw().unwrap(), None)
                     }
                     Event::Unlock(key) => resolver.untrack_lock(&key.into_raw().unwrap(), None),
-                    Event::RawLock(ts) => resolver.raw_track_lock(ts.into()),
-                    Event::RawUnlock(ts) => resolver.raw_untrack_lock(ts.into()),
                     Event::Resolve(min_ts, expect) => {
-                        assert_eq!(
-                            resolver.resolve(min_ts.into()).min(),
-                            expect.into(),
-                            "case {}",
-                            i
-                        )
+                        assert_eq!(resolver.resolve(min_ts.into()), expect.into(), "case {}", i)
                     }
                 }
             }

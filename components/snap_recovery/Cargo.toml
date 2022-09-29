@@ -1,0 +1,32 @@
+[package]
+name = "snap_recovery"
+version = "0.1.0"
+edition = "2021"
+publish = false
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+chrono = "0.4"
+encryption = { path = "../../components/encryption", default-features = false }
+encryption_export = { path = "../../components/encryption/export", default-features = false }
+engine_rocks = { path = "../../components/engine_rocks", default-features = false }
+engine_traits = { path = "../../components/engine_traits", default-features = false }
+futures = { version = "0.3", features = ["executor"] }
+grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+keys = { path = "../../components/keys", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto" }
+log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
+pd_client = { path = "../pd_client", default-features = false }
+protobuf = { version = "2.8", features = ["bytes"] }
+raft_log_engine = { path = "../raft_log_engine", default-features = false }
+raftstore = { path = "../../components/raftstore", default-features = false }
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+structopt = "0.3"
+tempfile = "3.0"
+thiserror = "1.0"
+tikv = { path = "../.." }
+tikv_alloc = { path = "../../components/tikv_alloc" }
+tikv_util = { path = "../../components/tikv_util", default-features = false }
+toml = "0.5"
+txn_types = { path = "../../components/txn_types", default-features = false }

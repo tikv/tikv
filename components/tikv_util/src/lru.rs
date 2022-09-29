@@ -20,37 +20,39 @@ struct ValueEntry<K, V> {
 }
 
 struct Trace<K> {
-    head: Box<Record<K>>,
-    tail: Box<Record<K>>,
+    head: NonNull<Record<K>>,
+    tail: NonNull<Record<K>>,
     tick: usize,
     sample_mask: usize,
 }
 
 #[inline]
-unsafe fn suture<K>(leading: &mut Record<K>, following: &mut Record<K>) {
-    leading.next = NonNull::new_unchecked(following);
-    following.prev = NonNull::new_unchecked(leading);
+unsafe fn suture<K>(mut leading: NonNull<Record<K>>, mut following: NonNull<Record<K>>) {
+    leading.as_mut().next = following;
+    following.as_mut().prev = leading;
 }
 
 #[inline]
-unsafe fn cut_out<K>(record: &mut Record<K>) {
-    suture(record.prev.as_mut(), record.next.as_mut())
+unsafe fn cut_out<K>(record: NonNull<Record<K>>) {
+    suture(record.as_ref().prev, record.as_ref().next)
 }
 
 impl<K> Trace<K> {
     fn new(sample_mask: usize) -> Trace<K> {
         unsafe {
-            let mut head = Box::new(Record {
-                prev: NonNull::new_unchecked(1usize as _),
-                next: NonNull::new_unchecked(1usize as _),
+            let head = Box::leak(Box::new(Record {
+                prev: NonNull::dangling(),
+                next: NonNull::dangling(),
                 key: MaybeUninit::uninit(),
-            });
-            let mut tail = Box::new(Record {
-                prev: NonNull::new_unchecked(1usize as _),
-                next: NonNull::new_unchecked(1usize as _),
+            }))
+            .into();
+            let tail = Box::leak(Box::new(Record {
+                prev: NonNull::dangling(),
+                next: NonNull::dangling(),
                 key: MaybeUninit::uninit(),
-            });
-            suture(&mut head, &mut tail);
+            }))
+            .into();
+            suture(head, tail);
 
             Trace {
                 head,
@@ -69,17 +71,17 @@ impl<K> Trace<K> {
         }
     }
 
-    fn promote(&mut self, mut record: NonNull<Record<K>>) {
+    fn promote(&mut self, record: NonNull<Record<K>>) {
         unsafe {
-            cut_out(record.as_mut());
-            suture(record.as_mut(), self.head.next.as_mut());
-            suture(&mut self.head, record.as_mut());
+            cut_out(record);
+            suture(record, self.head.as_ref().next);
+            suture(self.head, record);
         }
     }
 
-    fn delete(&mut self, mut record: NonNull<Record<K>>) {
+    fn delete(&mut self, record: NonNull<Record<K>>) {
         unsafe {
-            cut_out(record.as_mut());
+            cut_out(record);
 
             ptr::drop_in_place(Box::from_raw(record.as_ptr()).key.as_mut_ptr());
         }
@@ -87,24 +89,24 @@ impl<K> Trace<K> {
 
     fn create(&mut self, key: K) -> NonNull<Record<K>> {
         let record = Box::leak(Box::new(Record {
-            prev: unsafe { NonNull::new_unchecked(&mut *self.head) },
-            next: self.head.next,
+            prev: self.head,
+            next: unsafe { self.head.as_ref().next },
             key: MaybeUninit::new(key),
         }))
         .into();
         unsafe {
-            self.head.next.as_mut().prev = record;
-            self.head.next = record;
+            self.head.as_mut().next.as_mut().prev = record;
+            self.head.as_mut().next = record;
         }
         record
     }
 
     fn reuse_tail(&mut self, key: K) -> (K, NonNull<Record<K>>) {
         unsafe {
-            let mut record = self.tail.prev;
-            cut_out(record.as_mut());
-            suture(record.as_mut(), self.head.next.as_mut());
-            suture(&mut self.head, record.as_mut());
+            let mut record = self.tail.as_ref().prev;
+            cut_out(record);
+            suture(record, self.head.as_ref().next);
+            suture(self.head, record);
 
             let old_key = record.as_mut().key.as_ptr().read();
             record.as_mut().key = MaybeUninit::new(key);
@@ -113,24 +115,33 @@ impl<K> Trace<K> {
     }
 
     fn clear(&mut self) {
-        let mut cur = self.head.next;
         unsafe {
-            while cur.as_ptr() != &mut *self.tail {
-                let tmp = cur.as_mut().next;
+            let mut cur = self.head.as_ref().next;
+            while cur != self.tail {
+                let tmp = cur.as_ref().next;
                 ptr::drop_in_place(Box::from_raw(cur.as_ptr()).key.as_mut_ptr());
                 cur = tmp;
             }
-            suture(&mut self.head, &mut self.tail);
+            suture(self.head, self.tail);
         }
     }
 
     fn remove_tail(&mut self) -> K {
         unsafe {
-            let mut record = self.tail.prev;
-            cut_out(record.as_mut());
+            let record = self.tail.as_ref().prev;
+            cut_out(record);
 
             let r = Box::from_raw(record.as_ptr());
             r.key.as_ptr().read()
+        }
+    }
+}
+
+impl<K> Drop for Trace<K> {
+    fn drop(&mut self) {
+        unsafe {
+            drop(Box::from_raw(self.head.as_ptr()));
+            drop(Box::from_raw(self.tail.as_ptr()));
         }
     }
 }

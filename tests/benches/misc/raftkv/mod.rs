@@ -15,9 +15,9 @@ use kvproto::{
 use raftstore::{
     router::{LocalReadRouter, RaftStoreRouter},
     store::{
-        cmd_resp, util, Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter,
-        RaftCmdExtraOpts, RaftCommand, ReadResponse, RegionSnapshot, SignificantMsg,
-        SignificantRouter, StoreMsg, StoreRouter, WriteResponse,
+        cmd_resp, Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter, RaftCmdExtraOpts,
+        RaftCommand, ReadResponse, RegionSnapshot, SignificantMsg, SignificantRouter, StoreMsg,
+        StoreRouter, WriteResponse,
     },
     Result,
 };
@@ -29,7 +29,7 @@ use tikv::{
         Engine,
     },
 };
-use tikv_util::time::ThreadReadId;
+use tikv_util::{store::new_peer, time::ThreadReadId};
 use txn_types::Key;
 
 use crate::test;
@@ -119,7 +119,7 @@ impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
 
 impl LocalReadRouter<RocksEngine> for SyncBenchRouter {
     fn read(
-        &self,
+        &mut self,
         _: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
@@ -127,7 +127,7 @@ impl LocalReadRouter<RocksEngine> for SyncBenchRouter {
         self.send_command(req, cb, RaftCmdExtraOpts::default())
     }
 
-    fn release_snapshot_cache(&self) {}
+    fn release_snapshot_cache(&mut self) {}
 }
 
 fn new_engine() -> (TempDir, RocksEngine) {
@@ -171,7 +171,7 @@ fn bench_async_snapshots_noop(b: &mut test::Bencher) {
 
 #[bench]
 fn bench_async_snapshot(b: &mut test::Bencher) {
-    let leader = util::new_peer(2, 3);
+    let leader = new_peer(2, 3);
     let mut region = Region::default();
     region.set_id(1);
     region.set_start_key(vec![]);
@@ -180,7 +180,7 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
     region.mut_region_epoch().set_version(2);
     region.mut_region_epoch().set_conf_ver(5);
     let (_tmp, db) = new_engine();
-    let kv = RaftKv::new(
+    let mut kv = RaftKv::new(
         SyncBenchRouter::new(region.clone(), db.clone()),
         db,
         Arc::new(RwLock::new(HashSet::default())),
@@ -204,7 +204,7 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
 
 #[bench]
 fn bench_async_write(b: &mut test::Bencher) {
-    let leader = util::new_peer(2, 3);
+    let leader = new_peer(2, 3);
     let mut region = Region::default();
     region.set_id(1);
     region.set_start_key(vec![]);
