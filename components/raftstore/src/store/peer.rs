@@ -846,8 +846,6 @@ pub enum UnsafeRecoveryState {
 // it is checked every time this peer applies a new entry or a snapshot,
 // if the latest committed index is met, the syncer will be called to notify the
 // result.
-
-// The applied command and their callback
 pub struct FlashbackMemoryState(Option<Sender<bool>>);
 
 impl FlashbackMemoryState {
