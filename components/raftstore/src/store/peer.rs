@@ -5653,6 +5653,8 @@ pub fn get_sync_log_from_request(msg: &RaftCmdRequest) -> bool {
                 | AdminCmdType::PrepareMerge
                 | AdminCmdType::CommitMerge
                 | AdminCmdType::RollbackMerge
+                | AdminCmdType::PrepareFlashback
+                | AdminCmdType::FinishFlashback
         );
     }
 
