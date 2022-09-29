@@ -77,10 +77,9 @@ pub struct Storage<ER> {
     snap_state: RefCell<SnapState>,
     gen_snap_task: RefCell<Option<GenSnapTask>>,
     snap_tried_cnt: RefCell<usize>,
-    tablet_suffix: Option<u64>,
 }
 
-impl<ER: RaftEngine> Debug for Storage<ER> {
+impl<ER> Debug for Storage<ER> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -91,7 +90,7 @@ impl<ER: RaftEngine> Debug for Storage<ER> {
     }
 }
 
-impl<ER: RaftEngine> Storage<ER> {
+impl<ER> Storage<ER> {
     #[inline]
     pub fn entry_storage(&self) -> &EntryStorage<ER> {
         &self.entry_storage
@@ -123,10 +122,7 @@ impl<ER: RaftEngine> Storage<ER> {
     }
 }
 
-impl<ER> Storage<ER>
-where
-    ER: RaftEngine,
-{
+impl<ER: RaftEngine> Storage<ER> {
     /// Creates a new storage with uninit states.
     ///
     /// This should only be used for creating new peer from raft message.
@@ -148,7 +144,6 @@ where
             log_fetch_scheduler,
             false,
             logger,
-            None,
         )
     }
 
@@ -192,17 +187,6 @@ where
             }
         };
 
-        let suffix = match region_state.get_state() {
-            PeerState::Tombstone | PeerState::Applying => None,
-            _ => {
-                if region_state.get_tablet_index() != 0 {
-                    Some(region_state.get_tablet_index())
-                } else {
-                    None
-                }
-            }
-        };
-
         Self::create(
             store_id,
             region_state,
@@ -212,7 +196,6 @@ where
             log_fetch_scheduler,
             true,
             logger,
-            suffix,
         )
         .map(Some)
     }
@@ -226,7 +209,6 @@ where
         log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         persisted: bool,
         logger: &Logger,
-        suffix: Option<u64>,
     ) -> Result<Self> {
         let peer = find_peer(region_state.get_region(), store_id);
         let peer = match peer {
@@ -255,7 +237,6 @@ where
             snap_state: RefCell::new(SnapState::Relax),
             gen_snap_task: RefCell::new(None),
             snap_tried_cnt: RefCell::new(0),
-            tablet_suffix: suffix,
         })
     }
 
@@ -284,6 +265,13 @@ where
 
     pub fn take_gen_snap_task(&mut self) -> Option<GenSnapTask> {
         self.gen_snap_task.get_mut().take()
+    }
+
+    fn get_tablet_index(&self) -> u64 {
+        match self.region_state.get_state() {
+            PeerState::Tombstone | PeerState::Applying => 0,
+            _ => self.region_state.get_tablet_index(),
+        }
     }
 
     fn validate_snap(&self, snap: &Snapshot, request_index: u64) -> bool {
@@ -401,7 +389,7 @@ where
             "requesting snapshot";
             "region_id" => self.region().get_id(),
             "peer_id" => self.peer().get_id(),
-            "tablet_suffix" => self.tablet_suffix.unwrap_or(0),
+            "tablet_index" => self.get_tablet_index(),
             "request_index" => request_index,
             "request_peer" => to,
         );
@@ -426,7 +414,7 @@ where
 
         let task = GenSnapTask::new(
             self.region().get_id(),
-            self.tablet_suffix.unwrap_or(0),
+            self.get_tablet_index(),
             canceled,
             sender,
         );
@@ -570,7 +558,7 @@ mod tests {
     }
 
     #[test]
-    fn test_storage_snapshot_mock_runner() {
+    fn test_storage_create_snapshot_with_mock_runner() {
         let region = new_region();
         let path = TempDir::new().unwrap();
         let raft_engine =

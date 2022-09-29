@@ -17,7 +17,7 @@ use crate::{worker::RegionTask, Result};
 
 pub struct GenSnapTask {
     pub(crate) region_id: u64,
-    pub tablet_suffix: u64,
+    pub tablet_index: u64,
     // Fetch it to cancel the task if necessary.
     pub canceled: Arc<AtomicBool>,
 
@@ -29,13 +29,13 @@ pub struct GenSnapTask {
 impl GenSnapTask {
     pub fn new(
         region_id: u64,
-        tablet_suffix: u64,
+        tablet_index: u64,
         canceled: Arc<AtomicBool>,
         snap_notifier: SyncSender<RaftSnapshot>,
     ) -> GenSnapTask {
         GenSnapTask {
             region_id,
-            tablet_suffix,
+            tablet_index,
             canceled,
             snap_notifier,
             for_balance: false,
@@ -52,7 +52,7 @@ impl GenSnapTask {
     ) -> Result<()> {
         let snapshot = RegionTask::Gen {
             region_id: self.region_id,
-            tablet_suffix: self.tablet_suffix,
+            tablet_index: self.tablet_index,
             notifier: self.snap_notifier,
             for_balance: self.for_balance,
             canceled: self.canceled,
