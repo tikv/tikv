@@ -1553,10 +1553,7 @@ where
             AdminCmdType::PrepareMerge => self.exec_prepare_merge(ctx, request),
             AdminCmdType::CommitMerge => self.exec_commit_merge(ctx, request),
             AdminCmdType::RollbackMerge => self.exec_rollback_merge(ctx, request),
-            AdminCmdType::PrepareFlashback => {
-                self.set_flashback_state(ctx, FlashbackState::Processing)
-            }
-            AdminCmdType::FinishFlashback => self.set_flashback_state(ctx, FlashbackState::Finish),
+            AdminCmdType::SetFlashbackState => self.set_flashback_state(ctx, request),
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
         }?;
         response.set_cmd_type(cmd_type);
@@ -2808,7 +2805,7 @@ where
     fn set_flashback_state(
         &self,
         ctx: &mut ApplyContext<EK>,
-        state: FlashbackState,
+        req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         let region_id = self.region_id();
         let region_state_key = keys::region_state_key(region_id);
@@ -2821,13 +2818,17 @@ where
                 return Err(box_err!("failed to get region state of {}", region_id));
             }
         };
+        let state = req.get_set_flashback().get_state();
         old_state.set_flashback_state(state);
         ctx.kv_wb_mut()
             .put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &old_state)
             .unwrap_or_else(|e| {
-                panic!(
+                error!(
                     "{} failed to exec flashback state {:?} for region {}: {:?}",
-                    self.tag, state, region_id, e
+                    self.tag,
+                    state,
+                    region_id,
+                    e
                 )
             });
 

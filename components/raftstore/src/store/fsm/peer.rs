@@ -1016,7 +1016,7 @@ where
                 target_state.get_flashback_state(),
                 self.region(),
             );
-            if target_state.get_flashback_state() == FlashbackState::Prepare {
+            if target_state.get_flashback_state() == FlashbackState::NotStart {
                 // callback itself to wait for the new change to be applied completely.
                 let raft_router_clone = self.ctx.router.clone();
                 let ch_clone = ch.clone();
@@ -1036,7 +1036,8 @@ where
                 let req = {
                     let mut request = new_admin_request(region_id, self.fsm.peer.peer.clone());
                     let mut admin = AdminRequest::default();
-                    admin.set_cmd_type(AdminCmdType::PrepareFlashback);
+                    admin.set_cmd_type(AdminCmdType::SetFlashbackState);
+                    admin.mut_set_flashback().set_state(FlashbackState::Prepare);
                     request.set_admin_request(admin);
                     request
                 };
@@ -1060,19 +1061,25 @@ where
             "region_id" => region_id,
             "peer_id" => self.fsm.peer.peer_id(),
         );
-        let cb = Callback::write(Box::new(move |resp| {
-            if resp.response.get_header().has_error() {
-                ch.send(false).unwrap();
-                error!("send flashback finish msg failed"; "region_id" => region_id);
-            }
+        let ch_clone = ch.clone();
+        let cb = Callback::write_ext(
+            Box::new(move |resp| {
+                if resp.response.get_header().has_error() {
+                    ch_clone.send(false).unwrap();
+                    error!("send flashback prepare msg failed"; "region_id" => region_id);
+                }
+            }), 
+        None, 
+        Some(Box::new(move || {
             ch.send(true).unwrap();
-        }));
+        })));
         self.fsm.peer.flashback_state.take();
 
         let req = {
             let mut request = new_admin_request(self.region().get_id(), self.fsm.peer.peer.clone());
             let mut admin = AdminRequest::default();
-            admin.set_cmd_type(AdminCmdType::FinishFlashback);
+            admin.set_cmd_type(AdminCmdType::SetFlashbackState);
+            admin.mut_set_flashback().set_state(FlashbackState::Finish);
             request.set_admin_request(admin);
             request
         };

@@ -75,8 +75,8 @@ fn test_flashback_for_schedule() {
     assert!(!resp.get_header().has_error());
 
     block_on(cluster.call_finish_flashback(region.get_id(), 1));
-    // transfer leader to (1, 1)
-    cluster.must_transfer_leader(1, new_peer(1, 1));
+    // transfer leader to (2, 2)
+    cluster.must_transfer_leader(1, new_peer(2, 2));
 }
 
 #[test]
@@ -201,6 +201,9 @@ fn test_flahsback_for_local_read() {
     assert_eq!(state.get_last_index(), last_index + 1);
 
     block_on(cluster.call_finish_flashback(region.get_id(), store_id));
+    
+    let state = cluster.raft_local_state(region.get_id(), store_id);
+    assert_eq!(state.get_last_index(), last_index + 2);
 
     // check local read after finish flashback
     let state = cluster.raft_local_state(region.get_id(), store_id);
