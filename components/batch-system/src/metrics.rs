@@ -14,7 +14,7 @@ lazy_static! {
     pub static ref ROUTER_CACHE_MISS: IntCounter =
         register_int_counter!(
             "tikv_router_cache_miss_total",
-            "Total number of region miss."
+            "Total number of router cache miss."
         ).unwrap();
 
     pub static ref ROUTER_MAILBOX_DURATION_HISTOGRAM: Histogram =
