@@ -6,6 +6,7 @@ use std::{
     fmt::{self, Display, Formatter},
     ops::Deref,
     sync::{
+        atomic,
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
     },
@@ -48,7 +49,7 @@ pub trait ReadExecutor<E: KvEngine> {
     fn get_snapshot(
         &mut self,
         ts: Option<ThreadReadId>,
-        read_context: &mut Option<LocalReadContext<'_, E>>,
+        read_context: &mut Option<&mut LocalReadContext<'_, E>>,
     ) -> Arc<E::Snapshot>;
 
     fn get_value(&mut self, req: &Request, region: &metapb::Region) -> Result<Response> {
@@ -94,7 +95,7 @@ pub trait ReadExecutor<E: KvEngine> {
         region: &Arc<metapb::Region>,
         read_index: Option<u64>,
         mut ts: Option<ThreadReadId>,
-        mut read_context: Option<LocalReadContext<'_, E>>,
+        mut read_context: Option<&mut LocalReadContext<'_, E>>,
     ) -> ReadResponse<E::Snapshot> {
         let requests = msg.get_requests();
         let mut response = ReadResponse {
@@ -216,6 +217,7 @@ where
 {
     read_id: &'a mut ThreadReadId,
     snap_cache: &'a mut Box<Option<Arc<E::Snapshot>>>,
+    snapshot_ts: &'a mut Timespec,
 }
 
 impl Drop for ReadDelegate {
@@ -555,6 +557,7 @@ where
     pub delegates: LruCache<u64, D>,
     snap_cache: Box<Option<Arc<E::Snapshot>>>,
     cache_read_id: ThreadReadId,
+    cached_snapshot_ts: Timespec,
     // A channel to raftstore.
     router: C,
 }
@@ -570,7 +573,7 @@ where
     fn get_snapshot(
         &mut self,
         create_time: Option<ThreadReadId>,
-        read_context: &mut Option<LocalReadContext<'_, E>>,
+        read_context: &mut Option<&mut LocalReadContext<'_, E>>,
     ) -> Arc<E::Snapshot> {
         let ctx = read_context.as_mut().unwrap();
         TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_requests.inc());
@@ -585,6 +588,9 @@ where
             let snap = Arc::new(self.kv_engine.snapshot());
             *ctx.read_id = ts;
             *ctx.snap_cache = Box::new(Some(snap.clone()));
+            // Ensure snapshot is acquired before snapshot ts
+            atomic::fence(Ordering::Release);
+            *ctx.snapshot_ts = monotonic_raw_now();
             return snap;
         }
         Arc::new(self.kv_engine.snapshot())
@@ -608,6 +614,7 @@ where
             cache_read_id,
             store_id: Cell::new(None),
             delegates: LruCache::with_capacity_and_sample(0, 7),
+            cached_snapshot_ts: Timespec::new(0, 0),
         }
     }
 
@@ -750,7 +757,7 @@ where
     ) {
         match self.pre_propose_raft_command(&req) {
             Ok(Some((mut delegate, policy))) => {
-                let delegate_ext: LocalReadContext<'_, E>;
+                let mut delegate_ext: LocalReadContext<'_, E>;
                 let mut response = match policy {
                     // Leader can read local if and only if it is in lease.
                     RequestPolicy::ReadLocal => {
@@ -765,20 +772,27 @@ where
                             }
                             None => monotonic_raw_now(),
                         };
-                        if !delegate.is_in_leader_lease(snapshot_ts) {
-                            // Forward to raftstore.
-                            self.redirect(RaftCommand::new(req, cb));
-                            return;
-                        }
 
                         delegate_ext = LocalReadContext {
                             snap_cache: &mut self.snap_cache,
                             read_id: &mut self.cache_read_id,
+                            snapshot_ts: &mut self.cached_snapshot_ts,
                         };
 
                         let region = Arc::clone(&delegate.region);
                         let response =
-                            delegate.execute(&req, &region, None, read_id, Some(delegate_ext));
+                            delegate.execute(&req, &region, None, read_id, Some(&mut delegate_ext));
+
+                        println!("1111");
+                        if !delegate.is_in_leader_lease(*delegate_ext.snapshot_ts) {
+                            println!("2222");
+                            // Forward to raftstore.
+                            fail_point!("localreader_before_redirect");
+                            self.redirect(RaftCommand::new(req, cb));
+                            return;
+                        }
+                        println!("3333");
+
                         // Try renew lease in advance
                         delegate.maybe_renew_lease_advance(&self.router, snapshot_ts);
                         response
@@ -794,12 +808,13 @@ where
                         delegate_ext = LocalReadContext {
                             snap_cache: &mut self.snap_cache,
                             read_id: &mut self.cache_read_id,
+                            snapshot_ts: &mut self.cached_snapshot_ts,
                         };
 
                         let region = Arc::clone(&delegate.region);
                         // Getting the snapshot
                         let response =
-                            delegate.execute(&req, &region, None, read_id, Some(delegate_ext));
+                            delegate.execute(&req, &region, None, read_id, Some(&mut delegate_ext));
 
                         // Double check in case `safe_ts` change after the first check and before
                         // getting snapshot
@@ -875,6 +890,7 @@ where
             delegates: LruCache::with_capacity_and_sample(0, 7),
             snap_cache: self.snap_cache.clone(),
             cache_read_id: self.cache_read_id.clone(),
+            cached_snapshot_ts: self.cached_snapshot_ts,
         }
     }
 }
@@ -1479,13 +1495,16 @@ mod tests {
 
         let mut read_id = ThreadReadId::new();
         let mut snap_cache = Box::new(None);
+        let mut snapshot_ts = Timespec::new(0, 0);
 
         let read_id_copy = Some(read_id.clone());
 
-        let mut read_context = Some(LocalReadContext {
+        let mut read_context = LocalReadContext {
             read_id: &mut read_id,
             snap_cache: &mut snap_cache,
-        });
+            snapshot_ts: &mut snapshot_ts,
+        };
+        let mut read_context = Some(&mut read_context);
 
         let (_, delegate) = store_meta.get_executor_and_len(1);
         let mut delegate = delegate.unwrap();
@@ -1551,10 +1570,12 @@ mod tests {
         let read_id = Some(ThreadReadId::new());
 
         {
-            let mut read_context = Some(LocalReadContext {
+            let mut read_context = LocalReadContext {
                 snap_cache: &mut reader.snap_cache,
                 read_id: &mut reader.cache_read_id,
-            });
+                snapshot_ts: &mut reader.cached_snapshot_ts,
+            };
+            let mut read_context = Some(&mut read_context);
 
             for _ in 0..10 {
                 // Different region id should reuse the cache
@@ -1570,12 +1591,13 @@ mod tests {
         let read_id = Some(ThreadReadId::new());
 
         {
-            let read_context = LocalReadContext {
+            let mut read_context = LocalReadContext {
                 snap_cache: &mut reader.snap_cache,
                 read_id: &mut reader.cache_read_id,
+                snapshot_ts: &mut reader.cached_snapshot_ts,
             };
 
-            let _ = delegate.get_snapshot(read_id.clone(), &mut Some(read_context));
+            let _ = delegate.get_snapshot(read_id.clone(), &mut Some(&mut read_context));
         }
         // This time, we will miss the cache
         assert_eq!(
@@ -1584,11 +1606,12 @@ mod tests {
         );
 
         {
-            let read_context = LocalReadContext {
+            let mut read_context = LocalReadContext {
                 snap_cache: &mut reader.snap_cache,
                 read_id: &mut reader.cache_read_id,
+                snapshot_ts: &mut reader.cached_snapshot_ts,
             };
-            let _ = delegate.get_snapshot(read_id.clone(), &mut Some(read_context));
+            let _ = delegate.get_snapshot(read_id.clone(), &mut Some(&mut read_context));
             // We can hit it again.
             assert_eq!(
                 TLS_LOCAL_READ_METRICS.with(|m| m.borrow().local_executed_snapshot_cache_hit.get()),
@@ -1598,11 +1621,12 @@ mod tests {
 
         reader.release_snapshot_cache();
         {
-            let read_context = LocalReadContext {
+            let mut read_context = LocalReadContext {
                 snap_cache: &mut reader.snap_cache,
                 read_id: &mut reader.cache_read_id,
+                snapshot_ts: &mut reader.cached_snapshot_ts,
             };
-            let _ = delegate.get_snapshot(read_id.clone(), &mut Some(read_context));
+            let _ = delegate.get_snapshot(read_id.clone(), &mut Some(&mut read_context));
         }
         // After release, we will mss the cache even with the prevsiou read_id.
         assert_eq!(
@@ -1611,11 +1635,12 @@ mod tests {
         );
 
         {
-            let read_context = LocalReadContext {
+            let mut read_context = LocalReadContext {
                 snap_cache: &mut reader.snap_cache,
                 read_id: &mut reader.cache_read_id,
+                snapshot_ts: &mut reader.cached_snapshot_ts,
             };
-            let _ = delegate.get_snapshot(read_id, &mut Some(read_context));
+            let _ = delegate.get_snapshot(read_id, &mut Some(&mut read_context));
         }
         // We can hit it again.
         assert_eq!(
@@ -1685,19 +1710,24 @@ mod tests {
         must_not_redirect(&mut reader, &rx, task);
 
         fail::cfg("before_execute_get_snapshot", "pause").unwrap();
-        reader.propose_raft_command(
-            None,
-            cmd.clone(),
-            Callback::read(Box::new(|resp| {
-                panic!("unexpected invoke, {:?}", resp);
-            })),
-        );
+        let cmd2 = cmd.clone();
+        let handle = thread::spawn(move || {
+            reader.propose_raft_command(
+                None,
+                cmd2,
+                Callback::read(Box::new(|resp| {
+                    panic!("unexpected invoke, {:?}", resp);
+                })),
+            );
+        });
+
         // Wait for request to pause right before executing getting
         // snapshot
         thread::sleep(Duration::milliseconds(500).to_std().unwrap());
         // Exipre the lease
         lease.expire();
         fail::cfg("before_execute_get_snapshot", "off").unwrap();
+        handle.join().unwrap();
 
         // So, it should be redirect to raftstore
         assert_eq!(

@@ -89,7 +89,7 @@ where
     fn get_snapshot(
         &mut self,
         _: Option<ThreadReadId>,
-        _: &mut Option<raftstore::store::LocalReadContext<'_, E>>,
+        _: &mut Option<&mut raftstore::store::LocalReadContext<'_, E>>,
     ) -> Arc<E::Snapshot> {
         Arc::new(self.cached_tablet.latest().unwrap().snapshot())
     }
