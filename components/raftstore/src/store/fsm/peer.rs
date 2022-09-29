@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use core::panic;
 // #[PerformanceCriticalPath]
 use std::{
     borrow::Cow,
@@ -83,7 +84,7 @@ use crate::{
         metrics::*,
         msg::{Callback, ExtCallback, InspectedRaftMessage},
         peer::{
-            ConsistencyState, FlashbackMemoryState, ForceLeaderState, Peer, PersistSnapshotResult,
+            ConsistencyState, FlashbackState, ForceLeaderState, Peer, PersistSnapshotResult,
             SnapshotRecoveryState, SnapshotRecoveryWaitApplySyncer, StaleState,
             UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
             UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
@@ -992,9 +993,10 @@ where
     // RegionLocalState. Once called, the persistent state and memory state will
     // first be checked and if neither is found, then a Raft Admin Command will be
     // proposed to persist the state in the RegionLocalState to lock the region.
-    // Once this command is submitted, a callback will be invoked to call msg
+    // Once this Command is submitted, a callback will be invoked to call msg
     // PrepareFlashback again to wait for the new change to be applied completely.
-    // So we can perform the flashback safely later.
+    // So we can perform the flashback safely later. We make FlashbackToVersion
+    // become a two-phase request, and lock the region as the first phase.
     fn on_prepare_flashback(&mut self, ch: Sender<bool>) {
         let region_id = self.region().get_id();
         info!(
@@ -1004,7 +1006,7 @@ where
         );
         // check persist state
         let state_key = keys::region_state_key(region_id);
-        if let Some(target_state) = self
+        if let Some(state) = self
             .ctx
             .engines
             .kv
@@ -1012,25 +1014,25 @@ where
             .unwrap()
         {
             info!(
-                "Prepare Flashback, a flashback persist state is: {} for {:?} ",
-                target_state.get_is_in_flashback(),
+                "Prepare Flashback, at now flashback persist state is: {} for {:?} ",
+                state.get_is_in_flashback(),
                 self.region(),
             );
-            if !target_state.get_is_in_flashback() {
+            if !state.get_is_in_flashback() {
                 // callback itself to wait for the new change to be applied completely.
                 let raft_router_clone = self.ctx.router.clone();
                 let ch_clone = ch.clone();
                 let cb = Callback::write(Box::new(move |resp| {
+                    if resp.response.get_header().has_error() {
+                        ch.send(false).unwrap();
+                        error!("send flashback prepare msg failed"; "region_id" => region_id);
+                    }
                     raft_router_clone
                         .force_send(
                             region_id,
                             PeerMsg::SignificantMsg(SignificantMsg::PrepareFlashback(ch_clone)),
                         )
                         .unwrap();
-                    if resp.response.get_header().has_error() {
-                        ch.send(false).unwrap();
-                        error!("send flashback prepare msg failed"; "region_id" => region_id);
-                    }
                 }));
                 // set persist state by a Raft Admin Command
                 let req = {
@@ -1045,7 +1047,7 @@ where
             }
             // check memory state
             if self.fsm.peer.flashback_state.is_none() {
-                self.fsm.peer.flashback_state = Some(FlashbackMemoryState::new(ch));
+                self.fsm.peer.flashback_state = Some(FlashbackState::new(ch));
             }
         }
         // Let the leader lease to None to ensure that local reads are not executed.
@@ -4852,9 +4854,6 @@ where
                 }
                 ExecResult::IngestSst { ssts } => self.on_ingest_sst_result(ssts),
                 ExecResult::TransferLeader { term } => self.on_transfer_leader(term),
-                ExecResult::IsInFlashback { is_in_flashback } => {
-                    self.on_ready_check_flashback_persist(is_in_flashback)
-                }
             }
         }
 
@@ -6195,24 +6194,6 @@ where
             true,
         );
         self.fsm.has_ready = true;
-    }
-
-    fn on_ready_check_flashback_persist(&mut self, should_in_flashback: bool) {
-        let state_key = keys::region_state_key(self.region().get_id());
-        if let Some(target_state) = self
-            .ctx
-            .engines
-            .kv
-            .get_msg_cf::<RegionLocalState>(CF_RAFT, &state_key)
-            .unwrap()
-        {
-            if target_state.get_is_in_flashback() != should_in_flashback {
-                panic!(
-                    "Check for Flashback whether in persist for {:?}",
-                    self.region(),
-                );
-            }
-        }
     }
 
     /// Verify and store the hash to state. return true means the hash has been

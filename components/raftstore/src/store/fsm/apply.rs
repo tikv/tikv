@@ -256,9 +256,6 @@ pub enum ExecResult<S> {
         region: Region,
         commit: u64,
     },
-    IsInFlashback {
-        is_in_flashback: bool,
-    },
     ComputeHash {
         region: Region,
         index: u64,
@@ -1416,8 +1413,7 @@ where
                 | ExecResult::CompactLog { .. }
                 | ExecResult::DeleteRange { .. }
                 | ExecResult::IngestSst { .. }
-                | ExecResult::TransferLeader { .. }
-                | ExecResult::IsInFlashback { .. } => {}
+                | ExecResult::TransferLeader { .. } => {}
                 ExecResult::SplitRegion { ref derived, .. } => {
                     self.region = derived.clone();
                     self.metrics.size_diff_hint = 0;
@@ -1554,7 +1550,6 @@ where
             AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => {
                 self.set_flashback_state_persist(ctx, request)
             }
-
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
         }?;
         response.set_cmd_type(cmd_type);
@@ -2810,7 +2805,7 @@ where
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         let region_id = self.region_id();
         let region_state_key = keys::region_state_key(region_id);
-        let mut old_state: RegionLocalState = match ctx
+        let mut old_state = match ctx
             .engine
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
         {
@@ -2819,8 +2814,7 @@ where
                 return Err(box_err!("failed to get region state of {}", region_id));
             }
         };
-        let shouild_in_flashback = req.get_cmd_type() == AdminCmdType::PrepareFlashback;
-        old_state.set_is_in_flashback(shouild_in_flashback);
+        old_state.set_is_in_flashback(req.get_cmd_type() == AdminCmdType::PrepareFlashback);
         ctx.kv_wb_mut()
             .put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &old_state)
             .unwrap_or_else(|e| {
@@ -2830,12 +2824,7 @@ where
                 )
             });
 
-        Ok((
-            AdminResponse::default(),
-            ApplyResult::Res(ExecResult::IsInFlashback {
-                is_in_flashback: shouild_in_flashback,
-            }),
-        ))
+        Ok((AdminResponse::default(), ApplyResult::None))
     }
 
     fn exec_compact_log(

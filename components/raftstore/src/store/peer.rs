@@ -846,11 +846,11 @@ pub enum UnsafeRecoveryState {
 // it is checked every time this peer applies a new entry or a snapshot,
 // if the latest committed index is met, the syncer will be called to notify the
 // result.
-pub struct FlashbackMemoryState(Option<Sender<bool>>);
+pub struct FlashbackState(Option<Sender<bool>>);
 
-impl FlashbackMemoryState {
+impl FlashbackState {
     pub fn new(ch: Sender<bool>) -> Self {
-        FlashbackMemoryState(Some(ch))
+        FlashbackState(Some(ch))
     }
 
     pub fn finish_wait_apply(&mut self) {
@@ -1048,7 +1048,7 @@ where
     /// lead_transferee if the peer is in a leadership transferring.
     pub lead_transferee: u64,
     pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
-    pub flashback_state: Option<FlashbackMemoryState>,
+    pub flashback_state: Option<FlashbackState>,
     pub snapshot_recovery_state: Option<SnapshotRecoveryState>,
 }
 
