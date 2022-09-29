@@ -1100,8 +1100,8 @@ where
     pub lead_transferee: u64,
     /// The state indicates this peer(follower) just receives a
     /// TransferLeaderMsg and this peer may become leader in the near future.
-    /// Currently, this state is set only when
-    /// cfg.raft_entry_cache_max_warmup_time is not 0.
+    /// This state is set only when cfg.warm_up_raft_entry_cache_ticks is not 0
+    /// because it only does warmup things in this state currently.
     pub pre_become_leader_state: Option<PreBecomeLeaderState>,
     pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
     pub flashback_state: Option<FlashbackState>,
@@ -4576,13 +4576,13 @@ where
     /// Before ack the transfer leader message sent by the leader.
     ///
     /// This peer can warm up it's entry cache before ack the message.
-    /// Return true means the message can be acked immediately.
+    /// Return a tuple (should_ack, should_tick).
     pub fn pre_ack_transfer_leader_msg<T>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         msg: eraftpb::Message,
         peer_disk_usage: DiskUsage,
-    ) -> bool {
+    ) -> (bool, bool) {
         let pending_snapshot = self.is_handling_snapshot() || self.has_pending_snapshot();
         if pending_snapshot
             || msg.get_from() != self.leader_id()
@@ -4600,12 +4600,12 @@ where
                 "pending_snapshot" => pending_snapshot,
                 "disk_usage" => ?ctx.self_disk_usage,
             );
-            return false;
+            return (false, false);
         }
 
-        // When the max warmup time is 0, skip the warmup process.
-        if ctx.cfg.raft_entry_cache_max_warmup_time.0 <= Duration::from_millis(0) {
-            return true;
+        // When the the warm up ticks is 0, skip the warmup process.
+        if ctx.cfg.warm_up_raft_entry_cache_ticks == 0 {
+            return (true, false);
         }
 
         // Check if this peer is already in PreBecomeLeaderState.
@@ -4614,11 +4614,13 @@ where
             // Return true if it is timeout, so that this peer could ack
             // the message and the leadership transfer process can continue.
             // Though it may be timeout, the warmup operation may succeeded lator.
-            let is_timeout = state.elapsed() >= ctx.cfg.raft_entry_cache_max_warmup_time.0;
+            let timeout = ctx.cfg.pre_become_leader_state_tick_interval.as_millis()
+                * ctx.cfg.warm_up_raft_entry_cache_ticks as u64;
+            let is_timeout = state.elapsed() >= Duration::from_millis(timeout);
             if is_timeout {
                 WARM_UP_ENTRY_CACHE_COUNTER.timeout.inc();
             }
-            return is_timeout;
+            return (is_timeout, false);
         }
 
         // Sometimes, it needs not to fetch raft logs from raftdb and
@@ -4653,21 +4655,21 @@ where
         }
 
         if need_fetch_to_warmup {
-            let low = if warmup_range_start > self.last_compacted_idx {
+            let low = if warmup_range_start >= self.last_compacted_idx {
                 warmup_range_start
             } else {
-                self.last_compacted_idx + 1
+                self.last_compacted_idx
             };
             if let Some(high) = self.get_store().async_warm_up_entry_cache(low) {
                 self.pre_become_leader_state =
                     Some(PreBecomeLeaderState::new_with_warmup_range(low, high));
-                return false;
+                return (false, true);
             }
         }
 
         WARM_UP_ENTRY_CACHE_COUNTER.already.inc();
         self.pre_become_leader_state = Some(PreBecomeLeaderState::new());
-        true
+        (true, true)
     }
 
     pub fn ack_transfer_leader_msg(

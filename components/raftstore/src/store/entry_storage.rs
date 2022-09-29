@@ -1024,7 +1024,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
 
     /// Trigger a task to warm up the entry cache.
     ///
-    /// This will ensure the range [low, last_index] are loaded into cache.
+    /// This will ensure the range [low..high..last_index] are loaded into cache.
     /// Return the high index of the warmup range if a task is successfully
     /// triggered.
     pub fn async_warm_up_entry_cache(&self, low: u64) -> Option<u64> {
@@ -1694,5 +1694,54 @@ pub mod tests {
         assert!(!cache.appendleft(&ents2));
         // Appendleft should fail when there is a hole.
         assert!(!cache.appendleft(&ents3));
+    }
+
+    #[test]
+    fn test_async_warm_up_entry_cache() {
+        let ents = vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)];
+
+        let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
+        let region_worker = Worker::new("snap-manager").lazy_build("snap-manager");
+        let region_scheduler = region_worker.scheduler();
+        let (dummy_scheduler, _rx) = dummy_scheduler();
+
+        let mut store = new_storage_from_ents(region_scheduler, dummy_scheduler, &td, &ents);
+        store.cache.compact_to(6);
+        assert_eq!(store.entry_cache_first_index().unwrap(), 6);
+
+        // The return value should be None when it is already warmed up.
+        assert!(store.async_warm_up_entry_cache(6).is_none());
+
+        // The high index should be equal to the entry_cache_first_index.
+        assert_eq!(store.async_warm_up_entry_cache(5).unwrap(), 6);
+
+        store.cache.compact_to(7);  // Clean cache.
+        // The high index should be equal to the last_index + 1.
+        assert_eq!(store.async_warm_up_entry_cache(5).unwrap(), 7);
+    }
+
+    #[test]
+    fn test_on_warmup_range_fetched(){
+        let ents = vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)];
+
+        let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
+        let region_worker = Worker::new("snap-manager").lazy_build("snap-manager");
+        let region_scheduler = region_worker.scheduler();
+        let (dummy_scheduler, _rx) = dummy_scheduler();
+        let mut store = new_storage_from_ents(region_scheduler, dummy_scheduler, &td, &ents);
+        store.cache.compact_to(6);
+
+        let res = RaftlogFetchResult {
+            ents: Ok(ents[1..2].to_vec()),
+            low: 5,
+            max_size: u64::MAX,
+            hit_size_limit: false,
+            tried_cnt: MAX_ASYNC_FETCH_TRY_CNT,
+            term: 1,
+        };
+        store.update_async_fetch_res(5, Some(Box::new(res)));
+        store.on_warmup_range_fetched((5, 6));
+        // Cache should be warmed up.
+        assert_eq!(store.entry_cache_first_index().unwrap(), 5);
     }
 }

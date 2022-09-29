@@ -1217,7 +1217,7 @@ where
             PeerTick::ReactivateMemoryLock => self.on_reactivate_memory_lock_tick(),
             PeerTick::ReportBuckets => self.on_report_region_buckets_tick(),
             PeerTick::CheckLongUncommitted => self.on_check_long_uncommitted_tick(),
-            PeerTick::PreBecomeLeaderState => self.on_check_pre_become_leader_tick(),
+            PeerTick::PreBecomeLeaderState => self.on_pre_become_leader_state_tick(),
         }
     }
 
@@ -3279,12 +3279,17 @@ where
                     }
                 }
             }
-        } else if self
-            .fsm
-            .peer
-            .pre_ack_transfer_leader_msg(self.ctx, msg.clone(), peer_disk_usage)
-        {
-            self.fsm.peer.ack_transfer_leader_msg(false);
+        } else {
+            let (should_ack, should_tick) = self
+                .fsm
+                .peer
+                .pre_ack_transfer_leader_msg(self.ctx, msg.clone(), peer_disk_usage);
+            if should_tick {
+                self.register_pre_become_leader_state_tick();
+            }
+            if should_ack{
+                self.fsm.peer.ack_transfer_leader_msg(false);
+            }
         }
     }
 
@@ -5386,7 +5391,7 @@ where
         self.schedule_tick(PeerTick::PreBecomeLeaderState)
     }
 
-    fn on_check_pre_become_leader_tick(&mut self) {
+    fn on_pre_become_leader_state_tick(&mut self) {
         if let Some(state) = self.fsm.peer.pre_become_leader_state.as_mut() {
             state.ticks += 1;
             if state.ticks >= self.ctx.cfg.exit_pre_become_leader_state_ticks {
@@ -5394,7 +5399,7 @@ where
                 return;
             }
 
-            if state.elapsed() >= self.ctx.cfg.raft_entry_cache_max_warmup_time.0
+            if state.ticks >= self.ctx.cfg.warm_up_raft_entry_cache_ticks
                 && !state.is_msg_acked()
             {
                 WARM_UP_ENTRY_CACHE_COUNTER.timeout.inc();

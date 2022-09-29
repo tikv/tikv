@@ -674,7 +674,7 @@ impl Suite {
         let leader = self.cluster.leader_of_region(region_id);
         for peer in region.get_peers() {
             if leader.as_ref().map(|p| p.id != peer.id).unwrap_or(true) {
-                self.cluster.transfer_leader(region_id, peer.clone());
+                self.cluster.must_transfer_leader(region_id, peer.clone());
                 self.cluster.reset_leader_of_region(region_id);
                 return;
             }

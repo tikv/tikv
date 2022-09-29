@@ -54,7 +54,7 @@ impl PeerTick {
             PeerTick::ReactivateMemoryLock => "reactivate_memory_lock",
             PeerTick::ReportBuckets => "report_buckets",
             PeerTick::CheckLongUncommitted => "check_long_uncommitted",
-            PeerTick::PreBecomeLeaderState => "check_pre_become_leader",
+            PeerTick::PreBecomeLeaderState => "pre_become_leader_state",
         }
     }
 

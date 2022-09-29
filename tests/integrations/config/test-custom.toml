@@ -222,6 +222,9 @@ report-min-resolved-ts-interval = "233ms"
 report-region-buckets-tick-interval = "1234s"
 max-snapshot-file-raw-size = "10GB"
 unreachable-backoff = "111s"
+pre-become-leader-state-tick-interval = "2s"
+exit-pre-become-leader-state-ticks = 2
+warm-up-raft-entry-cache-ticks = 2
 
 [coprocessor]
 split-region-on-table = false
