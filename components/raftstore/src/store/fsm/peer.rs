@@ -2632,7 +2632,7 @@ where
         if !self.fsm.peer.is_leader() {
             let mut resp = ExtraMessage::default();
             resp.set_type(ExtraMessageType::MsgTracePeerAvailabilityInfo);
-            resp.miss_data = self.fsm.peer.miss_data;
+            resp.wait_data = self.fsm.peer.wait_data;
             self.fsm
                 .peer
                 .send_extra_message(resp, &mut self.ctx.trans, from);
@@ -2644,8 +2644,11 @@ where
             );
             return;
         }
-        if !msg.miss_data {
-            self.fsm.peer.peers_miss_data.remove(&from.get_id());
+        if !msg.wait_data {
+            self.fsm
+                .peer
+                .wait_data_peers
+                .retain(|id| *id != from.get_id());
             info!(
                 "receive peer ready info";
                 "peer_id" => self.fsm.peer.peer.get_id(),
@@ -3240,7 +3243,7 @@ where
                         );
                     } else {
                         self.fsm.peer.transfer_leader(&from);
-                        self.fsm.peer.peers_miss_data.clear();
+                        self.fsm.peer.wait_data_peers.clear();
                     }
                 }
             }
@@ -3674,13 +3677,6 @@ where
                     // Add this peer to peer_heartbeats.
                     self.fsm.peer.peer_heartbeats.insert(peer_id, now);
                     if self.fsm.peer.is_leader() {
-                        if peer.is_witness {
-                            self.fsm.peer.peers_miss_data.insert(peer.id, false);
-                        } else {
-                            // TODO: add judgment condition: prew_peer_is_witness
-                            self.fsm.peer.peers_miss_data.insert(peer.id, true);
-                            self.register_check_peers_availability_tick();
-                        }
                         need_ping = true;
                         self.fsm.peer.peers_start_pending_time.push((peer_id, now));
                         // As `raft_max_inflight_msgs` may have been updated via online config
@@ -3699,7 +3695,7 @@ where
                             .peer
                             .peers_start_pending_time
                             .retain(|&(p, _)| p != peer_id);
-                        self.fsm.peer.peers_miss_data.remove(&peer_id);
+                        self.fsm.peer.wait_data_peers.retain(|id| *id != peer_id);
                     }
                     self.fsm.peer.remove_peer_from_cache(peer_id);
                     // We only care remove itself now.
@@ -5904,28 +5900,26 @@ where
     }
 
     fn on_check_peers_availability(&mut self) {
-        for (peer_id, miss_data) in self.fsm.peer.peers_miss_data.iter() {
-            if *miss_data {
-                if let Some(peer) = self.fsm.peer.get_peer_from_cache(*peer_id) {
-                    let mut msg = ExtraMessage::default();
-                    msg.set_type(ExtraMessageType::MsgTracePeerAvailabilityInfo);
-                    self.fsm
-                        .peer
-                        .send_extra_message(msg, &mut self.ctx.trans, &peer);
-                    info!(
-                        "check peer availability";
-                        "target peer id" => *peer_id,
-                    );
-                    continue;
-                }
-                // TODO: make sure if the path is reasonable
-                warn!(
-                    "peer not found, ignore check availability";
-                    "region_id" => self.region_id(),
-                    "peer_id" => self.fsm.peer_id(),
-                    "to_peer_id" => peer_id,
+        for peer_id in self.fsm.peer.wait_data_peers.iter() {
+            if let Some(peer) = self.fsm.peer.get_peer_from_cache(*peer_id) {
+                let mut msg = ExtraMessage::default();
+                msg.set_type(ExtraMessageType::MsgTracePeerAvailabilityInfo);
+                self.fsm
+                    .peer
+                    .send_extra_message(msg, &mut self.ctx.trans, &peer);
+                info!(
+                    "check peer availability";
+                    "target peer id" => *peer_id,
                 );
+                continue;
             }
+            // TODO: make sure if the path is reasonable
+            warn!(
+                "peer not found, ignore check availability";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "to_peer_id" => peer_id,
+            );
         }
     }
 
