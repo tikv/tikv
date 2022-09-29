@@ -1854,7 +1854,7 @@ where
             // if the low and high index are exactly the same as the warmup range.
             let state = self.fsm.peer.pre_become_leader_state.as_ref().unwrap();
             let entry_cache_warmup_range = state.entry_cache_warmup_range();
-            let is_msg_acked = state.is_msg_acked();
+            let is_entry_cache_warmup_timeout = state.is_entry_cache_warmup_timeout();
 
             // Generally speaking, when the res.low is the same as the warmup
             // range start, the fetch result is exactly used for warmup.
@@ -1907,9 +1907,8 @@ where
                 // Clean the async fetch result immediately if it is not used.
                 self.fsm.peer.mut_store().update_async_fetch_res(low, None);
             }
-            // No matter the entry cache is warmed up or not,
-            // the transfer leader msg should be acked.
-            if !is_msg_acked {
+            // Need not to ack here if warmup is timeout.
+            if !is_entry_cache_warmup_timeout {
                 self.fsm.peer.ack_transfer_leader_msg(false);
             }
         } else {
@@ -3279,16 +3278,24 @@ where
                     }
                 }
             }
-        } else {
-            let (should_ack, should_tick) =
-                self.fsm
-                    .peer
-                    .pre_ack_transfer_leader_msg(self.ctx, msg.clone(), peer_disk_usage);
-            if should_tick {
-                self.register_pre_become_leader_state_tick();
-            }
-            if should_ack {
+        } else if !self
+            .fsm
+            .peer
+            .maybe_reject_transfer_leader_msg(self.ctx, msg, peer_disk_usage)
+        {
+            // Skip pre_ack when the warmup ticks is 0, because it only does
+            // warmup related things in the pre_ack stage.
+            if self.ctx.cfg.warm_up_raft_entry_cache_ticks == 0 {
                 self.fsm.peer.ack_transfer_leader_msg(false);
+            } else {
+                let (should_ack, should_tick) =
+                    self.fsm.peer.pre_ack_transfer_leader_msg(self.ctx, msg);
+                if should_tick {
+                    self.register_pre_become_leader_state_tick();
+                }
+                if should_ack {
+                    self.fsm.peer.ack_transfer_leader_msg(false);
+                }
             }
         }
     }
@@ -5399,7 +5406,9 @@ where
                 return;
             }
 
-            if state.ticks >= self.ctx.cfg.warm_up_raft_entry_cache_ticks && !state.is_msg_acked() {
+            if state.ticks >= self.ctx.cfg.warm_up_raft_entry_cache_ticks
+                && !state.is_entry_cache_warmup_timeout()
+            {
                 WARM_UP_ENTRY_CACHE_COUNTER.timeout.inc();
                 self.fsm.peer.ack_transfer_leader_msg(false);
             }

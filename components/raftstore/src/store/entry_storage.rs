@@ -1043,15 +1043,11 @@ impl<ER: RaftEngine> EntryStorage<ER> {
         match self.entries(low, high, u64::MAX, GetEntriesContext::empty(true)) {
             Ok(_) => {
                 // This should not happen, but it's OK :)
-                WARM_UP_ENTRY_CACHE_COUNTER.unexpected_err.inc();
                 error!("entries are fetched unexpectedly during warming up");
                 return None;
             }
-            Err(raft::Error::Store(raft::StorageError::LogTemporarilyUnavailable)) => {
-                WARM_UP_ENTRY_CACHE_COUNTER.started.inc();
-            }
+            Err(raft::Error::Store(raft::StorageError::LogTemporarilyUnavailable)) => {}
             Err(e) => {
-                WARM_UP_ENTRY_CACHE_COUNTER.unexpected_err.inc();
                 error!(
                     "fetching entries met unexpected error during warming up";
                     "err" => ?e,

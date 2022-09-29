@@ -83,6 +83,8 @@ make_auto_flush_static_metric! {
         started,
         timeout,
         finished,
+        no_need,
+        invalid_index,
         unexpected_err,
     }
 

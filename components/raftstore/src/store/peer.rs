@@ -873,9 +873,8 @@ impl FlashbackState {
 pub struct PreBecomeLeaderState {
     pub ticks: usize,
     entry_cache_warmup_range: (u64, u64),
+    is_entry_cache_warmup_timeout: bool,
     started_at: TiInstant,
-    /// Has the TransferLeaderMsg been acked.
-    is_msg_acked: bool,
 }
 
 impl PreBecomeLeaderState {
@@ -887,8 +886,8 @@ impl PreBecomeLeaderState {
         PreBecomeLeaderState {
             ticks: 0,
             entry_cache_warmup_range: (low, high),
+            is_entry_cache_warmup_timeout: false,
             started_at: TiInstant::now(),
-            is_msg_acked: false,
         }
     }
 
@@ -901,14 +900,12 @@ impl PreBecomeLeaderState {
         self.started_at.saturating_elapsed()
     }
 
-    /// Has the TransferLeaderMsg been acked.
-    pub fn is_msg_acked(&self) -> bool {
-        self.is_msg_acked
+    pub fn is_entry_cache_warmup_timeout(&self) -> bool {
+        self.is_entry_cache_warmup_timeout
     }
 
-    /// Mark thart the TransferLeaderMsg has been acked.
-    pub fn acked(&mut self) {
-        self.is_msg_acked = true;
+    pub fn acked_due_to_timeout(&mut self) {
+        self.is_entry_cache_warmup_timeout = true;
     }
 }
 
@@ -4573,16 +4570,12 @@ where
         Ok(Either::Left(propose_index))
     }
 
-    /// Before ack the transfer leader message sent by the leader.
-    ///
-    /// This peer can warm up it's entry cache before ack the message.
-    /// Return a tuple (should_ack, should_tick).
-    pub fn pre_ack_transfer_leader_msg<T>(
+    pub fn maybe_reject_transfer_leader_msg<T>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
-        msg: eraftpb::Message,
+        msg: &eraftpb::Message,
         peer_disk_usage: DiskUsage,
-    ) -> (bool, bool) {
+    ) -> bool {
         let pending_snapshot = self.is_handling_snapshot() || self.has_pending_snapshot();
         if pending_snapshot
             || msg.get_from() != self.leader_id()
@@ -4600,50 +4593,45 @@ where
                 "pending_snapshot" => pending_snapshot,
                 "disk_usage" => ?ctx.self_disk_usage,
             );
-            return (false, false);
+            return true;
         }
+        false
+    }
 
-        // When the the warm up ticks is 0, skip the warmup process.
-        if ctx.cfg.warm_up_raft_entry_cache_ticks == 0 {
-            return (true, false);
-        }
-
-        // Check if this peer is already in PreBecomeLeaderState.
-        // By default, PD resends the transfer leader command every 2s for 5 times.
-        if let Some(state) = &self.pre_become_leader_state {
-            // Return true if it is timeout, so that this peer could ack
-            // the message and the leadership transfer process can continue.
-            // Though it may be timeout, the warmup operation may succeeded lator.
-            let timeout = ctx.cfg.pre_become_leader_state_tick_interval.as_millis()
-                * ctx.cfg.warm_up_raft_entry_cache_ticks as u64;
-            let is_timeout = state.elapsed() >= Duration::from_millis(timeout);
-            if is_timeout {
-                WARM_UP_ENTRY_CACHE_COUNTER.timeout.inc();
-            }
-            return (is_timeout, false);
-        }
-
-        // Sometimes, it needs not to fetch raft logs from raftdb and
-        // it just needs to prevent the current cache from compacted
-        let mut need_fetch_to_warmup = true;
-
+    /// Before ack the transfer leader message sent by the leader.
+    /// For easy understanding, this stage is called `PreBecomeLeaderState`.
+    /// Currently, it only warms up the entry cache in this stage.
+    ///
+    /// This return a tuple: (should_ack, is_first_time).
+    /// * `should_ack` means that the the TransferLeaderMsg should be acked
+    ///   immediately. When cache is warmed up or the warmup operation is
+    ///   timeout, it is true.
+    /// * `is_first_time` implies whether it isthe first time entering this
+    ///   state.
+    pub fn pre_ack_transfer_leader_msg<T>(
+        &mut self,
+        ctx: &mut PollContext<EK, ER, T>,
+        msg: &eraftpb::Message,
+    ) -> (bool, bool) {
         // The start index of warmup range is leader's entry_cache_start_index,
         // and it is equal to the lowest matched index in general.
-        // Need not to warm up when the index is 0.
-        //
-        // There are two cases where index can be 0
-        // 1. During rolling upgrade, old instances doesn't support warmup.
-        // 2. The leader's entry cache is empty.
         let warmup_range_start = msg.get_index();
-        if warmup_range_start == 0 {
-            need_fetch_to_warmup = false;
-        }
-
         let last_index = self.get_store().last_index();
-        // warmup_range_start should not be large than the last index.
-        // Since the index is leader's entry_cache_first_index, so this is
-        // unlikely to happen.
-        if warmup_range_start > last_index {
+        let mut should_ack_now = false;
+        let mut low = warmup_range_start;
+
+        // Need not to warm up when the index is 0.
+        // There are two cases where index can be 0:
+        // 1. During rolling upgrade, old instances may not support warmup.
+        // 2. The leader's entry cache is empty.
+        if warmup_range_start == 0 {
+            WARM_UP_ENTRY_CACHE_COUNTER.no_need.inc();
+            should_ack_now = true;
+        } else if warmup_range_start > last_index {
+            // warmup range start should not be large than the last index.
+            // Since the index is leader's entry_cache_first_index, so this is
+            // unlikely to happen.
+            WARM_UP_ENTRY_CACHE_COUNTER.invalid_index.inc();
             warn!(
                 "the start index of warmup range is too large";
                 "region_id" => self.region_id,
@@ -4651,25 +4639,58 @@ where
                 "warmup_range_start" => warmup_range_start,
                 "last_index" => last_index,
             );
-            need_fetch_to_warmup = false;
-        }
-
-        if need_fetch_to_warmup {
-            let low = if warmup_range_start >= self.last_compacted_idx {
-                warmup_range_start
-            } else {
-                self.last_compacted_idx
+            should_ack_now = true;
+        } else {
+            if warmup_range_start < self.last_compacted_idx {
+                low = self.last_compacted_idx
             };
-            if let Some(high) = self.get_store().async_warm_up_entry_cache(low) {
-                self.pre_become_leader_state =
-                    Some(PreBecomeLeaderState::new_with_warmup_range(low, high));
-                return (false, true);
+            // Check if the entry cache is already warmed up.
+            if let Some(first_index) = self.get_store().entry_cache_first_index() {
+                if low >= first_index {
+                    WARM_UP_ENTRY_CACHE_COUNTER.already.inc();
+                    should_ack_now = true;
+                }
             }
         }
 
-        WARM_UP_ENTRY_CACHE_COUNTER.already.inc();
-        self.pre_become_leader_state = Some(PreBecomeLeaderState::new());
-        (true, true)
+        if should_ack_now {
+            let is_first_time = if self.pre_become_leader_state.as_ref().is_none() {
+                self.pre_become_leader_state = Some(PreBecomeLeaderState::new());
+                true
+            } else {
+                false
+            };
+            return (should_ack_now, is_first_time);
+        }
+
+        // Check if the warmup operation is timeout if it is already in
+        // PreBecomeLeaderState.
+        if let Some(state) = self.pre_become_leader_state.as_mut() {
+            // If it is timeout, this peer should ack the message so that
+            // the leadership transfer process can continue.
+            if state.is_entry_cache_warmup_timeout() {
+                return (true, false);
+            }
+            let timeout = ctx.cfg.pre_become_leader_state_tick_interval.as_millis()
+                * ctx.cfg.warm_up_raft_entry_cache_ticks as u64;
+            let is_timeout = state.elapsed() >= Duration::from_millis(timeout);
+            if is_timeout {
+                state.is_entry_cache_warmup_timeout = true;
+                WARM_UP_ENTRY_CACHE_COUNTER.timeout.inc();
+            }
+            (is_timeout, false)
+        } else {
+            let is_first_time = true;
+            if let Some(high) = self.get_store().async_warm_up_entry_cache(low) {
+                WARM_UP_ENTRY_CACHE_COUNTER.started.inc();
+                self.pre_become_leader_state =
+                    Some(PreBecomeLeaderState::new_with_warmup_range(low, high));
+                return (false, is_first_time);
+            }
+            WARM_UP_ENTRY_CACHE_COUNTER.unexpected_err.inc();
+            self.pre_become_leader_state = Some(PreBecomeLeaderState::new());
+            (true, is_first_time)
+        }
     }
 
     pub fn ack_transfer_leader_msg(
@@ -4686,12 +4707,6 @@ where
             msg.set_context(Bytes::from_static(TRANSFER_LEADER_COMMAND_REPLY_CTX));
         }
         self.raft_group.raft.msgs.push(msg);
-        // The state should be already set when reply_cmd is true.
-        if !reply_cmd {
-            if let Some(state) = self.pre_become_leader_state.as_mut() {
-                state.acked();
-            }
-        }
     }
 
     /// Return true to if the transfer leader request is accepted.
