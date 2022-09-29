@@ -137,6 +137,17 @@ pub struct Config {
     #[online_config(skip)]
     pub snap_apply_batch_size: ReadableSize,
 
+    // used to periodically check whether schedule pending applies in region runner
+    #[doc(hidden)]
+    #[online_config(skip)]
+    pub region_worker_tick_interval: ReadableDuration,
+
+    // used to periodically check whether we should delete a stale peer's range in
+    // region runner
+    #[doc(hidden)]
+    #[online_config(skip)]
+    pub clean_stale_ranges_tick: usize,
+
     // Interval (ms) to check region whether the data is consistent.
     pub consistency_check_interval: ReadableDuration,
 
@@ -335,6 +346,12 @@ impl Default for Config {
             peer_stale_state_check_interval: ReadableDuration::minutes(5),
             leader_transfer_max_log_lag: 128,
             snap_apply_batch_size: ReadableSize::mb(10),
+            region_worker_tick_interval: if cfg!(feature = "test") {
+                ReadableDuration::millis(200)
+            } else {
+                ReadableDuration::millis(1000)
+            },
+            clean_stale_ranges_tick: if cfg!(feature = "test") { 1 } else { 10 },
             lock_cf_compact_interval: ReadableDuration::minutes(10),
             lock_cf_compact_bytes_threshold: ReadableSize::mb(256),
             // Disable consistency check by default as it will hurt performance.
@@ -384,7 +401,7 @@ impl Default for Config {
             region_split_size: ReadableSize(0),
             clean_stale_peer_delay: ReadableDuration::minutes(0),
             inspect_interval: ReadableDuration::millis(500),
-            report_min_resolved_ts_interval: ReadableDuration::millis(0),
+            report_min_resolved_ts_interval: ReadableDuration::secs(1),
             check_leader_lease_interval: ReadableDuration::secs(0),
             renew_leader_lease_advance_duration: ReadableDuration::secs(0),
             report_region_buckets_tick_interval: ReadableDuration::secs(10),

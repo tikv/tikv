@@ -1,9 +1,10 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    cell::Cell,
     mem,
     ops::{Deref, DerefMut},
-    sync::{atomic::AtomicUsize, Arc},
+    sync::{atomic::AtomicUsize, Arc, Mutex},
     time::Duration,
 };
 
@@ -11,10 +12,13 @@ use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, HandleResult, HandlerBuilder, PollHandler,
 };
 use collections::HashMap;
-use crossbeam::channel::Sender;
+use crossbeam::channel::{Sender, TrySendError};
 use engine_traits::{Engines, KvEngine, RaftEngine, TabletFactory};
 use futures::{compat::Future01CompatExt, FutureExt};
-use kvproto::{metapb::Store, raft_serverpb::PeerState};
+use kvproto::{
+    metapb::Store,
+    raft_serverpb::{PeerState, RaftMessage},
+};
 use raft::INVALID_ID;
 use raftstore::store::{
     fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, RaftlogFetchRunner,
@@ -24,17 +28,20 @@ use slog::Logger;
 use tikv_util::{
     box_err,
     config::{Tracker, VersionTrack},
+    defer,
     future::poll_future_notify,
     time::Instant as TiInstant,
     timer::SteadyTimer,
     worker::{Scheduler, Worker},
+    Either,
 };
+use time::Timespec;
 
 use super::apply::{create_apply_batch_system, ApplyPollerBuilder, ApplyRouter, ApplySystem};
 use crate::{
-    fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate},
-    raft::Peer,
-    router::{PeerMsg, PeerTick, StoreMsg},
+    fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate, StoreMeta},
+    raft::{Peer, Storage},
+    router::{PeerMsg, PeerTick, QueryResChannel, StoreMsg},
     Error, Result,
 };
 
@@ -44,6 +51,7 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub logger: Logger,
     /// The transport for sending messages to peers on other stores.
     pub trans: T,
+    pub current_time: Option<Timespec>,
     pub has_ready: bool,
     pub raft_metrics: RaftMetrics,
     /// The latest configuration.
@@ -55,28 +63,11 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     /// The precise timer for scheduling tick.
     pub timer: SteadyTimer,
     pub write_senders: WriteSenders<EK, ER>,
-}
-
-impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
-    fn new(
-        cfg: Config,
-        trans: T,
-        router: StoreRouter<EK, ER>,
-        write_senders: WriteSenders<EK, ER>,
-        logger: Logger,
-    ) -> Self {
-        Self {
-            logger,
-            trans,
-            has_ready: false,
-            raft_metrics: RaftMetrics::new(cfg.waterfall_metrics),
-            cfg,
-            router,
-            tick_batch: vec![PeerTickBatch::default(); PeerTick::VARIANT_COUNT],
-            timer: SteadyTimer::default(),
-            write_senders,
-        }
-    }
+    /// store meta
+    pub store_meta: Arc<Mutex<StoreMeta<EK>>>,
+    pub engine: ER,
+    pub tablet_factory: Arc<dyn TabletFactory<EK>>,
+    pub log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
 }
 
 /// A [`PollHandler`] that handles updates of [`StoreFsm`]s and [`PeerFsm`]s.
@@ -226,6 +217,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
     write_senders: WriteSenders<EK, ER>,
     logger: Logger,
+    store_meta: Arc<Mutex<StoreMeta<EK>>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
@@ -239,6 +231,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         store_writers: &mut StoreWriters<EK, ER>,
         logger: Logger,
+        store_meta: Arc<Mutex<StoreMeta<EK>>>,
     ) -> Self {
         StorePollerBuilder {
             cfg,
@@ -250,6 +243,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             log_fetch_scheduler,
             logger,
             write_senders: store_writers.senders(),
+            store_meta,
         }
     }
 
@@ -260,19 +254,17 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         self.engine
             .for_each_raft_group::<Error, _>(&mut |region_id| {
                 assert_ne!(region_id, INVALID_ID);
-                let peer = match Peer::new(
-                    &cfg,
+                let storage = match Storage::new(
                     region_id,
                     self.store_id,
-                    self.tablet_factory.as_ref(),
                     self.engine.clone(),
                     self.log_fetch_scheduler.clone(),
                     &self.logger,
                 )? {
-                    Some(peer) => peer,
+                    Some(p) => p,
                     None => return Ok(()),
                 };
-                let pair = PeerFsm::new(&cfg, peer)?;
+                let pair = PeerFsm::new(&cfg, &*self.tablet_factory, storage)?;
                 let prev = regions.insert(region_id, pair);
                 if let Some((_, p)) = prev {
                     return Err(box_err!(
@@ -303,13 +295,23 @@ where
     type Handler = StorePoller<EK, ER, T>;
 
     fn build(&mut self, priority: batch_system::Priority) -> Self::Handler {
-        let poll_ctx = StoreContext::new(
-            self.cfg.value().clone(),
-            self.trans.clone(),
-            self.router.clone(),
-            self.write_senders.clone(),
-            self.logger.clone(),
-        );
+        let cfg = self.cfg.value().clone();
+        let poll_ctx = StoreContext {
+            logger: self.logger.clone(),
+            trans: self.trans.clone(),
+            current_time: None,
+            has_ready: false,
+            raft_metrics: RaftMetrics::new(cfg.waterfall_metrics),
+            cfg,
+            router: self.router.clone(),
+            tick_batch: vec![PeerTickBatch::default(); PeerTick::VARIANT_COUNT],
+            timer: SteadyTimer::default(),
+            write_senders: self.write_senders.clone(),
+            store_meta: self.store_meta.clone(),
+            engine: self.engine.clone(),
+            tablet_factory: self.tablet_factory.clone(),
+            log_fetch_scheduler: self.log_fetch_scheduler.clone(),
+        };
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
         StorePoller::new(poll_ctx, cfg_tracker)
     }
@@ -344,25 +346,21 @@ pub struct StoreSystem<EK: KvEngine, ER: RaftEngine> {
 impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
     pub fn start<T>(
         &mut self,
-        store: Store,
+        store_id: u64,
         cfg: Arc<VersionTrack<Config>>,
         raft_engine: ER,
         tablet_factory: Arc<dyn TabletFactory<EK>>,
         trans: T,
         router: &StoreRouter<EK, ER>,
+        store_meta: Arc<Mutex<StoreMeta<EK>>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
     {
         let mut workers = Workers::default();
-        workers.store_writers.spawn(
-            store.get_id(),
-            raft_engine.clone(),
-            None,
-            router,
-            &trans,
-            &cfg,
-        )?;
+        workers
+            .store_writers
+            .spawn(store_id, raft_engine.clone(), None, router, &trans, &cfg)?;
         let log_fetch_scheduler = workers.log_fetch_worker.start(
             "raftlog-fetch-worker",
             RaftlogFetchRunner::new(router.clone(), raft_engine.clone()),
@@ -370,7 +368,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
 
         let mut builder = StorePollerBuilder::new(
             cfg.clone(),
-            store.get_id(),
+            store_id,
             raft_engine,
             tablet_factory,
             trans,
@@ -378,6 +376,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             log_fetch_scheduler,
             &mut workers.store_writers,
             self.logger.clone(),
+            store_meta,
         );
         self.workers = Some(workers);
         let peers = builder.init()?;
@@ -385,7 +384,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             .schedule_all(peers.values().map(|pair| pair.1.peer()));
         // Choose a different name so we know what version is actually used. rs stands
         // for raft store.
-        let tag = format!("rs-{}", store.get_id());
+        let tag = format!("rs-{}", store_id);
         self.system.spawn(tag, builder);
 
         let mut mailboxes = Vec::with_capacity(peers.len());
@@ -403,7 +402,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         for addr in address {
             router.force_send(addr, PeerMsg::Start).unwrap();
         }
-        router.send_control(StoreMsg::Start { store }).unwrap();
+        router.send_control(StoreMsg::Start).unwrap();
 
         let apply_poller_builder = ApplyPollerBuilder::new(cfg);
         self.apply_system
@@ -436,6 +435,33 @@ impl<EK: KvEngine, ER: RaftEngine> StoreRouter<EK, ER> {
     pub fn logger(&self) -> &Logger {
         &self.logger
     }
+
+    pub fn send_raft_message(
+        &self,
+        msg: Box<RaftMessage>,
+    ) -> std::result::Result<(), TrySendError<Box<RaftMessage>>> {
+        let id = msg.get_region_id();
+        let peer_msg = PeerMsg::RaftMessage(msg);
+        let store_msg = match self.try_send(id, peer_msg) {
+            Either::Left(Ok(())) => return Ok(()),
+            Either::Left(Err(TrySendError::Full(PeerMsg::RaftMessage(m)))) => {
+                return Err(TrySendError::Full(m));
+            }
+            Either::Left(Err(TrySendError::Disconnected(PeerMsg::RaftMessage(m)))) => {
+                return Err(TrySendError::Disconnected(m));
+            }
+            Either::Right(PeerMsg::RaftMessage(m)) => StoreMsg::RaftMessage(m),
+            _ => unreachable!(),
+        };
+        match self.send_control(store_msg) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(StoreMsg::RaftMessage(m))) => Err(TrySendError::Full(m)),
+            Err(TrySendError::Disconnected(StoreMsg::RaftMessage(m))) => {
+                Err(TrySendError::Disconnected(m))
+            }
+            _ => unreachable!(),
+        }
+    }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Deref for StoreRouter<EK, ER> {
@@ -457,14 +483,14 @@ impl<EK: KvEngine, ER: RaftEngine> DerefMut for StoreRouter<EK, ER> {
 /// Creates the batch system for polling raft activities.
 pub fn create_store_batch_system<EK, ER>(
     cfg: &Config,
-    store: Store,
+    store_id: u64,
     logger: Logger,
 ) -> (StoreRouter<EK, ER>, StoreSystem<EK, ER>)
 where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    let (store_tx, store_fsm) = StoreFsm::new(cfg, store);
+    let (store_tx, store_fsm) = StoreFsm::new(cfg, store_id, logger.clone());
     let (router, system) =
         batch_system::create_system(&cfg.store_batch_system, store_tx, store_fsm);
     let (apply_router, apply_system) = create_apply_batch_system(cfg);

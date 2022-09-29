@@ -229,10 +229,9 @@ impl SstImporter {
         src_file_name: &str,
         dst_file: std::path::PathBuf,
         backend: &StorageBackend,
-        expect_sha256: Option<Vec<u8>>,
         support_kms: bool,
-        file_crypter: Option<FileEncryptionInfo>,
         speed_limiter: &Limiter,
+        restore_config: external_storage_export::RestoreConfig,
     ) -> Result<()> {
         let start_read = Instant::now();
         if let Some(p) = dst_file.parent() {
@@ -266,9 +265,8 @@ impl SstImporter {
             src_file_name,
             dst_file.clone(),
             file_length,
-            expect_sha256,
             speed_limiter,
-            file_crypter,
+            restore_config,
         );
         IMPORTER_DOWNLOAD_BYTES.observe(file_length as _);
         result.map_err(|e| Error::CannotReadExternalStorage {
@@ -300,8 +298,10 @@ impl SstImporter {
         backend: &StorageBackend,
         speed_limiter: &Limiter,
     ) -> Result<PathBuf> {
-        let name = meta.get_name();
-        let path = self.dir.get_import_path(name)?;
+        let offset = meta.get_range_offset();
+        let src_name = meta.get_name();
+        let dst_name = format!("{}_{}", src_name, offset);
+        let path = self.dir.get_import_path(&dst_name)?;
         let start = Instant::now();
         let sha256 = meta.get_sha256().to_vec();
         let expected_sha256 = if !sha256.is_empty() {
@@ -313,29 +313,39 @@ impl SstImporter {
             return Ok(path.save);
         }
 
-        let lock = self.file_locks.entry(name.to_string()).or_default();
+        let lock = self.file_locks.entry(dst_name.to_string()).or_default();
 
         if path.save.exists() {
             return Ok(path.save);
         }
 
+        let range_length = meta.get_range_length();
+        let range = if range_length == 0 {
+            None
+        } else {
+            Some((offset, range_length))
+        };
+        let restore_config = external_storage_export::RestoreConfig {
+            range,
+            compression_type: Some(meta.compression_type),
+            expected_sha256,
+            file_crypter: None,
+        };
         self.download_file_from_external_storage(
-            // don't check file length after download file for now.
             meta.get_length(),
-            name,
+            src_name,
             path.temp.clone(),
             backend,
-            expected_sha256,
             // kv-files needn't are decrypted with KMS when download currently because these files
             // are not encrypted when log-backup. It is different from sst-files
             // because sst-files is encrypted when saved with rocksdb env with KMS.
             // to do: support KMS when log-backup and restore point.
             false,
             // don't support encrypt for now.
-            None,
             speed_limiter,
+            restore_config,
         )?;
-        info!("download file finished {}", name);
+        info!("download file finished {}, offset {}", src_name, offset);
 
         if let Some(p) = path.save.parent() {
             // we have v1 prefix in file name.
@@ -347,10 +357,11 @@ impl SstImporter {
                 }
             })?;
         }
+
         file_system::rename(path.temp, path.save.clone())?;
 
         drop(lock);
-        self.file_locks.remove(name);
+        self.file_locks.remove(&dst_name);
 
         IMPORTER_APPLY_DURATION
             .with_label_values(&["download"])
@@ -493,15 +504,19 @@ impl SstImporter {
             iv: meta.cipher_iv.to_owned(),
         });
 
+        let restore_config = external_storage_export::RestoreConfig {
+            file_crypter,
+            ..Default::default()
+        };
+
         self.download_file_from_external_storage(
             meta.length,
             name,
             path.temp.clone(),
             backend,
-            None,
             true,
-            file_crypter,
             speed_limiter,
+            restore_config,
         )?;
 
         // now validate the SST file.
@@ -1249,16 +1264,16 @@ mod tests {
         // perform download file into .temp dir.
         let file_name = "sample.sst";
         let path = importer.dir.get_import_path(file_name).unwrap();
+        let restore_config = external_storage_export::RestoreConfig::default();
         importer
             .download_file_from_external_storage(
                 meta.get_length(),
                 file_name,
                 path.temp.clone(),
                 &backend,
-                None,
                 true,
-                None,
                 &Limiter::new(f64::INFINITY),
+                restore_config,
             )
             .unwrap();
         check_file_exists(&path.temp, Some(&key_manager));
@@ -1283,16 +1298,19 @@ mod tests {
         .unwrap();
 
         let path = importer.dir.get_import_path(kv_meta.get_name()).unwrap();
+        let restore_config = external_storage_export::RestoreConfig {
+            expected_sha256: Some(kv_meta.get_sha256().to_vec()),
+            ..Default::default()
+        };
         importer
             .download_file_from_external_storage(
                 kv_meta.get_length(),
                 kv_meta.get_name(),
                 path.temp.clone(),
                 &backend,
-                Some(kv_meta.get_sha256().to_vec()),
                 false,
-                None,
                 &Limiter::new(f64::INFINITY),
+                restore_config,
             )
             .unwrap();
 

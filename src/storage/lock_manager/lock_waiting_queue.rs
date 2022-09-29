@@ -97,7 +97,7 @@ pub struct LockWaitEntry {
     pub parameters: PessimisticLockParameters,
     pub lock_wait_token: LockWaitToken,
     pub req_states: Option<Arc<LockWaitContextSharedState>>,
-    pub current_legacy_wake_up_cnt: Option<usize>,
+    pub legacy_wake_up_index: Option<usize>,
     pub key_cb: Option<SyncWrapper<PessimisticLockKeyCallback>>,
 }
 
@@ -141,13 +141,13 @@ pub struct KeyLockWaitState {
     /// the example are all in legacy mode):
     ///
     /// Let's denote a lock-wait entry by `(start_ts,
-    /// current_legacy_wake_up_cnt)`. Consider there are three requests with
+    /// legacy_wake_up_index)`. Consider there are three requests with
     /// start_ts 20, 30, 40 respectively, and they are pushed to the
-    /// queue when the `KeyLockWaitState::legacy_wake_up_cnt` is 0. Then the
+    /// queue when the `KeyLockWaitState::legacy_wake_up_index` is 0. Then the
     /// `KeyLockWaitState` is:
     ///
     /// ```text
-    /// legacy_wake_up_cnt: 0, queue: [(20, 0), (30, 0), (40, 0)]
+    /// legacy_wake_up_index: 0, queue: [(20, 0), (30, 0), (40, 0)]
     /// ```
     ///
     /// Then the lock on the key is released. We pops the first entry in the
@@ -156,7 +156,7 @@ pub struct KeyLockWaitState {
     /// `wake_up_delay_duration`. The current state becomes:
     ///
     /// ```text
-    /// legacy_wake_up_cnt: 1, queue: [(30, 0), (40, 0)]
+    /// legacy_wake_up_index: 1, queue: [(30, 0), (40, 0)]
     /// ````
     ///
     /// Here, if some other request arrives, one of them may successfully
@@ -164,7 +164,7 @@ pub struct KeyLockWaitState {
     /// becomes:
     ///
     /// ```text
-    /// legacy_wake_up_cnt: 1, queue: [(30, 0), (40, 0), (50, 1), (60, 1)]
+    /// legacy_wake_up_index: 1, queue: [(30, 0), (40, 0), (50, 1), (60, 1)]
     /// ```
     ///
     /// Then `wake_up_delay_duration` is elapsed since the previous waking up.
@@ -173,10 +173,10 @@ pub struct KeyLockWaitState {
     /// don't want to wake up later-arrived entries (50 and 60) since it
     /// introduces useless pessimistic retries to transaction 50 and 60 when
     /// they don't need to. The solution is, only wake up the entries that
-    /// has `entry.current_legacy_wake_up_cnt <
-    /// key_lock_wait_state.legacy_wake_up_cnt`. Therefore, we only wakes up
-    /// entries 30 and 40 who has `current_legacy_wake_up_cnt < 1`, while 50 and
-    /// 60 will be left untouched.
+    /// has `entry.legacy_wake_up_index <
+    /// key_lock_wait_state.legacy_wake_up_index`. Therefore, we only wakes up
+    /// entries 30 and 40 who has `legacy_wake_up_index < 1`, while 50
+    /// and 60 will be left untouched.
     ///
     /// When waking up resumable requests, the mechanism above won't take
     /// effect. If a legacy request is woken up and triggered the mechanism,
@@ -184,7 +184,7 @@ pub struct KeyLockWaitState {
     /// will stop at the first resumable request it meets, pop it out, and
     /// return it from a [`DelayedNotifyAllFuture`]. See
     /// [`LockWaitQueues::pop_for_waking_up`].
-    legacy_wake_up_cnt: usize,
+    legacy_wake_up_index: usize,
     queue: BinaryHeap<Box<LockWaitEntry>>,
 
     /// The start_ts of the most recent waking up event.
@@ -200,7 +200,7 @@ impl KeyLockWaitState {
     fn new() -> Self {
         Self {
             current_lock: kvrpcpb::LockInfo::default(),
-            legacy_wake_up_cnt: 0,
+            legacy_wake_up_index: 0,
             queue: BinaryHeap::new(),
             last_conflict_start_ts: TimeStamp::zero(),
             last_conflict_commit_ts: TimeStamp::zero(),
@@ -235,7 +235,7 @@ impl<L: LockManager> LockWaitQueues<L> {
     }
 
     /// Enqueues a lock wait entry. The key is indicated by the `key` field of
-    /// the `lock_wait_entry`. The caller also need to provide the
+    /// the `lock_wait_entry`. The caller also needs to provide the
     /// information of the current-holding lock.
     pub fn push_lock_wait(
         &self,
@@ -243,7 +243,7 @@ impl<L: LockManager> LockWaitQueues<L> {
         current_lock: kvrpcpb::LockInfo,
     ) {
         let mut new_key = false;
-        let mut entry = self
+        let mut key_state = self
             .inner
             .queue_map
             .entry(lock_wait_entry.key.clone())
@@ -251,12 +251,12 @@ impl<L: LockManager> LockWaitQueues<L> {
                 new_key = true;
                 KeyLockWaitState::new()
             });
-        entry.current_lock = current_lock;
+        key_state.current_lock = current_lock;
 
-        if lock_wait_entry.current_legacy_wake_up_cnt.is_none() {
-            lock_wait_entry.current_legacy_wake_up_cnt = Some(entry.value().legacy_wake_up_cnt);
+        if lock_wait_entry.legacy_wake_up_index.is_none() {
+            lock_wait_entry.legacy_wake_up_index = Some(key_state.value().legacy_wake_up_index);
         }
-        entry.value_mut().queue.push(lock_wait_entry);
+        key_state.value_mut().queue.push(lock_wait_entry);
 
         let len = entry.value_mut().queue.len();
         drop(entry);
@@ -304,7 +304,7 @@ impl<L: LockManager> LockWaitQueues<L> {
         // For statistics.
         let mut removed_waiters = 0;
 
-        // We don't want other thread insert insert any more entries between finding the
+        // We don't want other threads insert any more entries between finding the
         // queue is empty and removing the queue from the map. Wrap the logic
         // within a call to `remove_if_mut` to avoid releasing lock during the
         // procedure.
@@ -323,7 +323,7 @@ impl<L: LockManager> LockWaitQueues<L> {
                 if !lock_wait_entry.parameters.allow_lock_with_conflict {
                     // If a pessimistic lock request in legacy mode is woken up, increase the
                     // counter.
-                    v.legacy_wake_up_cnt += 1;
+                    v.legacy_wake_up_index += 1;
                     let notify_all_future = match wake_up_delay_duration_ms {
                         Some(delay) if !v.queue.is_empty() => {
                             self.handle_delayed_wake_up(v, key, delay)
@@ -404,7 +404,6 @@ impl<L: LockManager> LockWaitQueues<L> {
         delay_ms: Arc<AtomicU64>,
         notify_id: u64,
     ) -> Option<Box<LockWaitEntry>> {
-        // tokio::task::yield_now().await;
         let mut prev_delay_ms = 0;
         // The delay duration may be extended by later waking-up events, by updating the
         // value of `delay_ms`. So we loop until we find that the elapsed
@@ -442,7 +441,7 @@ impl<L: LockManager> LockWaitQueues<L> {
 
         let mut removed_waiters = 0;
 
-        // We don't want other thread insert insert any more entries between finding the
+        // We don't want other threads insert any more entries between finding the
         // queue is empty and removing the queue from the map. Wrap the logic
         // within a call to `remove_if_mut` to avoid releasing lock during the
         // procedure.
@@ -463,7 +462,7 @@ impl<L: LockManager> LockWaitQueues<L> {
             conflicting_start_ts = v.last_conflict_start_ts;
             conflicting_commit_ts = v.last_conflict_commit_ts;
 
-            let legacy_wake_up_index = v.legacy_wake_up_cnt;
+            let legacy_wake_up_index = v.legacy_wake_up_index;
 
             while let Some(front) = v.queue.peek() {
                 if front.req_states.as_ref().unwrap().is_finished() {
@@ -473,8 +472,8 @@ impl<L: LockManager> LockWaitQueues<L> {
                     continue;
                 }
                 if front
-                    .current_legacy_wake_up_cnt
-                    .map_or(false, |cnt| cnt >= legacy_wake_up_index)
+                    .legacy_wake_up_index
+                    .map_or(false, |idx| idx >= legacy_wake_up_index)
                 {
                     // This entry is added after the legacy-wakeup that issued the current
                     // delayed_notify_all operation. Keep it and other remaining items in the queue.
@@ -515,6 +514,7 @@ impl<L: LockManager> LockWaitQueues<L> {
                     conflict_commit_ts: conflicting_commit_ts,
                     key: lock_wait_entry.key.into_raw().unwrap(),
                     primary: lock_wait_entry.parameters.primary,
+                    reason: kvrpcpb::WriteConflictReason::PessimisticRetry,
                 },
             )));
             cb(Err(e.into()));
@@ -624,7 +624,7 @@ mod tests {
                 parameters,
                 lock_wait_token: token,
                 req_states: Some(dummy_ctx.get_shared_states().clone()),
-                current_legacy_wake_up_cnt: None,
+                legacy_wake_up_index: None,
                 key_cb: Some(SyncWrapper::new(Box::new(move |res| tx.send(res).unwrap()))),
             });
 
@@ -730,7 +730,7 @@ mod tests {
             res
         }
 
-        fn must_not_contains_key(&self, key: &[u8]) {
+        fn must_not_contain_key(&self, key: &[u8]) {
             assert!(self.inner.queue_map.get(&Key::from_raw(key)).is_none());
         }
 
@@ -804,14 +804,14 @@ mod tests {
             .check_key(b"k1")
             .check_start_ts(10);
         queues.must_pop_none(b"k1", 5, 6);
-        queues.must_not_contains_key(b"k1");
+        queues.must_not_contain_key(b"k1");
 
         queues
             .must_pop(b"k2", 5, 6)
             .check_key(b"k2")
             .check_start_ts(11);
         queues.must_pop_none(b"k2", 5, 6);
-        queues.must_not_contains_key(b"k2");
+        queues.must_not_contain_key(b"k2");
     }
 
     #[test]
@@ -833,7 +833,7 @@ mod tests {
                 .check_start_ts(expected_start_ts);
         }
 
-        queues.must_not_contains_key(b"k1");
+        queues.must_not_contain_key(b"k1");
     }
 
     #[test]
@@ -855,7 +855,7 @@ mod tests {
                 .must_pop(b"k1", 5, 6)
                 .check_start_ts(expected_start_ts);
         }
-        queues.must_not_contains_key(b"k1");
+        queues.must_not_contain_key(b"k1");
     }
 
     #[tokio::test]
@@ -870,14 +870,22 @@ mod tests {
             queues.mock_lock_wait(b"k1", 13, 5, false),
         ];
 
+        // Current queue: [8, 11, 12, 13]
+
         let (entry, delay_wake_up_future) = queues.must_pop_with_delayed_notify(b"k1", 5, 6);
         entry.check_key(b"k1").check_start_ts(8);
+
+        // Current queue: [11*, 12*, 13*] (Items marked with * means it has
+        // legacy_wake_up_index less than that in KeyLockWaitState, so it might
+        // be woken up when calling delayed_notify_all).
 
         let handles2 = vec![
             queues.mock_lock_wait(b"k1", 14, 5, false),
             queues.mock_lock_wait(b"k1", 15, 5, true),
             queues.mock_lock_wait(b"k1", 16, 5, false),
         ];
+
+        // Current queue: [11*, 12*, 13*, 14, 15, 16]
 
         assert!(
             handles1[0]
@@ -898,18 +906,31 @@ mod tests {
                 .is_none()
         );
 
+        // Current queue: [14, 15, 16]
+
         queues.mock_lock_wait(b"k1", 9, 5, false);
-        // 9 will be woken up and 14 to 16 will be scheduled for delayed wake up.
+        // Current queue: [9, 14, 15, 16]
+
+        // 9 will be woken up and delayed wake up should be scheduled. After delaying,
+        // 14 to 16 should be all woken up later if they are all not resumable.
+        // However since 15 is resumable, it will only wake up 14 and return 15
+        // through the result of the `delay_wake_up_future`.
         let (entry, delay_wake_up_future) = queues.must_pop_with_delayed_notify(b"k1", 7, 8);
         entry.check_key(b"k1").check_start_ts(9);
 
+        // Current queue: [14*, 15*, 16*]
+
         queues.mock_lock_wait(b"k1", 17, 5, false);
         let handle18 = queues.mock_lock_wait(b"k1", 18, 5, false);
+
+        // Current queue: [14*, 15*, 16*, 17, 18]
 
         // Wakes up 14, and stops at 15 which is resumable. Then, 15 should be returned
         // and the caller should be responsible for waking it up.
         let entry15 = delay_wake_up_future.await.unwrap();
         entry15.check_key(b"k1").check_start_ts(15);
+
+        // Current queue: [16*, 17, 18]
 
         let mut it = handles2.into_iter();
         // Receive 14.
@@ -947,7 +968,7 @@ mod tests {
                 .is_none()
         );
 
-        // Remove remaining entries of the key.
+        // Current queue: [16*, 17, 18]
 
         let (entry, delayed_wake_up_future) = queues.must_pop_with_delayed_notify(b"k1", 7, 8);
         entry.check_key(b"k1").check_start_ts(16);
@@ -961,21 +982,27 @@ mod tests {
         );
         queues.must_have_next_entry(b"k1", 17);
 
+        // Current queue: [17*, 18*]
+
         // Don't need to create new future if there already exists one for the key.
         let entry = queues.must_pop_with_no_delayed_notify(b"k1", 9, 10);
         entry.check_key(b"k1").check_start_ts(17);
         queues.must_have_next_entry(b"k1", 18);
 
+        // Current queue: [18*]
+
         queues.mock_lock_wait(b"k1", 19, 5, false);
+        // Current queue: [18*, 19]
         assert!(delayed_wake_up_future.await.is_none());
         // 18 will be cancelled with ts of the latest wake-up event.
         expect_write_conflict(&handle18.wait_for_result().unwrap_err().0, 9, 10);
+        // Current queue: [19]
 
         // Don't need to create new future if the queue is cleared.
         let entry = queues.must_pop_with_no_delayed_notify(b"k1", 9, 10);
         entry.check_key(b"k1").check_start_ts(19);
-
-        queues.must_not_contains_key(b"k1");
+        // Current queue: empty
+        queues.must_not_contain_key(b"k1");
 
         // Calls delayed_notify_all on keys that not exists (maybe deleted due to
         // completely waking up). Nothing would happen.
@@ -984,6 +1011,6 @@ mod tests {
                 .delayed_notify_all(&Key::from_raw(b"k1"), 1)
                 .is_none()
         );
-        queues.must_not_contains_key(b"k1");
+        queues.must_not_contain_key(b"k1");
     }
 }

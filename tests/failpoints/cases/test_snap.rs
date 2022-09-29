@@ -793,3 +793,107 @@ fn test_snapshot_recover_from_raft_write_failure() {
         cluster.must_put(format!("k1{}", i).as_bytes(), b"v1");
     }
 }
+
+/// Test whether applying snapshot is resumed properly when last_index before
+/// applying snapshot is larger than the snapshot index and applying is aborted
+/// between kv write and raft write.
+#[test]
+fn test_snapshot_recover_from_raft_write_failure_with_uncommitted_log() {
+    let mut cluster = new_server_cluster(0, 3);
+    configure_for_snapshot(&mut cluster);
+    // Avoid triggering snapshot at final step.
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(10);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    // We use three peers([1, 2, 3]) for this test.
+    cluster.run();
+
+    sleep_ms(500);
+
+    // Guarantee peer 1 is leader.
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    cluster.must_put(b"k1", b"v1");
+    for i in 1..4 {
+        must_get_equal(&cluster.get_engine(i), b"k1", b"v1");
+    }
+
+    // Guarantee that peer 2 and 3 won't receive any entries,
+    // so these entries cannot be committed.
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(1, 1)
+            .msg_type(MessageType::MsgAppend)
+            .direction(Direction::Send),
+    ));
+
+    // Peer 1 appends entries which is never committed.
+    for i in 1..20 {
+        let region = cluster.get_region(b"");
+        let reqs = vec![new_put_cmd(format!("k2{}", i).as_bytes(), b"v2")];
+        let mut put = new_request(
+            region.get_id(),
+            region.get_region_epoch().clone(),
+            reqs,
+            false,
+        );
+        put.mut_header().set_peer(new_peer(1, 1));
+        let _ = cluster.call_command_on_node(1, put, Duration::from_secs(1));
+    }
+
+    for i in 1..4 {
+        must_get_none(&cluster.get_engine(i), b"k210");
+    }
+    // Now peer 1 should have much longer log than peer 2 and 3.
+
+    // Hack: down peer 1 in order to change leader to peer 3.
+    cluster.stop_node(1);
+    sleep_ms(100);
+    cluster.clear_send_filters();
+    sleep_ms(100);
+    cluster.must_transfer_leader(1, new_peer(3, 3));
+
+    for i in 0..20 {
+        cluster.must_put(format!("k3{}", i).as_bytes(), b"v3");
+    }
+
+    // Peer 1 back to cluster
+    cluster.add_send_filter(IsolationFilterFactory::new(1));
+    sleep_ms(100);
+    cluster.run_node(1).unwrap();
+    sleep_ms(100);
+    must_get_none(&cluster.get_engine(1), b"k319");
+    must_get_equal(&cluster.get_engine(2), b"k319", b"v3");
+    must_get_equal(&cluster.get_engine(3), b"k319", b"v3");
+
+    // Raft writes are dropped.
+    let raft_before_save_on_store_1_fp = "raft_before_save_on_store_1";
+    fail::cfg(raft_before_save_on_store_1_fp, "return").unwrap();
+    // Skip applying snapshot into RocksDB to keep peer status in Applying.
+    let apply_snapshot_fp = "apply_pending_snapshot";
+    fail::cfg(apply_snapshot_fp, "return()").unwrap();
+    cluster.clear_send_filters();
+    // Wait for leader send snapshot.
+    sleep_ms(100);
+
+    cluster.stop_node(1);
+    fail::remove(raft_before_save_on_store_1_fp);
+    fail::remove(apply_snapshot_fp);
+    // Recover from applying state and validate states,
+    // may fail in this step due to invalid states.
+    cluster.run_node(1).unwrap();
+    // Snapshot is applied.
+    must_get_equal(&cluster.get_engine(1), b"k319", b"v3");
+    let mut ents = Vec::new();
+    cluster
+        .get_raft_engine(1)
+        .get_all_entries_to(1, &mut ents)
+        .unwrap();
+    // Raft logs are cleared.
+    assert!(ents.is_empty());
+
+    // Final step: append some more entries to make sure raftdb is healthy.
+    for i in 20..25 {
+        cluster.must_put(format!("k1{}", i).as_bytes(), b"v1");
+    }
+}

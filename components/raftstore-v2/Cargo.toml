@@ -48,6 +48,7 @@ slog = "2.3"
 smallvec = "1.4"
 tikv_util = { path = "../tikv_util", default-features = false }
 time = "0.1"
+tracker = { path = "../tracker" }
 txn_types = { path = "../txn_types", default-features = false }
 
 [dev-dependencies]

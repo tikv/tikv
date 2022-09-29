@@ -226,6 +226,7 @@ mod tests {
                     conflict_commit_ts: 2.into(),
                     key: b"k1".to_vec(),
                     primary: b"k1".to_vec(),
+                    reason: kvproto::kvrpcpb::WriteConflictReason::PessimisticRetry,
                 },
             ))))
         };

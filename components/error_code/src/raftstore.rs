@@ -30,6 +30,7 @@ define_error_codes!(
     DEADLINE_EXCEEDED => ("DeadlineExceeded", "", ""),
     PENDING_PREPARE_MERGE => ("PendingPrepareMerge", "", ""),
     RECOVERY_IN_PROGRESS => ("RecoveryInProgress", "", ""),
+    FLASHBACK_IN_PROGRESS => ("FlashbackInProgress", "", ""),
 
     SNAP_ABORT => ("SnapAbort", "", ""),
     SNAP_TOO_MANY => ("SnapTooMany", "", ""),
@@ -64,6 +65,8 @@ impl ErrorCodeExt for errorpb::Error {
             DATA_IS_NOT_READY
         } else if self.has_recovery_in_progress() {
             RECOVERY_IN_PROGRESS
+        } else if self.has_flashback_in_progress() {
+            FLASHBACK_IN_PROGRESS
         } else {
             UNKNOWN
         }
