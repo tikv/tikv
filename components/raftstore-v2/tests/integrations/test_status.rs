@@ -1,13 +1,9 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::assert_matches::assert_matches;
-
-use futures::executor::block_on;
 use kvproto::raft_cmdpb::{RaftCmdRequest, StatusCmdType};
-use raftstore::store::util::new_peer;
-use raftstore_v2::router::{PeerMsg, PeerTick, QueryResChannel, QueryResult, RaftRequest};
+use tikv_util::store::new_peer;
 
-use crate::Cluster;
+use crate::cluster::Cluster;
 
 #[test]
 fn test_status() {

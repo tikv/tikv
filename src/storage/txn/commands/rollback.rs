@@ -81,15 +81,15 @@ mod tests {
 
     #[test]
     fn rollback_lock_with_existing_rollback() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let (k1, k2) = (b"k1", b"k2");
         let v = b"v";
 
-        must_acquire_pessimistic_lock(&engine, k1, k1, 10, 10);
-        must_rollback(&engine, k1, 10, false);
-        must_rollback(&engine, k2, 10, false);
+        must_acquire_pessimistic_lock(&mut engine, k1, k1, 10, 10);
+        must_rollback(&mut engine, k1, 10, false);
+        must_rollback(&mut engine, k2, 10, false);
 
-        must_pessimistic_prewrite_put(&engine, k2, v, k1, 10, 10, SkipPessimisticCheck);
-        must_rollback(&engine, k2, 10, false);
+        must_pessimistic_prewrite_put(&mut engine, k2, v, k1, 10, 10, SkipPessimisticCheck);
+        must_rollback(&mut engine, k2, 10, false);
     }
 }

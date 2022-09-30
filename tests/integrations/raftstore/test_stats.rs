@@ -12,9 +12,8 @@ use futures::{executor::block_on, SinkExt, StreamExt};
 use grpcio::*;
 use kvproto::{kvrpcpb::*, pdpb::QueryKind, tikvpb::*, tikvpb_grpc::TikvClient};
 use pd_client::PdClient;
-use raftstore::store::QueryStats;
 use test_raftstore::*;
-use tikv_util::config::*;
+use tikv_util::{config::*, store::QueryStats};
 use txn_types::Key;
 
 fn check_available<T: Simulator>(cluster: &mut Cluster<T>) {

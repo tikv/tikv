@@ -71,7 +71,7 @@ use std::{
 };
 
 use api_version::{ApiV1, ApiV2, KeyMode, KvFormat, RawValue};
-use causal_ts::{CausalTs, CausalTsProvider};
+use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
@@ -123,7 +123,7 @@ use crate::{
             commands::{RawAtomicStore, RawCompareAndSwap, TypedCommand},
             flow_controller::{EngineFlowController, FlowController},
             scheduler::Scheduler as TxnScheduler,
-            Command,
+            Command, ErrorInner as TxnError,
         },
         types::StorageCallbackType,
     },
@@ -180,7 +180,7 @@ pub struct Storage<E: Engine, L: LockManager, F: KvFormat> {
 
     api_version: ApiVersion, // TODO: remove this. Use `Api` instead.
 
-    causal_ts_provider: Option<Arc<CausalTs>>,
+    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
 
     quota_limiter: Arc<QuotaLimiter>,
 
@@ -262,7 +262,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         resource_tag_factory: ResourceTagFactory,
         quota_limiter: Arc<QuotaLimiter>,
         feature_gate: FeatureGate,
-        causal_ts_provider: Option<Arc<CausalTs>>,
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
     ) -> Result<Self> {
         assert_eq!(config.api_version(), F::TAG, "Api version not match");
 
@@ -273,6 +273,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             config,
             dynamic_switches,
             flow_controller,
+            causal_ts_provider.clone(),
             reporter,
             resource_tag_factory.clone(),
             Arc::clone(&quota_limiter),
@@ -315,7 +316,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
     /// Get a snapshot of `engine`.
     fn snapshot(
-        engine: &E,
+        engine: &mut E,
         ctx: SnapContext<'_>,
     ) -> impl std::future::Future<Output = Result<E::Snap>> {
         kv::snapshot(engine, ctx)
@@ -324,11 +325,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     }
 
     #[cfg(test)]
-    pub fn get_snapshot(&self) -> E::Snap {
+    pub fn get_snapshot(&mut self) -> E::Snap {
         self.engine.snapshot(Default::default()).unwrap()
     }
 
-    pub fn release_snapshot(&self) {
+    pub fn release_snapshot(&mut self) {
         self.engine.release_snapshot();
     }
 
@@ -349,7 +350,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     }
 
     #[inline]
-    fn with_tls_engine<R>(f: impl FnOnce(&E) -> R) -> R {
+    fn with_tls_engine<R>(f: impl FnOnce(&mut E) -> R) -> R {
         // Safety: the read pools ensure that a TLS engine exists.
         unsafe { with_tls_engine(f) }
     }
@@ -1847,47 +1848,42 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         }
     }
 
-    fn get_causal_ts(ts_provider: &Option<Arc<CausalTs>>) -> Result<Option<TimeStamp>> {
-        if let Some(p) = ts_provider {
-            match p.get_ts() {
-                Ok(ts) => Ok(Some(ts)),
-                Err(e) => Err(box_err!("Fail to get ts: {}", e)),
+    async fn check_causal_ts_flushed(ctx: &mut Context, tag: CommandKind) -> Result<()> {
+        if F::TAG == ApiVersion::V2 {
+            let snap_ctx = SnapContext {
+                pb_ctx: ctx,
+                ..Default::default()
+            };
+            match Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await {
+                Ok(snapshot) => {
+                    SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
+                    if !snapshot.ext().is_max_ts_synced() {
+                        return Err(Error::from(txn::Error::from(
+                            TxnError::MaxTimestampNotSynced {
+                                region_id: ctx.get_region_id(),
+                                start_ts: TimeStamp::zero(),
+                            },
+                        )));
+                    }
+                    let term = snapshot.ext().get_term();
+                    if let Some(term) = term {
+                        ctx.set_term(term.get());
+                    }
+                }
+                Err(err) => {
+                    SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();
+                    info!("get snapshot failed"; "tag" => ?tag, "err" => ?err);
+                    return Err(err);
+                }
             }
-        } else {
-            Ok(None)
         }
-    }
-
-    async fn get_raw_key_guard(
-        ts_provider: &Option<Arc<CausalTs>>,
-        concurrency_manager: ConcurrencyManager,
-    ) -> Result<Option<KeyHandleGuard>> {
-        // NOTE: the ts cannot be reused as timestamp of data key.
-        // There is a little chance that CDC will acquired a timestamp for resolved-ts
-        // just between the Self::get_causal_ts & concurrency_manager.lock_key,
-        // which violate the constraint that resolve-ts should not be larger
-        // than timestamp of captured data.
-        let ts = Self::get_causal_ts(ts_provider)?;
-        if let Some(ts) = ts {
-            let raw_key = vec![api_version::api_v2::RAW_KEY_PREFIX];
-            // Make keys for locking by RAW_KEY_PREFIX & ts. RAW_KEY_PREFIX to avoid
-            // conflict with TiDB & TxnKV keys, and ts to avoid collision with
-            // other raw write requests. Ts in lock value to used by CDC which
-            // get maximum resolved-ts from concurrency_manager.global_min_lock_ts
-            let encode_key = ApiV2::encode_raw_key(&raw_key, Some(ts));
-            let key_guard = concurrency_manager.lock_key(&encode_key).await;
-            let lock = Lock::new(LockType::Put, raw_key, ts, 0, None, 0.into(), 1, ts);
-            key_guard.with_lock(|l| *l = Some(lock));
-            Ok(Some(key_guard))
-        } else {
-            Ok(None)
-        }
+        Ok(())
     }
 
     /// Write a raw key to the storage.
     pub fn raw_put(
         &self,
-        ctx: Context,
+        mut ctx: Context,
         cf: String,
         key: Vec<u8>,
         value: Vec<u8>,
@@ -1914,11 +1910,16 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 return callback(Err(Error::from(e)));
             }
             let command_duration = tikv_util::time::Instant::now();
-            let key_guard = Self::get_raw_key_guard(&provider, concurrency_manager).await;
+
+            if let Err(e) = Self::check_causal_ts_flushed(&mut ctx, CMD).await {
+                return callback(Err(e));
+            }
+
+            let key_guard = get_raw_key_guard(&provider, concurrency_manager).await;
             if let Err(e) = key_guard {
                 return callback(Err(e));
             }
-            let ts = Self::get_causal_ts(&provider);
+            let ts = get_causal_ts(&provider).await;
             if let Err(e) = ts {
                 return callback(Err(e));
             }
@@ -1989,7 +1990,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     /// Write some keys to the storage in a batch.
     pub fn raw_batch_put(
         &self,
-        ctx: Context,
+        mut ctx: Context,
         cf: String,
         pairs: Vec<KvPair>,
         ttls: Vec<u64>,
@@ -2022,11 +2023,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             }
             let command_duration = tikv_util::time::Instant::now();
 
-            let key_guard = Self::get_raw_key_guard(&provider, concurrency_manager).await;
+            if let Err(e) = Self::check_causal_ts_flushed(&mut ctx, CMD).await {
+                return callback(Err(e));
+            }
+
+            let key_guard = get_raw_key_guard(&provider, concurrency_manager).await;
             if let Err(e) = key_guard {
                 return callback(Err(e));
             }
-            let ts = Self::get_causal_ts(&provider);
+            let ts = get_causal_ts(&provider).await;
             if let Err(e) = ts {
                 return callback(Err(e));
             }
@@ -2063,7 +2068,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     /// operations.
     pub fn raw_delete(
         &self,
-        ctx: Context,
+        mut ctx: Context,
         cf: String,
         key: Vec<u8>,
         callback: Callback<()>,
@@ -2083,11 +2088,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             }
             let command_duration = tikv_util::time::Instant::now();
 
-            let key_guard = Self::get_raw_key_guard(&provider, concurrency_manager).await;
+            if let Err(e) = Self::check_causal_ts_flushed(&mut ctx, CMD).await {
+                return callback(Err(e));
+            }
+
+            let key_guard = get_raw_key_guard(&provider, concurrency_manager).await;
             if let Err(e) = key_guard {
                 return callback(Err(e));
             }
-            let ts = Self::get_causal_ts(&provider);
+            let ts = get_causal_ts(&provider).await;
             if let Err(e) = ts {
                 return callback(Err(e));
             }
@@ -2168,7 +2177,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     /// operations.
     pub fn raw_batch_delete(
         &self,
-        ctx: Context,
+        mut ctx: Context,
         cf: String,
         keys: Vec<Vec<u8>>,
         callback: Callback<()>,
@@ -2188,11 +2197,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             }
             let command_duration = tikv_util::time::Instant::now();
 
-            let key_guard = Self::get_raw_key_guard(&provider, concurrency_manager).await;
+            if let Err(e) = Self::check_causal_ts_flushed(&mut ctx, CMD).await {
+                return callback(Err(e));
+            }
+
+            let key_guard = get_raw_key_guard(&provider, concurrency_manager).await;
             if let Err(e) = key_guard {
                 return callback(Err(e));
             }
-            let ts = Self::get_causal_ts(&provider);
+            let ts = get_causal_ts(&provider).await;
             if let Err(e) = ts {
                 return callback(Err(e));
             }
@@ -2602,7 +2615,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         previous_value: Option<Vec<u8>>,
         value: Vec<u8>,
         ttl: u64,
-        cb: Callback<(Option<Value>, bool)>,
+        callback: Callback<(Option<Value>, bool)>,
     ) -> Result<()> {
         const CMD: CommandKind = CommandKind::raw_compare_and_swap;
         let api_version = self.api_version;
@@ -2612,43 +2625,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         if !F::IS_TTL_ENABLED && ttl != 0 {
             return Err(Error::from(ErrorInner::TtlNotEnabled));
         }
-        let provider = self.causal_ts_provider.clone();
         let sched = self.get_scheduler();
-        let concurrency_manager = self.get_concurrency_manager();
         self.sched_raw_command(CMD, async move {
-            // Raw atomic cmd has two locks, one is concurrency_manager and the other is txn
-            // latch. Now, concurrency_manager lock key with ts encoded, it aims
-            // to "lock" resolved-ts to be less than its timestamp, rather than
-            // to "lock" other concurrent requests. TODO: Merge the two locks
-            // into one to simplify the process. Same to other raw atomic
-            // commands.
-            let key_guard = Self::get_raw_key_guard(&provider, concurrency_manager).await;
-            if let Err(e) = key_guard {
-                return cb(Err(e));
-            }
-            let ts = Self::get_causal_ts(&provider);
-            if let Err(e) = ts {
-                return cb(Err(e));
-            }
-            // Do NOT encode ts here as RawCompareAndSwap use key to gen lock.
             let key = F::encode_raw_key_owned(key, None);
-            let cmd = RawCompareAndSwap::new(
-                cf,
-                key,
-                previous_value,
-                value,
-                ttl,
-                api_version,
-                ts.unwrap(),
-                ctx,
-            );
+            let cmd = RawCompareAndSwap::new(cf, key, previous_value, value, ttl, api_version, ctx);
             Self::sched_raw_atomic_command(
                 sched,
                 cmd,
-                Box::new(|res| {
-                    cb(res.map_err(Error::from));
-                    drop(key_guard)
-                }),
+                Box::new(|res| callback(res.map_err(Error::from))),
             );
         })
     }
@@ -2672,28 +2656,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         Self::check_ttl_valid(pairs.len(), &ttls)?;
 
-        let provider = self.causal_ts_provider.clone();
         let sched = self.get_scheduler();
-        let concurrency_manager = self.get_concurrency_manager();
         self.sched_raw_command(CMD, async move {
-            let key_guard = Self::get_raw_key_guard(&provider, concurrency_manager).await;
-            if let Err(e) = key_guard {
-                return callback(Err(e));
-            }
-            let ts = Self::get_causal_ts(&provider);
-            if let Err(e) = ts {
-                return callback(Err(e));
-            }
-            // Do NOT encode ts here as RawAtomicStore use key to gen lock
             let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls, None);
-            let cmd = RawAtomicStore::new(cf, modifies, ts.unwrap(), ctx);
+            let cmd = RawAtomicStore::new(cf, modifies, ctx);
             Self::sched_raw_atomic_command(
                 sched,
                 cmd,
-                Box::new(|res| {
-                    callback(res.map_err(Error::from));
-                    drop(key_guard)
-                }),
+                Box::new(|res| callback(res.map_err(Error::from))),
             );
         })
     }
@@ -2706,34 +2676,21 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         callback: Callback<()>,
     ) -> Result<()> {
         const CMD: CommandKind = CommandKind::raw_atomic_store;
-        Self::check_api_version(self.api_version, ctx.api_version, CMD, &keys)?;
 
+        Self::check_api_version(self.api_version, ctx.api_version, CMD, &keys)?;
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
-        let provider = self.causal_ts_provider.clone();
         let sched = self.get_scheduler();
-        let concurrency_manager = self.get_concurrency_manager();
         self.sched_raw_command(CMD, async move {
-            let key_guard = Self::get_raw_key_guard(&provider, concurrency_manager).await;
-            if let Err(e) = key_guard {
-                return callback(Err(e));
-            }
-            let ts = Self::get_causal_ts(&provider);
-            if let Err(e) = ts {
-                return callback(Err(e));
-            }
             // Do NOT encode ts here as RawAtomicStore use key to gen lock
             let modifies = keys
                 .into_iter()
                 .map(|k| Self::raw_delete_request_to_modify(cf, k, None))
                 .collect();
-            let cmd = RawAtomicStore::new(cf, modifies, ts.unwrap(), ctx);
+            let cmd = RawAtomicStore::new(cf, modifies, ctx);
             Self::sched_raw_atomic_command(
                 sched,
                 cmd,
-                Box::new(|res| {
-                    callback(res.map_err(Error::from));
-                    drop(key_guard)
-                }),
+                Box::new(|res| callback(res.map_err(Error::from))),
             );
         })
     }
@@ -2826,6 +2783,45 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
                 .await?
         }
+    }
+}
+
+pub async fn get_raw_key_guard(
+    ts_provider: &Option<Arc<CausalTsProviderImpl>>,
+    concurrency_manager: ConcurrencyManager,
+) -> Result<Option<KeyHandleGuard>> {
+    // NOTE: the ts cannot be reused as timestamp of data key.
+    // There is a little chance that CDC will acquired a timestamp for resolved-ts
+    // just between the get_causal_ts & concurrency_manager.lock_key,
+    // which violate the constraint that resolve-ts should not be larger
+    // than timestamp of captured data.
+    let ts = get_causal_ts(ts_provider).await?;
+    if let Some(ts) = ts {
+        let raw_key = vec![api_version::api_v2::RAW_KEY_PREFIX];
+        // Make keys for locking by RAW_KEY_PREFIX & ts. RAW_KEY_PREFIX to avoid
+        // conflict with TiDB & TxnKV keys, and ts to avoid collision with
+        // other raw write requests. Ts in lock value to used by CDC which
+        // get maximum resolved-ts from concurrency_manager.global_min_lock_ts
+        let encode_key = ApiV2::encode_raw_key(&raw_key, Some(ts));
+        let key_guard = concurrency_manager.lock_key(&encode_key).await;
+        let lock = Lock::new(LockType::Put, raw_key, ts, 0, None, 0.into(), 1, ts);
+        key_guard.with_lock(|l| *l = Some(lock));
+        Ok(Some(key_guard))
+    } else {
+        Ok(None)
+    }
+}
+
+pub async fn get_causal_ts(
+    ts_provider: &Option<Arc<CausalTsProviderImpl>>,
+) -> Result<Option<TimeStamp>> {
+    if let Some(p) = ts_provider {
+        match p.async_get_ts().await {
+            Ok(ts) => Ok(Some(ts)),
+            Err(e) => Err(box_err!("Fail to get ts: {}", e)),
+        }
+    } else {
+        Ok(None)
     }
 }
 
@@ -2971,7 +2967,7 @@ impl<E: Engine> Engine for TxnTestEngine<E> {
     }
 
     fn async_snapshot(
-        &self,
+        &mut self,
         ctx: SnapContext<'_>,
         cb: tikv_kv::Callback<Self::Snap>,
     ) -> tikv_kv::Result<()> {
@@ -3107,7 +3103,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             self.engine.clone(),
         );
         let ts_provider = if F::TAG == ApiVersion::V2 {
-            let test_provider: causal_ts::CausalTs =
+            let test_provider: causal_ts::CausalTsProviderImpl =
                 causal_ts::tests::TestProvider::default().into();
             Some(Arc::new(test_provider))
         } else {
@@ -3444,7 +3440,7 @@ mod tests {
     #[test]
     fn test_prewrite_blocks_read() {
         use kvproto::kvrpcpb::ExtraOp;
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
+        let mut storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
 
@@ -3465,6 +3461,7 @@ mod tests {
                     extra_op: ExtraOp::Noop,
                     statistics: &mut Statistics::default(),
                     async_apply_prewrite: false,
+                    raw_ext: None,
                 },
             )
             .unwrap();
@@ -8682,7 +8679,7 @@ mod tests {
     // they should not have overlapped ts, which is an expected property.
     #[test]
     fn test_overlapped_ts_rollback_before_prewrite() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let storage =
             TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine.clone(), DummyLockManager)
                 .build()
@@ -8787,8 +8784,8 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
 
-        must_unlocked(&engine, k2);
-        must_written(&engine, k2, 10, 10, WriteType::Rollback);
+        must_unlocked(&mut engine, k2);
+        must_written(&mut engine, k2, 10, 10, WriteType::Rollback);
 
         // T1 prewrites, start_ts = 1, for_update_ts = 3
         storage
@@ -9003,7 +9000,7 @@ mod tests {
 
     #[test]
     fn test_resolve_commit_pessimistic_locks() {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
+        let mut storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -9083,7 +9080,7 @@ mod tests {
         // Pessimistically rollback the k2 lock.
         // Non lite lock resolve on k1 and k2, there should no errors as lock on k2 is
         // pessimistic type.
-        must_rollback(&storage.engine, b"k2", 10, false);
+        must_rollback(&mut storage.engine, b"k2", 10, false);
         let mut temp_map = HashMap::default();
         temp_map.insert(10.into(), 20.into());
         storage
@@ -9169,7 +9166,7 @@ mod tests {
 
         // Unlock the k6 first.
         // Non lite lock resolve on k5 and k6, error should be reported.
-        must_rollback(&storage.engine, b"k6", 10, true);
+        must_rollback(&mut storage.engine, b"k6", 10, true);
         storage
             .sched_txn_command(
                 commands::ResolveLock::new(
