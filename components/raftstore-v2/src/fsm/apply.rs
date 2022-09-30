@@ -1,74 +1,102 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use batch_system::Fsm;
+use std::{
+    pin::Pin,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    task::{Context, Poll},
+};
+
+use batch_system::{Fsm, FsmScheduler, Mailbox};
 use crossbeam::channel::TryRecvError;
 use engine_traits::KvEngine;
-use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
+use futures::{Future, StreamExt};
+use kvproto::raft_serverpb::RegionLocalState;
+use slog::Logger;
+use tikv_util::mpsc::future::{self, Receiver, Sender, WakePolicy};
 
-use crate::{batch::ApplyContext, raft::Apply, router::ApplyTask};
+use crate::{
+    raft::Apply,
+    router::{ApplyRes, ApplyTask, PeerMsg},
+    tablet::CachedTablet,
+};
 
-pub struct ApplyFsm<EK: KvEngine> {
-    apply: Apply<EK>,
-    receiver: Receiver<ApplyTask>,
-    is_stopped: bool,
+/// A trait for reporting apply result.
+///
+/// Using a trait to make signiture simpler.
+pub trait ApplyResReporter {
+    fn report(&self, apply_res: ApplyRes);
 }
 
-impl<EK: KvEngine> ApplyFsm<EK> {
-    pub fn new(apply: Apply<EK>) -> (LooseBoundedSender<ApplyTask>, Box<Self>) {
-        let (tx, rx) = mpsc::loose_bounded(usize::MAX);
+impl<F: Fsm<Message = PeerMsg>, S: FsmScheduler<Fsm = F>> ApplyResReporter for Mailbox<F, S> {
+    fn report(&self, apply_res: ApplyRes) {
+        // TODO: check shutdown.
+        self.force_send(PeerMsg::ApplyRes(apply_res)).unwrap();
+    }
+}
+
+/// Schedule task to `ApplyFsm`.
+pub struct ApplyScheduler {
+    sender: Sender<ApplyTask>,
+}
+
+impl ApplyScheduler {
+    #[inline]
+    pub fn send(&self, task: ApplyTask) {
+        // TODO: ignore error when shutting down.
+        self.sender.send(task).unwrap();
+    }
+}
+
+pub struct ApplyFsm<EK: KvEngine, R> {
+    apply: Apply<EK, R>,
+    receiver: Receiver<ApplyTask>,
+}
+
+impl<EK: KvEngine, R> ApplyFsm<EK, R> {
+    pub fn new(
+        region_state: RegionLocalState,
+        res_reporter: R,
+        remote_tablet: CachedTablet<EK>,
+        logger: Logger,
+    ) -> (ApplyScheduler, Self) {
+        let (tx, rx) = future::unbounded(WakePolicy::Immediately);
+        let apply = Apply::new(region_state, res_reporter, remote_tablet, logger);
         (
-            tx,
-            Box::new(Self {
+            ApplyScheduler { sender: tx },
+            Self {
                 apply,
                 receiver: rx,
-                is_stopped: false,
-            }),
+            },
         )
     }
+}
 
-    /// Fetches messages to `apply_task_buf`. It will stop when the buffer
-    /// capacity is reached or there is no more pending messages.
-    ///
-    /// Returns how many messages are fetched.
-    pub fn recv(&mut self, apply_task_buf: &mut Vec<ApplyTask>) -> usize {
-        let l = apply_task_buf.len();
-        for i in l..apply_task_buf.capacity() {
-            match self.receiver.try_recv() {
-                Ok(msg) => apply_task_buf.push(msg),
-                Err(e) => {
-                    if let TryRecvError::Disconnected = e {
-                        self.is_stopped = true;
-                    }
-                    return i - l;
+impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
+    pub async fn handle_all_tasks(&mut self) {
+        loop {
+            let mut task = match self.receiver.next().await {
+                Some(t) => t,
+                None => return,
+            };
+            loop {
+                match task {
+                    // TODO: flush by buffer size.
+                    ApplyTask::CommittedEntries(ce) => self.apply.apply_committed_entries(ce).await,
+                }
+
+                // TODO: yield after some time.
+
+                // Perhaps spin sometime?
+                match self.receiver.try_recv() {
+                    Ok(t) => task = t,
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => return,
                 }
             }
-        }
-        apply_task_buf.capacity() - l
-    }
-}
-
-impl<EK: KvEngine> Fsm for ApplyFsm<EK> {
-    type Message = ApplyTask;
-
-    #[inline]
-    fn is_stopped(&self) -> bool {
-        self.is_stopped
-    }
-}
-
-pub struct ApplyFsmDelegate<'a, EK: KvEngine> {
-    fsm: &'a mut ApplyFsm<EK>,
-    apply_ctx: &'a mut ApplyContext,
-}
-
-impl<'a, EK: KvEngine> ApplyFsmDelegate<'a, EK> {
-    pub fn new(fsm: &'a mut ApplyFsm<EK>, apply_ctx: &'a mut ApplyContext) -> Self {
-        Self { fsm, apply_ctx }
-    }
-
-    pub fn handle_msgs(&self, apply_task_buf: &mut Vec<ApplyTask>) {
-        for task in apply_task_buf.drain(..) {
-            // TODO: handle the tasks.
+            self.apply.flush();
         }
     }
 }
