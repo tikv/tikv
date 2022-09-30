@@ -748,7 +748,6 @@ pub trait WriteCommand<S: Snapshot, L: LockManager>: CommandExt {
 pub mod test_util {
     use std::sync::Arc;
 
-    use api_version::{ApiV2, KvFormat};
     use causal_ts::CausalTsProviderImpl;
     use kvproto::kvrpcpb::ApiVersion;
     use txn_types::Mutation;
