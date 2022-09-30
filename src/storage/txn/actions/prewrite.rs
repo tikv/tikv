@@ -1489,15 +1489,7 @@ pub mod tests {
         // report WriteConflict.
         must_rollback(&engine, b"k2", 50, false);
         let err = must_retry_pessimistic_prewrite_put_err(
-            &engine,
-            b"k2",
-            b"v2",
-            b"k1",
-            &None,
-            50,
-            50,
-            false,
-            0,
+            &engine, b"k2", b"v2", b"k1", &None, 50, 50, false, 0,
         );
         assert!(
             matches!(err, Error(box ErrorInner::WriteConflict { .. })),
