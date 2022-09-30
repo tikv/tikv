@@ -732,6 +732,11 @@ impl DataKeyManager {
         };
         Ok(Some(encrypted_file))
     }
+
+    /// Return which method this manager is using.
+    pub fn encryption_method(&self) -> engine_traits::EncryptionMethod {
+        crypter::to_engine_encryption_method(self.method)
+    }
 }
 
 impl Drop for DataKeyManager {
