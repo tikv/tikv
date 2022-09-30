@@ -204,6 +204,51 @@ fn quote(bytes: BytesRef) -> Result<Option<Bytes>> {
     Ok(Some(result))
 }
 
+fn json_valid_json_validator(expr: &tipb::Expr) -> Result<()> {
+    assert!(expr.get_children().len() == 1);
+    let children = expr.get_children();
+    super::function::validate_expr_return_type(&children[0], EvalType::Json)?;
+    Ok(())
+}
+
+#[rpn_fn(nullable, raw_varg, min_args = 1, extra_validator = json_valid_json_validator)]
+#[inline]
+fn json_valid_json(args: &[ScalarValueRef]) -> Result<Option<Int>> {
+    assert!(!args.is_empty() && args.len() == 1);
+    let j: Option<JsonRef> = args[0].as_json();
+    let j = match j {
+        None => return Ok(None),
+        Some(j) => return Ok(Some(1)),
+    };
+}
+
+#[rpn_fn]
+#[inline]
+fn json_valid_string(args: &[ScalarValueRef]) -> Result<Option<Int>> {
+    assert!(!args.is_empty() && args.len() == 1);
+    match parse_json_path_list(&args[0..])? {
+        Some(path_expr_list) => {
+            if path_expr_list.len() == 1 && path_expr_list[0].contains_any_asterisk() {
+                return Ok(None);
+            }
+            match j.as_ref().extract(&path_expr_list)? {
+                Some(json) => {
+                    j = json;
+                }
+                _ => return Ok(None),
+            }
+        }
+        None => return Ok(None),
+    };
+}
+
+#[rpn_fn]
+#[inline]
+fn json_valid_other(args: &[ScalarValueRef]) -> Result<Option<Int>> {
+    assert!(!args.is_empty() && args.len() == 1);
+    return Ok(Some(0));
+}
+
 #[rpn_fn]
 #[inline]
 fn json_unquote(arg: BytesRef) -> Result<Option<Bytes>> {
