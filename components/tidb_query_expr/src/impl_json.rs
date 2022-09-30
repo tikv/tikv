@@ -335,7 +335,7 @@ fn json_contains(args: &[ScalarValueRef]) -> Result<Option<i64>> {
         };
     }
     match j.as_ref().json_contains(target.as_ref())? {
-        Some(_) => Ok(Some(1)),
+        true => Ok(Some(1)),
         _ => Ok(Some(0)),
     }
 }
