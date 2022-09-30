@@ -23,7 +23,7 @@ impl<'a> JsonRef<'a> {
                             }
                             Some(idx) => {
                                 let exp = self.object_get_val(idx)?;
-                                if exp.json_contains(val)? == false {
+                                if !(exp.json_contains(val)?) {
                                     return Ok(false);
                                 }
                             }
@@ -36,7 +36,7 @@ impl<'a> JsonRef<'a> {
                 if target.type_code == JsonType::Array {
                     let elem_count = target.get_elem_count();
                     for i in 0..elem_count {
-                        if self.json_contains(target.array_get_elem(i)?)? == false {
+                        if !(self.json_contains(target.array_get_elem(i)?)?) {
                             return Ok(false);
                         }
                     }
@@ -44,7 +44,7 @@ impl<'a> JsonRef<'a> {
                 }
                 let elem_count = self.get_elem_count();
                 for i in 0..elem_count {
-                    if self.array_get_elem(i)?.json_contains(target)? == true {
+                    if self.array_get_elem(i)?.json_contains(target)? {
                         return Ok(true);
                     }
                 }
