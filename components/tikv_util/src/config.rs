@@ -60,7 +60,7 @@ pub enum LogFormat {
     Json,
 }
 
-#[derive(Clone, Debug, Copy, PartialEq)]
+#[derive(Clone, Debug, Copy, PartialEq, Default)]
 pub struct ReadableSize(pub u64);
 
 impl From<ReadableSize> for ConfigValue {
@@ -75,42 +75,6 @@ impl From<ConfigValue> for ReadableSize {
             ReadableSize(s)
         } else {
             panic!("expect: ConfigValue::Size, got: {:?}", c);
-        }
-    }
-}
-
-/// This trivial type is needed, because we can't define the `From<Option<ReadableSize>>`
-/// and `Into<Option<ReadableSize>>` trait for `ConfigValue` which is needed to derive
-/// `OnlineConfig` trait for `BlockCacheConfig`
-#[derive(Clone, Debug, Copy, Serialize, Deserialize, PartialEq)]
-#[serde(from = "Option<ReadableSize>")]
-#[serde(into = "Option<ReadableSize>")]
-pub struct OptionReadableSize(pub Option<ReadableSize>);
-
-impl From<Option<ReadableSize>> for OptionReadableSize {
-    fn from(s: Option<ReadableSize>) -> OptionReadableSize {
-        OptionReadableSize(s)
-    }
-}
-
-impl From<OptionReadableSize> for Option<ReadableSize> {
-    fn from(s: OptionReadableSize) -> Option<ReadableSize> {
-        s.0
-    }
-}
-
-impl From<OptionReadableSize> for ConfigValue {
-    fn from(size: OptionReadableSize) -> ConfigValue {
-        ConfigValue::OptionSize(size.0.map(|v| v.0))
-    }
-}
-
-impl From<ConfigValue> for OptionReadableSize {
-    fn from(s: ConfigValue) -> OptionReadableSize {
-        if let ConfigValue::OptionSize(s) = s {
-            OptionReadableSize(s.map(ReadableSize))
-        } else {
-            panic!("expect: ConfigValue::OptionSize, got: {:?}", s);
         }
     }
 }
