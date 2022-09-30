@@ -1505,6 +1505,7 @@ mod tests {
                     extra_op: ExtraOp::Noop,
                     statistics: &mut Statistics::default(),
                     async_apply_prewrite: false,
+                    raw_ext: None,
                 }
             };
         }
@@ -1674,6 +1675,7 @@ mod tests {
                 extra_op: ExtraOp::Noop,
                 statistics: &mut statistics,
                 async_apply_prewrite: case.async_apply_prewrite,
+                raw_ext: None,
             };
             let mut engine = TestEngineBuilder::new().build().unwrap();
             let snap = engine.snapshot(Default::default()).unwrap();
@@ -1787,6 +1789,7 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
             async_apply_prewrite: false,
+            raw_ext: None,
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let result = cmd.cmd.process_write(snap, context).unwrap();
@@ -1814,6 +1817,7 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
             async_apply_prewrite: false,
+            raw_ext: None,
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let result = cmd.cmd.process_write(snap, context).unwrap();
@@ -1895,6 +1899,7 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
             async_apply_prewrite: false,
+            raw_ext: None,
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let result = cmd.cmd.process_write(snap, context).unwrap();
@@ -1926,6 +1931,7 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
             async_apply_prewrite: false,
+            raw_ext: None,
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let result = cmd.cmd.process_write(snap, context).unwrap();
@@ -2194,6 +2200,7 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
             async_apply_prewrite: false,
+            raw_ext: None,
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         assert!(prewrite_cmd.cmd.process_write(snap, context).is_err());
@@ -2217,6 +2224,7 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
             async_apply_prewrite: false,
+            raw_ext: None,
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         assert!(prewrite_cmd.cmd.process_write(snap, context).is_err());
@@ -2422,6 +2430,7 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
             async_apply_prewrite: false,
+            raw_ext: None,
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let res = prewrite_cmd.cmd.process_write(snap, context).unwrap();
