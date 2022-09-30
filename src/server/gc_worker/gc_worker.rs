@@ -2069,7 +2069,7 @@ mod tests {
     fn test_gc_keys_with_region_info_provider() {
         let store_id = 1;
         let engine = TestEngineBuilder::new().build(0, 0).unwrap();
-        let prefixed_engine = PrefixedEngine(engine.clone());
+        let mut prefixed_engine = PrefixedEngine(engine.clone());
 
         let (tx, _rx) = mpsc::channel();
         let feature_gate = FeatureGate::default();
@@ -2179,7 +2179,7 @@ mod tests {
     fn test_gc_keys_statistics() {
         let store_id = 1;
         let engine = TestEngineBuilder::new().build(0, 0).unwrap();
-        let prefixed_engine = PrefixedEngine(engine.clone());
+        let mut prefixed_engine = PrefixedEngine(engine.clone());
 
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
@@ -2242,7 +2242,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let builder = TestEngineBuilder::new().path(dir.path());
         let engine = builder.build_with_cfg(&cfg, 0, 0).unwrap();
-        let prefixed_engine = PrefixedEngine(engine);
+        let mut prefixed_engine = PrefixedEngine(engine);
 
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
@@ -2344,7 +2344,7 @@ mod tests {
     #[test]
     fn test_gc_keys_scan_range_limit() {
         let engine = TestEngineBuilder::new().build(0, 0).unwrap();
-        let prefixed_engine = PrefixedEngine(engine.clone());
+        let mut prefixed_engine = PrefixedEngine(engine.clone());
 
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
@@ -2464,9 +2464,9 @@ mod tests {
     #[test]
     fn delete_range_when_worker_is_full() {
         let store_id = 1;
-        let engine = PrefixedEngine(TestEngineBuilder::new().build(0, 0).unwrap());
-        must_prewrite_put(&engine, b"key", b"value", b"key", 10);
-        must_commit(&engine, b"key", 10, 20);
+        let mut engine = PrefixedEngine(TestEngineBuilder::new().build(0, 0).unwrap());
+        must_prewrite_put(&mut engine, b"key", b"value", b"key", 10);
+        must_commit(&mut engine, b"key", 10, 20);
         let db = engine.kv_engine().unwrap().as_inner().clone();
         let cf = get_cf_handle(&db, CF_WRITE).unwrap();
         db.flush_cf(cf, true).unwrap();
@@ -2790,7 +2790,7 @@ mod tests {
             .prefix("test_gc_for_multi_rocksdb")
             .tempdir()
             .unwrap();
-        let (factory, engine, _ri_provider, mut gc_runner, regions, _) =
+        let (factory, mut engine, _ri_provider, mut gc_runner, regions, _) =
             multi_gc_engine_setup(store_id, put_start_ts, delete_start_ts, true, &path);
 >>>>>>> 30cace667 (*: fix multi_gc_engine_setup())
 
@@ -2841,7 +2841,7 @@ mod tests {
             .prefix("test_gc_keys_for_multi_rocksdb")
             .tempdir()
             .unwrap();
-        let (factory, engine, ri_provider, mut gc_runner, ..) =
+        let (factory, mut engine, ri_provider, mut gc_runner, ..) =
             multi_gc_engine_setup(store_id, put_start_ts, delete_start_ts, true, &path);
 >>>>>>> 30cace667 (*: fix multi_gc_engine_setup())
 
@@ -3070,7 +3070,7 @@ mod tests {
             .prefix("test_destroy_range_for_multi_rocksdb_impl")
             .tempdir()
             .unwrap();
-        let (factory, engine, ri_provider, gc_runner, _, _rx) =
+        let (factory, mut engine, ri_provider, gc_runner, _, _rx) =
             multi_gc_engine_setup(store_id, put_start_ts, 0, false, &path);
 >>>>>>> 30cace667 (*: fix multi_gc_engine_setup())
 
@@ -3158,7 +3158,7 @@ mod tests {
             .prefix("test_compaction_filter_for_multi_rocksdb")
             .tempdir()
             .unwrap();
-        let (_, engine, ..) =
+        let (_, mut engine, ..) =
             multi_gc_engine_setup(store_id, put_start_ts, delete_start_ts, true, &path);
         for region_id in 1..=3 {
             let raw_engine = match get_rocksdb_from_factory(region_id, 10) {
@@ -3174,7 +3174,7 @@ mod tests {
                 let k = format!("k{:02}", i).into_bytes();
 
                 // Stale MVCC-PUTs will be cleaned in write CF's compaction filter.
-                must_get_none_on_region(&engine, region_id, &k, delete_start_ts - 1);
+                must_get_none_on_region(&mut engine, region_id, &k, delete_start_ts - 1);
 
                 // MVCC-DELETIONs is cleaned
                 // let mut raw_k = vec![b'z'];

@@ -503,7 +503,7 @@ mod tests {
 
     #[test]
     fn test_disk_read() {
-        let engine = TestEngineBuilder::new().build_without_cache(0, 0).unwrap();
+        let mut engine = TestEngineBuilder::new().build_without_cache(0, 0).unwrap();
         for i in 0..100 {
             let owned_key = format!("{:06}", i);
             let key = owned_key.as_bytes();

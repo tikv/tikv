@@ -2001,7 +2001,7 @@ mod tests {
 
     #[test]
     fn test_repeated_prewrite_non_pessimistic_lock() {
-        let mut engine = TestEngineBuilder::new().build(0 ,0).unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let cm = ConcurrencyManager::new(1.into());
         let mut statistics = Statistics::default();
 
@@ -2235,7 +2235,9 @@ mod tests {
 
     #[test]
     fn test_assertion_fail_on_conflicting_index_key() {
-        let mut engine = crate::storage::TestEngineBuilder::new().build(0, 0).unwrap();
+        let mut engine = crate::storage::TestEngineBuilder::new()
+            .build(0, 0)
+            .unwrap();
 
         // Simulate two transactions that tries to insert the same row with a secondary
         // index, and the second one canceled the first one (by rolling back its lock).

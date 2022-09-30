@@ -314,7 +314,7 @@ pub mod tests {
     fn test_flashback_to_version_pessimistic() {
         use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
 
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let k = b"k";
         let (v1, v2, v3) = (b"v1", b"v2", b"v3");
         // Prewrite and commit Put(k -> v1) with stat_ts = 10, commit_ts = 15.

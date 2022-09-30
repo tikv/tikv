@@ -128,12 +128,8 @@ impl TestEngineBuilder {
                 _ => (*cf, RocksCfOptions::default()),
             })
             .collect();
-        let mut engine =
+        let engine =
             RocksEngine::new(&path, None, cfs_opts, cache.is_some(), self.io_rate_limiter)?;
-
-        if let ApiVersion::V2 = api_version {
-            Self::register_causal_observer(&mut engine);
-        }
 
         Ok(engine)
     }
@@ -221,7 +217,7 @@ mod tests {
 
     #[test]
     fn test_max_skippable_internal_keys_error() {
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         must_put(&engine, b"foo", b"bar");
         must_delete(&engine, b"foo");
         must_put(&engine, b"foo1", b"bar1");
@@ -291,7 +287,7 @@ mod tests {
 
     #[test]
     fn test_prefix_seek_skip_tombstone() {
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         engine
             .put_cf(
                 &Context::default(),

@@ -502,7 +502,7 @@ mod tests {
     /// PUT     zz       -> zvzv....    (commit at 103)
     fn new_sample_engine() -> RocksEngine {
         let suffix = "v".repeat(SHORT_VALUE_MAX_LEN + 1);
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         must_prewrite_put(
             &mut engine,
             b"foo1",
@@ -566,7 +566,7 @@ mod tests {
     /// PUT     foo2    -> foo2vv...    (start at 4)
     fn new_sample_engine_2() -> RocksEngine {
         let suffix = "v".repeat(SHORT_VALUE_MAX_LEN + 1);
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         must_prewrite_put(
             &mut engine,
             b"foo1",
@@ -661,9 +661,9 @@ mod tests {
 
     #[test]
     fn test_use_prefix_seek() {
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
-        must_prewrite_put(&engine, b"foo1", b"bar1", b"foo1", 10);
-        must_commit(&engine, b"foo1", 10, 20);
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        must_prewrite_put(&mut engine, b"foo1", b"bar1", b"foo1", 10);
+        must_commit(&mut engine, b"foo1", 10, 20);
 
         // Mustn't get the next user key even if point getter doesn't compare user key.
         let mut getter = new_point_getter(&mut engine, 30.into());
@@ -937,7 +937,7 @@ mod tests {
 
     #[test]
     fn test_get_bypass_locks() {
-        let mut engine = TestEngineBuilder::new(0, 0).build().unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         let (key, val) = (b"foo", b"bar");
         must_prewrite_put(&mut engine, key, val, key, 10);

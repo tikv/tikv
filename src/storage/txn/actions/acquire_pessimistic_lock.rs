@@ -1073,7 +1073,9 @@ pub mod tests {
 
     #[test]
     fn test_old_value_put_delete_lock_insert() {
-        let mut engine = crate::storage::TestEngineBuilder::new().build(0, 0).unwrap();
+        let mut engine = crate::storage::TestEngineBuilder::new()
+            .build(0, 0)
+            .unwrap();
         let start_ts = old_value_put_delete_lock_insert(&mut engine, b"k1");
         let key = Key::from_raw(b"k1");
         for should_not_exist in &[true, false] {

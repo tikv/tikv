@@ -1015,7 +1015,7 @@ pub mod tests {
     // Test compaction filter won't break basic GC rules.
     #[test]
     fn test_compaction_filter_basic() {
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let raw_engine = engine.get_rocksdb();
         let value = vec![b'v'; 512];
         let mut gc_runner = TestGcRunner::new(0);
@@ -1032,8 +1032,7 @@ pub mod tests {
 
         // GC can't delete keys before the safe ponit if they are latest versions.
         gc_runner.safe_point(200).gc(&raw_engine, false);
-        must_get(&engine, b"zkey", 110, &value);
->>>>>>> a990ac026 (*: address comments)
+        must_get(&mut engine, b"zkey", 110, &value);
 
         must_prewrite_put(&mut engine, b"zkey", &value, b"zkey", 120);
         must_commit(&mut engine, b"zkey", 120, 130);
@@ -1055,7 +1054,7 @@ pub mod tests {
     #[test]
     fn test_compaction_filter_handle_deleting() {
         let value = vec![b'v'; 512];
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let raw_engine = engine.get_rocksdb();
         let mut gc_runner = TestGcRunner::new(0);
 
@@ -1124,7 +1123,7 @@ pub mod tests {
         cfg.writecf.dynamic_level_bytes = false;
         let dir = tempfile::TempDir::new().unwrap();
         let builder = TestEngineBuilder::new().path(dir.path());
-        let engine = builder.build_with_cfg(&cfg, 0, 0).unwrap();
+        let mut engine = builder.build_with_cfg(&cfg, 0, 0).unwrap();
         let raw_engine = engine.get_rocksdb();
         let value = vec![b'v'; 512];
         let mut gc_runner = TestGcRunner::new(0);
@@ -1193,7 +1192,7 @@ pub mod tests {
 
         let dir = tempfile::TempDir::new().unwrap();
         let builder = TestEngineBuilder::new().path(dir.path());
-        let engine = builder.build_with_cfg(&cfg, 0, 0).unwrap();
+        let mut engine = builder.build_with_cfg(&cfg, 0, 0).unwrap();
         let raw_engine = engine.get_rocksdb();
         let mut gc_runner = TestGcRunner::new(0);
 

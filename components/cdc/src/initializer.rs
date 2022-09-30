@@ -652,7 +652,7 @@ mod tests {
 
     #[test]
     fn test_initializer_build_resolver() {
-        let engine = TestEngineBuilder::new().build_without_cache(0, 0).unwrap();
+        let mut engine = TestEngineBuilder::new().build_without_cache(0, 0).unwrap();
 
         let mut expected_locks = BTreeMap::<TimeStamp, HashSet<Arc<[u8]>>>::new();
 
@@ -760,7 +760,7 @@ mod tests {
     // handling `OldValue::SeekWrite` with `OldValueReader`.
     #[test]
     fn test_incremental_scanner_with_hint_min_ts() {
-        let engine = TestEngineBuilder::new().build_without_cache(0, 0).unwrap();
+        let mut engine = TestEngineBuilder::new().build_without_cache(0, 0).unwrap();
 
         let v_suffix = |suffix: usize| -> Vec<u8> {
             let suffix = suffix.to_string().into_bytes();

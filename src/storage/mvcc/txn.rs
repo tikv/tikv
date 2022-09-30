@@ -536,7 +536,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_rollback_del() {
-        let mut engine = TestEngineBuilder::new().build(0 ,0).unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         let (k, v) = (b"k1", b"v1");
         must_prewrite_put(&mut engine, k, v, k, 5);
@@ -552,7 +552,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_rollback_overlapped() {
-        let mut engine = TestEngineBuilder::new().build(0 ,0).unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let (k1, v1) = (b"key1", b"v1");
         let (k2, v2) = (b"key2", b"v2");
 
@@ -877,7 +877,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_scan_values_in_default() {
-        let mut engine = TestEngineBuilder::new().build(0 ,0).unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         must_prewrite_put(
             &mut engine,
@@ -932,7 +932,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_seek_ts() {
-        let mut engine = TestEngineBuilder::new().build(0 ,0).unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         must_prewrite_put(&mut engine, &[2], b"vv", &[2], 3);
         must_commit(&mut engine, &[2], 3, 3);
@@ -1131,7 +1131,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_non_pessimistic_lock_conflict_with_optimistic_txn() {
-        let mut engine = TestEngineBuilder::new().build(0 ,0).unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         let k = b"k1";
         let v = b"v1";
@@ -1144,7 +1144,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_non_pessimistic_lock_conflict_with_pessismitic_txn() {
-        let mut engine = TestEngineBuilder::new().build(0 ,0).unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 
         // k1 is a row key, k2 is the corresponding index key.
         let (k1, v1) = (b"k1", b"v1");
@@ -1363,7 +1363,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_async_commit_pushed_min_commit_ts() {
-        let mut engine = TestEngineBuilder::new().build(0 ,0).unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let cm = ConcurrencyManager::new(42.into());
 
         // Simulate that min_commit_ts is pushed forward larger than latest_ts
@@ -1406,7 +1406,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_txn_timestamp_overlapping() {
-        let mut engine = TestEngineBuilder::new().build(0 ,0).unwrap();
+        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
         let (k, v) = (b"k1", b"v1");
 
         // Prepare a committed transaction.
