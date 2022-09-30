@@ -123,7 +123,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
 mod tests {
     use std::sync::Arc;
 
-    use api_version::test_kv_format_impl;
+    use api_version::{test_kv_format_impl, ApiV2};
     use causal_ts::CausalTsProviderImpl;
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_DEFAULT;
@@ -276,5 +276,14 @@ mod tests {
             F::encode_raw_value_owned(encode_value),
         )];
         assert_eq!(write_result.to_be_write.modifies, modifies_with_ts);
+        if F::TAG == ApiVersion::V2 {
+            assert_eq!(write_result.lock_guards.len(), 1);
+            let raw_key = vec![api_version::api_v2::RAW_KEY_PREFIX];
+            let encoded_key = ApiV2::encode_raw_key(&raw_key, Some(100.into()));
+            assert_eq!(
+                write_result.lock_guards.first().unwrap().key(),
+                &encoded_key
+            );
+        }
     }
 }

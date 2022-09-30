@@ -34,7 +34,6 @@ use std::{
     u64,
 };
 
-// use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
 use causal_ts::CausalTsProviderImpl;
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
@@ -864,7 +863,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         )
         .await;
         if let Err(err) = raw_ext {
-            debug!("get apiv2 context failed"; "cid" => cid, "err" => ?err);
+            info!("get_raw_ext failed"; "cid" => cid, "err" => ?err);
             scheduler.finish_with_err(cid, err);
             return;
         }
