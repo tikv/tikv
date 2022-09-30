@@ -746,9 +746,12 @@ pub trait WriteCommand<S: Snapshot, L: LockManager>: CommandExt {
 
 #[cfg(test)]
 pub mod test_util {
+    use std::sync::Arc;
+
     use api_version::{ApiV2, KvFormat};
+    use causal_ts::CausalTsProviderImpl;
     use kvproto::kvrpcpb::ApiVersion;
-    use txn_types::{Lock, LockType, Mutation};
+    use txn_types::Mutation;
 
     use super::*;
     use crate::storage::{
@@ -944,22 +947,23 @@ pub mod test_util {
         Ok(())
     }
 
-    pub async fn mock_raw_ext(
-        api_ver: ApiVersion,
-        concurrency_manager: ConcurrencyManager,
-    ) -> Option<RawExt> {
-        if api_ver == ApiVersion::V2 {
-            let raw_key = vec![api_version::api_v2::RAW_KEY_PREFIX];
-            let ts = 100.into();
-
-            let encode_key = ApiV2::encode_raw_key(&raw_key, Some(ts));
-            let key_guard = concurrency_manager.lock_key(&encode_key).await;
-            let lock = Lock::new(LockType::Put, raw_key, ts, 0, None, 0.into(), 1, ts);
-            key_guard.with_lock(|l| *l = Some(lock));
-
-            Some(RawExt { ts, key_guard })
+    pub fn gen_ts_provider(api_version: ApiVersion) -> Option<Arc<CausalTsProviderImpl>> {
+        if api_version == ApiVersion::V2 {
+            let test_provider: causal_ts::CausalTsProviderImpl =
+                causal_ts::tests::TestProvider::default().into();
+            Some(Arc::new(test_provider))
         } else {
             None
+        }
+    }
+
+    pub fn gen_locked_key(api_version: ApiVersion, ts: TimeStamp) -> Vec<Key> {
+        if api_version == ApiVersion::V2 {
+            let raw_key = vec![api_version::api_v2::RAW_KEY_PREFIX];
+            let encode_key = ApiV2::encode_raw_key(&raw_key, Some(ts));
+            vec![encode_key]
+        } else {
+            vec![]
         }
     }
 }

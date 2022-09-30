@@ -1265,7 +1265,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     }
 }
 
-async fn get_raw_ext(
+pub async fn get_raw_ext(
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
     concurrency_manager: ConcurrencyManager,
     max_ts_synced: bool,

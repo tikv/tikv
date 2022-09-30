@@ -1,7 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-
 use engine_traits::CfName;
 
 use crate::storage::{
@@ -60,10 +59,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
             rows,
             pr: ProcessResult::Res,
             lock_info: None,
-            lock_guards: raw_ext
-                .into_iter()
-                .map(|raw_ext| raw_ext.key_guard)
-                .collect(),
+            lock_guards: raw_ext.into_iter().map(|r| r.key_guard).collect(),
             response_policy: ResponsePolicy::OnApplied,
         })
     }
@@ -76,9 +72,12 @@ mod tests {
     use futures::executor::block_on;
     use kvproto::kvrpcpb::Context;
     use tikv_kv::Engine;
+    use txn_types::Key;
 
     use super::*;
-    use crate::storage::{lock_manager::DummyLockManager, Statistics, TestEngineBuilder};
+    use crate::storage::{
+        lock_manager::DummyLockManager, txn::scheduler::get_raw_ext, Statistics, TestEngineBuilder,
+    };
 
     #[test]
     fn test_atomic_process_write() {
@@ -90,6 +89,7 @@ mod tests {
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
         let raw_keys = vec![b"ra", b"rz"];
         let raw_values = vec![b"valuea", b"valuez"];
+        let ts_provider = super::super::test_util::gen_ts_provider(F::TAG);
 
         let mut modifies = vec![];
         for i in 0..raw_keys.len() {
@@ -107,7 +107,7 @@ mod tests {
         let cmd = RawAtomicStore::new(CF_DEFAULT, modifies, Context::default());
         let mut statistic = Statistics::default();
         let snap = engine.snapshot(Default::default()).unwrap();
-        let raw_ext = block_on(super::super::test_util::mock_raw_ext(F::TAG, cm.clone()));
+        let raw_ext = block_on(get_raw_ext(ts_provider, cm.clone(), true, &cmd.cmd)).unwrap();
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
             concurrency_manager: cm,
@@ -127,10 +127,18 @@ mod tests {
             };
             modifies_with_ts.push(Modify::Put(
                 CF_DEFAULT,
-                F::encode_raw_key_owned(raw_keys[i].to_vec(), Some(100.into())),
+                F::encode_raw_key_owned(raw_keys[i].to_vec(), Some(101.into())),
                 F::encode_raw_value_owned(raw_value),
             ));
         }
-        assert_eq!(write_result.to_be_write.modifies, modifies_with_ts)
+        assert_eq!(write_result.to_be_write.modifies, modifies_with_ts);
+        assert_eq!(
+            write_result
+                .lock_guards
+                .into_iter()
+                .map(|g| g.key())
+                .collect::<Key>(),
+            super::super::test_util::gen_locked_key(F::TAG, 101.into())
+        );
     }
 }

@@ -1,7 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-
 use api_version::{match_template_api_version, KvFormat, RawValue};
 use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName};
 use kvproto::kvrpcpb::ApiVersion;
@@ -93,10 +92,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
                     previous_value: old_value,
                     succeed: true,
                 },
-                raw_ext
-                    .into_iter()
-                    .map(|raw_ext| raw_ext.key_guard)
-                    .collect(),
+                raw_ext.into_iter().map(|r| r.key_guard).collect(),
             )
         } else {
             (
@@ -125,14 +121,20 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use api_version::test_kv_format_impl;
+    use causal_ts::CausalTsProviderImpl;
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_DEFAULT;
     use futures::executor::block_on;
     use kvproto::kvrpcpb::Context;
 
     use super::*;
-    use crate::storage::{lock_manager::DummyLockManager, Engine, Statistics, TestEngineBuilder};
+    use crate::storage::{
+        lock_manager::DummyLockManager, txn::scheduler::get_raw_ext, Engine, Statistics,
+        TestEngineBuilder,
+    };
 
     #[test]
     fn test_cas_basic() {
@@ -145,6 +147,7 @@ mod tests {
     /// `src/storage/mod.rs`.
     fn test_cas_basic_impl<F: KvFormat>() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
+        let ts_provider = super::super::test_util::gen_ts_provider(F::TAG);
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
         let key = b"rk";
 
@@ -159,7 +162,8 @@ mod tests {
             F::TAG,
             Context::default(),
         );
-        let (prev_val, succeed) = sched_command(&mut engine, cm.clone(), cmd, F::TAG).unwrap();
+        let (prev_val, succeed) =
+            sched_command(&mut engine, cm.clone(), cmd, ts_provider.clone()).unwrap();
         assert!(prev_val.is_none());
         assert!(succeed);
 
@@ -172,7 +176,8 @@ mod tests {
             F::TAG,
             Context::default(),
         );
-        let (prev_val, succeed) = sched_command(&mut engine, cm.clone(), cmd, F::TAG).unwrap();
+        let (prev_val, succeed) =
+            sched_command(&mut engine, cm.clone(), cmd, ts_provider.clone()).unwrap();
         assert_eq!(prev_val, Some(b"v1".to_vec()));
         assert!(!succeed);
 
@@ -185,7 +190,7 @@ mod tests {
             F::TAG,
             Context::default(),
         );
-        let (prev_val, succeed) = sched_command(&mut engine, cm, cmd, F::TAG).unwrap();
+        let (prev_val, succeed) = sched_command(&mut engine, cm, cmd, ts_provider).unwrap();
         assert_eq!(prev_val, Some(b"v1".to_vec()));
         assert!(succeed);
     }
@@ -194,15 +199,13 @@ mod tests {
         engine: &mut E,
         cm: ConcurrencyManager,
         cmd: TypedCommand<(Option<Value>, bool)>,
-        api_version: ApiVersion,
+        ts_provider: Option<Arc<CausalTsProviderImpl>>,
     ) -> Result<(Option<Value>, bool)> {
         let snap = engine.snapshot(Default::default())?;
         use kvproto::kvrpcpb::ExtraOp;
         let mut statistic = Statistics::default();
-        let raw_ext = block_on(super::super::test_util::mock_raw_ext(
-            api_version,
-            cm.clone(),
-        ));
+
+        let raw_ext = block_on(get_raw_ext(ts_provider, cm.clone(), true, &cmd.cmd)).unwrap();
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
             concurrency_manager: cm,
@@ -234,6 +237,7 @@ mod tests {
 
     fn test_cas_process_write_impl<F: KvFormat>() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
+        let ts_provider = super::super::test_util::gen_ts_provider(F::TAG);
 
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
         let raw_key = b"rk";
@@ -255,7 +259,7 @@ mod tests {
         );
         let mut statistic = Statistics::default();
         let snap = engine.snapshot(Default::default()).unwrap();
-        let raw_ext = block_on(super::super::test_util::mock_raw_ext(F::TAG, cm.clone()));
+        let raw_ext = block_on(get_raw_ext(ts_provider, cm.clone(), true, &cmd.cmd)).unwrap();
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
             concurrency_manager: cm,
@@ -268,9 +272,17 @@ mod tests {
         let write_result = cmd.process_write(snap, context).unwrap();
         let modifies_with_ts = vec![Modify::Put(
             CF_DEFAULT,
-            F::encode_raw_key(raw_key, Some(100.into())),
+            F::encode_raw_key(raw_key, Some(101.into())),
             F::encode_raw_value_owned(encode_value),
         )];
-        assert_eq!(write_result.to_be_write.modifies, modifies_with_ts)
+        assert_eq!(write_result.to_be_write.modifies, modifies_with_ts);
+        assert_eq!(
+            write_result
+                .lock_guards
+                .into_iter()
+                .map(|g| g.key())
+                .collect::<Key>(),
+            super::super::test_util::gen_locked_key(F::TAG, 101.into())
+        );
     }
 }
