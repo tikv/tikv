@@ -40,7 +40,8 @@ use crate::{
     fsm::PeerFsmDelegate,
     raft::Peer,
     router::{
-        message::RaftRequest, DebugInfoChannel, PeerMsg, QueryResChannel, QueryResult, ReadResponse,
+        message::RaftRequest, ApplyRes, DebugInfoChannel, PeerMsg, QueryResChannel, QueryResult,
+        ReadResponse,
     },
 };
 
@@ -378,24 +379,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ch.set_result(meta);
     }
 
-    pub fn post_apply<T>(
+    // the v1's post_apply
+    // As the logic is mostly for read, rename it to handle_read_after_apply
+    pub fn handle_read_on_apply<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
-        apply_state: RaftApplyState,
-        applied_term: u64,
-        apply_metrics: &ApplyMetrics,
+        apply_res: ApplyRes,
+        progress_to_be_updated: bool,
     ) -> bool {
         let mut has_ready = false;
         // TODO: add is_handling_snapshot check
         // it could update has_ready
-
-        let applied_index = apply_state.get_applied_index();
-        self.raft_group_mut().advance_apply_to(applied_index);
-
-        // TODO: add cmd_epoch_checker.advance_apply
-        let progress_to_be_updated = self.entry_storage().applied_term() != applied_term;
-        self.entry_storage_mut().set_applied_state(apply_state);
-        self.entry_storage_mut().set_applied_term(applied_term);
 
         // TODO: add peer_stat(for PD hotspot scheduling) and deleted_keys_hint
         if !self.is_leader() {
@@ -406,13 +400,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
         }
         self.pending_reads_mut().gc();
-
-        self.read_progress_mut().update_applied_core(applied_index);
+        self.read_progress_mut()
+            .update_applied_core(apply_res.applied_index);
 
         // Only leaders need to update applied_term.
         if progress_to_be_updated && self.is_leader() {
             // TODO: add coprocessor_host hook
-            let progress = ReadProgress::applied_term(applied_term);
+            let progress = ReadProgress::applied_term(apply_res.applied_term);
+            // TODO: remove it
+            self.add_reader_if_necessary(&mut ctx.store_meta);
             let mut meta = ctx.store_meta.lock().unwrap();
             let reader = meta.readers.get_mut(&self.region_id()).unwrap();
             self.maybe_update_read_progress(reader, progress);
