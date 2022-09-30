@@ -31,9 +31,9 @@ use tikv_util::{
     Either,
 };
 
-use super::storage::Storage;
+use super::{storage::Storage, Apply};
 use crate::{
-    batch::StoreContext,
+    fsm::{ApplyFsm, ApplyScheduler},
     operation::{AsyncWriter, DestroyProgress, SimpleWriteEncoder},
     router::{CmdResChannel, QueryResChannel},
     tablet::{self, CachedTablet},
@@ -55,6 +55,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// than protobuf.
     raw_write_encoder: Option<SimpleWriteEncoder>,
     proposals: ProposalQueue<Vec<CmdResChannel>>,
+    apply_scheduler: Option<ApplyScheduler>,
 
     /// Set to true if any side effect needs to be handled.
     has_ready: bool,
@@ -121,15 +122,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             None
         };
 
+        let tablet = CachedTablet::new(tablet);
+
         let raft_group = RawNode::new(&raft_cfg, storage, &logger)?;
         let region = raft_group.store().region_state().get_region().clone();
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
         let mut peer = Peer {
-            tablet: CachedTablet::new(tablet),
+            tablet,
             peer_cache: vec![],
             raw_write_encoder: None,
             proposals: ProposalQueue::new(region_id, raft_group.raft.id),
             async_writer: AsyncWriter::new(region_id, peer_id),
+            apply_scheduler: None,
             has_ready: false,
             destroy_progress: DestroyProgress::None,
             raft_group,
@@ -364,12 +368,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &mut self.destroy_progress
     }
 
-    pub fn raw_write_encoder_mut(&mut self) -> &mut Option<SimpleWriteEncoder> {
+    #[inline]
+    pub(crate) fn has_applied_to_current_term(&self) -> bool {
+        self.entry_storage().applied_term() == self.term()
+    }
+
+    #[inline]
+    pub fn simple_write_encoder_mut(&mut self) -> &mut Option<SimpleWriteEncoder> {
         &mut self.raw_write_encoder
     }
 
     #[inline]
-    pub fn raw_write_encoder(&self) -> &Option<SimpleWriteEncoder> {
+    pub fn simple_write_encoder(&self) -> &Option<SimpleWriteEncoder> {
         &self.raw_write_encoder
     }
 
@@ -404,5 +414,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // this store does not apply commit merge, so the leader is not ready
             // to read, until the merge is rollbacked.
             && !self.is_merging()
+    }
+
+    pub fn apply_scheduler(&self) -> &ApplyScheduler {
+        self.apply_scheduler.as_ref().unwrap()
+    }
+
+    #[inline]
+    pub fn set_apply_scheduler(&mut self, apply_scheduler: ApplyScheduler) {
+        self.apply_scheduler = Some(apply_scheduler);
     }
 }
