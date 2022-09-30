@@ -4,6 +4,7 @@ use engine_traits::{
     CfNamesExt, DeleteStrategy, ImportExt, IterOptions, Iterable, Iterator, MiscExt, Mutable,
     Range, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt, ALL_CFS,
 };
+use rocksdb::Range as RocksRange;
 use tikv_util::{box_try, keybuilder::KeyBuilder};
 
 use crate::{
@@ -150,26 +151,42 @@ impl MiscExt for RocksEngine {
         match strategy {
             DeleteStrategy::DeleteFiles => {
                 let handle = util::get_cf_handle(self.as_inner(), cf)?;
-                for r in ranges {
-                    if r.start_key >= r.end_key {
-                        continue;
-                    }
-                    self.as_inner()
-                        .delete_files_in_range_cf(handle, r.start_key, r.end_key, false)
-                        .map_err(r2e)?;
+                let rocks_ranges: Vec<_> = ranges
+                    .iter()
+                    .filter_map(|r| {
+                        if r.start_key >= r.end_key {
+                            None
+                        } else {
+                            Some(RocksRange::new(r.start_key, r.end_key))
+                        }
+                    })
+                    .collect();
+                if rocks_ranges.is_empty() {
+                    return Ok(());
                 }
+                self.as_inner()
+                    .delete_files_in_ranges_cf(handle, &rocks_ranges, false)
+                    .map_err(r2e)?;
             }
             DeleteStrategy::DeleteBlobs => {
                 let handle = util::get_cf_handle(self.as_inner(), cf)?;
                 if self.is_titan() {
-                    for r in ranges {
-                        if r.start_key >= r.end_key {
-                            continue;
-                        }
-                        self.as_inner()
-                            .delete_blob_files_in_range_cf(handle, r.start_key, r.end_key, false)
-                            .map_err(r2e)?;
+                    let rocks_ranges: Vec<_> = ranges
+                        .iter()
+                        .filter_map(|r| {
+                            if r.start_key >= r.end_key {
+                                None
+                            } else {
+                                Some(RocksRange::new(r.start_key, r.end_key))
+                            }
+                        })
+                        .collect();
+                    if rocks_ranges.is_empty() {
+                        return Ok(());
                     }
+                    self.as_inner()
+                        .delete_blob_files_in_ranges_cf(handle, &rocks_ranges, false)
+                        .map_err(r2e)?;
                 }
             }
             DeleteStrategy::DeleteByRange => {
