@@ -862,12 +862,6 @@ where
             None
         };
 
-        // Register causal observer for RawKV API V2
-        if let Some(provider) = self.causal_ts_provider.clone() {
-            let causal_ob = causal_ts::CausalObserver::new(provider);
-            causal_ob.register_to(self.coprocessor_host.as_mut().unwrap());
-        };
-
         let check_leader_runner = CheckLeaderRunner::new(
             engines.store_meta.clone(),
             self.coprocessor_host.clone().unwrap(),
@@ -1055,6 +1049,7 @@ where
             auto_split_controller,
             self.concurrency_manager.clone(),
             collector_reg_handle,
+            self.causal_ts_provider.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
