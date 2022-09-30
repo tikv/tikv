@@ -421,6 +421,7 @@ impl ReadDelegate {
 
     pub fn is_in_leader_lease(&self, ts: Timespec) -> bool {
         fail_point!("perform_read_local", |_| true);
+        fail_point!("local_reader_fail_lease_check", |_| false);
 
         if let Some(ref lease) = self.leader_lease {
             let term = lease.term();
@@ -783,22 +784,12 @@ where
                         let response =
                             delegate.execute(&req, &region, None, read_id, Some(&mut delegate_ext));
 
-                        println!("1111");
                         if !delegate.is_in_leader_lease(*delegate_ext.snapshot_ts) {
-                            println!("2222");
-                            fail_point!("localreader_before_redirect", || {
-                                cb.invoke_read(ReadResponse {
-                                    response: Default,
-                                    snapshot: None,
-                                    txn_extra_op: TxnExtraOp::Noop,
-                                });
-                                return;
-                            });
+                            fail_point!("localreader_before_redirect", |_| {});
                             // Forward to raftstore.
                             self.redirect(RaftCommand::new(req, cb));
                             return;
                         }
-                        println!("3333");
 
                         // Try renew lease in advance
                         delegate.maybe_renew_lease_advance(&self.router, snapshot_ts);
@@ -1653,95 +1644,6 @@ mod tests {
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().local_executed_snapshot_cache_hit.get()),
             11
-        );
-    }
-
-    #[test]
-    fn test_lease_expire_before_get_snapshot() {
-        let store_id = 2;
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
-        let (_tmp, mut reader, rx) = new_reader("test-local-reader", store_id, store_meta.clone());
-
-        let mut region1 = metapb::Region::default();
-        region1.set_id(1);
-        let prs = new_peers(store_id, vec![2, 3, 4]);
-        region1.set_peers(prs.clone().into());
-        let epoch13 = {
-            let mut ep = metapb::RegionEpoch::default();
-            ep.set_conf_ver(1);
-            ep.set_version(3);
-            ep
-        };
-        let leader2 = prs[0].clone();
-        region1.set_region_epoch(epoch13.clone());
-        let term6 = 6;
-        let mut lease = Lease::new(Duration::seconds(3), Duration::milliseconds(250));
-        let read_progress = Arc::new(RegionReadProgress::new(&region1, 1, 1, "".to_owned()));
-
-        let mut cmd = RaftCmdRequest::default();
-        let mut header = RaftRequestHeader::default();
-        header.set_region_id(1);
-        header.set_peer(leader2.clone());
-        header.set_region_epoch(epoch13.clone());
-        header.set_term(term6);
-        cmd.set_header(header);
-        let mut req = Request::default();
-        req.set_cmd_type(CmdType::Snap);
-        cmd.set_requests(vec![req].into());
-
-        lease.renew(monotonic_raw_now());
-        let remote = lease.maybe_new_remote_lease(term6).unwrap();
-        {
-            let mut meta = store_meta.lock().unwrap();
-            let read_delegate = ReadDelegate {
-                tag: String::new(),
-                region: Arc::new(region1.clone()),
-                peer_id: leader2.get_id(),
-                term: term6,
-                applied_term: term6,
-                leader_lease: Some(remote),
-                last_valid_ts: Timespec::new(0, 0),
-                txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
-                txn_ext: Arc::new(TxnExt::default()),
-                read_progress: read_progress.clone(),
-                pending_remove: false,
-                track_ver: TrackVer::new(),
-                bucket_meta: None,
-            };
-            meta.readers.insert(1, read_delegate);
-        }
-
-        let task =
-            RaftCommand::<KvTestSnapshot>::new(cmd.clone(), Callback::read(Box::new(move |_| {})));
-        // Lease is working appropriately.
-        must_not_redirect(&mut reader, &rx, task);
-
-        fail::cfg("before_execute_get_snapshot", "pause").unwrap();
-        let cmd2 = cmd.clone();
-        let handle = thread::spawn(move || {
-            reader.propose_raft_command(
-                None,
-                cmd2,
-                Callback::read(Box::new(|resp| {
-                    panic!("unexpected invoke, {:?}", resp);
-                })),
-            );
-        });
-
-        // Wait for request to pause right before executing getting
-        // snapshot
-        thread::sleep(Duration::milliseconds(500).to_std().unwrap());
-        // Exipre the lease
-        lease.expire();
-        fail::cfg("before_execute_get_snapshot", "off").unwrap();
-        handle.join().unwrap();
-
-        // So, it should be redirect to raftstore
-        assert_eq!(
-            rx.recv_timeout(Duration::seconds(5).to_std().unwrap())
-                .unwrap()
-                .request,
-            cmd
         );
     }
 }
