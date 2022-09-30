@@ -276,13 +276,5 @@ mod tests {
             F::encode_raw_value_owned(encode_value),
         )];
         assert_eq!(write_result.to_be_write.modifies, modifies_with_ts);
-        assert_eq!(
-            write_result
-                .lock_guards
-                .into_iter()
-                .map(|g| g.key())
-                .collect::<Key>(),
-            super::super::test_util::gen_locked_key(F::TAG, 101.into())
-        );
     }
 }

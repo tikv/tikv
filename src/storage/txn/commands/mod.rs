@@ -956,14 +956,4 @@ pub mod test_util {
             None
         }
     }
-
-    pub fn gen_locked_key(api_version: ApiVersion, ts: TimeStamp) -> Vec<Key> {
-        if api_version == ApiVersion::V2 {
-            let raw_key = vec![api_version::api_v2::RAW_KEY_PREFIX];
-            let encode_key = ApiV2::encode_raw_key(&raw_key, Some(ts));
-            vec![encode_key]
-        } else {
-            vec![]
-        }
-    }
 }
