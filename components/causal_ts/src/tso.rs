@@ -918,7 +918,7 @@ pub mod tests {
         assert_eq!(provider.tso_remain(), 0);
         assert_eq!(provider.tso_usage(), 100);
 
-        assert_eq!(provider.flush().unwrap(), TimeStamp::from(1201)); // allocated: [1101, 1200]
+        assert_eq!(provider.flush().unwrap(), TimeStamp::from(1201)); // allocated: [1201, 2200]
         for ts in 1202..=1260u64 {
             assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
         }
