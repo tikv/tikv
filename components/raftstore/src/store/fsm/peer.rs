@@ -1063,18 +1063,14 @@ where
             "peer_id" => self.fsm.peer.peer_id(),
         );
         let ch_clone = ch.clone();
-        let cb = Callback::write_ext(
+        let cb = Callback::write(
             Box::new(move |resp| {
                 if resp.response.get_header().has_error() {
                     ch_clone.send(false).unwrap();
                     error!("send flashback prepare msg failed"; "region_id" => region_id);
                 }
-            }),
-            None,
-            Some(Box::new(move || {
                 ch.send(true).unwrap();
-            })),
-        );
+            }));
         self.fsm.peer.flashback_state.take();
 
         let req = {

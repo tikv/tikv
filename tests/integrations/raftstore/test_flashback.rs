@@ -246,9 +246,9 @@ fn test_flashback_for_check_is_in_persist() {
     let local_state = cluster.region_local_state(1, 2);
     assert!(local_state.get_is_in_flashback());
 
-    block_on(cluster.call_finish_flashback(region.get_id(), 2));
-    // TODO: check the region flashback state is not set by committed callback.
-    // assert!(!local_state.get_is_in_flashback());
+    block_on(cluster.call_finish_flashback(1, 2));
+    let local_state = cluster.region_local_state(1, 2);
+    assert!(!local_state.get_is_in_flashback());
 }
 
 #[test]
