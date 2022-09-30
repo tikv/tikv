@@ -13,11 +13,11 @@ use std::{
 
 use crossbeam::channel::{self, Receiver, Sender};
 use engine_test::{
-    ctor::{CfOptions, DbOptions},
+    ctor::DbOptions,
     kv::{KvTestEngine, TestTabletFactoryV2},
     raft::RaftTestEngine,
 };
-use engine_traits::{OpenOptions, TabletFactory, ALL_CFS};
+use engine_traits::{OpenOptions, TabletFactory};
 use futures::executor::block_on;
 use kvproto::{
     metapb::Store,
@@ -124,16 +124,7 @@ impl RunningState {
         transport: TestTransport,
         logger: &Logger,
     ) -> (TestRouter, Self) {
-        let cf_opts = ALL_CFS
-            .iter()
-            .copied()
-            .map(|cf| (cf, CfOptions::default()))
-            .collect();
-        let factory = Arc::new(TestTabletFactoryV2::new(
-            path,
-            DbOptions::default(),
-            cf_opts,
-        ));
+        let factory = Arc::new(TestTabletFactoryV2::new(path, DbOptions::default()));
         let raft_engine =
             engine_test::raft::new_engine(&format!("{}", path.join("raft").display()), None)
                 .unwrap();
