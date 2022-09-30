@@ -9,11 +9,15 @@ pub mod ioload;
 pub mod thread;
 
 // re-export some traits for ease of use
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use fail::fail_point;
 #[cfg(target_os = "linux")]
 use lazy_static::lazy_static;
+use mnt::get_mount;
 use sysinfo::RefreshKind;
 pub use sysinfo::{DiskExt, NetworkExt, ProcessExt, ProcessorExt, SystemExt};
 
@@ -155,4 +159,42 @@ pub fn cache_size(level: usize) -> Option<u64> {
 /// It will only return `Some` on Linux.
 pub fn cache_line_size(level: usize) -> Option<u64> {
     read_size_in_cache(level, "coherency_line_size")
+}
+
+pub fn path_in_same_mount_point(path1: &str, path2: &str) -> bool {
+    if path1.is_empty() || path2.is_empty() {
+        return true;
+    }
+    let path1 = PathBuf::from(path1);
+    let path1_mount_point = match get_mount(&path1) {
+        Ok(list) => match list {
+            Some(mount) => mount,
+            None => {
+                warn!("No mount point for {}", path1.display());
+                return false;
+            }
+        },
+        Err(e) => {
+            warn!("Error: {}", e);
+            return false;
+        }
+    };
+    let path2 = PathBuf::from(path2);
+    let path2_mount_point = match get_mount(&path2) {
+        Ok(list) => match list {
+            Some(mount) => mount,
+            None => {
+                warn!("No mount point for {}", path2.display());
+                return false;
+            }
+        },
+        Err(e) => {
+            warn!("Error: {}", e);
+            return false;
+        }
+    };
+    if path1_mount_point == path2_mount_point {
+        return true;
+    }
+    return false;
 }
