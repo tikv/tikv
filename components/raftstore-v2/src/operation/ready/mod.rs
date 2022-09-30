@@ -248,7 +248,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     break;
                 }
             }
-
         }
         self.schedule_apply_committed_entries(ctx, committed_entries);
     }
