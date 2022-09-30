@@ -1496,7 +1496,7 @@ pub mod tests {
             &None,
             50,
             50,
-            SkipPessimisticCheck,
+            false,
             0,
         );
         assert!(
@@ -1512,7 +1512,7 @@ pub mod tests {
             b"k1",
             &None,
             48.into(),
-            SkipPessimisticCheck,
+            false,
             100,
             48.into(),
             1,
