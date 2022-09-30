@@ -144,6 +144,10 @@ impl RaftEngine for PanicEngine {
         panic!()
     }
 
+    fn path(&self) -> &str {
+        panic!()
+    }
+
     fn put_store_ident(&self, ident: &StoreIdent) -> Result<()> {
         panic!()
     }

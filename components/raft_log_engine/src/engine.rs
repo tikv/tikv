@@ -305,6 +305,10 @@ impl RaftLogEngine {
         )))
     }
 
+    pub fn path(&self) -> &str {
+        self.0.path()
+    }
+
     /// If path is not an empty directory, we say db exists.
     pub fn exists(path: &str) -> bool {
         let path = Path::new(path);
@@ -613,6 +617,10 @@ impl RaftEngine for RaftLogEngine {
 
     fn get_engine_size(&self) -> Result<u64> {
         Ok(self.0.get_used_size() as u64)
+    }
+
+    fn path(&self) -> &str {
+        self.path()
     }
 
     fn for_each_raft_group<E, F>(&self, f: &mut F) -> std::result::Result<(), E>
