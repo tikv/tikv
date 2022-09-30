@@ -1,8 +1,15 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::Arc, thread};
+use std::{
+    sync::{mpsc, Arc},
+    thread,
+    time::Duration,
+};
 
-use test_raftstore::{configure_for_lease_read, new_node_cluster};
+use test_raftstore::{
+    configure_for_lease_read, new_node_cluster, new_request, new_snap_cmd, Simulator,
+};
+use tikv_util::HandyRwLock;
 
 #[test]
 fn test_lease_expire_before_get_snapshot() {
@@ -21,9 +28,26 @@ fn test_lease_expire_before_get_snapshot() {
 
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
-    fail::cfg("before_execute_get_snapshot", "pause").unwrap();
+    // fail::cfg("before_execute_get_snapshot", "pause").unwrap();
     let cluster_clone = cluster.clone();
-    let handle = thread::spawn(move || {
 
-    })
+    let region = cluster.get_region(key);
+    let region_id = region.id;
+    let leader = cluster.leader_of_region(region_id).unwrap();
+    let mut req = new_request(
+        region_id,
+        region.get_region_epoch(),
+        vec![new_snap_cmd()],
+        false,
+    );
+    req.mut_header().set_peer(leader);
+
+    let (tx, rx) = mpsc::channel();
+    cluster.sim.wl().async_read(node_id, None, req, tx);
+
+    let resp = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    // let handle = thread::spawn(move || {
+
+    // })
 }

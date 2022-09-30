@@ -786,8 +786,15 @@ where
                         println!("1111");
                         if !delegate.is_in_leader_lease(*delegate_ext.snapshot_ts) {
                             println!("2222");
+                            fail_point!("localreader_before_redirect", || {
+                                cb.invoke_read(ReadResponse {
+                                    response: Default,
+                                    snapshot: None,
+                                    txn_extra_op: TxnExtraOp::Noop,
+                                });
+                                return;
+                            });
                             // Forward to raftstore.
-                            fail_point!("localreader_before_redirect");
                             self.redirect(RaftCommand::new(req, cb));
                             return;
                         }
