@@ -205,7 +205,11 @@ fn retry_delete_snapshot(mgr: &SnapManagerCore, key: &SnapKey, snap: &Snapshot) 
     false
 }
 
-fn gen_snapshot_meta(cf_files: &[CfFile], for_balance: bool) -> RaftStoreResult<SnapshotMeta> {
+fn gen_snapshot_meta(
+    cf_files: &[CfFile],
+    for_balance: bool,
+    is_in_flashback: bool,
+) -> RaftStoreResult<SnapshotMeta> {
     let mut meta = Vec::with_capacity(cf_files.len());
     for cf_file in cf_files {
         if !SNAPSHOT_CFS.iter().any(|cf| cf_file.cf == *cf) {
@@ -234,6 +238,7 @@ fn gen_snapshot_meta(cf_files: &[CfFile], for_balance: bool) -> RaftStoreResult<
     let mut snapshot_meta = SnapshotMeta::default();
     snapshot_meta.set_cf_files(meta.into());
     snapshot_meta.set_for_balance(for_balance);
+    snapshot_meta.set_is_in_flashback(is_in_flashback);
     Ok(snapshot_meta)
 }
 
@@ -654,7 +659,7 @@ impl Snapshot {
         Ok(())
     }
 
-    fn read_snapshot_meta(&mut self) -> RaftStoreResult<SnapshotMeta> {
+    pub fn read_snapshot_meta(&mut self) -> RaftStoreResult<SnapshotMeta> {
         let buf = file_system::read(&self.meta_file.path)?;
         let mut snapshot_meta = SnapshotMeta::default();
         snapshot_meta.merge_from_bytes(&buf)?;
@@ -840,6 +845,7 @@ impl Snapshot {
         region: &Region,
         allow_multi_files_snapshot: bool,
         for_balance: bool,
+        is_in_flashback: bool,
     ) -> RaftStoreResult<()>
     where
         EK: KvEngine,
@@ -922,7 +928,11 @@ impl Snapshot {
         }
 
         // save snapshot meta to meta file
-        self.meta_file.meta = Some(gen_snapshot_meta(&self.cf_files[..], for_balance)?);
+        self.meta_file.meta = Some(gen_snapshot_meta(
+            &self.cf_files[..],
+            for_balance,
+            is_in_flashback,
+        )?);
         self.save_meta_file()?;
         Ok(())
     }
@@ -1027,6 +1037,7 @@ impl Snapshot {
         region: &Region,
         allow_multi_files_snapshot: bool,
         for_balance: bool,
+        is_in_flashback: bool,
     ) -> RaftStoreResult<RaftSnapshotData> {
         let mut snap_data = RaftSnapshotData::default();
         snap_data.set_region(region.clone());
@@ -1038,6 +1049,7 @@ impl Snapshot {
             region,
             allow_multi_files_snapshot,
             for_balance,
+            is_in_flashback,
         )?;
 
         let total_size = self.total_size();
@@ -2149,7 +2161,8 @@ pub mod tests {
             };
             cf_file.push(f);
         }
-        let meta = super::gen_snapshot_meta(&cf_file, false).unwrap();
+        let is_in_flashback = true;
+        let meta = super::gen_snapshot_meta(&cf_file, false, is_in_flashback).unwrap();
         let cf_files = meta.get_cf_files();
         assert_eq!(cf_files.len(), super::SNAPSHOT_CFS.len() * 2); // each CF has two snapshot files;
         for (i, cf_file_meta) in meta.get_cf_files().iter().enumerate() {
@@ -2180,6 +2193,7 @@ pub mod tests {
                 );
             }
         }
+        assert_eq!(meta.get_is_in_flashback(), is_in_flashback);
     }
 
     #[test]
@@ -2231,7 +2245,9 @@ pub mod tests {
         assert!(!s1.exists());
         assert_eq!(mgr_core.get_total_snap_size().unwrap(), 0);
 
-        let mut snap_data = s1.build(&db, &snapshot, &region, true, false).unwrap();
+        let mut snap_data = s1
+            .build(&db, &snapshot, &region, true, false, false)
+            .unwrap();
 
         // Ensure that this snapshot file does exist after being built.
         assert!(s1.exists());
@@ -2331,13 +2347,17 @@ pub mod tests {
         let mut s1 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s1.exists());
 
-        let _ = s1.build(&db, &snapshot, &region, true, false).unwrap();
+        let _ = s1
+            .build(&db, &snapshot, &region, true, false, false)
+            .unwrap();
         assert!(s1.exists());
 
         let mut s2 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(s2.exists());
 
-        let _ = s2.build(&db, &snapshot, &region, true, false).unwrap();
+        let _ = s2
+            .build(&db, &snapshot, &region, true, false, false)
+            .unwrap();
         assert!(s2.exists());
     }
 
@@ -2480,7 +2500,9 @@ pub mod tests {
         let mut s1 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s1.exists());
 
-        let _ = s1.build(&db, &snapshot, &region, true, false).unwrap();
+        let _ = s1
+            .build(&db, &snapshot, &region, true, false, false)
+            .unwrap();
         assert!(s1.exists());
 
         corrupt_snapshot_size_in(dir.path());
@@ -2489,7 +2511,9 @@ pub mod tests {
 
         let mut s2 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s2.exists());
-        let snap_data = s2.build(&db, &snapshot, &region, true, false).unwrap();
+        let snap_data = s2
+            .build(&db, &snapshot, &region, true, false, false)
+            .unwrap();
         assert!(s2.exists());
 
         let dst_dir = Builder::new()
@@ -2550,7 +2574,9 @@ pub mod tests {
         let mut s1 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s1.exists());
 
-        let _ = s1.build(&db, &snapshot, &region, true, false).unwrap();
+        let _ = s1
+            .build(&db, &snapshot, &region, true, false, false)
+            .unwrap();
         assert!(s1.exists());
 
         assert_eq!(1, corrupt_snapshot_meta_file(dir.path()));
@@ -2559,7 +2585,9 @@ pub mod tests {
 
         let mut s2 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s2.exists());
-        let mut snap_data = s2.build(&db, &snapshot, &region, true, false).unwrap();
+        let mut snap_data = s2
+            .build(&db, &snapshot, &region, true, false, false)
+            .unwrap();
         assert!(s2.exists());
 
         let dst_dir = Builder::new()
@@ -2621,7 +2649,9 @@ pub mod tests {
         let mgr_core = create_manager_core(&path, u64::MAX);
         let mut s1 = Snapshot::new_for_building(&path, &key1, &mgr_core).unwrap();
         let mut region = gen_test_region(1, 1, 1);
-        let mut snap_data = s1.build(&db, &snapshot, &region, true, false).unwrap();
+        let mut snap_data = s1
+            .build(&db, &snapshot, &region, true, false, false)
+            .unwrap();
         let mut s = Snapshot::new_for_sending(&path, &key1, &mgr_core).unwrap();
         let expected_size = s.total_size();
         let mut s2 =
@@ -2693,7 +2723,9 @@ pub mod tests {
         // Ensure the snapshot being built will not be deleted on GC.
         src_mgr.register(key.clone(), SnapEntry::Generating);
         let mut s1 = src_mgr.get_snapshot_for_building(&key).unwrap();
-        let mut snap_data = s1.build(&db, &snapshot, &region, true, false).unwrap();
+        let mut snap_data = s1
+            .build(&db, &snapshot, &region, true, false, false)
+            .unwrap();
 
         check_registry_around_deregister(&src_mgr, &key, &SnapEntry::Generating);
 
@@ -2776,6 +2808,7 @@ pub mod tests {
                 &gen_test_region(100, 1, 1),
                 true,
                 false,
+                false,
             )
             .unwrap()
         };
@@ -2799,7 +2832,7 @@ pub mod tests {
             let region = gen_test_region(region_id, 1, 1);
             let mut s = snap_mgr.get_snapshot_for_building(&key).unwrap();
             let _ = s
-                .build(&engine.kv, &snapshot, &region, true, false)
+                .build(&engine.kv, &snapshot, &region, true, false, false)
                 .unwrap();
 
             // The first snap_size is for region 100.
@@ -2869,7 +2902,9 @@ pub mod tests {
         // correctly.
         for _ in 0..2 {
             let mut s1 = snap_mgr.get_snapshot_for_building(&key).unwrap();
-            let _ = s1.build(&db, &snapshot, &region, true, false).unwrap();
+            let _ = s1
+                .build(&db, &snapshot, &region, true, false, false)
+                .unwrap();
             assert!(snap_mgr.delete_snapshot(&key, &s1, false));
         }
     }

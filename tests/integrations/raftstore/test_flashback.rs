@@ -1,10 +1,11 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
 use kvproto::metapb;
 use test_raftstore::*;
+use tikv_util::time::InstantExt;
 use txn_types::WriteBatchFlags;
 
 #[test]
@@ -44,9 +45,8 @@ fn test_flashback_for_schedule() {
     // verify the schedule is unabled.
     let mut region = cluster.get_region(b"k3");
     let admin_req = new_transfer_leader_cmd(new_peer(2, 2));
-    let mut transfer_leader =
+    let transfer_leader =
         new_admin_request(region.get_id(), &region.take_region_epoch(), admin_req);
-    transfer_leader.mut_header().set_peer(new_peer(1, 1));
     let resp = cluster
         .call_command_on_leader(transfer_leader, Duration::from_secs(3))
         .unwrap();
@@ -61,22 +61,10 @@ fn test_flashback_for_schedule() {
 
     // verify the schedule can be executed if add flashback flag in request's
     // header.
-    let mut region = cluster.get_region(b"k3");
-    let admin_req = new_transfer_leader_cmd(new_peer(2, 2));
-    let mut transfer_leader =
-        new_admin_request(region.get_id(), &region.take_region_epoch(), admin_req);
-    transfer_leader.mut_header().set_peer(new_peer(1, 1));
-    transfer_leader
-        .mut_header()
-        .set_flags(WriteBatchFlags::FLASHBACK.bits());
-    let resp = cluster
-        .call_command_on_leader(transfer_leader, Duration::from_secs(5))
-        .unwrap();
-    assert!(!resp.get_header().has_error());
-
-    block_on(cluster.call_finish_flashback(region.get_id(), 1));
-    // transfer leader to (2, 2)
-    cluster.must_transfer_leader(1, new_peer(2, 2));
+    must_transfer_leader(&mut cluster, region.get_id(), new_peer(2, 2));
+    block_on(cluster.call_finish_flashback(region.get_id(), 2));
+    // transfer leader to (1, 1)
+    cluster.must_transfer_leader(1, new_peer(1, 1));
 }
 
 #[test]
@@ -239,6 +227,100 @@ fn test_flahsback_for_status_cmd_as_region_detail() {
 
     assert!(region_detail.has_leader());
     assert_eq!(region_detail.get_leader(), &leader);
+}
+
+#[test]
+fn test_flashback_for_check_is_in_persist() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.run();
+
+    cluster.must_transfer_leader(1, new_peer(2, 2));
+
+    let local_state = cluster.region_local_state(1, 2);
+    assert!(!local_state.get_is_in_flashback());
+
+    // prepare for flashback
+    let region = cluster.get_region(b"k1");
+    block_on(cluster.call_and_wait_prepare_flashback(region.get_id(), 2));
+
+    let local_state = cluster.region_local_state(1, 2);
+    assert!(local_state.get_is_in_flashback());
+
+    block_on(cluster.call_finish_flashback(region.get_id(), 2));
+    // TODO: check the region flashback state is not set by committed callback.
+    // assert!(!local_state.get_is_in_flashback());
+}
+
+#[test]
+fn test_flashback_for_apply_snapshot() {
+    let mut cluster = new_node_cluster(0, 5);
+    cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    // make node3 isolationed
+    cluster.add_send_filter(IsolationFilterFactory::new(5));
+
+    let local_state = cluster.region_local_state(1, 1);
+    assert!(!local_state.get_is_in_flashback());
+
+    // write for cluster
+    let value = vec![1_u8; 8096];
+    multi_do_cmd(&mut cluster, new_put_cf_cmd("write", b"k1", &value));
+
+    // prepare for flashback
+    block_on(cluster.call_and_wait_prepare_flashback(1, 1));
+    let local_state = cluster.region_local_state(1, 1);
+    assert!(local_state.get_is_in_flashback());
+
+    // Add node 3 back.
+    cluster.clear_send_filters();
+    // wait for snapshot
+    sleep_ms(500);
+
+    must_transfer_leader(&mut cluster, 1, new_peer(5, 5));
+    let local_state = cluster.region_local_state(1, 5);
+    assert!(local_state.get_is_in_flashback());
+
+    block_on(cluster.call_finish_flashback(1, 5));
+}
+
+fn transfer_leader<T: Simulator>(cluster: &mut Cluster<T>, region_id: u64, leader: metapb::Peer) {
+    let epoch = cluster.get_region_epoch(region_id);
+    let admin_req = new_transfer_leader_cmd(leader);
+    let mut transfer_leader = new_admin_request(region_id, &epoch, admin_req);
+    transfer_leader
+        .mut_header()
+        .set_flags(WriteBatchFlags::FLASHBACK.bits());
+    let resp = cluster
+        .call_command_on_leader(transfer_leader, Duration::from_secs(5))
+        .unwrap();
+    assert!(!resp.get_header().has_error());
+}
+
+fn must_transfer_leader<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    region_id: u64,
+    leader: metapb::Peer,
+) {
+    let timer = Instant::now();
+    loop {
+        cluster.reset_leader_of_region(region_id);
+        let cur_leader = cluster.leader_of_region(region_id);
+        if let Some(ref cur_leader) = cur_leader {
+            if cur_leader.get_id() == leader.get_id()
+                && cur_leader.get_store_id() == leader.get_store_id()
+            {
+                return;
+            }
+        }
+        if timer.saturating_elapsed() > Duration::from_secs(5) {
+            panic!(
+                "failed to transfer leader to [{}] {:?}, current leader: {:?}",
+                region_id, leader, cur_leader
+            );
+        }
+        transfer_leader(cluster, region_id, leader.clone());
+    }
 }
 
 fn multi_do_cmd<T: Simulator>(cluster: &mut Cluster<T>, cmd: kvproto::raft_cmdpb::Request) {

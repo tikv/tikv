@@ -594,9 +594,21 @@ where
         }
         // Write its source peers' `RegionLocalState` together with itself for atomicity
         for r in destroy_regions {
-            write_peer_state(kv_wb, r, PeerState::Tombstone, None, false)?;
+            write_peer_state(
+                kv_wb,
+                r,
+                PeerState::Tombstone,
+                None,
+                snap_data.get_meta().get_is_in_flashback(),
+            )?;
         }
-        write_peer_state(kv_wb, &region, PeerState::Applying, None, false)?;
+        write_peer_state(
+            kv_wb,
+            &region,
+            PeerState::Applying,
+            None,
+            snap_data.get_meta().get_is_in_flashback(),
+        )?;
 
         let last_index = snap.get_metadata().get_index();
 
@@ -1064,6 +1076,7 @@ where
         region_state.get_region(),
         allow_multi_files_snapshot,
         for_balance,
+        region_state.get_is_in_flashback(),
     )?;
     snapshot.set_data(snap_data.write_to_bytes()?.into());
 
