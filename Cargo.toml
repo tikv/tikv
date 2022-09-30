@@ -302,6 +302,10 @@ opt-level = 1
 debug = false
 opt-level = 1
 
+[profile.dev.package.tirocks-sys]
+debug = false
+opt-level = 1
+
 [profile.dev.package.tests]
 debug = 1
 opt-level = 1
