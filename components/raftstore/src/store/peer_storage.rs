@@ -33,7 +33,9 @@ use tikv_util::{
     box_err, box_try, debug, defer, error, info, time::Instant, warn, worker::Scheduler,
 };
 
-use super::{metrics::*, worker::RegionTask, SnapEntry, SnapKey, SnapManager};
+use super::{
+    metrics::*, peer::FlashbackState, worker::RegionTask, SnapEntry, SnapKey, SnapManager,
+};
 use crate::{
     store::{
         async_io::write::WriteTask, entry_storage::EntryStorage, fsm::GenSnapTask,
@@ -703,6 +705,21 @@ where
 
     pub fn raft_engine(&self) -> &ER {
         self.entry_storage.raft_engine()
+    }
+
+    // Initialize the flashback state in memory by Checking the persistent flashback
+    // state
+    pub fn get_region_flashback(&self, region_id: u64) -> Option<FlashbackState> {
+        match self.raft_engine().get_region_state(region_id) {
+            Ok(Some(state)) => {
+                if state.get_is_in_flashback() {
+                    Some(FlashbackState::new(None))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
     }
 
     /// Check whether the storage has finished applying snapshot.

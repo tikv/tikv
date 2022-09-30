@@ -1047,7 +1047,7 @@ where
             }
             // check memory state
             if self.fsm.peer.flashback_state.is_none() {
-                self.fsm.peer.flashback_state = Some(FlashbackState::new(ch));
+                self.fsm.peer.flashback_state = Some(FlashbackState::new(Some(ch)));
             }
         }
         // Let the leader lease to None to ensure that local reads are not executed.

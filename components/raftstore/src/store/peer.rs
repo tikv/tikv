@@ -849,8 +849,8 @@ pub enum UnsafeRecoveryState {
 pub struct FlashbackState(Option<Sender<bool>>);
 
 impl FlashbackState {
-    pub fn new(ch: Sender<bool>) -> Self {
-        FlashbackState(Some(ch))
+    pub fn new(ch: Option<Sender<bool>>) -> Self {
+        FlashbackState(ch)
     }
 
     pub fn finish_wait_apply(&mut self) {
@@ -1081,7 +1081,7 @@ where
             peer.get_id(),
             tag.clone(),
         )?;
-
+        let flashback_state = ps.get_region_flashback(region.get_id());
         let applied_index = ps.applied_index();
 
         let raft_cfg = raft::Config {
@@ -1182,7 +1182,7 @@ where
             last_region_buckets: None,
             lead_transferee: raft::INVALID_ID,
             unsafe_recovery_state: None,
-            flashback_state: None,
+            flashback_state,
             snapshot_recovery_state: None,
         };
 
