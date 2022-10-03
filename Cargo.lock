@@ -149,6 +149,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-compression"
+version = "0.3.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "345fd392ab01f746c717b1357165b76f0b67a60192007b234058c9045fdcf695"
+dependencies = [
+ "futures-core",
+ "futures-io",
+ "memchr",
+ "pin-project-lite",
+ "tokio",
+ "zstd",
+ "zstd-safe",
+]
+
+[[package]]
 name = "async-speed-limit"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -255,6 +270,7 @@ name = "aws"
 version = "0.0.1"
 dependencies = [
  "async-trait",
+ "base64",
  "bytes",
  "cloud",
  "fail",
@@ -266,6 +282,7 @@ dependencies = [
  "hyper-tls",
  "kvproto",
  "lazy_static",
+ "md5",
  "prometheus",
  "rusoto_core",
  "rusoto_credential",
@@ -279,6 +296,7 @@ dependencies = [
  "tikv_util",
  "tokio",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -442,6 +460,7 @@ dependencies = [
 name = "backup-stream"
 version = "0.1.0"
 dependencies = [
+ "async-compression",
  "async-trait",
  "bytes",
  "chrono",
@@ -485,6 +504,7 @@ dependencies = [
  "tidb_query_datatype",
  "tikv",
  "tikv_alloc",
+ "tikv_kv",
  "tikv_util",
  "tokio",
  "tokio-stream",
@@ -722,9 +742,11 @@ name = "causal_ts"
 version = "0.0.1"
 dependencies = [
  "api_version",
+ "async-trait",
  "criterion",
  "engine_rocks",
  "engine_traits",
+ "enum_dispatch",
  "error_code",
  "fail",
  "futures 0.3.15",
@@ -736,12 +758,11 @@ dependencies = [
  "prometheus",
  "prometheus-static-metric",
  "raft",
- "raftstore",
  "serde",
  "serde_derive",
  "slog",
  "slog-global",
- "test_raftstore",
+ "test_pd_client",
  "thiserror",
  "tikv_alloc",
  "tikv_util",
@@ -751,9 +772,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.0.69"
+version = "1.0.73"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e70cc2f62c6ce1868963827bd677764c62d07c3d9a3e1fb1177ee1a9ab199eb2"
+checksum = "2fff2a6927b3bb87f9595d67196a70493f627687a71d87a0d692242c33f58c11"
 dependencies = [
  "jobserver",
 ]
@@ -793,6 +814,7 @@ dependencies = [
  "slog",
  "slog-global",
  "tempfile",
+ "test_pd_client",
  "test_raftstore",
  "test_util",
  "thiserror",
@@ -933,9 +955,8 @@ dependencies = [
 
 [[package]]
 name = "cmake"
-version = "0.1.45"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb6210b637171dfba4cda12e579ac6dc73f5165ad56133e5d72ef3131f320855"
+version = "0.1.48"
+source = "git+https://github.com/rust-lang/cmake-rs#00e6b220342a8b0ec4548071928ade38fd5f691b"
 dependencies = [
  "cc",
 ]
@@ -1574,6 +1595,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "enum_dispatch"
+version = "0.3.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0eb359f1476bf611266ac1f5355bc14aeca37b299d0ebccc038ee7058891c9cb"
+dependencies = [
+ "once_cell",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "env_logger"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1650,6 +1683,7 @@ dependencies = [
 name = "external_storage"
 version = "0.0.1"
 dependencies = [
+ "async-compression",
  "async-trait",
  "bytes",
  "encryption",
@@ -1687,6 +1721,7 @@ dependencies = [
 name = "external_storage_export"
 version = "0.0.1"
 dependencies = [
+ "async-compression",
  "async-trait",
  "aws",
  "azure",
@@ -2628,7 +2663,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#f95ac338b3312e0a9bd7c33c9647a87a74314567"
+source = "git+https://github.com/pingcap/kvproto.git#f6d05706948aa296cff4db060e0962d3720f32eb"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -2757,7 +2792,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#827a5df22cd59dc708c4c6a87dd8735a2312773d"
+source = "git+https://github.com/tikv/rust-rocksdb.git#bd07e9e598db63574cf06edaeea3c4687eadff59"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2776,7 +2811,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#827a5df22cd59dc708c4c6a87dd8735a2312773d"
+source = "git+https://github.com/tikv/rust-rocksdb.git#bd07e9e598db63574cf06edaeea3c4687eadff59"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4056,8 +4091,8 @@ dependencies = [
 
 [[package]]
 name = "raft-engine"
-version = "0.2.0"
-source = "git+https://github.com/tikv/raft-engine.git#9751c6dd5c20a056570c9fbfe62bad6e0d585094"
+version = "0.3.0"
+source = "git+https://github.com/tikv/raft-engine.git#5f718cfe50a28f7fee0282c0959670de5962eec8"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4090,8 +4125,8 @@ dependencies = [
 
 [[package]]
 name = "raft-engine-ctl"
-version = "0.2.0"
-source = "git+https://github.com/tikv/raft-engine.git#9751c6dd5c20a056570c9fbfe62bad6e0d585094"
+version = "0.3.0"
+source = "git+https://github.com/tikv/raft-engine.git#5f718cfe50a28f7fee0282c0959670de5962eec8"
 dependencies = [
  "clap 3.1.6",
  "env_logger",
@@ -4139,6 +4174,7 @@ dependencies = [
  "bitflags",
  "byteorder",
  "bytes",
+ "causal_ts",
  "collections",
  "concurrency_manager",
  "crc32fast",
@@ -4211,6 +4247,7 @@ dependencies = [
  "engine_traits",
  "error_code",
  "fail",
+ "file_system",
  "futures 0.3.15",
  "keys",
  "kvproto",
@@ -4525,6 +4562,7 @@ dependencies = [
  "slog-global",
  "tempfile",
  "test_raftstore",
+ "test_sst_importer",
  "test_util",
  "thiserror",
  "tikv",
@@ -4618,7 +4656,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#827a5df22cd59dc708c4c6a87dd8735a2312773d"
+source = "git+https://github.com/tikv/rust-rocksdb.git#bd07e9e598db63574cf06edaeea3c4687eadff59"
 dependencies = [
  "libc 0.2.132",
  "librocksdb_sys",
@@ -5116,6 +5154,7 @@ dependencies = [
  "signal-hook",
  "slog",
  "slog-global",
+ "snap_recovery",
  "tempfile",
  "tikv",
  "tikv_alloc",
@@ -5262,6 +5301,36 @@ dependencies = [
  "autocfg",
  "static_assertions",
  "version_check 0.9.4",
+]
+
+[[package]]
+name = "snap_recovery"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "encryption",
+ "encryption_export",
+ "engine_rocks",
+ "engine_traits",
+ "futures 0.3.15",
+ "grpcio",
+ "keys",
+ "kvproto",
+ "log",
+ "pd_client",
+ "protobuf",
+ "raft_log_engine",
+ "raftstore",
+ "slog",
+ "slog-global",
+ "structopt",
+ "tempfile",
+ "thiserror",
+ "tikv",
+ "tikv_alloc",
+ "tikv_util",
+ "toml",
+ "txn_types",
 ]
 
 [[package]]
@@ -5494,6 +5563,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "sync_wrapper"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "20518fe4a4c9acf048008599e464deb21beeae3d3578418951a189c235a7a9a8"
+
+[[package]]
 name = "sysinfo"
 version = "0.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5677,6 +5752,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "test_pd_client"
+version = "0.0.1"
+dependencies = [
+ "collections",
+ "fail",
+ "futures 0.3.15",
+ "grpcio",
+ "keys",
+ "kvproto",
+ "log_wrappers",
+ "pd_client",
+ "raft",
+ "slog",
+ "slog-global",
+ "tikv_util",
+ "tokio",
+ "tokio-timer",
+ "txn_types",
+]
+
+[[package]]
 name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
@@ -5712,6 +5808,7 @@ dependencies = [
  "slog",
  "slog-global",
  "tempfile",
+ "test_pd_client",
  "test_util",
  "tikv",
  "tikv_util",
@@ -5790,6 +5887,7 @@ dependencies = [
  "encryption",
  "engine_rocks",
  "engine_rocks_helper",
+ "engine_test",
  "engine_traits",
  "error_code",
  "external_storage_export",
@@ -5827,6 +5925,7 @@ dependencies = [
  "test_backup",
  "test_coprocessor",
  "test_pd",
+ "test_pd_client",
  "test_raftstore",
  "test_sst_importer",
  "test_storage",
@@ -6046,7 +6145,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "6.2.0-alpha"
+version = "6.4.0-alpha"
 dependencies = [
  "anyhow",
  "api_version",
@@ -6065,6 +6164,7 @@ dependencies = [
  "crc32fast",
  "crc64fast",
  "crossbeam",
+ "dashmap",
  "encryption_export",
  "engine_panic",
  "engine_rocks",
@@ -6136,8 +6236,10 @@ dependencies = [
  "serde_json",
  "slog",
  "slog-global",
+ "smallvec",
  "sst_importer",
  "strum 0.20.0",
+ "sync_wrapper",
  "sysinfo",
  "tempfile",
  "test_sst_importer",
@@ -6284,6 +6386,7 @@ name = "tikv_kv"
 version = "0.1.0"
 dependencies = [
  "backtrace",
+ "collections",
  "engine_panic",
  "engine_rocks",
  "engine_test",
@@ -7161,6 +7264,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e12b8667a4fff63d236f8363be54392f93dbb13616be64a83e761a9319ab589"
 dependencies = [
  "rand 0.7.3",
+]
+
+[[package]]
+name = "zstd"
+version = "0.11.2+zstd.1.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "20cc960326ece64f010d2d2107537f26dc589a6573a316bd5b1dba685fa5fde4"
+dependencies = [
+ "zstd-safe",
+]
+
+[[package]]
+name = "zstd-safe"
+version = "5.0.2+zstd.1.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d2a5585e04f9eea4b2a3d1eca508c4dee9592a89ef6f450c11719da0726f4db"
+dependencies = [
+ "libc 0.2.132",
+ "zstd-sys",
 ]
 
 [[package]]

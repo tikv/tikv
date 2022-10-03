@@ -152,7 +152,9 @@ impl<S: Snapshot> EventLoader<S> {
                         )
                     })?;
                     debug!("meet lock during initial scanning."; "key" => %utils::redact(&lock_at), "ts" => %lock.ts);
-                    resolver.track_phase_one_lock(lock.ts, lock_at)
+                    if utils::should_track_lock(&lock) {
+                        resolver.track_phase_one_lock(lock.ts, lock_at);
+                    }
                 }
                 TxnEntry::Commit { default, write, .. } => {
                     result.push(ApplyEvent {
@@ -487,8 +489,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use futures::executor::block_on;
     use kvproto::metapb::*;
-    use tikv::storage::{txn::tests::*, Engine, TestEngineBuilder};
+    use tikv::storage::{txn::tests::*, TestEngineBuilder};
+    use tikv_kv::SnapContext;
     use txn_types::TimeStamp;
 
     use super::EventLoader;
@@ -499,14 +503,14 @@ mod tests {
 
     #[test]
     fn test_disk_read() {
-        let engine = TestEngineBuilder::new().build_without_cache().unwrap();
+        let mut engine = TestEngineBuilder::new().build_without_cache().unwrap();
         for i in 0..100 {
             let owned_key = format!("{:06}", i);
             let key = owned_key.as_bytes();
             let owned_value = [i as u8; 512];
             let value = owned_value.as_slice();
-            must_prewrite_put(&engine, key, value, key, i * 2);
-            must_commit(&engine, key, i * 2, i * 2 + 1);
+            must_prewrite_put(&mut engine, key, value, key, i * 2);
+            must_commit(&mut engine, key, i * 2, i * 2 + 1);
         }
         // let compact the memtable to disk so we can see the disk read.
         engine.get_rocksdb().as_inner().compact_range(None, None);
@@ -515,7 +519,9 @@ mod tests {
         r.set_id(42);
         r.set_start_key(b"".to_vec());
         r.set_end_key(b"".to_vec());
-        let snap = engine.snapshot_on_kv_engine(b"", b"").unwrap();
+
+        let snap = block_on(async { tikv_kv::snapshot(&mut engine, SnapContext::default()).await })
+            .unwrap();
         let mut loader =
             EventLoader::load_from(snap, TimeStamp::zero(), TimeStamp::max(), &r).unwrap();
 

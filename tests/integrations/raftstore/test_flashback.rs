@@ -8,7 +8,7 @@ use test_raftstore::*;
 use txn_types::WriteBatchFlags;
 
 #[test]
-fn test_flahsback_for_applied_index() {
+fn test_flashback_for_applied_index() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.run();
 
@@ -50,10 +50,9 @@ fn test_flashback_for_schedule() {
         .call_command_on_leader(transfer_leader, Duration::from_secs(3))
         .unwrap();
     let e = resp.get_header().get_error();
-    // reuse recovery_in_progress error code.
     assert_eq!(
-        e.get_recovery_in_progress(),
-        &kvproto::errorpb::RecoveryInProgress {
+        e.get_flashback_in_progress(),
+        &kvproto::errorpb::FlashbackInProgress {
             region_id: region.get_id(),
             ..Default::default()
         }
@@ -80,7 +79,7 @@ fn test_flashback_for_schedule() {
 }
 
 #[test]
-fn test_flahsback_for_write() {
+fn test_flashback_for_write() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.run();
 
@@ -94,7 +93,7 @@ fn test_flahsback_for_write() {
 
     // write will be blocked
     let value = vec![1_u8; 8096];
-    must_get_error_recovery_in_progress(&mut cluster, &region, new_put_cmd(b"k1", &value));
+    must_get_error_flashback_in_progress(&mut cluster, &region, new_put_cmd(b"k1", &value));
 
     must_cmd_add_flashback_flag(
         &mut cluster,
@@ -108,7 +107,7 @@ fn test_flahsback_for_write() {
 }
 
 #[test]
-fn test_flahsback_for_read() {
+fn test_flashback_for_read() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.run();
 
@@ -123,7 +122,7 @@ fn test_flahsback_for_read() {
     block_on(cluster.call_and_wait_prepare_flashback(region.get_id(), 1));
 
     // read will be blocked
-    must_get_error_recovery_in_progress(&mut cluster, &region, new_get_cf_cmd("write", b"k1"));
+    must_get_error_flashback_in_progress(&mut cluster, &region, new_get_cf_cmd("write", b"k1"));
 
     // verify the read can be executed if add flashback flag in request's
     // header.
@@ -142,7 +141,7 @@ fn test_flahsback_for_read() {
 // However, when flashback is enabled, it will make the lease None and prevent
 // renew lease.
 #[test]
-fn test_flahsback_for_local_read() {
+fn test_flashback_for_local_read() {
     let mut cluster = new_node_cluster(0, 3);
     let election_timeout = configure_for_lease_read(&mut cluster, Some(50), None);
 
@@ -209,7 +208,7 @@ fn test_flahsback_for_local_read() {
 }
 
 #[test]
-fn test_flahsback_for_status_cmd_as_region_detail() {
+fn test_flashback_for_status_cmd_as_region_detail() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.run();
 
@@ -263,7 +262,7 @@ fn must_cmd_add_flashback_flag<T: Simulator>(
     assert!(!resp.get_header().has_error());
 }
 
-fn must_get_error_recovery_in_progress<T: Simulator>(
+fn must_get_error_flashback_in_progress<T: Simulator>(
     cluster: &mut Cluster<T>,
     region: &metapb::Region,
     cmd: kvproto::raft_cmdpb::Request,
@@ -277,8 +276,8 @@ fn must_get_error_recovery_in_progress<T: Simulator>(
             Ok(_) => {}
             Err(e) => {
                 assert_eq!(
-                    e.get_recovery_in_progress(),
-                    &kvproto::errorpb::RecoveryInProgress {
+                    e.get_flashback_in_progress(),
+                    &kvproto::errorpb::FlashbackInProgress {
                         region_id: region.get_id(),
                         ..Default::default()
                     }

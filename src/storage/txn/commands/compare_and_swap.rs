@@ -51,9 +51,16 @@ impl CommandExt for RawCompareAndSwap {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
-    fn process_write(self, snapshot: S, _: WriteContext<'_, L>) -> Result<WriteResult> {
-        let (cf, key, value, previous_value, ctx) =
-            (self.cf, self.key, self.value, self.previous_value, self.ctx);
+    fn process_write(self, snapshot: S, wctx: WriteContext<'_, L>) -> Result<WriteResult> {
+        let (cf, mut key, value, previous_value, ctx, raw_ext) = (
+            self.cf,
+            self.key,
+            self.value,
+            self.previous_value,
+            self.ctx,
+            wctx.raw_ext,
+        );
+
         let mut data = vec![];
         let old_value = RawStore::new(snapshot, self.api_version).raw_get_key_value(
             cf,
@@ -61,7 +68,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
             &mut Statistics::default(),
         )?;
 
-        let pr = if old_value == previous_value {
+        let (pr, lock_guards) = if old_value == previous_value {
             let raw_value = RawValue {
                 user_value: value,
                 expire_ts: ttl_to_expire_ts(self.ttl),
@@ -73,17 +80,28 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
                     ApiVersion::API => API::encode_raw_value_owned(raw_value),
                 }
             );
+
+            if let Some(ref raw_ext) = raw_ext {
+                key = key.append_ts(raw_ext.ts);
+            }
+
             let m = Modify::Put(cf, key, encoded_raw_value);
             data.push(m);
-            ProcessResult::RawCompareAndSwapRes {
-                previous_value: old_value,
-                succeed: true,
-            }
+            (
+                ProcessResult::RawCompareAndSwapRes {
+                    previous_value: old_value,
+                    succeed: true,
+                },
+                raw_ext.into_iter().map(|r| r.key_guard).collect(),
+            )
         } else {
-            ProcessResult::RawCompareAndSwapRes {
-                previous_value: old_value,
-                succeed: false,
-            }
+            (
+                ProcessResult::RawCompareAndSwapRes {
+                    previous_value: old_value,
+                    succeed: false,
+                },
+                vec![],
+            )
         };
         fail_point!("txn_commands_compare_and_swap");
         let rows = data.len();
@@ -95,7 +113,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
             rows,
             pr,
             lock_info: None,
-            lock_guards: vec![],
+            lock_guards,
             response_policy: ResponsePolicy::OnApplied,
         })
     }
@@ -103,13 +121,20 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
 
 #[cfg(test)]
 mod tests {
-    use api_version::test_kv_format_impl;
+    use std::sync::Arc;
+
+    use api_version::{test_kv_format_impl, ApiV2};
+    use causal_ts::CausalTsProviderImpl;
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_DEFAULT;
+    use futures::executor::block_on;
     use kvproto::kvrpcpb::Context;
 
     use super::*;
-    use crate::storage::{lock_manager::DummyLockManager, Engine, Statistics, TestEngineBuilder};
+    use crate::storage::{
+        lock_manager::DummyLockManager, txn::scheduler::get_raw_ext, Engine, Statistics,
+        TestEngineBuilder,
+    };
 
     #[test]
     fn test_cas_basic() {
@@ -121,7 +146,8 @@ mod tests {
     /// to key. The full test of `RawCompareAndSwap` is in
     /// `src/storage/mod.rs`.
     fn test_cas_basic_impl<F: KvFormat>() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let ts_provider = super::super::test_util::gen_ts_provider(F::TAG);
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
         let key = b"rk";
 
@@ -136,7 +162,8 @@ mod tests {
             F::TAG,
             Context::default(),
         );
-        let (prev_val, succeed) = sched_command(&engine, cm.clone(), cmd).unwrap();
+        let (prev_val, succeed) =
+            sched_command(&mut engine, cm.clone(), cmd, ts_provider.clone()).unwrap();
         assert!(prev_val.is_none());
         assert!(succeed);
 
@@ -149,7 +176,8 @@ mod tests {
             F::TAG,
             Context::default(),
         );
-        let (prev_val, succeed) = sched_command(&engine, cm.clone(), cmd).unwrap();
+        let (prev_val, succeed) =
+            sched_command(&mut engine, cm.clone(), cmd, ts_provider.clone()).unwrap();
         assert_eq!(prev_val, Some(b"v1".to_vec()));
         assert!(!succeed);
 
@@ -162,25 +190,29 @@ mod tests {
             F::TAG,
             Context::default(),
         );
-        let (prev_val, succeed) = sched_command(&engine, cm, cmd).unwrap();
+        let (prev_val, succeed) = sched_command(&mut engine, cm, cmd, ts_provider).unwrap();
         assert_eq!(prev_val, Some(b"v1".to_vec()));
         assert!(succeed);
     }
 
     pub fn sched_command<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         cm: ConcurrencyManager,
         cmd: TypedCommand<(Option<Value>, bool)>,
+        ts_provider: Option<Arc<CausalTsProviderImpl>>,
     ) -> Result<(Option<Value>, bool)> {
         let snap = engine.snapshot(Default::default())?;
         use kvproto::kvrpcpb::ExtraOp;
         let mut statistic = Statistics::default();
+
+        let raw_ext = block_on(get_raw_ext(ts_provider, cm.clone(), true, &cmd.cmd)).unwrap();
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
             concurrency_manager: cm,
             extra_op: ExtraOp::Noop,
             statistics: &mut statistic,
             async_apply_prewrite: false,
+            raw_ext,
         };
         let ret = cmd.cmd.process_write(snap, context)?;
         match ret.pr {
@@ -195,6 +227,63 @@ mod tests {
                 Ok((previous_value, succeed))
             }
             _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn test_cas_process_write() {
+        test_kv_format_impl!(test_cas_process_write_impl);
+    }
+
+    fn test_cas_process_write_impl<F: KvFormat>() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let ts_provider = super::super::test_util::gen_ts_provider(F::TAG);
+
+        let cm = concurrency_manager::ConcurrencyManager::new(1.into());
+        let raw_key = b"rk";
+        let raw_value = b"valuek";
+        let ttl = 30;
+        let encode_value = RawValue {
+            user_value: raw_value.to_vec(),
+            expire_ts: ttl_to_expire_ts(ttl),
+            is_delete: false,
+        };
+        let cmd = RawCompareAndSwap::new(
+            CF_DEFAULT,
+            F::encode_raw_key(raw_key, None),
+            None,
+            raw_value.to_vec(),
+            ttl,
+            F::TAG,
+            Context::default(),
+        );
+        let mut statistic = Statistics::default();
+        let snap = engine.snapshot(Default::default()).unwrap();
+        let raw_ext = block_on(get_raw_ext(ts_provider, cm.clone(), true, &cmd.cmd)).unwrap();
+        let context = WriteContext {
+            lock_mgr: &DummyLockManager {},
+            concurrency_manager: cm,
+            extra_op: kvproto::kvrpcpb::ExtraOp::Noop,
+            statistics: &mut statistic,
+            async_apply_prewrite: false,
+            raw_ext,
+        };
+        let cmd: Command = cmd.into();
+        let write_result = cmd.process_write(snap, context).unwrap();
+        let modifies_with_ts = vec![Modify::Put(
+            CF_DEFAULT,
+            F::encode_raw_key(raw_key, Some(101.into())),
+            F::encode_raw_value_owned(encode_value),
+        )];
+        assert_eq!(write_result.to_be_write.modifies, modifies_with_ts);
+        if F::TAG == ApiVersion::V2 {
+            assert_eq!(write_result.lock_guards.len(), 1);
+            let raw_key = vec![api_version::api_v2::RAW_KEY_PREFIX];
+            let encoded_key = ApiV2::encode_raw_key(&raw_key, Some(100.into()));
+            assert_eq!(
+                write_result.lock_guards.first().unwrap().key(),
+                &encoded_key
+            );
         }
     }
 }

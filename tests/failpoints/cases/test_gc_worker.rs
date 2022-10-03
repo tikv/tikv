@@ -315,16 +315,16 @@ fn test_collect_applying_locks() {
 // correctly.
 #[test]
 fn test_error_in_compaction_filter() {
-    let engine = TestEngineBuilder::new().build().unwrap();
+    let mut engine = TestEngineBuilder::new().build().unwrap();
     let raw_engine = engine.get_rocksdb();
 
     let large_value = vec![b'x'; 300];
-    must_prewrite_put(&engine, b"zkey", &large_value, b"zkey", 101);
-    must_commit(&engine, b"zkey", 101, 102);
-    must_prewrite_put(&engine, b"zkey", &large_value, b"zkey", 103);
-    must_commit(&engine, b"zkey", 103, 104);
-    must_prewrite_delete(&engine, b"zkey", b"zkey", 105);
-    must_commit(&engine, b"zkey", 105, 106);
+    must_prewrite_put(&mut engine, b"zkey", &large_value, b"zkey", 101);
+    must_commit(&mut engine, b"zkey", 101, 102);
+    must_prewrite_put(&mut engine, b"zkey", &large_value, b"zkey", 103);
+    must_commit(&mut engine, b"zkey", 103, 104);
+    must_prewrite_delete(&mut engine, b"zkey", b"zkey", 105);
+    must_commit(&mut engine, b"zkey", 105, 106);
 
     let fp = "write_compaction_filter_flush_write_batch";
     fail::cfg(fp, "return").unwrap();
@@ -339,8 +339,8 @@ fn test_error_in_compaction_filter() {
     }
 
     // Although versions on default CF is not cleaned, write CF is GCed correctly.
-    must_get_none(&engine, b"zkey", 102);
-    must_get_none(&engine, b"zkey", 104);
+    must_get_none(&mut engine, b"zkey", 102);
+    must_get_none(&mut engine, b"zkey", 104);
 
     fail::remove(fp);
 }

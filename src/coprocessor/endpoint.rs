@@ -350,12 +350,12 @@ impl<E: Engine> Endpoint<E> {
 
     #[inline]
     fn async_snapshot(
-        engine: &E,
+        engine: &mut E,
         ctx: &ReqContext,
     ) -> impl std::future::Future<Output = Result<E::Snap>> {
         let mut snap_ctx = SnapContext {
             pb_ctx: &ctx.context,
-            start_ts: ctx.txn_start_ts,
+            start_ts: Some(ctx.txn_start_ts),
             ..Default::default()
         };
         // need to pass start_ts and ranges to check memory locks for replica read
