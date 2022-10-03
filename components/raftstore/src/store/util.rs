@@ -1373,24 +1373,26 @@ pub fn gc_seqno_relations<EK: KvEngine, ER: RaftEngine>(
         let mut region_state_update = None;
         raft_engine
             .scan_seqno_relations(region_id, None, Some(seqno + 1), |s, relation| {
-                apply_state_update = Some(relation.get_apply_state().clone());
                 if relation.has_region_state()
                 {
                     let region_state = relation.get_region_state();
                     if region_state.get_state() == PeerState::Tombstone {
-                        wb.delete_apply_state(region_id).unwrap();
                         if let Some(raft_state) = raft_engine.get_raft_state(region_id).unwrap() {
                             if router.mailbox(region_id).is_none() {
                                 raft_engine.clean(region_id, 0, &raft_state, wb).unwrap();
                             } else {
                                 // Region destroy may be delayed, clean up meta later.
                                 pending_clean_regions.push(region_id);
+                                info!("peer not destroyed, clean up meta later"; "region_id" => region_id);
+                                return false;
                             }
                         }
+                        wb.delete_apply_state(region_id).unwrap();
                     }
                     region_state_update = Some(region_state.clone());
                 }
                 info!("delete relation during gc relation"; "region_id" => region_id, "relation" => ?relation);
+                apply_state_update = Some(relation.get_apply_state().clone());
                 wb.delete_seqno_relation(region_id, s).unwrap();
                 true
             })

@@ -252,19 +252,21 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             Some(cf) => self.flushed_seqno.update(cf, seqno),
             None => self.flushed_seqno.update_all(seqno),
         };
-        self.engines
-            .raft
-            .put_flushed_seqno(&self.flushed_seqno)
-            .unwrap();
+        let raft_engine = self.engines.raft.clone();
+        raft_engine.put_flushed_seqno(&self.flushed_seqno).unwrap();
         // Prevent raft log gc before recovery done.
         if self.started {
             if let Some(min) = min_flushed {
                 for region_id in mem::take(&mut self.pending_clean_regions) {
                     if let Some(raft_state) = self.engines.raft.get_raft_state(region_id).unwrap() {
                         if self.router.mailbox(region_id).is_none() {
-                            self.engines
-                                .raft
+                            let region_state =
+                                raft_engine.get_region_state(region_id).unwrap().unwrap();
+                            raft_engine
                                 .clean(region_id, 0, &raft_state, &mut self.raft_wb)
+                                .unwrap();
+                            self.raft_wb
+                                .put_region_state(region_id, &region_state)
                                 .unwrap();
                         } else {
                             // Region destroy may be delayed, clean up meta later.
