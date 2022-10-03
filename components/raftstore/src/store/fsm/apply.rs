@@ -28,9 +28,10 @@ use batch_system::{
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
-    util::SequenceNumber, DeleteStrategy, KvEngine, Mutable, PerfContext, PerfContextKind,
-    RaftEngine, RaftEngineReadOnly, Range as EngineRange, Snapshot, SstMetaInfo, WriteBatch,
-    ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    util::{SequenceNumber, SequenceNumberProgress},
+    DeleteStrategy, KvEngine, Mutable, PerfContext, PerfContextKind, RaftEngine,
+    RaftEngineReadOnly, Range as EngineRange, Snapshot, SstMetaInfo, WriteBatch, ALL_CFS,
+    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use fail::fail_point;
 use kvproto::{
@@ -352,6 +353,7 @@ pub trait Notifier<EK: KvEngine>: Send {
     fn notify_one(&self, region_id: u64, msg: PeerMsg<EK>);
     fn notify_direct(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>);
     fn notify_destroy_region(&self, region: Region, peer_id: u64, merge_from_snapshot: bool);
+    fn notify_recover_status(&self, region_id: u64, status: RecoverStatus, cb: RecoverCallback);
     fn clone_box(&self) -> Box<dyn Notifier<EK>>;
 }
 
@@ -435,6 +437,7 @@ where
 
     // TODO: add a test
     skip_sst_ingest: bool,
+    seqno_progress: Option<Arc<SequenceNumberProgress>>,
 }
 
 impl<EK> ApplyContext<EK>
@@ -453,6 +456,7 @@ where
         store_id: u64,
         pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
         priority: Priority,
+        seqno_progress: Option<Arc<SequenceNumberProgress>>,
     ) -> ApplyContext<EK> {
         let kv_wb = engine.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
 
@@ -491,6 +495,7 @@ where
             disable_wal: cfg.disable_kv_wal,
             uncommitted_res_count: 0,
             skip_sst_ingest: false,
+            seqno_progress,
         }
     }
 
@@ -555,14 +560,14 @@ where
             write_opts.set_sync(need_sync);
             write_opts.set_disable_wal(self.disable_wal);
             if self.disable_wal {
-                let sn = SequenceNumber::pre_write();
+                let sn = self.seqno_progress.as_ref().unwrap().pre_write();
                 seqno = Some(sn);
             }
             let seq = self.kv_wb_mut().write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!("failed to write to engine: {:?}", e);
             });
             if let Some(seqno) = seqno.as_mut() {
-                seqno.post_write(seq)
+                self.seqno_progress.as_ref().unwrap().post_write(seqno, seq)
             }
             let trackers: Vec<_> = self
                 .applied_batch
@@ -3312,6 +3317,7 @@ impl ChangeObserver {
     }
 }
 
+#[derive(Debug)]
 pub enum RecoverStatus {
     VersionChanged {
         new_version: u64,
@@ -3326,7 +3332,13 @@ pub enum RecoverStatus {
     Finished,
 }
 
-pub type BoxRecoverCallback = Box<dyn FnOnce(RecoverStatus) + Send>;
+pub struct RecoverCallback(pub Box<dyn FnOnce(RecoverStatus) + Send>);
+
+impl Debug for RecoverCallback {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("RecoverCallback").finish()
+    }
+}
 
 pub enum Msg<EK>
 where
@@ -3352,7 +3364,7 @@ where
         commit_index: u64,
         commit_term: u64,
         entries: Vec<Entry>,
-        cb: BoxRecoverCallback,
+        cb: RecoverCallback,
     },
     #[cfg(any(test, feature = "testexport"))]
     #[allow(clippy::type_complexity)]
@@ -3387,7 +3399,7 @@ where
         commit_index: u64,
         commit_term: u64,
         entries: Vec<Entry>,
-        cb: BoxRecoverCallback,
+        cb: RecoverCallback,
     ) -> Msg<EK> {
         Msg::Recover {
             region_id,
@@ -3607,7 +3619,7 @@ where
         commit_index: u64,
         commit_term: u64,
         mut entries: Vec<Entry>,
-        cb: BoxRecoverCallback,
+        cb: RecoverCallback,
     ) {
         if apply_ctx.timer.is_none() {
             apply_ctx.timer = Some(Instant::now_coarse());
@@ -3638,7 +3650,11 @@ where
         // low-priority.
         self.delegate.priority = Priority::Normal;
         if entries.is_empty() {
-            cb(RecoverStatus::Finished);
+            apply_ctx.notifier.notify_recover_status(
+                self.delegate.region_id(),
+                RecoverStatus::Finished,
+                cb,
+            );
             return;
         }
         if let Some(ref state) = self.delegate.wait_merge_state.take() {
@@ -3691,7 +3707,14 @@ where
             match res {
                 ApplyResult::None => {}
                 ApplyResult::Res(res) => {
-                    results.push(res);
+                    if !matches!(
+                        res,
+                        ExecResult::ComputeHash { .. } | ExecResult::VerifyHash { .. }
+                    ) {
+                        results.push(res)
+                    } else {
+                        info!("ignore compute/verify hash during recovery"; "region_id" => self.delegate.region_id());
+                    }
                     let new_version = self.delegate.region.get_region_epoch().get_version();
                     if prev_version != new_version {
                         break;
@@ -3712,25 +3735,29 @@ where
         apply_ctx.finish_for(&mut self.delegate, results);
         apply_ctx.skip_sst_ingest = false;
 
-        if let Some((logs_up_to_date, source_region_id, commit)) = wait_merge_source {
-            cb(RecoverStatus::WaitMergeSource {
-                logs_up_to_date,
-                source_region_id,
-                commit,
-                applied_index: self.delegate.apply_state.get_applied_index(),
-            });
-        } else if entries_drainer.len() == 0 || self.delegate.pending_remove {
-            cb(RecoverStatus::Finished);
-        } else {
-            cb(RecoverStatus::VersionChanged {
-                new_version: self.delegate.region.get_region_epoch().get_version(),
-                applied_index: self.delegate.apply_state.get_applied_index(),
-            });
-        }
         if self.delegate.pending_remove {
             self.destroy(apply_ctx);
         }
         apply_ctx.flush();
+        let recover_status =
+            if let Some((logs_up_to_date, source_region_id, commit)) = wait_merge_source {
+                RecoverStatus::WaitMergeSource {
+                    logs_up_to_date,
+                    source_region_id,
+                    commit,
+                    applied_index: self.delegate.apply_state.get_applied_index(),
+                }
+            } else if entries_drainer.len() == 0 || self.delegate.pending_remove {
+                RecoverStatus::Finished
+            } else {
+                RecoverStatus::VersionChanged {
+                    new_version: self.delegate.region.get_region_epoch().get_version(),
+                    applied_index: self.delegate.apply_state.get_applied_index(),
+                }
+            };
+        apply_ctx
+            .notifier
+            .notify_recover_status(self.delegate.region_id(), recover_status, cb);
     }
 
     /// Handles proposals, and appends the commands to the apply delegate.
@@ -4323,6 +4350,7 @@ pub struct Builder<EK: KvEngine> {
     router: ApplyRouter<EK>,
     store_id: u64,
     pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+    seqno_progress: Option<Arc<SequenceNumberProgress>>,
 }
 
 impl<EK: KvEngine> Builder<EK> {
@@ -4330,6 +4358,7 @@ impl<EK: KvEngine> Builder<EK> {
         builder: &RaftPollerBuilder<EK, ER, T>,
         sender: Box<dyn Notifier<EK>>,
         router: ApplyRouter<EK>,
+        seqno_progress: Option<Arc<SequenceNumberProgress>>,
     ) -> Builder<EK> {
         Builder {
             tag: format!("[store {}]", builder.store.get_id()),
@@ -4342,6 +4371,7 @@ impl<EK: KvEngine> Builder<EK> {
             router,
             store_id: builder.store.get_id(),
             pending_create_peers: builder.pending_create_peers.clone(),
+            seqno_progress,
         }
     }
 }
@@ -4368,6 +4398,7 @@ where
                 self.store_id,
                 self.pending_create_peers.clone(),
                 priority,
+                self.seqno_progress.clone(),
             ),
             messages_per_tick: cfg.messages_per_tick,
             cfg_tracker: self.cfg.clone().tracker(self.tag.clone()),
@@ -4392,6 +4423,7 @@ where
             router: self.router.clone(),
             store_id: self.store_id,
             pending_create_peers: self.pending_create_peers.clone(),
+            seqno_progress: self.seqno_progress.clone(),
         }
     }
 }
@@ -4754,6 +4786,14 @@ mod tests {
                 },
             });
         }
+
+        fn notify_recover_status(
+            &self,
+            _region_id: u64,
+            _status: RecoverStatus,
+            _cb: RecoverCallback,
+        ) {
+        }
     }
 
     impl Default for Registration {
@@ -4973,6 +5013,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            seqno_progress: None,
         };
         system.spawn("test-basic".to_owned(), builder);
 
@@ -5432,6 +5473,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            seqno_progress: None,
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -5776,6 +5818,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            seqno_progress: None,
         };
         system.spawn("test-ingest".to_owned(), builder);
 
@@ -5956,6 +5999,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            seqno_progress: None,
         };
         system.spawn("test-bucket".to_owned(), builder);
 
@@ -6049,6 +6093,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            seqno_progress: None,
         };
         system.spawn("test-exec-observer".to_owned(), builder);
 
@@ -6273,6 +6318,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            seqno_progress: None,
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -6553,6 +6599,7 @@ mod tests {
             router: router.clone(),
             store_id: 2,
             pending_create_peers,
+            seqno_progress: None,
         };
         system.spawn("test-split".to_owned(), builder);
 

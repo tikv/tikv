@@ -493,6 +493,11 @@ impl RaftLogBatchTrait for RaftLogBatch {
         self.0.delete(raft_group_id, APPLY_STATE_KEY.to_vec());
         Ok(())
     }
+
+    fn delete_region_state(&mut self, raft_group_id: u64) -> Result<()> {
+        self.0.delete(raft_group_id, REGION_STATE_KEY.to_vec());
+        Ok(())
+    }
 }
 
 impl RaftEngineReadOnly for RaftLogEngine {

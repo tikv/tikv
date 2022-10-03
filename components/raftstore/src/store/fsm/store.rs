@@ -10,10 +10,7 @@ use std::{
     },
     mem,
     ops::{Deref, DerefMut, RangeInclusive},
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
-    },
+    sync::{atomic::Ordering, Arc, Mutex},
     time::{Duration, Instant},
     u64,
 };
@@ -27,9 +24,9 @@ use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{unbounded, TryRecvError, TrySendError};
 use engine_traits::{
-    util::MemtableEventNotifier, CompactedEvent, DeleteStrategy, Engines, KvEngine, Mutable,
-    PerfContextKind, RaftEngine, RaftLogBatch, Range, Result as EngineTraitsResult, WriteBatch,
-    WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    util::{MemtableEventNotifier, SequenceNumberProgress},
+    CompactedEvent, DeleteStrategy, Engines, KvEngine, Mutable, PerfContextKind, RaftEngine,
+    RaftLogBatch, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use fail::fail_point;
 use futures::{compat::Future01CompatExt, FutureExt};
@@ -45,7 +42,6 @@ use kvproto::{
     },
     replication_modepb::{ReplicationMode, ReplicationStatus},
 };
-use parking_lot_core::SpinWait;
 use pd_client::{Feature, FeatureGate, PdClient};
 use protobuf::Message;
 use raft::StateRole;
@@ -67,7 +63,6 @@ use tikv_util::{
     timer::SteadyTimer,
     warn,
     worker::{LazyWorker, Scheduler, Worker},
-    yatp_pool::{DefaultTicker, YatpPoolBuilder},
     Either, RingQueue,
 };
 use time::{self, Timespec};
@@ -86,19 +81,24 @@ use crate::{
         },
         config::Config,
         fsm::{
+            apply::RecoverCallback,
             create_apply_batch_system,
             metrics::*,
             peer::{
                 maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
             },
-            ApplyBatchSystem, ApplyNotifier, ApplyPollerBuilder, ApplyRes, ApplyRouter, ApplyTask,
+            ApplyBatchSystem, ApplyNotifier, ApplyPollerBuilder, ApplyRes, ApplyRouter,
             ApplyTaskRes,
         },
         local_metrics::RaftMetrics,
         memory::*,
         metrics::*,
-        migrate_states::migrate_states_from_kvdb_to_raftdb,
+        migrate_states::{
+            clear_states_in_raftdb, migrate_states_from_kvdb_to_raftdb,
+            migrate_states_from_raftdb_to_kvdb,
+        },
         peer_storage,
+        recover::Recovery,
         transport::Transport,
         util::{self, gc_seqno_relations, is_initial_msg, RegionReadProgressRegistry},
         worker::{
@@ -513,6 +513,21 @@ where
         }
     }
 
+    fn notify_recover_status(&self, region_id: u64, status: RecoverStatus, cb: RecoverCallback) {
+        let scheduler = self.seqno_scheduler.as_ref().unwrap();
+        if let Err(e) = scheduler.schedule(SeqnoRelationTask::RecoverStatus {
+            region_id,
+            status,
+            cb,
+        }) {
+            error!(
+                "failed to schedule recover status to seqno relation worker";
+                "err" => ?e,
+                "region_id" => region_id,
+            );
+        }
+    }
+
     fn clone_box(&self) -> Box<dyn ApplyNotifier<EK>> {
         Box::new(self.clone())
     }
@@ -523,20 +538,6 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn notify_memtable_sealed(&self, seqno: u64) {
-        if let Err(e) = self
-            .seqno_scheduler
-            .as_ref()
-            .unwrap()
-            .schedule(SeqnoRelationTask::MemtableSealed(seqno))
-        {
-            warn!(
-                "failed to schedule memtable sealed seqno to seqno relation worker";
-                "err" => ?e,
-            );
-        }
-    }
-
     fn notify_memtable_flushed(&self, cf: &str, seqno: u64) {
         if let Err(e) =
             self.seqno_scheduler
@@ -546,20 +547,6 @@ where
                     cf: Some(cf.to_string()),
                     seqno,
                 })
-        {
-            warn!(
-                "failed to schedule memtable flushed seqno to seqno relation worker";
-                "err" => ?e,
-            );
-        }
-    }
-
-    fn notify_flush_cfs(&self, seqno: u64) {
-        if let Err(e) = self
-            .seqno_scheduler
-            .as_ref()
-            .unwrap()
-            .schedule(SeqnoRelationTask::MemtableFlushed { cf: None, seqno })
         {
             warn!(
                 "failed to schedule memtable flushed seqno to seqno relation worker";
@@ -1387,6 +1374,11 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
 
         self.clear_stale_data(&meta)?;
 
+        if recover_from_raft_db {
+            // Region ranges may be overlapped, need to insert ranges during recovery.
+            meta.region_ranges.clear();
+        }
+
         Ok(region_peers)
     }
 
@@ -1405,73 +1397,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
             let mut raft_wb = raft_engine.log_batch(0);
             gc_seqno_relations(start_seqno, &raft_engine, &self.router, &mut raft_wb).unwrap();
             raft_engine.consume(&mut raft_wb, true).unwrap();
-            let mut kv_wb = kv_engine.write_batch();
-            raft_engine
-                .for_each_raft_group(&mut |region_id| {
-                    if let Some((snap_region_state, snap_apply_state)) =
-                        raft_engine.get_apply_snapshot_state(region_id)?
-                    {
-                        kv_wb.put_msg_cf(
-                            CF_RAFT,
-                            &keys::region_state_key(region_id),
-                            &snap_region_state,
-                        )?;
-                        kv_wb.put_msg_cf(
-                            CF_RAFT,
-                            &keys::apply_state_key(region_id),
-                            &snap_apply_state,
-                        )?;
-                        let raft_state =
-                            raft_engine.get_raft_state(region_id)?.unwrap_or_else(|| {
-                                panic!("raft state not found, region_id: {}", region_id)
-                            });
-                        info!(
-                            "recover applying snapshot region from raftdb";
-                            "region_id" => region_id,
-                            "snap_region_state" => ?snap_region_state,
-                            "snap_apply_state" => ?snap_apply_state,
-                            "raft_state" => ?raft_state,
-                        );
-                    } else {
-                        let region_state =
-                            raft_engine.get_region_state(region_id)?.unwrap_or_else(|| {
-                                panic!("region state not found, region_id: {}", region_id)
-                            });
-                        kv_wb.put_msg_cf(
-                            CF_RAFT,
-                            &keys::region_state_key(region_id),
-                            &region_state,
-                        )?;
-                        let states = if region_state.get_state() != PeerState::Tombstone {
-                            let apply_state =
-                                raft_engine.get_apply_state(region_id)?.unwrap_or_else(|| {
-                                    panic!("apply state not found, region_id: {}", region_id)
-                                });
-                            kv_wb.put_msg_cf(
-                                CF_RAFT,
-                                &keys::apply_state_key(region_id),
-                                &apply_state,
-                            )?;
-                            let raft_state =
-                                raft_engine.get_raft_state(region_id)?.unwrap_or_else(|| {
-                                    panic!("raft state not found, region_id: {}", region_id)
-                                });
-                            Some((apply_state, raft_state))
-                        } else {
-                            None
-                        };
-
-                        info!(
-                            "recover region from raftdb";
-                            "region_id" => region_id,
-                            "region_state" => ?region_state,
-                            "states" => ?states,
-                        );
-                    }
-                    Result::Ok(())
-                })
-                .unwrap();
-            kv_wb.write().unwrap();
+            migrate_states_from_raftdb_to_kvdb(&self.engines, false)?;
         } else if self.cfg.value().disable_kv_wal {
             migrate_states_from_kvdb_to_raftdb(&self.engines)?;
         }
@@ -1788,6 +1714,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             engines.clone(),
             cfg.value().raft_log_compact_sync_interval.0,
             cfg.value().disable_kv_wal,
+            workers.seqno_worker.as_ref().map(|w| w.scheduler()),
         );
         let raftlog_gc_scheduler = workers
             .background_worker
@@ -1901,6 +1828,11 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
+        let seqno_progress = if cfg.disable_kv_wal {
+            Some(Arc::new(SequenceNumberProgress::default()))
+        } else {
+            None
+        };
         let apply_poller_builder = ApplyPollerBuilder::<EK>::new(
             &builder,
             Box::new(ApplyResNotifier::new(
@@ -1908,6 +1840,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 workers.seqno_worker.as_ref().map(|w| w.scheduler()),
             )),
             self.apply_router.clone(),
+            seqno_progress,
         );
         self.apply_system
             .schedule_all(region_peers.iter().map(|pair| pair.1.get_peer()));
@@ -1955,14 +1888,24 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         self.apply_system
             .spawn("apply".to_owned(), apply_poller_builder);
         if let Some(range) = raft_builder.seqno_recover_range.as_ref() {
-            self.replay_raft_logs_between_seqnos(
-                range,
-                &raft_builder.engines,
+            let recovery = Recovery::new(
+                range.clone(),
+                raft_builder.engines.raft.clone(),
+                self.router.clone(),
+                self.apply_router.clone(),
                 raft_builder.store_meta.clone(),
             );
+            recovery.run();
         }
         if raft_builder.cfg.value().disable_kv_wal {
+            let seqno_worker = workers.seqno_worker.as_ref().unwrap();
+            let scheduler = seqno_worker.scheduler();
+            scheduler.schedule(SeqnoRelationTask::Start).unwrap();
             let seqno = raft_builder.engines.kv.get_latest_sequence_number();
+            raft_builder.engines.kv.flush_cfs(true).unwrap();
+            scheduler
+                .schedule(SeqnoRelationTask::MemtableFlushed { cf: None, seqno })
+                .unwrap();
             let mut recover_state = StoreRecoverState::default();
             recover_state.set_seqno(seqno);
             raft_builder
@@ -1970,9 +1913,11 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 .raft
                 .put_recover_state(&recover_state)
                 .unwrap();
-            let seqno_worker = workers.seqno_worker.as_ref().unwrap();
-            let scheduler = seqno_worker.scheduler();
-            scheduler.schedule(SeqnoRelationTask::Start).unwrap();
+        } else if raft_builder.seqno_recover_range.is_some() {
+            raft_builder.engines.kv.flush_cfs(true).unwrap();
+            // KV WAL enabled, need to cleanup all states in raftdb
+            // TODO: migrate raft states from raftdb to kvdb after removing raft CF.
+            clear_states_in_raftdb(&self.engines.raft)?;
         }
 
         for addr in address {
@@ -2046,294 +1991,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         if let Some(mut w) = workers.seqno_worker {
             w.stop();
         }
-    }
-
-    fn replay_raft_logs_between_seqnos(
-        &mut self,
-        range: &RangeInclusive<u64>,
-        engines: &Engines<EK, ER>,
-        store_meta: Arc<Mutex<StoreMeta>>,
-    ) {
-        let mut recover_regions: BTreeMap<u64, HashMap<_, _>> = BTreeMap::new();
-        engines
-            .raft
-            .for_each_raft_group(&mut |region_id| {
-                if engines
-                    .raft
-                    .get_apply_snapshot_state(region_id)
-                    .unwrap()
-                    .is_some()
-                {
-                    return EngineTraitsResult::Ok(());
-                }
-                let region_state = engines
-                    .raft
-                    .get_region_state(region_id)
-                    .unwrap()
-                    .unwrap_or_else(|| {
-                        panic!("region_id {}", region_id);
-                    });
-                if !matches!(
-                    region_state.get_state(),
-                    PeerState::Applying | PeerState::Tombstone
-                ) {
-                    let apply_state = engines.raft.get_apply_state(region_id).unwrap().unwrap();
-                    let version = region_state.get_region().get_region_epoch().get_version();
-                    let (start, end) = if let Some(relation) =
-                        engines.raft.get_seqno_relation(region_id, *range.end())?
-                    {
-                        assert!(
-                            relation.get_sequence_number() > *range.start(),
-                            "relation {:?}, range {:?}",
-                            relation,
-                            range
-                        );
-                        let start = apply_state.applied_index + 1;
-                        let end = relation.get_apply_state().applied_index + 1;
-                        assert!(
-                            start <= end,
-                            "region {} apply_state {:?}, relation {:?}, region_state {:?}",
-                            region_id,
-                            apply_state,
-                            relation,
-                            region_state
-                        );
-                        (start, end)
-                    } else {
-                        (apply_state.applied_index + 1, apply_state.applied_index + 1)
-                    };
-                    let regions = recover_regions
-                        .entry(version)
-                        .or_insert_with(HashMap::default);
-                    regions.insert(region_id, (start, end, Some(region_state)));
-                }
-                EngineTraitsResult::Ok(())
-            })
-            .unwrap();
-
-        let pool = YatpPoolBuilder::new(DefaultTicker::default())
-            .name_prefix("recovery-")
-            .thread_count(4, 4, 4)
-            .build_single_level_pool();
-
-        #[derive(Clone)]
-        struct WaitMergeSourceRegion {
-            region_id: u64,
-            version: u64,
-            applied_index: u64,
-            end: u64,
-            logs_up_to_date: Arc<AtomicU64>,
-        }
-
-        let mut wait_merge_source_regions = HashMap::default();
-        let mut regions_applied_index = HashMap::default();
-        while let Some((version, regions)) = recover_regions.pop_first() {
-            let results: Vec<_> = regions
-                .into_iter()
-                .filter_map(|(region_id, (start, end, region_state))| {
-                    info!("replay raft logs"; "region_id" => region_id, "start" => start, "end" => end, "version" => version);
-                    // Regions could be overlapped before recovery, because the splitted regions
-                    // were created immediately and tombstone states of a source merge region were
-                    // persisted after CFs flushed. So after restarted, a source merge region may
-                    // be overlapped with other regions.
-                    // This situation is safe because we recover regions by the order of
-                    // versions, a tombstoned source merge region will be destroyed after recovery,
-                    // but still region ranges in StoreMeta could be inconsistent because
-                    // overlapped, here we insert it again at the first time we recover a region to
-                    // keep it partly consistent during recovering a region.
-                    if let Some(state) = region_state {
-                        let region = state.get_region();
-                        let end_key = enc_end_key(state.get_region());
-                        let mut spin_wait = SpinWait::new();
-                        let mut wait_count = 0;
-                        loop {
-                            {
-                                let mut meta = store_meta.lock().unwrap();
-                                if let Some(meta_region_id) = meta.region_ranges.get(&end_key) {
-                                    if *meta_region_id == region_id {
-                                        break;
-                                    } else {
-                                        let meta_region = meta.regions.get(meta_region_id).unwrap();
-                                        if meta_region.get_region_epoch().get_version()
-                                            > region.get_region_epoch().get_version()
-                                        {
-                                            meta.region_ranges.insert(end_key, region_id);
-                                            break;
-                                        } else if wait_count == 1000 {
-                                            wait_count = 0;
-                                            info!(
-                                                "wait region range update";
-                                                "region_id" => region_id,
-                                                "meta_region_id" => meta_region_id,
-                                            );
-                                        }
-                                    }
-                                } else {
-                                    meta.region_ranges.insert(end_key, region_id);
-                                    break;
-                                }
-                            }
-                            // the region with smaller version may be running a region destroy, wait
-                            // until it done.
-                            spin_wait.spin();
-                            wait_count += 1;
-                        }
-                    }
-                    if start != end {
-                        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-                        let router = self.apply_router.clone();
-                        let raftdb = engines.raft.clone();
-                        pool.spawn(async move {
-                            let mut entries = vec![];
-                            if let Err(e) =
-                                raftdb.fetch_entries_to(region_id, start, end, None, &mut entries)
-                            {
-                                panic!(
-                                    "fetch entries failed: {:?}, region_id: {}, start:{}, end: {}",
-                                    e, region_id, start, end
-                                );
-                            }
-                            let term = entries.last().unwrap().get_term();
-                            let commit_index = entries.last().unwrap().get_index();
-                            router.schedule_task(
-                                region_id,
-                                ApplyTask::recover(
-                                    region_id,
-                                    term,
-                                    commit_index,
-                                    term,
-                                    entries,
-                                    Box::new(move |status| {
-                                        tx.send(status).unwrap();
-                                    }),
-                                ),
-                            );
-                        });
-                        Some((rx, region_id, end))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            for (rx, region_id, end) in results {
-                let status = rx.recv().unwrap();
-                match status {
-                    RecoverStatus::VersionChanged {
-                        new_version,
-                        applied_index,
-                    } => {
-                        assert!(applied_index < end);
-                        if applied_index + 1 != end {
-                            let regions = recover_regions
-                                .entry(new_version)
-                                .or_insert_with(HashMap::default);
-                            regions.insert(region_id, (applied_index + 1, end, None));
-                        }
-                        regions_applied_index.insert(region_id, applied_index);
-                        if let Some(WaitMergeSourceRegion {
-                            region_id: target_region_id,
-                            version: target_region_version,
-                            logs_up_to_date,
-                            applied_index: target_applied_index,
-                            end: target_end,
-                        }) = wait_merge_source_regions
-                            .get(&(region_id, applied_index))
-                            .cloned()
-                        {
-                            info!(
-                                "region recovery merge continue, source: {}, applied_index: {}",
-                                region_id, applied_index;
-                                "region_id" => target_region_id,
-                            );
-                            logs_up_to_date.store(region_id, Ordering::Relaxed);
-                            let regions = recover_regions
-                                .entry(target_region_version)
-                                .or_insert_with(HashMap::default);
-                            regions.insert(
-                                target_region_id,
-                                (target_applied_index + 1, target_end, None),
-                            );
-                            wait_merge_source_regions.remove(&(region_id, applied_index));
-                        }
-                    }
-                    RecoverStatus::WaitMergeSource {
-                        logs_up_to_date,
-                        source_region_id,
-                        commit,
-                        applied_index,
-                    } => {
-                        assert!(applied_index < end - 1);
-                        let mut merge_prepared = false;
-                        if let Some(index) = regions_applied_index.get(&source_region_id) {
-                            if *index >= commit {
-                                merge_prepared = true;
-                            }
-                        } else if let Some(apply_state) =
-                            engines.raft.get_apply_state(source_region_id).unwrap()
-                        {
-                            if apply_state.get_applied_index() >= commit {
-                                merge_prepared = true;
-                            }
-                        }
-                        info!(
-                            "region recovery wait merge source region, source: {}, applied_index: {}, commit: {}, merge_prepared: {}",
-                            source_region_id, applied_index, commit, merge_prepared;
-                            "region_id" => region_id
-                        );
-                        if merge_prepared {
-                            logs_up_to_date.store(source_region_id, Ordering::Relaxed);
-                            let regions = recover_regions
-                                .entry(version)
-                                .or_insert_with(HashMap::default);
-                            regions.insert(region_id, (applied_index + 1, end, None));
-                        } else {
-                            wait_merge_source_regions.insert(
-                                (source_region_id, commit),
-                                WaitMergeSourceRegion {
-                                    region_id,
-                                    version,
-                                    logs_up_to_date,
-                                    applied_index,
-                                    end,
-                                },
-                            );
-                        }
-                    }
-                    RecoverStatus::Finished => {
-                        let applied_index = end - 1;
-                        regions_applied_index.insert(region_id, applied_index);
-                        if let Some(WaitMergeSourceRegion {
-                            region_id: target_region_id,
-                            version: target_region_version,
-                            logs_up_to_date,
-                            applied_index: target_applied_index,
-                            end: target_end,
-                        }) = wait_merge_source_regions
-                            .get(&(region_id, applied_index))
-                            .cloned()
-                        {
-                            info!(
-                                "region recovery merge continue, source: {}, applied_index: {}",
-                                region_id, applied_index;
-                                "region_id" => target_region_id,
-                            );
-                            logs_up_to_date.store(region_id, Ordering::Relaxed);
-                            let regions = recover_regions
-                                .entry(target_region_version)
-                                .or_insert_with(HashMap::default);
-                            regions.insert(
-                                target_region_id,
-                                (target_applied_index + 1, target_end, None),
-                            );
-                            wait_merge_source_regions.remove(&(region_id, applied_index));
-                        }
-                        info!("region recover finished"; "region_id" => region_id);
-                    }
-                }
-            }
-        }
-        engines.kv.flush_cfs(true).unwrap();
-        info!("all regions recover finished");
     }
 }
 

@@ -180,10 +180,6 @@ impl KvEngineFactory {
         let shared_block_cache = self.inner.block_cache.is_some();
         kv_engine.set_shared_block_cache(shared_block_cache);
         kv_engine.set_disable_kv_wal(self.inner.disable_kv_wal);
-        if let Some(listener) = &self.inner.flush_listener {
-            listener.set_engine(kv_engine.clone());
-            kv_engine.set_flush_listener(listener.clone());
-        }
         Ok(kv_engine)
     }
 

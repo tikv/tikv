@@ -7,17 +7,17 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_traits::{util::FlushedSeqno, Engines, KvEngine, RaftEngine, RaftLogGcTask, DATA_CFS};
+use engine_traits::{Engines, KvEngine, RaftEngine, RaftLogGcTask};
 use file_system::{IoType, WithIoType};
 use thiserror::Error;
 use tikv_util::{
     box_try, debug, error,
     time::{Duration, Instant},
     warn,
-    worker::{Runnable, RunnableWithTimer},
+    worker::{Runnable, RunnableWithTimer, Scheduler},
 };
 
-use crate::store::worker::metrics::*;
+use crate::store::{worker::metrics::*, SeqnoRelationTask};
 
 const MAX_GC_REGION_BATCH: usize = 512;
 const MAX_REGION_NORMAL_GC_LOG_NUMBER: u64 = 10240;
@@ -25,7 +25,7 @@ const FLUSH_MEMTABLE_LOG_COUNT_THRESHOLD: u64 = 1024 * 10;
 
 pub enum Task {
     Gc(GcTask),
-    MemtableFlushed { cf: Option<String>, seqno: u64 },
+    TryExecPendingTask,
 }
 
 impl Task {
@@ -73,8 +73,8 @@ impl Display for Task {
                     task.cb.is_some()
                 )
             }
-            Task::MemtableFlushed { cf, seqno } => {
-                write!(f, "MemtableFlushed [cf: {:?}, seqno: {}]", cf, seqno)
+            Task::TryExecPendingTask => {
+                write!(f, "TryExecPendingTask")
             }
         }
     }
@@ -100,10 +100,11 @@ pub struct Runner<EK: KvEngine, ER: RaftEngine> {
     gc_entries: Option<Sender<usize>>,
     compact_sync_interval: Duration,
     // region_id -> end index
-    residual_log_regions: HashMap<u64, (u64, u64)>,
-    residual_log_count: u64,
-    residual_log_count_sender: Option<Sender<u64>>,
-    flushed_seqno: Option<FlushedSeqno>,
+    pending_tasks: HashMap<u64, (u64, u64)>,
+    pending_log_count: u64,
+    pending_log_count_sender: Option<Sender<u64>>,
+    disable_kv_wal: bool,
+    seqno_relation_scheduler: Option<Scheduler<SeqnoRelationTask<EK::Snapshot>>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
@@ -111,24 +112,18 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         engines: Engines<EK, ER>,
         compact_log_interval: Duration,
         disable_kv_wal: bool,
+        seqno_relation_scheduler: Option<Scheduler<SeqnoRelationTask<EK::Snapshot>>>,
     ) -> Runner<EK, ER> {
-        let flushed_seqno = if disable_kv_wal {
-            Some(FlushedSeqno::new(
-                DATA_CFS,
-                engines.kv.get_latest_sequence_number(),
-            ))
-        } else {
-            None
-        };
         Runner {
             engines,
-            flushed_seqno,
+            disable_kv_wal,
             tasks: vec![],
             gc_entries: None,
             compact_sync_interval: compact_log_interval,
-            residual_log_regions: HashMap::default(),
-            residual_log_count: 0,
-            residual_log_count_sender: None,
+            pending_tasks: HashMap::default(),
+            pending_log_count: 0,
+            pending_log_count_sender: None,
+            seqno_relation_scheduler,
         }
     }
 
@@ -180,13 +175,13 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                 // It's only for flush.
                 continue;
             }
-            if self.flushed_seqno.is_some() {
+            if self.disable_kv_wal {
                 let max_compact_to = self.region_flushed_index(t.region_id).unwrap_or_default();
                 if t.end_idx > max_compact_to {
                     let end_idx = t.end_idx;
                     let gap_count = end_idx - max_compact_to;
-                    let residual_log_count = &mut self.residual_log_count;
-                    self.residual_log_regions
+                    let residual_log_count = &mut self.pending_log_count;
+                    self.pending_tasks
                         .entry(t.region_id)
                         .and_modify(|(idx, gap)| {
                             *idx = u64::max(*idx, end_idx);
@@ -235,11 +230,17 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             cb()
         }
 
-        if self.residual_log_count > FLUSH_MEMTABLE_LOG_COUNT_THRESHOLD {
+        if self.pending_log_count > FLUSH_MEMTABLE_LOG_COUNT_THRESHOLD {
+            let seqno = self.engines.kv.get_latest_sequence_number();
             self.engines.kv.flush_cfs(true).unwrap();
+            if let Some(scheduler) = self.seqno_relation_scheduler.as_ref() {
+                scheduler
+                    .schedule(SeqnoRelationTask::MemtableFlushed { cf: None, seqno })
+                    .unwrap();
+            }
         }
-        if let Some(ref ch) = self.residual_log_count_sender {
-            ch.send(self.residual_log_count).unwrap();
+        if let Some(ref ch) = self.pending_log_count_sender {
+            ch.send(self.pending_log_count).unwrap();
         }
     }
 }
@@ -259,24 +260,16 @@ where
                 flush_now = task.flush;
                 self.tasks.push(task);
             }
-            Task::MemtableFlushed { cf, seqno } => {
-                if let Some(flushed_seqno) = self.flushed_seqno.as_mut() {
-                    let min_flushed = match cf {
-                        Some(cf) => flushed_seqno.update(&cf, seqno),
-                        None => flushed_seqno.update_all(seqno),
-                    };
-                    if min_flushed.is_some() {
-                        for (region_id, (end_idx, gap_count)) in self.residual_log_regions.drain() {
-                            self.tasks.push(GcTask {
-                                region_id,
-                                start_idx: 0,
-                                end_idx,
-                                cb: None,
-                                flush: false,
-                            });
-                            self.residual_log_count -= gap_count;
-                        }
-                    }
+            Task::TryExecPendingTask => {
+                for (region_id, (end_idx, gap_count)) in self.pending_tasks.drain() {
+                    self.tasks.push(GcTask {
+                        region_id,
+                        start_idx: 0,
+                        end_idx,
+                        cb: None,
+                        flush: false,
+                    });
+                    self.pending_log_count -= gap_count;
                 }
             }
         }
@@ -309,7 +302,7 @@ where
 mod tests {
     use std::{sync::mpsc, time::Duration};
 
-    use engine_traits::{MiscExt, RaftEngine, RaftLogBatch, ALL_CFS, CF_DEFAULT};
+    use engine_traits::{MiscExt, RaftEngine, RaftLogBatch, ALL_CFS};
     use kvproto::raft_serverpb::RaftApplyState;
     use raft::eraftpb::Entry;
     use tempfile::Builder;
@@ -331,10 +324,11 @@ mod tests {
             engines,
             tasks: vec![],
             compact_sync_interval: Duration::from_secs(5),
-            residual_log_regions: HashMap::default(),
-            flushed_seqno: None,
-            residual_log_count: 0,
-            residual_log_count_sender: None,
+            pending_tasks: HashMap::default(),
+            pending_log_count: 0,
+            pending_log_count_sender: None,
+            disable_kv_wal: false,
+            seqno_relation_scheduler: None,
         };
 
         // generate raft logs
@@ -395,7 +389,6 @@ mod tests {
         let kv_db = engine_test::kv::new_engine(path_raft.to_str().unwrap(), ALL_CFS).unwrap();
         let engines = Engines::new(kv_db.clone(), raft_db.clone());
         let init_seqno = kv_db.get_latest_sequence_number();
-        let flushed_seqno = FlushedSeqno::new(&[CF_DEFAULT], init_seqno);
 
         let (gc_tx, gc_rx) = mpsc::channel();
         let (log_tx, log_rx) = mpsc::channel();
@@ -404,10 +397,11 @@ mod tests {
             engines,
             tasks: vec![],
             compact_sync_interval: Duration::from_millis(100),
-            residual_log_regions: HashMap::default(),
-            flushed_seqno: Some(flushed_seqno),
-            residual_log_count: 0,
-            residual_log_count_sender: Some(log_tx),
+            pending_tasks: HashMap::default(),
+            pending_log_count: 0,
+            pending_log_count_sender: Some(log_tx),
+            disable_kv_wal: true,
+            seqno_relation_scheduler: None,
         };
 
         // generate raft logs
@@ -467,10 +461,7 @@ mod tests {
                 let mut raft_wb = raft_db.log_batch(0);
                 raft_wb.put_apply_state(region_id, &apply_state).unwrap();
                 raft_db.consume(&mut raft_wb, false /* sync */).unwrap();
-                runner.run(Task::MemtableFlushed {
-                    cf: Some(CF_DEFAULT.to_string()),
-                    seqno: r.0,
-                });
+                runner.run(Task::TryExecPendingTask);
             }
             runner.run(task);
             runner.flush();

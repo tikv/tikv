@@ -137,11 +137,7 @@ impl MiscExt for RocksEngine {
         for cf in self.cf_names() {
             handles.push(util::get_cf_handle(self.as_inner(), cf)?);
         }
-        let latest_seqno = self.get_latest_sequence_number();
         self.as_inner().flush_cfs(&handles, wait).map_err(r2e)?;
-        if let Some(listener) = self.flush_listener.as_ref() {
-            listener.notify_flush_cfs(latest_seqno);
-        }
         Ok(())
     }
 

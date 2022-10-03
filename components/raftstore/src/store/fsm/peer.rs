@@ -613,11 +613,6 @@ where
     }
 
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK>>) {
-        // println!(
-        //     ">>>>>>>> region {} handle msgs: {:?}",
-        //     self.region_id(),
-        //     msgs
-        // );
         for m in msgs.drain(..) {
             match m {
                 PeerMsg::RaftMessage(msg) => {
@@ -1484,6 +1479,10 @@ where
                 self.on_snapshot_recovery_wait_apply(syncer)
             }
             SignificantMsg::CheckPendingAdmin(ch) => self.on_check_pending_admin(ch),
+            SignificantMsg::RecoverStatus { status, cb } => {
+                info!("report region recover status"; "region_id" => self.region_id(), "status" => ?status);
+                cb.0(status);
+            }
         }
     }
 
@@ -3880,16 +3879,19 @@ where
             // Check if this new region should be splitted
             let new_split_peer = new_split_regions.get(&new_region.get_id()).unwrap();
             if new_split_peer.result.is_some() {
-                if let Err(e) = self
-                    .fsm
-                    .peer
-                    .mut_store()
-                    .clear_extra_split_data(enc_start_key(&new_region), enc_end_key(&new_region))
-                {
-                    error!(?e;
-                        "failed to cleanup extra split data, may leave some dirty data";
-                        "region_id" => new_region.get_id(),
-                    );
+                // If fsm is not started and it receives an `ApplyRes`, it could be doing a
+                // recovery. During recovery some region ranges maybe overlapped, here we skip
+                // clearing data to avoid deleting other living regions' data.
+                if self.fsm.started {
+                    if let Err(e) = self.fsm.peer.mut_store().clear_extra_split_data(
+                        enc_start_key(&new_region),
+                        enc_end_key(&new_region),
+                    ) {
+                        error!(?e;
+                            "failed to cleanup extra split data, may leave some dirty data";
+                            "region_id" => new_region.get_id(),
+                        );
+                    }
                 }
                 continue;
             }
@@ -4260,6 +4262,7 @@ where
 
     fn on_check_merge(&mut self) {
         if self.fsm.stopped
+            || !self.fsm.started
             || self.fsm.peer.pending_remove
             || self.fsm.peer.pending_merge_state.is_none()
         {

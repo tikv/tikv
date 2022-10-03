@@ -274,4 +274,8 @@ impl RaftLogBatch for PanicWriteBatch {
     fn delete_apply_state(&mut self, raft_group_id: u64) -> Result<()> {
         panic!()
     }
+
+    fn delete_region_state(&mut self, raft_group_id: u64) -> Result<()> {
+        panic!()
+    }
 }

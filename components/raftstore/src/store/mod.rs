@@ -21,6 +21,7 @@ mod compaction_guard;
 mod hibernate_state;
 mod migrate_states;
 mod peer_storage;
+mod recover;
 mod region_snapshot;
 mod replication_mode;
 pub mod snap;

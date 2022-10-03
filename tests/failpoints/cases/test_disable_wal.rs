@@ -6,7 +6,7 @@ use engine_traits::{MiscExt, Peekable, RaftEngineReadOnly, CF_RAFT};
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use raft::prelude::MessageType;
 use test_raftstore::*;
-use tikv_util::HandyRwLock;
+use tikv_util::{config::ReadableDuration, HandyRwLock};
 
 #[test]
 fn test_disable_wal_recovery_add_peer_snapshot() {
@@ -14,15 +14,16 @@ fn test_disable_wal_recovery_add_peer_snapshot() {
     // Initialize the cluster.
     cluster.pd_client.disable_default_operator();
     cluster.cfg.raft_store.disable_kv_wal = true;
+    cluster.cfg.raft_store.region_worker_tick_interval = ReadableDuration::millis(50);
     let region = cluster.run_conf_change();
     cluster.must_put(b"k1", b"v1");
     cluster.pd_client.must_add_peer(region, new_peer(2, 2));
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
     cluster.must_transfer_leader(region, new_peer(1, 1));
-    cluster.pd_client.add_peer(region, new_learner_peer(3, 3));
     // Skip applying snapshot into RocksDB to keep peer status in Applying.
     let apply_snapshot_fp = "apply_pending_snapshot";
-    fail::cfg(apply_snapshot_fp, "return()").unwrap();
+    fail::cfg(apply_snapshot_fp, "return").unwrap();
+    cluster.pd_client.add_peer(region, new_learner_peer(3, 3));
     loop {
         let region_state: Option<RegionLocalState> = cluster
             .get_engine(3)
@@ -35,8 +36,10 @@ fn test_disable_wal_recovery_add_peer_snapshot() {
         }
     }
     cluster.stop_node(3);
-    fail::remove(apply_snapshot_fp);
     cluster.run_node(3).unwrap();
+    fail::remove(apply_snapshot_fp);
+    // Check if region range exists
+    cluster.must_split(&cluster.get_region(b""), b"k2");
     cluster.must_put(b"k2", b"v2");
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
@@ -102,23 +105,3 @@ fn test_disable_wal_recovery_catchup_snapshot() {
     assert!(apply_state.get_applied_index() < restarted_state.get_applied_index());
     must_get_equal(&cluster.get_engine(3), b"k2", b"v");
 }
-
-// #[test]
-// fn test_disable_wal_recovery_raft_state_not_updated() {
-//     let mut cluster = new_node_cluster(0, 3);
-//     // Initialize the cluster.
-//     cluster.pd_client.disable_default_operator();
-//     cluster.cfg.raft_store.disable_kv_wal = true;
-//     cluster.cfg.raft_store.store_io_pool_size = 1;
-//     cluster.run();
-//     cluster.must_put(b"k1", b"v1");
-//     must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
-//     let fp = "raft_before_put_raft_state";
-//     fail::cfg(fp, "pause").unwrap();
-//     cluster.must_put(b"k2", b"v2");
-//     must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
-//     sleep_ms(100);
-//     cluster.stop_node(1);
-//     fail::remove(fp);
-//     cluster.run_node(1).unwrap();
-// }

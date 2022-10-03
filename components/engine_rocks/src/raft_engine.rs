@@ -533,6 +533,10 @@ impl RaftLogBatch for RocksWriteBatchVec {
     fn delete_apply_state(&mut self, raft_group_id: u64) -> Result<()> {
         self.delete(&keys::apply_state_key(raft_group_id))
     }
+
+    fn delete_region_state(&mut self, raft_group_id: u64) -> Result<()> {
+        self.delete(&keys::region_state_key(raft_group_id))
+    }
 }
 
 impl RocksWriteBatchVec {

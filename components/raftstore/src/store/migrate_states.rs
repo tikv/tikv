@@ -1,6 +1,9 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{Engines, KvEngine, RaftEngine, RaftLogBatch, CF_RAFT};
+use engine_traits::{
+    Engines, KvEngine, Mutable, RaftEngine, RaftLogBatch, Result as EngineTraitsResult, WriteBatch,
+    CF_RAFT,
+};
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use protobuf::Message;
 use tikv_util::{box_try, info};
@@ -72,4 +75,100 @@ where
     Ok(())
 }
 
-// pub fn migrate_states_from_raftdb_to_kvdb() {}
+pub fn migrate_states_from_raftdb_to_kvdb<EK, ER>(
+    engines: &Engines<EK, ER>,
+    delete_states: bool,
+) -> Result<()>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    info!("start to migrate states from raftdb to kvdb");
+    let kv_engine = engines.kv.clone();
+    let raft_engine = engines.raft.clone();
+    let mut raft_wb = engines.raft.log_batch(0);
+    let mut kv_wb = engines.kv.write_batch();
+
+    raft_engine
+        .for_each_raft_group(&mut |region_id| {
+            if let Some((snap_region_state, snap_apply_state)) =
+                raft_engine.get_apply_snapshot_state(region_id)?
+            {
+                kv_wb.put_msg_cf(
+                    CF_RAFT,
+                    &keys::region_state_key(region_id),
+                    &snap_region_state,
+                )?;
+                kv_wb.put_msg_cf(
+                    CF_RAFT,
+                    &keys::apply_state_key(region_id),
+                    &snap_apply_state,
+                )?;
+                info!(
+                    "migrate applying snapshot region from raftdb";
+                    "region_id" => region_id,
+                    "snap_region_state" => ?snap_region_state,
+                    "snap_apply_state" => ?snap_apply_state,
+                );
+            } else {
+                let region_state = raft_engine
+                    .get_region_state(region_id)?
+                    .unwrap_or_else(|| panic!("region state not found, region_id: {}", region_id));
+                kv_wb.put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state)?;
+                let apply_state = if region_state.get_state() != PeerState::Tombstone {
+                    let apply_state =
+                        raft_engine.get_apply_state(region_id)?.unwrap_or_else(|| {
+                            panic!("apply state not found, region_id: {}", region_id)
+                        });
+                    kv_wb.put_msg_cf(CF_RAFT, &keys::apply_state_key(region_id), &apply_state)?;
+                    Some(apply_state)
+                } else {
+                    None
+                };
+
+                info!(
+                    "migrate region from raftdb";
+                    "region_id" => region_id,
+                    "region_state" => ?region_state,
+                    "apply_state" => ?apply_state,
+                );
+            }
+
+            if delete_states {
+                raft_wb.delete_apply_snapshot_state(region_id).unwrap();
+                raft_wb.delete_apply_state(region_id).unwrap();
+                raft_wb.delete_region_state(region_id).unwrap();
+            }
+
+            EngineTraitsResult::Ok(())
+        })
+        .unwrap();
+
+    if !kv_wb.is_empty() {
+        kv_wb.write().unwrap();
+        kv_engine.flush_cf(CF_RAFT, true).unwrap();
+    }
+    if !raft_wb.is_empty() {
+        raft_engine.consume(&mut raft_wb, true);
+    }
+    info!("migrating states from kvdb to raftdb done");
+
+    Ok(())
+}
+
+pub fn clear_states_in_raftdb<E: RaftEngine>(engine: E) -> Result<()> {
+    let mut raft_wb = engine.log_batch(0);
+    engine
+        .for_each_raft_group(&mut |region_id| {
+            raft_wb.delete_apply_snapshot_state(region_id).unwrap();
+            raft_wb.delete_apply_state(region_id).unwrap();
+            raft_wb.delete_region_state(region_id).unwrap();
+
+            EngineTraitsResult::Ok(())
+        })
+        .unwrap();
+    if !raft_wb.is_empty() {
+        raft_engine.consume(&mut raft_wb, true);
+    }
+    Ok(())
+}

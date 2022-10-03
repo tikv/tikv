@@ -2,7 +2,7 @@
 
 use std::{
     path::Path,
-    sync::{Arc, Mutex, RwLock},
+    sync::{atomic::AtomicU64, Arc, Mutex, RwLock},
     thread,
     time::Duration,
     usize,
@@ -31,7 +31,10 @@ use kvproto::{
 };
 use pd_client::PdClient;
 use raftstore::{
-    coprocessor::{CoprocessorHost, RegionInfoAccessor},
+    coprocessor::{
+        BoxConsistencyCheckObserver, ConsistencyCheckMethod, CoprocessorHost,
+        RawConsistencyCheckObserver, RegionInfoAccessor,
+    },
     errors::Error as RaftError,
     router::{LocalReadRouter, RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter},
     store::{
@@ -68,6 +71,7 @@ use tikv::{
     storage::{
         self,
         kv::SnapContext,
+        mvcc::MvccConsistencyCheckObserver,
         txn::flow_controller::{EngineFlowController, FlowController},
         Engine,
     },
@@ -584,6 +588,19 @@ impl ServerCluster {
             max_unified_read_pool_thread_count,
             None,
         );
+
+        let safe_point = Arc::new(AtomicU64::new(0));
+        let observer = match cfg.tikv.coprocessor.consistency_check_method {
+            ConsistencyCheckMethod::Mvcc => {
+                BoxConsistencyCheckObserver::new(MvccConsistencyCheckObserver::new(safe_point))
+            }
+            ConsistencyCheckMethod::Raw => {
+                BoxConsistencyCheckObserver::new(RawConsistencyCheckObserver::default())
+            }
+        };
+        coprocessor_host
+            .registry
+            .register_consistency_check_observer(100, observer);
 
         let causal_ts_provider = self.get_causal_ts_provider(node_id);
 

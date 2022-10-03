@@ -19,7 +19,7 @@ use crate::{
         ENGINE_HIST_TYPES, ENGINE_TICKER_TYPES, TITAN_ENGINE_HIST_TYPES, TITAN_ENGINE_TICKER_TYPES,
     },
     util::get_cf_handle,
-    FlushListener, RocksEngineIterator, RocksSnapshot,
+    RocksEngineIterator, RocksSnapshot,
 };
 
 #[derive(Clone, Debug)]
@@ -28,7 +28,6 @@ pub struct RocksEngine {
     shared_block_cache: bool,
     support_multi_batch_write: bool,
     pub(crate) disable_kv_wal: bool,
-    pub(crate) flush_listener: Option<FlushListener>,
 }
 
 impl RocksEngine {
@@ -41,7 +40,6 @@ impl RocksEngine {
             db: db.clone(),
             shared_block_cache: false,
             support_multi_batch_write: db.get_db_options().is_enable_multi_batch_write(),
-            flush_listener: None,
             disable_kv_wal: false,
         }
     }
@@ -72,10 +70,6 @@ impl RocksEngine {
 
     pub fn set_disable_kv_wal(&mut self, disable: bool) {
         self.disable_kv_wal = disable;
-    }
-
-    pub fn set_flush_listener(&mut self, listener: FlushListener) {
-        self.flush_listener = Some(listener);
     }
 
     pub fn shared_block_cache(&self) -> bool {

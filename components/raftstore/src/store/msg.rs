@@ -27,7 +27,11 @@ use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 use tracker::{get_tls_tracker_token, TrackerToken, GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN};
 
 use super::{
-    local_metrics::TimeTracker, region_meta::RegionMeta, worker::FetchedLogs, RegionSnapshot,
+    fsm::apply::{RecoverCallback, RecoverStatus},
+    local_metrics::TimeTracker,
+    region_meta::RegionMeta,
+    worker::FetchedLogs,
+    RegionSnapshot,
 };
 use crate::store::{
     fsm::apply::{CatchUpLogs, ChangeObserver, TaskRes as ApplyTaskRes},
@@ -516,6 +520,10 @@ where
     PrepareFlashback(Sender<bool>),
     FinishFlashback,
     CheckPendingAdmin(UnboundedSender<CheckAdminResponse>),
+    RecoverStatus {
+        status: RecoverStatus,
+        cb: RecoverCallback,
+    },
 }
 
 /// Message that will be sent to a peer.

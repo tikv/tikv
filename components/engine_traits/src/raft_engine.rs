@@ -201,6 +201,7 @@ pub trait RaftLogBatch: Send {
     fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()>;
 
     fn delete_apply_state(&mut self, raft_group_id: u64) -> Result<()>;
+    fn delete_region_state(&mut self, raft_group_id: u64) -> Result<()>;
 
     fn put_seqno_relation(
         &mut self,
