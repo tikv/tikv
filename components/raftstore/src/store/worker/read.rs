@@ -646,7 +646,7 @@ where
         Self {
             cached_read_id: self.cached_read_id.clone(),
             snapshot: self.snapshot.clone(),
-            cached_snapshot_ts: self.cached_snapshot_ts.clone(),
+            cached_snapshot_ts: self.cached_snapshot_ts,
         }
     }
 }
