@@ -216,28 +216,22 @@ fn json_valid(args: &[ScalarValueRef]) -> Result<Option<Int>> {
                 Some(_) => Ok(Some(1)),
                 _ => Ok(None),
             }
-        },
-        EvalType::Bytes => {
-            match args[0].as_bytes() {
-                Some(p) => {
-                    let tmp_str = std::str::from_utf8(p).unwrap();
-                    let json : serde_json::error::Result<Json> = serde_json::from_str(tmp_str);
-                    match json {
-                        Ok(_) => Ok(Some(1)),
-                        _ => Ok(Some(0))
-                    }
-                }
-                _ => Ok(Some(0))
-            }
-        },
-        _ => {
-            Ok(Some(0))
         }
+        EvalType::Bytes => match args[0].as_bytes() {
+            Some(p) => {
+                let tmp_str = std::str::from_utf8(p).unwrap();
+                let json: serde_json::error::Result<Json> = serde_json::from_str(tmp_str);
+                match json {
+                    Ok(_) => Ok(Some(1)),
+                    _ => Ok(Some(0)),
+                }
+            }
+            _ => Ok(Some(0)),
+        },
+        _ => Ok(Some(0)),
     };
     r
 }
-
-
 
 #[rpn_fn]
 #[inline]
@@ -818,83 +812,21 @@ mod tests {
     fn test_json_valid() {
         let cases: Vec<(Vec<ScalarValue>, Option<i64>)> = vec![
             (
-                vec![
-                    Some(Json::from_str(r#"{"a":1}"#).unwrap()).into(),
-                ],
+                vec![Some(Json::from_str(r#"{"a":1}"#).unwrap()).into()],
                 Some(1),
             ),
-            (
-                vec![
-                    Some(b"hello".to_vec()).into(),
-                ],
-                Some(0),
-            ),
-            (
-                vec![
-                    Some(b"\"hello\"".to_vec()).into(),
-                ],
-                Some(1),
-            ),
-            (
-                vec![
-                    Some(b"null".to_vec()).into(),
-                ],
-                Some(1),
-            ),
-            (
-                vec![
-                    Some(Json::from_str(r#"{}"#).unwrap()).into(),
-                ],
-                Some(1),
-            ),
-            (
-                vec![
-                    Some(Json::from_str(r#"[]"#).unwrap()).into(),
-                ],
-                Some(1),
-            ),
-            (
-                vec![
-                    Some(b"2".to_vec()).into(),
-                ],
-                Some(1),
-            ),
-            (
-                vec![
-                    Some(b"2.5".to_vec()).into(),
-                ],
-                Some(1),
-            ),
-            (
-                vec![
-                    Some(b"2019-8-19".to_vec()).into(),
-                ],
-                Some(0),
-            ),
-            (
-                vec![
-                    Some(b"\"2019-8-19\"".to_vec()).into(),
-                ],
-                Some(1),
-            ),
-            (
-                vec![
-                    Some(2).into(),
-                ],
-                Some(0),
-            ),
-            (
-                vec![
-                    Some(2.5).into(),
-                ],
-                Some(0),
-            ),
-            (
-                vec![
-                    None::<Json>.into(),
-                ],
-                None,
-            ),
+            (vec![Some(b"hello".to_vec()).into()], Some(0)),
+            (vec![Some(b"\"hello\"".to_vec()).into()], Some(1)),
+            (vec![Some(b"null".to_vec()).into()], Some(1)),
+            (vec![Some(Json::from_str(r#"{}"#).unwrap()).into()], Some(1)),
+            (vec![Some(Json::from_str(r#"[]"#).unwrap()).into()], Some(1)),
+            (vec![Some(b"2".to_vec()).into()], Some(1)),
+            (vec![Some(b"2.5".to_vec()).into()], Some(1)),
+            (vec![Some(b"2019-8-19".to_vec()).into()], Some(0)),
+            (vec![Some(b"\"2019-8-19\"".to_vec()).into()], Some(1)),
+            (vec![Some(2).into()], Some(0)),
+            (vec![Some(2.5).into()], Some(0)),
+            (vec![None::<Json>.into()], None),
             // (
             //     vec![
             //         None::<Bytes>.into(),
