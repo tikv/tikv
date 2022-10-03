@@ -88,8 +88,7 @@ where
 
     fn get_snapshot(
         &mut self,
-        _: Option<ThreadReadId>,
-        _: &mut Option<&mut raftstore::store::LocalReadContext<'_, E>>,
+        _: &mut Option<&mut raftstore::store::SnapCacheContext<'_, E>>,
     ) -> Arc<E::Snapshot> {
         Arc::new(self.cached_tablet.latest().unwrap().snapshot())
     }
@@ -226,7 +225,7 @@ mod tests {
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
         assert_eq!(tablet1.as_inner().path(), tablet.as_inner().path());
-        let snapshot = delegate.get_snapshot(None, &mut None);
+        let snapshot = delegate.get_snapshot(&mut None);
         assert_eq!(
             b"val1".to_vec(),
             *snapshot.get_value(b"a1").unwrap().unwrap()
@@ -236,7 +235,7 @@ mod tests {
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
         assert_eq!(tablet2.as_inner().path(), tablet.as_inner().path());
-        let snapshot = delegate.get_snapshot(None, &mut None);
+        let snapshot = delegate.get_snapshot(&mut None);
         assert_eq!(
             b"val2".to_vec(),
             *snapshot.get_value(b"a2").unwrap().unwrap()

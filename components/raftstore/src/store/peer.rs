@@ -61,7 +61,7 @@ use tikv_util::{
     codec::number::decode_u64,
     debug, error, info,
     sys::disk::DiskUsage,
-    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, InstantExt, ThreadReadId},
+    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, InstantExt},
     warn,
     worker::Scheduler,
     Either,
@@ -82,7 +82,7 @@ use super::{
         self, check_region_epoch, is_initial_msg, AdminCmdEpochState, ChangePeerI, ConfChangeKind,
         Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
     },
-    DestroyPeerJob, LocalReadContext,
+    DestroyPeerJob, SnapCacheContext,
 };
 use crate::{
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason, RoleChange},
@@ -4761,7 +4761,7 @@ where
             }
         }
 
-        let mut resp = reader.execute(&req, &Arc::new(region), read_index, None, None);
+        let mut resp = reader.execute(&req, &Arc::new(region), read_index, None);
         if let Some(snap) = resp.snapshot.as_mut() {
             snap.txn_ext = Some(self.txn_ext.clone());
             snap.bucket_meta = self.region_buckets.as_ref().map(|b| b.meta.clone());
@@ -5618,11 +5618,7 @@ where
         &self.engines.kv
     }
 
-    fn get_snapshot(
-        &mut self,
-        _: Option<ThreadReadId>,
-        _: &mut Option<&mut LocalReadContext<'_, EK>>,
-    ) -> Arc<EK::Snapshot> {
+    fn get_snapshot(&mut self, _: &mut Option<&mut SnapCacheContext<'_, EK>>) -> Arc<EK::Snapshot> {
         Arc::new(self.engines.kv.snapshot())
     }
 }
