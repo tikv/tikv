@@ -10,6 +10,9 @@ use crate::{
     storage::{txn::ProcessResult, types::StorageCallback},
 };
 
+pub mod lock_wait_context;
+pub mod lock_waiting_queue;
+
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct Lock {
     pub ts: TimeStamp,
@@ -61,6 +64,18 @@ impl WaitTimeout {
 impl From<u64> for WaitTimeout {
     fn from(i: u64) -> WaitTimeout {
         WaitTimeout::Millis(i)
+    }
+}
+
+/// Uniquely identifies a lock-waiting request in a `LockManager`.
+///
+/// Not used yet, but necessary for implementing `LockWaitQueues`.
+#[derive(Clone, Copy, Hash, PartialEq, Eq, Debug)]
+pub struct LockWaitToken(pub Option<u64>);
+
+impl LockWaitToken {
+    pub fn is_valid(&self) -> bool {
+        self.0.is_some()
     }
 }
 

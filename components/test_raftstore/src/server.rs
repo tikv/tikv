@@ -385,10 +385,7 @@ impl ServerCluster {
                 .unwrap()
                 .into(),
             );
-            self.causal_ts_providers
-                .insert(node_id, causal_ts_provider.clone());
-            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
-            causal_ob.register_to(&mut coprocessor_host);
+            self.causal_ts_providers.insert(node_id, causal_ts_provider);
         }
 
         // Start resource metering.
@@ -587,6 +584,9 @@ impl ServerCluster {
             max_unified_read_pool_thread_count,
             None,
         );
+
+        let causal_ts_provider = self.get_causal_ts_provider(node_id);
+
         let mut seqno_worker = None;
         if let Some(listener) = flush_listener {
             let worker = LazyWorker::new("seqno-relation");
@@ -595,6 +595,7 @@ impl ServerCluster {
             listener.update_notifier(notifier);
             seqno_worker = Some(worker);
         };
+
         node.start(
             engines,
             simulate_trans.clone(),
@@ -607,6 +608,7 @@ impl ServerCluster {
             auto_split_controller,
             concurrency_manager.clone(),
             collector_reg_handle,
+            causal_ts_provider,
             seqno_worker,
         )?;
         assert!(node_id == 0 || node_id == node.id());
@@ -723,13 +725,13 @@ impl Simulator for ServerCluster {
     }
 
     fn async_read(
-        &self,
+        &mut self,
         node_id: u64,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
     ) {
-        match self.metas.get(&node_id) {
+        match self.metas.get_mut(&node_id) {
             None => {
                 let e: RaftError = box_err!("missing sender for store {}", node_id);
                 let mut resp = RaftCmdResponse::default();
@@ -796,7 +798,7 @@ impl Cluster<ServerCluster> {
             ctx.set_peer(leader);
             ctx.set_region_epoch(epoch);
 
-            let storage = self.sim.rl().storages.get(&store_id).unwrap().clone();
+            let mut storage = self.sim.rl().storages.get(&store_id).unwrap().clone();
             let snap_ctx = SnapContext {
                 pb_ctx: &ctx,
                 ..Default::default()

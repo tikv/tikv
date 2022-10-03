@@ -338,6 +338,7 @@ impl Simulator for NodeCluster {
             AutoSplitController::default(),
             cm,
             CollectorRegHandle::new_for_test(),
+            None,
             seqno_worker,
         )?;
         assert!(
@@ -458,7 +459,7 @@ impl Simulator for NodeCluster {
     }
 
     fn async_read(
-        &self,
+        &mut self,
         node_id: u64,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
