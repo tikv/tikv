@@ -195,7 +195,7 @@ where
     }
 
     fn exec_snapshot(
-        &self,
+        &mut self,
         ctx: SnapContext<'_>,
         req: Request,
         cb: Callback<CmdRes<E::Snapshot>>,
@@ -428,7 +428,11 @@ where
         })
     }
 
-    fn async_snapshot(&self, mut ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> kv::Result<()> {
+    fn async_snapshot(
+        &mut self,
+        mut ctx: SnapContext<'_>,
+        cb: Callback<Self::Snap>,
+    ) -> kv::Result<()> {
         fail_point!("raftkv_async_snapshot_err", |_| Err(box_err!(
             "injected error for async_snapshot"
         )));
@@ -481,7 +485,7 @@ where
         })
     }
 
-    fn release_snapshot(&self) {
+    fn release_snapshot(&mut self) {
         self.router.release_snapshot_cache();
     }
 

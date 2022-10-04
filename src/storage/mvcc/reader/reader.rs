@@ -2428,7 +2428,7 @@ pub mod tests {
             },
         ];
         for (i, case) in cases.into_iter().enumerate() {
-            let engine = TestEngineBuilder::new().build().unwrap();
+            let mut engine = TestEngineBuilder::new().build().unwrap();
             let cm = ConcurrencyManager::new(42.into());
             let mut txn = MvccTxn::new(TimeStamp::new(10), cm.clone());
             for (write_record, put_ts) in case.written.iter() {
@@ -2461,7 +2461,7 @@ pub mod tests {
 
         // Must return Oldvalue::None when prev_write_loaded is true and prev_write is
         // None.
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true);
         let prev_write_loaded = true;

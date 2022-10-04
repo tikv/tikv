@@ -2,7 +2,6 @@
 
 // #[PerformanceCriticalPath]
 use engine_traits::CfName;
-use txn_types::TimeStamp;
 
 use crate::storage::{
     kv::{Modify, WriteData},
@@ -26,7 +25,6 @@ command! {
             /// The set of mutations to apply.
             cf: CfName,
             mutations: Vec<Modify>,
-            data_ts: Option<TimeStamp>,
         }
 }
 
@@ -41,16 +39,18 @@ impl CommandExt for RawAtomicStore {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
-    fn process_write(self, _: S, _: WriteContext<'_, L>) -> Result<WriteResult> {
+    fn process_write(self, _: S, wctx: WriteContext<'_, L>) -> Result<WriteResult> {
         let rows = self.mutations.len();
-        let (mut mutations, ctx) = (self.mutations, self.ctx);
-        if let Some(ts) = self.data_ts {
+        let (mut mutations, ctx, raw_ext) = (self.mutations, self.ctx, wctx.raw_ext);
+
+        if let Some(ref raw_ext) = raw_ext {
             for mutation in &mut mutations {
                 if let Modify::Put(_, ref mut key, _) = mutation {
-                    key.append_ts_inplace(ts);
+                    key.append_ts_inplace(raw_ext.ts);
                 }
             }
         };
+
         let mut to_be_write = WriteData::from_modifies(mutations);
         to_be_write.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
@@ -59,7 +59,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
             rows,
             pr: ProcessResult::Res,
             lock_info: None,
-            lock_guards: vec![],
+            lock_guards: raw_ext.into_iter().map(|r| r.key_guard).collect(),
             response_policy: ResponsePolicy::OnApplied,
         })
     }
@@ -67,13 +67,16 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
 
 #[cfg(test)]
 mod tests {
-    use api_version::{test_kv_format_impl, KvFormat, RawValue};
+    use api_version::{test_kv_format_impl, ApiV2, KvFormat, RawValue};
     use engine_traits::CF_DEFAULT;
-    use kvproto::kvrpcpb::Context;
+    use futures::executor::block_on;
+    use kvproto::kvrpcpb::{ApiVersion, Context};
     use tikv_kv::Engine;
 
     use super::*;
-    use crate::storage::{lock_manager::DummyLockManager, Statistics, TestEngineBuilder};
+    use crate::storage::{
+        lock_manager::DummyLockManager, txn::scheduler::get_raw_ext, Statistics, TestEngineBuilder,
+    };
 
     #[test]
     fn test_atomic_process_write() {
@@ -81,15 +84,12 @@ mod tests {
     }
 
     fn test_atomic_process_write_impl<F: KvFormat>() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
         let raw_keys = vec![b"ra", b"rz"];
         let raw_values = vec![b"valuea", b"valuez"];
-        let encode_ts = if F::TAG == kvproto::kvrpcpb::ApiVersion::V2 {
-            Some(TimeStamp::from(100))
-        } else {
-            None
-        };
+        let ts_provider = super::super::test_util::gen_ts_provider(F::TAG);
+
         let mut modifies = vec![];
         for i in 0..raw_keys.len() {
             let raw_value = RawValue {
@@ -103,15 +103,17 @@ mod tests {
                 F::encode_raw_value_owned(raw_value),
             ));
         }
-        let cmd = RawAtomicStore::new(CF_DEFAULT, modifies, encode_ts, Context::default());
+        let cmd = RawAtomicStore::new(CF_DEFAULT, modifies, Context::default());
         let mut statistic = Statistics::default();
         let snap = engine.snapshot(Default::default()).unwrap();
+        let raw_ext = block_on(get_raw_ext(ts_provider, cm.clone(), true, &cmd.cmd)).unwrap();
         let context = WriteContext {
             lock_mgr: &DummyLockManager {},
             concurrency_manager: cm,
             extra_op: kvproto::kvrpcpb::ExtraOp::Noop,
             statistics: &mut statistic,
             async_apply_prewrite: false,
+            raw_ext,
         };
         let cmd: Command = cmd.into();
         let write_result = cmd.process_write(snap, context).unwrap();
@@ -124,10 +126,19 @@ mod tests {
             };
             modifies_with_ts.push(Modify::Put(
                 CF_DEFAULT,
-                F::encode_raw_key_owned(raw_keys[i].to_vec(), encode_ts),
+                F::encode_raw_key_owned(raw_keys[i].to_vec(), Some(101.into())),
                 F::encode_raw_value_owned(raw_value),
             ));
         }
-        assert_eq!(write_result.to_be_write.modifies, modifies_with_ts)
+        assert_eq!(write_result.to_be_write.modifies, modifies_with_ts);
+        if F::TAG == ApiVersion::V2 {
+            assert_eq!(write_result.lock_guards.len(), 1);
+            let raw_key = vec![api_version::api_v2::RAW_KEY_PREFIX];
+            let encoded_key = ApiV2::encode_raw_key(&raw_key, Some(100.into()));
+            assert_eq!(
+                write_result.lock_guards.first().unwrap().key(),
+                &encoded_key
+            );
+        }
     }
 }

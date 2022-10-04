@@ -50,7 +50,7 @@ mod tests {
 
     #[test]
     fn test_check_data_constraint() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let cm = ConcurrencyManager::new(42.into());
         let mut txn = MvccTxn::new(TimeStamp::new(2), cm);
         txn.put_write(
