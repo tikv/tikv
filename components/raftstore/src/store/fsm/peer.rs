@@ -4990,6 +4990,7 @@ where
                 && msg.get_admin_request().get_cmd_type() == AdminCmdType::TransferLeader)
             {
                 self.ctx.raft_metrics.invalid_proposal.witness.inc();
+                // TODO: use a dedicated error type
                 return Err(Error::RecoveryInProgress(self.region_id()));
             }
         }
