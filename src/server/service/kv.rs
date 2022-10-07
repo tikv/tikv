@@ -67,7 +67,7 @@ use crate::{
 };
 
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
-const GRPC_MSG_NOTIFY_SIZE: usize = 8;
+const GRPC_MSG_NOTIFY_SIZE: u8 = 8;
 
 /// Service handles the RPC messages for the `Tikv` service.
 pub struct Service<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFormat> {
@@ -1049,7 +1049,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
         mut sink: DuplexSink<BatchCommandsResponse>,
     ) {
         forward_duplex!(self.proxy, batch_commands, ctx, stream, sink);
-        let (tx, rx) = unbounded(WakePolicy::TillReach(GRPC_MSG_NOTIFY_SIZE));
+        let (tx, rx) = unbounded(WakePolicy::period(GRPC_MSG_NOTIFY_SIZE));
 
         let ctx = Arc::new(ctx);
         let peer = ctx.peer();
@@ -1268,7 +1268,7 @@ fn response_batch_commands_request<F, T>(
                 source,
             };
             let task = MeasuredSingleResponse::new(id, resp, measure);
-            if let Err(e) = tx.send_with(task, WakePolicy::Immediately) {
+            if let Err(e) = tx.send_immediately(task) {
                 error!("KvService response batch commands fail"; "err" => ?e);
             }
         }

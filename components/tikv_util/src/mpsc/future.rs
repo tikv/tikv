@@ -4,7 +4,7 @@
 
 use std::{
     pin::Pin,
-    sync::atomic::{self, AtomicUsize, Ordering},
+    sync::atomic::{self, AtomicU8, AtomicUsize, Ordering},
     task::{Context, Poll},
 };
 
@@ -14,10 +14,19 @@ use crossbeam::{
 };
 use futures::{task::AtomicWaker, Stream, StreamExt};
 
-#[derive(Clone, Copy)]
 pub enum WakePolicy {
     Immediately,
-    TillReach(usize),
+    // Notify by period.
+    Period { step: u8, tick: AtomicU8 },
+}
+
+impl WakePolicy {
+    pub fn period(step: u8) -> WakePolicy {
+        WakePolicy::Period {
+            step,
+            tick: AtomicU8::new(0),
+        }
+    }
 }
 
 struct Queue<T> {
@@ -29,16 +38,15 @@ struct Queue<T> {
 
 impl<T> Queue<T> {
     #[inline]
-    fn wake(&self, policy: WakePolicy) {
-        match policy {
-            WakePolicy::Immediately => self.waker.wake(),
-            WakePolicy::TillReach(n) => {
-                if self.queue.len() < n {
-                    return;
-                }
-                self.waker.wake();
+    fn wake(&self, policy: &WakePolicy) {
+        if let WakePolicy::Period { step, tick } = policy {
+            let t = tick.fetch_add(1, Ordering::AcqRel);
+            if t + 1 < *step {
+                return;
             }
+            tick.store(0, Ordering::Release);
         }
+        self.waker.wake();
     }
 }
 
@@ -53,13 +61,13 @@ impl<T: Send> Sender<T> {
     /// Sends the message with predefined wake policy.
     #[inline]
     pub fn send(&self, t: T) -> Result<(), SendError<T>> {
-        let policy = unsafe { (*self.queue).policy };
+        let policy = unsafe { &(*self.queue).policy };
         self.send_with(t, policy)
     }
 
     /// Sends the message with the specified wake policy.
     #[inline]
-    pub fn send_with(&self, t: T, policy: WakePolicy) -> Result<(), SendError<T>> {
+    fn send_with(&self, t: T, policy: &WakePolicy) -> Result<(), SendError<T>> {
         let queue = unsafe { &*self.queue };
         if queue.liveness.load(Ordering::Acquire) & RECEIVER_COUNT_BASE != 0 {
             queue.queue.push(t);
@@ -67,6 +75,16 @@ impl<T: Send> Sender<T> {
             return Ok(());
         }
         Err(SendError(t))
+    }
+
+    /// Send and notify immediately despite the configured wake policy.
+    #[inline]
+    pub fn send_immediately(&self, t: T) -> Result<(), SendError<T>> {
+        let policy = unsafe { &(*self.queue).policy };
+        if let WakePolicy::Period { tick, .. } = policy {
+            tick.store(0, Ordering::Release);
+        }
+        self.send_with(t, &WakePolicy::Immediately)
     }
 }
 
@@ -89,7 +107,7 @@ impl<T> Drop for Sender<T> {
             .fetch_sub(SENDER_COUNT_BASE, Ordering::Release);
         if previous == SENDER_COUNT_BASE | RECEIVER_COUNT_BASE {
             // The last sender is dropped, we need to wake up the receiver.
-            queue.waker.wake();
+            queue.wake(&WakePolicy::Immediately);
         } else if previous == SENDER_COUNT_BASE {
             atomic::fence(Ordering::Acquire);
             drop(unsafe { Box::from_raw(self.queue) });
@@ -159,7 +177,7 @@ unsafe impl<T: Send> Send for Receiver<T> {}
 pub fn unbounded<T>(policy: WakePolicy) -> (Sender<T>, Receiver<T>) {
     let queue = Box::into_raw(Box::new(Queue {
         queue: SegQueue::new(),
-        waker: AtomicWaker::new(),
+        waker: AtomicWaker::default(),
         liveness: AtomicUsize::new(SENDER_COUNT_BASE | RECEIVER_COUNT_BASE),
         policy,
     }));
@@ -268,8 +286,8 @@ mod tests {
     }
 
     #[test]
-    fn test_till_reach_wake() {
-        let (tx, rx) = unbounded::<u64>(WakePolicy::TillReach(4));
+    fn test_period_wake() {
+        let (tx, rx) = unbounded::<u64>(WakePolicy::period(4));
 
         let (_pool, msg_counter) = spawn_and_wait(move || rx);
 
@@ -319,7 +337,7 @@ mod tests {
 
     #[test]
     fn test_batch_receiver() {
-        let (tx, rx) = unbounded::<u64>(WakePolicy::TillReach(4));
+        let (tx, rx) = unbounded::<u64>(WakePolicy::period(4));
 
         let len = Arc::new(AtomicUsize::new(0));
         let l = len.clone();
@@ -349,7 +367,7 @@ mod tests {
 
     #[test]
     fn test_switch_between_sender_and_receiver() {
-        let (tx, mut rx) = unbounded::<i32>(WakePolicy::TillReach(4));
+        let (tx, mut rx) = unbounded::<i32>(WakePolicy::period(4));
         let future = async move { rx.next().await };
         let task = Task {
             future: Arc::new(Mutex::new(Some(future.boxed()))),
