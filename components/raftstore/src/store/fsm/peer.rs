@@ -2636,7 +2636,7 @@ where
             self.fsm
                 .peer
                 .send_extra_message(resp, &mut self.ctx.trans, from);
-            info!(
+            debug!(
                 "peer responses availability info to leader";
                 "region_id" => self.region().get_id(),
                 "peer_id" => self.fsm.peer.peer.get_id(),
@@ -2649,7 +2649,7 @@ where
                 .peer
                 .wait_data_peers
                 .retain(|id| *id != from.get_id());
-            info!(
+            debug!(
                 "receive peer ready info";
                 "peer_id" => self.fsm.peer.peer.get_id(),
             );
