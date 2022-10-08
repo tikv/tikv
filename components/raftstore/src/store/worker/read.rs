@@ -48,14 +48,14 @@ pub trait ReadExecutor<E: KvEngine> {
     fn get_tablet(&mut self) -> &E;
     fn get_snapshot(
         &mut self,
-        read_context: &mut Option<&mut SnapCacheContext<'_, E>>,
+        read_context: &mut Option<&mut SnapshotContext<'_, E>>,
     ) -> Arc<E::Snapshot>;
 
     fn get_value(
         &mut self,
         req: &Request,
         region: &metapb::Region,
-        read_context: &mut Option<&mut SnapCacheContext<'_, E>>,
+        read_context: &mut Option<&mut SnapshotContext<'_, E>>,
     ) -> Result<Response> {
         let key = req.get_get().get_key();
         // region key range has no data prefix, so we must use origin key to check.
@@ -100,7 +100,7 @@ pub trait ReadExecutor<E: KvEngine> {
         msg: &RaftCmdRequest,
         region: &Arc<metapb::Region>,
         read_index: Option<u64>,
-        mut snap_cache_ctx: Option<&mut SnapCacheContext<'_, E>>,
+        mut snap_cache_ctx: Option<&mut SnapshotContext<'_, E>>,
     ) -> ReadResponse<E::Snapshot> {
         let requests = msg.get_requests();
         let mut response = ReadResponse {
@@ -213,16 +213,15 @@ where
     }
 }
 
-/// #[RaftstoreCommon]: LocalReadContext combines some LocalReader's fields for temporary usage.
-pub struct SnapCacheContext<'a, E>
+// If SnapshotContext is initialized with `read_id`, it manages the `SnapCache`
+// of the LocalReader. Otherwise, it fetch snapshot from KvEngine in each
+// request.
+pub struct SnapshotContext<'a, E>
 where
     E: KvEngine,
 {
-    // read_id: &'a mut ThreadReadId,
-    // snap_cache: &'a mut Box<Option<Arc<E::Snapshot>>>,
-    // snapshot_ts: &'a mut Timespec,
-    snap_cache: &'a mut SnapCache<E>,
     read_id: Option<ThreadReadId>,
+    snap_cache: &'a mut SnapCache<E>,
 
     snapshot: Option<Arc<E::Snapshot>>,
     snapshot_ts: Option<Timespec>,
@@ -231,7 +230,7 @@ where
     updated: bool,
 }
 
-impl<'a, E> SnapCacheContext<'a, E>
+impl<'a, E> SnapshotContext<'a, E>
 where
     E: KvEngine,
 {
@@ -684,7 +683,7 @@ where
 
     fn get_snapshot(
         &mut self,
-        read_context: &mut Option<&mut SnapCacheContext<'_, E>>,
+        read_context: &mut Option<&mut SnapshotContext<'_, E>>,
     ) -> Arc<E::Snapshot> {
         let ctx = read_context.as_mut().unwrap();
         TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_requests.inc());
@@ -860,7 +859,7 @@ where
                     // Leader can read local if and only if it is in lease.
                     RequestPolicy::ReadLocal => {
                         let mut snap_cache_ctx =
-                            SnapCacheContext::new(&mut self.snap_cache, read_id);
+                            SnapshotContext::new(&mut self.snap_cache, read_id);
                         snap_cache_ctx.maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
 
                         let snapshot_ts = snap_cache_ctx.snapshot_ts().unwrap();
@@ -888,7 +887,7 @@ where
                         }
 
                         let mut snap_cache_ctx =
-                            SnapCacheContext::new(&mut self.snap_cache, read_id);
+                            SnapshotContext::new(&mut self.snap_cache, read_id);
                         snap_cache_ctx.maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
 
                         let region = Arc::clone(&delegate.region);
@@ -1579,7 +1578,7 @@ mod tests {
         let read_id = ThreadReadId::new();
         let mut snap_cache = SnapCache::new();
 
-        let mut read_context = SnapCacheContext::new(&mut snap_cache, Some(read_id));
+        let mut read_context = SnapshotContext::new(&mut snap_cache, Some(read_id));
         read_context.maybe_update_snapshot(tablet, last_valid_ts);
         let mut read_context = Some(&mut read_context);
 
@@ -1644,7 +1643,7 @@ mod tests {
         let read_id = Some(ThreadReadId::new());
 
         {
-            let mut read_context = SnapCacheContext::new(&mut reader.snap_cache, read_id);
+            let mut read_context = SnapshotContext::new(&mut reader.snap_cache, read_id);
             let last_valid_ts = delegate.last_valid_ts;
             read_context.maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
             let mut read_context = Some(&mut read_context);
@@ -1663,7 +1662,7 @@ mod tests {
         let read_id = Some(ThreadReadId::new());
 
         {
-            let mut read_context = SnapCacheContext::new(&mut reader.snap_cache, read_id.clone());
+            let mut read_context = SnapshotContext::new(&mut reader.snap_cache, read_id.clone());
             let last_valid_ts = delegate.last_valid_ts;
             read_context.maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
             let mut read_context = Some(&mut read_context);
@@ -1677,7 +1676,7 @@ mod tests {
         );
 
         {
-            let mut read_context = SnapCacheContext::new(&mut reader.snap_cache, read_id.clone());
+            let mut read_context = SnapshotContext::new(&mut reader.snap_cache, read_id.clone());
             let last_valid_ts = delegate.last_valid_ts;
             read_context.maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
             let mut read_context = Some(&mut read_context);
@@ -1692,7 +1691,7 @@ mod tests {
 
         reader.release_snapshot_cache();
         {
-            let mut read_context = SnapCacheContext::new(&mut reader.snap_cache, read_id.clone());
+            let mut read_context = SnapshotContext::new(&mut reader.snap_cache, read_id.clone());
             let last_valid_ts = delegate.last_valid_ts;
             read_context.maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
             let mut read_context = Some(&mut read_context);
@@ -1706,7 +1705,7 @@ mod tests {
         );
 
         {
-            let mut read_context = SnapCacheContext::new(&mut reader.snap_cache, read_id);
+            let mut read_context = SnapshotContext::new(&mut reader.snap_cache, read_id);
             let last_valid_ts = delegate.last_valid_ts;
             read_context.maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
             let mut read_context = Some(&mut read_context);
@@ -1729,7 +1728,7 @@ mod tests {
 
         let db = create_engine("test_snap_cache_context");
         let mut snap_cache = SnapCache::new();
-        let mut read_context = SnapCacheContext::new(&mut snap_cache, None);
+        let mut read_context = SnapshotContext::new(&mut snap_cache, None);
 
         // Have not inited the snap cache
         assert!(read_context.snapshot().is_none());
@@ -1758,7 +1757,7 @@ mod tests {
         assert!(read_context.snapshot_ts().unwrap() > compare_ts);
 
         let read_id = ThreadReadId::new();
-        let mut read_context = SnapCacheContext::new(&mut snap_cache, Some(read_id));
+        let mut read_context = SnapshotContext::new(&mut snap_cache, Some(read_id));
 
         // Have not inited the snap cache
         assert!(read_context.snapshot().is_none());
