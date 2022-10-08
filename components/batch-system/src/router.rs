@@ -2,7 +2,9 @@
 
 use crate::fsm::{Fsm, FsmScheduler};
 use crate::mailbox::{BasicMailbox, Mailbox};
-use crate::metrics::{CHANNEL_FULL_COUNTER_VEC, ROUTER_CACHE_MISS, ROUTER_MAILBOX_DURATION_HISTOGRAM};
+use crate::metrics::{
+    CHANNEL_FULL_COUNTER_VEC, ROUTER_CACHE_MISS, ROUTER_MAILBOX_DURATION_HISTOGRAM,
+};
 
 use crossbeam::channel::{SendError, TrySendError};
 use std::cell::Cell;
@@ -10,8 +12,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tikv_util::collections::HashMap;
 use tikv_util::lru::LruCache;
-use tikv_util::Either;
 use tikv_util::time::{duration_to_sec, Instant as TiInstant};
+use tikv_util::Either;
 
 enum CheckDoResult<T> {
     NotExist,
