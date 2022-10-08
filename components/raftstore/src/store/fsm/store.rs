@@ -2874,8 +2874,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             );
         }
         let mut kv_wb = self.ctx.engines.kv.write_batch();
-        if let Err(e) =
-            peer_storage::write_peer_state(&mut kv_wb, &region, PeerState::Normal, None, false)
+        if let Err(e) = peer_storage::write_peer_state(&mut kv_wb, &region, PeerState::Normal, None)
         {
             panic!(
                 "Unsafe recovery, fail to add peer state for {:?} into write batch, the error is {:?}",

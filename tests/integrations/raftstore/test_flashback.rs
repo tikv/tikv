@@ -237,18 +237,18 @@ fn test_flashback_for_check_is_in_persist() {
     cluster.must_transfer_leader(1, new_peer(2, 2));
 
     let local_state = cluster.region_local_state(1, 2);
-    assert!(!local_state.get_is_in_flashback());
+    assert!(!local_state.get_region().get_is_in_flashback());
 
     // prepare for flashback
     let region = cluster.get_region(b"k1");
     block_on(cluster.call_and_wait_prepare_flashback(region.get_id(), 2));
 
     let local_state = cluster.region_local_state(1, 2);
-    assert!(local_state.get_is_in_flashback());
+    assert!(local_state.get_region().get_is_in_flashback());
 
     block_on(cluster.call_finish_flashback(1, 2));
     let local_state = cluster.region_local_state(1, 2);
-    assert!(!local_state.get_is_in_flashback());
+    assert!(!local_state.get_region().get_is_in_flashback());
 }
 
 #[test]
@@ -261,7 +261,7 @@ fn test_flashback_for_apply_snapshot() {
     cluster.add_send_filter(IsolationFilterFactory::new(5));
 
     let local_state = cluster.region_local_state(1, 1);
-    assert!(!local_state.get_is_in_flashback());
+    assert!(!local_state.get_region().get_is_in_flashback());
 
     // write for cluster
     let value = vec![1_u8; 8096];
@@ -270,7 +270,7 @@ fn test_flashback_for_apply_snapshot() {
     // prepare for flashback
     block_on(cluster.call_and_wait_prepare_flashback(1, 1));
     let local_state = cluster.region_local_state(1, 1);
-    assert!(local_state.get_is_in_flashback());
+    assert!(local_state.get_region().get_is_in_flashback());
 
     // Add node 3 back.
     cluster.clear_send_filters();
@@ -279,7 +279,7 @@ fn test_flashback_for_apply_snapshot() {
 
     must_transfer_leader(&mut cluster, 1, new_peer(5, 5));
     let local_state = cluster.region_local_state(1, 5);
-    assert!(local_state.get_is_in_flashback());
+    assert!(local_state.get_region().get_is_in_flashback());
 
     block_on(cluster.call_finish_flashback(1, 5));
 }

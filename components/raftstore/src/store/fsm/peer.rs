@@ -1014,10 +1014,10 @@ where
         {
             info!(
                 "Prepare Flashback, at now flashback persist state is: {} for {:?} ",
-                state.get_is_in_flashback(),
+                state.get_region().get_is_in_flashback(),
                 self.region(),
             );
-            if !state.get_is_in_flashback() {
+            if !state.get_region().get_is_in_flashback() {
                 // callback itself to wait for the new change to be applied completely.
                 let raft_router_clone = self.ctx.router.clone();
                 let ch_clone = ch.clone();

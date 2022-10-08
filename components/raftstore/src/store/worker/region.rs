@@ -480,14 +480,6 @@ where
         // delete snapshot state.
         let mut wb = self.engine.write_batch();
         region_state.set_state(PeerState::Normal);
-        // call read_snapshot_meta to set flashback state
-        let snapshot_meta = match s.read_snapshot_meta() {
-            Ok(meta) => meta,
-            Err(e) => {
-                return Err(box_err!("missing snapshot meta {:?}", e));
-            }
-        };
-        region_state.set_is_in_flashback(snapshot_meta.get_is_in_flashback());
         box_try!(wb.put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state));
         box_try!(wb.delete_cf(CF_RAFT, &keys::snapshot_raft_state_key(region_id)));
         wb.write().unwrap_or_else(|e| {

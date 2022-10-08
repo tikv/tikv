@@ -2056,7 +2056,7 @@ where
         } else {
             PeerState::Normal
         };
-        if let Err(e) = write_peer_state(ctx.kv_wb_mut(), &region, state, None, false) {
+        if let Err(e) = write_peer_state(ctx.kv_wb_mut(), &region, state, None) {
             panic!("{} failed to update region state: {:?}", self.tag, e);
         }
 
@@ -2101,7 +2101,7 @@ where
             PeerState::Normal
         };
 
-        if let Err(e) = write_peer_state(ctx.kv_wb_mut(), &region, state, None, false) {
+        if let Err(e) = write_peer_state(ctx.kv_wb_mut(), &region, state, None) {
             panic!("{} failed to update region state: {:?}", self.tag, e);
         }
 
@@ -2505,7 +2505,7 @@ where
                 );
                 continue;
             }
-            write_peer_state(kv_wb_mut, new_region, PeerState::Normal, None, false)
+            write_peer_state(kv_wb_mut, new_region, PeerState::Normal, None)
                 .and_then(|_| write_initial_apply_state(kv_wb_mut, new_region.get_id()))
                 .unwrap_or_else(|e| {
                     panic!(
@@ -2514,7 +2514,7 @@ where
                     )
                 });
         }
-        write_peer_state(kv_wb_mut, &derived, PeerState::Normal, None, false).unwrap_or_else(|e| {
+        write_peer_state(kv_wb_mut, &derived, PeerState::Normal, None).unwrap_or_else(|e| {
             panic!("{} fails to update region {:?}: {:?}", self.tag, derived, e)
         });
         let mut resp = AdminResponse::default();
@@ -2581,7 +2581,6 @@ where
             &region,
             PeerState::Merging,
             Some(merging_state.clone()),
-            false,
         )
         .unwrap_or_else(|e| {
             panic!(
@@ -2720,7 +2719,7 @@ where
             region.set_start_key(source_region.get_start_key().to_vec());
         }
         let kv_wb_mut = ctx.kv_wb_mut();
-        write_peer_state(kv_wb_mut, &region, PeerState::Normal, None, false)
+        write_peer_state(kv_wb_mut, &region, PeerState::Normal, None)
             .and_then(|_| {
                 // TODO: maybe all information needs to be filled?
                 let mut merging_state = MergeState::default();
@@ -2730,7 +2729,6 @@ where
                     source_region,
                     PeerState::Tombstone,
                     Some(merging_state),
-                    state.get_is_in_flashback(),
                 )
             })
             .unwrap_or_else(|e| {
@@ -2778,14 +2776,12 @@ where
         let version = region.get_region_epoch().get_version();
         // Update version to avoid duplicated rollback requests.
         region.mut_region_epoch().set_version(version + 1);
-        write_peer_state(ctx.kv_wb_mut(), &region, PeerState::Normal, None, false).unwrap_or_else(
-            |e| {
-                panic!(
-                    "{} failed to rollback merge {:?}: {:?}",
-                    self.tag, rollback, e
-                )
-            },
-        );
+        write_peer_state(ctx.kv_wb_mut(), &region, PeerState::Normal, None).unwrap_or_else(|e| {
+            panic!(
+                "{} failed to rollback merge {:?}: {:?}",
+                self.tag, rollback, e
+            )
+        });
 
         PEER_ADMIN_CMD_COUNTER.rollback_merge.success.inc();
         let resp = AdminResponse::default();
@@ -2814,7 +2810,9 @@ where
                 return Err(box_err!("failed to get region state of {}", region_id));
             }
         };
-        old_state.set_is_in_flashback(req.get_cmd_type() == AdminCmdType::PrepareFlashback);
+        old_state
+            .mut_region()
+            .set_is_in_flashback(req.get_cmd_type() == AdminCmdType::PrepareFlashback);
         ctx.kv_wb_mut()
             .put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &old_state)
             .unwrap_or_else(|e| {

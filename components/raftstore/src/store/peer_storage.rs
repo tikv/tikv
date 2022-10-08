@@ -594,21 +594,9 @@ where
         }
         // Write its source peers' `RegionLocalState` together with itself for atomicity
         for r in destroy_regions {
-            write_peer_state(
-                kv_wb,
-                r,
-                PeerState::Tombstone,
-                None,
-                snap_data.get_meta().get_is_in_flashback(),
-            )?;
+            write_peer_state(kv_wb, r, PeerState::Tombstone, None)?;
         }
-        write_peer_state(
-            kv_wb,
-            &region,
-            PeerState::Applying,
-            None,
-            snap_data.get_meta().get_is_in_flashback(),
-        )?;
+        write_peer_state(kv_wb, &region, PeerState::Applying, None)?;
 
         let last_index = snap.get_metadata().get_index();
 
@@ -724,7 +712,7 @@ where
     pub fn get_region_flashback(&self, region_id: u64) -> Option<FlashbackState> {
         match self.raft_engine().get_region_state(region_id) {
             Ok(Some(state)) => {
-                if state.get_is_in_flashback() {
+                if state.get_region().get_is_in_flashback() {
                     Some(FlashbackState::new(None))
                 } else {
                     None
@@ -1076,7 +1064,6 @@ where
         region_state.get_region(),
         allow_multi_files_snapshot,
         for_balance,
-        region_state.get_is_in_flashback(),
     )?;
     snapshot.set_data(snap_data.write_to_bytes()?.into());
 
@@ -1117,7 +1104,6 @@ pub fn write_peer_state<T: Mutable>(
     region: &metapb::Region,
     state: PeerState,
     merge_state: Option<MergeState>,
-    is_in_flashback: bool,
 ) -> Result<()> {
     let region_id = region.get_id();
     let mut region_state = RegionLocalState::default();
@@ -1125,9 +1111,6 @@ pub fn write_peer_state<T: Mutable>(
     region_state.set_region(region.clone());
     if let Some(state) = merge_state {
         region_state.set_merge_state(state);
-    }
-    if is_in_flashback {
-        region_state.set_is_in_flashback(is_in_flashback);
     }
 
     debug!(
