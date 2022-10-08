@@ -283,9 +283,6 @@ where
         if self.read_id.is_some() {
             self.snap_cache.snapshot.as_ref().as_ref().unwrap().clone()
         } else {
-            if self.snapshot.as_ref().is_none() {
-                println!("111");
-            }
             self.snapshot.as_ref().unwrap().clone()
         }
     }
