@@ -124,8 +124,6 @@ pub trait ReadExecutor<E: KvEngine> {
                     }
                 },
                 CmdType::Snap => {
-                    fail_point!("before_execute_get_snapshot");
-
                     let snapshot = RegionSnapshot::from_snapshot(
                         self.get_snapshot(&mut snap_cache_ctx),
                         region.clone(),
@@ -228,6 +226,8 @@ where
 
     snapshot: Option<Arc<E::Snapshot>>,
     snapshot_ts: Option<Timespec>,
+
+    // It shows whether we have updated the snapshot in this request
     updated: bool,
 }
 
@@ -489,12 +489,12 @@ impl ReadDelegate {
 
     pub fn is_in_leader_lease(&self, ts: Timespec) -> bool {
         fail_point!("perform_read_local", |_| true);
-        fail_point!("local_reader_fail_lease_check", |_| false);
 
         if let Some(ref lease) = self.leader_lease {
             let term = lease.term();
             if term == self.term {
                 if lease.inspect(Some(ts)) == LeaseState::Valid {
+                    fail_point!("after_pass_lease_check");
                     return true;
                 } else {
                     TLS_LOCAL_READ_METRICS
@@ -872,16 +872,16 @@ where
                             SnapCacheContext::new(&mut self.snap_cache, read_id);
                         snap_cache_ctx.maybe_update_snapshot(delegate.get_tablet());
 
-                        let region = Arc::clone(&delegate.region);
-                        let response =
-                            delegate.execute(&req, &region, None, Some(&mut snap_cache_ctx));
-
                         if !delegate.is_in_leader_lease(snap_cache_ctx.snapshot_ts()) {
                             fail_point!("localreader_before_redirect", |_| {});
                             // Forward to raftstore.
                             self.redirect(RaftCommand::new(req, cb));
                             return;
                         }
+
+                        let region = Arc::clone(&delegate.region);
+                        let response =
+                            delegate.execute(&req, &region, None, Some(&mut snap_cache_ctx));
 
                         // Try renew lease in advance
                         delegate.maybe_renew_lease_advance(&self.router, snapshot_ts);

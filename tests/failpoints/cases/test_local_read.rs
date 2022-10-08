@@ -2,58 +2,78 @@
 
 use std::{sync::Arc, thread, time::Duration};
 
-use test_raftstore::{
-    configure_for_lease_read, make_cb, new_node_cluster, new_request, new_snap_cmd, Simulator,
+use grpcio::{ChannelBuilder, Environment};
+use kvproto::{
+    kvrpcpb::{Context, GetRequest, Op},
+    tikvpb_grpc::TikvClient,
 };
+use test_raftstore::{get_tso, new_mutation, new_peer, new_server_cluster, PeerClient};
 use tikv_util::HandyRwLock;
 
-// The test mock the situation that just before acquiring the snapshot, the
-// lease expires.
+// The test mocks the situation that just after passing the lease check, even
+// when lease expires, we can read the correct value.
 #[test]
-fn test_lease_expire_before_get_snapshot() {
-    let mut cluster = new_node_cluster(0, 1);
-
-    let _ = configure_for_lease_read(&mut cluster, None, None);
+fn test_consistency_after_lease_pass() {
+    let mut cluster = new_server_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
-
     cluster.run();
+    let leader = new_peer(1, 1);
+    cluster.must_transfer_leader(1, leader.clone());
 
-    let key = b"k0";
-    let value = b"v0";
-    cluster.must_put(key, value);
+    // Create clients.
+    let env = Arc::new(Environment::new(1));
+    let channel = ChannelBuilder::new(Arc::clone(&env)).connect(&cluster.sim.rl().get_addr(1));
+    let client = TikvClient::new(channel);
+    let leader_client = PeerClient::new(&cluster, 1, leader);
+
+    let _ = leader_client.must_kv_write(
+        &pd_client,
+        vec![new_mutation(Op::Put, &b"key1"[..], &b"value1"[..])],
+        b"key1".to_vec(),
+    );
+
+    // Ensure the request is executed by the local reader
     fail::cfg("localreader_before_redirect", "panic").unwrap();
 
     // Lease read works correctly
-    assert_eq!(cluster.get(key), Some(value.to_vec()));
+    leader_client.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), get_tso(&pd_client));
 
-    fail::cfg("localreader_before_redirect", "return").unwrap();
-    fail::cfg("before_execute_get_snapshot", "pause").unwrap();
+    // we pause just after pass the lease check, and then remove the peer. We can
+    // still read the relevant value as we should have already got the snapshot when
+    // passing the lease check.
+    fail::cfg("after_pass_lease_check", "pause").unwrap();
 
-    let region = cluster.get_region(key);
+    let region = cluster.get_region(&b"key1"[..]);
     let region_id = region.id;
     let leader = cluster.leader_of_region(region_id).unwrap();
-    let node_id = leader.get_store_id();
-    let mut req = new_request(
-        region_id,
-        region.get_region_epoch().clone(),
-        vec![new_snap_cmd()],
-        false,
+
+    let mut ctx = Context::default();
+    ctx.set_region_id(region_id);
+    ctx.set_peer(leader.clone());
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+
+    let mut get_req = GetRequest::default();
+    get_req.set_context(ctx);
+    get_req.key = b"key1".to_vec();
+    get_req.version = get_tso(&pd_client);
+    let mut receiver = client.kv_get_async(&get_req).unwrap();
+
+    thread::sleep(Duration::from_millis(200));
+
+    cluster.must_transfer_leader(1, new_peer(2, 2));
+
+    assert!(
+        !cluster
+            .async_remove_peer(region_id, leader)
+            .unwrap()
+            .recv()
+            .unwrap()
+            .get_header()
+            .has_error()
     );
-    req.mut_header().set_peer(leader);
 
-    let (cb, rx) = make_cb(&req);
-    let handle = thread::spawn(move || {
-        thread::sleep(Duration::from_millis(200));
-        // This is equivalent to expiring the lease
-        fail::cfg("local_reader_fail_lease_check", "return").unwrap();
-        fail::cfg("before_execute_get_snapshot", "off").unwrap();
-    });
-    cluster.sim.wl().async_read(node_id, None, req, cb);
+    fail::cfg("after_pass_lease_check", "off").unwrap();
 
-    // Request should be redirected to the raftstore, but the failpoint above makes
-    // it just return. So cb will not be called.
-    let _ = rx.recv_timeout(Duration::from_secs(5)).unwrap_err();
-
-    handle.join().unwrap();
+    assert_eq!(b"value1", receiver.receive_sync().unwrap().1.get_value());
 }
