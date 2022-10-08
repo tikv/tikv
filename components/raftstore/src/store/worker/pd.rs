@@ -2095,7 +2095,7 @@ where
             let now = UnixSecs::now();
             let interval_second = now.into_inner() - self.store_stat.last_report_ts.into_inner();
             if self.slow_score.should_force_report_slow_store()
-                || interval_second >= self.store_heartbeat_interval.as_secs()
+                && interval_second >= self.store_heartbeat_interval.as_secs()
             {
                 self.force_report_store_heartbeat();
             }
