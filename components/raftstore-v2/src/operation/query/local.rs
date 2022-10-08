@@ -88,7 +88,7 @@ where
 
     fn get_snapshot(
         &mut self,
-        _: &mut Option<&mut raftstore::store::SnapCacheContext<'_, E>>,
+        _: &mut Option<&mut raftstore::store::SnapshotContext<'_, E>>,
     ) -> Arc<E::Snapshot> {
         Arc::new(self.cached_tablet.latest().unwrap().snapshot())
     }
