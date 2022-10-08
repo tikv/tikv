@@ -228,7 +228,6 @@ impl TestNode {
     }
 
     fn stop(&mut self) {
-        self.running_state.take();
         if let Some(state) = std::mem::take(&mut self.running_state) {
             let mut meta = state.store_meta.lock().unwrap();
             meta.tablet_caches.clear();
