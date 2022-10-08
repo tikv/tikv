@@ -4,6 +4,7 @@ mod command;
 mod life;
 mod query;
 mod ready;
+mod split;
 
 pub use command::{CommittedEntries, SimpleWriteDecoder, SimpleWriteEncoder};
 pub use life::DestroyProgress;

@@ -358,6 +358,34 @@ impl ReadDelegate {
         }
     }
 
+    pub fn new(
+        peer_id: u64,
+        term: u64,
+        region: metapb::Region,
+        applied_term: u64,
+        txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+        txn_ext: Arc<TxnExt>,
+        read_progress: Arc<RegionReadProgress>,
+        bucket_meta: Option<Arc<BucketMeta>>,
+    ) -> Self {
+        let region_id = region.id;
+        ReadDelegate {
+            region: Arc::new(region),
+            peer_id,
+            term,
+            applied_term,
+            leader_lease: None,
+            last_valid_ts: Timespec::new(0, 0),
+            tag: format!("[region {}] {}", region_id, peer_id),
+            txn_extra_op,
+            txn_ext,
+            read_progress,
+            pending_remove: false,
+            bucket_meta,
+            track_ver: TrackVer::new(),
+        }
+    }
+
     pub fn fresh_valid_ts(&mut self) {
         self.last_valid_ts = monotonic_raw_now();
     }

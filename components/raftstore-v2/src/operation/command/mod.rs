@@ -99,7 +99,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let mailbox = store_ctx.router.mailbox(self.region_id()).unwrap();
         let tablet = self.tablet().clone();
         let logger = self.logger.clone();
-        let (apply_scheduler, mut apply_fsm) = ApplyFsm::new(region_state, mailbox, tablet, logger);
+        let (apply_scheduler, mut apply_fsm) = ApplyFsm::new(
+            0, // todo(SpadeA): fix it.
+            region_state,
+            mailbox,
+            tablet,
+            store_ctx.engine.clone(),
+            store_ctx.tablet_factory.clone(),
+            logger,
+        );
         store_ctx
             .apply_pool
             .spawn(async move { apply_fsm.handle_all_tasks().await })
@@ -249,7 +257,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 }
 
-impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
+impl<EK: KvEngine, ER: RaftEngine, R: ApplyResReporter> Apply<EK, ER, R> {
     #[inline]
     pub async fn apply_committed_entries(&mut self, ce: CommittedEntries) {
         fail::fail_point!("APPLY_COMMITTED_ENTRIES");

@@ -11,7 +11,7 @@ use std::{
 
 use batch_system::{Fsm, FsmScheduler, Mailbox};
 use crossbeam::channel::TryRecvError;
-use engine_traits::KvEngine;
+use engine_traits::{KvEngine, RaftEngine, TabletFactory};
 use futures::{Future, StreamExt};
 use kvproto::raft_serverpb::RegionLocalState;
 use slog::Logger;
@@ -50,20 +50,31 @@ impl ApplyScheduler {
     }
 }
 
-pub struct ApplyFsm<EK: KvEngine, R> {
-    apply: Apply<EK, R>,
+pub struct ApplyFsm<EK: KvEngine, ER: RaftEngine, R> {
+    apply: Apply<EK, ER, R>,
     receiver: Receiver<ApplyTask>,
 }
 
-impl<EK: KvEngine, R> ApplyFsm<EK, R> {
+impl<EK: KvEngine, ER: RaftEngine, R> ApplyFsm<EK, ER, R> {
     pub fn new(
+        store_id: u64,
         region_state: RegionLocalState,
         res_reporter: R,
         remote_tablet: CachedTablet<EK>,
+        raft_engine: ER,
+        tablet_factory: Arc<dyn TabletFactory<EK>>,
         logger: Logger,
     ) -> (ApplyScheduler, Self) {
         let (tx, rx) = future::unbounded(WakePolicy::Immediately);
-        let apply = Apply::new(region_state, res_reporter, remote_tablet, logger);
+        let apply = Apply::new(
+            store_id,
+            region_state,
+            res_reporter,
+            remote_tablet,
+            raft_engine,
+            tablet_factory,
+            logger,
+        );
         (
             ApplyScheduler { sender: tx },
             Self {
@@ -74,7 +85,7 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
     }
 }
 
-impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
+impl<EK: KvEngine, ER: RaftEngine, R: ApplyResReporter> ApplyFsm<EK, ER, R> {
     pub async fn handle_all_tasks(&mut self) {
         loop {
             let mut task = match self.receiver.next().await {

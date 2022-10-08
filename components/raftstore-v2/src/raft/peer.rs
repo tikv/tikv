@@ -6,10 +6,12 @@ use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory};
 use fail::fail_point;
 use kvproto::{
+    kvrpcpb::ExtraOp as TxnExtraOp,
     metapb,
     raft_cmdpb::{self, RaftCmdRequest},
     raft_serverpb::RegionLocalState,
 };
+use pd_client::BucketStat;
 use protobuf::Message;
 use raft::{RawNode, StateRole, INVALID_ID};
 use raftstore::{
@@ -17,8 +19,8 @@ use raftstore::{
         fsm::Proposal,
         metrics::PEER_PROPOSE_LOG_SIZE_HISTOGRAM,
         util::{Lease, RegionReadProgress},
-        Config, EntryStorage, ProposalQueue, RaftlogFetchTask, ReadIndexQueue, ReadIndexRequest,
-        Transport, WriteRouter,
+        Config, EntryStorage, ProposalQueue, RaftlogFetchTask, ReadDelegate, ReadIndexQueue,
+        ReadIndexRequest, Transport, TxnExt, WriteRouter,
     },
     Error,
 };
@@ -68,6 +70,12 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     pending_reads: ReadIndexQueue<QueryResChannel>,
     read_progress: Arc<RegionReadProgress>,
     leader_lease: Lease,
+
+    /// region buckets.
+    region_buckets: Option<BucketStat>,
+    /// Transaction extensions related to this peer.
+    txn_ext: Arc<TxnExt>,
+    txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -138,6 +146,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             destroy_progress: DestroyProgress::None,
             raft_group,
             logger,
+            txn_ext: Arc::default(),
+            txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
+            region_buckets: Some(BucketStat {
+                meta: Arc::default(),
+                stats: metapb::BucketStats::default(),
+                create_time: TiInstant::now(),
+            }),
             pending_reads: ReadIndexQueue::new(tag.clone()),
             read_progress: Arc::new(RegionReadProgress::new(
                 &region,
@@ -396,5 +411,20 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn set_apply_scheduler(&mut self, apply_scheduler: ApplyScheduler) {
         self.apply_scheduler = Some(apply_scheduler);
+    }
+
+    pub fn generate_read_delegate(&self) -> ReadDelegate {
+        let peer_id = self.peer().get_id();
+
+        ReadDelegate::new(
+            peer_id,
+            self.term(),
+            self.region().clone(),
+            self.storage().entry_storage().applied_term(),
+            self.txn_extra_op.clone(),
+            self.txn_ext.clone(),
+            self.read_progress().clone(),
+            self.region_buckets.as_ref().map(|b| b.meta.clone()),
+        )
     }
 }

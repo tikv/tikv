@@ -1,6 +1,9 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{KvEngine, RaftEngine};
+use std::sync::{Arc, Mutex};
+
+use collections::HashMap;
+use engine_traits::{KvEngine, RaftEngine, TabletFactory};
 use kvproto::{raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
 use raftstore::store::fsm::apply::DEFAULT_APPLY_WB_SIZE;
 use slog::Logger;
@@ -13,10 +16,15 @@ use crate::{
 };
 
 /// Apply applies all the committed commands to kv db.
-pub struct Apply<EK: KvEngine, R> {
+pub struct Apply<EK: KvEngine, ER: RaftEngine, R> {
+    pub(crate) store_id: u64,
+
     remote_tablet: CachedTablet<EK>,
     tablet: EK,
     write_batch: Option<EK::WriteBatch>,
+
+    pub(crate) raft_engine: ER,
+    pub(crate) tablet_factory: Arc<dyn TabletFactory<EK>>,
 
     callbacks: Vec<(Vec<CmdResChannel>, RaftCmdResponse)>,
 
@@ -26,19 +34,28 @@ pub struct Apply<EK: KvEngine, R> {
     region_state: RegionLocalState,
     state_changed: bool,
 
+    /// Used for handling race between splitting and creating new peer.
+    /// An uninitialized peer can be replaced to the one from splitting iff they
+    /// are exactly the same peer.
+    pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+
     res_reporter: R,
     pub(crate) logger: Logger,
 }
 
-impl<EK: KvEngine, R> Apply<EK, R> {
+impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
     #[inline]
     pub fn new(
+        store_id: u64,
         region_state: RegionLocalState,
         res_reporter: R,
         mut remote_tablet: CachedTablet<EK>,
+        raft_engine: ER,
+        tablet_factory: Arc<dyn TabletFactory<EK>>,
         logger: Logger,
     ) -> Self {
         Apply {
+            store_id,
             tablet: remote_tablet.latest().unwrap().clone(),
             remote_tablet,
             write_batch: None,
@@ -47,6 +64,9 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             applied_term: 0,
             region_state,
             state_changed: false,
+            pending_create_peers: Arc::default(), // todo(SpadeA): init by parameter
+            raft_engine,
+            tablet_factory,
             res_reporter,
             logger,
         }
@@ -92,8 +112,18 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     }
 
     #[inline]
+    pub fn set_region_state(&mut self, region_state: RegionLocalState) {
+        self.region_state = region_state;
+    }
+
+    #[inline]
     pub fn reset_state_changed(&mut self) -> bool {
         std::mem::take(&mut self.state_changed)
+    }
+
+    #[inline]
+    pub fn tablet(&mut self) -> Option<EK> {
+        self.remote_tablet.latest().cloned()
     }
 
     /// Publish the tablet so that it can be used by read worker.
@@ -104,5 +134,15 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     pub fn publish_tablet(&mut self, tablet: EK) {
         self.remote_tablet.set(tablet.clone());
         self.tablet = tablet;
+    }
+
+    #[inline]
+    pub fn pending_create_peers(&self) -> &Arc<Mutex<HashMap<u64, (u64, bool)>>> {
+        &self.pending_create_peers
+    }
+
+    #[inline]
+    pub fn raft_engine(&self) -> &ER {
+        &self.raft_engine
     }
 }

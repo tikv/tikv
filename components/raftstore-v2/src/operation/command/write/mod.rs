@@ -98,7 +98,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 }
 
-impl<EK: KvEngine, R> Apply<EK, R> {
+impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
     #[inline]
     pub fn apply_put(&mut self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         util::check_key_in_region(key, self.region_state().get_region())?;
