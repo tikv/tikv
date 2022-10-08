@@ -24,7 +24,7 @@ command! {
     /// This should be following a [`Prewrite`](Command::Prewrite) on the given key.
     Rollback:
         cmd_ty => (),
-        display => "kv::command::rollback keys({}) @ {} | {:?}", (keys.len, start_ts, ctx),
+        display => "kv::command::rollback keys({:?}) @ {} | {:?}", (keys, start_ts, ctx),
         content => {
             keys: Vec<Key>,
             /// The transaction timestamp.
@@ -35,6 +35,7 @@ command! {
 impl CommandExt for Rollback {
     ctx!();
     tag!(rollback);
+    request_type!(KvRollback);
     ts!(start_ts);
     write_bytes!(keys: multiple);
     gen_lock!(keys: multiple);
@@ -51,8 +52,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Rollback {
         let rows = self.keys.len();
         let mut released_locks = ReleasedLocks::new(self.start_ts, TimeStamp::zero());
         for k in self.keys {
-            // Rollback is called only if the transaction is known to fail. Under the circumstances,
-            // the rollback record needn't be protected.
+            // Rollback is called only if the transaction is known to fail. Under the
+            // circumstances, the rollback record needn't be protected.
             let released_lock = cleanup(&mut txn, &mut reader, k, TimeStamp::zero(), false)?;
             released_locks.push(released_lock);
         }
@@ -74,6 +75,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Rollback {
 
 #[cfg(test)]
 mod tests {
+    use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
+
     use crate::storage::{txn::tests::*, TestEngineBuilder};
 
     #[test]
@@ -86,7 +89,7 @@ mod tests {
         must_rollback(&engine, k1, 10, false);
         must_rollback(&engine, k2, 10, false);
 
-        must_pessimistic_prewrite_put(&engine, k2, v, k1, 10, 10, false);
+        must_pessimistic_prewrite_put(&engine, k2, v, k1, 10, 10, SkipPessimisticCheck);
         must_rollback(&engine, k2, 10, false);
     }
 }

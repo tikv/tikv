@@ -1,10 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use kvproto::{kvrpcpb::Op, metapb::Peer};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
+use test_pd_client::TestPdClient;
 use test_raftstore::*;
 
 fn prepare_for_stale_read(leader: Peer) -> (Cluster<ServerCluster>, Arc<TestPdClient>, PeerClient) {
@@ -111,10 +112,12 @@ fn test_stale_read_basic_flow_lock() {
         b"key1".to_vec(),
     );
 
-    // Assert `(key1, value2)` can't be readed with `commit_ts2` due to it's larger than the `start_ts` of `key2`.
+    // Assert `(key1, value2)` can't be read with `commit_ts2` due to it's larger
+    // than the `start_ts` of `key2`.
     let resp = follower_client2.kv_read(b"key1".to_vec(), commit_ts2);
     assert!(resp.get_region_error().has_data_is_not_ready());
-    // Still can read `(key1, value1)` since `commit_ts1` is less than the `key2` lock's `start_ts`
+    // Still can read `(key1, value1)` since `commit_ts1` is less than the `key2`
+    // lock's `start_ts`
     follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), commit_ts1);
 
     // Prewrite on `key3` but not commit yet
@@ -129,7 +132,8 @@ fn test_stale_read_basic_flow_lock() {
     leader_client.must_kv_commit(vec![b"key2".to_vec()], k2_prewrite_ts, k2_commit_ts);
 
     // Although there is still lock on the region, but the min lock is refreshed
-    // to the `key3`'s lock, now we can read `(key1, value2)` but not `(key2, value1)`
+    // to the `key3`'s lock, now we can read `(key1, value2)` but not `(key2,
+    // value1)`
     follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value2".to_vec(), commit_ts2);
     let resp = follower_client2.kv_read(b"key2".to_vec(), k2_commit_ts);
     assert!(resp.get_region_error().has_data_is_not_ready());
@@ -144,9 +148,9 @@ fn test_stale_read_basic_flow_lock() {
     follower_client2.must_kv_read_equal(b"key3".to_vec(), b"value1".to_vec(), get_tso(&pd_client));
 }
 
-// Testing that even leader's `apply_index` updated before sync the `(apply_index, safe_ts)`
-// item to other replica, the `apply_index` in the `(apply_index, safe_ts)` item should not
-// be updated
+// Testing that even leader's `apply_index` updated before sync the
+// `(apply_index, safe_ts)` item to other replica, the `apply_index` in the
+// `(apply_index, safe_ts)` item should not be updated
 #[test]
 fn test_update_apply_index_before_sync_read_state() {
     let (mut cluster, pd_client, mut leader_client) = prepare_for_stale_read(new_peer(1, 1));
@@ -195,9 +199,9 @@ fn test_update_apply_index_before_sync_read_state() {
     follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), commit_ts1);
 }
 
-// Testing that if `resolved_ts` updated before `apply_index` update, the `safe_ts`
-// won't be updated, hence the leader won't broadcast a wrong `(apply_index, safe_ts)`
-// item to other replicas
+// Testing that if `resolved_ts` updated before `apply_index` update, the
+// `safe_ts` won't be updated, hence the leader won't broadcast a wrong
+// `(apply_index, safe_ts)` item to other replicas
 #[test]
 fn test_update_resoved_ts_before_apply_index() {
     let (mut cluster, pd_client, mut leader_client) = prepare_for_stale_read(new_peer(1, 1));
@@ -213,7 +217,8 @@ fn test_update_resoved_ts_before_apply_index() {
     );
     follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), commit_ts1);
 
-    // Return before handling `apply_res`, to stop the leader updating the apply index
+    // Return before handling `apply_res`, to stop the leader updating the apply
+    // index
     let on_apply_res_fp = "on_apply_res";
     fail::cfg(on_apply_res_fp, "return()").unwrap();
     // Stop replicate data to follower 2
@@ -249,7 +254,8 @@ fn test_update_resoved_ts_before_apply_index() {
     follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value2".to_vec(), commit_ts2);
 }
 
-// Testing that the new elected leader should initialize the `resolver` correctly
+// Testing that the new elected leader should initialize the `resolver`
+// correctly
 #[test]
 fn test_new_leader_init_resolver() {
     let (mut cluster, pd_client, mut peer_client1) = prepare_for_stale_read(new_peer(1, 1));
@@ -264,8 +270,8 @@ fn test_new_leader_init_resolver() {
         b"key1".to_vec(),
     );
 
-    // There are no lock in the region, the `safe_ts` should keep updating by the new leader,
-    // so we can read `key1` with the newest ts
+    // There are no lock in the region, the `safe_ts` should keep updating by the
+    // new leader, so we can read `key1` with the newest ts
     cluster.must_transfer_leader(1, new_peer(2, 2));
     peer_client1.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), get_tso(&pd_client));
 
@@ -276,8 +282,8 @@ fn test_new_leader_init_resolver() {
         get_tso(&pd_client),
     );
 
-    // There are locks in the region, the `safe_ts` can't be updated, so we can't read
-    // `key1` with the newest ts
+    // There are locks in the region, the `safe_ts` can't be updated, so we can't
+    // read `key1` with the newest ts
     cluster.must_transfer_leader(1, new_peer(1, 1));
     let resp = peer_client2.kv_read(b"key1".to_vec(), get_tso(&pd_client));
     assert!(resp.get_region_error().has_data_is_not_ready());
@@ -285,8 +291,9 @@ fn test_new_leader_init_resolver() {
     peer_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), commit_ts1);
 }
 
-// Testing that while applying snapshot the follower should reset its `safe_ts` to 0 and
-// reject incoming stale read request, then resume the `safe_ts` after applying snapshot
+// Testing that while applying snapshot the follower should reset its `safe_ts`
+// to 0 and reject incoming stale read request, then resume the `safe_ts` after
+// applying snapshot
 #[test]
 fn test_stale_read_while_applying_snapshot() {
     let (mut cluster, pd_client, leader_client) =
@@ -314,15 +321,15 @@ fn test_stale_read_while_applying_snapshot() {
 
     // Compact logs to force requesting snapshot after clearing send filters.
     let gc_limit = cluster.cfg.raft_store.raft_log_gc_count_limit();
-    let state = cluster.truncated_state(1, 1);
-    for i in 1..gc_limit * 10 {
+    for i in 1..gc_limit * 2 {
         let (k, v) = (
             format!("k{}", i).into_bytes(),
             format!("v{}", i).into_bytes(),
         );
         leader_client.must_kv_write(&pd_client, vec![new_mutation(Op::Put, &k, &v)], k);
     }
-    cluster.wait_log_truncated(1, 1, state.get_index() + 5 * gc_limit);
+    let last_index_on_store_2 = cluster.raft_local_state(1, 2).last_index;
+    cluster.wait_log_truncated(1, 1, last_index_on_store_2 + 1);
 
     // Pasuse before applying snapshot is finish
     let raft_before_applying_snap_finished = "raft_before_applying_snap_finished";
@@ -330,7 +337,7 @@ fn test_stale_read_while_applying_snapshot() {
     cluster.clear_send_filters();
 
     // Wait follower 2 start applying snapshot
-    cluster.wait_log_truncated(1, 2, state.get_index() + 5 * gc_limit);
+    cluster.wait_log_truncated(1, 2, last_index_on_store_2 + 1);
     sleep_ms(100);
 
     // We can't read while applying snapshot and the `safe_ts` should reset to 0
@@ -345,6 +352,9 @@ fn test_stale_read_while_applying_snapshot() {
 
     // Resume applying snapshot
     fail::remove(raft_before_applying_snap_finished);
+
+    let last_index_on_store_1 = cluster.raft_local_state(1, 1).last_index;
+    cluster.wait_last_index(1, 2, last_index_on_store_1, Duration::from_secs(3));
 
     // We can read `key1` after applied snapshot
     follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), k1_commit_ts);
@@ -395,15 +405,17 @@ fn test_stale_read_while_region_merge() {
         b"key5".to_vec(),
     );
 
-    // Merge source region into target region, the lock on source region should also merge
-    // into the target region and cause the target region's `safe_ts` decrease
+    // Merge source region into target region, the lock on source region should also
+    // merge into the target region and cause the target region's `safe_ts`
+    // decrease
     pd_client.must_merge(source.get_id(), target.get_id());
 
     let mut follower_client2 = PeerClient::new(&cluster, target.get_id(), new_peer(2, 2));
     follower_client2.ctx.set_stale_read(true);
     // We can read `(key5, value1)` with `k1_prewrite_ts`
     follower_client2.must_kv_read_equal(b"key5".to_vec(), b"value1".to_vec(), k1_prewrite_ts);
-    // Can't read `key5` with `k5_commit_ts` because `k1_prewrite_ts` is smaller than `k5_commit_ts`
+    // Can't read `key5` with `k5_commit_ts` because `k1_prewrite_ts` is smaller
+    // than `k5_commit_ts`
     let resp = follower_client2.kv_read(b"key5".to_vec(), k5_commit_ts);
     assert!(resp.get_region_error().has_data_is_not_ready());
 
@@ -414,7 +426,8 @@ fn test_stale_read_while_region_merge() {
     follower_client2.must_kv_read_equal(b"key5".to_vec(), b"value2".to_vec(), get_tso(&pd_client));
 }
 
-// Testing that after region merge, the `safe_ts` could be advanced even without any incoming write
+// Testing that after region merge, the `safe_ts` could be advanced even without
+// any incoming write
 #[test]
 fn test_stale_read_after_merge() {
     let (mut cluster, pd_client, _) =
@@ -441,9 +454,9 @@ fn test_stale_read_after_merge() {
     follower_client2.must_kv_read_equal(b"key5".to_vec(), b"value1".to_vec(), get_tso(&pd_client));
 }
 
-// Testing that during the merge, the leader of the source region won't not update the
-// `safe_ts` since it can't know when the merge is completed and whether there are new
-// kv write into its key range
+// Testing that during the merge, the leader of the source region won't not
+// update the `safe_ts` since it can't know when the merge is completed and
+// whether there are new kv write into its key range
 #[test]
 fn test_read_source_region_after_target_region_merged() {
     let (mut cluster, pd_client, leader_client) =
@@ -459,7 +472,8 @@ fn test_read_source_region_after_target_region_merged() {
     cluster.must_split(&cluster.get_region(&[]), b"key3");
     let source = pd_client.get_region(b"key1").unwrap();
     let target = pd_client.get_region(b"key5").unwrap();
-    // Transfer the target region leader to store 1 and the source region leader to store 2
+    // Transfer the target region leader to store 1 and the source region leader to
+    // store 2
     cluster.must_transfer_leader(target.get_id(), new_peer(1, 1));
     cluster.must_transfer_leader(source.get_id(), find_peer(&source, 2).unwrap().clone());
     // Get the source region follower on store 3
@@ -478,7 +492,8 @@ fn test_read_source_region_after_target_region_merged() {
     // Merge source region into target region
     pd_client.must_merge(source.get_id(), target.get_id());
 
-    // Leave a lock on the original source region key range through the target region leader
+    // Leave a lock on the original source region key range through the target
+    // region leader
     let target_leader = PeerClient::new(&cluster, target.get_id(), new_peer(1, 1));
     let k1_prewrite_ts2 = get_tso(&pd_client);
     target_leader.must_kv_prewrite(
@@ -492,17 +507,17 @@ fn test_read_source_region_after_target_region_merged() {
 
     // We still can read `key1` with `k1_commit_ts1` through source region
     source_follower_client3.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), k1_commit_ts1);
-    // But can't read `key2` with `k1_prewrite_ts2` because the source leader can't update
-    // `safe_ts` after source region is merged into target region even though the source leader
-    // didn't know the merge is complement
+    // But can't read `key2` with `k1_prewrite_ts2` because the source leader can't
+    // update `safe_ts` after source region is merged into target region even
+    // though the source leader didn't know the merge is complement
     let resp = source_follower_client3.kv_read(b"key1".to_vec(), k1_prewrite_ts2);
     assert!(resp.get_region_error().has_data_is_not_ready());
 
     fail::remove(apply_before_prepare_merge_2_3);
 }
 
-// Testing that altough the source region's `safe_ts` wont't be updated during merge, after merge
-// rollbacked it should resume updating
+// Testing that altough the source region's `safe_ts` wont't be updated during
+// merge, after merge rollbacked it should resume updating
 #[test]
 fn test_stale_read_after_rollback_merge() {
     let (mut cluster, pd_client, leader_client) =
@@ -536,12 +551,13 @@ fn test_stale_read_after_rollback_merge() {
         find_peer(&source, 3).unwrap().clone(),
     );
     source_client3.ctx.set_stale_read(true);
-    // the `safe_ts` should resume updating after merge rollback so we can read `key1` with the newest ts
+    // the `safe_ts` should resume updating after merge rollback so we can read
+    // `key1` with the newest ts
     source_client3.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), get_tso(&pd_client));
 }
 
-// Testing that the new leader should ignore the pessimistic lock that wrote by the previous
-// leader and keep updating the `safe_ts`
+// Testing that the new leader should ignore the pessimistic lock that wrote by
+// the previous leader and keep updating the `safe_ts`
 #[test]
 fn test_new_leader_ignore_pessimistic_lock() {
     let (mut cluster, pd_client, leader_client) = prepare_for_stale_read(new_peer(1, 1));
@@ -561,7 +577,8 @@ fn test_new_leader_ignore_pessimistic_lock() {
 
     let mut follower_client3 = PeerClient::new(&cluster, 1, new_peer(3, 3));
     follower_client3.ctx.set_stale_read(true);
-    // The new leader should be able to update `safe_ts` so we can read `key1` with the newest ts
+    // The new leader should be able to update `safe_ts` so we can read `key1` with
+    // the newest ts
     follower_client3.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), get_tso(&pd_client));
 }
 
@@ -587,7 +604,8 @@ fn test_stale_read_on_learner() {
     learner_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), get_tso(&pd_client));
 }
 
-// Testing that stale read request with a future ts should not update the `concurency_manager`'s `max_ts`
+// Testing that stale read request with a future ts should not update the
+// `concurrency_manager`'s `max_ts`
 #[test]
 fn test_stale_read_future_ts_not_update_max_ts() {
     let (_cluster, pd_client, mut leader_client) = prepare_for_stale_read(new_peer(1, 1));
@@ -605,8 +623,9 @@ fn test_stale_read_future_ts_not_update_max_ts() {
     let resp = leader_client.kv_read(b"key1".to_vec(), read_ts);
     assert!(resp.get_region_error().has_data_is_not_ready());
 
-    // The `max_ts` should not updated by the stale read request, so we can prewrite and commit
-    // `async_commit` transaction with a ts that smaller than the `read_ts`
+    // The `max_ts` should not updated by the stale read request, so we can prewrite
+    // and commit `async_commit` transaction with a ts that smaller than the
+    // `read_ts`
     let prewrite_ts = get_tso(&pd_client);
     assert!(prewrite_ts < read_ts);
     leader_client.must_kv_prewrite_async_commit(
@@ -624,8 +643,8 @@ fn test_stale_read_future_ts_not_update_max_ts() {
     let resp = leader_client.kv_read(b"key1".to_vec(), read_ts);
     assert!(resp.get_region_error().has_data_is_not_ready());
 
-    // The `max_ts` should not updated by the stale read request, so 1pc transaction with a ts that smaller
-    // than the `read_ts` should not be fallbacked to 2pc
+    // The `max_ts` should not updated by the stale read request, so 1pc transaction
+    // with a ts that smaller than the `read_ts` should not be fallbacked to 2pc
     let prewrite_ts = get_tso(&pd_client);
     assert!(prewrite_ts < read_ts);
     leader_client.must_kv_prewrite_one_pc(

@@ -57,15 +57,15 @@ pub fn run_test_with_hook(cases: &[&TestDescAndFn], hook: impl TestHook + Send +
         .iter()
         .map(|case| {
             let name = case.desc.name.as_slice().to_owned();
-            let h = hook.clone();
+            let hook = hook.clone();
             let f = match case.testfn {
                 TestFn::StaticTestFn(f) => TestFn::DynTestFn(Box::new(move || {
-                    let _watcher = CaseLifeWatcher::new(name, h);
+                    let _watcher = CaseLifeWatcher::new(name.clone(), hook.clone());
                     f();
                 })),
-                TestFn::StaticBenchFn(f) => TestFn::DynTestFn(Box::new(move || {
-                    let _watcher = CaseLifeWatcher::new(name, h);
-                    bench::run_once(move |b| f(b));
+                TestFn::StaticBenchFn(f) => TestFn::DynBenchFn(Box::new(move |b| {
+                    let _watcher = CaseLifeWatcher::new(name.clone(), hook.clone());
+                    f(b);
                 })),
                 ref f => panic!("unexpected testfn {:?}", f),
             };
@@ -99,9 +99,9 @@ impl TestHook for FailpointHook {
     }
 }
 
-/// During panic, due to drop order, failpoints will not be cleared before tests exit.
-/// If tests wait for a sleep failpoint, the whole tests will hang. So we need a method
-/// to clear failpoints explicitly besides teardown.
+/// During panic, due to drop order, failpoints will not be cleared before tests
+/// exit. If tests wait for a sleep failpoint, the whole tests will hang. So we
+/// need a method to clear failpoints explicitly besides teardown.
 pub fn clear_failpoints() {
     FS.with(|s| s.borrow_mut().take());
 }

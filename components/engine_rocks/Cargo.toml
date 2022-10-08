@@ -51,6 +51,7 @@ tempfile = "3.0"
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util", default-features = false }
 time = "0.1"
+tracker = { path = "../tracker" }
 txn_types = { path = "../txn_types", default-features = false }
 
 [dependencies.rocksdb]

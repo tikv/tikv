@@ -36,6 +36,7 @@ fn test_compact_after_delete<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.region_compact_min_tombstones = 500;
     cluster.cfg.raft_store.region_compact_tombstones_percent = 50;
     cluster.cfg.raft_store.region_compact_check_step = 1;
+    cluster.cfg.rocksdb.titan.enabled = true;
     cluster.run();
 
     for i in 0..1000 {
@@ -62,8 +63,7 @@ fn test_compact_after_delete<T: Simulator>(cluster: &mut Cluster<T>) {
         cluster.must_delete_cf(CF_WRITE, &k);
     }
     for engines in cluster.engines.values() {
-        let cf = get_cf_handle(engines.kv.as_inner(), CF_WRITE).unwrap();
-        engines.kv.as_inner().flush_cf(cf, true).unwrap();
+        engines.kv.flush_cf(CF_WRITE, true).unwrap();
     }
 
     // wait for compaction.

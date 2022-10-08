@@ -71,10 +71,10 @@ pub trait Mutable: Send {
 /// save point, and pops the save point from the stack.
 pub trait WriteBatch: Mutable {
     /// Commit the WriteBatch to disk with the given options
-    fn write_opt(&self, opts: &WriteOptions) -> Result<()>;
+    fn write_opt(&mut self, opts: &WriteOptions) -> Result<u64>;
 
     /// Commit the WriteBatch to disk atomically
-    fn write(&self) -> Result<()> {
+    fn write(&mut self) -> Result<u64> {
         self.write_opt(&WriteOptions::default())
     }
 

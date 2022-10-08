@@ -7,7 +7,7 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "engine_rocks"]
 failpoints = ["fail/failpoints"]
 testexport = []
 test-raftstore-proxy = []
@@ -27,8 +27,6 @@ test-engines-panic = [
 cloud-aws = ["sst_importer/cloud-aws"]
 cloud-gcp = ["sst_importer/cloud-gcp"]
 cloud-azure = ["sst_importer/cloud-azure"]
-compat_new_proxy = ["engine_tiflash/compat_new_proxy"]
-compat_old_proxy = ["engine_tiflash/compat_old_proxy"]
 
 [dependencies]
 batch-system = { path = "../batch-system", default-features = false }
@@ -41,12 +39,10 @@ crc32fast = "1.2"
 crossbeam = "0.8"
 derivative = "2"
 encryption = { path = "../encryption", default-features = false }
-
-engine_rocks = { path = "../engine_rocks", default-features = false }
+engine_rocks = { path = "../engine_rocks", default-features = false, optional = true } 
 # Should be [dev-dependencies] but we need to control the features
 # https://github.com/rust-lang/cargo/issues/6915
 engine_test = { path = "../engine_test", default-features = false }
-engine_tiflash = { path = "../../engine_tiflash", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code", default-features = false }
 fail = "0.5"
@@ -90,7 +86,7 @@ tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util", default-features = false }
 time = "0.1"
 tokio = { version = "1.5", features = ["sync", "rt-multi-thread"] }
-tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
+tracker = { path = "../tracker" }
 txn_types = { path = "../txn_types", default-features = false }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }

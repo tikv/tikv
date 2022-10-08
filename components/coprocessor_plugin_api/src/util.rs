@@ -2,33 +2,40 @@
 
 use super::{allocator::HostAllocatorPtr, plugin_api::CoprocessorPlugin};
 
-/// Name of the exported constructor with signature [`PluginConstructorSignature`] for the plugin.
+/// Name of the exported constructor with signature
+/// [`PluginConstructorSignature`] for the plugin.
 pub static PLUGIN_CONSTRUCTOR_SYMBOL: &[u8] = b"_plugin_create";
-/// Name of the exported function with signature [`PluginGetBuildInfoSignature`] to get build
-/// information about the plugin.
+/// Name of the exported function with signature [`PluginGetBuildInfoSignature`]
+/// to get build information about the plugin.
 pub static PLUGIN_GET_BUILD_INFO_SYMBOL: &[u8] = b"_plugin_get_build_info";
-/// Name of the exported function with signature [`PluginGetPluginInfoSignature`] to get some
-/// information about the plugin.
+/// Name of the exported function with signature
+/// [`PluginGetPluginInfoSignature`] to get some information about the plugin.
 pub static PLUGIN_GET_PLUGIN_INFO_SYMBOL: &[u8] = b"_plugin_get_plugin_info";
 
-/// Type signature of the exported function with symbol [`PLUGIN_CONSTRUCTOR_SYMBOL`].
+/// Type signature of the exported function with symbol
+/// [`PLUGIN_CONSTRUCTOR_SYMBOL`].
 pub type PluginConstructorSignature =
     unsafe fn(host_allocator: HostAllocatorPtr) -> *mut dyn CoprocessorPlugin;
 
-/// Type signature of the exported function with symbol [`PLUGIN_GET_BUILD_INFO_SYMBOL`].
+/// Type signature of the exported function with symbol
+/// [`PLUGIN_GET_BUILD_INFO_SYMBOL`].
 pub type PluginGetBuildInfoSignature = extern "C" fn() -> BuildInfo;
 
-/// Type signature of the exported function with symbol [`PLUGIN_GET_PLUGIN_INFO_SYMBOL`].
+/// Type signature of the exported function with symbol
+/// [`PLUGIN_GET_PLUGIN_INFO_SYMBOL`].
 pub type PluginGetPluginInfoSignature = extern "C" fn() -> PluginInfo;
 
-/// Automatically collected build information about the plugin that is exposed from the library.
+/// Automatically collected build information about the plugin that is exposed
+/// from the library.
 ///
-/// Will be automatically created when using [`declare_plugin!(...)`](declare_plugin) and will be
-/// used by TiKV when a plugin is loaded to determine whether there are compilation mismatches.
+/// Will be automatically created when using
+/// [`declare_plugin!(...)`](declare_plugin) and will be used by TiKV when a
+/// plugin is loaded to determine whether there are compilation mismatches.
 #[repr(C)]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BuildInfo {
-    /// Version of the [`coprocessor_plugin_api`](crate) crate that was used to compile this plugin.
+    /// Version of the [`coprocessor_plugin_api`](crate) crate that was used to
+    /// compile this plugin.
     pub api_version: &'static str,
     /// Target triple for which platform this plugin was compiled.
     pub target: &'static str,
@@ -48,7 +55,7 @@ impl BuildInfo {
 
 /// Information about the plugin, like its name and version.
 #[repr(C)]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PluginInfo {
     /// The name of the plugin.
     pub name: &'static str,
@@ -59,11 +66,15 @@ pub struct PluginInfo {
 /// Declare a plugin for the library so that it can be loaded by TiKV.
 ///
 /// The macro has three different versions:
-/// * `declare_plugin!(plugin_name, plugin_version, plugin_ctor)` which gives you full control.
-/// * `declare_plugin!(plugin_name, plugin_ctor)` automatically fetches the version from `Cargo.toml`.
-/// * `declare_plugin!(plugin_ctor)` automatically fetches plugin name and version from `Cargo.toml`.
+/// * `declare_plugin!(plugin_name, plugin_version, plugin_ctor)` which gives
+///   you full control.
+/// * `declare_plugin!(plugin_name, plugin_ctor)` automatically fetches the
+///   version from `Cargo.toml`.
+/// * `declare_plugin!(plugin_ctor)` automatically fetches plugin name and
+///   version from `Cargo.toml`.
 ///
-/// The types of `plugin_name` and `plugin_version` have to be `&'static str` literals.
+/// The types of `plugin_name` and `plugin_version` have to be `&'static str`
+/// literals.
 ///
 /// # Notes
 /// This works by automatically generating an `extern "C"` function with a
@@ -119,8 +130,8 @@ macro_rules! declare_plugin {
 
 /// Transforms the name of a package into the name of the compiled library.
 ///
-/// The result of the function can be used to correctly locate build artifacts of `dylib` on
-/// different platforms.
+/// The result of the function can be used to correctly locate build artifacts
+/// of `dylib` on different platforms.
 ///
 /// The name of the `dylib` is
 /// * `lib<pkgname>.so` on Linux

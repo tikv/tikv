@@ -2,6 +2,7 @@
 
 use std::{cmp::Ordering, convert::TryFrom, sync::Arc};
 
+use async_trait::async_trait;
 use tidb_query_aggr::*;
 use tidb_query_common::{storage::IntervalRange, Result};
 use tidb_query_datatype::{
@@ -24,6 +25,7 @@ pub struct BatchStreamAggregationExecutor<Src: BatchExecutor>(
     AggregationExecutor<Src, BatchStreamAggregationImpl>,
 );
 
+#[async_trait]
 impl<Src: BatchExecutor> BatchExecutor for BatchStreamAggregationExecutor<Src> {
     type StorageStats = Src::StorageStats;
 
@@ -33,8 +35,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchStreamAggregationExecutor<Src> {
     }
 
     #[inline]
-    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        self.0.next_batch(scan_rows)
+    async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        self.0.next_batch(scan_rows).await
     }
 
     #[inline]
@@ -58,8 +60,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchStreamAggregationExecutor<Src> {
     }
 }
 
-// We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we can omit the type
-// when calling `check_supported`.
+// We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we
+// can omit the type when calling `check_supported`.
 impl BatchStreamAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
     /// Checks whether this executor can be used.
     #[inline]
@@ -95,13 +97,15 @@ pub struct BatchStreamAggregationImpl {
     states: Vec<Box<dyn AggrFunctionState>>,
 
     /// Stores evaluation results of group by expressions.
-    /// It is just used to reduce allocations. The lifetime is not really 'static. The elements
-    /// are only valid in the same batch where they are added.
+    /// It is just used to reduce allocations. The lifetime is not really
+    /// 'static. The elements are only valid in the same batch where they
+    /// are added.
     group_by_results_unsafe: Vec<RpnStackNode<'static>>,
 
     /// Stores evaluation results of aggregate expressions.
-    /// It is just used to reduce allocations. The lifetime is not really 'static. The elements
-    /// are only valid in the same batch where they are added.
+    /// It is just used to reduce allocations. The lifetime is not really
+    /// 'static. The elements are only valid in the same batch where they
+    /// are added.
     aggr_expr_results_unsafe: Vec<RpnStackNode<'static>>,
 }
 
@@ -121,6 +125,17 @@ impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
             aggr_def_parser,
         )
         .unwrap()
+    }
+
+    #[cfg(test)]
+    pub fn new_for_test_with_config(
+        config: Arc<EvalConfig>,
+        src: Src,
+        group_by_exps: Vec<RpnExpression>,
+        aggr_defs: Vec<Expr>,
+        aggr_def_parser: impl AggrDefinitionParser,
+    ) -> Self {
+        Self::new_impl(config, src, group_by_exps, aggr_defs, aggr_def_parser).unwrap()
     }
 
     pub fn new(
@@ -215,8 +230,8 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
         let group_by_len = self.group_by_exps.len();
         let aggr_fn_len = entities.each_aggr_fn.len();
 
-        // Decode columns with mutable input first, so subsequent access to input can be immutable
-        // (and the borrow checker will be happy)
+        // Decode columns with mutable input first, so subsequent access to input can be
+        // immutable (and the borrow checker will be happy)
         ensure_columns_decoded(
             context,
             &self.group_by_exps,
@@ -380,8 +395,8 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
         Ok(group_by_columns)
     }
 
-    /// We cannot ensure the last group is complete, so we can output partial results
-    /// only if group count >= 2.
+    /// We cannot ensure the last group is complete, so we can output partial
+    /// results only if group count >= 2.
     #[inline]
     fn is_partial_results_ready(&self) -> bool {
         AggregationExecutorImpl::<Src>::groups_len(self) >= 2
@@ -441,6 +456,7 @@ fn update_current_states(
 
 #[cfg(test)]
 mod tests {
+    use futures::executor::block_on;
     use tidb_query_datatype::{
         builder::FieldTypeBuilder, expr::EvalWarnings, Collation, FieldTypeTp,
     };
@@ -458,7 +474,8 @@ mod tests {
         use tipb::ExprType;
         use tipb_helper::ExprDefBuilder;
 
-        // This test creates a stream aggregation executor with the following aggregate functions:
+        // This test creates a stream aggregation executor with the following aggregate
+        // functions:
         // - COUNT(1)
         // - AVG(col_1 + 1.0)
         // And group by:
@@ -497,7 +514,7 @@ mod tests {
             AllAggrDefinitionParser,
         );
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[0, 1]);
         assert_eq!(r.physical_columns.rows_len(), 2);
         assert_eq!(r.physical_columns.columns_len(), 5);
@@ -528,12 +545,12 @@ mod tests {
             &[None, Real::new(3.5).ok()]
         );
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[0]);
         assert_eq!(r.physical_columns.rows_len(), 1);
         assert_eq!(r.physical_columns.columns_len(), 5);
@@ -581,7 +598,7 @@ mod tests {
             AllAggrDefinitionParser,
         );
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[0, 1]);
         assert_eq!(r.physical_columns.rows_len(), 2);
         assert_eq!(r.physical_columns.columns_len(), 2);
@@ -597,12 +614,12 @@ mod tests {
             &[None, Real::new(1.5).ok()]
         );
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[0]);
         assert_eq!(r.physical_columns.rows_len(), 1);
         assert_eq!(r.physical_columns.columns_len(), 2);

@@ -18,7 +18,10 @@ use tokio_timer::{
     Delay,
 };
 
-use crate::time::{monotonic_raw_now, Instant};
+use crate::{
+    sys::thread::StdThreadBuildWrapper,
+    time::{monotonic_raw_now, Instant},
+};
 
 pub struct Timer<T> {
     pending: BinaryHeap<Reverse<TimeoutTask<T>>>,
@@ -45,11 +48,11 @@ impl<T> Timer<T> {
         self.pending.peek().map(|task| task.0.next_tick)
     }
 
-    /// Pops a `TimeoutTask` from the `Timer`, which should be ticked before `instant`.
-    /// Returns `None` if no tasks should be ticked any more.
+    /// Pops a `TimeoutTask` from the `Timer`, which should be ticked before
+    /// `instant`. Returns `None` if no tasks should be ticked any more.
     ///
-    /// The normal use case is keeping `pop_task_before` until get `None` in order
-    /// to retrieve all available events.
+    /// The normal use case is keeping `pop_task_before` until get `None` in
+    /// order to retrieve all available events.
     pub fn pop_task_before(&mut self, instant: Instant) -> Option<T> {
         if self
             .pending
@@ -99,7 +102,7 @@ pub fn start_global_timer(name: &str) -> Handle {
     let props = crate::thread_group::current_properties();
     Builder::new()
         .name(thd_name!(name))
-        .spawn(move || {
+        .spawn_wrapper(move || {
             crate::thread_group::set_properties(props);
             tikv_alloc::add_thread_memory_accessor();
             let mut timer = tokio_timer::Timer::default();
@@ -119,8 +122,8 @@ pub fn start_global_timer(name: &str) -> Handle {
 struct TimeZero {
     /// An arbitrary time used as the zero time.
     ///
-    /// Note that `zero` doesn't have to be related to `steady_time_point`, as what's
-    /// observed here is elapsed time instead of time point.
+    /// Note that `zero` doesn't have to be related to `steady_time_point`, as
+    /// what's observed here is elapsed time instead of time point.
     zero: std::time::Instant,
     /// A base time point.
     ///
@@ -133,8 +136,8 @@ struct TimeZero {
 /// Time produced by the clock is not affected by clock jump or time adjustment.
 /// Internally it uses CLOCK_MONOTONIC_RAW to get a steady time source.
 ///
-/// `Instant`s produced by this clock can't be compared or used to calculate elapse
-/// unless they are produced using the same zero time.
+/// `Instant`s produced by this clock can't be compared or used to calculate
+/// elapse unless they are produced using the same zero time.
 #[derive(Clone)]
 pub struct SteadyClock {
     zero: Arc<TimeZero>,
@@ -198,7 +201,7 @@ fn start_global_steady_timer() -> SteadyTimer {
     let clock_ = clock.clone();
     Builder::new()
         .name(thd_name!("steady-timer"))
-        .spawn(move || {
+        .spawn_wrapper(move || {
             let c = Clock::new_with_now(clock_);
             let mut timer = tokio_timer::Timer::new_with_now(ParkThread::new(), c);
             tx.send(timer.handle()).unwrap();
@@ -219,7 +222,7 @@ mod tests {
 
     use super::*;
 
-    #[derive(Debug, PartialEq, Eq, Copy, Clone)]
+    #[derive(Debug, PartialEq, Copy, Clone)]
     enum Task {
         A,
         B,

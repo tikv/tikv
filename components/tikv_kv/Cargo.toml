@@ -26,8 +26,10 @@ test-engines-panic = [
 
 [dependencies]
 backtrace = "0.3"
+collections = { path = "../collections" }
 engine_panic = { path = "../engine_panic", default-features = false }
 engine_rocks = { path = "../engine_rocks", default-features = false }
+engine_test = { path = "../engine_test", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code", default-features = false }
 fail = "0.5"
@@ -46,6 +48,7 @@ slog_derive = "0.2"
 tempfile = "3.0"
 thiserror = "1.0"
 tikv_util = { path = "../tikv_util", default-features = false }
+tracker = { path = "../tracker" }
 txn_types = { path = "../txn_types", default-features = false }
 
 [dev-dependencies]

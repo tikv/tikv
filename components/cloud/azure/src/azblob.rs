@@ -247,8 +247,6 @@ impl RetryError for RequestError {
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(900);
 
 /// A helper for uploading a large file to Azure storage.
-///
-///
 struct AzureUploader {
     client_builder: Arc<dyn ContainerBuilder>,
     name: String,
@@ -257,7 +255,8 @@ struct AzureUploader {
 }
 
 impl AzureUploader {
-    /// Creates a new uploader with a given target location and upload configuration.
+    /// Creates a new uploader with a given target location and upload
+    /// configuration.
     fn new(client_builder: Arc<dyn ContainerBuilder>, config: &Config, name: String) -> Self {
         AzureUploader {
             client_builder,
@@ -288,8 +287,8 @@ impl AzureUploader {
 
     /// Uploads a file atomically.
     ///
-    /// This should be used only when the data is known to be short, and thus relatively cheap to
-    /// retry the entire upload.
+    /// This should be used only when the data is known to be short, and thus
+    /// relatively cheap to retry the entire upload.
     async fn upload(&self, data: &[u8]) -> Result<(), RequestError> {
         match timeout(Self::get_timeout(), async {
             self.client_builder
@@ -554,6 +553,33 @@ impl AzureStorage {
         }
         key.to_owned()
     }
+
+    fn get_range(
+        &self,
+        name: &str,
+        range: Option<std::ops::Range<u64>>,
+    ) -> Box<dyn AsyncRead + Unpin + '_> {
+        let name = self.maybe_prefix_key(name);
+        debug!("read file from Azure storage"; "key" => %name);
+        let t = async move {
+            let blob_client = self.client_builder.get_client().await?.as_blob_client(name);
+
+            let builder = if let Some(r) = range {
+                blob_client.get().range(r)
+            } else {
+                blob_client.get()
+            };
+
+            builder
+                .execute()
+                .await
+                .map(|res| res.data)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", e)))
+        };
+        let k = stream::once(t);
+        let t = k.boxed().into_async_read();
+        Box::new(t)
+    }
 }
 
 #[async_trait]
@@ -577,22 +603,11 @@ impl BlobStorage for AzureStorage {
     }
 
     fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
-        let name = self.maybe_prefix_key(name);
-        debug!("read file from Azure storage"; "key" => %name);
-        let t = async move {
-            self.client_builder
-                .get_client()
-                .await?
-                .as_blob_client(name)
-                .get()
-                .execute()
-                .await
-                .map(|res| res.data)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", e)))
-        };
-        let k = stream::once(t);
-        let t = k.boxed().into_async_read();
-        Box::new(t)
+        self.get_range(name, None)
+    }
+
+    fn get_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_> {
+        self.get_range(name, Some(off..off + len))
     }
 }
 

@@ -15,7 +15,7 @@ use prometheus::{
 };
 
 use crate::{
-    sys::thread::{self, Pid},
+    sys::thread::{self, Pid, THREAD_NAME_HASHMAP},
     time::Instant,
 };
 
@@ -150,7 +150,12 @@ impl Collector for ThreadsCollector {
                 // Threads CPU time.
                 let total = thread::linux::cpu_total(&stat);
                 // sanitize thread name before push metrics.
-                let name = sanitize_thread_name(tid, &stat.command);
+                let name = if let Some(thread_name) = THREAD_NAME_HASHMAP.lock().unwrap().get(&tid)
+                {
+                    sanitize_thread_name(tid, thread_name)
+                } else {
+                    sanitize_thread_name(tid, &stat.command)
+                };
                 let cpu_total = metrics
                     .cpu_totals
                     .get_metric_with_label_values(&[&name, &format!("{}", tid)])
@@ -209,7 +214,8 @@ impl Collector for ThreadsCollector {
     }
 }
 
-/// Sanitizes the thread name. Keeps `a-zA-Z0-9_:`, replaces `-` and ` ` with `_`, and drops the others.
+/// Sanitizes the thread name. Keeps `a-zA-Z0-9_:`, replaces `-` and ` ` with
+/// `_`, and drops the others.
 ///
 /// Examples:
 ///
@@ -363,7 +369,8 @@ impl ThreadInfoStatistics {
                 self.tid_names.entry(tid).or_insert(name);
 
                 // To get a percentage result,
-                // we pre-multiply `cpu_time` by 100 here rather than inside the `update_metric`.
+                // we pre-multiply `cpu_time` by 100 here rather than inside the
+                // `update_metric`.
                 let cpu_time = thread::linux::cpu_total(&stat) * 100.0;
                 update_metric(
                     &mut self.metrics_total.cpu_times,
@@ -471,6 +478,7 @@ mod tests {
     use std::{env::temp_dir, fs, io::Write, sync, time::Duration};
 
     use super::*;
+    use crate::sys::thread::StdThreadBuildWrapper;
 
     #[test]
     fn test_thread_stat_io() {
@@ -479,7 +487,7 @@ mod tests {
         let (tx1, rx1) = sync::mpsc::channel();
         let h = std::thread::Builder::new()
             .name(name.to_owned())
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 // Make `io::write_bytes` > 0
                 let mut tmp = temp_dir();
                 tmp.push(name);
@@ -528,7 +536,7 @@ mod tests {
         let (tx1, rx1) = sync::mpsc::channel();
         std::thread::Builder::new()
             .name(str1.to_owned())
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 tx1.send(()).unwrap();
 
                 // Make `io::write_bytes` > 0
@@ -614,7 +622,7 @@ mod tests {
         let (tx1, rx1) = sync::mpsc::channel();
         std::thread::Builder::new()
             .name(name)
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 tx1.send(()).unwrap();
 
                 let start = Instant::now();
@@ -698,7 +706,7 @@ mod tests {
 
         let (raw_name, _) = get_thread_name("(@#)").unwrap();
         assert_eq!(sanitize_thread_name(1, raw_name), "1");
-        assert!(get_thread_name("invalid_stat").is_err());
+        get_thread_name("invalid_stat").unwrap_err();
     }
 
     #[test]

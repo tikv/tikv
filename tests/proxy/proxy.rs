@@ -14,8 +14,9 @@ use kvproto::{
 use new_mock_engine_store::{
     mock_cluster::FFIHelperSet, node::NodeCluster, Cluster, ProxyConfig, TestPdClient,
 };
+pub use new_mock_engine_store::{must_get_equal, must_get_none};
 use raftstore::coprocessor::ConsistencyCheckMethod;
-pub use test_raftstore::{must_get_equal, must_get_none, new_peer};
+pub use test_raftstore::new_peer;
 use tikv_util::{
     config::{ReadableDuration, ReadableSize},
     time::Duration,
@@ -79,8 +80,7 @@ pub fn iter_ffi_helpers(
         None => cluster.engines.keys().map(|e| *e).collect::<Vec<_>>(),
     };
     for id in ids {
-        let db = cluster.get_engine(id);
-        let engine = engine_rocks::RocksEngine::from_db(db);
+        let engine = cluster.get_engine(id);
         let mut lock = cluster.ffi_helper_set.lock().unwrap();
         let ffiset = lock.get_mut(&id).unwrap();
         f(id, &engine, ffiset);
@@ -327,8 +327,8 @@ fn test_kv_write() {
         cluster.must_put(k.as_bytes(), v.as_bytes());
     }
 
-    // We can read from mock-store's memory, we are not sure if we can read from disk,
-    // since there may be or may not be a CompactLog.
+    // We can read from mock-store's memory, we are not sure if we can read from
+    // disk, since there may be or may not be a CompactLog.
     for i in 20..30 {
         let k = format!("k{}", i);
         let v = format!("v{}", i);

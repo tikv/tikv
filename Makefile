@@ -51,6 +51,7 @@ ifeq ($(PROXY_FRAME_POINTER),1)
 export RUSTFLAGS := $(RUSTFLAGS) -Cforce-frame-pointers=yes
 export CFLAGS := $(CFLAGS) -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer
 export CXXFLAGS := $(CXXFLAGS) -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer
+ENABLE_FEATURES += pprof-fp
 endif
 
 # Pick an allocator

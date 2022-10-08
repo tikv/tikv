@@ -5,6 +5,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use collections::HashMap;
 use kvproto::kvrpcpb::Context;
 
 use super::Result;
@@ -81,7 +82,8 @@ impl ExpectedWrite {
     }
 }
 
-/// `ExpectedWriteList` represents a list of writes expected to write to the engine
+/// `ExpectedWriteList` represents a list of writes expected to write to the
+/// engine
 struct ExpectedWriteList(Mutex<LinkedList<ExpectedWrite>>);
 
 // We implement drop here instead of on MockEngine
@@ -147,16 +149,12 @@ impl Engine for MockEngine {
     type Snap = <RocksEngine as Engine>::Snap;
     type Local = <RocksEngine as Engine>::Local;
 
-    fn kv_engine(&self) -> Self::Local {
+    fn kv_engine(&self) -> Option<Self::Local> {
         self.base.kv_engine()
     }
 
-    fn snapshot_on_kv_engine(&self, start_key: &[u8], end_key: &[u8]) -> Result<Self::Snap> {
-        self.base.snapshot_on_kv_engine(start_key, end_key)
-    }
-
-    fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()> {
-        self.base.modify_on_kv_engine(modifies)
+    fn modify_on_kv_engine(&self, region_modifies: HashMap<u64, Vec<Modify>>) -> Result<()> {
+        self.base.modify_on_kv_engine(region_modifies)
     }
 
     fn async_snapshot(&self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()> {

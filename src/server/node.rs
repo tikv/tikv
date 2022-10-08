@@ -43,7 +43,7 @@ use crate::{
 };
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
-const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
+const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL: Duration = Duration::from_secs(3);
 
 /// Creates a new storage engine which is backed by the Raft consensus
 /// protocol.
@@ -281,7 +281,8 @@ where
     pub fn get_router(&self) -> RaftRouter<EK, ER> {
         self.system.router()
     }
-    /// Gets a transmission end of a channel which is used send messages to apply worker.
+    /// Gets a transmission end of a channel which is used send messages to
+    /// apply worker.
     pub fn get_apply_router(&self) -> ApplyRouter<EK> {
         self.system.apply_router()
     }
@@ -319,11 +320,12 @@ where
             .kv
             .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?
             .expect("Store should have bootstrapped");
-        // API version is not written into `StoreIdent` in legacy TiKV, thus it will be V1 in
-        // `StoreIdent` regardless of `storage.enable_ttl`. To allow upgrading from legacy V1
-        // TiKV, the config switch between V1 and V1ttl are not checked here.
-        // It's safe to do so because `storage.enable_ttl` is impossible to change thanks to the
-        // config check.
+        // API version is not written into `StoreIdent` in legacy TiKV, thus it will be
+        // V1 in `StoreIdent` regardless of `storage.enable_ttl`. To allow upgrading
+        // from legacy V1 TiKV, the config switch between V1 and V1ttl are not checked
+        // here. It's safe to do so because `storage.enable_ttl` is impossible to change
+        // thanks to the config check. let should_check = match (ident.api_version,
+        // self.api_version) {
         let should_check = match (ident.api_version, self.api_version) {
             (ApiVersion::V1, ApiVersion::V1ttl) | (ApiVersion::V1ttl, ApiVersion::V1) => false,
             (left, right) => left != right,
@@ -334,7 +336,7 @@ where
             for cf in DATA_CFS {
                 for (start, end) in TIDB_RANGES_COMPLEMENT {
                     let mut unexpected_data_key = None;
-                    snapshot.scan_cf(
+                    snapshot.scan(
                         cf,
                         &keys::data_key(start),
                         &keys::data_key(end),
@@ -466,9 +468,7 @@ where
                 Err(e) => error!(?e; "bootstrap cluster"; "cluster_id" => self.cluster_id,),
             }
             retry += 1;
-            thread::sleep(Duration::from_secs(
-                CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS,
-            ));
+            thread::sleep(CHECK_CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL);
         }
         Err(box_err!("bootstrapped cluster failed"))
     }
@@ -481,9 +481,7 @@ where
                     warn!("check cluster bootstrapped failed"; "err" => ?e);
                 }
             }
-            thread::sleep(Duration::from_secs(
-                CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS,
-            ));
+            thread::sleep(CHECK_CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL);
         }
         Err(box_err!("check cluster bootstrapped failed"))
     }

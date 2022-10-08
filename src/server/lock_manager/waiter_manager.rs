@@ -18,14 +18,15 @@ use futures::{
     future::Future,
     task::{Context, Poll},
 };
-use kvproto::deadlock::WaitForEntry;
-use prometheus::HistogramTimer;
+use kvproto::{deadlock::WaitForEntry, kvrpcpb::WriteConflictReason};
 use tikv_util::{
     config::ReadableDuration,
+    time::{duration_to_sec, InstantExt},
     timer::GLOBAL_TIMER_HANDLE,
     worker::{FutureRunnable, FutureScheduler, Stopped},
 };
 use tokio::task::spawn_local;
+use tracker::GLOBAL_TRACKERS;
 
 use super::{config::Config, deadlock::Scheduler as DetectorScheduler, metrics::*};
 use crate::storage::{
@@ -40,11 +41,13 @@ struct DelayInner {
     cancelled: bool,
 }
 
-/// `Delay` is a wrapper of `tokio_timer::Delay` which has a resolution of one millisecond.
-/// It has some extra features than `tokio_timer::Delay` used by `WaiterManager`.
+/// `Delay` is a wrapper of `tokio_timer::Delay` which has a resolution of one
+/// millisecond. It has some extra features than `tokio_timer::Delay` used by
+/// `WaiterManager`.
 ///
-/// `Delay` performs no work and completes with `true` once the specified deadline has been reached.
-/// If it has been cancelled, it will complete with `false` at arbitrary time.
+/// `Delay` performs no work and completes with `true` once the specified
+/// deadline has been reached. If it has been cancelled, it will complete with
+/// `false` at arbitrary time.
 // FIXME: Use `tokio_timer::DelayQueue` instead if https://github.com/tokio-rs/tokio/issues/1700 is fixed.
 #[derive(Clone)]
 struct Delay {
@@ -108,6 +111,7 @@ pub enum Task {
         lock: Lock,
         timeout: WaitTimeout,
         diag_ctx: DiagnosticContext,
+        start_waiting_time: Instant,
     },
     WakeUp {
         // lock info
@@ -179,7 +183,7 @@ pub(crate) struct Waiter {
     pub(crate) lock: Lock,
     pub diag_ctx: DiagnosticContext,
     delay: Delay,
-    _lifetime_timer: HistogramTimer,
+    start_waiting_time: Instant,
 }
 
 impl Waiter {
@@ -190,6 +194,7 @@ impl Waiter {
         lock: Lock,
         deadline: Instant,
         diag_ctx: DiagnosticContext,
+        start_waiting_time: Instant,
     ) -> Self {
         Self {
             start_ts,
@@ -198,7 +203,7 @@ impl Waiter {
             lock,
             delay: Delay::new(deadline),
             diag_ctx,
-            _lifetime_timer: WAITER_LIFETIME_HISTOGRAM.start_coarse_timer(),
+            start_waiting_time,
         }
     }
 
@@ -222,6 +227,11 @@ impl Waiter {
     /// `Notify` consumes the `Waiter` to notify the corresponding transaction
     /// going on.
     fn notify(self) {
+        let elapsed = self.start_waiting_time.saturating_elapsed();
+        GLOBAL_TRACKERS.with_tracker(self.diag_ctx.tracker, |tracker| {
+            tracker.metrics.pessimistic_lock_wait_nanos = elapsed.as_nanos() as u64;
+        });
+        WAITER_LIFETIME_HISTOGRAM.observe(duration_to_sec(elapsed));
         // Cancel the delay timer to prevent removing the same `Waiter` earlier.
         self.delay.cancel();
         self.cb.execute(self.pr);
@@ -237,6 +247,7 @@ impl Waiter {
             conflict_commit_ts: commit_ts,
             key,
             primary,
+            reason: WriteConflictReason::PessimisticRetry,
         });
         self.pr = ProcessResult::Failed {
             err: StorageError::from(TxnError::from(mvcc_err)),
@@ -325,7 +336,8 @@ impl WaitTable {
             WAIT_TABLE_STATUS_GAUGE.txns.inc();
             None
         }
-        // Here we don't increase waiter_count because it's already updated in LockManager::wait_for()
+        // Here we don't increase waiter_count because it's already updated in
+        // LockManager::wait_for()
     }
 
     /// Removes all waiters waiting for the lock.
@@ -348,10 +360,11 @@ impl WaitTable {
         Some(waiter)
     }
 
-    /// Removes the `Waiter` with the smallest start ts and returns it with remaining waiters.
+    /// Removes the `Waiter` with the smallest start ts and returns it with
+    /// remaining waiters.
     ///
-    /// NOTE: Due to the borrow checker, it doesn't remove the entry in the `WaitTable`
-    /// even if there is no remaining waiter.
+    /// NOTE: Due to the borrow checker, it doesn't remove the entry in the
+    /// `WaitTable` even if there is no remaining waiter.
     fn remove_oldest_waiter(&mut self, lock: Lock) -> Option<(Waiter, &mut Waiters)> {
         let waiters = self.wait_table.get_mut(&lock.hash)?;
         let oldest_idx = waiters
@@ -420,6 +433,7 @@ impl Scheduler {
             lock,
             timeout,
             diag_ctx,
+            start_waiting_time: Instant::now(),
         });
     }
 
@@ -593,6 +607,7 @@ impl FutureRunnable<Task> for WaiterManager {
                 lock,
                 timeout,
                 diag_ctx,
+                start_waiting_time,
             } => {
                 let waiter = Waiter::new(
                     start_ts,
@@ -601,6 +616,7 @@ impl FutureRunnable<Task> for WaiterManager {
                     lock,
                     self.normalize_deadline(timeout),
                     diag_ctx,
+                    start_waiting_time,
                 );
                 self.handle_wait_for(waiter);
                 TASK_COUNTER_METRICS.wait_for.inc();
@@ -658,7 +674,7 @@ pub mod tests {
             lock: Lock { ts: lock_ts, hash },
             diag_ctx: DiagnosticContext::default(),
             delay: Delay::new(Instant::now()),
-            _lifetime_timer: WAITER_LIFETIME_HISTOGRAM.start_coarse_timer(),
+            start_waiting_time: Instant::now(),
         }
     }
 
@@ -760,6 +776,7 @@ pub mod tests {
             lock,
             Instant::now() + Duration::from_millis(3000),
             DiagnosticContext::default(),
+            Instant::now(),
         );
         (waiter, info, f)
     }
@@ -806,6 +823,7 @@ pub mod tests {
                     conflict_commit_ts,
                     key,
                     primary,
+                    ..
                 }),
             ))))) => {
                 assert_eq!(start_ts, waiter_ts);
@@ -823,7 +841,8 @@ pub mod tests {
         waiter_ts: TimeStamp,
         mut lock_info: LockInfo,
         deadlock_hash: u64,
-        expect_wait_chain: &[(u64, u64, &[u8], &[u8])], // (waiter_ts, wait_for_ts, key, resource_group_tag)
+        expect_wait_chain: &[(u64, u64, &[u8], &[u8])], /* (waiter_ts, wait_for_ts, key,
+                                                         * resource_group_tag) */
     ) {
         match res {
             Err(StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
@@ -972,7 +991,7 @@ pub mod tests {
                 .remove_waiter(
                     Lock {
                         ts: TimeStamp::zero(),
-                        hash: 0
+                        hash: 0,
                     },
                     TimeStamp::zero(),
                 )

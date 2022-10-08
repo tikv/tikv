@@ -8,7 +8,8 @@ pub unsafe extern "C" fn print_raftstore_proxy_version() {
 }
 
 /// # Safety
-/// Please make sure such function will be run in an independent thread. Usage about interfaces can be found in `struct EngineStoreServerHelper`.
+/// Please make sure such function will be run in an independent thread. Usage
+/// about interfaces can be found in `struct EngineStoreServerHelper`.
 #[no_mangle]
 pub unsafe extern "C" fn run_raftstore_proxy_ffi(
     argc: c_int,

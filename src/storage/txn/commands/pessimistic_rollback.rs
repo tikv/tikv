@@ -25,7 +25,7 @@ command! {
     /// This can roll back an [`AcquirePessimisticLock`](Command::AcquirePessimisticLock) command.
     PessimisticRollback:
         cmd_ty => Vec<StorageResult<()>>,
-        display => "kv::command::pessimistic_rollback keys({}) @ {} {} | {:?}", (keys.len, start_ts, for_update_ts, ctx),
+        display => "kv::command::pessimistic_rollback keys({:?}) @ {} {} | {:?}", (keys, start_ts, for_update_ts, ctx),
         content => {
             /// The keys to be rolled back.
             keys: Vec<Key>,
@@ -38,13 +38,15 @@ command! {
 impl CommandExt for PessimisticRollback {
     ctx!();
     tag!(pessimistic_rollback);
+    request_type!(KvPessimisticRollback);
     ts!(start_ts);
     write_bytes!(keys: multiple);
     gen_lock!(keys: multiple);
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
-    /// Delete any pessimistic lock with small for_update_ts belongs to this transaction.
+    /// Delete any pessimistic lock with small for_update_ts belongs to this
+    /// transaction.
     fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
         let mut reader = ReaderWithStats::new(

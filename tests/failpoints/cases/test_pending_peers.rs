@@ -37,8 +37,8 @@ fn test_pending_peers() {
     assert!(pending_peers.is_empty());
 }
 
-// Tests if raftstore and apply worker write truncated_state concurrently could lead to
-// dirty write.
+// Tests if raftstore and apply worker write truncated_state concurrently could
+// lead to dirty write.
 #[test]
 fn test_pending_snapshot() {
     let mut cluster = new_node_cluster(0, 3);

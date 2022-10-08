@@ -935,7 +935,7 @@ fn test_cdc_batch_size_limit_impl<F: KvFormat>() {
     assert_eq!(events.len(), 1, "{:?}", events);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 2);
+            assert_eq!(es.entries.len(), 2);
             let e = &es.entries[0];
             assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", e.get_type());
             assert_eq!(e.key, b"xk3", "{:?}", e.key);
@@ -1177,7 +1177,8 @@ fn test_old_value_multi_changefeeds_impl<F: KvFormat>() {
         }
     }
 
-    // The downstream 2 can also get old values because `req`.`extra_op` field is ignored now.
+    // The downstream 2 can also get old values because `req`.`extra_op` field is
+    // ignored now.
     event_count = 0;
     loop {
         let events = receive_event_2(false).events.to_vec();
@@ -1285,9 +1286,9 @@ fn test_cdc_resolve_ts_checking_concurrency_manager_impl<F: KvFormat>() {
     }
 
     let _guard = lock_key(b"xa", 90);
-    // The resolved_ts should be blocked by the mem lock but it's already greater than 90.
-    // Retry until receiving an unchanged resolved_ts because the first several resolved ts received
-    // might be updated before acquiring the lock.
+    // The resolved_ts should be blocked by the mem lock but it's already greater
+    // than 90. Retry until receiving an unchanged resolved_ts because the first
+    // several resolved ts received might be updated before acquiring the lock.
     let mut last_resolved_ts = 0;
     let mut success = false;
     for _ in 0..5 {
@@ -1840,9 +1841,10 @@ fn test_cdc_scan_ignore_gc_fence_impl<F: KvFormat>() {
     let commit_ts2 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_kv_commit(1, vec![key.to_vec()], start_ts2, commit_ts2);
 
-    // Assume the first version above is written by async commit and it's commit_ts is not unique.
-    // Use it's commit_ts as another transaction's start_ts.
-    // Run check_txn_status on commit_ts1 so that gc_fence will be set on the first version.
+    // Assume the first version above is written by async commit and it's commit_ts
+    // is not unique. Use it's commit_ts as another transaction's start_ts.
+    // Run check_txn_status on commit_ts1 so that gc_fence will be set on the first
+    // version.
     let caller_start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     let action = suite.must_check_txn_status(
         1,
@@ -1940,9 +1942,10 @@ fn test_cdc_extract_rollback_if_gc_fence_set_impl<F: KvFormat>() {
     let commit_ts2 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_kv_commit(1, vec![key.to_vec()], start_ts2, commit_ts2);
 
-    // We don't care about the events caused by the previous writings in this test case, and it's
-    // too complicated to check them. Just skip them here, and wait for resolved_ts to be pushed to
-    // a greater value than the two versions' commit_ts-es.
+    // We don't care about the events caused by the previous writings in this test
+    // case, and it's too complicated to check them. Just skip them here, and
+    // wait for resolved_ts to be pushed to a greater value than the two
+    // versions' commit_ts-es.
     let skip_to_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     loop {
         let e = receive_event(true);
@@ -1953,9 +1956,10 @@ fn test_cdc_extract_rollback_if_gc_fence_set_impl<F: KvFormat>() {
         }
     }
 
-    // Assume the two versions of the key are written by async commit transactions, and their
-    // commit_ts-es are also other transaction's start_ts-es. Run check_txn_status on the
-    // commit_ts-es of the two versions to cause overlapping rollback.
+    // Assume the two versions of the key are written by async commit transactions,
+    // and their commit_ts-es are also other transaction's start_ts-es. Run
+    // check_txn_status on the commit_ts-es of the two versions to cause
+    // overlapping rollback.
     let caller_start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_check_txn_status(
         1,
@@ -2007,9 +2011,9 @@ fn test_cdc_extract_rollback_if_gc_fence_set_impl<F: KvFormat>() {
             other => panic!("unknown event {:?}", other),
         });
 
-    // In some special cases, a newly committed record may carry an overlapped rollback initially.
-    // In this case, gc_fence shouldn't be set, and CDC ignores the rollback and handles the
-    // committing normally.
+    // In some special cases, a newly committed record may carry an overlapped
+    // rollback initially. In this case, gc_fence shouldn't be set, and CDC
+    // ignores the rollback and handles the committing normally.
     let start_ts3 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
@@ -2031,11 +2035,11 @@ fn test_cdc_extract_rollback_if_gc_fence_set_impl<F: KvFormat>() {
             other => panic!("unknown event {:?}", other),
         });
 
-    // Again, assume the transaction is committed with async commit protocol, and the commit_ts is
-    // also another transaction's start_ts.
+    // Again, assume the transaction is committed with async commit protocol, and
+    // the commit_ts is also another transaction's start_ts.
     let commit_ts3 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
-    // Rollback another transaction before committing, then the rolling back information will be
-    // recorded in the lock.
+    // Rollback another transaction before committing, then the rolling back
+    // information will be recorded in the lock.
     let caller_start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_check_txn_status(
         1,
@@ -2082,10 +2086,11 @@ fn test_cdc_extract_rollback_if_gc_fence_set_impl<F: KvFormat>() {
     suite.stop();
 }
 
-// This test is created for covering the case that term was increased without leader change.
-// Ideally leader id and term in StoreMeta should be updated together with a yielded SoftState,
-// but sometimes the leader was transferred to another store and then changed back,
-// a follower would not get a new SoftState.
+// This test is created for covering the case that term was increased without
+// leader change. Ideally leader id and term in StoreMeta should be updated
+// together with a yielded SoftState, but sometimes the leader was transferred
+// to another store and then changed back, a follower would not get a new
+// SoftState.
 #[test]
 fn test_term_change() {
     let cluster = new_server_cluster(0, 3);
@@ -2317,4 +2322,40 @@ fn test_resolved_ts_with_learners() {
         }
     }
     panic!("resolved timestamp should be advanced correctly");
+}
+
+#[test]
+fn test_prewrite_without_value() {
+    let cluster = new_server_cluster(0, 2);
+    cluster.pd_client.disable_default_operator();
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
+    let rid = suite.cluster.get_region(&[]).id;
+    let ctx = suite.get_context(rid);
+    let client = suite.get_tikv_client(rid).clone();
+    let large_value = vec![b'x'; 2 * txn_types::SHORT_VALUE_MAX_LEN];
+
+    // Perform a pessimistic prewrite with a large value.
+    let mut muts = vec![Mutation::default()];
+    muts[0].set_op(Op::Put);
+    muts[0].key = b"key".to_vec();
+    muts[0].value = large_value.clone();
+    try_kv_prewrite_pessimistic(&client, ctx.clone(), muts, b"key".to_vec(), 10);
+
+    let req = suite.new_changedata_request(rid);
+    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(rid));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+
+    // The prewrite can be retrieved from incremental scan.
+    let event = receive_event(false);
+    assert_eq!(
+        event.get_events()[0].get_entries().entries[0].value,
+        large_value
+    );
+
+    // check_txn_status will put the lock again, but without value.
+    must_check_txn_status(&client, ctx.clone(), b"key", 10, 12, 12);
+    must_kv_commit(&client, ctx, vec![b"key".to_vec()], 10, 14, 14);
+    // The lock without value shouldn't be retrieved.
+    let event = receive_event(false);
+    assert_eq!(event.get_events()[0].get_entries().entries[0].commit_ts, 14);
 }

@@ -52,8 +52,17 @@
 # foreground-write-bandwidth = "0B"
 ## Read bandwidth limitation for this TiKV instance, default value is 0 which means unlimited.
 # foreground-read-bandwidth = "0B"
-## Limitation of max delay duration for each request, default value is 0 which means unlimited.
+## CPU quota for these background requests can use, default value is 0, it means unlimited.
+## The unit is millicpu but for now this config is approximate and soft limit.
+# background-cpu-time = 0
+## Write bandwidth limitation for backgroud request for this TiKV instance, default value is 0 which means unlimited.
+# background-write-bandwidth = "0B"
+## Read bandwidth limitation for background request for this TiKV instance, default value is 0 which means unlimited.
+# background-read-bandwidth = "0B"
+## Limitation of max delay duration, default value is 0 which means unlimited.
 # max-delay-duration = "500ms"
+## Whether to enable quota auto tune
+# enable-auto-tune = false
 
 [log]
 ## Log levels: debug, info, warn, error, fatal.
@@ -81,7 +90,7 @@
 
 ## The maximum working thread count of the thread pool.
 ## The default value is max(4, LOGICAL_CPU_NUM * 0.8).
-# max-thread-count = 8
+# max-thread-count = 4
 
 ## Size of the stack for each thread in the thread pool.
 # stack-size = "10MB"
@@ -693,7 +702,7 @@
 ## Maximum number of level-0 files.
 ## When the number of SST files of level-0 reaches the limit of `level0-stop-writes-trigger`,
 ## RocksDB stalls the new write operation.
-# level0-stop-writes-trigger = 36
+# level0-stop-writes-trigger = 20
 
 ## Amount of data to build up in memory (backed by an unsorted log on disk) before converting to a
 ## sorted on-disk file. It is the RocksDB MemTable size.
@@ -745,6 +754,12 @@
 ## "min-overlapping-ratio"
 # compaction-pri = "min-overlapping-ratio"
 
+## Refer to storage.flow-control.soft-pending-compaction-bytes-limit.
+# soft-pending-compaction-bytes-limit = "192GB"
+
+## Refer to storage.flow-control.hard-pending-compaction-bytes-limit.
+# hard-pending-compaction-bytes-limit = "1000GB"
+
 ## Indicating if we'd put index/filter blocks to the block cache.
 ## If not specified, each "table reader" object will pre-load index/filter block during table
 ## initialization.
@@ -788,6 +803,56 @@
 ## for the same CF.
 # compaction-guard-max-output-file-size = "128M"
 
+## Available versions:
+##
+## 0 -- This version can be read by all TiKV releases. Doesn't support changing
+## checksum type (default is CRC32).
+##
+## 1 -- Can be read by all TiKV releases. Supports non-default checksum, like
+## xxHash. It is written by RocksDB when BlockBasedTableOptions::checksum is
+## something other than kCRC32c. (version 0 is silently upconverted)
+##
+## 2 -- Can be read by all TiKV releases. Changes the way we encode compressed
+## blocks with LZ4, BZip2 and Zlib compression.
+##
+## 3 -- Can be read by TiKV's versions since 2.1. Changes the way we encode the
+## keys in index blocks.
+## This option only affects newly written tables. When reading existing tables,
+## the information about version is read from the footer.
+##
+## 4 -- Can be read by TiKV's versions since 3.0. Changes the way we encode the
+## values in index blocks.
+## This option only affects newly written tables. When reading existing tables,
+## the information about version is read from the footer.
+##
+# format-version = 2
+
+## If enabled, prepopulate warm/hot blocks (data, uncompressed dict, index and
+## filter blocks) which are already in memory into block cache at the time of
+## flush. On a flush, the block that is in memory (in memtables) get flushed
+## to the device. If using Direct IO, additional IO is incurred to read this
+## data back into memory again, which is avoided by enabling this option. This
+## further helps if the workload exhibits high temporal locality, where most
+## of the reads go to recently written data. This also helps in case of
+## Distributed FileSystem.
+##
+##   disabled:   kDisabled
+##   flush-only: kFlushOnly
+##
+# prepopulate-block-cache = "disabled"
+
+## Use the specified checksum type. Newly created table files will be
+## protected with this checksum type. Old table files will still be readable,
+## even though they have different checksum type.
+##
+##   no:       kNoChecksum
+##   crc32c:   kCRC32c
+##   xxhash:   kxxHash
+##   xxhash64: kxxHash64
+##   xxh3:     kXXH3 (supported since TiKV 6.2)
+##
+# checksum = "crc32c"
+
 ## Options for "Default" Column Family for `Titan`.
 [rocksdb.defaultcf.titan]
 ## The smallest value to store in blob files. Value smaller than
@@ -816,10 +881,15 @@
 ## default: 0.5
 # discardable-ratio = 0.5
 
-## The mode used to process blob files. In read-only mode Titan
-## stops writing value into blob log. In fallback mode Titan
-## converts blob index into real value on flush and compaction.
-## This option is especially useful for downgrading Titan.
+## The mode used to process blob files. In read-only mode Titan stops writing
+## value into blob log. In fallback mode Titan converts blob index into real
+## value on flush and compaction.
+##
+## This option can be used to disable Titan. More specifically, to disable
+## Titan, set this option to fallback and perform a full compaction using
+## tikv-ctl. Then, monitor the blob file size metrics. After the blob file size
+## decreases to 0, you can set rocksdb.titan.enabled to false and restart TiKV.
+##
 ##   default:   kNormal
 ##   read-only: kReadOnly
 ##   fallback:  kFallback
@@ -838,10 +908,6 @@
 ## default: false
 # level-merge = false
 
-## Use merge operator to rewrite GC blob index.
-## default: false
-# gc-merge-rewrite = false
-
 ## Options for "Write" Column Family, which stores MVCC commit information
 [rocksdb.writecf]
 ## Recommend to set it the same as `rocksdb.defaultcf.compression-per-level`.
@@ -859,16 +925,21 @@
 
 # level0-file-num-compaction-trigger = 4
 # level0-slowdown-writes-trigger = 20
-# level0-stop-writes-trigger = 36
+# level0-stop-writes-trigger = 20
 # cache-index-and-filter-blocks = true
 # pin-l0-filter-and-index-blocks = true
 # compaction-pri = "min-overlapping-ratio"
+# soft-pending-compaction-bytes-limit = "192GB"
+# hard-pending-compaction-bytes-limit = "1000GB"
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = false
 # enable-compaction-guard = true
 # compaction-guard-min-output-file-size = "8M"
 # compaction-guard-max-output-file-size = "128M"
+# format-version = 2
+# prepopulate-block-cache = "disabled"
+# checksum = "crc32c"
 
 [rocksdb.lockcf]
 # compression-per-level = ["no", "no", "no", "no", "no", "no", "no"]
@@ -880,14 +951,19 @@
 # target-file-size-base = "8MB"
 # level0-file-num-compaction-trigger = 1
 # level0-slowdown-writes-trigger = 20
-# level0-stop-writes-trigger = 36
+# level0-stop-writes-trigger = 20
 # cache-index-and-filter-blocks = true
 # pin-l0-filter-and-index-blocks = true
 # compaction-pri = "by-compensated-size"
+# soft-pending-compaction-bytes-limit = "192GB"
+# hard-pending-compaction-bytes-limit = "1000GB"
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = false
 # enable-compaction-guard = false
+# format-version = 2
+# prepopulate-block-cache = "disabled"
+# checksum = "crc32c"
 
 [raftdb]
 # max-background-jobs = 4
@@ -937,14 +1013,19 @@
 
 # level0-file-num-compaction-trigger = 4
 # level0-slowdown-writes-trigger = 20
-# level0-stop-writes-trigger = 36
+# level0-stop-writes-trigger = 20
 # cache-index-and-filter-blocks = true
 # pin-l0-filter-and-index-blocks = true
 # compaction-pri = "by-compensated-size"
+# soft-pending-compaction-bytes-limit = "192GB"
+# hard-pending-compaction-bytes-limit = "1000GB"
 # read-amp-bytes-per-bit = 0
 # dynamic-level-bytes = true
 # optimize-filters-for-hits = true
 # enable-compaction-guard = false
+# format-version = 2
+# prepopulate-block-cache = "disabled"
+# checksum = "crc32c"
 
 [raft-engine]
 ## Determines whether to use Raft Engine to store raft logs. When it is
@@ -965,12 +1046,6 @@
 ##
 ## If you set this configuration item to `0`, compression is disabled.
 # batch-compression-threshold = "8KB"
-
-## Specifies the maximum accumulative size of buffered writes. When this
-## configuration value is exceeded, buffered writes are flushed to the disk.
-##
-## If you set this configuration item to `0`, incremental sync is disabled.
-# bytes-per-sync = "4MB"
 
 ## Specifies the maximum size of log files. When a log file is larger than this
 ## value, it is rotated.
@@ -1004,6 +1079,23 @@
 ## Memory usage limit for Raft Engine.
 ## When it's not set, 15% of available system memory will be used.
 # memory-limit = "1GB"
+
+## Version of the log file in Raft Engine.
+##
+## Candidates:
+##   1: Can be read by TiKV release 6.1 and above.
+##   2: Can be read by TiKV release 6.3 and above. Supports log recycling.
+##
+## Default: 2.
+# format-version = 2
+
+## Whether to recycle stale log files in Raft Engine.
+## If `true`, logically purged log files will be reserved for recycling.
+## Only available for `format-version` >= 2. This option is only
+## available when TiKV >= 6.3.x.
+##
+## Default: true.
+# enable-log-recycle = true
 
 [security]
 ## The path for TLS certificates. Empty string means disabling secure connections.
@@ -1108,12 +1200,12 @@
 
 [log-backup] 
 ## Number of threads to perform backup stream tasks.
-## The default value is set to min(CPU_NUM * 0.5, 8).
+## The default value is CPU_NUM * 0.5, and limited to [2, 12].
 # num-threads = 8
 
 ## enable this feature. TiKV will starts watch related tasks in PD. and backup kv changes to storage accodring to task.
 ## The default value is false.
-# enable = false 
+# enable = true 
 
 [backup.hadoop]
 ## let TiKV know how to find the hdfs shell command.

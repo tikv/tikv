@@ -44,6 +44,7 @@ use crate::{
     read_pool::ReadPool,
     server::{gc_worker::GcWorker, Proxy},
     storage::{lock_manager::LockManager, Engine, Storage},
+    tikv_util::sys::thread::ThreadBuildWrapper,
 };
 
 const LOAD_STATISTICS_SLOTS: usize = 4;
@@ -109,6 +110,8 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
                 RuntimeBuilder::new_multi_thread()
                     .thread_name(STATS_THREAD_PREFIX)
                     .worker_threads(cfg.value().stats_concurrency)
+                    .after_start_wrapper(|| {})
+                    .before_stop_wrapper(|| {})
                     .build()
                     .unwrap(),
             )
@@ -306,7 +309,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
             server.shutdown();
         }
         if let Some(pool) = self.stats_pool.take() {
-            let _ = pool.shutdown_background();
+            pool.shutdown_background();
         }
         let _ = self.yatp_read_pool.take();
         self.health_service.shutdown();
@@ -407,7 +410,10 @@ mod tests {
     use engine_rocks::RocksSnapshot;
     use grpcio::EnvBuilder;
     use kvproto::raft_serverpb::RaftMessage;
-    use raftstore::store::{transport::Transport, *};
+    use raftstore::{
+        coprocessor::region_info_accessor::MockRegionInfoProvider,
+        store::{transport::Transport, *},
+    };
     use resource_metering::ResourceTagFactory;
     use security::SecurityConfig;
     use tikv_util::quota_limiter::QuotaLimiter;
@@ -463,9 +469,11 @@ mod tests {
         }
     }
 
-    // if this failed, unset the environmental variables 'http_proxy' and 'https_proxy', and retry.
+    // if this failed, unset the environmental variables 'http_proxy' and
+    // 'https_proxy', and retry.
     #[test]
     fn test_peer_resolve() {
+        let mock_store_id = 5;
         let cfg = Config {
             addr: "127.0.0.1:0".to_owned(),
             ..Default::default()
@@ -492,8 +500,9 @@ mod tests {
             tx,
             Default::default(),
             Default::default(),
+            Arc::new(MockRegionInfoProvider::new(Vec::new())),
         );
-        gc_worker.start().unwrap();
+        gc_worker.start(mock_store_id).unwrap();
 
         let quick_fail = Arc::new(AtomicBool::new(false));
         let cfg = Arc::new(VersionTrack::new(cfg));
@@ -515,10 +524,11 @@ mod tests {
             TokioBuilder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
                 .worker_threads(1)
+                .after_start_wrapper(|| {})
+                .before_stop_wrapper(|| {})
                 .build()
                 .unwrap(),
         );
-        let mock_store_id = 5;
         let addr = Arc::new(Mutex::new(None));
         let (check_leader_scheduler, _) = tikv_util::worker::dummy_scheduler();
         let mut server = Server::new(
@@ -564,7 +574,7 @@ mod tests {
 
         trans.send(msg.clone()).unwrap();
         trans.flush();
-        assert!(rx.recv_timeout(Duration::from_secs(5)).is_ok());
+        rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
         msg.mut_to_peer().set_store_id(2);
         msg.set_region_id(2);

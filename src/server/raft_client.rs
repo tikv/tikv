@@ -133,7 +133,8 @@ impl Queue {
         self.buf.pop()
     }
 
-    /// Same as `try_pop` but register interest on readiness when `None` is returned.
+    /// Same as `try_pop` but register interest on readiness when `None` is
+    /// returned.
     ///
     /// The method should be called in polling context. If the queue is empty,
     /// it will register current polling task for notifications.
@@ -216,11 +217,20 @@ impl BatchMessageBuffer {
         msg_size
     }
 
+    #[inline]
+    fn maybe_refresh_config(&mut self) {
+        if let Some(new_cfg) = self.cfg_tracker.any_new() {
+            self.cfg = new_cfg.clone();
+        }
+    }
+
     #[cfg(test)]
     fn clear(&mut self) {
         self.batch = BatchRaftMessage::default();
         self.size = 0;
         self.overflowing = None;
+        // try refresh config
+        self.maybe_refresh_config();
     }
 }
 
@@ -235,12 +245,8 @@ impl Buffer for BatchMessageBuffer {
     #[inline]
     fn push(&mut self, msg: RaftMessage) {
         let msg_size = Self::message_size(&msg);
-        // try refresh config before check
-        if let Some(new_cfg) = self.cfg_tracker.any_new() {
-            self.cfg = new_cfg.clone();
-        }
-        // To avoid building too large batch, we limit each batch's size. Since `msg_size`
-        // is estimated, `GRPC_SEND_MSG_BUF` is reserved for errors.
+        // To avoid building too large batch, we limit each batch's size. Since
+        // `msg_size` is estimated, `GRPC_SEND_MSG_BUF` is reserved for errors.
         if self.size > 0
             && (self.size + msg_size + self.cfg.raft_client_grpc_send_msg_buffer
                 >= self.cfg.max_grpc_send_msg_len as usize
@@ -270,6 +276,13 @@ impl Buffer for BatchMessageBuffer {
         if let Some(more) = self.overflowing.take() {
             self.push(more);
         }
+
+        // try refresh config after flush. `max_grpc_send_msg_len` and
+        // `raft_msg_max_batch_size` can impact the buffer push logic, but since
+        // they are soft restriction, we check config change at here to avoid
+        // affact performance since `push` is a hot path.
+        self.maybe_refresh_config();
+
         res
     }
 
@@ -522,7 +535,8 @@ where
                     RAFT_MESSAGE_FLUSH_COUNTER.full.inc_by(1);
                 }
 
-                // So either enough messages are batched up or don't need to wait or wait timeouts.
+                // So either enough messages are batched up or don't need to wait or wait
+                // timeouts.
                 s.flush_timeout.take();
                 ready!(Poll::Ready(s.buffer.flush(&mut s.sender)))?;
                 continue;
@@ -681,6 +695,8 @@ where
             .keepalive_time(cfg.grpc_keepalive_time.0)
             .keepalive_timeout(cfg.grpc_keepalive_timeout.0)
             .default_compression_algorithm(cfg.grpc_compression_algorithm())
+            .default_gzip_compression_level(cfg.grpc_gzip_compression_level)
+            .default_grpc_min_message_size_to_compress(cfg.grpc_min_message_size_to_compress)
             // hack: so it's different args, grpc will always create a new connection.
             .raw_cfg_int(
                 CString::new("random id").unwrap(),
@@ -810,9 +826,9 @@ async fn start<S, R, E>(
         let f = back_end.batch_call(&client, addr.clone());
         let mut res = f.await;
         if res == Ok(()) {
-            // If the call is setup successfully, it will never finish. Returning `Ok(())` means the
-            // batch_call is not supported, we are probably connect to an old version of TiKV. So we
-            // need to fallback to use legacy API.
+            // If the call is setup successfully, it will never finish. Returning `Ok(())`
+            // means the batch_call is not supported, we are probably connect to
+            // an old version of TiKV. So we need to fallback to use legacy API.
             let f = back_end.call(&client, addr.clone());
             res = f.await;
         }
@@ -823,7 +839,8 @@ async fn start<S, R, E>(
             Err(_) => {
                 error!("connection abort"; "store_id" => back_end.store_id, "addr" => addr);
                 if retry_times > 1 {
-                    // Clears pending messages to avoid consuming high memory when one node is shutdown.
+                    // Clears pending messages to avoid consuming high memory when one node is
+                    // shutdown.
                     back_end.clear_pending_message("unreachable");
                 } else {
                     // At least report failure in metrics.
@@ -977,9 +994,9 @@ where
 
     /// Sends a message.
     ///
-    /// If the message fails to be sent, false is returned. Returning true means the message is
-    /// enqueued to buffer. Caller is expected to call `flush` to ensure all buffered messages
-    /// are sent out.
+    /// If the message fails to be sent, false is returned. Returning true means
+    /// the message is enqueued to buffer. Caller is expected to call `flush` to
+    /// ensure all buffered messages are sent out.
     pub fn send(&mut self, msg: RaftMessage) -> result::Result<(), DiscardReason> {
         let store_id = msg.get_to_peer().store_id;
         let grpc_raft_conn_num = self.builder.cfg.value().grpc_raft_conn_num as u64;
@@ -1190,6 +1207,21 @@ mod tests {
         assert!(msg_buf.full());
     }
 
+    fn new_test_msg(size: usize) -> RaftMessage {
+        let mut msg = RaftMessage::default();
+        msg.set_region_id(1);
+        let mut region_epoch = RegionEpoch::default();
+        region_epoch.conf_ver = 1;
+        region_epoch.version = 0x123456;
+        msg.set_region_epoch(region_epoch);
+        msg.set_start_key(vec![0; size]);
+        msg.set_end_key(vec![]);
+        msg.mut_message().set_snapshot(Snapshot::default());
+        msg.mut_message().set_commit(0);
+        assert_eq!(BatchMessageBuffer::message_size(&msg), size);
+        msg
+    }
+
     #[test]
     fn test_push_raft_message_cfg_change() {
         let version_track = Arc::new(VersionTrack::new(Config::default()));
@@ -1199,38 +1231,45 @@ mod tests {
         );
 
         let default_grpc_msg_len = msg_buf.cfg.max_grpc_send_msg_len as usize;
-        let make_msg = |size: usize| {
-            let mut msg = RaftMessage::default();
-            msg.set_region_id(1);
-            let mut region_epoch = RegionEpoch::default();
-            region_epoch.conf_ver = 1;
-            region_epoch.version = 0x123456;
-            msg.set_region_epoch(region_epoch);
-            msg.set_start_key(vec![0; size]);
-            msg.set_end_key(vec![]);
-            msg.mut_message().set_snapshot(Snapshot::default());
-            msg.mut_message().set_commit(0);
-            assert_eq!(BatchMessageBuffer::message_size(&msg), size);
-            msg
-        };
-
         let max_msg_len = default_grpc_msg_len - msg_buf.cfg.raft_client_grpc_send_msg_buffer;
-        msg_buf.push(make_msg(max_msg_len));
+        msg_buf.push(new_test_msg(max_msg_len));
         assert!(!msg_buf.full());
-        msg_buf.push(make_msg(1));
+        msg_buf.push(new_test_msg(1));
         assert!(msg_buf.full());
-        msg_buf.clear();
 
         // update config
-        version_track.update(|cfg| cfg.max_grpc_send_msg_len *= 2);
+        let _ = version_track.update(|cfg| -> Result<(), ()> {
+            cfg.max_grpc_send_msg_len *= 2;
+            Ok(())
+        });
+        msg_buf.clear();
 
         let new_max_msg_len =
             default_grpc_msg_len * 2 - msg_buf.cfg.raft_client_grpc_send_msg_buffer;
         for _i in 0..2 {
-            msg_buf.push(make_msg(new_max_msg_len / 2 - 1));
+            msg_buf.push(new_test_msg(new_max_msg_len / 2 - 1));
             assert!(!msg_buf.full());
         }
-        msg_buf.push(make_msg(2));
+        msg_buf.push(new_test_msg(2));
         assert!(msg_buf.full());
+    }
+
+    #[bench]
+    fn bench_client_buffer_push(b: &mut test::Bencher) {
+        let version_track = Arc::new(VersionTrack::new(Config::default()));
+        let mut msg_buf = BatchMessageBuffer::new(
+            &version_track,
+            Arc::new(ThreadLoadPool::with_threshold(100)),
+        );
+
+        b.iter(|| {
+            for _i in 0..10 {
+                msg_buf.push(test::black_box(new_test_msg(1024)));
+            }
+            // run clear to mock flush.
+            msg_buf.clear();
+
+            test::black_box(&mut msg_buf);
+        });
     }
 }

@@ -125,7 +125,7 @@ pub fn get_region_approximate_middle(
 mod tests {
     use std::{iter, sync::mpsc};
 
-    use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
+    use engine_test::ctor::{CfOptions, DbOptions};
     use engine_traits::{MiscExt, SyncMutable, ALL_CFS, CF_DEFAULT, LARGE_CFS};
     use kvproto::{
         metapb::{Peer, Region},
@@ -148,15 +148,7 @@ mod tests {
     fn test_split_check() {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::default();
-        let cfs_opts = ALL_CFS
-            .iter()
-            .map(|cf| {
-                let cf_opts = ColumnFamilyOptions::new();
-                CFOptions::new(cf, cf_opts)
-            })
-            .collect();
-        let engine = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+        let engine = engine_test::kv::new_engine(path_str, ALL_CFS).unwrap();
 
         let mut region = Region::default();
         region.set_id(1);
@@ -197,18 +189,75 @@ mod tests {
         must_split_at(&rx, &region, vec![split_key.into_encoded()]);
     }
 
+    #[test]
+    fn test_split_check_with_key_range() {
+        let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let engine = engine_test::kv::new_engine(path_str, ALL_CFS).unwrap();
+
+        let mut region = Region::default();
+        region.set_id(1);
+        region.mut_peers().push(Peer::default());
+        region.mut_region_epoch().set_version(2);
+        region.mut_region_epoch().set_conf_ver(5);
+
+        let (tx, rx) = mpsc::sync_channel(100);
+        let cfg = Config {
+            region_max_size: Some(ReadableSize(BUCKET_NUMBER_LIMIT as u64)),
+            ..Default::default()
+        };
+        let cop_host = CoprocessorHost::new(tx.clone(), cfg);
+        let mut runnable = SplitCheckRunner::new(engine.clone(), tx, cop_host.clone());
+
+        for i in 0..11 {
+            let k = format!("{:04}", i).into_bytes();
+            let k = keys::data_key(Key::from_raw(&k).as_encoded());
+            engine.put_cf(CF_DEFAULT, &k, &k).unwrap();
+            // Flush for every key so that we can know the exact middle key.
+            engine.flush_cf(CF_DEFAULT, true).unwrap();
+        }
+        let start_key = Key::from_raw(b"0000").into_encoded();
+        let end_key = Key::from_raw(b"0005").into_encoded();
+        runnable.run(SplitCheckTask::split_check_key_range(
+            region.clone(),
+            Some(start_key),
+            Some(end_key),
+            false,
+            CheckPolicy::Scan,
+            None,
+        ));
+        let split_key = Key::from_raw(b"0003");
+        must_split_at(&rx, &region, vec![split_key.into_encoded()]);
+        let start_key = Key::from_raw(b"0005").into_encoded();
+        let end_key = Key::from_raw(b"0010").into_encoded();
+        runnable.run(SplitCheckTask::split_check_key_range(
+            region.clone(),
+            Some(start_key),
+            Some(end_key),
+            false,
+            CheckPolicy::Scan,
+            None,
+        ));
+        let split_key = Key::from_raw(b"0008");
+        must_split_at(&rx, &region, vec![split_key.into_encoded()]);
+        let start_key = Key::from_raw(b"0003").into_encoded();
+        let end_key = Key::from_raw(b"0008").into_encoded();
+        runnable.run(SplitCheckTask::split_check_key_range(
+            region.clone(),
+            Some(start_key),
+            Some(end_key),
+            false,
+            CheckPolicy::Scan,
+            None,
+        ));
+        let split_key = Key::from_raw(b"0006");
+        must_split_at(&rx, &region, vec![split_key.into_encoded()]);
+    }
+
     fn test_generate_region_bucket_impl(mvcc: bool) {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::default();
-        let cfs_opts = ALL_CFS
-            .iter()
-            .map(|cf| {
-                let cf_opts = ColumnFamilyOptions::new();
-                CFOptions::new(cf, cf_opts)
-            })
-            .collect();
-        let engine = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+        let engine = engine_test::kv::new_engine(path_str, ALL_CFS).unwrap();
 
         let mut region = Region::default();
         region.set_id(1);
@@ -332,15 +381,7 @@ mod tests {
     fn test_generate_region_bucket_with_deleting_data() {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::default();
-        let cfs_opts = ALL_CFS
-            .iter()
-            .map(|cf| {
-                let cf_opts = ColumnFamilyOptions::new();
-                CFOptions::new(cf, cf_opts)
-            })
-            .collect();
-        let engine = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+        let engine = engine_test::kv::new_engine(path_str, ALL_CFS).unwrap();
 
         let mut region = Region::default();
         region.set_id(1);
@@ -444,13 +485,10 @@ mod tests {
             .unwrap();
         let path = tmp.path().to_str().unwrap();
 
-        let db_opts = DBOptions::default();
-        let mut cf_opts = ColumnFamilyOptions::new();
+        let db_opts = DbOptions::default();
+        let mut cf_opts = CfOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
-        let cfs_opts = LARGE_CFS
-            .iter()
-            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
-            .collect();
+        let cfs_opts = LARGE_CFS.iter().map(|cf| (*cf, cf_opts.clone())).collect();
         let engine = engine_test::kv::new_engine_opt(path, db_opts, cfs_opts).unwrap();
 
         let mut big_value = Vec::with_capacity(256);

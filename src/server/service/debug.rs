@@ -61,7 +61,8 @@ pub struct Service<ER: RaftEngine, EK: KvEngine, T: RaftStoreRouter<EK>> {
 }
 
 impl<ER: RaftEngine, EK: KvEngine, T: RaftStoreRouter<EK>> Service<ER, EK, T> {
-    /// Constructs a new `Service` with `Engines`, a `RaftStoreRouter` and a `GcWorker`.
+    /// Constructs a new `Service` with `Engines`, a `RaftStoreRouter` and a
+    /// `GcWorker`.
     pub fn new(
         engines: Engines<RocksEngine, ER>,
         pool: Handle,
@@ -364,7 +365,7 @@ impl<ER: RaftEngine, EK: KvEngine, T: RaftStoreRouter<EK> + 'static> debugpb::De
             .spawn(async move {
                 let mut resp = GetMetricsResponse::default();
                 resp.set_store_id(debugger.get_store_ident()?.store_id);
-                resp.set_prometheus(metrics::dump());
+                resp.set_prometheus(metrics::dump(false));
                 if req.get_all() {
                     let engines = debugger.get_engine();
                     resp.set_rocksdb_kv(box_try!(MiscExt::dump_stats(&engines.kv)));
@@ -551,7 +552,7 @@ fn region_detail<EK: KvEngine, T: RaftStoreRouter<EK>>(
     raft_cmd.set_status_request(status_request);
 
     let (tx, rx) = oneshot::channel();
-    let cb = Callback::Read(Box::new(|resp| tx.send(resp).unwrap()));
+    let cb = Callback::read(Box::new(|resp| tx.send(resp).unwrap()));
 
     async move {
         raft_router
@@ -591,7 +592,7 @@ fn consistency_check<EK: KvEngine, T: RaftStoreRouter<EK>>(
     raft_cmd.set_admin_request(admin_request);
 
     let (tx, rx) = oneshot::channel();
-    let cb = Callback::Read(Box::new(|resp| tx.send(resp).unwrap()));
+    let cb = Callback::read(Box::new(|resp| tx.send(resp).unwrap()));
 
     async move {
         raft_router

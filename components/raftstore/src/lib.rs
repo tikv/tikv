@@ -6,7 +6,7 @@
 #![feature(min_specialization)]
 #![feature(box_patterns)]
 #![feature(hash_drain_filter)]
-#![feature(vec_retain_mut)]
+#![feature(let_else)]
 #![recursion_limit = "256"]
 #![feature(drain_filter)]
 
@@ -14,11 +14,15 @@
 extern crate test;
 #[macro_use]
 extern crate derivative;
+#[cfg(feature = "engine_rocks")]
+pub mod compacted_event_sender;
 
 pub mod coprocessor;
 pub mod errors;
 pub mod router;
 pub mod store;
+#[cfg(feature = "engine_rocks")]
+pub use self::compacted_event_sender::RaftRouterCompactedEventSender;
 pub use self::{
     coprocessor::{RegionInfo, RegionInfoAccessor, SeekRegionCallback},
     errors::{DiscardReason, Error, Result},

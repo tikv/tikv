@@ -10,7 +10,7 @@ use std::{
 
 use clap::{App, Arg};
 use engine_store_ffi::{KVGetStatus, RaftStoreProxyFFI};
-use engine_traits::MiscExt;
+use engine_traits::{MiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::{
     import_sstpb::SstMeta,
     metapb::RegionEpoch,
@@ -29,18 +29,18 @@ use pd_client::PdClient;
 use proxy_server::{
     config::{
         address_proxy_config, ensure_no_common_unrecognized_keys, get_last_config,
-        setup_default_tikv_config, validate_and_persist_config, TIFLASH_DEFAULT_LISTENING_ADDR,
-        TIFLASH_DEFAULT_STATUS_ADDR,
+        memory_limit_for_cf, setup_default_tikv_config, validate_and_persist_config,
+        TIFLASH_DEFAULT_LISTENING_ADDR, TIFLASH_DEFAULT_STATUS_ADDR,
     },
     proxy::gen_tikv_config,
 };
 use raft::eraftpb::MessageType;
 use raftstore::store::util::find_peer;
 use sst_importer::SstImporter;
-pub use test_raftstore::{must_get_equal, must_get_none, new_peer};
-use tikv::config::{TiKvConfig, LAST_CONFIG_FILE};
+use tikv::config::{TikvConfig, LAST_CONFIG_FILE};
 use tikv_util::{
     config::{ReadableDuration, ReadableSize},
+    sys::SysQuota,
     time::Duration,
     HandyRwLock,
 };
@@ -67,7 +67,8 @@ mod store {
             cluster.must_send_store_heartbeat(*id);
         }
         std::thread::sleep(std::time::Duration::from_millis(1000));
-        // let resp = block_on(pd_client.store_heartbeat(Default::default(), None, None)).unwrap();
+        // let resp = block_on(pd_client.store_heartbeat(Default::default(), None,
+        // None)).unwrap();
         for id in cluster.engines.keys() {
             let store_stat = pd_client.get_store_stats(*id).unwrap();
             assert_eq!(store_stat.get_capacity(), 444444);
@@ -190,7 +191,7 @@ mod region {
                         .proxy
                         .get_value_cf("none_cf", "123".as_bytes(), |value| {
                             let msg = value.unwrap_err();
-                            assert_eq!(msg, "Storage Engine cf none_cf not found");
+                            assert_eq!(msg, "Storage Engine Status { code: IoError, sub_code: None, sev: NoError, state: \"cf none_cf not found\" }");
                         });
                     ffi_set
                         .proxy
@@ -236,7 +237,7 @@ mod config {
         let path = file.path();
 
         let mut unrecognized_keys = Vec::new();
-        let mut config = TiKvConfig::from_file(path, Some(&mut unrecognized_keys)).unwrap();
+        let mut config = TikvConfig::from_file(path, Some(&mut unrecognized_keys)).unwrap();
         // Otherwise we have no default addr for TiKv.
         setup_default_tikv_config(&mut config);
         assert_eq!(config.memory_usage_high_water, 0.65);
@@ -269,7 +270,8 @@ mod config {
         assert_eq!(unknown.unwrap_err(), "nosense, rocksdb.z");
 
         // Common config can be persisted.
-        // Need run this test with ENGINE_LABEL_VALUE=tiflash, otherwise will fatal exit.
+        // Need run this test with ENGINE_LABEL_VALUE=tiflash, otherwise will fatal
+        // exit.
         let _ = std::fs::remove_file(
             PathBuf::from_str(&config.storage.data_dir)
                 .unwrap()
@@ -285,7 +287,7 @@ mod config {
     #[test]
     fn test_validate_config() {
         let mut file = tempfile::NamedTempFile::new().unwrap();
-        let text = "[raftstore.aaa]\nbbb=2\n[server]\nengine-addr=\"1.2.3.4:5\"\n[raftstore]\nsnap-handle-pool-size=4\nstale-peer-check-tick=9999\n[nosense]\nfoo=2\n[rocksdb]\nmax-open-files = 111\nz=1";
+        let text = "[raftstore.aaa]\nbbb=2\n[server]\nengine-addr=\"1.2.3.4:5\"\n[raftstore]\nsnap-handle-pool-size=4\nclean-stale-ranges-tick=9999\n[nosense]\nfoo=2\n[rocksdb]\nmax-open-files = 111\nz=1";
         write!(file, "{}", text).unwrap();
         let path = file.path();
         let tmp_store_folder = tempfile::TempDir::new().unwrap();
@@ -294,7 +296,7 @@ mod config {
         get_last_config(tmp_store_folder.path().to_str().unwrap());
 
         let mut unrecognized_keys: Vec<String> = vec![];
-        let mut config = TiKvConfig::from_file(path, Some(&mut unrecognized_keys)).unwrap();
+        let mut config = TikvConfig::from_file(path, Some(&mut unrecognized_keys)).unwrap();
         assert_eq!(config.raft_store.clean_stale_ranges_tick, 9999);
         address_proxy_config(&mut config, &ProxyConfig::default());
         let clean_stale_ranges_tick =
@@ -363,6 +365,7 @@ mod config {
         overwrite_config_with_cmd_args(&mut config, &mut proxy_config, &matches);
         address_proxy_config(&mut config, &proxy_config);
 
+        let total_mem = SysQuota::memory_limit_in_bytes();
         assert_eq!(config.rocksdb.max_open_files, 56);
         assert_eq!(config.server.addr, DEFAULT_LISTENING_ADDR);
         assert_eq!(config.server.status_addr, "");
@@ -376,6 +379,22 @@ mod config {
                 .raft_store
                 .apply_low_priority_pool_size,
             config.raft_store.apply_batch_system.low_priority_pool_size
+        );
+        assert_eq!(
+            config.raftdb.defaultcf.block_cache_size,
+            memory_limit_for_cf(true, CF_DEFAULT, total_mem)
+        );
+        assert_eq!(
+            config.rocksdb.defaultcf.block_cache_size,
+            memory_limit_for_cf(false, CF_DEFAULT, total_mem)
+        );
+        assert_eq!(
+            config.rocksdb.writecf.block_cache_size,
+            memory_limit_for_cf(false, CF_WRITE, total_mem)
+        );
+        assert_eq!(
+            config.rocksdb.lockcf.block_cache_size,
+            memory_limit_for_cf(false, CF_LOCK, total_mem)
         );
     }
 
@@ -395,7 +414,7 @@ apply-low-priority-pool-size = 41
         let mut v: Vec<String> = vec![];
         let cpath = Some(path.as_os_str());
         let mut config = gen_tikv_config(&cpath, false, &mut v);
-        let mut proxy_config = gen_proxy_config(&cpath, false, &mut v);
+        let proxy_config = gen_proxy_config(&cpath, false, &mut v);
         address_proxy_config(&mut config, &proxy_config);
 
         // When raftstore.apply-low-priority-pool-size is specified, its value
@@ -559,7 +578,8 @@ mod write {
         // Wait until all nodes have (k2, v2), then transfer leader.
         check_key(&cluster, b"k2", b"v2", Some(true), None, None);
         if filter {
-            // We should also filter normal kv, since a empty result can also be invoke pose_exec.
+            // We should also filter normal kv, since a empty result can also be invoke
+            // pose_exec.
             fail::cfg("on_post_exec_normal", "return(false)").unwrap();
         }
         let prev_states = collect_all_states(&cluster, region_id);
@@ -719,8 +739,8 @@ mod write {
             cluster.must_put(k.as_bytes(), v.as_bytes());
         }
 
-        // We can read from mock-store's memory, we are not sure if we can read from disk,
-        // since there may be or may not be a CompactLog.
+        // We can read from mock-store's memory, we are not sure if we can read from
+        // disk, since there may be or may not be a CompactLog.
         for i in 11..30 {
             let k = format!("k{}", i);
             let v = format!("v{}", i);
@@ -799,8 +819,8 @@ mod write {
 
     #[test]
     fn test_old_compact_log() {
-        // If we just return None for CompactLog, the region state in ApplyFsm will change.
-        // Because there is no rollback in new implementation.
+        // If we just return None for CompactLog, the region state in ApplyFsm will
+        // change. Because there is no rollback in new implementation.
         // This is a ERROR state.
         let (mut cluster, _pd_client) = new_mock_cluster(0, 3);
         cluster.run();
@@ -1320,7 +1340,8 @@ mod restart {
 
         let (key, value) = (b"k2", b"v2");
         cluster.must_put(key, value);
-        // we can get in memory, since snapshot is pre handled, though it is not persisted
+        // we can get in memory, since snapshot is pre handled, though it is not
+        // persisted
         check_key(
             &cluster,
             key,
@@ -1520,7 +1541,8 @@ mod snapshot {
         } else {
             let (key, value) = (b"k2", b"v2");
             cluster.must_put(key, value);
-            // we can get in memory, since snapshot is pre handled, though it is not persisted
+            // we can get in memory, since snapshot is pre handled, though it is not
+            // persisted
             check_key(
                 &cluster,
                 key,
@@ -1529,6 +1551,7 @@ mod snapshot {
                 None,
                 Some(vec![eng_ids[1]]),
             );
+            let engine_2 = cluster.get_engine(eng_ids[1]);
             // now snapshot must be applied on peer engine_2
             must_get_equal(&engine_2, first_key, first_value.as_slice());
 
@@ -1542,7 +1565,8 @@ mod snapshot {
 
             std::thread::sleep(std::time::Duration::from_millis(500));
             // We have not apply pre handled snapshot,
-            // we can't be sure if it exists in only get from memory too, since pre handle snapshot is async.
+            // we can't be sure if it exists in only get from memory too, since pre handle
+            // snapshot is async.
             must_get_none(&engine_3, first_key);
             fail::remove("on_ob_post_apply_snapshot");
 
@@ -1593,8 +1617,8 @@ mod snapshot {
 
         // Occasionally fails.
         // let region1 = cluster.get_region(b"k1");
-        // // Split the region range and then there should be another snapshot for the split ranges.
-        // cluster.must_split(&region, b"k2");
+        // // Split the region range and then there should be another snapshot for the
+        // split ranges. cluster.must_split(&region, b"k2");
         // check_key(&cluster, b"k3", b"v3", None, Some(true), Some(vec![3]));
         //
         // // Ensure the regions work after split.
@@ -1649,7 +1673,8 @@ mod snapshot {
             .iter()
             .map(|e| e.0.to_owned())
             .collect::<Vec<_>>();
-        // If we fail to call pre-handle snapshot, we can still handle it when apply snapshot.
+        // If we fail to call pre-handle snapshot, we can still handle it when apply
+        // snapshot.
         fail::cfg("before_actually_pre_handle", "return").unwrap();
         pd_client.must_add_peer(r1, new_peer(eng_ids[1], eng_ids[1]));
         check_key(
@@ -1662,7 +1687,8 @@ mod snapshot {
         );
         fail::remove("before_actually_pre_handle");
 
-        // If we failed in apply snapshot(not panic), even if per_handle_snapshot is not called.
+        // If we failed in apply snapshot(not panic), even if per_handle_snapshot is not
+        // called.
         fail::cfg("on_ob_pre_handle_snapshot", "return").unwrap();
         check_key(
             &cluster,
@@ -1730,7 +1756,8 @@ mod snapshot {
             // Can get from disk
             check_key(&cluster, b"k1", b"v1", None, Some(true), None);
             check_key(&cluster, b"k3", b"v3", None, Some(true), None);
-            // TODO Region in memory data must not contradict, but now we do not delete data
+            // TODO Region in memory data must not contradict, but now we do not
+            // delete data
         });
 
         pd_client.must_merge(r1_new.get_id(), r3_new.get_id());
@@ -1802,8 +1829,9 @@ mod snapshot {
         fail::cfg("apply_pending_snapshot", "return").unwrap();
         std::thread::sleep(std::time::Duration::from_millis(500));
         // Now, k1 and k3 are not handled, since pre-handle process is not finished.
-        // This is because `pending_applies_count` is not greater than `snap_handle_pool_size`,
-        // So there are no `handle_pending_applies` until `on_timeout`.
+        // This is because `pending_applies_count` is not greater than
+        // `snap_handle_pool_size`, So there are no `handle_pending_applies`
+        // until `on_timeout`.
 
         fail::remove("apply_pending_snapshot");
         assert_eq!(pending_count.load(Ordering::SeqCst), 2);

@@ -8,7 +8,7 @@ use std::{
 };
 
 use clap::{App, Arg};
-use tikv::config::TiKvConfig;
+use tikv::config::TikvConfig;
 
 use crate::{
     config::{make_tikv_config, ProxyConfig},
@@ -43,15 +43,15 @@ pub fn gen_proxy_config(
     proxy_config
 }
 
-/// Generate default TiKvConfig, but with some Proxy's default values.
+/// Generate default TikvConfig, but with some Proxy's default values.
 pub fn gen_tikv_config(
     config_path: &Option<&OsStr>,
     is_config_check: bool,
     unrecognized_keys: &mut Vec<String>,
-) -> TiKvConfig {
+) -> TikvConfig {
     config_path.map_or_else(make_tikv_config, |path| {
         let path = Path::new(path);
-        TiKvConfig::from_file(
+        TikvConfig::from_file(
             path,
             if is_config_check {
                 Some(unrecognized_keys)
@@ -266,7 +266,7 @@ pub unsafe fn run_proxy(
         .get_matches_from(args);
 
     if matches.is_present("print-sample-config") {
-        let config = TiKvConfig::default();
+        let config = TikvConfig::default();
         println!("{}", toml::to_string_pretty(&config).unwrap());
         process::exit(0);
     }

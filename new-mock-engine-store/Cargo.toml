@@ -14,8 +14,6 @@ protobuf-codec = [
   "protobuf/bytes",
   "kvproto/protobuf-codec",
 ]
-compat_new_proxy = ["engine_tiflash/compat_new_proxy"]
-compat_old_proxy = ["engine_tiflash/compat_old_proxy"]
 
 [dependencies]
 api_version = { path = "../components/api_version", default-features = false }
@@ -47,6 +45,7 @@ resource_metering = { path = "../components/resource_metering" }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tempfile = "3.0"
+test_pd_client = { path = "../components/test_pd_client" }
 test_raftstore = { path = "../components/test_raftstore" }
 test_util = { path = "../components/test_util", default-features = false }
 tikv = { path = "../.", default-features = false }

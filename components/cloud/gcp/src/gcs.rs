@@ -10,6 +10,7 @@ use futures_util::{
     io::{AsyncRead, AsyncReadExt, Cursor},
     stream::{StreamExt, TryStreamExt},
 };
+use http::HeaderValue;
 use hyper::{client::HttpConnector, Body, Client, Request, Response, StatusCode};
 use hyper_tls::HttpsConnector;
 pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, Gcs as InputConfig};
@@ -127,7 +128,7 @@ impl BlobConfig for Config {
 
 // GCS compatible storage
 #[derive(Clone)]
-pub struct GCSStorage {
+pub struct GcsStorage {
     config: Config,
     svc_access: Option<Arc<ServiceAccountAccess>>,
     client: Client<HttpsConnector<HttpConnector>, Body>,
@@ -228,7 +229,7 @@ impl RetryError for RequestError {
     }
 }
 
-impl GCSStorage {
+impl GcsStorage {
     pub fn from_input(input: InputConfig) -> io::Result<Self> {
         Self::new(Config::from_input(input)?)
     }
@@ -238,7 +239,7 @@ impl GCSStorage {
     }
 
     /// Create a new GCS storage for the given config.
-    pub fn new(config: Config) -> io::Result<GCSStorage> {
+    pub fn new(config: Config) -> io::Result<GcsStorage> {
         let svc_access = if let Some(si) = &config.svc_info {
             Some(
                 ServiceAccountAccess::new(si.clone())
@@ -249,7 +250,7 @@ impl GCSStorage {
         };
 
         let client = Client::builder().build(HttpsConnector::new());
-        Ok(GCSStorage {
+        Ok(GcsStorage {
             config,
             svc_access: svc_access.map(Arc::new),
             client,
@@ -345,6 +346,49 @@ impl GCSStorage {
     {
         Box::new(error_stream(io::Error::new(kind, e)).into_async_read())
     }
+
+    fn get_range(&self, name: &str, range: Option<String>) -> Box<dyn AsyncRead + Unpin + '_> {
+        let bucket = self.config.bucket.bucket.to_string();
+        let name = self.maybe_prefix_key(name);
+        debug!("read file from GCS storage"; "key" => %name);
+        let oid = match ObjectId::new(bucket, name) {
+            Ok(oid) => oid,
+            Err(e) => return GcsStorage::error_to_async_read(io::ErrorKind::InvalidInput, e),
+        };
+        let mut request = match Object::download(&oid, None /* optional */) {
+            Ok(request) => request.map(|_: io::Empty| Body::empty()),
+            Err(e) => return GcsStorage::error_to_async_read(io::ErrorKind::Other, e),
+        };
+        if let Some(r) = range {
+            let header_value = match HeaderValue::from_str(&r) {
+                Ok(v) => v,
+                Err(e) => return GcsStorage::error_to_async_read(io::ErrorKind::Other, e),
+            };
+            request.headers_mut().insert("Range", header_value);
+        }
+        Box::new(
+            self.make_request(request, tame_gcs::Scopes::ReadOnly)
+                .and_then(|response| async {
+                    if response.status().is_success() {
+                        Ok(response.into_body().map_err(|e| {
+                            io::Error::new(
+                                io::ErrorKind::Other,
+                                format!("download from GCS error: {}", e),
+                            )
+                        }))
+                    } else {
+                        Err(status_code_error(
+                            response.status(),
+                            "bucket read".to_string(),
+                        ))
+                    }
+                })
+                .err_into::<io::Error>()
+                .try_flatten_stream()
+                .boxed() // this `.boxed()` pin the stream.
+                .into_async_read(),
+        )
+    }
 }
 
 fn change_host(host: &StringNonEmpty, url: &str) -> Option<String> {
@@ -392,7 +436,7 @@ fn parse_predefined_acl(acl: &str) -> Result<Option<PredefinedAcl>, &str> {
 const STORAGE_NAME: &str = "gcs";
 
 #[async_trait]
-impl BlobStorage for GCSStorage {
+impl BlobStorage for GcsStorage {
     fn config(&self) -> Box<dyn BlobConfig> {
         Box::new(self.config.clone()) as Box<dyn BlobConfig>
     }
@@ -424,8 +468,8 @@ impl BlobStorage for GCSStorage {
             ..Default::default()
         };
 
-        // FIXME: Switch to upload() API so we don't need to read the entire data into memory
-        // in order to retry.
+        // FIXME: Switch to upload() API so we don't need to read the entire data into
+        // memory in order to retry.
         let mut data = Vec::with_capacity(content_length as usize);
         reader.read_to_end(&mut data).await?;
         retry(|| async {
@@ -449,39 +493,12 @@ impl BlobStorage for GCSStorage {
     }
 
     fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
-        let bucket = self.config.bucket.bucket.to_string();
-        let name = self.maybe_prefix_key(name);
-        debug!("read file from GCS storage"; "key" => %name);
-        let oid = match ObjectId::new(bucket, name) {
-            Ok(oid) => oid,
-            Err(e) => return GCSStorage::error_to_async_read(io::ErrorKind::InvalidInput, e),
-        };
-        let request = match Object::download(&oid, None /*optional*/) {
-            Ok(request) => request.map(|_: io::Empty| Body::empty()),
-            Err(e) => return GCSStorage::error_to_async_read(io::ErrorKind::Other, e),
-        };
-        Box::new(
-            self.make_request(request, tame_gcs::Scopes::ReadOnly)
-                .and_then(|response| async {
-                    if response.status().is_success() {
-                        Ok(response.into_body().map_err(|e| {
-                            io::Error::new(
-                                io::ErrorKind::Other,
-                                format!("download from GCS error: {}", e),
-                            )
-                        }))
-                    } else {
-                        Err(status_code_error(
-                            response.status(),
-                            "bucket read".to_string(),
-                        ))
-                    }
-                })
-                .err_into::<io::Error>()
-                .try_flatten_stream()
-                .boxed() // this `.boxed()` pin the stream.
-                .into_async_read(),
-        )
+        self.get_range(name, None)
+    }
+
+    fn get_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_> {
+        // inclusive, bytes=0-499 -> [0, 499]
+        self.get_range(name, Some(format!("bytes={}-{}", off, off + len - 1)))
     }
 }
 

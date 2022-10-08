@@ -54,8 +54,8 @@ fn detected_slot_idx(txn_ts: TimeStamp) -> usize {
 
 /// `LockManager` has two components working in two threads:
 ///   * One is the `WaiterManager` which manages transactions waiting for locks.
-///   * The other one is the `Detector` which detects deadlocks between transactions.
-#[allow(dead_code)]
+///   * The other one is the `Detector` which detects deadlocks between
+///     transactions.
 pub struct LockManager {
     waiter_mgr_worker: Option<FutureWorker<waiter_manager::Task>>,
     detector_worker: Option<FutureWorker<deadlock::Task>>,
@@ -200,8 +200,9 @@ impl LockManager {
         }
     }
 
-    /// Creates a `RoleChangeNotifier` of the deadlock detector worker and registers it to
-    /// the `CoprocessorHost` to observe the role change events of the leader region.
+    /// Creates a `RoleChangeNotifier` of the deadlock detector worker and
+    /// registers it to the `CoprocessorHost` to observe the role change
+    /// events of the leader region.
     pub fn register_detector_role_change_observer(
         &self,
         host: &mut CoprocessorHost<impl KvEngine>,
@@ -210,7 +211,8 @@ impl LockManager {
         role_change_notifier.register(host);
     }
 
-    /// Creates a `DeadlockService` to handle deadlock detect requests from other nodes.
+    /// Creates a `DeadlockService` to handle deadlock detect requests from
+    /// other nodes.
     pub fn deadlock_service(&self) -> DeadlockService {
         DeadlockService::new(
             self.waiter_mgr_scheduler.clone(),
@@ -270,7 +272,8 @@ impl LockManagerTrait for LockManager {
         self.waiter_mgr_scheduler
             .wait_for(start_ts, cb, pr, lock, timeout, diag_ctx.clone());
 
-        // If it is the first lock the transaction tries to lock, it won't cause deadlock.
+        // If it is the first lock the transaction tries to lock, it won't cause
+        // deadlock.
         if !is_first_lock {
             self.add_to_detected(start_ts);
             self.detector_scheduler.detect(start_ts, lock, diag_ctx);
@@ -290,8 +293,9 @@ impl LockManagerTrait for LockManager {
             self.waiter_mgr_scheduler
                 .wake_up(lock_ts, hashes, commit_ts);
         }
-        // If a pessimistic transaction is committed or rolled back and it once sent requests to
-        // detect deadlock, clean up its wait-for entries in the deadlock detector.
+        // If a pessimistic transaction is committed or rolled back and it once sent
+        // requests to detect deadlock, clean up its wait-for entries in the
+        // deadlock detector.
         if is_pessimistic_txn && self.remove_from_detected(lock_ts) {
             self.detector_scheduler.clean_up(lock_ts);
         }
@@ -317,6 +321,7 @@ mod tests {
     use raftstore::coprocessor::RegionChangeEvent;
     use security::SecurityConfig;
     use tikv_util::config::ReadableDuration;
+    use tracker::{TrackerToken, INVALID_TRACKER_TOKEN};
 
     use self::{deadlock::tests::*, metrics::*, waiter_manager::tests::*};
     use super::*;
@@ -358,10 +363,11 @@ mod tests {
         lock_mgr
     }
 
-    fn diag_ctx(key: &[u8], resource_group_tag: &[u8]) -> DiagnosticContext {
+    fn diag_ctx(key: &[u8], resource_group_tag: &[u8], tracker: TrackerToken) -> DiagnosticContext {
         DiagnosticContext {
             key: key.to_owned(),
             resource_group_tag: resource_group_tag.to_owned(),
+            tracker,
         }
     }
 
@@ -425,7 +431,7 @@ mod tests {
             waiter1.lock,
             false,
             Some(WaitTimeout::Default),
-            diag_ctx(b"k1", b"tag1"),
+            diag_ctx(b"k1", b"tag1", INVALID_TRACKER_TOKEN),
         );
         assert!(lock_mgr.has_waiter());
         let (waiter2, lock_info2, f2) = new_test_waiter(20.into(), 10.into(), 10);
@@ -436,7 +442,7 @@ mod tests {
             waiter2.lock,
             false,
             Some(WaitTimeout::Default),
-            diag_ctx(b"k2", b"tag2"),
+            diag_ctx(b"k2", b"tag2", INVALID_TRACKER_TOKEN),
         );
         assert!(lock_mgr.has_waiter());
         assert_elapsed(

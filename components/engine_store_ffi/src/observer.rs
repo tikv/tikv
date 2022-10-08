@@ -17,7 +17,6 @@ use kvproto::{
 };
 use raft::StateRole;
 use raftstore::{
-    coprocessor,
     coprocessor::{
         AdminObserver, ApplyCtxInfo, ApplySnapshotObserver, BoxAdminObserver,
         BoxApplySnapshotObserver, BoxPdTaskObserver, BoxQueryObserver, BoxRegionChangeObserver,
@@ -27,7 +26,6 @@ use raftstore::{
     },
     store,
     store::{check_sst_for_ingestion, snap::plain_file_used, SnapKey},
-    Error, Result,
 };
 use sst_importer::SstImporter;
 use tikv_util::{debug, error, info, warn};
@@ -115,7 +113,8 @@ impl Clone for TiFlashObserver {
     }
 }
 
-// TiFlash observer's priority should be higher than all other observers, to avoid being bypassed.
+// TiFlash observer's priority should be higher than all other observers, to
+// avoid being bypassed.
 const TIFLASH_OBSERVER_PRIORITY: u32 = 0;
 
 impl TiFlashObserver {
@@ -265,7 +264,8 @@ impl AdminObserver for TiFlashObserver {
                     );
                     return true;
                 }
-                // Otherwise, we can exec CompactLog, without later rolling back.
+                // Otherwise, we can exec CompactLog, without later rolling
+                // back.
             }
             AdminCmdType::ComputeHash | AdminCmdType::VerifyHash => {
                 // We can't support.
@@ -372,9 +372,10 @@ impl AdminObserver for TiFlashObserver {
         let persist = match flash_res {
             EngineStoreApplyRes::None => {
                 if cmd_type == AdminCmdType::CompactLog {
-                    // This could only happen in mock-engine-store when we perform some related tests.
-                    // Formal code should never return None for CompactLog now.
-                    // If CompactLog can't be done, the engine-store should return `false` in previous `try_flush_data`.
+                    // This could only happen in mock-engine-store when we perform some related
+                    // tests. Formal code should never return None for
+                    // CompactLog now. If CompactLog can't be done, the
+                    // engine-store should return `false` in previous `try_flush_data`.
                     error!("applying CompactLog should not return None"; "region_id" => ob_ctx.region().get_id(),
                             "peer_id" => region_state.peer_id, "apply_state" => ?apply_state, "cmd" => ?cmd);
                 }
@@ -483,8 +484,8 @@ impl QueryObserver for TiFlashObserver {
                     // which holds ssts from being cleaned(by adding into `delete_ssts`),
                     // when engine-store returns None.
                     // Though this is fixed by br#1150 & tikv#10202, we still have to handle None,
-                    // since TiKV's compaction filter can also cause mismatch between default and write.
-                    // According to tiflash#1811.
+                    // since TiKV's compaction filter can also cause mismatch between default and
+                    // write. According to tiflash#1811.
                     info!(
                         "skip persist for ingest sst";
                         "region_id" => ob_ctx.region().get_id(),
@@ -722,7 +723,8 @@ impl ApplySnapshotObserver for TiFlashObserver {
                     .pending_applies_count
                     .fetch_add(1, Ordering::SeqCst);
                 p.spawn(async move {
-                    // The original implementation is in `Snapshot`, so we don't need to care abort lifetime.
+                    // The original implementation is in `Snapshot`, so we don't need to care abort
+                    // lifetime.
                     fail::fail_point!("before_actually_pre_handle", |_| {});
                     let res = pre_handle_snapshot_impl(
                         engine_store_server_helper,

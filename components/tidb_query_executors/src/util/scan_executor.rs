@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use async_trait::async_trait;
 use kvproto::coprocessor::KeyRange;
 use tidb_query_common::{
     storage::{
@@ -25,8 +26,9 @@ pub trait ScanExecutorImpl: Send {
 
     /// Accepts a key value pair and fills the column vector.
     ///
-    /// The column vector does not need to be regular when there are errors during this process.
-    /// However if there is no error, the column vector must be regular.
+    /// The column vector does not need to be regular when there are errors
+    /// during this process. However if there is no error, the column vector
+    /// must be regular.
     fn process_kv_pair(
         &mut self,
         key: &[u8],
@@ -35,8 +37,9 @@ pub trait ScanExecutorImpl: Send {
     ) -> Result<()>;
 }
 
-/// A shared executor implementation for both table scan and index scan. Implementation differences
-/// between table scan and index scan are further given via `ScanExecutorImpl`.
+/// A shared executor implementation for both table scan and index scan.
+/// Implementation differences between table scan and index scan are further
+/// given via `ScanExecutorImpl`.
 pub struct ScanExecutor<S: Storage, I: ScanExecutorImpl> {
     /// The internal scanning implementation.
     imp: I,
@@ -44,9 +47,9 @@ pub struct ScanExecutor<S: Storage, I: ScanExecutorImpl> {
     /// The scanner that scans over ranges.
     scanner: RangesScanner<S>,
 
-    /// A flag indicating whether this executor is ended. When table is drained or there was an
-    /// error scanning the table, this flag will be set to `true` and `next_batch` should be never
-    /// called again.
+    /// A flag indicating whether this executor is ended. When table is drained
+    /// or there was an error scanning the table, this flag will be set to
+    /// `true` and `next_batch` should be never called again.
     is_ended: bool,
 }
 
@@ -94,16 +97,17 @@ impl<S: Storage, I: ScanExecutorImpl> ScanExecutor<S, I> {
 
     /// Fills a column vector and returns whether or not all ranges are drained.
     ///
-    /// The columns are ensured to be regular even if there are errors during the process.
-    fn fill_column_vec(
+    /// The columns are ensured to be regular even if there are errors during
+    /// the process.
+    async fn fill_column_vec(
         &mut self,
         scan_rows: usize,
         columns: &mut LazyBatchColumnVec,
     ) -> Result<bool> {
         assert!(scan_rows > 0);
 
-        for _ in 0..scan_rows {
-            let some_row = self.scanner.next()?;
+        for i in 0..scan_rows {
+            let some_row = self.scanner.next_opt(i == scan_rows - 1).await?;
             if let Some((key, value)) = some_row {
                 // Retrieved one row from point range or non-point range.
 
@@ -129,7 +133,8 @@ impl<S: Storage, I: ScanExecutorImpl> ScanExecutor<S, I> {
 }
 
 /// Extracts `FieldType` from `ColumnInfo`.
-// TODO: Embed FieldType in ColumnInfo directly in Cop DAG v2 to remove this function.
+// TODO: Embed FieldType in ColumnInfo directly in Cop DAG v2 to remove this
+// function.
 pub fn field_type_from_column_info(ci: &ColumnInfo) -> FieldType {
     let mut field_type = FieldType::default();
     field_type.set_tp(ci.get_tp());
@@ -156,6 +161,7 @@ pub fn check_columns_info_supported(columns_info: &[ColumnInfo]) -> Result<()> {
     Ok(())
 }
 
+#[async_trait]
 impl<S: Storage, I: ScanExecutorImpl> BatchExecutor for ScanExecutor<S, I> {
     type StorageStats = S::Statistics;
 
@@ -165,20 +171,20 @@ impl<S: Storage, I: ScanExecutorImpl> BatchExecutor for ScanExecutor<S, I> {
     }
 
     #[inline]
-    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+    async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
         assert!(scan_rows > 0);
 
         let mut logical_columns = self.imp.build_column_vec(scan_rows);
-        let is_drained = self.fill_column_vec(scan_rows, &mut logical_columns);
+        let is_drained = self.fill_column_vec(scan_rows, &mut logical_columns).await;
 
         logical_columns.assert_columns_equal_length();
         let logical_rows = (0..logical_columns.rows_len()).collect();
 
         // TODO
-        // If `is_drained.is_err()`, it means that there is an error after *successfully* retrieving
-        // these rows. After that, if we only consumes some of the rows (TopN / Limit), we should
-        // ignore this error.
+        // If `is_drained.is_err()`, it means that there is an error after
+        // *successfully* retrieving these rows. After that, if we only consumes
+        // some of the rows (TopN / Limit), we should ignore this error.
 
         match &is_drained {
             // Note: `self.is_ended` is only used for assertion purpose.

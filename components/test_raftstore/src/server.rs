@@ -9,7 +9,7 @@ use std::{
 };
 
 use api_version::{dispatch_api_version, KvFormat};
-use causal_ts::CausalTsProvider;
+use causal_ts::{tests::DummyRawTsTracker, CausalTsProvider};
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
@@ -38,13 +38,14 @@ use raftstore::{
         fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
         msg::RaftCmdExtraOpts,
         AutoSplitController, Callback, CheckLeaderRunner, LocalReader, RegionSnapshot, SnapManager,
-        SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
+        SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
     },
     Result,
 };
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
 use tempfile::TempDir;
+use test_pd_client::TestPdClient;
 use tikv::{
     config::ConfigController,
     coprocessor, coprocessor_v2,
@@ -61,11 +62,17 @@ use tikv::{
         ConnectionBuilder, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv,
         Result as ServerResult, Server, ServerTransport,
     },
-    storage::{self, kv::SnapContext, txn::flow_controller::FlowController, Engine},
+    storage::{
+        self,
+        kv::SnapContext,
+        txn::flow_controller::{EngineFlowController, FlowController},
+        Engine,
+    },
 };
 use tikv_util::{
     config::VersionTrack,
     quota_limiter::QuotaLimiter,
+    sys::thread::ThreadBuildWrapper,
     time::ThreadReadId,
     worker::{Builder as WorkerBuilder, LazyWorker},
     HandyRwLock,
@@ -161,7 +168,8 @@ impl ServerCluster {
         );
         let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
         let map = AddressMap::default();
-        // We don't actually need to handle snapshot message, just create a dead worker to make it compile.
+        // We don't actually need to handle snapshot message, just create a dead worker
+        // to make it compile.
         let worker = LazyWorker::new("snap-worker");
         let conn_builder = ConnectionBuilder::new(
             env.clone(),
@@ -277,15 +285,23 @@ impl ServerCluster {
             }
         }
 
-        let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
-        let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
-        let sim_router = SimulateTransport::new(raft_router.clone());
-
-        let raft_engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
+        let local_reader = LocalReader::new(
+            engines.kv.clone(),
+            StoreMetaDelegate::new(store_meta.clone(), engines.kv.clone()),
+            router.clone(),
+        );
 
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
+
+        let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
+        let sim_router = SimulateTransport::new(raft_router.clone());
+        let raft_engine = RaftKv::new(
+            sim_router.clone(),
+            engines.kv.clone(),
+            region_info_accessor.region_leaders(),
+        );
 
         if let Some(hooks) = self.coprocessor_hooks.get(&node_id) {
             for hook in hooks {
@@ -302,7 +318,11 @@ impl ServerCluster {
             raft_engine.clone(),
         ));
 
-        let mut engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
+        let mut engine = RaftKv::new(
+            sim_router.clone(),
+            engines.kv.clone(),
+            region_info_accessor.region_leaders(),
+        );
         if let Some(scheduler) = self.txn_extra_schedulers.remove(&node_id) {
             engine.set_txn_extra_scheduler(scheduler);
         }
@@ -318,8 +338,9 @@ impl ServerCluster {
             tx,
             cfg.gc.clone(),
             Default::default(),
+            Arc::new(region_info_accessor.clone()),
         );
-        gc_worker.start().unwrap();
+        gc_worker.start(node_id).unwrap();
         gc_worker
             .start_observe_lock_apply(&mut coprocessor_host, concurrency_manager.clone())
             .unwrap();
@@ -353,13 +374,16 @@ impl ServerCluster {
                 block_on(causal_ts::BatchTsoProvider::new_opt(
                     self.pd_client.clone(),
                     cfg.causal_ts.renew_interval.0,
+                    cfg.causal_ts.available_interval.0,
                     cfg.causal_ts.renew_batch_min_size,
+                    cfg.causal_ts.renew_batch_max_size,
                 ))
                 .unwrap(),
             );
             self.causal_ts_providers
                 .insert(node_id, causal_ts_provider.clone());
-            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
+            let causal_ob =
+                causal_ts::CausalObserver::new(causal_ts_provider, DummyRawTsTracker::default());
             causal_ob.register_to(&mut coprocessor_host);
         }
 
@@ -376,7 +400,11 @@ impl ServerCluster {
             cfg.quota.foreground_cpu_time,
             cfg.quota.foreground_write_bandwidth,
             cfg.quota.foreground_read_bandwidth,
+            cfg.quota.background_cpu_time,
+            cfg.quota.background_write_bandwidth,
+            cfg.quota.background_read_bandwidth,
             cfg.quota.max_delay_duration,
+            cfg.quota.enable_auto_tune,
         ));
         let store = create_raft_storage::<_, _, _, F, _>(
             engine,
@@ -385,7 +413,7 @@ impl ServerCluster {
             lock_mgr.clone(),
             concurrency_manager.clone(),
             lock_mgr.get_storage_dynamic_configs(),
-            Arc::new(FlowController::empty()),
+            Arc::new(FlowController::Singleton(EngineFlowController::empty())),
             pd_sender,
             res_tag_factory.clone(),
             quota_limiter.clone(),
@@ -427,6 +455,7 @@ impl ServerCluster {
             .max_total_size(cfg.server.snap_max_total_size.0)
             .encryption_key_manager(key_manager)
             .max_per_file_size(cfg.raft_store.max_snapshot_file_raw_size.0)
+            .enable_multi_snapshot_files(true)
             .build(tmp_str);
         self.snap_mgrs.insert(node_id, snap_mgr.clone());
         let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
@@ -449,6 +478,8 @@ impl ServerCluster {
             TokioBuilder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
                 .worker_threads(1)
+                .after_start_wrapper(|| {})
+                .before_stop_wrapper(|| {})
                 .build()
                 .unwrap(),
         );
@@ -464,7 +495,11 @@ impl ServerCluster {
         // Create node.
         let mut raft_store = cfg.raft_store.clone();
         raft_store
-            .validate(cfg.coprocessor.region_split_size)
+            .validate(
+                cfg.coprocessor.region_split_size,
+                cfg.coprocessor.enable_region_bucket,
+                cfg.coprocessor.region_bucket_size,
+            )
             .unwrap();
         let health_service = HealthService::default();
         let mut node = Node::new(
@@ -527,11 +562,13 @@ impl ServerCluster {
         cfg.server.addr = format!("{}", addr);
         let trans = server.transport();
         let simulate_trans = SimulateTransport::new(trans);
+        let max_grpc_thread_count = cfg.server.grpc_concurrency;
         let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
 
         // Register the role change observer of the lock manager.
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
 
+        let max_unified_read_pool_thread_count = cfg.readpool.unified.max_thread_count;
         let pessimistic_txn_cfg = cfg.tikv.pessimistic_txn;
 
         let split_check_runner =
@@ -539,7 +576,12 @@ impl ServerCluster {
         let split_check_scheduler = bg_worker.start("split-check", split_check_runner);
         let split_config_manager =
             SplitConfigManager::new(Arc::new(VersionTrack::new(cfg.tikv.split)));
-        let auto_split_controller = AutoSplitController::new(split_config_manager);
+        let auto_split_controller = AutoSplitController::new(
+            split_config_manager,
+            max_grpc_thread_count,
+            max_unified_read_pool_thread_count,
+            None,
+        );
         node.start(
             engines,
             simulate_trans.clone(),

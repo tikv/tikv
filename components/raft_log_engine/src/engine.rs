@@ -9,11 +9,17 @@ use std::{
 
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
-    CacheStats, EncryptionKeyManager, RaftEngine, RaftEngineDebug, RaftEngineReadOnly,
-    RaftLogBatch as RaftLogBatchTrait, RaftLogGCTask, Result,
+    CacheStats, EncryptionKeyManager, EncryptionMethod, PerfContextExt, PerfContextKind, PerfLevel,
+    RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait,
+    RaftLogGcTask, Result,
 };
-use file_system::{IOOp, IORateLimiter, IOType};
-use kvproto::raft_serverpb::RaftLocalState;
+use file_system::{IoOp, IoRateLimiter, IoType};
+use kvproto::{
+    metapb::Region,
+    raft_serverpb::{
+        RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent, StoreRecoverState,
+    },
+};
 use raft::eraftpb::Entry;
 use raft_engine::{
     env::{DefaultFileSystem, FileSystem, Handle, WriteExt},
@@ -21,6 +27,11 @@ use raft_engine::{
 };
 pub use raft_engine::{Config as RaftEngineConfig, ReadableSize, RecoveryMode};
 use tikv_util::Either;
+
+use crate::perf_context::RaftEnginePerfContext;
+
+// A special region ID representing store state.
+const STORE_STATE_ID: u64 = 0;
 
 #[derive(Clone)]
 pub struct MessageExtTyped;
@@ -33,12 +44,12 @@ impl MessageExt for MessageExtTyped {
     }
 }
 
-struct ManagedReader {
+pub struct ManagedReader {
     inner: Either<
         <DefaultFileSystem as FileSystem>::Reader,
         DecrypterReader<<DefaultFileSystem as FileSystem>::Reader>,
     >,
-    rate_limiter: Option<Arc<IORateLimiter>>,
+    rate_limiter: Option<Arc<IoRateLimiter>>,
 }
 
 impl Seek for ManagedReader {
@@ -54,7 +65,7 @@ impl Read for ManagedReader {
     fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
         let mut size = buf.len();
         if let Some(ref mut limiter) = self.rate_limiter {
-            size = limiter.request(IOType::ForegroundRead, IOOp::Read, size);
+            size = limiter.request(IoType::ForegroundRead, IoOp::Read, size);
         }
         match self.inner.as_mut() {
             Either::Left(reader) => reader.read(&mut buf[..size]),
@@ -63,12 +74,12 @@ impl Read for ManagedReader {
     }
 }
 
-struct ManagedWriter {
+pub struct ManagedWriter {
     inner: Either<
         <DefaultFileSystem as FileSystem>::Writer,
         EncrypterWriter<<DefaultFileSystem as FileSystem>::Writer>,
     >,
-    rate_limiter: Option<Arc<IORateLimiter>>,
+    rate_limiter: Option<Arc<IoRateLimiter>>,
 }
 
 impl Seek for ManagedWriter {
@@ -84,7 +95,7 @@ impl Write for ManagedWriter {
     fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
         let mut size = buf.len();
         if let Some(ref mut limiter) = self.rate_limiter {
-            size = limiter.request(IOType::ForegroundWrite, IOOp::Write, size);
+            size = limiter.request(IoType::ForegroundWrite, IoOp::Write, size);
         }
         match self.inner.as_mut() {
             Either::Left(writer) => writer.write(&buf[..size]),
@@ -106,13 +117,6 @@ impl WriteExt for ManagedWriter {
         }
     }
 
-    fn sync(&mut self) -> IoResult<()> {
-        match self.inner.as_mut() {
-            Either::Left(writer) => writer.sync(),
-            Either::Right(writer) => writer.inner_mut().sync(),
-        }
-    }
-
     fn allocate(&mut self, offset: usize, size: usize) -> IoResult<()> {
         match self.inner.as_mut() {
             Either::Left(writer) => writer.allocate(offset, size),
@@ -121,26 +125,26 @@ impl WriteExt for ManagedWriter {
     }
 }
 
-struct ManagedFileSystem {
-    base_level_file_system: DefaultFileSystem,
+pub struct ManagedFileSystem {
+    base_file_system: DefaultFileSystem,
     key_manager: Option<Arc<DataKeyManager>>,
-    rate_limiter: Option<Arc<IORateLimiter>>,
+    rate_limiter: Option<Arc<IoRateLimiter>>,
 }
 
 impl ManagedFileSystem {
-    fn new(
+    pub fn new(
         key_manager: Option<Arc<DataKeyManager>>,
-        rate_limiter: Option<Arc<IORateLimiter>>,
+        rate_limiter: Option<Arc<IoRateLimiter>>,
     ) -> Self {
         Self {
-            base_level_file_system: DefaultFileSystem,
+            base_file_system: DefaultFileSystem,
             key_manager,
             rate_limiter,
         }
     }
 }
 
-struct ManagedHandle {
+pub struct ManagedHandle {
     path: PathBuf,
     base: Arc<<DefaultFileSystem as FileSystem>::Handle>,
 }
@@ -153,6 +157,10 @@ impl Handle for ManagedHandle {
     fn file_size(&self) -> IoResult<usize> {
         self.base.file_size()
     }
+
+    fn sync(&self) -> IoResult<()> {
+        self.base.sync()
+    }
 }
 
 impl FileSystem for ManagedFileSystem {
@@ -161,7 +169,7 @@ impl FileSystem for ManagedFileSystem {
     type Writer = ManagedWriter;
 
     fn create<P: AsRef<Path>>(&self, path: P) -> IoResult<Self::Handle> {
-        let base = Arc::new(self.base_level_file_system.create(path.as_ref())?);
+        let base = Arc::new(self.base_file_system.create(path.as_ref())?);
         if let Some(ref manager) = self.key_manager {
             manager.new_file(path.as_ref().to_str().unwrap())?;
         }
@@ -174,14 +182,80 @@ impl FileSystem for ManagedFileSystem {
     fn open<P: AsRef<Path>>(&self, path: P) -> IoResult<Self::Handle> {
         Ok(ManagedHandle {
             path: path.as_ref().to_path_buf(),
-            base: Arc::new(self.base_level_file_system.open(path.as_ref())?),
+            base: Arc::new(self.base_file_system.open(path.as_ref())?),
         })
     }
 
+    fn delete<P: AsRef<Path>>(&self, path: P) -> IoResult<()> {
+        if let Some(ref manager) = self.key_manager {
+            manager.delete_file(path.as_ref().to_str().unwrap())?;
+        }
+        self.base_file_system.delete(path)
+    }
+
+    fn rename<P: AsRef<Path>>(&self, src_path: P, dst_path: P) -> IoResult<()> {
+        if let Some(ref manager) = self.key_manager {
+            // Note: `rename` will reuse the old entryption info from `src_path`.
+            let src_str = src_path.as_ref().to_str().unwrap();
+            let dst_str = dst_path.as_ref().to_str().unwrap();
+            manager.link_file(src_str, dst_str)?;
+            let r = self
+                .base_file_system
+                .rename(src_path.as_ref(), dst_path.as_ref());
+            let del_file = if r.is_ok() { src_str } else { dst_str };
+            if let Err(e) = manager.delete_file(del_file) {
+                warn!("fail to remove encryption metadata during 'rename'"; "err" => ?e);
+            }
+            r
+        } else {
+            self.base_file_system.rename(src_path, dst_path)
+        }
+    }
+
+    fn reuse<P: AsRef<Path>>(&self, src_path: P, dst_path: P) -> IoResult<()> {
+        if let Some(ref manager) = self.key_manager {
+            // Note: In contrast to `rename`, `reuse` will make sure the encryption
+            // metadata is properly updated by rotating the encryption key for safety,
+            // when encryption flag is true. It won't rewrite the data blocks with
+            // the updated encryption metadata. Therefore, the old encrypted data
+            // won't be accessible after this calling.
+            let src_str = src_path.as_ref().to_str().unwrap();
+            let dst_str = dst_path.as_ref().to_str().unwrap();
+            manager.new_file(dst_path.as_ref().to_str().unwrap())?;
+            let r = self
+                .base_file_system
+                .rename(src_path.as_ref(), dst_path.as_ref());
+            let del_file = if r.is_ok() { src_str } else { dst_str };
+            if let Err(e) = manager.delete_file(del_file) {
+                warn!("fail to remove encryption metadata during 'reuse'"; "err" => ?e);
+            }
+            r
+        } else {
+            self.base_file_system.rename(src_path, dst_path)
+        }
+    }
+
+    fn exists_metadata<P: AsRef<Path>>(&self, path: P) -> bool {
+        if let Some(ref manager) = self.key_manager {
+            if let Ok(info) = manager.get_file(path.as_ref().to_str().unwrap()) {
+                if info.method != EncryptionMethod::Plaintext {
+                    return true;
+                }
+            }
+        }
+        self.base_file_system.exists_metadata(path)
+    }
+
+    fn delete_metadata<P: AsRef<Path>>(&self, path: P) -> IoResult<()> {
+        if let Some(ref manager) = self.key_manager {
+            // Note: no error if the file doesn't exist.
+            manager.delete_file(path.as_ref().to_str().unwrap())?;
+        }
+        self.base_file_system.delete_metadata(path)
+    }
+
     fn new_reader(&self, handle: Arc<Self::Handle>) -> IoResult<Self::Reader> {
-        let base_reader = self
-            .base_level_file_system
-            .new_reader(handle.base.clone())?;
+        let base_reader = self.base_file_system.new_reader(handle.base.clone())?;
         if let Some(ref key_manager) = self.key_manager {
             Ok(ManagedReader {
                 inner: Either::Right(key_manager.open_file_with_reader(&handle.path, base_reader)?),
@@ -196,9 +270,7 @@ impl FileSystem for ManagedFileSystem {
     }
 
     fn new_writer(&self, handle: Arc<Self::Handle>) -> IoResult<Self::Writer> {
-        let base_writer = self
-            .base_level_file_system
-            .new_writer(handle.base.clone())?;
+        let base_writer = self.base_file_system.new_writer(handle.base.clone())?;
 
         if let Some(ref key_manager) = self.key_manager {
             Ok(ManagedWriter {
@@ -225,7 +297,7 @@ impl RaftLogEngine {
     pub fn new(
         config: RaftEngineConfig,
         key_manager: Option<Arc<DataKeyManager>>,
-        rate_limiter: Option<Arc<IORateLimiter>>,
+        rate_limiter: Option<Arc<IoRateLimiter>>,
     ) -> Result<Self> {
         let file_system = Arc::new(ManagedFileSystem::new(key_manager, rate_limiter));
         Ok(RaftLogEngine(Arc::new(
@@ -255,10 +327,23 @@ impl RaftLogEngine {
     }
 }
 
+impl PerfContextExt for RaftLogEngine {
+    type PerfContext = RaftEnginePerfContext;
+
+    fn get_perf_context(&self, _level: PerfLevel, _kind: PerfContextKind) -> Self::PerfContext {
+        RaftEnginePerfContext
+    }
+}
+
 #[derive(Default)]
 pub struct RaftLogBatch(LogBatch);
 
 const RAFT_LOG_STATE_KEY: &[u8] = b"R";
+const STORE_IDENT_KEY: &[u8] = &[0x01];
+const PREPARE_BOOTSTRAP_REGION_KEY: &[u8] = &[0x02];
+const REGION_STATE_KEY: &[u8] = &[0x03];
+const APPLY_STATE_KEY: &[u8] = &[0x04];
+const RECOVER_STATE_KEY: &[u8] = &[0x05];
 
 impl RaftLogBatchTrait for RaftLogBatch {
     fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
@@ -268,7 +353,8 @@ impl RaftLogBatchTrait for RaftLogBatch {
     }
 
     fn cut_logs(&mut self, _: u64, _: u64, _: u64) {
-        // It's unnecessary because overlapped entries can be handled in `append`.
+        // It's unnecessary because overlapped entries can be handled in
+        // `append`.
     }
 
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
@@ -287,6 +373,40 @@ impl RaftLogBatchTrait for RaftLogBatch {
 
     fn merge(&mut self, mut src: Self) -> Result<()> {
         self.0.merge(&mut src.0).map_err(transfer_error)
+    }
+
+    fn put_store_ident(&mut self, ident: &StoreIdent) -> Result<()> {
+        self.0
+            .put_message(STORE_STATE_ID, STORE_IDENT_KEY.to_vec(), ident)
+            .map_err(transfer_error)
+    }
+
+    fn put_prepare_bootstrap_region(&mut self, region: &Region) -> Result<()> {
+        self.0
+            .put_message(
+                STORE_STATE_ID,
+                PREPARE_BOOTSTRAP_REGION_KEY.to_vec(),
+                region,
+            )
+            .map_err(transfer_error)
+    }
+
+    fn remove_prepare_bootstrap_region(&mut self) -> Result<()> {
+        self.0
+            .delete(STORE_STATE_ID, PREPARE_BOOTSTRAP_REGION_KEY.to_vec());
+        Ok(())
+    }
+
+    fn put_region_state(&mut self, raft_group_id: u64, state: &RegionLocalState) -> Result<()> {
+        self.0
+            .put_message(raft_group_id, REGION_STATE_KEY.to_vec(), state)
+            .map_err(transfer_error)
+    }
+
+    fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()> {
+        self.0
+            .put_message(raft_group_id, APPLY_STATE_KEY.to_vec(), state)
+            .map_err(transfer_error)
     }
 }
 
@@ -323,6 +443,40 @@ impl RaftEngineReadOnly for RaftLogEngine {
             self.fetch_entries_to(raft_group_id, first, last + 1, None, buf)?;
         }
         Ok(())
+    }
+
+    fn is_empty(&self) -> Result<bool> {
+        self.get_store_ident().map(|i| i.is_none())
+    }
+
+    fn get_store_ident(&self) -> Result<Option<StoreIdent>> {
+        self.0
+            .get_message(STORE_STATE_ID, STORE_IDENT_KEY)
+            .map_err(transfer_error)
+    }
+
+    fn get_prepare_bootstrap_region(&self) -> Result<Option<Region>> {
+        self.0
+            .get_message(STORE_STATE_ID, PREPARE_BOOTSTRAP_REGION_KEY)
+            .map_err(transfer_error)
+    }
+
+    fn get_region_state(&self, raft_group_id: u64) -> Result<Option<RegionLocalState>> {
+        self.0
+            .get_message(raft_group_id, REGION_STATE_KEY)
+            .map_err(transfer_error)
+    }
+
+    fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>> {
+        self.0
+            .get_message(raft_group_id, APPLY_STATE_KEY)
+            .map_err(transfer_error)
+    }
+
+    fn get_recover_state(&self) -> Result<Option<StoreRecoverState>> {
+        self.0
+            .get_message(STORE_STATE_ID, RECOVER_STATE_KEY)
+            .map_err(transfer_error)
     }
 }
 
@@ -389,6 +543,16 @@ impl RaftEngine for RaftLogEngine {
         self.0.write(&mut batch.0, false).map_err(transfer_error)
     }
 
+    fn put_store_ident(&self, ident: &StoreIdent) -> Result<()> {
+        let mut batch = Self::LogBatch::default();
+        batch
+            .0
+            .put_message(STORE_STATE_ID, STORE_IDENT_KEY.to_vec(), ident)
+            .map_err(transfer_error)?;
+        self.0.write(&mut batch.0, true).map_err(transfer_error)?;
+        Ok(())
+    }
+
     fn put_raft_state(&self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
         let mut batch = Self::LogBatch::default();
         batch
@@ -400,14 +564,14 @@ impl RaftEngine for RaftLogEngine {
     }
 
     fn gc(&self, raft_group_id: u64, from: u64, to: u64) -> Result<usize> {
-        self.batch_gc(vec![RaftLogGCTask {
+        self.batch_gc(vec![RaftLogGcTask {
             raft_group_id,
             from,
             to,
         }])
     }
 
-    fn batch_gc(&self, tasks: Vec<RaftLogGCTask>) -> Result<usize> {
+    fn batch_gc(&self, tasks: Vec<RaftLogGcTask>) -> Result<usize> {
         let mut batch = self.log_batch(tasks.len());
         let mut old_first_index = Vec::with_capacity(tasks.len());
         for task in &tasks {
@@ -429,22 +593,18 @@ impl RaftEngine for RaftLogEngine {
         Ok(total as usize)
     }
 
-    fn purge_expired_files(&self) -> Result<Vec<u64>> {
+    fn need_manual_purge(&self) -> bool {
+        true
+    }
+
+    fn manual_purge(&self) -> Result<Vec<u64>> {
         self.0.purge_expired_files().map_err(transfer_error)
     }
-
-    fn has_builtin_entry_cache(&self) -> bool {
-        false
-    }
-
-    fn gc_entry_cache(&self, _raft_group_id: u64, _to: u64) {}
 
     /// Flush current cache stats.
     fn flush_stats(&self) -> Option<CacheStats> {
         None
     }
-
-    fn stop(&self) {}
 
     fn dump_stats(&self) -> Result<String> {
         // Raft engine won't dump anything.
@@ -453,6 +613,29 @@ impl RaftEngine for RaftLogEngine {
 
     fn get_engine_size(&self) -> Result<u64> {
         Ok(self.0.get_used_size() as u64)
+    }
+
+    fn for_each_raft_group<E, F>(&self, f: &mut F) -> std::result::Result<(), E>
+    where
+        F: FnMut(u64) -> std::result::Result<(), E>,
+        E: From<engine_traits::Error>,
+    {
+        for id in self.0.raft_groups() {
+            if id != STORE_STATE_ID {
+                f(id)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn put_recover_state(&self, state: &StoreRecoverState) -> Result<()> {
+        let mut batch = Self::LogBatch::default();
+        batch
+            .0
+            .put_message(STORE_STATE_ID, RECOVER_STATE_KEY.to_vec(), state)
+            .map_err(transfer_error)?;
+        self.0.write(&mut batch.0, true).map_err(transfer_error)?;
+        Ok(())
     }
 }
 

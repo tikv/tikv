@@ -70,6 +70,8 @@ pub struct EvalConfig {
     // warning is a executor stuff instead of a evaluation stuff.
     pub max_warning_cnt: usize,
     pub sql_mode: SqlMode,
+
+    pub paging_size: Option<u64>,
 }
 
 impl Default for EvalConfig {
@@ -87,8 +89,8 @@ impl EvalConfig {
         } else if req.has_time_zone_offset() {
             box_try!(eval_cfg.set_time_zone_by_offset(req.get_time_zone_offset()));
         } else {
-            // This should not be reachable. However we will not panic here in case
-            // of compatibility issues.
+            // This should not be reachable. However we will not panic here in
+            // case of compatibility issues.
         }
         if req.has_max_warning_count() {
             eval_cfg.set_max_warning_cnt(req.get_max_warning_count() as usize);
@@ -105,6 +107,7 @@ impl EvalConfig {
             flag: Flag::empty(),
             max_warning_cnt: DEFAULT_MAX_WARNING_CNT,
             sql_mode: SqlMode::empty(),
+            paging_size: None,
         }
     }
 
@@ -313,8 +316,8 @@ impl EvalContext {
     }
 
     /// Indicates whether values less than 0 should be clipped to 0 for unsigned
-    /// integer types. This is the case for `insert`, `update`, `alter table` and
-    /// `load data infile` statements, when not in strict SQL mode.
+    /// integer types. This is the case for `insert`, `update`, `alter table`
+    /// and `load data infile` statements, when not in strict SQL mode.
     /// see <https://dev.mysql.com/doc/refman/5.7/en/out-of-range-and-overflow.html>
     pub fn should_clip_to_zero(&self) -> bool {
         self.cfg.flag.contains(Flag::IN_INSERT_STMT)
@@ -332,19 +335,19 @@ mod tests {
     fn test_handle_truncate() {
         // ignore_truncate = false, truncate_as_warning = false
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::new()));
-        assert!(ctx.handle_truncate(false).is_ok());
-        assert!(ctx.handle_truncate(true).is_err());
+        ctx.handle_truncate(false).unwrap();
+        ctx.handle_truncate(true).unwrap_err();
         assert!(ctx.take_warnings().warnings.is_empty());
         // ignore_truncate = false;
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
-        assert!(ctx.handle_truncate(false).is_ok());
-        assert!(ctx.handle_truncate(true).is_ok());
+        ctx.handle_truncate(false).unwrap();
+        ctx.handle_truncate(true).unwrap();
         assert!(ctx.take_warnings().warnings.is_empty());
 
         // ignore_truncate = false, truncate_as_warning = true
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING)));
-        assert!(ctx.handle_truncate(false).is_ok());
-        assert!(ctx.handle_truncate(true).is_ok());
+        ctx.handle_truncate(false).unwrap();
+        ctx.handle_truncate(true).unwrap();
         assert!(!ctx.take_warnings().warnings.is_empty());
     }
 
@@ -352,11 +355,11 @@ mod tests {
     fn test_max_warning_cnt() {
         let eval_cfg = Arc::new(EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING));
         let mut ctx = EvalContext::new(Arc::clone(&eval_cfg));
-        assert!(ctx.handle_truncate(true).is_ok());
-        assert!(ctx.handle_truncate(true).is_ok());
+        ctx.handle_truncate(true).unwrap();
+        ctx.handle_truncate(true).unwrap();
         assert_eq!(ctx.take_warnings().warnings.len(), 2);
         for _ in 0..2 * DEFAULT_MAX_WARNING_CNT {
-            assert!(ctx.handle_truncate(true).is_ok());
+            ctx.handle_truncate(true).unwrap();
         }
         let warnings = ctx.take_warnings();
         assert_eq!(warnings.warning_cnt, 2 * DEFAULT_MAX_WARNING_CNT);
@@ -367,37 +370,37 @@ mod tests {
     fn test_handle_division_by_zero() {
         let cases = vec![
             //(flag,sql_mode,is_ok,is_empty)
-            (Flag::empty(), SqlMode::empty(), true, false), //warning
+            (Flag::empty(), SqlMode::empty(), true, false), // warning
             (
                 Flag::IN_INSERT_STMT,
                 SqlMode::ERROR_FOR_DIVISION_BY_ZERO,
                 true,
                 false,
-            ), //warning
+            ), // warning
             (
                 Flag::IN_UPDATE_OR_DELETE_STMT,
                 SqlMode::ERROR_FOR_DIVISION_BY_ZERO,
                 true,
                 false,
-            ), //warning
+            ), // warning
             (
                 Flag::IN_UPDATE_OR_DELETE_STMT,
                 SqlMode::ERROR_FOR_DIVISION_BY_ZERO | SqlMode::STRICT_ALL_TABLES,
                 false,
                 true,
-            ), //error
+            ), // error
             (
                 Flag::IN_UPDATE_OR_DELETE_STMT,
                 SqlMode::STRICT_ALL_TABLES,
                 true,
                 true,
-            ), //ok
+            ), // ok
             (
                 Flag::IN_UPDATE_OR_DELETE_STMT | Flag::DIVIDED_BY_ZERO_AS_WARNING,
                 SqlMode::ERROR_FOR_DIVISION_BY_ZERO | SqlMode::STRICT_ALL_TABLES,
                 true,
                 false,
-            ), //warning
+            ), // warning
         ];
         for (flag, sql_mode, is_ok, is_empty) in cases {
             let mut cfg = EvalConfig::new();
@@ -412,12 +415,12 @@ mod tests {
     fn test_handle_invalid_time_error() {
         let cases = vec![
             //(flag,strict_sql_mode,is_ok,is_empty)
-            (Flag::empty(), false, true, false),        //warning
-            (Flag::empty(), true, true, false),         //warning
-            (Flag::IN_INSERT_STMT, false, true, false), //warning
-            (Flag::IN_UPDATE_OR_DELETE_STMT, false, true, false), //warning
-            (Flag::IN_UPDATE_OR_DELETE_STMT, true, false, true), //error
-            (Flag::IN_INSERT_STMT, true, false, true),  //error
+            (Flag::empty(), false, true, false),        // warning
+            (Flag::empty(), true, true, false),         // warning
+            (Flag::IN_INSERT_STMT, false, true, false), // warning
+            (Flag::IN_UPDATE_OR_DELETE_STMT, false, true, false), // warning
+            (Flag::IN_UPDATE_OR_DELETE_STMT, true, false, true), // error
+            (Flag::IN_INSERT_STMT, true, false, true),  // error
         ];
         for (flag, strict_sql_mode, is_ok, is_empty) in cases {
             let err = Error::invalid_time_format("");

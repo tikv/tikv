@@ -30,4 +30,5 @@ raftstore = { path = "../raftstore", default-features = false }
 test_raftstore = { path = "../test_raftstore", default-features = false }
 tikv = { path = "../../", default-features = false }
 tikv_util = { path = "../tikv_util", default-features = false }
+tracker = { path = "../tracker", default-features = false }
 txn_types = { path = "../txn_types", default-features = false }

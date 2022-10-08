@@ -38,7 +38,7 @@ pub trait ClonableObserver: 'static + Send {
 }
 
 macro_rules! impl_box_observer {
-    ($name:ident, $ob: ident, $wrapper: ident) => {
+    ($name:ident, $ob:ident, $wrapper:ident) => {
         pub struct $name(Box<dyn ClonableObserver<Ob = dyn $ob> + Send>);
         impl $name {
             pub fn new<T: 'static + $ob + Clone>(observer: T) -> $name {
@@ -82,7 +82,7 @@ macro_rules! impl_box_observer {
 
 // This is the same as impl_box_observer_g except $ob has a typaram
 macro_rules! impl_box_observer_g {
-    ($name:ident, $ob: ident, $wrapper: ident) => {
+    ($name:ident, $ob:ident, $wrapper:ident) => {
         pub struct $name<E: KvEngine>(Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send>);
         impl<E: KvEngine + 'static + Send> $name<E> {
             pub fn new<T: 'static + $ob<E> + Clone>(observer: T) -> $name<E> {
@@ -271,8 +271,9 @@ impl<E: KvEngine> Registry<E> {
     }
 }
 
-/// A macro that loops over all observers and returns early when error is found or
-/// bypass is set. `try_loop_ob` is expected to be used for hook that returns a `Result`.
+/// A macro that loops over all observers and returns early when error is found
+/// or bypass is set. `try_loop_ob` is expected to be used for hook that returns
+/// a `Result`.
 macro_rules! try_loop_ob {
     ($r:expr, $obs:expr, $hook:ident, $($args:tt)*) => {
         loop_ob!(_imp _res, $r, $obs, $hook, $($args)*)

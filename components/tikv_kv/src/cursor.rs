@@ -63,13 +63,15 @@ impl<I: Iterator> Cursor<I> {
         self.cur_value_has_read.set(false);
     }
 
-    /// Mark key as read. Returns whether key was marked as read before this call.
+    /// Mark key as read. Returns whether key was marked as read before this
+    /// call.
     #[inline]
     fn mark_key_read(&self) -> bool {
         self.cur_key_has_read.replace(true)
     }
 
-    /// Mark value as read. Returns whether value was marked as read before this call.
+    /// Mark value as read. Returns whether value was marked as read before this
+    /// call.
     #[inline]
     fn mark_value_read(&self) -> bool {
         self.cur_value_has_read.replace(true)
@@ -148,7 +150,8 @@ impl<I: Iterator> Cursor<I> {
                 }
             } else if self.prefix_seek {
                 // When prefixed seek and prefix_same_as_start enabled
-                // seek_to_first may return false due to no key's prefix is same as iter lower bound's
+                // seek_to_first may return false due to no key's prefix is same as iter lower
+                // bound's
                 return self.seek(key, statistics);
             } else {
                 assert!(self.seek_to_first(statistics));
@@ -375,9 +378,9 @@ impl<I: Iterator> Cursor<I> {
     }
 
     #[inline]
-    // As Rocksdb described, if Iterator::Valid() is false, there are two possibilities:
-    // (1) We reached the end of the data. In this case, status() is OK();
-    // (2) there is an error. In this case status() is not OK().
+    // As Rocksdb described, if Iterator::Valid() is false, there are two
+    // possibilities: (1) We reached the end of the data. In this case, status()
+    // is OK(); (2) there is an error. In this case status() is not OK().
     // So check status when iterator is invalidated.
     pub fn valid(&self) -> Result<bool> {
         match self.iter.valid() {
@@ -418,7 +421,8 @@ impl<I: Iterator> Cursor<I> {
     }
 }
 
-/// A handy utility to build a snapshot cursor according to various configurations.
+/// A handy utility to build a snapshot cursor according to various
+/// configurations.
 pub struct CursorBuilder<'a, S: Snapshot> {
     snapshot: &'a S,
     cf: CfName,
@@ -555,13 +559,14 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
         iter_opt.set_key_only(self.key_only);
         iter_opt.set_max_skippable_internal_keys(self.max_skippable_internal_keys);
 
-        // prefix_seek is only used for single key, so set prefix_same_as_start for safety.
+        // prefix_seek is only used for single key, so set prefix_same_as_start for
+        // safety.
         if self.prefix_seek {
             iter_opt.use_prefix_seek();
             iter_opt.set_prefix_same_as_start(true);
         }
         Ok(Cursor::new(
-            self.snapshot.iter_cf(self.cf, iter_opt)?,
+            self.snapshot.iter(self.cf, iter_opt)?,
             self.scan_mode,
             self.prefix_seek,
         ))
@@ -570,14 +575,11 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use engine_rocks::{
-        raw::ColumnFamilyOptions,
-        raw_util::{new_engine, CFOptions},
-        util::{new_temp_engine, FixedPrefixSliceTransform},
-        RocksEngine, RocksSnapshot,
+        util::{new_engine_opt, FixedPrefixSliceTransform},
+        RocksCfOptions, RocksDbOptions, RocksEngine, RocksSnapshot,
     };
+    use engine_test::new_temp_engine;
     use engine_traits::{IterOptions, SyncMutable, CF_DEFAULT};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
@@ -613,22 +615,19 @@ mod tests {
     #[test]
     fn test_seek_and_prev_with_prefix_seek() {
         let path = Builder::new().prefix("test-cursor").tempdir().unwrap();
-        let mut cf_opts = ColumnFamilyOptions::new();
+        let mut cf_opts = RocksCfOptions::default();
         cf_opts
             .set_prefix_extractor(
                 "FixedPrefixSliceTransform",
                 FixedPrefixSliceTransform::new(3),
             )
             .unwrap();
-        let engine = new_engine(
+        let engine = new_engine_opt(
             path.path().to_str().unwrap(),
-            None,
-            &[CF_DEFAULT],
-            Some(vec![CFOptions::new(CF_DEFAULT, cf_opts)]),
+            RocksDbOptions::default(),
+            vec![(CF_DEFAULT, cf_opts)],
         )
         .unwrap();
-        let engine = Arc::new(engine);
-        let engine = RocksEngine::from_db(engine);
 
         let (region, _) = load_default_dataset(engine.clone());
 
@@ -637,7 +636,7 @@ mod tests {
         let mut iter_opt = IterOptions::default();
         iter_opt.use_prefix_seek();
         iter_opt.set_prefix_same_as_start(true);
-        let it = snap.iter(iter_opt);
+        let it = snap.iter(CF_DEFAULT, iter_opt).unwrap();
         let mut iter = Cursor::new(it, ScanMode::Mixed, true);
 
         assert!(
@@ -649,10 +648,8 @@ mod tests {
             iter.seek(&Key::from_encoded_slice(b"a3"), &mut statistics)
                 .unwrap()
         );
-        assert!(
-            iter.seek(&Key::from_encoded_slice(b"a9"), &mut statistics)
-                .is_err()
-        );
+        iter.seek(&Key::from_encoded_slice(b"a9"), &mut statistics)
+            .unwrap_err();
 
         assert!(
             !iter
@@ -663,10 +660,8 @@ mod tests {
             iter.seek_for_prev(&Key::from_encoded_slice(b"a3"), &mut statistics)
                 .unwrap()
         );
-        assert!(
-            iter.seek_for_prev(&Key::from_encoded_slice(b"a1"), &mut statistics)
-                .is_err()
-        );
+        iter.seek_for_prev(&Key::from_encoded_slice(b"a1"), &mut statistics)
+            .unwrap_err();
     }
 
     #[test]
@@ -677,7 +672,7 @@ mod tests {
 
         let snap = RegionSnapshot::<RocksSnapshot>::from_raw(engines.kv.clone(), region);
         let mut statistics = CfStatistics::default();
-        let it = snap.iter(IterOptions::default());
+        let it = snap.iter(CF_DEFAULT, IterOptions::default()).unwrap();
         let mut iter = Cursor::new(it, ScanMode::Mixed, false);
         assert!(
             !iter
@@ -707,14 +702,10 @@ mod tests {
                 .reverse_seek(&Key::from_encoded_slice(b"a3"), &mut statistics)
                 .unwrap()
         );
-        assert!(
-            iter.reverse_seek(&Key::from_encoded_slice(b"a1"), &mut statistics)
-                .is_err()
-        );
-        assert!(
-            iter.reverse_seek(&Key::from_encoded_slice(b"a8"), &mut statistics)
-                .is_err()
-        );
+        iter.reverse_seek(&Key::from_encoded_slice(b"a1"), &mut statistics)
+            .unwrap_err();
+        iter.reverse_seek(&Key::from_encoded_slice(b"a8"), &mut statistics)
+            .unwrap_err();
 
         assert!(iter.seek_to_last(&mut statistics));
         let mut res = vec![];
@@ -735,7 +726,7 @@ mod tests {
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());
         let snap = RegionSnapshot::<RocksSnapshot>::from_raw(engines.kv, region);
-        let it = snap.iter(IterOptions::default());
+        let it = snap.iter(CF_DEFAULT, IterOptions::default()).unwrap();
         let mut iter = Cursor::new(it, ScanMode::Mixed, false);
         assert!(
             !iter

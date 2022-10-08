@@ -6,8 +6,11 @@ use engine_store_ffi::interfaces::root::DB::{BaseBuffView, RaftStoreProxyPtr, Ra
 use futures::{compat::Future01CompatExt, executor::block_on};
 use kvproto::diagnosticspb::{ServerInfoRequest, ServerInfoResponse, ServerInfoType};
 use protobuf::Message;
-use tikv::server::service::diagnostics::{ioload, sys, SYS_INFO};
-use tikv_util::{sys::SystemExt, timer::GLOBAL_TIMER_HANDLE};
+use tikv::server::service::diagnostics::{sys, SYS_INFO};
+use tikv_util::{
+    sys::{ioload, SystemExt},
+    timer::GLOBAL_TIMER_HANDLE,
+};
 
 fn server_info_for_ffi(req: ServerInfoRequest) -> ServerInfoResponse {
     let tp = req.get_tp();

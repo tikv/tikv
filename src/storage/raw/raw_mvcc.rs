@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{CfName, IterOptions, ReadOptions, DATA_KEY_PREFIX_LEN};
+use engine_traits::{CfName, IterOptions, ReadOptions, CF_DEFAULT, DATA_KEY_PREFIX_LEN};
 use txn_types::{Key, TimeStamp, Value};
 
 use crate::storage::kv::{Error, ErrorInner, Iterator, Result, Snapshot};
@@ -19,7 +19,7 @@ impl<S: Snapshot> RawMvccSnapshot<S> {
 
     pub fn seek_first_key_value_cf(
         &self,
-        cf: Option<CfName>,
+        cf: CfName,
         opts: Option<ReadOptions>,
         key: &Key,
     ) -> Result<Option<Value>> {
@@ -29,10 +29,7 @@ impl<S: Snapshot> RawMvccSnapshot<S> {
         iter_opt.set_prefix_same_as_start(true);
         let upper_bound = key.clone().append_ts(TimeStamp::zero()).into_encoded();
         iter_opt.set_vec_upper_bound(upper_bound, DATA_KEY_PREFIX_LEN);
-        let mut iter = match cf {
-            Some(cf_name) => self.iter_cf(cf_name, iter_opt)?,
-            None => self.iter(iter_opt)?,
-        };
+        let mut iter = self.iter(cf, iter_opt)?;
         if iter.seek(key)? {
             Ok(Some(iter.value().to_owned()))
         } else {
@@ -43,29 +40,22 @@ impl<S: Snapshot> RawMvccSnapshot<S> {
 
 impl<S: Snapshot> Snapshot for RawMvccSnapshot<S> {
     type Iter = RawMvccIterator<S::Iter>;
-    type Ext<'a>
-    where
-        S: 'a,
-    = S::Ext<'a>;
+    type Ext<'a> = S::Ext<'a> where S: 'a;
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {
-        self.seek_first_key_value_cf(None, None, key)
+        self.seek_first_key_value_cf(CF_DEFAULT, None, key)
     }
 
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>> {
-        self.seek_first_key_value_cf(Some(cf), None, key)
+        self.seek_first_key_value_cf(cf, None, key)
     }
 
     fn get_cf_opt(&self, opts: ReadOptions, cf: CfName, key: &Key) -> Result<Option<Value>> {
-        self.seek_first_key_value_cf(Some(cf), Some(opts), key)
+        self.seek_first_key_value_cf(cf, Some(opts), key)
     }
 
-    fn iter(&self, iter_opt: IterOptions) -> Result<Self::Iter> {
-        Ok(RawMvccIterator::new(self.snap.iter(iter_opt)?))
-    }
-
-    fn iter_cf(&self, cf: CfName, iter_opt: IterOptions) -> Result<Self::Iter> {
-        Ok(RawMvccIterator::new(self.snap.iter_cf(cf, iter_opt)?))
+    fn iter(&self, cf: CfName, iter_opt: IterOptions) -> Result<Self::Iter> {
+        Ok(RawMvccIterator::new(self.snap.iter(cf, iter_opt)?))
     }
 
     #[inline]
@@ -161,8 +151,9 @@ impl<I: Iterator> RawMvccIterator<I> {
 }
 
 // RawMvccIterator always return the latest ts of user key.
-// ts is desc encoded after user key, so it's placed the first one for the same user key.
-// Only one-way direction scan is supported. Like `seek` then `next` or `seek_for_prev` then `prev`
+// ts is desc encoded after user key, so it's placed the first one for the same
+// user key. Only one-way direction scan is supported. Like `seek` then `next`
+// or `seek_for_prev` then `prev`
 impl<I: Iterator> Iterator for RawMvccIterator<I> {
     fn next(&mut self) -> Result<bool> {
         if !self.is_forward {
@@ -227,7 +218,8 @@ impl<I: Iterator> Iterator for RawMvccIterator<I> {
     }
 
     fn key(&self) -> &[u8] {
-        // need map_or_else to lazy evaluate the default func, as it will abort when invalid.
+        // need map_or_else to lazy evaluate the default func, as it will abort when
+        // invalid.
         self.cur_key.as_deref().unwrap_or_else(|| self.inner.key())
     }
 
@@ -269,7 +261,8 @@ mod tests {
         let (tx, rx) = channel();
         let ctx = Context::default();
 
-        // TODO: Consider another way other than hard coding, to generate keys' prefix of test data.
+        // TODO: Consider another way other than hard coding, to generate keys' prefix
+        // of test data.
         let test_data = vec![
             (b"r\0a".to_vec(), b"aa".to_vec(), 10),
             (b"r\0aa".to_vec(), b"aaa".to_vec(), 20),
@@ -318,7 +311,7 @@ mod tests {
 
         // seek
         let iter_opt = IterOptions::default();
-        let mut iter = encode_snapshot.iter_cf(CF_DEFAULT, iter_opt).unwrap();
+        let mut iter = encode_snapshot.iter(CF_DEFAULT, iter_opt).unwrap();
         let mut pairs = vec![];
         let raw_key = ApiV2::encode_raw_key_owned(b"r\0a".to_vec(), None);
         iter.seek(&raw_key).unwrap();

@@ -502,10 +502,11 @@ impl Filter for SnapshotFilter {
     }
 }
 
-/// `CollectSnapshotFilter` is a simulation transport filter to simulate the simultaneous delivery
-/// of multiple snapshots from different peers. It collects the snapshots from different
-/// peers and drop the subsequent snapshots from the same peers. Currently, if there are
-/// more than 1 snapshots in this filter, all the snapshots will be dilivered at once.
+/// `CollectSnapshotFilter` is a simulation transport filter to simulate the
+/// simultaneous delivery of multiple snapshots from different peers. It
+/// collects the snapshots from different peers and drop the subsequent
+/// snapshots from the same peers. Currently, if there are more than 1 snapshots
+/// in this filter, all the snapshots will be dilivered at once.
 pub struct CollectSnapshotFilter {
     dropped: AtomicBool,
     stale: AtomicBool,
@@ -748,10 +749,11 @@ impl Filter for LeadingDuplicatedSnapshotFilter {
     }
 }
 
-/// `RandomLatencyFilter` is a transport filter to simulate randomized network latency.
-/// Based on a randomized rate, `RandomLatencyFilter` will decide whether to delay
-/// the sending of any message. It's could be used to simulate the message sending
-/// in a network with random latency, where messages could be delayed, disordered or lost.
+/// `RandomLatencyFilter` is a transport filter to simulate randomized network
+/// latency. Based on a randomized rate, `RandomLatencyFilter` will decide
+/// whether to delay the sending of any message. It's could be used to simulate
+/// the message sending in a network with random latency, where messages could
+/// be delayed, disordered or lost.
 pub struct RandomLatencyFilter {
     delay_rate: u32,
     delayed_msgs: Mutex<Vec<RaftMessage>>,

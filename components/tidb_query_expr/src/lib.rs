@@ -1,19 +1,18 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! This crate implements a simple SQL query engine to work with TiDB pushed down executors.
+//! This crate implements a simple SQL query engine to work with TiDB pushed
+//! down executors.
 //!
-//! The query engine is able to scan and understand rows stored by TiDB, run against a
-//! series of executors and then return the execution result. The query engine is provided via
-//! TiKV Coprocessor interface. However standalone UDF functions are also exported and can be used
-//! standalone.
+//! The query engine is able to scan and understand rows stored by TiDB, run
+//! against a series of executors and then return the execution result. The
+//! query engine is provided via TiKV Coprocessor interface. However standalone
+//! UDF functions are also exported and can be used standalone.
 
 #![allow(elided_lifetimes_in_paths)] // Necessary until rpn_fn accepts functions annotated with lifetimes.
 #![allow(incomplete_features)]
 #![feature(proc_macro_hygiene)]
 #![feature(specialization)]
 #![feature(test)]
-#![feature(const_fn_fn_ptr_basics)]
-#![feature(const_fn_trait_bound)]
 #![feature(const_mut_refs)]
 
 #[macro_use(box_err, box_try, try_opt)]
@@ -39,6 +38,7 @@ pub mod impl_math;
 pub mod impl_miscellaneous;
 pub mod impl_op;
 pub mod impl_other;
+pub mod impl_regexp;
 pub mod impl_string;
 pub mod impl_time;
 
@@ -53,7 +53,7 @@ pub use self::types::*;
 use self::{
     impl_arithmetic::*, impl_cast::*, impl_compare::*, impl_compare_in::*, impl_control::*,
     impl_encryption::*, impl_json::*, impl_like::*, impl_math::*, impl_miscellaneous::*,
-    impl_op::*, impl_other::*, impl_string::*, impl_time::*,
+    impl_op::*, impl_other::*, impl_regexp::*, impl_string::*, impl_time::*,
 };
 
 fn map_to_binary_fn_sig(expr: &Expr) -> Result<RpnFnMeta> {
@@ -95,6 +95,38 @@ fn map_like_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
     Ok(match_template_collator! {
         TT, match ret_field_type.as_accessor().collation().map_err(tidb_query_datatype::codec::Error::from)? {
             Collation::TT => like_fn_meta::<TT>()
+        }
+    })
+}
+
+fn map_regexp_like_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
+    Ok(match_template_collator! {
+        TT, match ret_field_type.as_accessor().collation().map_err(tidb_query_datatype::codec::Error::from)? {
+            Collation::TT => regexp_like_fn_meta::<TT>()
+        }
+    })
+}
+
+fn map_regexp_substr_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
+    Ok(match_template_collator! {
+        TT, match ret_field_type.as_accessor().collation().map_err(tidb_query_datatype::codec::Error::from)? {
+            Collation::TT => regexp_substr_fn_meta::<TT>()
+        }
+    })
+}
+
+fn map_regexp_instr_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
+    Ok(match_template_collator! {
+        TT, match ret_field_type.as_accessor().collation().map_err(tidb_query_datatype::codec::Error::from)? {
+            Collation::TT => regexp_instr_fn_meta::<TT>()
+        }
+    })
+}
+
+fn map_regexp_replace_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
+    Ok(match_template_collator! {
+        TT, match ret_field_type.as_accessor().collation().map_err(tidb_query_datatype::codec::Error::from)? {
+            Collation::TT => regexp_replace_fn_meta::<TT>()
         }
     })
 }
@@ -143,7 +175,8 @@ fn map_int_sig<F>(value: ScalarFuncSig, children: &[Expr], mapper: F) -> Result<
 where
     F: Fn(bool, bool) -> RpnFnMeta,
 {
-    // FIXME: The signature for different signed / unsigned int should be inferred at TiDB side.
+    // FIXME: The signature for different signed / unsigned int should be inferred
+    // at TiDB side.
     if children.len() != 2 {
         return Err(other_err!(
             "ScalarFunction {:?} (params = {}) is not supported in batch mode",
@@ -222,7 +255,8 @@ fn map_rhs_int_sig<F>(value: ScalarFuncSig, children: &[Expr], mapper: F) -> Res
 where
     F: Fn(bool) -> RpnFnMeta,
 {
-    // FIXME: The signature for different signed / unsigned int should be inferred at TiDB side.
+    // FIXME: The signature for different signed / unsigned int should be inferred
+    // at TiDB side.
     if children.len() != 2 {
         return Err(other_err!(
             "ScalarFunction {:?} (params = {}) is not supported in batch mode",
@@ -429,20 +463,20 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::FromBinary => map_from_binary_fn_sig(expr)?,
 
         // impl_compare
-        ScalarFuncSig::LtInt => map_int_sig(value, children, compare_mapper::<CmpOpLT>)?,
-        ScalarFuncSig::LtReal => compare_fn_meta::<BasicComparer<Real, CmpOpLT>>(),
-        ScalarFuncSig::LtDecimal => compare_fn_meta::<BasicComparer<Decimal, CmpOpLT>>(),
-        ScalarFuncSig::LtString => map_string_compare_sig::<CmpOpLT>(ft)?,
-        ScalarFuncSig::LtTime => compare_fn_meta::<BasicComparer<DateTime, CmpOpLT>>(),
-        ScalarFuncSig::LtDuration => compare_fn_meta::<BasicComparer<Duration, CmpOpLT>>(),
-        ScalarFuncSig::LtJson => compare_json_fn_meta::<CmpOpLT>(),
-        ScalarFuncSig::LeInt => map_int_sig(value, children, compare_mapper::<CmpOpLE>)?,
-        ScalarFuncSig::LeReal => compare_fn_meta::<BasicComparer<Real, CmpOpLE>>(),
-        ScalarFuncSig::LeDecimal => compare_fn_meta::<BasicComparer<Decimal, CmpOpLE>>(),
-        ScalarFuncSig::LeString => map_string_compare_sig::<CmpOpLE>(ft)?,
-        ScalarFuncSig::LeTime => compare_fn_meta::<BasicComparer<DateTime, CmpOpLE>>(),
-        ScalarFuncSig::LeDuration => compare_fn_meta::<BasicComparer<Duration, CmpOpLE>>(),
-        ScalarFuncSig::LeJson => compare_json_fn_meta::<CmpOpLE>(),
+        ScalarFuncSig::LtInt => map_int_sig(value, children, compare_mapper::<CmpOpLt>)?,
+        ScalarFuncSig::LtReal => compare_fn_meta::<BasicComparer<Real, CmpOpLt>>(),
+        ScalarFuncSig::LtDecimal => compare_fn_meta::<BasicComparer<Decimal, CmpOpLt>>(),
+        ScalarFuncSig::LtString => map_string_compare_sig::<CmpOpLt>(ft)?,
+        ScalarFuncSig::LtTime => compare_fn_meta::<BasicComparer<DateTime, CmpOpLt>>(),
+        ScalarFuncSig::LtDuration => compare_fn_meta::<BasicComparer<Duration, CmpOpLt>>(),
+        ScalarFuncSig::LtJson => compare_json_fn_meta::<CmpOpLt>(),
+        ScalarFuncSig::LeInt => map_int_sig(value, children, compare_mapper::<CmpOpLe>)?,
+        ScalarFuncSig::LeReal => compare_fn_meta::<BasicComparer<Real, CmpOpLe>>(),
+        ScalarFuncSig::LeDecimal => compare_fn_meta::<BasicComparer<Decimal, CmpOpLe>>(),
+        ScalarFuncSig::LeString => map_string_compare_sig::<CmpOpLe>(ft)?,
+        ScalarFuncSig::LeTime => compare_fn_meta::<BasicComparer<DateTime, CmpOpLe>>(),
+        ScalarFuncSig::LeDuration => compare_fn_meta::<BasicComparer<Duration, CmpOpLe>>(),
+        ScalarFuncSig::LeJson => compare_json_fn_meta::<CmpOpLe>(),
         ScalarFuncSig::GreatestInt => greatest_int_fn_meta(),
         ScalarFuncSig::GreatestDecimal => greatest_decimal_fn_meta(),
         ScalarFuncSig::GreatestString => greatest_string_fn_meta(),
@@ -463,41 +497,41 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::LeastCmpStringAsTime=> least_cmp_string_as_time_fn_meta(),
         ScalarFuncSig::LeastDuration => least_duration_fn_meta(),
         ScalarFuncSig::IntervalReal => interval_real_fn_meta(),
-        ScalarFuncSig::GtInt => map_int_sig(value, children, compare_mapper::<CmpOpGT>)?,
-        ScalarFuncSig::GtReal => compare_fn_meta::<BasicComparer<Real, CmpOpGT>>(),
-        ScalarFuncSig::GtDecimal => compare_fn_meta::<BasicComparer<Decimal, CmpOpGT>>(),
-        ScalarFuncSig::GtString => map_string_compare_sig::<CmpOpGT>(ft)?,
-        ScalarFuncSig::GtTime => compare_fn_meta::<BasicComparer<DateTime, CmpOpGT>>(),
-        ScalarFuncSig::GtDuration => compare_fn_meta::<BasicComparer<Duration, CmpOpGT>>(),
-        ScalarFuncSig::GtJson => compare_json_fn_meta::<CmpOpGT>(),
-        ScalarFuncSig::GeInt => map_int_sig(value, children, compare_mapper::<CmpOpGE>)?,
-        ScalarFuncSig::GeReal => compare_fn_meta::<BasicComparer<Real, CmpOpGE>>(),
-        ScalarFuncSig::GeDecimal => compare_fn_meta::<BasicComparer<Decimal, CmpOpGE>>(),
-        ScalarFuncSig::GeString => map_string_compare_sig::<CmpOpGE>(ft)?,
-        ScalarFuncSig::GeTime => compare_fn_meta::<BasicComparer<DateTime, CmpOpGE>>(),
-        ScalarFuncSig::GeDuration => compare_fn_meta::<BasicComparer<Duration, CmpOpGE>>(),
-        ScalarFuncSig::GeJson => compare_json_fn_meta::<CmpOpGE>(),
-        ScalarFuncSig::NeInt => map_int_sig(value, children, compare_mapper::<CmpOpNE>)?,
-        ScalarFuncSig::NeReal => compare_fn_meta::<BasicComparer<Real, CmpOpNE>>(),
-        ScalarFuncSig::NeDecimal => compare_fn_meta::<BasicComparer<Decimal, CmpOpNE>>(),
-        ScalarFuncSig::NeString => map_string_compare_sig::<CmpOpNE>(ft)?,
-        ScalarFuncSig::NeTime => compare_fn_meta::<BasicComparer<DateTime, CmpOpNE>>(),
-        ScalarFuncSig::NeDuration => compare_fn_meta::<BasicComparer<Duration, CmpOpNE>>(),
-        ScalarFuncSig::NeJson => compare_json_fn_meta::<CmpOpNE>(),
-        ScalarFuncSig::EqInt => map_int_sig(value, children, compare_mapper::<CmpOpEQ>)?,
-        ScalarFuncSig::EqReal => compare_fn_meta::<BasicComparer<Real, CmpOpEQ>>(),
-        ScalarFuncSig::EqDecimal => compare_fn_meta::<BasicComparer<Decimal, CmpOpEQ>>(),
-        ScalarFuncSig::EqString => map_string_compare_sig::<CmpOpEQ>(ft)?,
-        ScalarFuncSig::EqTime => compare_fn_meta::<BasicComparer<DateTime, CmpOpEQ>>(),
-        ScalarFuncSig::EqDuration => compare_fn_meta::<BasicComparer<Duration, CmpOpEQ>>(),
-        ScalarFuncSig::EqJson => compare_json_fn_meta::<CmpOpEQ>(),
-        ScalarFuncSig::NullEqInt => map_int_sig(value, children, compare_mapper::<CmpOpNullEQ>)?,
-        ScalarFuncSig::NullEqReal => compare_fn_meta::<BasicComparer<Real, CmpOpNullEQ>>(),
-        ScalarFuncSig::NullEqDecimal => compare_fn_meta::<BasicComparer<Decimal, CmpOpNullEQ>>(),
-        ScalarFuncSig::NullEqString => map_string_compare_sig::<CmpOpNullEQ>(ft)?,
-        ScalarFuncSig::NullEqTime => compare_fn_meta::<BasicComparer<DateTime, CmpOpNullEQ>>(),
-        ScalarFuncSig::NullEqDuration => compare_fn_meta::<BasicComparer<Duration, CmpOpNullEQ>>(),
-        ScalarFuncSig::NullEqJson => compare_json_fn_meta::<CmpOpNullEQ>(),
+        ScalarFuncSig::GtInt => map_int_sig(value, children, compare_mapper::<CmpOpGt>)?,
+        ScalarFuncSig::GtReal => compare_fn_meta::<BasicComparer<Real, CmpOpGt>>(),
+        ScalarFuncSig::GtDecimal => compare_fn_meta::<BasicComparer<Decimal, CmpOpGt>>(),
+        ScalarFuncSig::GtString => map_string_compare_sig::<CmpOpGt>(ft)?,
+        ScalarFuncSig::GtTime => compare_fn_meta::<BasicComparer<DateTime, CmpOpGt>>(),
+        ScalarFuncSig::GtDuration => compare_fn_meta::<BasicComparer<Duration, CmpOpGt>>(),
+        ScalarFuncSig::GtJson => compare_json_fn_meta::<CmpOpGt>(),
+        ScalarFuncSig::GeInt => map_int_sig(value, children, compare_mapper::<CmpOpGe>)?,
+        ScalarFuncSig::GeReal => compare_fn_meta::<BasicComparer<Real, CmpOpGe>>(),
+        ScalarFuncSig::GeDecimal => compare_fn_meta::<BasicComparer<Decimal, CmpOpGe>>(),
+        ScalarFuncSig::GeString => map_string_compare_sig::<CmpOpGe>(ft)?,
+        ScalarFuncSig::GeTime => compare_fn_meta::<BasicComparer<DateTime, CmpOpGe>>(),
+        ScalarFuncSig::GeDuration => compare_fn_meta::<BasicComparer<Duration, CmpOpGe>>(),
+        ScalarFuncSig::GeJson => compare_json_fn_meta::<CmpOpGe>(),
+        ScalarFuncSig::NeInt => map_int_sig(value, children, compare_mapper::<CmpOpNe>)?,
+        ScalarFuncSig::NeReal => compare_fn_meta::<BasicComparer<Real, CmpOpNe>>(),
+        ScalarFuncSig::NeDecimal => compare_fn_meta::<BasicComparer<Decimal, CmpOpNe>>(),
+        ScalarFuncSig::NeString => map_string_compare_sig::<CmpOpNe>(ft)?,
+        ScalarFuncSig::NeTime => compare_fn_meta::<BasicComparer<DateTime, CmpOpNe>>(),
+        ScalarFuncSig::NeDuration => compare_fn_meta::<BasicComparer<Duration, CmpOpNe>>(),
+        ScalarFuncSig::NeJson => compare_json_fn_meta::<CmpOpNe>(),
+        ScalarFuncSig::EqInt => map_int_sig(value, children, compare_mapper::<CmpOpEq>)?,
+        ScalarFuncSig::EqReal => compare_fn_meta::<BasicComparer<Real, CmpOpEq>>(),
+        ScalarFuncSig::EqDecimal => compare_fn_meta::<BasicComparer<Decimal, CmpOpEq>>(),
+        ScalarFuncSig::EqString => map_string_compare_sig::<CmpOpEq>(ft)?,
+        ScalarFuncSig::EqTime => compare_fn_meta::<BasicComparer<DateTime, CmpOpEq>>(),
+        ScalarFuncSig::EqDuration => compare_fn_meta::<BasicComparer<Duration, CmpOpEq>>(),
+        ScalarFuncSig::EqJson => compare_json_fn_meta::<CmpOpEq>(),
+        ScalarFuncSig::NullEqInt => map_int_sig(value, children, compare_mapper::<CmpOpNullEq>)?,
+        ScalarFuncSig::NullEqReal => compare_fn_meta::<BasicComparer<Real, CmpOpNullEq>>(),
+        ScalarFuncSig::NullEqDecimal => compare_fn_meta::<BasicComparer<Decimal, CmpOpNullEq>>(),
+        ScalarFuncSig::NullEqString => map_string_compare_sig::<CmpOpNullEq>(ft)?,
+        ScalarFuncSig::NullEqTime => compare_fn_meta::<BasicComparer<DateTime, CmpOpNullEq>>(),
+        ScalarFuncSig::NullEqDuration => compare_fn_meta::<BasicComparer<Duration, CmpOpNullEq>>(),
+        ScalarFuncSig::NullEqJson => compare_json_fn_meta::<CmpOpNullEq>(),
         ScalarFuncSig::CoalesceInt => coalesce_fn_meta::<Int>(),
         ScalarFuncSig::CoalesceReal => coalesce_fn_meta::<Real>(),
         ScalarFuncSig::CoalesceString => coalesce_bytes_fn_meta(),
@@ -562,8 +596,14 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::JsonQuoteSig => json_quote_fn_meta(),
         // impl_like
         ScalarFuncSig::LikeSig => map_like_sig(ft)?,
-        ScalarFuncSig::RegexpSig => regexp_fn_meta(),
-        ScalarFuncSig::RegexpUtf8Sig => regexp_utf8_fn_meta(),
+        // impl_regexp
+        ScalarFuncSig::RegexpSig => map_regexp_like_sig(ft)?,
+        ScalarFuncSig::RegexpUtf8Sig => map_regexp_like_sig(ft)?,
+        ScalarFuncSig::RegexpLikeSig => map_regexp_like_sig(ft)?,
+        ScalarFuncSig::RegexpSubstrSig => map_regexp_substr_sig(ft)?,
+        ScalarFuncSig::RegexpInStrSig => map_regexp_instr_sig(ft)?,
+        ScalarFuncSig::RegexpReplaceSig => map_regexp_replace_sig(ft)?,
+
         // impl_math
         ScalarFuncSig::AbsInt => abs_int_fn_meta(),
         ScalarFuncSig::AbsUInt => abs_uint_fn_meta(),

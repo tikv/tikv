@@ -5,7 +5,7 @@ use std::borrow::ToOwned;
 use clap::ArgMatches;
 use collections::HashMap;
 pub use server::setup::initial_logger;
-use tikv::config::{MetricConfig, TiKvConfig};
+use tikv::config::{MetricConfig, TikvConfig};
 use tikv_util::{self, logger};
 
 use crate::config::ProxyConfig;
@@ -29,13 +29,13 @@ pub fn initial_metric(cfg: &MetricConfig) {
 
 #[allow(dead_code)]
 pub fn overwrite_config_with_cmd_args(
-    config: &mut TiKvConfig,
+    config: &mut TikvConfig,
     proxy_config: &mut ProxyConfig,
     matches: &ArgMatches<'_>,
 ) {
     if let Some(level) = matches.value_of("log-level") {
-        config.log.level = logger::get_level_by_string(level).unwrap();
-        config.log_level = slog::Level::Info;
+        config.log.level = logger::get_level_by_string(level).unwrap().into();
+        config.log_level = slog::Level::Info.into();
     }
 
     if let Some(file) = matches.value_of("log-file") {

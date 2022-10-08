@@ -1,0 +1,42 @@
+[package]
+name = "tikv-server"
+version = "0.0.1"
+license = "Apache-2.0"
+edition = "2018"
+publish = false
+
+[features]
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
+tcmalloc = ["server/tcmalloc"]
+jemalloc = ["server/jemalloc"]
+mimalloc = ["server/mimalloc"]
+portable = ["server/portable"]
+sse = ["server/sse"]
+mem-profiling = ["server/mem-profiling"]
+failpoints = ["server/failpoints"]
+cloud-aws = ["server/cloud-aws"]
+cloud-gcp = ["server/cloud-gcp"]
+cloud-azure = ["server/cloud-azure"]
+test-engine-kv-rocksdb = [
+  "server/test-engine-kv-rocksdb"
+]
+test-engine-raft-raft-engine = [
+  "server/test-engine-raft-raft-engine"
+]
+test-engines-rocksdb = ["server/test-engines-rocksdb"]
+test-engines-panic = ["server/test-engines-panic"]
+
+nortcheck = ["server/nortcheck"]
+
+pprof-fp = ["tikv/pprof-fp"]
+
+[dependencies]
+clap = "2.32"
+serde_json = { version = "1.0", features = ["preserve_order"] }
+server = { path = "../../components/server", default-features = false }
+tikv = { path = "../../", default-features = false }
+toml = "0.5"
+
+[build-dependencies]
+cc = "1.0"
+time = "0.1"

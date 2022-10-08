@@ -9,15 +9,15 @@ use std::{
     time::Duration,
 };
 
+use collections::HashMap;
 pub use engine_rocks::RocksSnapshot;
 use engine_rocks::{
-    get_env, raw::DBOptions, raw_util::CFOptions, RocksEngine as BaseRocksEngine,
-    RocksEngineIterator,
+    get_env, RocksCfOptions, RocksDbOptions, RocksEngine as BaseRocksEngine, RocksEngineIterator,
 };
 use engine_traits::{
-    CfName, Engines, IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions, SeekKey,
+    CfName, Engines, IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions,
 };
-use file_system::IORateLimiter;
+use file_system::IoRateLimiter;
 use kvproto::{kvrpcpb::Context, metapb, raft_cmdpb};
 use raftstore::coprocessor::CoprocessorHost;
 use tempfile::{Builder, TempDir};
@@ -89,11 +89,10 @@ pub struct RocksEngine {
 impl RocksEngine {
     pub fn new(
         path: &str,
-        cfs: &[CfName],
-        cfs_opts: Option<Vec<CFOptions<'_>>>,
+        db_opts: Option<RocksDbOptions>,
+        cfs_opts: Vec<(CfName, RocksCfOptions)>,
         shared_block_cache: bool,
-        io_rate_limiter: Option<Arc<IORateLimiter>>,
-        db_opts: Option<DBOptions>,
+        io_rate_limiter: Option<Arc<IoRateLimiter>>,
     ) -> Result<RocksEngine> {
         info!("RocksEngine: creating for path"; "path" => path);
         let (path, temp_dir) = match path {
@@ -104,21 +103,16 @@ impl RocksEngine {
             _ => (path.to_owned(), None),
         };
         let worker = Worker::new("engine-rocksdb");
-        let mut db_opts = db_opts.unwrap_or_else(|| DBOptions::new());
+        let mut db_opts = db_opts.unwrap_or_default();
         if io_rate_limiter.is_some() {
-            db_opts.set_env(get_env(None /*key_manager*/, io_rate_limiter).unwrap());
+            db_opts.set_env(get_env(None /* key_manager */, io_rate_limiter).unwrap());
         }
 
-        let db = Arc::new(engine_rocks::raw_util::new_engine(
-            &path,
-            Some(db_opts),
-            cfs,
-            cfs_opts,
-        )?);
+        let db = engine_rocks::util::new_engine_opt(&path, db_opts, cfs_opts)?;
         // It does not use the raft_engine, so it is ok to fill with the same
         // rocksdb.
-        let mut kv_engine = BaseRocksEngine::from_db(db.clone());
-        let mut raft_engine = BaseRocksEngine::from_db(db);
+        let mut kv_engine = db.clone();
+        let mut raft_engine = db;
         kv_engine.set_shared_block_cache(shared_block_cache);
         raft_engine.set_shared_block_cache(shared_block_cache);
         let engines = Engines::new(kv_engine, raft_engine);
@@ -134,6 +128,15 @@ impl RocksEngine {
 
     pub fn trigger_not_leader(&self) {
         self.not_leader.store(true, Ordering::SeqCst);
+    }
+
+    fn not_leader_error(&self) -> Error {
+        let not_leader = {
+            let mut header = kvproto::errorpb::Error::default();
+            header.mut_not_leader().set_region_id(100);
+            header
+        };
+        Error::from(ErrorInner::Request(not_leader))
     }
 
     pub fn pause(&self, dur: Duration) {
@@ -158,7 +161,8 @@ impl RocksEngine {
     }
 
     /// `pre_propose` is called before propose.
-    /// It's used to trigger "pre_propose_query" observers for RawKV API V2 by now.
+    /// It's used to trigger "pre_propose_query" observers for RawKV API V2 by
+    /// now.
     fn pre_propose(&self, mut batch: WriteData) -> Result<WriteData> {
         let requests = batch
             .modifies
@@ -203,16 +207,20 @@ impl Engine for RocksEngine {
     type Snap = Arc<RocksSnapshot>;
     type Local = BaseRocksEngine;
 
-    fn kv_engine(&self) -> BaseRocksEngine {
-        self.engines.kv.clone()
+    fn kv_engine(&self) -> Option<BaseRocksEngine> {
+        Some(self.engines.kv.clone())
     }
 
-    fn snapshot_on_kv_engine(&self, _: &[u8], _: &[u8]) -> Result<Self::Snap> {
-        self.snapshot(Default::default())
-    }
-
-    fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()> {
+    fn modify_on_kv_engine(&self, region_modifies: HashMap<u64, Vec<Modify>>) -> Result<()> {
+        let modifies = region_modifies.into_values().flatten().collect();
         write_modifies(&self.engines.kv, modifies)
+    }
+
+    fn precheck_write_with_ctx(&self, _ctx: &Context) -> Result<()> {
+        if self.not_leader.load(Ordering::SeqCst) {
+            return Err(self.not_leader_error());
+        }
+        Ok(())
     }
 
     fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> Result<()> {
@@ -249,16 +257,11 @@ impl Engine for RocksEngine {
         fail_point!("rockskv_async_snapshot", |_| Err(box_err!(
             "snapshot failed"
         )));
-        let not_leader = {
-            let mut header = kvproto::errorpb::Error::default();
-            header.mut_not_leader().set_region_id(100);
-            header
-        };
         fail_point!("rockskv_async_snapshot_not_leader", |_| {
-            Err(Error::from(ErrorInner::Request(not_leader.clone())))
+            Err(self.not_leader_error())
         });
         if self.not_leader.load(Ordering::SeqCst) {
-            return Err(Error::from(ErrorInner::Request(not_leader)));
+            return Err(self.not_leader_error());
         }
         box_try!(self.sched.schedule(Task::Snapshot(cb)));
         Ok(())
@@ -287,14 +290,9 @@ impl Snapshot for Arc<RocksSnapshot> {
         Ok(v.map(|v| v.to_vec()))
     }
 
-    fn iter(&self, iter_opt: IterOptions) -> Result<Self::Iter> {
-        trace!("RocksSnapshot: create iterator");
-        Ok(self.iterator_opt(iter_opt)?)
-    }
-
-    fn iter_cf(&self, cf: CfName, iter_opt: IterOptions) -> Result<Self::Iter> {
+    fn iter(&self, cf: CfName, iter_opt: IterOptions) -> Result<Self::Iter> {
         trace!("RocksSnapshot: create cf iterator");
-        Ok(self.iterator_cf_opt(cf, iter_opt)?)
+        Ok(self.iterator_opt(cf, iter_opt)?)
     }
 
     fn ext(&self) -> DummySnapshotExt {
@@ -312,19 +310,19 @@ impl EngineIterator for RocksEngineIterator {
     }
 
     fn seek(&mut self, key: &Key) -> Result<bool> {
-        Iterator::seek(self, key.as_encoded().as_slice().into()).map_err(Error::from)
+        Iterator::seek(self, key.as_encoded()).map_err(Error::from)
     }
 
     fn seek_for_prev(&mut self, key: &Key) -> Result<bool> {
-        Iterator::seek_for_prev(self, key.as_encoded().as_slice().into()).map_err(Error::from)
+        Iterator::seek_for_prev(self, key.as_encoded()).map_err(Error::from)
     }
 
     fn seek_to_first(&mut self) -> Result<bool> {
-        Iterator::seek(self, SeekKey::Start).map_err(Error::from)
+        Iterator::seek_to_first(self).map_err(Error::from)
     }
 
     fn seek_to_last(&mut self) -> Result<bool> {
-        Iterator::seek(self, SeekKey::End).map_err(Error::from)
+        Iterator::seek_to_last(self).map_err(Error::from)
     }
 
     fn valid(&self) -> Result<bool> {

@@ -7,7 +7,7 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_traits::Peekable;
+use engine_traits::{Peekable, WriteBatch};
 use grpcio::{ChannelBuilder, Environment};
 use keys::data_key;
 use kvproto::{kvrpcpb::*, metapb::Region, tikvpb::TikvClient};
@@ -17,7 +17,7 @@ use raftstore::coprocessor::{
 use test_raftstore::*;
 use tikv::{
     server::gc_worker::{
-        AutoGcConfig, GcSafePointProvider, GcTask, Result as GcWorkerResult, TestGCRunner,
+        AutoGcConfig, GcSafePointProvider, GcTask, Result as GcWorkerResult, TestGcRunner,
     },
     storage::{
         kv::TestEngineBuilder,
@@ -28,12 +28,12 @@ use tikv::{
 use tikv_util::HandyRwLock;
 use txn_types::{Key, TimeStamp};
 
-// In theory, raft can propose conf change as long as there is no pending one. Replicas
-// don't apply logs synchronously, so it's possible the old leader is removed before the new
-// leader applies all logs.
-// In the current implementation, the new leader rejects conf change until it applies all logs.
-// It guarantees the correctness of green GC. This test is to prevent breaking it in the
-// future.
+// In theory, raft can propose conf change as long as there is no pending one.
+// Replicas don't apply logs synchronously, so it's possible the old leader is
+// removed before the new leader applies all logs.
+// In the current implementation, the new leader rejects conf change until it
+// applies all logs. It guarantees the correctness of green GC. This test is to
+// prevent breaking it in the future.
 #[test]
 fn test_collect_lock_from_stale_leader() {
     let mut cluster = new_server_cluster(0, 2);
@@ -62,7 +62,8 @@ fn test_collect_lock_from_stale_leader() {
     ctx.set_peer(leader.clone());
     ctx.set_region_epoch(cluster.get_region_epoch(region_id));
 
-    // Pause the new peer applying so that when it becomes the leader, it doesn't apply all logs.
+    // Pause the new peer applying so that when it becomes the leader, it doesn't
+    // apply all logs.
     let new_leader_apply_fp = "on_handle_apply_1003";
     fail::cfg(new_leader_apply_fp, "pause").unwrap();
     must_kv_prewrite(
@@ -73,7 +74,8 @@ fn test_collect_lock_from_stale_leader() {
         10,
     );
 
-    // Leader election only considers the progress of appending logs, so it can succeed.
+    // Leader election only considers the progress of appending logs, so it can
+    // succeed.
     cluster.must_transfer_leader(region_id, new_peer.clone());
     // It shouldn't succeed in the current implementation.
     cluster.pd_client.remove_peer(region_id, leader.clone());
@@ -157,7 +159,8 @@ fn test_notify_observer_after_apply() {
             10,
         );
     });
-    // We can use physical_scan_lock to get the lock because we notify the lock observer after writing data to the rocskdb.
+    // We can use physical_scan_lock to get the lock because we notify the lock
+    // observer after writing data to the rocskdb.
     let mut locks = vec![];
     retry_until(|| {
         assert!(must_check_lock_observer(&client, max_ts, true).is_empty());
@@ -189,7 +192,8 @@ fn test_notify_observer_after_apply() {
     cluster
         .pd_client
         .must_add_peer(ctx.get_region_id(), new_peer(store_id, store_id));
-    // We can use physical_scan_lock to get the lock because we notify the lock observer after writing data to the rocksdb.
+    // We can use physical_scan_lock to get the lock because we notify the lock
+    // observer after writing data to the rocksdb.
     let mut locks = vec![];
     retry_until(|| {
         assert!(must_check_lock_observer(&replica_client, max_ts, true).is_empty());
@@ -213,13 +217,19 @@ fn test_notify_observer_after_apply() {
     );
 }
 
-// It may cause locks missing during green GC if the raftstore notifies the lock observer before writing data to the rocksdb:
-//   1. Store-1 transfers a region to store-2 and store-2 is applying logs.
-//   2. GC worker registers lock observer on store-2 after calling lock observer's callback and before finishing applying which means the lock won't be observed.
-//   3. GC worker scans locks on each store independently. It's possible GC worker has scanned all locks on store-2 and hasn't scanned locks on store-1.
-//   4. Store-2 applies all logs and removes the peer on store-1.
-//   5. GC worker can't scan the lock on store-1 because the peer has been destroyed.
-//   6. GC worker can't get the lock from store-2 because it can't observe the lock and has scanned it.
+// It may cause locks missing during green GC if the raftstore notifies the lock
+// observer before writing data to the rocksdb:
+// - Store-1 transfers a region to store-2 and store-2 is applying logs.
+// - GC worker registers lock observer on store-2 after calling lock observer's
+//   callback and before finishing applying which means the lock won't be
+//   observed.
+// - GC worker scans locks on each store independently. It's possible GC worker
+//   has scanned all locks on store-2 and hasn't scanned locks on store-1.
+// - Store-2 applies all logs and removes the peer on store-1.
+// - GC worker can't scan the lock on store-1 because the peer has been
+//   destroyed.
+// - GC worker can't get the lock from store-2 because it can't observe the lock
+//   and has scanned it.
 #[test]
 fn test_collect_applying_locks() {
     let mut cluster = new_server_cluster(0, 2);
@@ -248,7 +258,8 @@ fn test_collect_applying_locks() {
     ctx.set_peer(leader.clone());
     ctx.set_region_epoch(cluster.get_region_epoch(region_id));
 
-    // Pause store-2 after calling observer callbacks and before writing to the rocksdb.
+    // Pause store-2 after calling observer callbacks and before writing to the
+    // rocksdb.
     let new_leader_apply_fp = "post_handle_apply_1003";
     fail::cfg(new_leader_apply_fp, "pause").unwrap();
 
@@ -300,7 +311,8 @@ fn test_collect_applying_locks() {
     assert_eq!(locks[0].get_key(), b"k1");
 }
 
-// Test write CF's compaction filter can call `orphan_versions_handler` correctly.
+// Test write CF's compaction filter can call `orphan_versions_handler`
+// correctly.
 #[test]
 fn test_error_in_compaction_filter() {
     let engine = TestEngineBuilder::new().build().unwrap();
@@ -317,11 +329,11 @@ fn test_error_in_compaction_filter() {
     let fp = "write_compaction_filter_flush_write_batch";
     fail::cfg(fp, "return").unwrap();
 
-    let mut gc_runner = TestGCRunner::new(200);
+    let mut gc_runner = TestGcRunner::new(200);
     gc_runner.gc(&raw_engine);
 
     match gc_runner.gc_receiver.recv().unwrap() {
-        GcTask::OrphanVersions { wb, .. } => assert_eq!(wb.as_inner().count(), 2),
+        GcTask::OrphanVersions { wb, .. } => assert_eq!(wb.count(), 2),
         GcTask::GcKeys { .. } => {}
         _ => unreachable!(),
     }
@@ -333,8 +345,8 @@ fn test_error_in_compaction_filter() {
     fail::remove(fp);
 }
 
-// Test GC worker can receive and handle orphan versions emit from write CF's compaction filter
-// correctly.
+// Test GC worker can receive and handle orphan versions emit from write CF's
+// compaction filter correctly.
 #[test]
 fn test_orphan_versions_from_compaction_filter() {
     let (cluster, leader, ctx) = must_new_and_configure_cluster(|cluster| {
@@ -370,7 +382,7 @@ fn test_orphan_versions_from_compaction_filter() {
     let fp = "write_compaction_filter_flush_write_batch";
     fail::cfg(fp, "return").unwrap();
 
-    let mut gc_runner = TestGCRunner::new(100);
+    let mut gc_runner = TestGcRunner::new(100);
     gc_runner.gc_scheduler = cluster.sim.rl().get_gc_worker(1).scheduler();
     gc_runner.gc(&engine.kv);
 
@@ -390,8 +402,9 @@ fn test_orphan_versions_from_compaction_filter() {
     fail::remove(fp);
 }
 
-// Call `start_auto_gc` like `cmd/src/server.rs` does. It will combine compaction filter and GC
-// worker so that GC worker can help to process orphan versions on default CF.
+// Call `start_auto_gc` like `cmd/src/server.rs` does. It will combine
+// compaction filter and GC worker so that GC worker can help to process orphan
+// versions on default CF.
 fn init_compaction_filter(cluster: &Cluster<ServerCluster>, store_id: u64) {
     #[derive(Clone)]
     struct MockSafePointProvider;

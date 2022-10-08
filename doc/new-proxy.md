@@ -25,13 +25,18 @@ However, it may cost a lot to achieve such a replacement:
 3. A flush to storage layer may be more expensive in other storage engine than TiKV.
 
 Apart from `Engine Traits`, we also need `coprocessor`s to observe and control TiKV's applying procedures:
-1. An observer before execution of raft commands, which can filter incompatible commands for TiFlash.
+1. An observer before execution of raft commands, which can:
+   1. Filter incompatible commands for TiFlash.
+   1. Nofify TiFlash do some preliminary work.
 2. An observer after execution of raft commands, which can suggest a persistence.
 3. An observer when receiving tasks for applying snapshots, which allows TiFlash pre-handling multiple snapsnots in parallel.
 4. An observer after snapshots are applied, which informs TiFlash to do a immediate persistence.
 5. An observer when a peer is destroyed.
 6. An observer for empty raft entry.
+   1. We can't ignore empty raft entry, otherwise can cause wait index timeout.
 7. An observer to fetch used/total size of storage.
+   1. TiFlash supports multi-disks, so we need to report correct storage information.
+8. An observer controls whether to persist before calling `finish_for` and `commit`.
 
 The whole work can be divided into two parts:
 1. TiKV side

@@ -40,6 +40,7 @@ command! {
 impl CommandExt for TxnHeartBeat {
     ctx!();
     tag!(txn_heart_beat);
+    request_type!(KvTxnHeartBeat);
     ts!(start_ts);
     write_bytes!(primary_key);
     gen_lock!(primary_key);
@@ -209,7 +210,8 @@ pub mod tests {
         must_err(&engine, k, 5, 100);
 
         // Create a lock with TTL=100.
-        // The initial TTL will be set to 0 after calling must_prewrite_put. Update it first.
+        // The initial TTL will be set to 0 after calling must_prewrite_put. Update it
+        // first.
         must_prewrite_put(&engine, k, v, k, 5);
         must_locked(&engine, k, 5);
         must_success(&engine, k, 5, 100, 100);

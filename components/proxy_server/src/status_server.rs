@@ -41,12 +41,11 @@ use regex::Regex;
 use security::{self, SecurityConfig};
 use serde_json::Value;
 use tikv::{
-    config::{log_level_serde, ConfigController},
+    config::{ConfigController, LogLevel},
     server::{
         status_server::{
             activate_heap_profile, deactivate_heap_profile, jeprof_heap_profile,
-            list_heap_profiles, read_file, region_meta, start_one_cpu_profile,
-            start_one_heap_profile,
+            list_heap_profiles, read_file, start_one_cpu_profile, start_one_heap_profile,
         },
         Result,
     },
@@ -71,8 +70,7 @@ static FAIL_POINTS_REQUEST_PATH: &str = "/fail";
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct LogLevelRequest {
-    #[serde(with = "log_level_serde")]
-    pub log_level: slog::Level,
+    pub log_level: LogLevel,
 }
 
 pub struct StatusServer<E, R> {
@@ -428,7 +426,8 @@ where
                 Ok(val) => val,
                 Err(err) => return Ok(make_response(StatusCode::BAD_REQUEST, err.to_string())),
             },
-            None => 99, // Default frequency of sampling. 99Hz to avoid coincide with special periods
+            None => 99, /* Default frequency of sampling. 99Hz to avoid coincide with special
+                         * periods */
         };
 
         let prototype_content_type: hyper::http::HeaderValue =
@@ -478,7 +477,7 @@ where
 
         match log_level_request {
             Ok(req) => {
-                set_log_level(req.log_level);
+                set_log_level(req.log_level.into());
                 Ok(Response::new(Body::empty()))
             }
             Err(err) => Ok(make_response(StatusCode::BAD_REQUEST, err.to_string())),
@@ -530,7 +529,7 @@ where
         match router.send(
             id,
             CasualMessage::AccessPeer(Box::new(move |peer| {
-                if let Err(meta) = tx.send(region_meta::RegionMeta::new(peer)) {
+                if let Err(meta) = tx.send(peer) {
                     error!("receiver dropped, region meta: {:?}", meta)
                 }
             })),
@@ -655,8 +654,9 @@ where
                         }
 
                         // 1. POST "/config" will modify the configuration of TiKV.
-                        // 2. GET "/region" will get start key and end key. These keys could be actual
-                        // user data since in some cases the data itself is stored in the key.
+                        // 2. GET "/region" will get start key and end key. These keys could be
+                        // actual user data since in some cases the data
+                        // itself is stored in the key.
                         let should_check_cert = !matches!(
                             (&method, path.as_ref()),
                             (&Method::GET, "/metrics")
@@ -673,7 +673,9 @@ where
                         }
 
                         match (method, path.as_ref()) {
-                            (Method::GET, "/metrics") => Ok(Response::new(dump().into())),
+                            (Method::GET, "/metrics") => Ok(Response::new(
+                                dump(cfg_controller.get_current().server.simplify_metrics).into(),
+                            )),
                             (Method::GET, "/status") => Ok(Response::default()),
                             (Method::GET, "/debug/pprof/heap_list") => Self::list_heap_prof(req),
                             (Method::GET, "/debug/pprof/heap_activate") => {
@@ -954,7 +956,8 @@ async fn handle_fail_points_request(req: Request<Body>) -> hyper::Result<Respons
             Ok(Response::new(body.into()))
         }
         (Method::GET, _) => {
-            // In this scope the path must be like /fail...(/...), which starts with FAIL_POINTS_REQUEST_PATH and may or may not have a sub path
+            // In this scope the path must be like /fail...(/...), which starts with
+            // FAIL_POINTS_REQUEST_PATH and may or may not have a sub path
             // Now we return 404 when path is neither /fail nor /fail/
             if path != FAIL_POINTS_REQUEST_PATH && path != fail_path {
                 return Ok(Response::builder()
@@ -1028,7 +1031,7 @@ mod tests {
     use tikv_util::logger::get_log_level;
 
     use crate::{
-        config::{ConfigController, TiKvConfig},
+        config::{ConfigController, TikvConfig},
         server::status_server::{profile::TEST_PROFILE_MUTEX, LogLevelRequest, StatusServer},
     };
 
@@ -1119,12 +1122,12 @@ mod tests {
                 .await
                 .unwrap();
             let resp_json = String::from_utf8_lossy(&v).to_string();
-            let cfg = TiKvConfig::default();
+            let cfg = TikvConfig::default();
             serde_json::to_string(&cfg.get_encoder())
                 .map(|cfg_json| {
                     assert_eq!(resp_json, cfg_json);
                 })
-                .expect("Could not convert TiKvConfig to string");
+                .expect("Could not convert TikvConfig to string");
         });
         block_on(handle).unwrap();
         status_server.stop();

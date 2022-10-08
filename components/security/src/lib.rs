@@ -18,6 +18,8 @@ use grpcio::{
     RpcContext, RpcStatus, RpcStatusCode, ServerBuilder, ServerChecker, ServerCredentialsBuilder,
     ServerCredentialsFetcher,
 };
+#[cfg(feature = "tonic")]
+use tonic::transport::{channel::ClientTlsConfig, Certificate, Identity};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
@@ -39,7 +41,8 @@ pub struct SecurityConfig {
 ///
 ///  # Arguments
 ///
-///  - `tag`: only used in the error message, like "ca key", "cert key", "private key", etc.
+///  - `tag`: only used in the error message, like "ca key", "cert key",
+///    "private key", etc.
 fn check_key_file(tag: &str, path: &str) -> Result<Option<File>, Box<dyn Error>> {
     if path.is_empty() {
         return Ok(None);
@@ -121,6 +124,23 @@ impl SecurityManager {
         })
     }
 
+    #[cfg(feature = "tonic")]
+    /// Make a tonic tls config via the config.
+    pub fn tonic_tls_config(&self) -> Option<ClientTlsConfig> {
+        let (ca, cert, key) = self.cfg.load_certs().unwrap_or_default();
+        if ca.is_empty() && cert.is_empty() && key.is_empty() {
+            return None;
+        }
+        let mut cfg = ClientTlsConfig::new();
+        if !ca.is_empty() {
+            cfg = cfg.ca_certificate(Certificate::from_pem(ca));
+        }
+        if !cert.is_empty() && !key.is_empty() {
+            cfg = cfg.identity(Identity::from_pem(cert, key));
+        }
+        Some(cfg)
+    }
+
     pub fn connect(&self, mut cb: ChannelBuilder, addr: &str) -> Channel {
         if self.cfg.ca_path.is_empty() {
             cb.connect(addr)
@@ -146,7 +166,7 @@ impl SecurityManager {
             sb.bind(addr, port)
         } else {
             if !self.cfg.cert_allowed_cn.is_empty() {
-                let cn_checker = CNChecker {
+                let cn_checker = CnChecker {
                     allowed_cn: Arc::new(self.cfg.cert_allowed_cn.clone()),
                 };
                 sb = sb.add_checker(cn_checker);
@@ -166,11 +186,11 @@ impl SecurityManager {
 }
 
 #[derive(Clone)]
-struct CNChecker {
+struct CnChecker {
     allowed_cn: Arc<HashSet<String>>,
 }
 
-impl ServerChecker for CNChecker {
+impl ServerChecker for CnChecker {
     fn check(&mut self, ctx: &RpcContext<'_>) -> CheckResult {
         match check_common_name(&self.allowed_cn, ctx) {
             Ok(()) => CheckResult::Continue,

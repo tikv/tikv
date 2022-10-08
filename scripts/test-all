@@ -9,8 +9,17 @@ set -euo pipefail
 # Run from the Makefile environment
 MAKEFILE_RUN=${MAKEFILE_RUN:-""}
 if [[ -z $MAKEFILE_RUN ]] ; then
-  COMMAND="$0 $*" exec make run
+    COMMAND="$0 $*" exec make run
 fi
 
-./scripts/test "$@" -- --nocapture
+./scripts/test "$@"  && echo
+# Re-run tests that requires specific environment variables.
+if [[ "$(uname)" == "Linux" ]]; then
+    export MALLOC_CONF=prof:true
+    ./scripts/test ifdef_malloc_conf "$@" && echo
+fi
 
+if [[ "$(uname)" = "Linux" ]]; then
+    CUSTOM_TEST_COMMAND="" EXTRA_CARGO_ARGS="" ./scripts/test --message-format=json-render-diagnostics -q --no-run |
+        python scripts/check-bins.py --features "${TIKV_ENABLE_FEATURES}" --check-tests
+fi

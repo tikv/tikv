@@ -30,6 +30,7 @@ failpoints = ["tikv/failpoints"]
 [dependencies]
 api_version = { path = "../api_version" }
 bitflags = "1.0"
+causal_ts = { path = "../causal_ts" }
 collections = { path = "../collections" }
 concurrency_manager = { path = "../concurrency_manager", default-features = false }
 crossbeam = "0.8"
@@ -69,6 +70,7 @@ engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 tempfile = "3.0"
+test_pd_client = { path = "../test_pd_client" }
 test_raftstore = { path = "../test_raftstore", default-features = false }
 test_util = { path = "../test_util", default-features = false }
 

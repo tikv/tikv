@@ -10,14 +10,14 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use encryption::DataKeyManager;
-use engine_rocks::raw::DB;
 // mock cluster
 pub use engine_store_ffi::{
     interfaces::root::DB as ffi_interfaces, EngineStoreServerHelper, RaftStoreProxyFFIHelper,
     RawCppPtr, TiFlashEngine, UnwrapExternCFunc,
 };
-use engine_traits::{Engines, KvEngine, CF_DEFAULT};
-use file_system::IORateLimiter;
+use engine_tiflash::DB;
+use engine_traits::{Engines, KvEngine, Peekable, CF_DEFAULT};
+use file_system::IoRateLimiter;
 use futures::executor::block_on;
 use kvproto::{
     errorpb::Error as PbError,
@@ -44,15 +44,16 @@ use raftstore::{
     Error, Result,
 };
 use tempfile::TempDir;
+pub use test_pd_client::TestPdClient;
 use test_raftstore::FilterFactory;
 pub use test_raftstore::{
     is_error_response, make_cb, new_admin_request, new_delete_cmd, new_peer, new_put_cf_cmd,
     new_region_leader_cmd, new_request, new_status_request, new_store, new_tikv_config,
-    new_transfer_leader_cmd, sleep_ms, TestPdClient,
+    new_transfer_leader_cmd, sleep_ms,
 };
-use tikv::{config::TiKvConfig, server::Result as ServerResult};
+use tikv::{config::TikvConfig, server::Result as ServerResult};
 use tikv_util::{
-    debug, error, safe_panic,
+    debug, error, escape, safe_panic,
     sys::SysQuota,
     thread_group::GroupProperties,
     time::{Instant, ThreadReadId},
@@ -93,7 +94,7 @@ pub struct Cluster<T: Simulator<TiFlashEngine>> {
     pub dbs: Vec<Engines<TiFlashEngine, engine_rocks::RocksEngine>>,
     pub store_metas: HashMap<u64, Arc<Mutex<StoreMeta>>>,
     pub key_managers: Vec<Option<Arc<DataKeyManager>>>,
-    pub io_rate_limiter: Option<Arc<IORateLimiter>>,
+    pub io_rate_limiter: Option<Arc<IoRateLimiter>>,
     pub engines: HashMap<u64, Engines<TiFlashEngine, engine_rocks::RocksEngine>>,
     pub key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
     pub labels: HashMap<u64, HashMap<String, String>>,
@@ -146,11 +147,11 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         engines: Engines<TiFlashEngine, engine_rocks::RocksEngine>,
         key_mgr: &Option<Arc<DataKeyManager>>,
         router: &Option<RaftRouter<TiFlashEngine, engine_rocks::RocksEngine>>,
-        node_cfg: TiKvConfig,
+        node_cfg: TikvConfig,
         cluster_id: isize,
         proxy_compat: bool,
         mock_cfg: MockConfig,
-    ) -> (FFIHelperSet, TiKvConfig) {
+    ) -> (FFIHelperSet, TikvConfig) {
         // We must allocate on heap to avoid move.
         let proxy = Box::new(engine_store_ffi::RaftStoreProxy {
             status: AtomicU8::new(engine_store_ffi::RaftProxyStatus::Idle as u8),
@@ -203,7 +204,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         engines: Engines<TiFlashEngine, engine_rocks::RocksEngine>,
         key_mgr: &Option<Arc<DataKeyManager>>,
         router: &Option<RaftRouter<TiFlashEngine, engine_rocks::RocksEngine>>,
-    ) -> (FFIHelperSet, TiKvConfig) {
+    ) -> (FFIHelperSet, TikvConfig) {
         Cluster::<T>::make_ffi_helper_set_no_bind(
             id,
             engines,
@@ -221,7 +222,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
             self.cfg
                 .storage
                 .io_rate_limit
-                .build(true /*enable_statistics*/),
+                .build(true /* enable_statistics */),
         ));
         for _ in 0..self.count {
             self.create_engine(None);
@@ -415,7 +416,7 @@ pub fn create_tiflash_test_engine(
     // ref init_tiflash_engines and create_test_engine
     // TODO: pass it in for all cases.
     _router: Option<RaftRouter<TiFlashEngine, engine_rocks::RocksEngine>>,
-    limiter: Option<Arc<IORateLimiter>>,
+    limiter: Option<Arc<IoRateLimiter>>,
     cfg: &Config,
 ) -> (
     Engines<TiFlashEngine, engine_rocks::RocksEngine>,
@@ -443,9 +444,8 @@ pub fn create_tiflash_test_engine(
         .rocksdb
         .build_cf_opts(&cache, None, cfg.storage.api_version());
 
-    let engine = Arc::new(
-        engine_rocks::raw_util::new_engine_opt(kv_path_str, kv_db_opt, kv_cfs_opt).unwrap(),
-    );
+    let engine = engine_rocks::util::new_engine_opt(kv_path_str, kv_db_opt, kv_cfs_opt).unwrap();
+    let mut engine = TiFlashEngine::from_rocks(engine);
 
     let raft_path = dir.path().join("raft");
     let raft_path_str = raft_path.to_str().unwrap();
@@ -454,13 +454,10 @@ pub fn create_tiflash_test_engine(
     raft_db_opt.set_env(env);
 
     let raft_cfs_opt = cfg.raftdb.build_cf_opts(&cache);
-    let raft_engine = Arc::new(
-        engine_rocks::raw_util::new_engine_opt(raft_path_str, raft_db_opt, raft_cfs_opt).unwrap(),
-    );
+    let mut raft_engine =
+        engine_rocks::util::new_engine_opt(raft_path_str, raft_db_opt, raft_cfs_opt).unwrap();
 
-    let mut engine = TiFlashEngine::from_db(engine);
     // FFI is not usable, until create_engine.
-    let mut raft_engine = engine_rocks::RocksEngine::from_db(raft_engine);
     let shared_block_cache = cache.is_some();
     engine.set_shared_block_cache(shared_block_cache);
     raft_engine.set_shared_block_cache(shared_block_cache);
@@ -497,8 +494,8 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         }
     }
 
-    // It's similar to `ask_split`, the difference is the msg, it sends, is `Msg::SplitRegion`,
-    // and `region` will not be embedded to that msg.
+    // It's similar to `ask_split`, the difference is the msg, it sends, is
+    // `Msg::SplitRegion`, and `region` will not be embedded to that msg.
     // Caller must ensure that the `split_key` is in the `region`.
     pub fn split_region(
         &mut self,
@@ -999,8 +996,12 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         &self.engines[&node_id].kv
     }
 
-    pub fn get_engine(&self, node_id: u64) -> Arc<DB> {
+    pub fn get_raw_engine(&self, node_id: u64) -> Arc<DB> {
         Arc::clone(self.engines[&node_id].kv.bad_downcast())
+    }
+
+    pub fn get_engine(&self, node_id: u64) -> &engine_rocks::RocksEngine {
+        &self.get_tiflash_engine(node_id).rocks
     }
 
     pub fn must_transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {
@@ -1208,4 +1209,46 @@ pub trait Simulator<EK: KvEngine> {
         rx.recv_timeout(timeout)
             .map_err(|e| Error::Timeout(format!("request timeout for {:?}: {:?}", timeout, e)))
     }
+}
+
+pub fn must_get(engine: &engine_rocks::RocksEngine, cf: &str, key: &[u8], value: Option<&[u8]>) {
+    for _ in 1..300 {
+        let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
+        if let (Some(value), Some(res)) = (value, res.as_ref()) {
+            assert_eq!(value, &res[..]);
+            return;
+        }
+        if value.is_none() && res.is_none() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    debug!("last try to get {}", log_wrappers::hex_encode_upper(key));
+    let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
+    if value.is_none() && res.is_none()
+        || value.is_some() && res.is_some() && value.unwrap() == &*res.unwrap()
+    {
+        return;
+    }
+    panic!(
+        "can't get value {:?} for key {}",
+        value.map(escape),
+        log_wrappers::hex_encode_upper(key)
+    )
+}
+
+pub fn must_get_equal(engine: &engine_rocks::RocksEngine, key: &[u8], value: &[u8]) {
+    must_get(engine, "default", key, Some(value));
+}
+
+pub fn must_get_none(engine: &engine_rocks::RocksEngine, key: &[u8]) {
+    must_get(engine, "default", key, None);
+}
+
+pub fn must_get_cf_equal(engine: &engine_rocks::RocksEngine, cf: &str, key: &[u8], value: &[u8]) {
+    must_get(engine, cf, key, Some(value));
+}
+
+pub fn must_get_cf_none(engine: &engine_rocks::RocksEngine, cf: &str, key: &[u8]) {
+    must_get(engine, cf, key, None);
 }

@@ -14,7 +14,7 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use fail::fail_point;
 use futures::{compat::Future01CompatExt, future::select_all, FutureExt, TryFutureExt};
-use grpcio::{ChannelBuilder, Environment};
+use grpcio::{ChannelBuilder, Environment, Error as GrpcError, RpcStatusCode};
 use kvproto::{
     kvrpcpb::{CheckLeaderRequest, LeaderInfo},
     metapb::{Peer, PeerRole},
@@ -24,7 +24,9 @@ use pd_client::PdClient;
 use protobuf::Message;
 use raftstore::store::{fsm::StoreMeta, util::RegionReadProgressRegistry};
 use security::SecurityManager;
-use tikv_util::{info, time::Instant, timer::SteadyTimer, worker::Scheduler};
+use tikv_util::{
+    info, sys::thread::ThreadBuildWrapper, time::Instant, timer::SteadyTimer, worker::Scheduler,
+};
 use tokio::{
     runtime::{Builder, Runtime},
     sync::Mutex,
@@ -42,8 +44,8 @@ pub struct AdvanceTsWorker<E: KvEngine> {
     timer: SteadyTimer,
     worker: Runtime,
     scheduler: Scheduler<Task<E::Snapshot>>,
-    /// The concurrency manager for transactions. It's needed for CDC to check locks when
-    /// calculating resolved_ts.
+    /// The concurrency manager for transactions. It's needed for CDC to check
+    /// locks when calculating resolved_ts.
     concurrency_manager: ConcurrencyManager,
     // store_id -> client
     tikv_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
@@ -65,6 +67,8 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
             .thread_name("advance-ts")
             .worker_threads(1)
             .enable_time()
+            .after_start_wrapper(|| {})
+            .before_stop_wrapper(|| {})
             .build()
             .unwrap();
         Self {
@@ -100,10 +104,10 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
             // Ignore get tso errors since we will retry every `advance_ts_interval`.
             let mut min_ts = pd_client.get_tso().await.unwrap_or_default();
 
-            // Sync with concurrency manager so that it can work correctly when optimizations
-            // like async commit is enabled.
-            // Note: This step must be done before scheduling `Task::MinTS` task, and the
-            // resolver must be checked in or after `Task::MinTS`' execution.
+            // Sync with concurrency manager so that it can work correctly when
+            // optimizations like async commit is enabled.
+            // Note: This step must be done before scheduling `Task::MinTs` task, and the
+            // resolver must be checked in or after `Task::MinTs`' execution.
             cm.update_max_ts(min_ts);
             if let Some(min_mem_lock_ts) = cm.global_min_lock_ts() {
                 if min_mem_lock_ts < min_ts {
@@ -149,8 +153,9 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
 }
 
 // Confirms leadership of region peer before trying to advance resolved ts.
-// This function broadcasts a special message to all stores, gets the leader id of them to confirm whether
-// current peer has a quorum which accepts its leadership.
+// This function broadcasts a special message to all stores, gets the leader id
+// of them to confirm whether current peer has a quorum which accepts its
+// leadership.
 pub async fn region_resolved_ts_store(
     regions: Vec<u64>,
     store_meta: Arc<StdMutex<StoreMeta>>,
@@ -254,17 +259,26 @@ pub async fn region_resolved_ts_store(
                         .observe(elapsed.as_secs_f64());
                 });
 
-                let rpc = client
-                    .check_leader_async(&req)
-                    .map_err(|e| (to_store, true, format!("[rpc create failed]{}", e)))?;
+                let rpc = match client.check_leader_async(&req) {
+                    Ok(rpc) => rpc,
+                    Err(GrpcError::RpcFailure(status))
+                        if status.code() == RpcStatusCode::UNIMPLEMENTED =>
+                    {
+                        // Some stores like TiFlash don't implement it.
+                        return Ok((to_store, vec![]));
+                    }
+                    Err(e) => return Err((to_store, true, format!("[rpc create failed]{}", e))),
+                };
+
                 PENDING_CHECK_LEADER_REQ_SENT_COUNT.inc();
                 defer!(PENDING_CHECK_LEADER_REQ_SENT_COUNT.dec());
                 let timeout = Duration::from_millis(DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS);
-                let resp = tokio::time::timeout(timeout, rpc)
+                let regions = tokio::time::timeout(timeout, rpc)
                     .map_err(|e| (to_store, true, format!("[timeout] {}", e)))
                     .await?
-                    .map_err(|e| (to_store, true, format!("[rpc failed] {}", e)))?;
-                Ok((to_store, resp))
+                    .map_err(|e| (to_store, true, format!("[rpc failed] {}", e)))?
+                    .take_regions();
+                Ok((to_store, regions))
             }
             .boxed()
         })
@@ -277,21 +291,20 @@ pub async fn region_resolved_ts_store(
             .observe(start.saturating_elapsed_secs());
     });
     for _ in 0..store_count {
-        // Use `select_all` to avoid the process getting blocked when some TiKVs were down.
+        // Use `select_all` to avoid the process getting blocked when some TiKVs were
+        // down.
         let (res, _, remains) = select_all(stores).await;
         stores = remains;
         match res {
-            Ok((to_store, resp)) => {
-                for region_id in resp.regions {
-                    if let Some(r) = region_map.get(&region_id) {
-                        let resps = resp_map.entry(region_id).or_default();
-                        resps.push(to_store);
-                        if region_has_quorum(r, resps) {
-                            valid_regions.insert(region_id);
-                        }
+            Ok((to_store, regions)) => regions.into_iter().for_each(|region_id| {
+                if let Some(r) = region_map.get(&region_id) {
+                    let resps = resp_map.entry(region_id).or_default();
+                    resps.push(to_store);
+                    if region_has_quorum(r, resps) {
+                        valid_regions.insert(region_id);
                     }
                 }
-            }
+            }),
             Err((to_store, reconnect, err)) => {
                 info!("check leader failed"; "error" => ?err, "to_store" => to_store);
                 if reconnect {
@@ -384,7 +397,7 @@ async fn get_tikv_client(
         CString::new("random id").unwrap(),
         CONN_ID.fetch_add(1, Ordering::SeqCst),
     );
-    let channel = security_mgr.connect(cb, &store.address);
+    let channel = security_mgr.connect(cb, &store.peer_address);
     let cli = TikvClient::new(channel);
     clients.insert(store_id, cli.clone());
     RTS_TIKV_CLIENT_INIT_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());

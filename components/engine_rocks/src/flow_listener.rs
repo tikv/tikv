@@ -5,25 +5,56 @@ use std::sync::{mpsc::Sender, Arc, Mutex};
 use collections::hash_set_with_capacity;
 use rocksdb::{CompactionJobInfo, EventListener, FlushJobInfo, IngestionInfo};
 
+#[derive(Clone)]
 pub enum FlowInfo {
-    L0(String, u64),
-    L0Intra(String, u64),
-    Flush(String, u64),
-    Compaction(String),
-    BeforeUnsafeDestroyRange,
-    AfterUnsafeDestroyRange,
+    L0(String, u64, u64, u64),
+    L0Intra(String, u64, u64, u64),
+    Flush(String, u64, u64, u64),
+    Compaction(String, u64, u64),
+    BeforeUnsafeDestroyRange(u64),
+    AfterUnsafeDestroyRange(u64),
+    Created(u64, u64),
+    Destroyed(u64, u64),
 }
 
 #[derive(Clone)]
 pub struct FlowListener {
     flow_info_sender: Arc<Mutex<Sender<FlowInfo>>>,
+    region_id: u64,
+    suffix_id: u64,
 }
 
 impl FlowListener {
     pub fn new(flow_info_sender: Sender<FlowInfo>) -> Self {
         Self {
             flow_info_sender: Arc::new(Mutex::new(flow_info_sender)),
+            region_id: 0,
+            suffix_id: 0,
         }
+    }
+
+    pub fn clone_with(&self, region_id: u64, suffix_id: u64) -> Self {
+        Self {
+            flow_info_sender: self.flow_info_sender.clone(),
+            region_id,
+            suffix_id,
+        }
+    }
+
+    pub fn on_created(&self) {
+        let _ = self
+            .flow_info_sender
+            .lock()
+            .unwrap()
+            .send(FlowInfo::Created(self.region_id, self.suffix_id));
+    }
+
+    pub fn on_destroyed(&self) {
+        let _ = self
+            .flow_info_sender
+            .lock()
+            .unwrap()
+            .send(FlowInfo::Destroyed(self.region_id, self.suffix_id));
     }
 }
 
@@ -32,11 +63,12 @@ impl EventListener for FlowListener {
         let mut total = 0;
         let p = info.table_properties();
         total += p.data_size() + p.index_size() + p.filter_size();
-        let _ = self
-            .flow_info_sender
-            .lock()
-            .unwrap()
-            .send(FlowInfo::Flush(info.cf_name().to_owned(), total));
+        let _ = self.flow_info_sender.lock().unwrap().send(FlowInfo::Flush(
+            info.cf_name().to_owned(),
+            total,
+            self.region_id,
+            self.suffix_id,
+        ));
     }
 
     fn on_external_file_ingested(&self, info: &IngestionInfo) {
@@ -45,18 +77,23 @@ impl EventListener for FlowListener {
             let mut total = 0;
             let p = info.table_properties();
             total += p.data_size() + p.index_size() + p.filter_size();
-            let _ = self
-                .flow_info_sender
-                .lock()
-                .unwrap()
-                .send(FlowInfo::Flush(info.cf_name().to_owned(), total));
+            let _ = self.flow_info_sender.lock().unwrap().send(FlowInfo::Flush(
+                info.cf_name().to_owned(),
+                total,
+                self.region_id,
+                self.suffix_id,
+            ));
         } else {
             // ingestion may change the pending bytes.
             let _ = self
                 .flow_info_sender
                 .lock()
                 .unwrap()
-                .send(FlowInfo::Compaction(info.cf_name().to_owned()));
+                .send(FlowInfo::Compaction(
+                    info.cf_name().to_owned(),
+                    self.region_id,
+                    self.suffix_id,
+                ));
         }
     }
 
@@ -97,7 +134,12 @@ impl EventListener for FlowListener {
                     .flow_info_sender
                     .lock()
                     .unwrap()
-                    .send(FlowInfo::L0Intra(info.cf_name().to_owned(), diff));
+                    .send(FlowInfo::L0Intra(
+                        info.cf_name().to_owned(),
+                        diff,
+                        self.region_id,
+                        self.suffix_id,
+                    ));
             } else {
                 let l0_input_file_at_input_level =
                     info.input_file_count() - info.num_input_files_at_output_level();
@@ -116,11 +158,12 @@ impl EventListener for FlowListener {
                     }
                 }
 
-                let _ = self
-                    .flow_info_sender
-                    .lock()
-                    .unwrap()
-                    .send(FlowInfo::L0(info.cf_name().to_owned(), read_bytes));
+                let _ = self.flow_info_sender.lock().unwrap().send(FlowInfo::L0(
+                    info.cf_name().to_owned(),
+                    read_bytes,
+                    self.region_id,
+                    self.suffix_id,
+                ));
             }
         }
 
@@ -128,6 +171,10 @@ impl EventListener for FlowListener {
             .flow_info_sender
             .lock()
             .unwrap()
-            .send(FlowInfo::Compaction(info.cf_name().to_owned()));
+            .send(FlowInfo::Compaction(
+                info.cf_name().to_owned(),
+                self.region_id,
+                self.suffix_id,
+            ));
     }
 }

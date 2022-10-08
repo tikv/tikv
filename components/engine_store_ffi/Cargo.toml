@@ -27,8 +27,6 @@ test-engines-panic = [
 cloud-aws = ["sst_importer/cloud-aws"]
 cloud-gcp = ["sst_importer/cloud-gcp"]
 cloud-azure = ["sst_importer/cloud-azure"]
-compat_new_proxy = ["engine_tiflash/compat_new_proxy"]
-compat_old_proxy = ["engine_tiflash/compat_old_proxy"]
 
 [dependencies]
 batch-system = { path = "../batch-system", default-features = false }
@@ -86,6 +84,7 @@ tikv_util = { path = "../tikv_util", default-features = false }
 time = "0.1"
 tokio = { version = "1.5", features = ["sync", "rt-multi-thread"] }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
+tracker = { path = "../tracker", default-features = false }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 

@@ -19,6 +19,31 @@ name = "proxy"
 path = "proxy/mod.rs"
 required-features = ["failpoints", "testexport"]
 
+[[bench]]
+name = "raftstore"
+harness = false
+path = "benches/raftstore/mod.rs"
+
+[[bench]]
+name = "coprocessor_executors"
+harness = false
+path = "benches/coprocessor_executors/mod.rs"
+
+[[bench]]
+name = "hierarchy"
+harness = false
+path = "benches/hierarchy/mod.rs"
+
+[[bench]]
+name = "misc"
+path = "benches/misc/mod.rs"
+test = true
+
+[[bench]]
+name = "deadlock_detector"
+harness = false
+path = "benches/deadlock_detector/mod.rs"
+
 [features]
 default = ["failpoints", "testexport", "test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure", "test-raftstore-proxy"]
 test-raftstore-proxy = ["raftstore/test-raftstore-proxy"]
@@ -48,11 +73,10 @@ snmalloc = ["tikv/snmalloc"]
 mem-profiling = ["tikv/mem-profiling"]
 sse = ["tikv/sse"]
 portable = ["tikv/portable"]
-compat_new_proxy = ["engine_tiflash/compat_new_proxy"]
-compat_old_proxy = ["engine_tiflash/compat_old_proxy"]
 
 [dependencies]
 api_version = { path = "../components/api_version", default-features = false }
+async-trait = "0.1"
 batch-system = { path = "../components/batch-system", default-features = false }
 cdc = { path = "../components/cdc", default-features = false }
 collections = { path = "../components/collections" }
@@ -113,6 +137,7 @@ concurrency_manager = { path = "../components/concurrency_manager", default-feat
 criterion = "0.3"
 criterion-cpu-time = "0.1"
 engine_rocks = { path = "../components/engine_rocks", default-features = false }
+engine_test = { path = "../components/engine_test", default-features = false }
 engine_traits = { path = "../components/engine_traits", default-features = false }
 external_storage_export = { path = "../components/external_storage/export", default-features = false }
 file_system = { path = "../components/file_system" }
@@ -128,6 +153,7 @@ sst_importer = { path = "../components/sst_importer", default-features = false }
 test_backup = { path = "../components/test_backup", default-features = false }
 test_coprocessor = { path = "../components/test_coprocessor", default-features = false }
 test_pd = { path = "../components/test_pd", default-features = false }
+test_pd_client = { path = "../components/test_pd_client" }
 test_raftstore = { path = "../components/test_raftstore", default-features = false }
 test_sst_importer = { path = "../components/test_sst_importer", default-features = false }
 test_storage = { path = "../components/test_storage", default-features = false }

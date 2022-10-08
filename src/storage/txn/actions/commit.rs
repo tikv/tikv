@@ -41,11 +41,11 @@ pub fn commit<S: Snapshot>(
                 .into());
             }
 
-            // It's an abnormal routine since pessimistic locks shouldn't be committed in our
-            // transaction model. But a pessimistic lock will be left if the pessimistic
-            // rollback request fails to send and the transaction need not to acquire
-            // this lock again(due to WriteConflict). If the transaction is committed, we
-            // should commit this pessimistic lock too.
+            // It's an abnormal routine since pessimistic locks shouldn't be committed in
+            // our transaction model. But a pessimistic lock will be left if the pessimistic
+            // rollback request fails to send and the transaction need not to acquire this
+            // lock again(due to WriteConflict). If the transaction is committed, we should
+            // commit this pessimistic lock too.
             if lock.lock_type == LockType::Pessimistic {
                 warn!(
                     "commit a pessimistic lock with Lock type";
@@ -107,6 +107,9 @@ pub fn commit<S: Snapshot>(
 pub mod tests {
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
+    #[cfg(test)]
+    use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
+    use tikv_kv::SnapContext;
     use txn_types::TimeStamp;
 
     use super::*;
@@ -130,8 +133,35 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
     ) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(Default::default()).unwrap();
+        must_succeed_impl(engine, key, start_ts, commit_ts, None);
+    }
+
+    pub fn must_succeed_on_region<E: Engine>(
+        engine: &E,
+        region_id: u64,
+        key: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        commit_ts: impl Into<TimeStamp>,
+    ) {
+        must_succeed_impl(engine, key, start_ts, commit_ts, Some(region_id));
+    }
+
+    fn must_succeed_impl<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        commit_ts: impl Into<TimeStamp>,
+        region_id: Option<u64>,
+    ) {
+        let mut ctx = Context::default();
+        if let Some(region_id) = region_id {
+            ctx.region_id = region_id;
+        }
+        let snap_ctx = SnapContext {
+            pb_ctx: &ctx,
+            ..Default::default()
+        };
+        let snapshot = engine.snapshot(snap_ctx).unwrap();
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new(start_ts);
         let mut txn = MvccTxn::new(start_ts, cm);
@@ -151,7 +181,7 @@ pub mod tests {
         let cm = ConcurrencyManager::new(start_ts);
         let mut txn = MvccTxn::new(start_ts, cm);
         let mut reader = SnapshotReader::new(start_ts, snapshot, true);
-        assert!(commit(&mut txn, &mut reader, Key::from_raw(key), commit_ts.into()).is_err());
+        commit(&mut txn, &mut reader, Key::from_raw(key), commit_ts.into()).unwrap_err();
     }
 
     #[cfg(test)]
@@ -254,7 +284,8 @@ pub mod tests {
         );
         must_succeed(&engine, k, ts(30, 0), ts(50, 0));
 
-        // If the min_commit_ts of the pessimistic lock is greater than prewrite's, use it.
+        // If the min_commit_ts of the pessimistic lock is greater than prewrite's, use
+        // it.
         must_acquire_pessimistic_lock_for_large_txn(&engine, k, k, ts(60, 0), ts(60, 0), 100);
         check_txn_status::tests::must_success(
             &engine,
@@ -274,7 +305,7 @@ pub mod tests {
             k,
             &None,
             ts(60, 0),
-            true,
+            DoPessimisticCheck,
             50,
             ts(60, 0),
             1,

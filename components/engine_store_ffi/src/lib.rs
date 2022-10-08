@@ -10,6 +10,7 @@ mod read_index_helper;
 mod utils;
 
 use std::{
+    cell::RefCell,
     pin::Pin,
     sync::{
         atomic::{AtomicU8, Ordering},
@@ -21,8 +22,8 @@ use std::{
 use encryption::DataKeyManager;
 use engine_rocks::{get_env, RocksSstIterator, RocksSstReader};
 use engine_traits::{
-    EncryptionKeyManager, EncryptionMethod, FileEncryptionInfo, Iterator, Peekable, SeekKey,
-    SstReader, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    EncryptionKeyManager, EncryptionMethod, FileEncryptionInfo, IterOptions, Iterator, Peekable,
+    RefIterable, SstReader, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use kvproto::{kvrpcpb, metapb, raft_cmdpb};
 use lazy_static::lazy_static;
@@ -284,13 +285,13 @@ pub extern "C" fn ffi_gc_rust_ptr(
     let type_: RawRustPtrType = type_.into();
     match type_ {
         RawRustPtrType::ReadIndexTask => unsafe {
-            Box::from_raw(data as *mut read_index_helper::ReadIndexTask);
+            drop(Box::from_raw(data as *mut read_index_helper::ReadIndexTask));
         },
         RawRustPtrType::ArcFutureWaker => unsafe {
-            Box::from_raw(data as *mut utils::ArcNotifyWaker);
+            drop(Box::from_raw(data as *mut utils::ArcNotifyWaker));
         },
         RawRustPtrType::TimerTask => unsafe {
-            Box::from_raw(data as *mut utils::TimerTask);
+            drop(Box::from_raw(data as *mut utils::TimerTask));
         },
         _ => unreachable!(),
     }
@@ -615,10 +616,10 @@ unsafe extern "C" fn ffi_sst_reader_next(mut reader: SSTReaderPtr, type_: Column
 unsafe extern "C" fn ffi_gc_sst_reader(reader: SSTReaderPtr, type_: ColumnFamilyType) {
     match type_ {
         ColumnFamilyType::Lock => {
-            Box::from_raw(reader.inner as *mut LockCFFileReader);
+            drop(Box::from_raw(reader.inner as *mut LockCFFileReader));
         }
         _ => {
-            Box::from_raw(reader.inner as *mut SSTFileReader);
+            drop(Box::from_raw(reader.inner as *mut SSTFileReader));
         }
     }
 }
@@ -655,12 +656,13 @@ impl RaftStoreProxyFFIHelper {
     }
 }
 
-pub struct SSTFileReader {
-    iter: RocksSstIterator,
-    remained: bool,
+pub struct SSTFileReader<'a> {
+    iter: RefCell<Option<RocksSstIterator<'a>>>,
+    remained: RefCell<bool>,
+    inner: RocksSstReader,
 }
 
-impl SSTFileReader {
+impl<'a> SSTFileReader<'a> {
     fn ffi_get_cf_file_reader(path: &str, key_manager: Option<Arc<DataKeyManager>>) -> RawVoidPtr {
         let env = get_env(key_manager, None).unwrap();
         let sst_reader_res = RocksSstReader::open_with_env(path, Some(env));
@@ -677,28 +679,64 @@ impl SSTFileReader {
             }
             Ok(_) => (),
         }
-        let mut iter = sst_reader.iter();
-        let remained = iter.seek(SeekKey::Start).unwrap();
-
-        Box::into_raw(Box::new(SSTFileReader { iter, remained })) as *mut _
+        let b = Box::new(SSTFileReader {
+            iter: RefCell::new(None),
+            remained: RefCell::new(false),
+            inner: sst_reader,
+        });
+        // Can't call `create_iter` due to self-referencing.
+        Box::into_raw(b) as *mut _
     }
 
-    pub fn ffi_remained(&self) -> u8 {
-        self.remained as u8
+    pub fn create_iter(&'a self) {
+        let _ = self.iter.borrow_mut().insert(
+            self.inner
+                .iter(IterOptions::default())
+                .expect("fail gen iter"),
+        );
+        *self.remained.borrow_mut() = self
+            .iter
+            .borrow_mut()
+            .as_mut()
+            .expect("fail get iter")
+            .seek_to_first()
+            .unwrap();
     }
 
-    pub fn ffi_key(&self) -> BaseBuffView {
-        let ori_key = keys::origin_key(self.iter.key());
+    pub fn ffi_remained(&'a self) -> u8 {
+        if self.iter.borrow().is_none() {
+            self.create_iter();
+        }
+        *self.remained.borrow() as u8
+    }
+
+    pub fn ffi_key(&'a self) -> BaseBuffView {
+        if self.iter.borrow().is_none() {
+            self.create_iter();
+        }
+        let b = self.iter.borrow();
+        let iter = b.as_ref().unwrap();
+        let ori_key = keys::origin_key(iter.key());
         ori_key.into()
     }
 
-    pub fn ffi_val(&self) -> BaseBuffView {
-        let val = self.iter.value();
+    pub fn ffi_val(&'a self) -> BaseBuffView {
+        if self.iter.borrow().is_none() {
+            self.create_iter();
+        }
+        let b = self.iter.borrow();
+        let iter = b.as_ref().unwrap();
+        let val = iter.value();
         val.into()
     }
 
-    pub fn ffi_next(&mut self) {
-        self.remained = self.iter.next().unwrap();
+    pub fn ffi_next(&'a mut self) {
+        if self.iter.borrow().is_none() {
+            self.create_iter();
+        }
+        let mut b = self.iter.borrow_mut();
+        let iter = b.as_mut().unwrap();
+        *self.remained.borrow_mut() = iter.next().unwrap();
     }
 }
 
@@ -844,7 +882,8 @@ pub fn gen_engine_store_server_helper(
 }
 
 /// # Safety
-/// The lifetime of `engine_store_server_helper` is definitely longer than `ENGINE_STORE_SERVER_HELPER_PTR`.
+/// The lifetime of `engine_store_server_helper` is definitely longer than
+/// `ENGINE_STORE_SERVER_HELPER_PTR`.
 pub unsafe fn init_engine_store_server_helper(engine_store_server_helper: *const u8) {
     let ptr = &ENGINE_STORE_SERVER_HELPER_PTR as *const _ as *mut _;
     *ptr = engine_store_server_helper;

@@ -24,7 +24,8 @@ pub fn write_sender(
         // currently it is copying into an intermediate buffer
         // Writing to a file here uses up disk space
         // But as a positive it gets the backup data out of the DB the fastest
-        // Currently this waits for the file to be completely written before sending to storage
+        // Currently this waits for the file to be completely written before sending to
+        // storage
         runtime.enter(|| {
             block_on(async {
                 let msg = |action: &str| format!("{} file {:?}", action, &file_path);

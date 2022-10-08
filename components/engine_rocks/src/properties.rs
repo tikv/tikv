@@ -130,7 +130,7 @@ impl<'a> DecodeProperties for UserCollectedPropertiesDecoder<'a> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum RangeOffsetKind {
     Size,
     Keys,
@@ -536,9 +536,7 @@ pub fn get_range_entries_and_versions(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use engine_traits::{CF_WRITE, LARGE_CFS};
+    use engine_traits::{MiscExt, SyncMutable, CF_WRITE, LARGE_CFS};
     use rand::Rng;
     use tempfile::Builder;
     use test::Bencher;
@@ -546,9 +544,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        compat::Compat,
-        raw::{ColumnFamilyOptions, DBEntryType, DBOptions, TablePropertiesCollector, Writable},
-        raw_util::CFOptions,
+        raw::{DBEntryType, TablePropertiesCollector},
+        RocksCfOptions, RocksDbOptions,
     };
 
     #[allow(clippy::many_single_char_names)]
@@ -566,15 +563,18 @@ mod tests {
             ("g", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2, 1),
             ("h", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8, 1),
             ("i", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 4, 1),
-            // handle "i": size(size = DISTANCE / 8 * 9 + 4, offset = DISTANCE / 8 * 17 + 9),keys(4,5)
+            // handle "i": size(size = DISTANCE / 8 * 9 + 4, offset = DISTANCE / 8 * 17 +
+            // 9),keys(4,5)
             ("j", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2, 1),
             ("k", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2, 1),
             // handle "k": size(size = DISTANCE + 2, offset = DISTANCE / 8 * 25 + 11),keys(2,11)
             ("l", 0, DEFAULT_PROP_KEYS_INDEX_DISTANCE / 2),
             ("m", 0, DEFAULT_PROP_KEYS_INDEX_DISTANCE / 2),
-            //handle "m": keys = DEFAULT_PROP_KEYS_INDEX_DISTANCE,offset = 11+DEFAULT_PROP_KEYS_INDEX_DISTANCE
+            // handle "m": keys = DEFAULT_PROP_KEYS_INDEX_DISTANCE,offset =
+            // 11+DEFAULT_PROP_KEYS_INDEX_DISTANCE
             ("n", 1, DEFAULT_PROP_KEYS_INDEX_DISTANCE),
-            //handle "n": keys = DEFAULT_PROP_KEYS_INDEX_DISTANCE, offset = 11+2*DEFAULT_PROP_KEYS_INDEX_DISTANCE
+            // handle "n": keys = DEFAULT_PROP_KEYS_INDEX_DISTANCE, offset =
+            // 11+2*DEFAULT_PROP_KEYS_INDEX_DISTANCE
             ("o", 1, 1),
             // handle　"o": keys = 1, offset = 12 + 2*DEFAULT_PROP_KEYS_INDEX_DISTANCE
         ];
@@ -665,7 +665,8 @@ mod tests {
             ("g", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2),
             ("h", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8),
             ("i", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 4),
-            // handle "i": size(size = DISTANCE / 8 * 9 + 4, offset = DISTANCE / 8 * 17 + 9),keys(4,5)
+            // handle "i": size(size = DISTANCE / 8 * 9 + 4, offset = DISTANCE / 8 * 17 +
+            // 9),keys(4,5)
             ("j", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2),
             ("k", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2),
             // handle "k": size(size = DISTANCE + 2, offset = DISTANCE / 8 * 25 + 11),keys(2,11)
@@ -714,18 +715,15 @@ mod tests {
             .tempdir()
             .unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::new();
-        let mut cf_opts = ColumnFamilyOptions::new();
+        let db_opts = RocksDbOptions::default();
+        let mut cf_opts = RocksCfOptions::default();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
         cf_opts.add_table_properties_collector_factory(
             "tikv.mvcc-properties-collector",
             MvccPropertiesCollectorFactory::default(),
         );
-        let cfs_opts = LARGE_CFS
-            .iter()
-            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
-            .collect();
-        let db = Arc::new(crate::raw_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
+        let cfs_opts = LARGE_CFS.iter().map(|cf| (*cf, cf_opts.clone())).collect();
+        let db = crate::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
 
         let cases = ["a", "b", "c"];
         for &key in &cases {
@@ -734,22 +732,21 @@ mod tests {
                     .append_ts(2.into())
                     .as_encoded(),
             );
-            let write_cf = db.cf_handle(CF_WRITE).unwrap();
-            db.put_cf(write_cf, &k1, b"v1").unwrap();
-            db.delete_cf(write_cf, &k1).unwrap();
+            db.put_cf(CF_WRITE, &k1, b"v1").unwrap();
+            db.delete_cf(CF_WRITE, &k1).unwrap();
             let key = keys::data_key(
                 Key::from_raw(key.as_bytes())
                     .append_ts(3.into())
                     .as_encoded(),
             );
-            db.put_cf(write_cf, &key, b"v2").unwrap();
-            db.flush_cf(write_cf, true).unwrap();
+            db.put_cf(CF_WRITE, &key, b"v2").unwrap();
+            db.flush_cf(CF_WRITE, true).unwrap();
         }
 
         let start_keys = keys::data_key(&[]);
         let end_keys = keys::data_end_key(&[]);
         let (entries, versions) =
-            get_range_entries_and_versions(db.c(), CF_WRITE, &start_keys, &end_keys).unwrap();
+            get_range_entries_and_versions(&db, CF_WRITE, &start_keys, &end_keys).unwrap();
         assert_eq!(entries, (cases.len() * 2) as u64);
         assert_eq!(versions, cases.len() as u64);
     }

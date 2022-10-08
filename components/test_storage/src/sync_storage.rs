@@ -8,8 +8,14 @@ use std::{
 use api_version::{ApiV1, KvFormat};
 use collections::HashMap;
 use futures::executor::block_on;
-use kvproto::kvrpcpb::{ChecksumAlgorithm, Context, GetRequest, KeyRange, LockInfo, RawGetRequest};
-use raftstore::{coprocessor::RegionInfoProvider, router::RaftStoreBlackHole};
+use kvproto::{
+    kvrpcpb::{ChecksumAlgorithm, Context, GetRequest, KeyRange, LockInfo, RawGetRequest},
+    metapb,
+};
+use raftstore::{
+    coprocessor::{region_info_accessor::MockRegionInfoProvider, RegionInfoProvider},
+    router::RaftStoreBlackHole,
+};
 use tikv::{
     server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker},
     storage::{
@@ -19,6 +25,7 @@ use tikv::{
     },
 };
 use tikv_util::time::Instant;
+use tracker::INVALID_TRACKER_TOKEN;
 use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};
 
 /// A builder to build a `SyncTestStorage`.
@@ -77,7 +84,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorageBuilder<E, F> {
         self
     }
 
-    pub fn build(mut self) -> Result<SyncTestStorage<E, F>> {
+    pub fn build(mut self, store_id: u64) -> Result<SyncTestStorage<E, F>> {
         let mut builder = TestStorageBuilder::<_, _, F>::from_engine_and_lock_mgr(
             self.engine.clone(),
             DummyLockManager,
@@ -86,7 +93,11 @@ impl<E: Engine, F: KvFormat> SyncTestStorageBuilder<E, F> {
             builder = builder.config(config);
         }
         builder = builder.set_api_version(F::TAG);
-        SyncTestStorage::from_storage(builder.build()?, self.gc_config.unwrap_or_default())
+        SyncTestStorage::from_storage(
+            store_id,
+            builder.build()?,
+            self.gc_config.unwrap_or_default(),
+        )
     }
 }
 
@@ -105,6 +116,7 @@ pub type SyncTestStorageApiV1<E> = SyncTestStorage<E, ApiV1>;
 
 impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
     pub fn from_storage(
+        store_id: u64,
         storage: Storage<E, DummyLockManager, F>,
         config: GcConfig,
     ) -> Result<Self> {
@@ -115,8 +127,9 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
             tx,
             config,
             Default::default(),
+            Arc::new(MockRegionInfoProvider::new(Vec::new())),
         );
-        gc_worker.start()?;
+        gc_worker.start(store_id)?;
         Ok(Self {
             gc_worker,
             store: storage,
@@ -179,10 +192,11 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
                 req
             })
             .collect();
+        let trackers = keys.iter().map(|_| INVALID_TRACKER_TOKEN).collect();
         let p = GetConsumer::new();
         block_on(
             self.store
-                .batch_get_command(requests, ids, p.clone(), Instant::now()),
+                .batch_get_command(requests, ids, trackers, p.clone(), Instant::now()),
         )?;
         let mut values = vec![];
         for value in p.take_data().into_iter() {
@@ -332,8 +346,13 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
         .unwrap()
     }
 
-    pub fn gc(&self, _: Context, safe_point: impl Into<TimeStamp>) -> Result<()> {
-        wait_op!(|cb| self.gc_worker.gc(safe_point.into(), cb)).unwrap()
+    pub fn gc(
+        &self,
+        region: metapb::Region,
+        _: Context,
+        safe_point: impl Into<TimeStamp>,
+    ) -> Result<()> {
+        wait_op!(|cb| self.gc_worker.gc(region, safe_point.into(), cb)).unwrap()
     }
 
     pub fn delete_range(

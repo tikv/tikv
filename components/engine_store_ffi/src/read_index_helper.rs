@@ -123,10 +123,15 @@ impl<ER: RaftEngine, EK: KvEngine> ReadIndex for ReadIndexClient<ER, EK> {
 
             let (cb, f) = paired_future_callback();
 
+            let tracker = tracker::get_tls_tracker_token();
             if let Err(e) = self.routers[region_id as usize % self.routers.len()]
                 .lock()
                 .unwrap()
-                .send_command(cmd, Callback::Read(cb), RaftCmdExtraOpts::default())
+                .send_command(
+                    cmd,
+                    Callback::Read { cb, tracker },
+                    RaftCmdExtraOpts::default(),
+                )
             {
                 tikv_util::info!("make_read_index_task send command error"; "e" => ?e);
                 router_cbs.push_back((None, region_id));
@@ -194,10 +199,15 @@ impl<ER: RaftEngine, EK: KvEngine> ReadIndex for ReadIndexClient<ER, EK> {
 
             let (cb, f) = paired_future_callback();
 
+            let tracker = tracker::get_tls_tracker_token();
             if let Err(_) = self.routers[region_id as usize % self.routers.len()]
                 .lock()
                 .unwrap()
-                .send_command(cmd, Callback::Read(cb), RaftCmdExtraOpts::default())
+                .send_command(
+                    cmd,
+                    Callback::Read { cb, tracker },
+                    RaftCmdExtraOpts::default(),
+                )
             {
                 return None;
             } else {

@@ -2,6 +2,9 @@
 
 use std::{borrow::Cow, future::Future, marker::PhantomData, sync::Arc, time::Duration};
 
+use ::tracker::{
+    set_tls_tracker_token, with_tls_tracker, RequestInfo, RequestType, GLOBAL_TRACKERS,
+};
 use async_stream::try_stream;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::PerfLevel;
@@ -29,8 +32,9 @@ use crate::{
     },
 };
 
-/// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
-/// which means they don't need a permit from the semaphore before execution.
+/// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as
+/// light ones, which means they don't need a permit from the semaphore before
+/// execution.
 const LIGHT_TASK_THRESHOLD: Duration = Duration::from_millis(5);
 
 /// A pool to build and run Coprocessor request handlers.
@@ -76,9 +80,9 @@ impl<E: Engine> Endpoint<E> {
         resource_tag_factory: ResourceTagFactory,
         quota_limiter: Arc<QuotaLimiter>,
     ) -> Self {
-        // FIXME: When yatp is used, we need to limit coprocessor requests in progress to avoid
-        // using too much memory. However, if there are a number of large requests, small requests
-        // will still be blocked. This needs to be improved.
+        // FIXME: When yatp is used, we need to limit coprocessor requests in progress
+        // to avoid using too much memory. However, if there are a number of large
+        // requests, small requests will still be blocked. This needs to be improved.
         let semaphore = match &read_pool {
             ReadPoolHandle::Yatp { .. } => {
                 Some(Arc::new(Semaphore::new(cfg.end_point_max_concurrency)))
@@ -136,8 +140,8 @@ impl<E: Engine> Endpoint<E> {
         Ok(())
     }
 
-    /// Parse the raw `Request` to create `RequestHandlerBuilder` and `ReqContext`.
-    /// Returns `Err` if fails.
+    /// Parse the raw `Request` to create `RequestHandlerBuilder` and
+    /// `ReqContext`. Returns `Err` if fails.
     ///
     /// It also checks if there are locks in memory blocking this read request.
     fn parse_request_and_check_memory_locks(
@@ -164,6 +168,7 @@ impl<E: Engine> Endpoint<E> {
 
         let mut input = CodedInputStream::from_bytes(&data);
         input.set_recursion_limit(self.recursion_limit);
+
         let req_ctx: ReqContext;
         let builder: RequestHandlerBuilder<E::Snap>;
 
@@ -201,6 +206,10 @@ impl<E: Engine> Endpoint<E> {
                     cache_match_version,
                     self.perf_level,
                 );
+                with_tls_tracker(|tracker| {
+                    tracker.req_info.request_type = RequestType::CoprocessorDag;
+                    tracker.req_info.start_ts = start_ts;
+                });
 
                 self.check_memory_locks(&req_ctx)?;
 
@@ -260,8 +269,13 @@ impl<E: Engine> Endpoint<E> {
                     cache_match_version,
                     self.perf_level,
                 );
+                with_tls_tracker(|tracker| {
+                    tracker.req_info.request_type = RequestType::CoprocessorAnalyze;
+                    tracker.req_info.start_ts = start_ts;
+                });
 
                 self.check_memory_locks(&req_ctx)?;
+
                 let quota_limiter = self.quota_limiter.clone();
 
                 builder = Box::new(move |snap, req_ctx| {
@@ -300,6 +314,10 @@ impl<E: Engine> Endpoint<E> {
                     cache_match_version,
                     self.perf_level,
                 );
+                with_tls_tracker(|tracker| {
+                    tracker.req_info.request_type = RequestType::CoprocessorChecksum;
+                    tracker.req_info.start_ts = start_ts;
+                });
 
                 self.check_memory_locks(&req_ctx)?;
 
@@ -316,6 +334,7 @@ impl<E: Engine> Endpoint<E> {
             }
             tp => return Err(box_err!("unsupported tp {}", tp)),
         };
+
         Ok((builder, req_ctx))
     }
 
@@ -336,7 +355,7 @@ impl<E: Engine> Endpoint<E> {
     ) -> impl std::future::Future<Output = Result<E::Snap>> {
         let mut snap_ctx = SnapContext {
             pb_ctx: &ctx.context,
-            start_ts: ctx.txn_start_ts,
+            start_ts: Some(ctx.txn_start_ts),
             ..Default::default()
         };
         // need to pass start_ts and ranges to check memory locks for replica read
@@ -355,16 +374,17 @@ impl<E: Engine> Endpoint<E> {
 
     /// The real implementation of handling a unary request.
     ///
-    /// It first retrieves a snapshot, then builds the `RequestHandler` over the snapshot and
-    /// the given `handler_builder`. Finally, it calls the unary request interface of the
-    /// `RequestHandler` to process the request and produce a result.
+    /// It first retrieves a snapshot, then builds the `RequestHandler` over the
+    /// snapshot and the given `handler_builder`. Finally, it calls the unary
+    /// request interface of the `RequestHandler` to process the request and
+    /// produce a result.
     async fn handle_unary_request_impl(
         semaphore: Option<Arc<Semaphore>>,
-        mut tracker: Box<Tracker>,
+        mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> Result<MemoryTraceGuard<coppb::Response>> {
-        // When this function is being executed, it may be queued for a long time, so that
-        // deadline may exceed.
+        // When this function is being executed, it may be queued for a long time, so
+        // that deadline may exceed.
         tracker.on_scheduled();
         tracker.req_ctx.deadline.check()?;
 
@@ -427,8 +447,8 @@ impl<E: Engine> Endpoint<E> {
 
     /// Handle a unary request and run on the read pool.
     ///
-    /// Returns `Err(err)` if the read pool is full. Returns `Ok(future)` in other cases.
-    /// The future inside may be an error however.
+    /// Returns `Err(err)` if the read pool is full. Returns `Ok(future)` in
+    /// other cases. The future inside may be an error however.
     fn handle_unary_request(
         &self,
         req_ctx: ReqContext,
@@ -459,37 +479,53 @@ impl<E: Engine> Endpoint<E> {
         async move { res.await? }
     }
 
-    /// Parses and handles a unary request. Returns a future that will never fail. If there are
-    /// errors during parsing or handling, they will be converted into a `Response` as the success
-    /// result of the future.
+    /// Parses and handles a unary request. Returns a future that will never
+    /// fail. If there are errors during parsing or handling, they will be
+    /// converted into a `Response` as the success result of the future.
     #[inline]
     pub fn parse_and_handle_unary_request(
         &self,
         req: coppb::Request,
         peer: Option<String>,
     ) -> impl Future<Output = MemoryTraceGuard<coppb::Response>> {
+        let tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo::new(
+            req.get_context(),
+            RequestType::Unknown,
+            req.start_ts,
+        )));
+        set_tls_tracker_token(tracker);
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)
             .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
 
         async move {
-            match result_of_future {
+            let res = match result_of_future {
                 Err(e) => make_error_response(e).into(),
-                Ok(handle_fut) => handle_fut
-                    .await
-                    .unwrap_or_else(|e| make_error_response(e).into()),
-            }
+                Ok(handle_fut) => {
+                    let mut response = handle_fut
+                        .await
+                        .unwrap_or_else(|e| make_error_response(e).into());
+                    let scan_detail_v2 = response.mut_exec_details_v2().mut_scan_detail_v2();
+                    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+                        tracker.write_scan_detail(scan_detail_v2);
+                    });
+                    response
+                }
+            };
+            GLOBAL_TRACKERS.remove(tracker);
+            res
         }
     }
 
     /// The real implementation of handling a stream request.
     ///
-    /// It first retrieves a snapshot, then builds the `RequestHandler` over the snapshot and
-    /// the given `handler_builder`. Finally, it calls the stream request interface of the
-    /// `RequestHandler` multiple times to process the request and produce multiple results.
+    /// It first retrieves a snapshot, then builds the `RequestHandler` over the
+    /// snapshot and the given `handler_builder`. Finally, it calls the stream
+    /// request interface of the `RequestHandler` multiple times to process the
+    /// request and produce multiple results.
     fn handle_stream_request_impl(
         semaphore: Option<Arc<Semaphore>>,
-        mut tracker: Box<Tracker>,
+        mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> impl futures::stream::Stream<Item = Result<coppb::Response>> {
         try_stream! {
@@ -522,7 +558,7 @@ impl<E: Engine> Endpoint<E> {
                 let result = {
                     tracker.on_begin_item();
 
-                    let result = handler.handle_streaming_request();
+                    let result = handler.handle_streaming_request().await;
 
                     let mut storage_stats = Statistics::default();
                     handler.collect_scan_statistics(&mut storage_stats);
@@ -559,8 +595,8 @@ impl<E: Engine> Endpoint<E> {
 
     /// Handle a stream request and run on the read pool.
     ///
-    /// Returns `Err(err)` if the read pool is full. Returns `Ok(stream)` in other cases.
-    /// The stream inside may produce errors however.
+    /// Returns `Err(err)` if the read pool is full. Returns `Ok(stream)` in
+    /// other cases. The stream inside may produce errors however.
     fn handle_stream_request(
         &self,
         req_ctx: ReqContext,
@@ -595,9 +631,10 @@ impl<E: Engine> Endpoint<E> {
         Ok(rx)
     }
 
-    /// Parses and handles a stream request. Returns a stream that produce each result in a
-    /// `Response` and will never fail. If there are errors during parsing or handling, they will
-    /// be converted into a `Response` as the only stream item.
+    /// Parses and handles a stream request. Returns a stream that produce each
+    /// result in a `Response` and will never fail. If there are errors during
+    /// parsing or handling, they will be converted into a `Response` as the
+    /// only stream item.
     #[inline]
     pub fn parse_and_handle_stream_request(
         &self,
@@ -766,8 +803,9 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl RequestHandler for StreamFixture {
-        fn handle_streaming_request(&mut self) -> Result<(Option<coppb::Response>, bool)> {
+        async fn handle_streaming_request(&mut self) -> Result<(Option<coppb::Response>, bool)> {
             let is_finished = if self.result_len == 0 {
                 true
             } else {
@@ -811,8 +849,9 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl RequestHandler for StreamFromClosure {
-        fn handle_streaming_request(&mut self) -> Result<(Option<coppb::Response>, bool)> {
+        async fn handle_streaming_request(&mut self) -> Result<(Option<coppb::Response>, bool)> {
             let result = (self.result_generator)(self.nth);
             self.nth += 1;
             result
@@ -857,7 +896,7 @@ mod tests {
             None,
             PerfLevel::EnableCount,
         );
-        assert!(block_on(copr.handle_unary_request(outdated_req_ctx, handler_builder)).is_err());
+        block_on(copr.handle_unary_request(outdated_req_ctx, handler_builder)).unwrap_err();
     }
 
     #[test]
@@ -1008,7 +1047,7 @@ mod tests {
 
         // verify
         for _ in 2..5 {
-            assert!(rx.recv().unwrap().is_err());
+            rx.recv().unwrap().unwrap_err();
         }
         for i in 0..2 {
             let resp = rx.recv().unwrap().unwrap();
@@ -1264,19 +1303,20 @@ mod tests {
         use tikv_util::config::ReadableDuration;
 
         /// Asserted that the snapshot can be retrieved in 500ms.
-        const SNAPSHOT_DURATION_MS: i64 = 500;
+        const SNAPSHOT_DURATION_MS: u64 = 500;
 
-        /// Asserted that the delay caused by OS scheduling other tasks is smaller than 200ms.
-        /// This is mostly for CI.
-        const HANDLE_ERROR_MS: i64 = 200;
+        /// Asserted that the delay caused by OS scheduling other tasks is
+        /// smaller than 200ms. This is mostly for CI.
+        const HANDLE_ERROR_MS: u64 = 200;
 
-        /// The acceptable error range for a coarse timer. Note that we use CLOCK_MONOTONIC_COARSE
-        /// which can be slewed by time adjustment code (e.g., NTP, PTP).
-        const COARSE_ERROR_MS: i64 = 50;
+        /// The acceptable error range for a coarse timer. Note that we use
+        /// CLOCK_MONOTONIC_COARSE which can be slewed by time
+        /// adjustment code (e.g., NTP, PTP).
+        const COARSE_ERROR_MS: u64 = 50;
 
         /// The duration that payload executes.
-        const PAYLOAD_SMALL: i64 = 3000;
-        const PAYLOAD_LARGE: i64 = 6000;
+        const PAYLOAD_SMALL: u64 = 3000;
+        const PAYLOAD_LARGE: u64 = 6000;
 
         let engine = TestEngineBuilder::new().build().unwrap();
 
@@ -1313,7 +1353,7 @@ mod tests {
         req_with_exec_detail.context.set_record_time_stat(true);
 
         {
-            let mut wait_time: i64 = 0;
+            let mut wait_time: u64 = 0;
 
             // Request 1: Unary, success response.
             let handler_builder = Box::new(|_, _: &_| {
@@ -1350,7 +1390,7 @@ mod tests {
                 resp.get_exec_details()
                     .get_time_detail()
                     .get_process_wall_time_ms(),
-                PAYLOAD_SMALL - COARSE_ERROR_MS
+                PAYLOAD_SMALL.saturating_sub(COARSE_ERROR_MS)
             );
             assert_lt!(
                 resp.get_exec_details()
@@ -1362,7 +1402,7 @@ mod tests {
                 resp.get_exec_details()
                     .get_time_detail()
                     .get_wait_wall_time_ms(),
-                wait_time - HANDLE_ERROR_MS - COARSE_ERROR_MS
+                wait_time.saturating_sub(HANDLE_ERROR_MS + COARSE_ERROR_MS)
             );
             assert_lt!(
                 resp.get_exec_details()
@@ -1379,7 +1419,7 @@ mod tests {
                 resp.get_exec_details()
                     .get_time_detail()
                     .get_process_wall_time_ms(),
-                PAYLOAD_LARGE - COARSE_ERROR_MS
+                PAYLOAD_LARGE.saturating_sub(COARSE_ERROR_MS)
             );
             assert_lt!(
                 resp.get_exec_details()
@@ -1391,7 +1431,7 @@ mod tests {
                 resp.get_exec_details()
                     .get_time_detail()
                     .get_wait_wall_time_ms(),
-                wait_time - HANDLE_ERROR_MS - COARSE_ERROR_MS
+                wait_time.saturating_sub(HANDLE_ERROR_MS + COARSE_ERROR_MS)
             );
             assert_lt!(
                 resp.get_exec_details()
@@ -1434,18 +1474,19 @@ mod tests {
 
             // Response 1
             //
-            // Note: `process_wall_time_ms` includes `total_process_time` and `total_suspend_time`.
-            // Someday it will be separated, but for now, let's just consider the combination.
+            // Note: `process_wall_time_ms` includes `total_process_time` and
+            // `total_suspend_time`. Someday it will be separated, but for now,
+            // let's just consider the combination.
             //
-            // In the worst case, `total_suspend_time` could be totally req2 payload. So here:
-            // req1 payload <= process time <= (req1 payload + req2 payload)
+            // In the worst case, `total_suspend_time` could be totally req2 payload.
+            // So here: req1 payload <= process time <= (req1 payload + req2 payload)
             let resp = &rx.recv().unwrap()[0];
             assert!(resp.get_other_error().is_empty());
             assert_ge!(
                 resp.get_exec_details()
                     .get_time_detail()
                     .get_process_wall_time_ms(),
-                PAYLOAD_SMALL - COARSE_ERROR_MS
+                PAYLOAD_SMALL.saturating_sub(COARSE_ERROR_MS)
             );
             assert_lt!(
                 resp.get_exec_details()
@@ -1456,18 +1497,19 @@ mod tests {
 
             // Response 2
             //
-            // Note: `process_wall_time_ms` includes `total_process_time` and `total_suspend_time`.
-            // Someday it will be separated, but for now, let's just consider the combination.
+            // Note: `process_wall_time_ms` includes `total_process_time` and
+            // `total_suspend_time`. Someday it will be separated, but for now,
+            // let's just consider the combination.
             //
-            // In the worst case, `total_suspend_time` could be totally req1 payload. So here:
-            // req2 payload <= process time <= (req1 payload + req2 payload)
+            // In the worst case, `total_suspend_time` could be totally req1 payload.
+            // So here: req2 payload <= process time <= (req1 payload + req2 payload)
             let resp = &rx.recv().unwrap()[0];
             assert!(!resp.get_other_error().is_empty());
             assert_ge!(
                 resp.get_exec_details()
                     .get_time_detail()
                     .get_process_wall_time_ms(),
-                PAYLOAD_LARGE - COARSE_ERROR_MS
+                PAYLOAD_LARGE.saturating_sub(COARSE_ERROR_MS)
             );
             assert_lt!(
                 resp.get_exec_details()
@@ -1478,7 +1520,7 @@ mod tests {
         }
 
         {
-            let mut wait_time: i64 = 0;
+            let mut wait_time: u64 = 0;
 
             // Request 1: Unary, success response.
             let handler_builder = Box::new(|_, _: &_| {
@@ -1531,7 +1573,7 @@ mod tests {
                 resp.get_exec_details()
                     .get_time_detail()
                     .get_process_wall_time_ms(),
-                PAYLOAD_LARGE - COARSE_ERROR_MS
+                PAYLOAD_LARGE.saturating_sub(COARSE_ERROR_MS)
             );
             assert_lt!(
                 resp.get_exec_details()
@@ -1543,7 +1585,7 @@ mod tests {
                 resp.get_exec_details()
                     .get_time_detail()
                     .get_wait_wall_time_ms(),
-                wait_time - HANDLE_ERROR_MS - COARSE_ERROR_MS
+                wait_time.saturating_sub(HANDLE_ERROR_MS + COARSE_ERROR_MS)
             );
             assert_lt!(
                 resp.get_exec_details()
@@ -1562,7 +1604,7 @@ mod tests {
                     .get_exec_details()
                     .get_time_detail()
                     .get_process_wall_time_ms(),
-                PAYLOAD_SMALL - COARSE_ERROR_MS
+                PAYLOAD_SMALL.saturating_sub(COARSE_ERROR_MS)
             );
             assert_lt!(
                 resp[0]
@@ -1576,7 +1618,7 @@ mod tests {
                     .get_exec_details()
                     .get_time_detail()
                     .get_wait_wall_time_ms(),
-                wait_time - HANDLE_ERROR_MS - COARSE_ERROR_MS
+                wait_time.saturating_sub(HANDLE_ERROR_MS + COARSE_ERROR_MS)
             );
             assert_lt!(
                 resp[0]
@@ -1592,7 +1634,7 @@ mod tests {
                     .get_exec_details()
                     .get_time_detail()
                     .get_process_wall_time_ms(),
-                PAYLOAD_LARGE - COARSE_ERROR_MS
+                PAYLOAD_LARGE.saturating_sub(COARSE_ERROR_MS)
             );
             assert_lt!(
                 resp[1]
@@ -1606,7 +1648,7 @@ mod tests {
                     .get_exec_details()
                     .get_time_detail()
                     .get_wait_wall_time_ms(),
-                wait_time - HANDLE_ERROR_MS - COARSE_ERROR_MS
+                wait_time.saturating_sub(HANDLE_ERROR_MS + COARSE_ERROR_MS)
             );
             assert_lt!(
                 resp[1]

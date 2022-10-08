@@ -21,8 +21,9 @@ use crate::storage::{
 };
 
 #[derive(Debug, Error)]
-/// Detailed errors for storage operations. This enum also unifies code for basic error
-/// handling functionality in a single place instead of being spread out.
+/// Detailed errors for storage operations. This enum also unifies code for
+/// basic error handling functionality in a single place instead of being spread
+/// out.
 pub enum ErrorInner {
     #[error("{0}")]
     Kv(#[from] kv::Error),
@@ -177,8 +178,9 @@ pub enum ErrorHeaderKind {
 }
 
 impl ErrorHeaderKind {
-    /// TODO: This function is only used for bridging existing & legacy metric tags.
-    /// It should be removed once Coprocessor starts using new static metrics.
+    /// TODO: This function is only used for bridging existing & legacy metric
+    /// tags. It should be removed once Coprocessor starts using new static
+    /// metrics.
     pub fn get_str(&self) -> &'static str {
         match *self {
             ErrorHeaderKind::NotLeader => "not_leader",
@@ -204,8 +206,8 @@ const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
 const DEADLINE_EXCEEDED: &str = "deadline is exceeded";
 
-/// Get the `ErrorHeaderKind` enum that corresponds to the error in the protobuf message.
-/// Returns `ErrorHeaderKind::Other` if no match found.
+/// Get the `ErrorHeaderKind` enum that corresponds to the error in the protobuf
+/// message. Returns `ErrorHeaderKind::Other` if no match found.
 pub fn get_error_kind_from_header(header: &errorpb::Error) -> ErrorHeaderKind {
     if header.has_not_leader() {
         ErrorHeaderKind::NotLeader
@@ -266,8 +268,8 @@ pub fn extract_region_error<T>(res: &Result<T>) -> Option<errorpb::Error> {
             Some(err)
         }
         Err(Error(box ErrorInner::Closed)) => {
-            // TiKV is closing, return an RegionError to tell the client that this region is unavailable
-            // temporarily, the client should retry the request in other TiKVs.
+            // TiKV is closing, return an RegionError to tell the client that this region is
+            // unavailable temporarily, the client should retry the request in other TiKVs.
             let mut err = errorpb::Error::default();
             err.set_message("TiKV is Closing".to_string());
             Some(err)
@@ -312,7 +314,7 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
                 conflict_commit_ts,
                 key,
                 primary,
-                ..
+                reason,
             },
         ))))) => {
             let mut write_conflict = kvrpcpb::WriteConflict::default();
@@ -321,6 +323,7 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             write_conflict.set_conflict_commit_ts(conflict_commit_ts.into_inner());
             write_conflict.set_key(key.to_owned());
             write_conflict.set_primary(primary.to_owned());
+            write_conflict.set_reason(reason.to_owned());
             key_error.set_conflict(write_conflict);
             // for compatibility with older versions.
             key_error.set_retryable(format!("{:?}", err));
@@ -455,6 +458,8 @@ pub fn extract_key_errors(res: Result<Vec<Result<()>>>) -> Vec<kvrpcpb::KeyError
 
 #[cfg(test)]
 mod test {
+    use kvproto::kvrpcpb::WriteConflictReason;
+
     use super::*;
 
     #[test]
@@ -471,6 +476,7 @@ mod test {
                 conflict_commit_ts,
                 key: key.clone(),
                 primary: primary.clone(),
+                reason: WriteConflictReason::LazyUniquenessCheck,
             },
         )));
         let mut expect = kvrpcpb::KeyError::default();
@@ -480,6 +486,7 @@ mod test {
         write_conflict.set_conflict_commit_ts(conflict_commit_ts.into_inner());
         write_conflict.set_key(key);
         write_conflict.set_primary(primary);
+        write_conflict.set_reason(WriteConflictReason::LazyUniquenessCheck);
         expect.set_conflict(write_conflict);
         expect.set_retryable(format!("{:?}", case));
 

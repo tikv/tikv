@@ -6,16 +6,18 @@
 //! By doing so, the CPU of TiKV nodes can be utilized for computing and the
 //! amount of data to transfer can be reduced (i.e. filtered at TiKV side).
 //!
-//! Notice that Coprocessor handles more than simple SQL query executors (DAG request). It also
-//! handles analyzing requests and checksum requests.
+//! Notice that Coprocessor handles more than simple SQL query executors (DAG
+//! request). It also handles analyzing requests and checksum requests.
 //!
-//! The entry point of handling all coprocessor requests is `Endpoint`. Common steps are:
-//! 1. Parse the request into a DAG request, Checksum request or Analyze request.
-//! 2. Retrieve a snapshot from the underlying engine according to the given timestamp.
-//! 3. Build corresponding request handlers from the snapshot and request detail.
-//! 4. Run request handlers once (for unary requests) or multiple times (for streaming requests)
-//!    on a future thread pool.
-//! 5. Return handling result as a response.
+//! The entry point of handling all coprocessor requests is `Endpoint`. Common
+//! steps are:
+//! - Parse the request into a DAG request, Checksum request or Analyze request.
+//! - Retrieve a snapshot from the underlying engine according to the given
+//!   timestamp.
+//! - Build corresponding request handlers from the snapshot and request detail.
+//! - Run request handlers once (for unary requests) or multiple times (for
+//!   streaming requests) on a future thread pool.
+//! - Return handling result as a response.
 //!
 //! Please refer to `Endpoint` for more details.
 
@@ -54,6 +56,8 @@ pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
 pub const REQ_TYPE_CHECKSUM: i64 = 105;
 
+pub const REQ_FLAG_TIDB_SYSSESSION: u64 = 2048;
+
 type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
 
 /// An interface for all kind of Coprocessor request handlers.
@@ -65,7 +69,7 @@ pub trait RequestHandler: Send {
     }
 
     /// Processes current request and produces streaming responses.
-    fn handle_streaming_request(&mut self) -> HandlerStreamStepResult {
+    async fn handle_streaming_request(&mut self) -> HandlerStreamStepResult {
         panic!("streaming request is not supported for this handler");
     }
 
@@ -115,11 +119,13 @@ pub struct ReqContext {
     pub txn_start_ts: TimeStamp,
 
     /// The set of timestamps of locks that can be bypassed during the reading
-    /// because either they will be rolled back or their commit_ts > read request's start_ts.
+    /// because either they will be rolled back or their commit_ts > read
+    /// request's start_ts.
     pub bypass_locks: TsSet,
 
-    /// The set of timestamps of locks that value in it can be accessed during the reading
-    /// because they will be committed and their commit_ts <= read request's start_ts.
+    /// The set of timestamps of locks that value in it can be accessed during
+    /// the reading because they will be committed and their commit_ts <=
+    /// read request's start_ts.
     pub access_locks: TsSet,
 
     /// The data version to match. If it matches the underlying data version,

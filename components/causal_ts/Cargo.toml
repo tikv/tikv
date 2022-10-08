@@ -4,6 +4,9 @@ version = "0.0.1"
 edition = "2018"
 publish = false
 
+[features]
+testexport = []
+
 [dependencies]
 api_version = { path = "../api_version", default-features = false }
 engine_rocks = { path = "../engine_rocks", default-features = false }
@@ -17,6 +20,7 @@ log_wrappers = { path = "../log_wrappers" }
 parking_lot = "0.12"
 pd_client = { path = "../pd_client", default-features = false }
 prometheus = { version = "0.13", features = ["nightly"] }
+prometheus-static-metric = "0.5"
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raftstore = { path = "../raftstore", default-features = false }
 serde = "1.0"
@@ -30,4 +34,10 @@ tokio = { version = "1", features = ["sync"] }
 txn_types = { path = "../txn_types", default-features = false }
 
 [dev-dependencies]
-test_raftstore = { path = "../test_raftstore", default-features = false }
+criterion = "0.3"
+test_pd_client = { path = "../test_pd_client" }
+
+[[bench]]
+name = "tso"
+path = "benches/tso.rs"
+harness = false

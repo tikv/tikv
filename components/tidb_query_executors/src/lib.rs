@@ -1,17 +1,16 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! This crate implements a simple SQL query engine to work with TiDB pushed down executors.
+//! This crate implements a simple SQL query engine to work with TiDB pushed
+//! down executors.
 //!
-//! The query engine is able to scan and understand rows stored by TiDB, run against a
-//! series of executors and then return the execution result. The query engine is provided via
-//! TiKV Coprocessor interface. However standalone UDF functions are also exported and can be used
-//! standalone.
+//! The query engine is able to scan and understand rows stored by TiDB, run
+//! against a series of executors and then return the execution result. The
+//! query engine is provided via TiKV Coprocessor interface. However standalone
+//! UDF functions are also exported and can be used standalone.
 
 #![allow(incomplete_features)]
 #![feature(proc_macro_hygiene)]
 #![feature(specialization)]
-#![feature(const_fn_fn_ptr_basics)]
-#![feature(const_fn_trait_bound)]
 #![feature(const_mut_refs)]
 
 #[macro_use(box_try, warn)]

@@ -1,11 +1,16 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod test_async_fetch;
+mod test_async_io;
+mod test_backup;
 mod test_bootstrap;
 mod test_cmd_epoch_checker;
 mod test_conf_change;
+mod test_coprocessor;
 mod test_disk_full;
 mod test_early_apply;
 mod test_encryption;
+mod test_gc_metrics;
 mod test_gc_worker;
 mod test_hibernate;
 mod test_import_service;
@@ -13,10 +18,10 @@ mod test_kv_service;
 mod test_memory_usage_limit;
 mod test_merge;
 mod test_metrics_overflow;
-mod test_normal;
 mod test_pd_client;
 mod test_pending_peers;
 mod test_rawkv;
+mod test_read_execution_tracker;
 mod test_replica_read;
 mod test_replica_stale_read;
 mod test_server;

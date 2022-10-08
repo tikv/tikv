@@ -7,6 +7,7 @@ use std::{
     sync::Arc,
 };
 
+use async_trait::async_trait;
 use collections::{HashMap, HashMapEntry};
 use tidb_query_aggr::*;
 use tidb_query_common::{storage::IntervalRange, Result};
@@ -23,8 +24,8 @@ use crate::{
     util::{aggr_executor::*, hash_aggr_helper::HashAggregationHelper, *},
 };
 
-/// Slow Hash Aggregation Executor supports multiple groups but uses less efficient ways to
-/// store group keys in hash tables.
+/// Slow Hash Aggregation Executor supports multiple groups but uses less
+/// efficient ways to store group keys in hash tables.
 ///
 /// FIXME: It is not correct to just store the serialized data as the group key.
 /// See pingcap/tidb#10467.
@@ -32,6 +33,7 @@ pub struct BatchSlowHashAggregationExecutor<Src: BatchExecutor>(
     AggregationExecutor<Src, SlowHashAggregationImpl>,
 );
 
+#[async_trait]
 impl<Src: BatchExecutor> BatchExecutor for BatchSlowHashAggregationExecutor<Src> {
     type StorageStats = Src::StorageStats;
 
@@ -41,8 +43,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSlowHashAggregationExecutor<Src>
     }
 
     #[inline]
-    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        self.0.next_batch(scan_rows)
+    async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        self.0.next_batch(scan_rows).await
     }
 
     #[inline]
@@ -66,8 +68,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSlowHashAggregationExecutor<Src>
     }
 }
 
-// We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we can omit the type
-// when calling `check_supported`.
+// We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we
+// can omit the type when calling `check_supported`.
 impl BatchSlowHashAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
     /// Checks whether this executor can be used.
     #[inline]
@@ -102,6 +104,17 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
             aggr_def_parser,
         )
         .unwrap()
+    }
+
+    #[cfg(test)]
+    pub fn new_for_test_with_config(
+        config: Arc<EvalConfig>,
+        src: Src,
+        group_by_exps: Vec<RpnExpression>,
+        aggr_defs: Vec<Expr>,
+        aggr_def_parser: impl AggrDefinitionParser,
+    ) -> Self {
+        Self::new_impl(config, src, group_by_exps, aggr_defs, aggr_def_parser).unwrap()
     }
 
     pub fn new(
@@ -184,34 +197,37 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
 pub struct SlowHashAggregationImpl {
     states: Vec<Box<dyn AggrFunctionState>>,
 
-    /// The value is the group index. `states` and `group_key_offsets` are stored in
-    /// the order of group index.
+    /// The value is the group index. `states` and `group_key_offsets` are
+    /// stored in the order of group index.
     groups: HashMap<GroupKeyRefUnsafe, usize>,
     group_by_exps: Vec<RpnExpression>,
 
-    /// Extra group by columns store the bytes columns in original data form while
-    /// default columns store them in sortkey form.
-    /// The sortkey form is used to aggr on while the original form is to be returned
-    /// as results.
+    /// Extra group by columns store the bytes columns in original data form
+    /// while default columns store them in sortkey form.
+    /// The sortkey form is used to aggr on while the original form is to be
+    /// returned as results.
     ///
-    /// For example, the bytes column at index i will be stored in sortkey form at column i
-    /// and in original data form at column `extra_group_by_col_index[i]`.
+    /// For example, the bytes column at index i will be stored in sortkey form
+    /// at column i and in original data form at column
+    /// `extra_group_by_col_index[i]`.
     extra_group_by_col_index: Vec<usize>,
 
-    /// The sequence of group by column index which are in original form and are in the
-    /// same order as group_by_exps by substituting bytes columns index for extra group by column index.
+    /// The sequence of group by column index which are in original form and are
+    /// in the same order as group_by_exps by substituting bytes columns
+    /// index for extra group by column index.
     original_group_by_col_index: Vec<usize>,
 
-    /// Encoded group keys are stored in this buffer sequentially. Offsets of each encoded
-    /// element are stored in `group_key_offsets`.
+    /// Encoded group keys are stored in this buffer sequentially. Offsets of
+    /// each encoded element are stored in `group_key_offsets`.
     ///
     /// `GroupKeyRefUnsafe` contains a raw pointer to this buffer.
     #[allow(clippy::box_collection)]
     group_key_buffer: Box<Vec<u8>>,
 
-    /// The offsets of encoded keys in `group_key_buffer`. This `Vec` always has a leading `0`
-    /// element. Then, the begin and end offsets of the "i"-th column of the group key whose group
-    /// index is "j" are `group_key_offsets[j * group_by_col_len + i]` and
+    /// The offsets of encoded keys in `group_key_buffer`. This `Vec` always has
+    /// a leading `0` element. Then, the begin and end offsets of the "i"-th
+    /// column of the group key whose group index is "j" are
+    /// `group_key_offsets[j * group_by_col_len + i]` and
     /// `group_key_offsets[j * group_by_col_len + i + 1]`.
     ///
     /// group_by_col_len = group_by_exps.len() + extra_group_by_col_index.len()
@@ -220,8 +236,9 @@ pub struct SlowHashAggregationImpl {
     states_offset_each_logical_row: Vec<usize>,
 
     /// Stores evaluation results of group by expressions.
-    /// It is just used to reduce allocations. The lifetime is not really 'static. The elements
-    /// are only valid in the same batch where they are added.
+    /// It is just used to reduce allocations. The lifetime is not really
+    /// 'static. The elements are only valid in the same batch where they
+    /// are added.
     group_by_results_unsafe: Vec<RpnStackNode<'static>>,
 
     /// Cached encoded results for calculated Scalar results
@@ -256,8 +273,8 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
         let logical_rows_len = input_logical_rows.len();
         let aggr_fn_len = entities.each_aggr_fn.len();
 
-        // Decode columns with mutable input first, so subsequent access to input can be immutable
-        // (and the borrow checker will be happy)
+        // Decode columns with mutable input first, so subsequent access to input can be
+        // immutable (and the borrow checker will be happy)
         ensure_columns_decoded(
             context,
             &self.group_by_exps,
@@ -319,8 +336,8 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
             // End of the sortkey columns
             let group_key_ref_end = self.group_key_buffer.len();
 
-            // Encode bytes column in original form to extra group by columns, which is to be returned
-            // as group by results
+            // Encode bytes column in original form to extra group by columns, which is to
+            // be returned as group by results
             for (i, col_index) in self.extra_group_by_col_index.iter().enumerate() {
                 let group_by_result = &self.group_by_results_unsafe[*col_index];
                 match group_by_result {
@@ -457,17 +474,19 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
         Ok(group_by_columns)
     }
 
-    /// Slow hash aggregation can output aggregate results only if the source is drained.
+    /// Slow hash aggregation can output aggregate results only if the source is
+    /// drained.
     #[inline]
     fn is_partial_results_ready(&self) -> bool {
         false
     }
 }
 
-/// A reference to a group key slice in the `group_key_buffer` of `SlowHashAggregationImpl`.
+/// A reference to a group key slice in the `group_key_buffer` of
+/// `SlowHashAggregationImpl`.
 ///
-/// It is safe as soon as it doesn't outlive the `SlowHashAggregationImpl` that creates this
-/// reference.
+/// It is safe as soon as it doesn't outlive the `SlowHashAggregationImpl` that
+/// creates this reference.
 struct GroupKeyRefUnsafe {
     /// Points to the `group_key_buffer` of `SlowHashAggregationImpl`
     buffer_ptr: NonNull<Vec<u8>>,
@@ -494,6 +513,7 @@ impl Eq for GroupKeyRefUnsafe {}
 
 #[cfg(test)]
 mod tests {
+    use futures::executor::block_on;
     use tidb_query_datatype::{codec::data_type::*, FieldTypeTp};
     use tidb_query_expr::{
         impl_arithmetic::{arithmetic_fn_meta, RealPlus},
@@ -510,7 +530,8 @@ mod tests {
         use tipb::ExprType;
         use tipb_helper::ExprDefBuilder;
 
-        // This test creates a hash aggregation executor with the following aggregate functions:
+        // This test creates a hash aggregation executor with the following aggregate
+        // functions:
         // - COUNT(1)
         // - AVG(col_0 + 5.0)
         // And group by:
@@ -553,17 +574,17 @@ mod tests {
             AllAggrDefinitionParser,
         );
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
-        let mut r = exec.next_batch(1);
+        let mut r = block_on(exec.next_batch(1));
         // col_4 (sort_key),    col_0 + 1 can result in:
         // NULL,                NULL
         // aa,                  NULL
@@ -585,7 +606,8 @@ mod tests {
             .ensure_all_decoded_for_test(&mut EvalContext::default(), &exec.schema()[5])
             .unwrap();
 
-        // The row order is not defined. Let's sort it by the group by column before asserting.
+        // The row order is not defined. Let's sort it by the group by column before
+        // asserting.
         let mut sort_column: Vec<(usize, _)> = r.physical_columns[3]
             .decoded()
             .to_bytes_vec()

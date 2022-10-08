@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::str::FromStr;
+use std::{convert::TryFrom, str::FromStr};
 
 use online_config::ConfigValue;
 use rocksdb::{
@@ -215,6 +215,120 @@ pub mod compression_type_serde {
     }
 }
 
+pub mod checksum_serde {
+    use std::fmt;
+
+    use rocksdb::ChecksumType;
+    use serde::{
+        de::{Error, Unexpected, Visitor},
+        Deserializer, Serializer,
+    };
+
+    pub fn serialize<S>(t: &ChecksumType, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let name = match *t {
+            ChecksumType::NoChecksum => "no",
+            ChecksumType::CRC32c => "crc32c",
+            ChecksumType::XxHash => "xxhash",
+            ChecksumType::XxHash64 => "xxhash64",
+            ChecksumType::XXH3 => "xxh3",
+        };
+        serializer.serialize_str(name)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<ChecksumType, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct StrVistor;
+        impl<'de> Visitor<'de> for StrVistor {
+            type Value = ChecksumType;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(formatter, "a checksum type")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<ChecksumType, E>
+            where
+                E: Error,
+            {
+                let str = match &*value.trim().to_lowercase() {
+                    "no" => ChecksumType::NoChecksum,
+                    "crc32c" => ChecksumType::CRC32c,
+                    "xxhash" => ChecksumType::XxHash,
+                    "xxhash64" => ChecksumType::XxHash64,
+                    "xxh3" => ChecksumType::XXH3,
+                    _ => {
+                        return Err(E::invalid_value(
+                            Unexpected::Other("invalid checksum type"),
+                            &self,
+                        ));
+                    }
+                };
+                Ok(str)
+            }
+        }
+
+        deserializer.deserialize_str(StrVistor)
+    }
+}
+
+pub mod prepopulate_block_cache_serde {
+    use std::fmt;
+
+    use rocksdb::PrepopulateBlockCache;
+    use serde::{
+        de::{Error, Unexpected, Visitor},
+        Deserializer, Serializer,
+    };
+
+    pub fn serialize<S>(t: &PrepopulateBlockCache, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let name = match *t {
+            PrepopulateBlockCache::Disabled => "disabled",
+            PrepopulateBlockCache::FlushOnly => "flush-only",
+        };
+        serializer.serialize_str(name)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<PrepopulateBlockCache, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct StrVistor;
+        impl<'de> Visitor<'de> for StrVistor {
+            type Value = PrepopulateBlockCache;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(formatter, "a prepopulate block cache mode")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<PrepopulateBlockCache, E>
+            where
+                E: Error,
+            {
+                let str = match &*value.trim().to_lowercase() {
+                    "disabled" => PrepopulateBlockCache::Disabled,
+                    "flush-only" => PrepopulateBlockCache::FlushOnly,
+                    _ => {
+                        return Err(E::invalid_value(
+                            Unexpected::Other("invalid prepopulate block cache mode"),
+                            &self,
+                        ));
+                    }
+                };
+                Ok(str)
+            }
+        }
+
+        deserializer.deserialize_str(StrVistor)
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BlobRunMode {
@@ -225,21 +339,22 @@ pub enum BlobRunMode {
 
 impl From<BlobRunMode> for ConfigValue {
     fn from(mode: BlobRunMode) -> ConfigValue {
-        ConfigValue::BlobRunMode(format!("k{:?}", mode))
+        let str_value = match mode {
+            BlobRunMode::Normal => "normal",
+            BlobRunMode::ReadOnly => "read-only",
+            BlobRunMode::Fallback => "fallback",
+        };
+        ConfigValue::String(str_value.into())
     }
 }
 
-impl From<ConfigValue> for BlobRunMode {
-    fn from(c: ConfigValue) -> BlobRunMode {
-        if let ConfigValue::BlobRunMode(s) = c {
-            match s.as_str() {
-                "kNormal" => BlobRunMode::Normal,
-                "kReadOnly" => BlobRunMode::ReadOnly,
-                "kFallback" => BlobRunMode::Fallback,
-                m => panic!("expect: kNormal, kReadOnly or kFallback, got: {:?}", m),
-            }
+impl TryFrom<ConfigValue> for BlobRunMode {
+    type Error = String;
+    fn try_from(c: ConfigValue) -> Result<BlobRunMode, Self::Error> {
+        if let ConfigValue::String(s) = c {
+            Self::from_str(&s)
         } else {
-            panic!("expect: ConfigValue::BlobRunMode, got: {:?}", c);
+            panic!("expect: ConfigValue::String, got: {:?}", c);
         }
     }
 }

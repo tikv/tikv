@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use tracker::TrackerToken;
 use txn_types::TimeStamp;
 
 use crate::{
@@ -20,9 +21,12 @@ pub struct Lock {
 pub struct DiagnosticContext {
     /// The key we care about
     pub key: Vec<u8>,
-    /// This tag is used for aggregate related kv requests (eg. generated from same statement)
-    /// Currently it is the encoded SQL digest if the client is TiDB
+    /// This tag is used for aggregate related kv requests (eg. generated from
+    /// same statement) Currently it is the encoded SQL digest if the client
+    /// is TiDB
     pub resource_group_tag: Vec<u8>,
+    /// The tracker is used to track and collect the lock wait details.
+    pub tracker: TrackerToken,
 }
 
 /// Time to wait for lock released when encountering locks.
@@ -41,8 +45,8 @@ impl WaitTimeout {
         }
     }
 
-    /// Timeouts are encoded as i64s in protobufs where 0 means using default timeout.
-    /// Negative means no wait.
+    /// Timeouts are encoded as i64s in protobufs where 0 means using default
+    /// timeout. Negative means no wait.
     pub fn from_encoded(i: i64) -> Option<WaitTimeout> {
         use std::cmp::Ordering::*;
 
@@ -60,15 +64,18 @@ impl From<u64> for WaitTimeout {
     }
 }
 
-/// `LockManager` manages transactions waiting for locks held by other transactions.
-/// It has responsibility to handle deadlocks between transactions.
+/// `LockManager` manages transactions waiting for locks held by other
+/// transactions. It has responsibility to handle deadlocks between
+/// transactions.
 pub trait LockManager: Clone + Send + 'static {
     /// Transaction with `start_ts` waits for `lock` released.
     ///
-    /// If the lock is released or waiting times out or deadlock occurs, the transaction
-    /// should be waken up and call `cb` with `pr` to notify the caller.
+    /// If the lock is released or waiting times out or deadlock occurs, the
+    /// transaction should be waken up and call `cb` with `pr` to notify the
+    /// caller.
     ///
-    /// If the lock is the first lock the transaction waits for, it won't result in deadlock.
+    /// If the lock is the first lock the transaction waits for, it won't result
+    /// in deadlock.
     fn wait_for(
         &self,
         start_ts: TimeStamp,
@@ -80,7 +87,8 @@ pub trait LockManager: Clone + Send + 'static {
         diag_ctx: DiagnosticContext,
     );
 
-    /// The locks with `lock_ts` and `hashes` are released, tries to wake up transactions.
+    /// The locks with `lock_ts` and `hashes` are released, tries to wake up
+    /// transactions.
     fn wake_up(
         &self,
         lock_ts: TimeStamp,

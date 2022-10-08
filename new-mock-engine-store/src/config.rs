@@ -5,7 +5,7 @@ use std::{
     sync::{atomic::AtomicBool, Arc},
 };
 
-use tikv::config::TiKvConfig;
+use tikv::config::TikvConfig;
 
 use crate::ProxyConfig;
 
@@ -16,7 +16,7 @@ pub struct MockConfig {
 
 #[derive(Clone)]
 pub struct Config {
-    pub tikv: TiKvConfig,
+    pub tikv: TikvConfig,
     pub prefer_mem: bool,
     pub proxy_cfg: ProxyConfig,
     /// Whether our mock server should compat new proxy.
@@ -25,16 +25,16 @@ pub struct Config {
 }
 
 impl Deref for Config {
-    type Target = TiKvConfig;
+    type Target = TikvConfig;
     #[inline]
-    fn deref(&self) -> &TiKvConfig {
+    fn deref(&self) -> &TikvConfig {
         &self.tikv
     }
 }
 
 impl DerefMut for Config {
     #[inline]
-    fn deref_mut(&mut self) -> &mut TiKvConfig {
+    fn deref_mut(&mut self) -> &mut TikvConfig {
         &mut self.tikv
     }
 }

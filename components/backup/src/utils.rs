@@ -3,20 +3,22 @@
 use std::sync::Arc;
 
 use api_version::{dispatch_api_version, ApiV2, KeyMode, KvFormat};
-use file_system::IOType;
+use file_system::IoType;
 use futures::Future;
 use kvproto::kvrpcpb::ApiVersion;
-use tikv_util::error;
+use tikv_util::{error, sys::thread::ThreadBuildWrapper};
 use tokio::{io::Result as TokioResult, runtime::Runtime};
 use txn_types::{Key, TimeStamp};
 
 use crate::{metrics::*, Result};
 
-// BACKUP_V1_TO_V2_TS is used as causal timestamp to backup RawKV api version V1/V1Ttl data and save to V2 format.
-// Use 1 other than 0 because 0 is not a acceptable value for causal timestamp. See api_version::ApiV2::is_valid_ts.
+// BACKUP_V1_TO_V2_TS is used as causal timestamp to backup RawKV api version
+// V1/V1Ttl data and save to V2 format. Use 1 other than 0 because 0 is not a
+// acceptable value for causal timestamp. See api_version::ApiV2::is_valid_ts.
 pub const BACKUP_V1_TO_V2_TS: u64 = 1;
 /// DaemonRuntime is a "background" runtime, which contains "daemon" tasks:
-/// any task spawn into it would run until finish even the runtime isn't referenced.
+/// any task spawn into it would run until finish even the runtime isn't
+/// referenced.
 pub struct DaemonRuntime(Option<Runtime>);
 
 impl DaemonRuntime {
@@ -90,11 +92,11 @@ pub fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResu
         .thread_name(thread_name)
         .enable_io()
         .enable_time()
-        .on_thread_start(|| {
+        .after_start_wrapper(|| {
             tikv_alloc::add_thread_memory_accessor();
-            file_system::set_io_type(IOType::Export);
+            file_system::set_io_type(IoType::Export);
         })
-        .on_thread_stop(|| {
+        .before_stop_wrapper(|| {
             tikv_alloc::remove_thread_memory_accessor();
         })
         .worker_threads(thread_count)
@@ -109,11 +111,12 @@ pub struct KeyValueCodec {
 }
 
 // Usage of the KeyValueCodec in backup process is as following:
-// `new` -> `check_backup_api_version`, return false if not supported or input invalid.
-// encode the backup range with `encode_backup_key`
+// `new` -> `check_backup_api_version`, return false if not supported or input
+// invalid. encode the backup range with `encode_backup_key`
 // In `backup_raw` process -> use `is_valid_raw_value` &
 // `convert_encoded_key_to_dst_version` & `convert_encoded_value_to_dst_version`
-// In BackupResponse, call `decode_backup_key` & `convert_key_range_to_dst_version`
+// In BackupResponse, call `decode_backup_key` &
+// `convert_key_range_to_dst_version`
 impl KeyValueCodec {
     pub fn new(is_raw_kv: bool, cur_api_ver: ApiVersion, dst_api_ver: ApiVersion) -> Self {
         KeyValueCodec {
@@ -141,18 +144,27 @@ impl KeyValueCodec {
         true
     }
 
-    // only the non-deleted, non-expired 'raw' key/value is valid.
-    pub fn is_valid_raw_value(&self, key: &[u8], value: &[u8], current_ts: u64) -> Result<bool> {
+    // only the non-deleted, non-expired 'raw' key/value is valid, return (is_valid,
+    // is_ttl_expired)
+    pub fn is_valid_raw_value(
+        &self,
+        key: &[u8],
+        value: &[u8],
+        current_ts: u64,
+    ) -> Result<(bool, bool)> {
         if !self.is_raw_kv {
-            return Ok(false);
+            return Ok((false, false));
         }
         dispatch_api_version!(self.cur_api_ver, {
             let key_mode = API::parse_key_mode(key);
             if key_mode != KeyMode::Raw && key_mode != KeyMode::Unknown {
-                return Ok(false);
+                return Ok((false, false));
             }
             let raw_value = API::decode_raw_value(value)?;
-            return Ok(raw_value.is_valid(current_ts));
+            return Ok((
+                raw_value.is_valid(current_ts),
+                raw_value.is_ttl_expired(current_ts),
+            ));
         })
     }
 
@@ -204,7 +216,8 @@ impl KeyValueCodec {
         })
     }
 
-    // Input key is encoded key for rawkv apiv2 and txnkv. return the decode dst apiversion key.
+    // Input key is encoded key for rawkv apiv2 and txnkv. return the decode dst
+    // apiversion key.
     pub fn decode_backup_key(&self, key: Option<Key>) -> Result<Vec<u8>> {
         if key.is_none() {
             return Ok(vec![]);
@@ -528,6 +541,7 @@ pub mod tests {
                     !codec
                         .is_valid_raw_value(src_key, &deleted_encoded_value, 0)
                         .unwrap()
+                        .0
                 );
             }
             for raw_value in &raw_values {
@@ -550,6 +564,94 @@ pub mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn test_is_valid_raw_value() {
+        // api_version, key, value, expire_ts, is_delete, expect_valid,
+        // expect_ttl_expired
+        let test_cases = vec![
+            (
+                ApiVersion::V1,
+                b"m".to_vec(),
+                b"a".to_vec(),
+                10_u64,
+                false,
+                true,
+                false,
+            ),
+            (
+                ApiVersion::V2,
+                b"m".to_vec(),
+                b"a".to_vec(),
+                10,
+                false,
+                false,
+                false,
+            ),
+            (
+                ApiVersion::V1,
+                b"ra".to_vec(),
+                b"a".to_vec(),
+                100,
+                true,
+                true,
+                false,
+            ),
+            (
+                ApiVersion::V1ttl,
+                b"rz".to_vec(),
+                b"a".to_vec(),
+                10,
+                true,
+                false,
+                true,
+            ),
+            (
+                ApiVersion::V2,
+                b"ra".to_vec(),
+                b"a".to_vec(),
+                10,
+                false,
+                false,
+                true,
+            ),
+            (
+                ApiVersion::V2,
+                b"rz".to_vec(),
+                b"a".to_vec(),
+                100,
+                true,
+                false,
+                false,
+            ),
+            (
+                ApiVersion::V2,
+                b"rb".to_vec(),
+                b"a".to_vec(),
+                100,
+                false,
+                true,
+                false,
+            ),
+        ];
+
+        for (idx, (api_ver, key, value, expire_ts, is_delete, expect_valid, expect_ttl_expire)) in
+            test_cases.into_iter().enumerate()
+        {
+            let codec = KeyValueCodec::new(true, api_ver, api_ver);
+            let raw_value = RawValue {
+                user_value: value.clone(),
+                expire_ts: Some(expire_ts),
+                is_delete,
+            };
+            let encoded_value =
+                dispatch_api_version!(api_ver, API::encode_raw_value_owned(raw_value));
+            let (is_valid, ttl_expired) =
+                codec.is_valid_raw_value(&key, &encoded_value, 20).unwrap();
+            assert_eq!(is_valid, expect_valid, "case {}", idx);
+            assert_eq!(ttl_expired, expect_ttl_expire, "case {}", idx);
         }
     }
 }

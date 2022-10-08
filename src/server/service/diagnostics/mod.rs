@@ -19,11 +19,13 @@ use kvproto::diagnosticspb::{
     Diagnostics, SearchLogRequest, SearchLogRequestTarget, SearchLogResponse, ServerInfoRequest,
     ServerInfoResponse, ServerInfoType,
 };
-use tikv_util::{sys::SystemExt, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{
+    sys::{ioload, SystemExt},
+    timer::GLOBAL_TIMER_HANDLE,
+};
 use tokio::runtime::Handle;
 
 use crate::server::Error;
-pub mod ioload;
 mod log;
 pub mod sys;
 

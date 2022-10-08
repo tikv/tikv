@@ -47,7 +47,7 @@ jobs:
       - name: format check
         run: |
           cd ${{github.workspace}}
-          make ci_fmt_check
+          M="fmt" ./ci_check.sh
       - name: test
         run: |
           M="testold" ./ci_check.sh
@@ -90,7 +90,7 @@ jobs:
       - name: format check
         run: |
           cd ${{github.workspace}}
-          make ci_fmt_check
+          M="fmt" ./ci_check.sh
       - name: test
         run: |
           M="testnew" ./ci_check.sh

@@ -1,7 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use prometheus::{exponential_buckets, *};
+use std::{
+    cell::{Cell, RefCell},
+    time::Duration,
+};
+
+use collections::HashMap;
+use prometheus::{exponential_buckets, local::LocalIntCounter, *};
 use prometheus_static_metric::*;
+use tikv_util::time::Instant;
 
 pub use crate::storage::kv::metrics::{
     GcKeysCF, GcKeysCounterVec, GcKeysCounterVecInner, GcKeysDetail,
@@ -28,6 +35,7 @@ make_auto_flush_static_metric! {
         kv_resolve_lock,
         kv_gc,
         kv_delete_range,
+        kv_flashback_to_version,
         raw_get,
         raw_batch_get,
         raw_batch_get_command,
@@ -205,7 +213,7 @@ lazy_static! {
     pub static ref GC_KEYS_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_gcworker_gc_keys",
         "Counter of keys affected during gc",
-        &["cf", "tag"]
+        &["key_mode", "cf", "tag"]
     )
     .unwrap();
     pub static ref GC_KEY_FAILURES: IntCounter = register_int_counter!(
@@ -216,7 +224,7 @@ lazy_static! {
         "tikv_grpc_msg_duration_seconds",
         "Bucketed histogram of grpc server messages",
         &["type"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(5e-5, 2.0, 22).unwrap() // 50us ~ 104s
     )
     .unwrap();
     pub static ref SERVER_INFO_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
@@ -238,6 +246,18 @@ lazy_static! {
             "tikv_server_address_resolve_duration_secs",
             "Duration of resolving store address",
             exponential_buckets(0.0001, 2.0, 20).unwrap()
+        )
+        .unwrap();
+    pub static ref GRPC_REQUEST_SOURCE_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+            "tikv_grpc_request_source_counter_vec",
+            "Counter of different sources of RPC requests",
+            &["source"]
+        )
+        .unwrap();
+    pub static ref GRPC_REQUEST_SOURCE_DURATION_VEC: IntCounterVec = register_int_counter_vec!(
+            "tikv_grpc_request_source_duration_vec",
+            "Total duration of different sources of RPC requests (in microseconds)",
+            &["source"]
         )
         .unwrap();
 }
@@ -302,7 +322,7 @@ lazy_static! {
         "tikv_gcworker_gc_task_duration_vec",
         "Duration of gc tasks execution",
         &["task"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
     .unwrap();
     pub static ref GC_TOO_BUSY_COUNTER: IntCounter = register_int_counter!(
@@ -341,7 +361,7 @@ lazy_static! {
     pub static ref TTL_CHECKER_COMPACT_DURATION_HISTOGRAM: Histogram = register_histogram!(
         "tikv_ttl_checker_compact_duration",
         "Duration of ttl checker compact files execution",
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
     .unwrap();
     pub static ref TTL_CHECKER_POLL_INTERVAL_GAUGE: IntGauge = register_int_gauge!(
@@ -473,7 +493,7 @@ lazy_static! {
         "tikv_storage_engine_async_request_duration_seconds",
         "Bucketed histogram of processing successful asynchronous requests.",
         &["type"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
     .unwrap();
 }
@@ -483,4 +503,52 @@ lazy_static! {
         auto_flush_from!(ASYNC_REQUESTS_COUNTER, AsyncRequestsCounterVec);
     pub static ref ASYNC_REQUESTS_DURATIONS_VEC: AsyncRequestsDurationVec =
         auto_flush_from!(ASYNC_REQUESTS_DURATIONS, AsyncRequestsDurationVec);
+}
+
+struct LocalRequestSourceMetrics {
+    pub count: LocalIntCounter,
+    pub duration_us: LocalIntCounter,
+}
+
+impl LocalRequestSourceMetrics {
+    fn new(source: &str) -> Self {
+        LocalRequestSourceMetrics {
+            count: GRPC_REQUEST_SOURCE_COUNTER_VEC
+                .with_label_values(&[source])
+                .local(),
+            duration_us: GRPC_REQUEST_SOURCE_DURATION_VEC
+                .with_label_values(&[source])
+                .local(),
+        }
+    }
+}
+
+thread_local! {
+    static REQUEST_SOURCE_METRICS_MAP: RefCell<HashMap<String, LocalRequestSourceMetrics>> = RefCell::new(HashMap::default());
+
+    static LAST_LOCAL_FLUSH_TIME: Cell<Instant> = Cell::new(Instant::now_coarse());
+}
+
+pub fn record_request_source_metrics(source: String, duration: Duration) {
+    let need_flush = LAST_LOCAL_FLUSH_TIME.with(|last_local_flush_time| {
+        let now = Instant::now_coarse();
+        if now - last_local_flush_time.get() > Duration::from_secs(1) {
+            last_local_flush_time.set(now);
+            true
+        } else {
+            false
+        }
+    });
+    REQUEST_SOURCE_METRICS_MAP.with(|map| {
+        let mut map = map.borrow_mut();
+        let metrics = map
+            .entry(source)
+            .or_insert_with_key(|k| LocalRequestSourceMetrics::new(k));
+        metrics.count.inc();
+        metrics.duration_us.inc_by(duration.as_micros() as u64);
+        if need_flush {
+            metrics.count.flush();
+            metrics.duration_us.flush();
+        }
+    });
 }

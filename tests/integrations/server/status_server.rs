@@ -4,12 +4,10 @@ use std::{error::Error, net::SocketAddr, sync::Arc};
 
 use engine_store_ffi::EngineStoreServerHelper;
 use hyper::{body, Client, StatusCode, Uri};
+use raftstore::store::region_meta::RegionMeta;
 use security::SecurityConfig;
 use test_raftstore::{new_server_cluster, Simulator};
-use tikv::{
-    config::ConfigController,
-    server::status_server::{region_meta::RegionMeta, StatusServer},
-};
+use tikv::{config::ConfigController, server::status_server::StatusServer};
 use tikv_util::HandyRwLock;
 
 async fn check(authority: SocketAddr, region_id: u64) -> Result<(), Box<dyn Error>> {
@@ -57,7 +55,7 @@ fn test_region_meta_endpoint() {
     };
 
     let addr = format!("127.0.0.1:{}", test_util::alloc_port());
-    assert!(status_server.start(addr).is_ok());
+    status_server.start(addr).unwrap();
     let check_task = check(status_server.listening_addr(), region_id);
     let rt = tokio::runtime::Runtime::new().unwrap();
     if let Err(err) = rt.block_on(check_task) {

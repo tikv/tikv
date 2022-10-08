@@ -18,29 +18,36 @@ use raftstore::{
     },
 };
 
-use crate::CausalTsProvider;
+use crate::{CausalTsProvider, RawTsTracker};
 
-/// CausalObserver appends timestamp for RawKV V2 data,
-/// and invoke causal_ts_provider.flush() on specified event, e.g. leader transfer, snapshot apply.
+/// CausalObserver appends timestamp for RawKV V2 data, and invoke
+/// causal_ts_provider.flush() on specified event, e.g. leader
+/// transfer, snapshot apply.
 /// Should be used ONLY when API v2 is enabled.
-pub struct CausalObserver<Ts: CausalTsProvider> {
+pub struct CausalObserver<Ts: CausalTsProvider, Tk: RawTsTracker> {
     causal_ts_provider: Arc<Ts>,
+    ts_tracker: Tk,
 }
 
-impl<Ts: CausalTsProvider> Clone for CausalObserver<Ts> {
+impl<Ts: CausalTsProvider, Tk: RawTsTracker> Clone for CausalObserver<Ts, Tk> {
     fn clone(&self) -> Self {
         Self {
             causal_ts_provider: self.causal_ts_provider.clone(),
+            ts_tracker: self.ts_tracker.clone(),
         }
     }
 }
 
-// Causal observer's priority should be higher than all other observers, to avoid being bypassed.
+// Causal observer's priority should be higher than all other observers, to
+// avoid being bypassed.
 const CAUSAL_OBSERVER_PRIORITY: u32 = 0;
 
-impl<Ts: CausalTsProvider + 'static> CausalObserver<Ts> {
-    pub fn new(causal_ts_provider: Arc<Ts>) -> Self {
-        Self { causal_ts_provider }
+impl<Ts: CausalTsProvider + 'static, Tk: RawTsTracker + 'static> CausalObserver<Ts, Tk> {
+    pub fn new(causal_ts_provider: Arc<Ts>, ts_tracker: Tk) -> Self {
+        Self {
+            causal_ts_provider,
+            ts_tracker,
+        }
     }
 
     pub fn register_to<E: KvEngine>(&self, coprocessor_host: &mut CoprocessorHost<E>) {
@@ -61,7 +68,7 @@ impl<Ts: CausalTsProvider + 'static> CausalObserver<Ts> {
 const REASON_LEADER_TRANSFER: &str = "leader_transfer";
 const REASON_REGION_MERGE: &str = "region_merge";
 
-impl<Ts: CausalTsProvider> CausalObserver<Ts> {
+impl<Ts: CausalTsProvider, Tk: RawTsTracker> CausalObserver<Ts, Tk> {
     fn flush_timestamp(&self, region: &Region, reason: &'static str) {
         fail::fail_point!("causal_observer_flush_timestamp", |_| ());
 
@@ -73,9 +80,9 @@ impl<Ts: CausalTsProvider> CausalObserver<Ts> {
     }
 }
 
-impl<Ts: CausalTsProvider> Coprocessor for CausalObserver<Ts> {}
+impl<Ts: CausalTsProvider, Tk: RawTsTracker> Coprocessor for CausalObserver<Ts, Tk> {}
 
-impl<Ts: CausalTsProvider> QueryObserver for CausalObserver<Ts> {
+impl<Ts: CausalTsProvider, Tk: RawTsTracker> QueryObserver for CausalObserver<Ts, Tk> {
     fn pre_propose_query(
         &self,
         ctx: &mut ObserverContext<'_>,
@@ -92,6 +99,13 @@ impl<Ts: CausalTsProvider> QueryObserver for CausalObserver<Ts> {
                 ts = Some(self.causal_ts_provider.get_ts().map_err(|err| {
                     coprocessor::Error::Other(box_err!("Get causal timestamp error: {:?}", err))
                 })?);
+                // use prev ts as `resolved_ts` means the data with smaller or equal ts has
+                // already sink to cdc.
+                self.ts_tracker
+                    .track_ts(region_id, ts.unwrap().prev())
+                    .map_err(|err| {
+                        coprocessor::Error::Other(box_err!("track ts err: {:?}", err))
+                    })?;
             }
 
             ApiV2::append_ts_on_encoded_bytes(req.mut_put().mut_key(), ts.unwrap());
@@ -102,14 +116,14 @@ impl<Ts: CausalTsProvider> QueryObserver for CausalObserver<Ts> {
     }
 }
 
-impl<Ts: CausalTsProvider> RoleObserver for CausalObserver<Ts> {
+impl<Ts: CausalTsProvider, Tk: RawTsTracker> RoleObserver for CausalObserver<Ts, Tk> {
     /// Observe becoming leader, to flush CausalTsProvider.
     fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role_change: &RoleChange) {
         // In scenario of frequent leader transfer, the observing of change from
         // follower to leader by `on_role_change` would be later than the real role
         // change in raft state and adjacent write commands.
-        // This would lead to the late of flush, and violate causality. See issue #12498.
-        // So we observe role change to Candidate to fix this issue.
+        // This would lead to the late of flush, and violate causality. See issue
+        // #12498. So we observe role change to Candidate to fix this issue.
         // Also note that when there is only one peer, it would become leader directly.
         if role_change.state == StateRole::Candidate
             || (ctx.region().peers.len() == 1 && role_change.state == StateRole::Leader)
@@ -119,7 +133,7 @@ impl<Ts: CausalTsProvider> RoleObserver for CausalObserver<Ts> {
     }
 }
 
-impl<Ts: CausalTsProvider> RegionChangeObserver for CausalObserver<Ts> {
+impl<Ts: CausalTsProvider, Tk: RawTsTracker> RegionChangeObserver for CausalObserver<Ts, Tk> {
     fn on_region_changed(
         &self,
         ctx: &mut ObserverContext<'_>,
@@ -129,12 +143,12 @@ impl<Ts: CausalTsProvider> RegionChangeObserver for CausalObserver<Ts> {
         if role != StateRole::Leader {
             return;
         }
-
-        // In the scenario of region merge, the target region would merge some entries from source
-        // region with larger timestamps (when leader of source region is in another store with
-        // larger TSO batch than the store of target region's leader).
-        // So we need a flush after commit merge. See issue #12680.
-        // TODO: do not need flush if leaders of source & target region are in the same store.
+        // In the scenario of region merge, the target region would merge some entries
+        // from source region with larger timestamps (when leader of source region is in
+        // another store with larger TSO batch than the store of target region's
+        // leader). So we need a flush after commit merge. See issue #12680.
+        // TODO: do not need flush if leaders of source & target region are in the same
+        // store.
         if let RegionChangeEvent::Update(RegionChangeReason::CommitMerge) = event {
             self.flush_timestamp(ctx.region(), REASON_REGION_MERGE);
         }
@@ -151,18 +165,26 @@ pub mod tests {
         metapb::Region,
         raft_cmdpb::{RaftCmdRequest, Request as RaftRequest},
     };
-    use test_raftstore::TestPdClient;
+    use test_pd_client::TestPdClient;
     use txn_types::{Key, TimeStamp};
 
     use super::*;
-    use crate::BatchTsoProvider;
+    use crate::{tests::DummyRawTsTracker, BatchTsoProvider};
 
-    fn init() -> CausalObserver<BatchTsoProvider<TestPdClient>> {
+    fn init() -> CausalObserver<BatchTsoProvider<TestPdClient>, DummyRawTsTracker> {
         let pd_cli = Arc::new(TestPdClient::new(0, true));
         pd_cli.set_tso(100.into());
-        let causal_ts_provider =
-            Arc::new(block_on(BatchTsoProvider::new_opt(pd_cli, Duration::ZERO, 100)).unwrap());
-        CausalObserver::new(causal_ts_provider)
+        let causal_ts_provider = Arc::new(
+            block_on(BatchTsoProvider::new_opt(
+                pd_cli,
+                Duration::ZERO,
+                Duration::from_secs(3),
+                100,
+                8192,
+            ))
+            .unwrap(),
+        );
+        CausalObserver::new(causal_ts_provider, DummyRawTsTracker::default())
     }
 
     #[test]

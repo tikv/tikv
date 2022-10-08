@@ -15,6 +15,7 @@ use kvproto::{
     raft_cmdpb::*,
     raft_serverpb::{self, RaftMessage},
 };
+use protobuf::Message;
 use raft::{eraftpb::MessageType, SnapshotStatus};
 use raftstore::{
     coprocessor::{config::SplitCheckConfigManager, CoprocessorHost},
@@ -101,12 +102,10 @@ impl Transport for ChannelTransport {
                 Some(p) => {
                     p.0.register(key.clone(), SnapEntry::Receiving);
                     let data = msg.get_message().get_snapshot().get_data();
-                    match p.0.get_snapshot_for_receiving(&key, data) {
-                        Ok(r) => r,
-                        Err(e) => {
-                            return Err(box_err!("bad snapshot {:?}", e));
-                        }
-                    }
+                    let mut snapshot_data = raft_serverpb::RaftSnapshotData::default();
+                    snapshot_data.merge_from_bytes(data).unwrap();
+                    p.0.get_snapshot_for_receiving(&key, snapshot_data.take_meta())
+                        .unwrap()
                 }
                 None => return Err(box_err!("missing temp dir for store {}", to_store)),
             };
@@ -201,8 +200,8 @@ impl NodeCluster {
             .unwrap()
     }
 
-    // Set a function that will be invoked after creating each CoprocessorHost. The first argument
-    // of `op` is the node_id.
+    // Set a function that will be invoked after creating each CoprocessorHost. The
+    // first argument of `op` is the node_id.
     // Set this before invoking `run_node`.
     #[allow(clippy::type_complexity)]
     pub fn post_create_coprocessor_host(
@@ -247,7 +246,11 @@ impl Simulator<TiFlashEngine> for NodeCluster {
         let simulate_trans = SimulateTransport::new(self.trans.clone());
         let mut raft_store = cfg.raft_store.clone();
         raft_store
-            .validate(cfg.coprocessor.region_split_size)
+            .validate(
+                cfg.coprocessor.region_split_size,
+                cfg.coprocessor.enable_region_bucket,
+                cfg.coprocessor.region_bucket_size,
+            )
             .unwrap();
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
         let mut node = Node::new(
@@ -313,7 +316,11 @@ impl Simulator<TiFlashEngine> for NodeCluster {
         self.concurrency_managers.insert(node_id, cm.clone());
         ReplicaReadLockChecker::new(cm.clone()).register(&mut coprocessor_host);
 
-        let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
+        let local_reader = LocalReader::new(
+            engines.kv.clone(),
+            StoreMetaDelegate::new(store_meta.clone(), engines.kv.clone()),
+            router.clone(),
+        );
         let cfg_controller = ConfigController::new(cfg.tikv.clone());
 
         let split_check_runner =
@@ -358,8 +365,14 @@ impl Simulator<TiFlashEngine> for NodeCluster {
         );
 
         let region_split_size = cfg.coprocessor.region_split_size;
-        let mut raftstore_cfg = cfg.tikv.raft_store;
-        raftstore_cfg.validate(region_split_size).unwrap();
+        let mut raftstore_cfg = cfg.tikv.raft_store.clone();
+        raftstore_cfg
+            .validate(
+                region_split_size,
+                cfg.coprocessor.enable_region_bucket,
+                cfg.coprocessor.region_bucket_size,
+            )
+            .unwrap();
         let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
         cfg_controller.register(
             Module::Raftstore,

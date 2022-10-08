@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "6.1.0"
+version = "6.3.0"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -12,7 +12,7 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure", "pprof-dwarf"]
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
 jemalloc = ["tikv_alloc/jemalloc", "engine_rocks/jemalloc"]
 mimalloc = ["tikv_alloc/mimalloc"]
@@ -38,7 +38,7 @@ cloud-azure = [
   "encryption_export/cloud-azure",
   "sst_importer/cloud-azure",
 ]
-testexport = ["raftstore/testexport", "api_version/testexport", "engine_tiflash/testexport"]
+testexport = ["raftstore/testexport", "api_version/testexport", "engine_tiflash/testexport", "causal_ts/testexport"]
 test-engine-kv-rocksdb = [
   "engine_test/test-engine-kv-rocksdb"
 ]
@@ -56,10 +56,7 @@ bcc-iosnoop = [
 ]
 cloud-storage-grpc = ["sst_importer/cloud-storage-grpc"]
 cloud-storage-dylib = ["sst_importer/cloud-storage-dylib"]
-pprof-dwarf = ["pprof/backtrace-rs"]
 pprof-fp = ["pprof/frame-pointer"]
-compat_new_proxy = ["engine_tiflash/compat_new_proxy", "raftstore/compat_new_proxy"]
-compat_old_proxy = ["engine_tiflash/compat_old_proxy", "raftstore/compat_old_proxy"]
 
 # for testing configure propegate to other crates
 # https://stackoverflow.com/questions/41700543/can-we-share-test-utilites-between-crates
@@ -96,11 +93,13 @@ engine_traits_tests = { path = "components/engine_traits_tests", default-feature
 error_code = { path = "components/error_code", default-features = false }
 fail = "0.5"
 file_system = { path = "components/file_system", default-features = false }
+flate2 = { version = "1.0", default-features = false, features = ["zlib"] }
 futures = { version = "0.3", features = ["thread-pool", "compat"] }
 futures-executor = "0.3.1"
 futures-timer = "3.0"
 futures-util = { version = "0.3.1", default-features = false, features = ["io", "async-await"] }
-grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+getset = "0.1"
+grpcio = { version = "0.10.3", default-features = false, features = ["openssl-vendored", "protobuf-codec", "nightly"] }
 grpcio-health = { version = "0.10", default-features = false, features = ["protobuf-codec"] }
 hex = "0.4"
 http = "0"
@@ -115,7 +114,7 @@ libc = "0.2"
 libloading = "0.7"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "components/log_wrappers" }
-match_template = { path = "components/match_template" }
+match-template = "0.0.1"
 memory_trace_macros = { path = "components/memory_trace_macros" }
 mime = "0.3.13"
 more-asserts = "0.2"
@@ -131,14 +130,14 @@ paste = "1.0"
 pd_client = { path = "components/pd_client", default-features = false }
 pin-project = "1.0"
 pnet_datalink = "0.23"
-pprof = { git = "https://github.com/tikv/pprof-rs.git", rev = "a5a993a33a23557b27e633f18723366281d3b1c0", default-features = false, features = ["flamegraph", "protobuf-codec"] }
+pprof = { git = "https://github.com/tikv/pprof-rs.git", rev = "3fed55af8fc6cf69dbd954a0321c799c5a111e4e", default-features = false, features = ["flamegraph", "protobuf-codec"] }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 prost = "0.7"
 protobuf = { version = "2.8", features = ["bytes"] }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raft_log_engine = { path = "components/raft_log_engine", default-features = false }
-raftstore = { path = "components/raftstore", default-features = false }
+raftstore = { path = "components/raftstore", default-features = false, features = ["engine_rocks"] }
 rand = "0.7.3"
 regex = "1.3"
 resource_metering = { path = "components/resource_metering" }
@@ -149,7 +148,7 @@ semver = "0.11"
 serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0"
 serde_ignored = "0.1"
-serde_json = "1.0"
+serde_json = { version = "1.0", features = ["preserve_order"] }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 sst_importer = { path = "components/sst_importer", default-features = false }
@@ -171,6 +170,7 @@ tokio = { version = "1.17", features = ["full"] }
 tokio-openssl = "0.6"
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 toml = "0.5"
+tracker = { path = "components/tracker" }
 txn_types = { path = "components/txn_types", default-features = false }
 url = "2"
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
@@ -205,16 +205,21 @@ rusoto_mock = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr
 rusoto_s3 = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
 rusoto_sts = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
 
+snappy-sys = { git = "https://github.com/busyjay/rust-snappy.git", branch = "static-link" }
+
 # remove this when https://github.com/danburkert/fs2-rs/pull/42 is merged.
 fs2 = { git = "https://github.com/tabokie/fs2-rs", branch = "tikv" }
+
+# Remove this when a new version is release. We need to solve rust-lang/cmake-rs#143.
+cmake = { git = "https://github.com/rust-lang/cmake-rs" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229b2c1fcc44118bef7eff127128" }
 # When you modify TiKV cooperatively with kvproto, this will be useful to submit the PR to TiKV and the PR to
 # kvproto at the same time.
 # After the PR to kvproto is merged, remember to comment this out and run `cargo update -p kvproto`.
-# [patch.'https://github.com/pingcap/kvproto']
-# kvproto = {git = "https://github.com/your_github_id/kvproto", branch="your_branch"}
+[patch.'https://github.com/pingcap/kvproto']
+# kvproto = { git = "https://github.com/your_github_id/kvproto", branch="your_branch" }
 
 [workspace]
 members = [
@@ -237,6 +242,9 @@ members = [
   "components/encryption",
   "components/encryption/export",
   "components/engine_rocks_helper",
+# Only enable tirocks in local development, otherwise it can slow down compilation.
+# TODO: always enable tirocks and remove engine_rocks.
+#  "components/engine_tirocks",
   "components/error_code",
   "components/external_storage",
   "components/external_storage/export",
@@ -244,11 +252,11 @@ members = [
   "components/into_other",
   "components/keys",
   "components/log_wrappers",
-  "components/match_template",
   "components/online_config",
   "components/panic_hook",
   "components/pd_client",
   "components/raftstore",
+  "components/raftstore-v2",
   "components/resolved_ts",
   "components/resource_metering",
   "components/server",
@@ -258,6 +266,7 @@ members = [
   "components/test_coprocessor",
   "components/test_coprocessor_plugin/example_plugin",
   "components/test_pd",
+  "components/test_pd_client",
   "components/test_raftstore",
   "components/test_sst_importer",
   "components/test_storage",
@@ -271,6 +280,7 @@ members = [
   "components/tikv_alloc",
   "components/tikv_util",
   "components/tipb_helper",
+  "components/tracker",
   "components/txn_types",
   "fuzz",
   "fuzz/fuzzer-afl",
@@ -282,9 +292,29 @@ members = [
 ]
 default-members = ["raftstore-proxy"]
 
+[profile.dev.package.grpcio-sys]
+debug = false
+opt-level = 1
+
+[profile.dev.package.librocksdb_sys]
+debug = false
+opt-level = 1
+
+[profile.dev.package.libtitan_sys]
+debug = false
+opt-level = 1
+
+[profile.dev.package.tirocks-sys]
+debug = false
+opt-level = 1
+
+[profile.dev.package.tests]
+debug = 1
+opt-level = 1
+
 [profile.dev]
 opt-level = 0
-debug = true
+debug = 0
 codegen-units = 4
 lto = false
 incremental = true
@@ -306,7 +336,7 @@ rpath = false
 
 [profile.test]
 opt-level = 0
-debug = true
+debug = 0
 codegen-units = 16
 lto = false
 incremental = true

@@ -37,6 +37,11 @@ impl<'a> JsonRef<'a> {
                 .map_or(PRECEDENCE_NULL, |_| PRECEDENCE_BOOLEAN),
             JsonType::I64 | JsonType::U64 | JsonType::Double => PRECEDENCE_NUMBER,
             JsonType::String => PRECEDENCE_STRING,
+            JsonType::Opaque => PRECEDENCE_OPAQUE,
+            JsonType::Date => PRECEDENCE_DATE,
+            JsonType::Datetime => PRECEDENCE_DATETIME,
+            JsonType::Timestamp => PRECEDENCE_DATETIME,
+            JsonType::Time => PRECEDENCE_TIME,
         }
     }
 
@@ -140,15 +145,33 @@ impl<'a> PartialOrd for JsonRef<'a> {
                     }
                     Some(left_count.cmp(&right_count))
                 }
+                JsonType::Opaque => {
+                    if let (Ok(left), Ok(right)) =
+                        (self.get_opaque_bytes(), right.get_opaque_bytes())
+                    {
+                        left.partial_cmp(right)
+                    } else {
+                        return None;
+                    }
+                }
+                JsonType::Date | JsonType::Datetime | JsonType::Timestamp => {
+                    // The jsonTypePrecedences guarantees that the DATE is only comparable with the
+                    // DATE, and the DATETIME and TIMESTAMP will compare with
+                    // each other
+                    if let (Ok(left), Ok(right)) = (self.get_time(), right.get_time()) {
+                        left.partial_cmp(&right)
+                    } else {
+                        return None;
+                    }
+                }
+                JsonType::Time => {
+                    if let (Ok(left), Ok(right)) = (self.get_duration(), right.get_duration()) {
+                        left.partial_cmp(&right)
+                    } else {
+                        return None;
+                    }
+                }
             };
-        }
-
-        let left_data = self.as_f64();
-        let right_data = right.as_f64();
-        // tidb treats boolean as integer, but boolean is different from integer in JSON.
-        // so we need convert them to same type and then compare.
-        if let (Ok(left), Ok(right)) = (left_data, right_data) {
-            return left.partial_cmp(&right);
         }
 
         if precedence_diff > 0 {
@@ -181,6 +204,13 @@ impl PartialOrd for Json {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        codec::{
+            data_type::Duration,
+            mysql::{Time, TimeType},
+        },
+        expr::EvalContext,
+    };
 
     #[test]
     fn test_cmp_json_numberic_type() {
@@ -268,8 +298,8 @@ mod tests {
         let test_cases = vec![
             ("1.5", "2"),
             ("1.5", "false"),
-            ("true", "1.5"),
-            ("true", "2"),
+            ("1.5", "true"),
+            ("2", "true"),
             ("null", r#"{"a": "b"}"#),
             ("2", r#""hello, world""#),
             (r#""hello, world""#, r#"{"a": "b"}"#),
@@ -282,7 +312,121 @@ mod tests {
             let right: Json = right_str.parse().unwrap();
             assert!(left < right);
         }
+    }
 
-        assert_eq!(Json::from_i64(2).unwrap(), Json::from_bool(false).unwrap());
+    #[test]
+    fn test_cmp_json_between_json_type() {
+        let mut ctx = EvalContext::default();
+
+        let cmp = [
+            (
+                Json::from_time(
+                    Time::parse(
+                        &mut ctx,
+                        "1998-06-13 12:13:14",
+                        TimeType::DateTime,
+                        0,
+                        false,
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
+                Json::from_time(
+                    Time::parse(
+                        &mut ctx,
+                        "1998-06-14 13:14:15",
+                        TimeType::DateTime,
+                        0,
+                        false,
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
+                Ordering::Less,
+            ),
+            (
+                Json::from_time(
+                    Time::parse(
+                        &mut ctx,
+                        "1998-06-13 12:13:14",
+                        TimeType::DateTime,
+                        0,
+                        false,
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
+                Json::from_time(
+                    Time::parse(
+                        &mut ctx,
+                        "1998-06-12 13:14:15",
+                        TimeType::DateTime,
+                        0,
+                        false,
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
+                Ordering::Greater,
+            ),
+            (
+                // DateTime is always greater than Date
+                Json::from_time(
+                    Time::parse(
+                        &mut ctx,
+                        "1998-06-13 12:13:14",
+                        TimeType::DateTime,
+                        0,
+                        false,
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
+                Json::from_time(
+                    Time::parse(&mut ctx, "1998-06-14", TimeType::Date, 0, false).unwrap(),
+                )
+                .unwrap(),
+                Ordering::Greater,
+            ),
+            (
+                Json::from_duration(Duration::parse(&mut ctx, "12:13:14", 0).unwrap()).unwrap(),
+                Json::from_duration(Duration::parse(&mut ctx, "12:13:16", 0).unwrap()).unwrap(),
+                Ordering::Less,
+            ),
+            (
+                Json::from_duration(Duration::parse(&mut ctx, "12:13:16", 0).unwrap()).unwrap(),
+                Json::from_duration(Duration::parse(&mut ctx, "12:13:14", 0).unwrap()).unwrap(),
+                Ordering::Greater,
+            ),
+            (
+                // Time is always greater than Date
+                Json::from_duration(Duration::parse(&mut ctx, "12:13:16", 0).unwrap()).unwrap(),
+                Json::from_time(
+                    Time::parse(&mut ctx, "1998-06-12", TimeType::Date, 0, false).unwrap(),
+                )
+                .unwrap(),
+                Ordering::Greater,
+            ),
+            (
+                // Time is always less than DateTime
+                Json::from_duration(Duration::parse(&mut ctx, "12:13:16", 0).unwrap()).unwrap(),
+                Json::from_time(
+                    Time::parse(
+                        &mut ctx,
+                        "1998-06-12 11:11:11",
+                        TimeType::DateTime,
+                        0,
+                        false,
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
+                Ordering::Less,
+            ),
+        ];
+
+        for (l, r, result) in cmp {
+            assert_eq!(l.cmp(&r), result)
+        }
     }
 }

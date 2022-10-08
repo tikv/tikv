@@ -6,20 +6,20 @@ elif [[ $M == "testold" ]]; then
     export ENGINE_LABEL_VALUE=tiflash
     export RUST_BACKTRACE=full
     cargo check
-    cargo test --features compat_old_proxy --package tests --test failpoints cases::test_normal
-    cargo test --features compat_old_proxy --package tests --test failpoints cases::test_bootstrap
-    cargo test --features compat_old_proxy --package tests --test failpoints cases::test_compact_log
-    cargo test --features compat_old_proxy --package tests --test failpoints cases::test_early_apply
-    cargo test --features compat_old_proxy --package tests --test failpoints cases::test_encryption
-    cargo test --features compat_old_proxy --package tests --test failpoints cases::test_pd_client
-    cargo test --features compat_old_proxy --package tests --test failpoints cases::test_pending_peers
-    cargo test --features compat_old_proxy --package tests --test failpoints cases::test_transaction
-    cargo test --features compat_old_proxy --package tests --test failpoints cases::test_cmd_epoch_checker
-    cargo test --features compat_old_proxy --package tests --test failpoints cases::test_disk_full
-    cargo test --features compat_old_proxy --package tests --test failpoints cases::test_snap
-    cargo test --features compat_old_proxy --package tests --test failpoints cases::test_merge
-    cargo test --features compat_old_proxy --package tests --test failpoints cases::test_import_service
-    cargo test --features compat_old_proxy --package tests --test failpoints cases::test_proxy_replica_read
+    cargo test --package tests --test failpoints cases::test_normal
+    cargo test --package tests --test failpoints cases::test_bootstrap
+    cargo test --package tests --test failpoints cases::test_compact_log
+    cargo test --package tests --test failpoints cases::test_early_apply
+    cargo test --package tests --test failpoints cases::test_encryption
+    cargo test --package tests --test failpoints cases::test_pd_client
+    cargo test --package tests --test failpoints cases::test_pending_peers
+    cargo test --package tests --test failpoints cases::test_transaction
+    cargo test --package tests --test failpoints cases::test_cmd_epoch_checker
+    cargo test --package tests --test failpoints cases::test_disk_full
+    cargo test --package tests --test failpoints cases::test_snap
+    cargo test --package tests --test failpoints cases::test_merge
+    cargo test --package tests --test failpoints cases::test_import_service
+    cargo test --package tests --test failpoints cases::test_proxy_replica_read
 elif [[ $M == "testnew" ]]; then
     export ENGINE_LABEL_VALUE=tiflash
     export RUST_BACKTRACE=full
