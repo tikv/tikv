@@ -617,7 +617,7 @@ where
         delegate: &mut ApplyDelegate<EK>,
         results: VecDeque<ExecResult<EK::Snapshot>>,
     ) {
-        if self.host.pre_persist(&delegate.region, true, None) {
+        if self.host.pre_persist(&delegate.region, true, false, None) {
             if !delegate.pending_remove {
                 delegate.write_apply_state(self.kv_wb_mut());
             }
@@ -1124,7 +1124,9 @@ where
                 self.last_flush_applied_index != self.apply_state.get_applied_index();
             if (has_unflushed_data && should_write_to_engine(&cmd)
                 || apply_ctx.kv_wb().should_write_to_engine())
-                && apply_ctx.host.pre_persist(&self.region, false, Some(&cmd))
+                && apply_ctx
+                    .host
+                    .pre_persist(&self.region, false, false, Some(&cmd))
             {
                 apply_ctx.commit(self);
                 if let Some(start) = self.handle_start.as_ref() {
@@ -1135,7 +1137,11 @@ where
                 has_unflushed_data = false;
             }
             if self.priority != apply_ctx.priority {
-                if has_unflushed_data {
+                if has_unflushed_data
+                    && apply_ctx
+                        .host
+                        .pre_persist(&self.region, false, true, Some(&cmd))
+                {
                     apply_ctx.commit(self);
                 }
                 return ApplyResult::Yield;
@@ -5164,6 +5170,7 @@ mod tests {
             &self,
             _: &mut ObserverContext<'_>,
             _is_finished: bool,
+            _is_yield: bool,
             _cmd: Option<&RaftCmdRequest>,
         ) -> bool {
             !self.skip_persist_when_pre_commit.load(Ordering::SeqCst)

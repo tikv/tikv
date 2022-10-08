@@ -317,6 +317,7 @@ pub trait RegionChangeObserver: Coprocessor {
         &self,
         _: &mut ObserverContext<'_>,
         _is_finished: bool,
+        _is_yield: bool,
         _cmd: Option<&RaftCmdRequest>,
     ) -> bool {
         true

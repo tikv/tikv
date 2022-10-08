@@ -643,12 +643,13 @@ impl<E: KvEngine> CoprocessorHost<E> {
         &self,
         region: &Region,
         is_finished: bool,
+        is_yield: bool,
         cmd: Option<&RaftCmdRequest>,
     ) -> bool {
         let mut ctx = ObserverContext::new(region);
         for observer in &self.registry.region_change_observers {
             let observer = observer.observer.inner();
-            if !observer.pre_persist(&mut ctx, is_finished, cmd) {
+            if !observer.pre_persist(&mut ctx, is_finished, is_yield, cmd) {
                 return false;
             }
         }
