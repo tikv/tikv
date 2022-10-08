@@ -3,7 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::{
     ops::Deref,
-    sync::{Arc, Mutex},
+    sync::{atomic, Arc, Mutex},
 };
 
 use batch_system::Router;
@@ -109,16 +109,18 @@ where
         match self.pre_propose_raft_command(&req) {
             Ok(Some((mut delegate, policy))) => match policy {
                 RequestPolicy::ReadLocal => {
-                    let snapshot_ts = monotonic_raw_now();
-                    if !delegate.is_in_leader_lease(snapshot_ts) {
-                        return Ok(None);
-                    }
-
                     let region = Arc::clone(&delegate.region);
                     let snap = RegionSnapshot::from_snapshot(
                         delegate.get_snapshot(None, &mut None),
                         region,
                     );
+                    // Ensures the snapshot is acquired before getting the time
+                    atomic::fence(atomic::Ordering::Release);
+                    let snapshot_ts = monotonic_raw_now();
+
+                    if !delegate.is_in_leader_lease(snapshot_ts) {
+                        return Ok(None);
+                    }
 
                     TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_requests.inc());
 
