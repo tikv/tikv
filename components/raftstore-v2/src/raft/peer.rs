@@ -15,12 +15,13 @@ use pd_client::BucketStat;
 use protobuf::Message;
 use raft::{RawNode, StateRole, INVALID_ID};
 use raftstore::{
+    coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
     store::{
         fsm::Proposal,
         metrics::PEER_PROPOSE_LOG_SIZE_HISTOGRAM,
         util::{Lease, RegionReadProgress},
-        Config, EntryStorage, ProposalQueue, RaftlogFetchTask, ReadDelegate, ReadIndexQueue,
-        ReadIndexRequest, Transport, TxnExt, WriteRouter,
+        Config, EntryStorage, PeerStat, ProposalQueue, RaftlogFetchTask, ReadDelegate,
+        ReadIndexQueue, ReadIndexRequest, Transport, TxnExt, WriteRouter,
     },
     Error,
 };
@@ -35,6 +36,7 @@ use tikv_util::{
 
 use super::{storage::Storage, Apply};
 use crate::{
+    batch::StoreContext,
     fsm::{ApplyFsm, ApplyScheduler},
     operation::{AsyncWriter, DestroyProgress, SimpleWriteEncoder},
     router::{CmdResChannel, QueryResChannel},
@@ -46,6 +48,7 @@ const REGION_READ_PROGRESS_CAP: usize = 128;
 
 /// A peer that delegates commands between state machine and raft.
 pub struct Peer<EK: KvEngine, ER: RaftEngine> {
+    pub(crate) peer: metapb::Peer,
     raft_group: RawNode<Storage<ER>>,
     tablet: CachedTablet<EK>,
     /// We use a cache for looking up peers. Not all peers exist in region's
@@ -67,15 +70,27 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     destroy_progress: DestroyProgress,
 
     pub(crate) logger: Logger,
+
+    /// Transaction extensions related to this peer.
+    pub(crate) txn_ext: Arc<TxnExt>,
+    pub(crate) txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+    /// region buckets.
+    pub(crate) region_buckets: Option<BucketStat>,
+
+    /// Write Statistics for PD to schedule hot spot.
+    pub(crate) peer_stat: PeerStat,
+    /// The index of last compacted raft log. It is used for the next compact
+    /// log task.
+    pub(crate) last_compacted_idx: u64,
+
+    /// Approximate size of the region.
+    pub(crate) approximate_size: Option<u64>,
+    /// Approximate keys of the region.
+    pub(crate) approximate_keys: Option<u64>,
+
     pending_reads: ReadIndexQueue<QueryResChannel>,
     read_progress: Arc<RegionReadProgress>,
     leader_lease: Lease,
-
-    /// region buckets.
-    region_buckets: Option<BucketStat>,
-    /// Transaction extensions related to this peer.
-    txn_ext: Arc<TxnExt>,
-    txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -136,6 +151,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let region = raft_group.store().region_state().get_region().clone();
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
         let mut peer = Peer {
+            peer: metapb::Peer::default(),
             tablet,
             peer_cache: vec![],
             raw_write_encoder: None,
@@ -153,6 +169,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 stats: metapb::BucketStats::default(),
                 create_time: TiInstant::now(),
             }),
+            peer_stat: PeerStat::default(),
+            last_compacted_idx: 0,
+            approximate_keys: None,
+            approximate_size: None,
             pending_reads: ReadIndexQueue::new(tag.clone()),
             read_progress: Arc::new(RegionReadProgress::new(
                 &region,
@@ -187,6 +207,20 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn region_id(&self) -> u64 {
         self.region().get_id()
+    }
+
+    /// Set the region of a peer.
+    ///
+    /// This will update the region of the peer, caller must ensure the region
+    /// has been preserved in a durable device.
+    pub fn set_region(
+        &mut self,
+        host: &CoprocessorHost<impl KvEngine>,
+        reader: &mut ReadDelegate,
+        region: metapb::Region,
+        reason: RegionChangeReason,
+    ) {
+        unimplemented!()
     }
 
     #[inline]
@@ -411,6 +445,61 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn set_apply_scheduler(&mut self, apply_scheduler: ApplyScheduler) {
         self.apply_scheduler = Some(apply_scheduler);
+    }
+
+    #[inline]
+    pub fn post_split(&mut self) {
+        unimplemented!()
+    }
+
+    pub fn maybe_campaign(&mut self, parent_is_leader: bool) -> bool {
+        // if self.region().get_peers().len() <= 1 {
+        //     // The peer campaigned when it was created, no need to do it
+        // again.     return false;
+        // }
+
+        // if !parent_is_leader {
+        //     return false;
+        // }
+
+        // // If last peer is the leader of the region before split, it's
+        // intuitional for // it to become the leader of new split
+        // region. let _ = self.raft_group.campaign();
+        // true
+        unimplemented!()
+    }
+
+    /// Register self to apply_scheduler so that the peer is then usable.
+    /// Also trigger `RegionChangeEvent::Create` here.
+    pub fn activate<T>(&self, ctx: &StoreContext<EK, ER, T>) {
+        // self.schedule_apply_fsm(ctx)
+
+        ctx.coprocessor_host.as_ref().unwrap().on_region_changed(
+            self.region(),
+            RegionChangeEvent::Create,
+            self.get_role(),
+        );
+        // self.maybe_gen_approximate_buckets(ctx);
+    }
+
+    fn get_role(&self) -> StateRole {
+        self.raft_group.raft.state
+    }
+
+    pub fn approximate_size(&self) -> Option<u64> {
+        self.approximate_size
+    }
+
+    pub fn set_approximate_size(&mut self, approximate_size: Option<u64>) {
+        self.approximate_size = approximate_size;
+    }
+
+    pub fn approximate_keys(&self) -> Option<u64> {
+        self.approximate_keys
+    }
+
+    pub fn set_approximate_keys(&mut self, approximate_keys: Option<u64>) {
+        self.approximate_keys = approximate_keys;
     }
 
     pub fn generate_read_delegate(&self) -> ReadDelegate {

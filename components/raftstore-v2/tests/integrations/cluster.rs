@@ -160,7 +160,7 @@ impl RunningState {
             logger.clone(),
         );
 
-        let store_meta = Arc::new(Mutex::new(StoreMeta::<KvTestEngine>::new()));
+        let store_meta = Arc::new(Mutex::new(StoreMeta::<KvTestEngine>::new(0)));
         system
             .start(
                 store_id,

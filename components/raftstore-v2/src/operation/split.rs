@@ -66,7 +66,7 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
         let region_id = derived.id;
 
         let mut split_keys =
-            validate_and_get_split_keys(split_reqs, &self.region_state().get_region())?;
+            validate_and_get_split_keys(split_reqs, self.region_state().get_region())?;
 
         info!(
             self.logger,
@@ -179,248 +179,245 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
     }
 }
 
-// impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK,
-// ER, T> {     pub fn on_ready_split_region(
-//         &mut self,
-//         derived: Region,
-//         regions: Vec<Region>,
-//         new_split_regions: HashMap<u64, apply::NewSplitPeer>,
-//     ) {
-//         let region_id = derived.get_id();
+impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
+    pub fn on_ready_split_region(
+        &mut self,
+        derived: Region,
+        regions: Vec<Region>,
+        new_split_regions: HashMap<u64, apply::NewSplitPeer>,
+    ) {
+        let region_id = derived.get_id();
 
-//         // Group in-memory pessimistic locks in the original region into new
-// regions.         // The locks of new regions will be put into the
-// corresponding new regions         // later. And the locks belonging to the
-// old region will stay in the original         // map.
-//         let region_locks = {
-//             let mut pessimistic_locks =
-// self.fsm.peer().txn_ext.pessimistic_locks.write();
-// info!(self.store_ctx.logger, "moving {} locks to new regions",
-// pessimistic_locks.len(); "region_id"=> region_id);             // Update the
-// version so the concurrent reader will fail due to EpochNotMatch
-// // instead of PessimisticLockNotFound.             pessimistic_locks.version
-// = derived.get_region_epoch().get_version();
-// pessimistic_locks.group_by_regions(&regions, &derived)         };
+        // Group in-memory pessimistic locks in the original region into new regions.
+        // The locks of new regions will be put into the corresponding new regions
+        // later. And the locks belonging to the old region will stay in the original
+        // map.
+        let region_locks = {
+            let mut pessimistic_locks = self.fsm.peer().txn_ext.pessimistic_locks.write();
+            info!(self.store_ctx.logger, "moving {} locks to new regions", pessimistic_locks.len(); "region_id"=> region_id);
+            // Update the version so the concurrent reader will fail due to EpochNotMatch
+            // instead of PessimisticLockNotFound.
+            pessimistic_locks.version = derived.get_region_epoch().get_version();
+            pessimistic_locks.group_by_regions(&regions, &derived)
+        };
 
-//         // Roughly estimate the size and keys for new regions.
-//         let new_region_count = regions.len() as u64;
-//         let estimated_size = self
-//             .fsm
-//             .peer()
-//             .approximate_size()
-//             .map(|v| v / new_region_count);
-//         let estimated_keys = self
-//             .fsm
-//             .peer()
-//             .approximate_keys()
-//             .map(|v| v / new_region_count);
-//         let mut meta = self.store_ctx.store_meta.lock().unwrap();
-//         meta.set_region(
-//             self.store_ctx.coprocessor_host.as_ref().unwrap(),
-//             derived,
-//             self.fsm.peer_mut(),
-//             RegionChangeReason::Split,
-//         );
-//         self.fsm.peer_mut().post_split();
+        // Roughly estimate the size and keys for new regions.
+        let new_region_count = regions.len() as u64;
+        let estimated_size = self
+            .fsm
+            .peer()
+            .approximate_size()
+            .map(|v| v / new_region_count);
+        let estimated_keys = self
+            .fsm
+            .peer()
+            .approximate_keys()
+            .map(|v| v / new_region_count);
+        let mut meta = self.store_ctx.store_meta.lock().unwrap();
+        meta.set_region(
+            self.store_ctx.coprocessor_host.as_ref().unwrap(),
+            derived,
+            self.fsm.peer_mut(),
+            RegionChangeReason::Split,
+        );
+        self.fsm.peer_mut().post_split();
 
-//         // It's not correct anymore, so set it to false to schedule a split
-//         // check task.
-//         // self.fsm.peer.may_skip_split_check = false;
+        // It's not correct anymore, so set it to false to schedule a split
+        // check task.
+        // self.fsm.peer.may_skip_split_check = false;
 
-//         let is_leader = self.fsm.peer().is_leader();
-//         if is_leader {
-//             self.fsm.peer_mut().set_approximate_size(estimated_size);
-//             self.fsm.peer_mut().set_approximate_keys(estimated_keys);
+        let is_leader = self.fsm.peer().is_leader();
+        if is_leader {
+            self.fsm.peer_mut().set_approximate_size(estimated_size);
+            self.fsm.peer_mut().set_approximate_keys(estimated_keys);
 
-//             // todo(SpadeA): report regions to PD
-//             // self.fsm.peer.heartbeat_pd(self.ctx);
-//             // info!(
-//             //     self.store_ctx.logger,
-//             //     "notify pd with split";
-//             //     "region_id" => self.fsm.region_id(),
-//             //     "peer_id" => self.fsm.peer_id(),
-//             //     "split_count" => regions.len(),
-//             // );
-//             // // Now pd only uses ReportBatchSplit for history operation
-// show,             // // so we send it independently here.
-//             // let task = PdTask::ReportBatchSplit {
-//             //     regions: regions.to_vec(),
-//             // };
-//             // if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
-//             //     error!(
-//             //         "failed to notify pd";
-//             //         "region_id" => self.fsm.region_id(),
-//             //         "peer_id" => self.fsm.peer_id(),
-//             //         "err" => %e,
-//             //     );
-//             // }
-//         }
+            // todo(SpadeA): report regions to PD
+            // self.fsm.peer.heartbeat_pd(self.ctx);
+            // info!(
+            //     self.store_ctx.logger,
+            //     "notify pd with split";
+            //     "region_id" => self.fsm.region_id(),
+            //     "peer_id" => self.fsm.peer_id(),
+            //     "split_count" => regions.len(),
+            // );
+            // // Now pd only uses ReportBatchSplit for history operation show,
+            // // so we send it independently here.
+            // let task = PdTask::ReportBatchSplit {
+            //     regions: regions.to_vec(),
+            // };
+            // if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
+            //     error!(
+            //         "failed to notify pd";
+            //         "region_id" => self.fsm.region_id(),
+            //         "peer_id" => self.fsm.peer_id(),
+            //         "err" => %e,
+            //     );
+            // }
+        }
 
-//         let last_key = enc_end_key(regions.last().unwrap());
-//         if meta.region_ranges.remove(&last_key).is_none() {
-//             panic!(
-//                 "{:?} original region should exist",
-//                 self.store_ctx.logger.list()
-//             );
-//         }
-//         let last_region_id = regions.last().unwrap().get_id();
-//         for (new_region, locks) in regions.into_iter().zip(region_locks) {
-//             let new_region_id = new_region.get_id();
+        let last_key = enc_end_key(regions.last().unwrap());
+        if meta.region_ranges.remove(&last_key).is_none() {
+            panic!(
+                "{:?} original region should exist",
+                self.store_ctx.logger.list()
+            );
+        }
+        let last_region_id = regions.last().unwrap().get_id();
+        for (new_region, locks) in regions.into_iter().zip(region_locks) {
+            let new_region_id = new_region.get_id();
 
-//             if new_region_id == region_id {
-//                 let not_exist = meta
-//                     .region_ranges
-//                     .insert(enc_end_key(&new_region), new_region_id)
-//                     .is_none();
-//                 assert!(not_exist, "[region {}] should not exist",
-// new_region_id);                 continue;
-//             }
+            if new_region_id == region_id {
+                let not_exist = meta
+                    .region_ranges
+                    .insert(enc_end_key(&new_region), new_region_id)
+                    .is_none();
+                assert!(not_exist, "[region {}] should not exist", new_region_id);
+                continue;
+            }
 
-//             // Check if this new region should be splitted
-//             let new_split_peer =
-// new_split_regions.get(&new_region.get_id()).unwrap();             if
-// new_split_peer.result.is_some() {                 unimplemented!()
-//             }
+            // Check if this new region should be splitted
+            let new_split_peer = new_split_regions.get(&new_region.get_id()).unwrap();
+            if new_split_peer.result.is_some() {
+                unimplemented!()
+            }
 
-//             // Now all checking passed.
-//             {
-//                 let mut pending_create_peers =
-// self.store_ctx.pending_create_peers.lock().unwrap();
-// assert_eq!(                     pending_create_peers.remove(&new_region_id),
-//                     Some((new_split_peer.peer_id, true))
-//                 );
-//             }
+            // Now all checking passed.
+            {
+                let mut pending_create_peers = self.store_ctx.pending_create_peers.lock().unwrap();
+                assert_eq!(
+                    pending_create_peers.remove(&new_region_id),
+                    Some((new_split_peer.peer_id, true))
+                );
+            }
 
-//             // Insert new regions and validation
-//             info!(
-//                 self.store_ctx.logger,
-//                 "insert new region";
-//                 "region_id" => new_region_id,
-//                 "region" => ?new_region,
-//             );
+            // Insert new regions and validation
+            info!(
+                self.store_ctx.logger,
+                "insert new region";
+                "region_id" => new_region_id,
+                "region" => ?new_region,
+            );
 
-//             if let Some(r) = meta.regions.get(&new_region_id) {
-//                 // Suppose a new node is added by conf change and the
-// snapshot comes slowly.                 // Then, the region splits and the
-// first vote message comes to the new node                 // before the old
-// snapshot, which will create an uninitialized peer on the                 //
-// store. After that, the old snapshot comes, followed with the last split
-//                 // proposal. After it's applied, the uninitialized peer will
-// be met.                 // We can remove this uninitialized peer directly.
-//                 if util::is_region_initialized(r) {
-//                     panic!(
-//                         "[region {}] duplicated region {:?} for split region
-// {:?}",                         new_region_id, r, new_region
-//                     );
-//                 }
-//                 self.store_ctx.router.close(new_region_id);
-//             }
+            if let Some(r) = meta.regions.get(&new_region_id) {
+                // Suppose a new node is added by conf change and the snapshot comes slowly.
+                // Then, the region splits and the first vote message comes to the new node
+                // before the old snapshot, which will create an uninitialized peer on the
+                // store. After that, the old snapshot comes, followed with the last split
+                // proposal. After it's applied, the uninitialized peer will be met.
+                // We can remove this uninitialized peer directly.
+                if util::is_region_initialized(r) {
+                    panic!(
+                        "[region {}] duplicated region {:?} for split region {:?}",
+                        new_region_id, r, new_region
+                    );
+                }
+                self.store_ctx.router.close(new_region_id);
+            }
 
-//             let storage = Storage::new(
-//                 new_region_id,
-//                 self.store_ctx.store.id,
-//                 self.store_ctx.engine.clone(),
-//                 self.store_ctx.log_fetch_scheduler.clone(),
-//                 &self.store_ctx.logger,
-//             )
-//             .unwrap_or_else(|e| panic!("fail to create storage: {:?}", e))
-//             .unwrap();
+            let storage = Storage::new(
+                new_region_id,
+                self.store_ctx.store.id,
+                self.store_ctx.engine.clone(),
+                self.store_ctx.log_fetch_scheduler.clone(),
+                &self.store_ctx.logger,
+            )
+            .unwrap_or_else(|e| panic!("fail to create storage: {:?}", e))
+            .unwrap();
 
-//             let (sender, mut new_peer) = match PeerFsm::new(
-//                 &self.store_ctx.cfg,
-//                 self.store_ctx.tablet_factory.as_ref(),
-//                 storage,
-//             ) {
-//                 Ok((sender, new_peer)) => (sender, new_peer),
-//                 Err(e) => {
-//                     // peer information is already written into db, can't
-// recover.                     // there is probably a bug.
-//                     panic!("create new split region {:?} err {:?}",
-// new_region, e);                 }
-//             };
+            let (sender, mut new_peer) = match PeerFsm::new(
+                &self.store_ctx.cfg,
+                self.store_ctx.tablet_factory.as_ref(),
+                storage,
+            ) {
+                Ok((sender, new_peer)) => (sender, new_peer),
+                Err(e) => {
+                    // peer information is already written into db, can't recover.
+                    // there is probably a bug.
+                    panic!("create new split region {:?} err {:?}", new_region, e);
+                }
+            };
 
-//             // let mut replication_state =
-//             // self.ctx.global_replication_state.lock().unwrap();
-//             // new_peer.peer.init_replication_mode(&mut replication_state);
-//             // drop(replication_state);
+            // let mut replication_state =
+            // self.ctx.global_replication_state.lock().unwrap();
+            // new_peer.peer.init_replication_mode(&mut replication_state);
+            // drop(replication_state);
 
-//             let meta_peer = new_peer.peer().peer.clone();
+            let meta_peer = new_peer.peer().peer.clone();
 
-//             for p in new_region.get_peers() {
-//                 // Add this peer to cache
-//                 new_peer.peer_mut().insert_peer_cache(p.clone());
-//             }
+            for p in new_region.get_peers() {
+                // Add this peer to cache
+                new_peer.peer_mut().insert_peer_cache(p.clone());
+            }
 
-//             // New peer derive write flow from parent region,
-//             // this will be used by balance write flow.
-//             new_peer.peer_mut().peer_stat =
-// self.fsm.peer().peer_stat.clone();
-// new_peer.peer_mut().last_compacted_idx = new_peer                 .peer()
-//                 .storage()
-//                 .apply_state()
-//                 .get_truncated_state()
-//                 .get_index()
-//                 + 1;
-//             let campaigned = new_peer.peer_mut().maybe_campaign(is_leader);
-//             new_peer.set_has_ready(new_peer.has_ready() | campaigned);
+            // New peer derive write flow from parent region,
+            // this will be used by balance write flow.
+            new_peer.peer_mut().peer_stat = self.fsm.peer().peer_stat.clone();
+            new_peer.peer_mut().last_compacted_idx = new_peer
+                .peer()
+                .storage()
+                .apply_state()
+                .get_truncated_state()
+                .get_index()
+                + 1;
+            let campaigned = new_peer.peer_mut().maybe_campaign(is_leader);
+            new_peer.set_has_ready(new_peer.has_ready() | campaigned);
 
-//             if is_leader {
-//                 new_peer.peer_mut().approximate_size = estimated_size;
-//                 new_peer.peer_mut().approximate_keys = estimated_keys;
-//                 *new_peer.peer_mut().txn_ext.pessimistic_locks.write() =
-// locks;                 // The new peer is likely to become leader, send a
-//                 // heartbeatimmediately to reduce client query
-//                 // miss. new_peer.peer.heartbeat_pd(self.ctx);
-//             }
+            if is_leader {
+                new_peer.peer_mut().approximate_size = estimated_size;
+                new_peer.peer_mut().approximate_keys = estimated_keys;
+                *new_peer.peer_mut().txn_ext.pessimistic_locks.write() = locks;
+                // The new peer is likely to become leader, send a
+                // heartbeatimmediately to reduce client query
+                // miss. new_peer.peer.heartbeat_pd(self.ctx);
+            }
 
-//             meta.tablet_caches
-//                 .insert(new_region_id, new_peer.peer().tablet().clone());
-//             new_peer.peer().activate(self.store_ctx);
-//             meta.regions.insert(new_region_id, new_region.clone());
-//             let not_exist = meta
-//                 .region_ranges
-//                 .insert(enc_end_key(&new_region), new_region_id)
-//                 .is_none();
-//             assert!(not_exist, "[region {}] should not exist",
-// new_region_id);             meta.readers
-//                 .insert(new_region_id,
-// create_read_delegate(new_peer.peer()));             meta.region_read_progress
-//                 .insert(new_region_id,
-// new_peer.peer().read_progress().clone());
+            meta.tablet_caches
+                .insert(new_region_id, new_peer.peer().tablet().clone());
+            new_peer.peer().activate(self.store_ctx);
+            meta.regions.insert(new_region_id, new_region.clone());
+            let not_exist = meta
+                .region_ranges
+                .insert(enc_end_key(&new_region), new_region_id)
+                .is_none();
+            assert!(not_exist, "[region {}] should not exist", new_region_id);
+            meta.readers
+                .insert(new_region_id, new_peer.peer().generate_read_delegate());
+            meta.region_read_progress
+                .insert(new_region_id, new_peer.peer().read_progress().clone());
 
-//             if last_region_id == new_region_id {
-//                 // To prevent from big region, the right region needs run
-// split                 // check again after split.
-//                 // new_peer.peer().size_diff_hint =
-//                 // self.store_ctx.cfg.region_split_check_diff().0;
-//             }
-//             let mailbox =
-//                 BasicMailbox::new(sender, new_peer,
-// self.store_ctx.router.state_cnt().clone());
-// self.store_ctx.router.register(new_region_id, mailbox);
-// self.store_ctx                 .router
-//                 .force_send(new_region_id, PeerMsg::Start)
-//                 .unwrap();
+            if last_region_id == new_region_id {
+                // To prevent from big region, the right region needs run split
+                // check again after split.
+                // new_peer.peer().size_diff_hint =
+                // self.store_ctx.cfg.region_split_check_diff().0;
+            }
+            let mailbox =
+                BasicMailbox::new(sender, new_peer, self.store_ctx.router.state_cnt().clone());
+            self.store_ctx.router.register(new_region_id, mailbox);
+            self.store_ctx
+                .router
+                .force_send(new_region_id, PeerMsg::Start)
+                .unwrap();
 
-//             if !campaigned {
-//                 if let Some(msg) = meta
-//                     .pending_msgs
-//                     .swap_remove_front(|m| m.get_to_peer() == &meta_peer)
-//                 {
-//                     let peer_msg = PeerMsg::RaftMessage(Box::new(msg));
-//                     if let Err(e) =
-// self.store_ctx.router.force_send(new_region_id, peer_msg) {
-// // warn!("handle first requset failed"; "region_id" =>
-// // region_id, "error" => ?e);                     }
-//                 }
-//             }
-//         }
-//         drop(meta);
-//         if is_leader {
-//             self.on_split_region_check_tick();
-//         }
-//     }
-// }
+            if !campaigned {
+                if let Some(msg) = meta
+                    .pending_msgs
+                    .swap_remove_front(|m| m.get_to_peer() == &meta_peer)
+                {
+                    let peer_msg = PeerMsg::RaftMessage(Box::new(msg));
+                    if let Err(e) = self.store_ctx.router.force_send(new_region_id, peer_msg) {
+                        // warn!("handle first requset failed"; "region_id" =>
+                        // region_id, "error" => ?e);
+                    }
+                }
+            }
+        }
+        drop(meta);
+        if is_leader {
+            self.on_split_region_check_tick();
+        }
+    }
+}
 
 #[cfg(test)]
 mod test {

@@ -189,7 +189,7 @@ mod tests {
         let factory = Arc::new(TestTabletFactoryV2::new(path.path(), ops, cf_opts));
 
         let store_meta =
-            StoreMetaDelegate::new(Arc::new(Mutex::new(StoreMeta::<KvTestEngine>::new())));
+            StoreMetaDelegate::new(Arc::new(Mutex::new(StoreMeta::<KvTestEngine>::new(0))));
 
         let tablet1;
         let tablet2;

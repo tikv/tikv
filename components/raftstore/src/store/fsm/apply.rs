@@ -1964,7 +1964,7 @@ pub fn init_split_regions(
 
 // Some regions in new_split_regions may have already been created due to some
 // sophisticated cases. This methods inject reasons in `NewSplitPeer`
-// when these cases happen (See PR#8084).
+// for those regions (See PR#8084).
 pub fn amend_new_split_regions(
     _peer_id: u64,
     tag: impl fmt::Debug,
@@ -2532,6 +2532,7 @@ where
             },
         );
 
+        // write region information of split regions into disk
         let kv_wb_mut = ctx.kv_wb_mut();
         for new_region in &regions {
             if new_region.get_id() == derived.get_id() {
@@ -2558,6 +2559,7 @@ where
                     )
                 });
         }
+        // update region state of the splitting region
         write_peer_state(kv_wb_mut, &derived, PeerState::Normal, None).unwrap_or_else(|e| {
             panic!("{} fails to update region {:?}: {:?}", self.tag, derived, e)
         });

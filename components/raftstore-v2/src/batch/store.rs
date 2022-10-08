@@ -17,13 +17,16 @@ use engine_traits::{Engines, KvEngine, RaftEngine, TabletFactory};
 use file_system::{set_io_type, IoType};
 use futures::{compat::Future01CompatExt, FutureExt};
 use kvproto::{
-    metapb::Store,
+    metapb::{self, Store},
     raft_serverpb::{PeerState, RaftMessage},
 };
 use raft::INVALID_ID;
-use raftstore::store::{
-    fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, RaftlogFetchRunner,
-    RaftlogFetchTask, StoreWriters, Transport, WriteMsg, WriteSenders,
+use raftstore::{
+    coprocessor::CoprocessorHost,
+    store::{
+        fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, RaftlogFetchRunner,
+        RaftlogFetchTask, StoreWriters, Transport, WriteMsg, WriteSenders,
+    },
 };
 use slog::Logger;
 use tikv_util::{
@@ -49,6 +52,7 @@ use crate::{
 
 /// A per-thread context shared by the [`StoreFsm`] and multiple [`PeerFsm`]s.
 pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
+    pub store: metapb::Store,
     /// A logger without any KV. It's clean for creating new PeerFSM.
     pub logger: Logger,
     /// The transport for sending messages to peers on other stores.
@@ -71,6 +75,19 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub tablet_factory: Arc<dyn TabletFactory<EK>>,
     pub apply_pool: FuturePool,
     pub log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+    // todo(SpadeA): remove option
+    pub coprocessor_host: Option<CoprocessorHost<EK>>,
+    /// region_id -> (peer_id, is_splitting)
+    /// Used for handling race between splitting and creating new peer.
+    /// An uninitialized peer can be replaced to the one from splitting iff they
+    /// are exactly the same peer.
+    ///
+    /// WARNING:
+    /// To avoid deadlock, if you want to use `store_meta` and
+    /// `pending_create_peers` together, the lock sequence MUST BE:
+    /// 1. lock the store_meta.
+    /// 2. lock the pending_create_peers.
+    pub pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
 }
 
 /// A [`PollHandler`] that handles updates of [`StoreFsm`]s and [`PeerFsm`]s.
@@ -312,6 +329,7 @@ where
     fn build(&mut self, priority: batch_system::Priority) -> Self::Handler {
         let cfg = self.cfg.value().clone();
         let poll_ctx = StoreContext {
+            store: metapb::Store::default(), // todo(SpadeA): FIXME
             logger: self.logger.clone(),
             trans: self.trans.clone(),
             current_time: None,
@@ -327,6 +345,8 @@ where
             tablet_factory: self.tablet_factory.clone(),
             apply_pool: self.apply_pool.clone(),
             log_fetch_scheduler: self.log_fetch_scheduler.clone(),
+            coprocessor_host: None,
+            pending_create_peers: Arc::default(),
         };
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
         StorePoller::new(poll_ctx, cfg_tracker)
