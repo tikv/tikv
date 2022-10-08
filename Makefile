@@ -81,15 +81,21 @@ ROCKSDB_SYS_PORTABLE=0
 RUST_TEST_THREADS ?= 2
 endif
 
-# Disable SSE on ARM
-ifeq ($(shell uname -p),aarch64)
-ROCKSDB_SYS_SSE=0
+# Enable sse4.2 by default on x86 and x64
+ifeq ($(shell uname -m),x86_64)
+ROCKSDB_SYS_SSE=1
 endif
-ifeq ($(shell uname -p),arm)
-ROCKSDB_SYS_SSE=0
+ifeq ($(shell uname -m),x64)
+ROCKSDB_SYS_SSE=1
 endif
-ifeq ($(shell uname -p),arm64)
-ROCKSDB_SYS_SSE=0
+ifeq ($(shell uname -m),x86)
+ROCKSDB_SYS_SSE=1
+endif
+ifeq ($(shell uname -m),i386)
+ROCKSDB_SYS_SSE=1
+endif
+ifeq ($(shell uname -m),i686)
+ROCKSDB_SYS_SSE=1
 endif
 
 # Build portable binary by default unless disable explicitly
@@ -97,9 +103,8 @@ ifneq ($(ROCKSDB_SYS_PORTABLE),0)
 ENABLE_FEATURES += portable
 endif
 
-# Enable sse4.2 by default unless disable explicitly
 # Note this env var is also tested by scripts/check-sse4_2.sh
-ifneq ($(ROCKSDB_SYS_SSE),0)
+ifeq ($(ROCKSDB_SYS_SSE),1)
 ENABLE_FEATURES += sse
 endif
 
@@ -330,11 +335,11 @@ unset-override:
 
 pre-format: unset-override
 	@rustup component add rustfmt
-	@which cargo-sort &> /dev/null || cargo install -q cargo-sort 
+	@which cargo-sort &> /dev/null || cargo install -q cargo-sort
 
 format: pre-format
 	@cargo fmt
-	@cargo sort -w ./Cargo.toml ./*/Cargo.toml components/*/Cargo.toml cmd/*/Cargo.toml >/dev/null 
+	@cargo sort -w ./Cargo.toml ./*/Cargo.toml components/*/Cargo.toml cmd/*/Cargo.toml >/dev/null
 
 doc:
 	@cargo doc --workspace --document-private-items \
