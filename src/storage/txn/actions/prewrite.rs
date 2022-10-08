@@ -16,8 +16,8 @@ use txn_types::{
 use crate::storage::{
     mvcc::{
         metrics::{
-            CONCURRENCY_MANAGER_LOCK_DURATION_HISTOGRAM, MVCC_CONFLICT_COUNTER,
-            MVCC_DUPLICATE_CMD_COUNTER_VEC, MVCC_PREWRITE_ASSERTION_PERF_COUNTER_VEC,
+            MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC,
+            MVCC_PREWRITE_ASSERTION_PERF_COUNTER_VEC,
         },
         Error, ErrorInner, Lock, LockType, MvccTxn, Result, SnapshotReader,
     },
@@ -646,9 +646,7 @@ fn async_commit_timestamps(
 ) -> Result<TimeStamp> {
     // This operation should not block because the latch makes sure only one thread
     // is operating on this key.
-    let key_guard = CONCURRENCY_MANAGER_LOCK_DURATION_HISTOGRAM.observe_closure_duration(|| {
-        ::futures_executor::block_on(txn.concurrency_manager.lock_key(key))
-    });
+    let key_guard = ::futures_executor::block_on(txn.concurrency_manager.lock_key(key));
 
     let final_min_commit_ts = key_guard.with_lock(|l| {
         let max_ts = txn.concurrency_manager.max_ts();

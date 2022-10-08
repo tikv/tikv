@@ -97,10 +97,11 @@ use crate::{
     Error, Result,
 };
 
-const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
-const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
-const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
-const MAX_APPLY_BATCH_SIZE: usize = 64 * 1024 * 1024;
+// These consts are shared in both v1 and v2.
+pub const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
+pub const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
+pub const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
+pub const MAX_APPLY_BATCH_SIZE: usize = 64 * 1024 * 1024;
 
 pub struct PendingCmd<C> {
     pub index: u64,

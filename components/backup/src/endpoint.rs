@@ -15,7 +15,7 @@ use engine_rocks::RocksEngine;
 use engine_traits::{name_to_cf, raw_ttl::ttl_current_ts, CfName, SstCompressionType};
 use external_storage::{BackendConfig, HdfsConfig};
 use external_storage_export::{create_storage, ExternalStorage};
-use futures::channel::mpsc::*;
+use futures::{channel::mpsc::*, executor::block_on};
 use kvproto::{
     brpb::*,
     encryptionpb::EncryptionMethod,
@@ -982,7 +982,9 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             if let Err(e) = self
                 .causal_ts_provider
                 .as_ref()
-                .map_or(Ok(()), |provider| provider.flush())
+                .map_or(Ok(TimeStamp::new(0)), |provider| {
+                    block_on(provider.async_flush())
+                })
             {
                 error!("backup flush causal timestamp failed"; "err" => ?e);
                 let mut response = BackupResponse::default();
@@ -1826,7 +1828,7 @@ pub mod tests {
         let limiter = Arc::new(IoRateLimiter::new_for_test());
         let ts_provider: Arc<CausalTsProviderImpl> =
             Arc::new(causal_ts::tests::TestProvider::default().into());
-        let start_ts = ts_provider.get_ts().unwrap();
+        let start_ts = block_on(ts_provider.async_get_ts()).unwrap();
         let (tmp, endpoint) = new_endpoint_with_limiter(
             Some(limiter),
             ApiVersion::V2,
@@ -1844,8 +1846,8 @@ pub mod tests {
         req.set_dst_api_version(ApiVersion::V2);
         let (task, _) = Task::new(req, tx).unwrap();
         endpoint.handle_backup_task(task);
-        let end_ts = ts_provider.get_ts().unwrap();
-        assert_eq!(end_ts.into_inner(), start_ts.next().into_inner() + 100);
+        let end_ts = block_on(ts_provider.async_get_ts()).unwrap();
+        assert_eq!(end_ts.into_inner(), start_ts.next().into_inner() + 101);
     }
 
     #[test]

@@ -9,12 +9,12 @@ use std::{
     },
 };
 
-use kvproto::raft_serverpb::RaftApplyState;
+use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 use raftstore::store::RaftlogFetchTask as RegionTask;
 use tikv_util::{box_try, worker::Scheduler};
 
-use crate::Result;
+use crate::{operation::CommittedEntries, Result};
 
 pub struct GenSnapTask {
     pub(crate) region_id: u64,
@@ -71,7 +71,14 @@ impl Debug for GenSnapTask {
     }
 }
 
-pub enum ApplyTask {}
-
 #[derive(Debug)]
-pub enum ApplyRes {}
+pub enum ApplyTask {
+    CommittedEntries(CommittedEntries),
+}
+
+#[derive(Debug, Default)]
+pub struct ApplyRes {
+    pub applied_index: u64,
+    pub applied_term: u64,
+    pub region_state: Option<RegionLocalState>,
+}
