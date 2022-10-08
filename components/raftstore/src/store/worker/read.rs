@@ -270,20 +270,20 @@ where
     }
 
     // Note: must be called after `maybe_update_snapshot`
-    fn snapshot_ts(&self) -> Timespec {
+    fn snapshot_ts(&self) -> Option<Timespec> {
         if self.read_id.is_some() {
-            self.snap_cache.cached_snapshot_ts
+            Some(self.snap_cache.cached_snapshot_ts)
         } else {
-            self.snapshot_ts.unwrap()
+            self.snapshot_ts
         }
     }
 
-    fn snapshot(&self) -> Arc<E::Snapshot> {
+    fn snapshot(&self) -> Option<Arc<E::Snapshot>> {
         // read_id being some means we go through cache
         if self.read_id.is_some() {
-            self.snap_cache.snapshot.as_ref().as_ref().unwrap().clone()
+            self.snap_cache.snapshot.deref().clone()
         } else {
-            self.snapshot.as_ref().unwrap().clone()
+            self.snapshot.clone()
         }
     }
 }
@@ -692,7 +692,7 @@ where
         }
         ctx.updated = false;
 
-        ctx.snapshot()
+        ctx.snapshot().unwrap()
     }
 }
 
@@ -872,7 +872,7 @@ where
                             SnapCacheContext::new(&mut self.snap_cache, read_id);
                         snap_cache_ctx.maybe_update_snapshot(delegate.get_tablet());
 
-                        if !delegate.is_in_leader_lease(snap_cache_ctx.snapshot_ts()) {
+                        if !delegate.is_in_leader_lease(snap_cache_ctx.snapshot_ts().unwrap()) {
                             fail_point!("localreader_before_redirect", |_| {});
                             // Forward to raftstore.
                             self.redirect(RaftCommand::new(req, cb));
@@ -1719,6 +1719,84 @@ mod tests {
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().local_executed_snapshot_cache_hit.get()),
             11
+        );
+    }
+
+    #[test]
+    fn test_snap_cache_context() {
+        fn create_engine(path: &str) -> KvTestEngine {
+            let path = Builder::new().prefix(path).tempdir().unwrap();
+            engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap()
+        }
+
+        let db = create_engine("test_snap_cache_context");
+        let mut snap_cache = SnapCache::new();
+        let mut read_context = SnapCacheContext::new(&mut snap_cache, None);
+
+        // Have not inited the snap cache
+        assert!(read_context.snapshot().is_none());
+        assert!(read_context.snapshot_ts().is_none());
+
+        db.put(b"a1", b"val1").unwrap();
+
+        let compare_ts = monotonic_raw_now();
+        // Case 1: snap_cache_context.read_id is None
+        read_context.maybe_update_snapshot(&db);
+        assert!(read_context.snapshot_ts().unwrap() > compare_ts);
+        assert_eq!(
+            read_context
+                .snapshot()
+                .unwrap()
+                .get_value(b"a1")
+                .unwrap()
+                .unwrap(),
+            b"val1"
+        );
+
+        // snap_cache_context is *not* created with read_id, so calling
+        // `maybe_update_snapshot` again will update the snapshot
+        let compare_ts = monotonic_raw_now();
+        read_context.maybe_update_snapshot(&db);
+        assert!(read_context.snapshot_ts().unwrap() > compare_ts);
+
+        let read_id = ThreadReadId::new();
+        let mut read_context = SnapCacheContext::new(&mut snap_cache, Some(read_id));
+
+        // Have not inited the snap cache
+        assert!(read_context.snapshot().is_none());
+        assert_eq!(read_context.snapshot_ts().unwrap(), Timespec::new(0, 0));
+
+        let compare_ts = monotonic_raw_now();
+        // Case 2: snap_cache_context.read_id is not None but not equals to the
+        // snap_cache.cached_read_id
+        read_context.maybe_update_snapshot(&db);
+        assert!(read_context.snapshot_ts().unwrap() > compare_ts);
+        let snap_ts = read_context.snapshot_ts().unwrap();
+        assert_eq!(
+            read_context
+                .snapshot()
+                .unwrap()
+                .get_value(b"a1")
+                .unwrap()
+                .unwrap(),
+            b"val1"
+        );
+
+        let db2 = create_engine("test_snap_cache_context2");
+        // snap_cache_context is created with read_id, so calling
+        // `maybe_update_snapshot` again will *not* update the snapshot
+        // Case 3: snap_cache_context.read_id is not None and equals to the
+        // snap_cache.cached_read_id
+        read_context.maybe_update_snapshot(&db2);
+        assert_eq!(read_context.snapshot_ts().unwrap(), snap_ts);
+        assert_eq!(
+            read_context
+                .snapshot()
+                .unwrap()
+                .get_value(b"a1")
+                .unwrap()
+                .unwrap(),
+            b"val1"
         );
     }
 }
