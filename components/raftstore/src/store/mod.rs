@@ -79,7 +79,7 @@ pub use self::{
         CheckLeaderTask, FetchedLogs, FlowStatistics, FlowStatsReporter, KeyEntry, LocalReader,
         LogFetchedNotifier, PdTask, RaftlogFetchRunner, RaftlogFetchTask, ReadDelegate,
         ReadExecutor, ReadExecutorProvider, ReadProgress, ReadStats, RefreshConfigTask, RegionTask,
-        SnapCacheContext, SplitCheckRunner, SplitCheckTask, SplitConfig, SplitConfigManager,
+        SnapshotContext, SplitCheckRunner, SplitCheckTask, SplitConfig, SplitConfigManager,
         StoreMetaDelegate, TrackVer, WriteStats,
     },
 };

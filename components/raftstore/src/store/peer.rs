@@ -82,7 +82,7 @@ use super::{
         self, check_region_epoch, is_initial_msg, AdminCmdEpochState, ChangePeerI, ConfChangeKind,
         Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
     },
-    DestroyPeerJob, SnapCacheContext,
+    DestroyPeerJob, SnapshotContext,
 };
 use crate::{
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason, RoleChange},
@@ -5618,7 +5618,7 @@ where
         &self.engines.kv
     }
 
-    fn get_snapshot(&mut self, _: &mut Option<&mut SnapCacheContext<'_, EK>>) -> Arc<EK::Snapshot> {
+    fn get_snapshot(&mut self, _: &mut Option<&mut SnapshotContext<'_, EK>>) -> Arc<EK::Snapshot> {
         Arc::new(self.engines.kv.snapshot())
     }
 }
