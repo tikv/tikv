@@ -1081,7 +1081,6 @@ where
             peer.get_id(),
             tag.clone(),
         )?;
-        let flashback_state = ps.get_region_flashback(region.get_id());
         let applied_index = ps.applied_index();
 
         let raft_cfg = raft::Config {
@@ -1182,7 +1181,9 @@ where
             last_region_buckets: None,
             lead_transferee: raft::INVALID_ID,
             unsafe_recovery_state: None,
-            flashback_state,
+            flashback_state: region
+                .get_is_in_flashback()
+                .then(|| FlashbackState::new(None)),
             snapshot_recovery_state: None,
         };
 
