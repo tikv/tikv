@@ -88,6 +88,10 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
             &|region_id| self.raft_engine().get_region_state(region_id),
         );
 
+        // todo(SpadeA): Here: we use a temporary solution that we disable auto
+        // compaction and flush the memtable manually. Then we can trivially hardlink
+        // the tablet. It may cause large jitter and we will freeze the memtable rather
+        // than flush it in the following PR.
         let region_id = derived.get_id();
         let tablet = self.tablet().unwrap();
         for &cf in DATA_CFS {
@@ -224,7 +228,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
         // It's not correct anymore, so set it to false to schedule a split
         // check task.
-        // self.fsm.peer.may_skip_split_check = false;
+        self.fsm.peer_mut().set_may_skip_split_check(false);
 
         let is_leader = self.fsm.peer().is_leader();
         if is_leader {
@@ -232,6 +236,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
             self.fsm.peer_mut().set_approximate_keys(estimated_keys);
 
             // todo(SpadeA): report regions to PD
+
             // self.fsm.peer.heartbeat_pd(self.ctx);
             // info!(
             //     self.store_ctx.logger,
@@ -272,6 +277,16 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     .insert(enc_end_key(&new_region), new_region_id)
                     .is_none();
                 assert!(not_exist, "[region {}] should not exist", new_region_id);
+
+                // recover the auto_compaction
+                // todo(SpadeA): is it possible that the previous setting for
+                // disable_auto_compaction is true?
+                let tablet = self.fsm.peer_mut().tablet_mut().latest().unwrap().clone();
+                for &cf in DATA_CFS {
+                    let mut cf_option = tablet.get_options_cf(cf).unwrap();
+                    cf_option.set_disable_auto_compactions(false);
+                }
+
                 continue;
             }
 
@@ -337,12 +352,13 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 }
             };
 
+            // todo(SpadeA)
             // let mut replication_state =
-            // self.ctx.global_replication_state.lock().unwrap();
-            // new_peer.peer.init_replication_mode(&mut replication_state);
+            // self.ctx.global_replication_state.lock().unwrap(); new_peer.peer.
+            // init_replication_mode(&mut replication_state);
             // drop(replication_state);
 
-            let meta_peer = new_peer.peer().peer.clone();
+            let meta_peer = new_peer.peer().peer().clone();
 
             for p in new_region.get_peers() {
                 // Add this peer to cache
@@ -351,24 +367,31 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
             // New peer derive write flow from parent region,
             // this will be used by balance write flow.
-            new_peer.peer_mut().peer_stat = self.fsm.peer().peer_stat.clone();
-            new_peer.peer_mut().last_compacted_idx = new_peer
+            new_peer
+                .peer_mut()
+                .set_peer_stat(self.fsm.peer().peer_stat().clone());
+            let last_compacted_idx = new_peer
                 .peer()
                 .storage()
                 .apply_state()
                 .get_truncated_state()
                 .get_index()
                 + 1;
+            new_peer
+                .peer_mut()
+                .set_last_compacted_idx(last_compacted_idx);
+
             let campaigned = new_peer.peer_mut().maybe_campaign(is_leader);
             new_peer.set_has_ready(new_peer.has_ready() | campaigned);
 
             if is_leader {
-                new_peer.peer_mut().approximate_size = estimated_size;
-                new_peer.peer_mut().approximate_keys = estimated_keys;
+                new_peer.peer_mut().set_approximate_size(estimated_size);
+                new_peer.peer_mut().set_approximate_keys(estimated_keys);
                 *new_peer.peer_mut().txn_ext.pessimistic_locks.write() = locks;
                 // The new peer is likely to become leader, send a
-                // heartbeatimmediately to reduce client query
-                // miss. new_peer.peer.heartbeat_pd(self.ctx);
+                // heartbeat immediately to reduce client query
+                // miss.
+                // new_peer.peer.heartbeat_pd(self.ctx);
             }
 
             meta.tablet_caches
@@ -388,9 +411,20 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
             if last_region_id == new_region_id {
                 // To prevent from big region, the right region needs run split
                 // check again after split.
-                // new_peer.peer().size_diff_hint =
-                // self.store_ctx.cfg.region_split_check_diff().0;
+                new_peer
+                    .peer_mut()
+                    .set_size_diff_hint(self.store_ctx.cfg.region_split_check_diff().0);
             }
+
+            // recover the auto_compaction
+            // todo(SpadeA): is it possible that the previous setting for
+            // disable_auto_compaction is true?
+            let tablet = new_peer.peer_mut().tablet_mut().latest().unwrap().clone();
+            for &cf in DATA_CFS {
+                let mut cf_option = tablet.get_options_cf(cf).unwrap();
+                cf_option.set_disable_auto_compactions(false);
+            }
+
             let mailbox =
                 BasicMailbox::new(sender, new_peer, self.store_ctx.router.state_cnt().clone());
             self.store_ctx.router.register(new_region_id, mailbox);

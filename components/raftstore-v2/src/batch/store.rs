@@ -329,7 +329,7 @@ where
     fn build(&mut self, priority: batch_system::Priority) -> Self::Handler {
         let cfg = self.cfg.value().clone();
         let poll_ctx = StoreContext {
-            store: metapb::Store::default(), // todo(SpadeA): FIXME
+            store: metapb::Store::default(), // todo(SpadeA)
             logger: self.logger.clone(),
             trans: self.trans.clone(),
             current_time: None,

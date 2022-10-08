@@ -21,7 +21,7 @@ use std::cmp;
 use batch_system::{Fsm, FsmScheduler, Mailbox};
 use engine_traits::{KvEngine, RaftEngine, WriteBatch, WriteOptions};
 use kvproto::{
-    raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader},
+    raft_cmdpb::{self, AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader},
     raft_serverpb::RegionLocalState,
 };
 use protobuf::Message;
@@ -320,6 +320,12 @@ impl<EK: KvEngine, ER: RaftEngine, R: ApplyResReporter> Apply<EK, ER, R> {
                 util::check_region_epoch(&req, self.region_state().get_region(), true)?;
                 if req.has_admin_request() {
                     // TODO: implement admin request.
+                    let req = req.get_admin_request();
+                    let (mut response, exec_result) = match req.get_cmd_type() {
+                        AdminCmdType::Split => unimplemented!(),
+                        AdminCmdType::BatchSplit => self.exec_batch_split(req, entry.index),
+                        _ => unimplemented!(),
+                    }?;
                 } else {
                     for r in req.get_requests() {
                         match r.get_cmd_type() {

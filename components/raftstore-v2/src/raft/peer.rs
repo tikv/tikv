@@ -48,7 +48,6 @@ const REGION_READ_PROGRESS_CAP: usize = 128;
 
 /// A peer that delegates commands between state machine and raft.
 pub struct Peer<EK: KvEngine, ER: RaftEngine> {
-    pub(crate) peer: metapb::Peer,
     raft_group: RawNode<Storage<ER>>,
     tablet: CachedTablet<EK>,
     /// We use a cache for looking up peers. Not all peers exist in region's
@@ -78,15 +77,23 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     pub(crate) region_buckets: Option<BucketStat>,
 
     /// Write Statistics for PD to schedule hot spot.
-    pub(crate) peer_stat: PeerStat,
+    peer_stat: PeerStat,
+
+    // An inaccurate difference in region size since last reset.
+    /// It is used to decide whether split check is needed.
+    size_diff_hint: u64,
+    /// Approximate size of the region.
+    approximate_size: Option<u64>,
+    /// Approximate keys of the region.
+    approximate_keys: Option<u64>,
+    /// Whether this region has scheduled a split check task. If we just
+    /// splitted  the region or ingested one file which may be overlapped
+    /// with the existed data, reset the flag so that the region can be
+    /// splitted again.
+    may_skip_split_check: bool,
     /// The index of last compacted raft log. It is used for the next compact
     /// log task.
-    pub(crate) last_compacted_idx: u64,
-
-    /// Approximate size of the region.
-    pub(crate) approximate_size: Option<u64>,
-    /// Approximate keys of the region.
-    pub(crate) approximate_keys: Option<u64>,
+    last_compacted_idx: u64,
 
     pending_reads: ReadIndexQueue<QueryResChannel>,
     read_progress: Arc<RegionReadProgress>,
@@ -151,7 +158,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let region = raft_group.store().region_state().get_region().clone();
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
         let mut peer = Peer {
-            peer: metapb::Peer::default(),
             tablet,
             peer_cache: vec![],
             raw_write_encoder: None,
@@ -171,8 +177,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }),
             peer_stat: PeerStat::default(),
             last_compacted_idx: 0,
+            size_diff_hint: 0,
             approximate_keys: None,
             approximate_size: None,
+            may_skip_split_check: false,
             pending_reads: ReadIndexQueue::new(tag.clone()),
             read_progress: Arc::new(RegionReadProgress::new(
                 &region,
@@ -486,6 +494,30 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.raft_group.raft.state
     }
 
+    pub fn peer_stat(&self) -> &PeerStat {
+        &self.peer_stat
+    }
+
+    pub fn set_peer_stat(&mut self, peer_stat: PeerStat) {
+        self.peer_stat = peer_stat;
+    }
+
+    pub fn last_compacted_idx(&self) -> u64 {
+        self.last_compacted_idx
+    }
+
+    pub fn set_last_compacted_idx(&mut self, last_compacted_idx: u64) {
+        self.last_compacted_idx = last_compacted_idx;
+    }
+
+    pub fn size_diff_hint(&self) -> u64 {
+        self.size_diff_hint
+    }
+
+    pub fn set_size_diff_hint(&mut self, size_diff_hint: u64) {
+        self.size_diff_hint = size_diff_hint;
+    }
+
     pub fn approximate_size(&self) -> Option<u64> {
         self.approximate_size
     }
@@ -500,6 +532,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     pub fn set_approximate_keys(&mut self, approximate_keys: Option<u64>) {
         self.approximate_keys = approximate_keys;
+    }
+
+    pub fn may_skip_split_check(&self) -> bool {
+        self.may_skip_split_check
+    }
+
+    pub fn set_may_skip_split_check(&mut self, may_skip_split_check: bool) {
+        self.may_skip_split_check = may_skip_split_check;
     }
 
     pub fn generate_read_delegate(&self) -> ReadDelegate {
