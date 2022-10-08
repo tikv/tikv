@@ -370,6 +370,22 @@ impl<E: KvEngine> fmt::Debug for PeerMsg<E> {
     }
 }
 
+impl<EK: KvEngine> PeerMsg<EK> {
+    pub fn tag(&self) -> &'static str {
+        match self {
+            PeerMsg::RaftMessage(_) => "raft_message",
+            PeerMsg::RaftCommand(_) => "raft_command",
+            PeerMsg::Tick(_) => "tick",
+            PeerMsg::ApplyRes { res: _ } => "apply_res",
+            PeerMsg::SignificantMsg(_) => "significant_msg",
+            PeerMsg::Start => "start",
+            PeerMsg::Noop => "noop",
+            PeerMsg::CasualMessage(_) => "casual_message",
+            PeerMsg::HeartbeatPd => "heartbeat_pd",
+        }
+    }
+}
+
 pub enum StoreMsg {
     RaftMessage(RaftMessage),
 

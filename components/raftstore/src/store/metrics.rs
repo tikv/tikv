@@ -253,4 +253,11 @@ lazy_static! {
             "collect topN of read qps",
         &["order"]
         ).unwrap();
+
+    pub static ref PEER_MSG_LEN: Histogram =
+        register_histogram!(
+            "tikv_raftstore_peer_msg_len",
+            "Length of peer msg.",
+            exponential_buckets(1.0, 2.0, 20).unwrap() // max 1000s
+        ).unwrap();
 }

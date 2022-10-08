@@ -30,7 +30,7 @@ use raft::eraftpb::{ConfChangeType, MessageType};
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use raft::{Ready, StateRole};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
-use tikv_util::time::duration_to_sec;
+use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::worker::{Scheduler, Stopped};
 use tikv_util::{escape, is_zero_duration};
 use txn_types::TxnExtra;
@@ -402,7 +402,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<RocksEngine>>) {
+        let timer = TiInstant::now_coarse();
+        let count = msgs.len();
         for m in msgs.drain(..) {
+            let timer1 = TiInstant::now_coarse();
+            let typ = m.tag();
             match m {
                 PeerMsg::RaftMessage(msg) => {
                     if let Err(e) = self.on_raft_message(msg) {
@@ -444,9 +448,16 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 }
                 PeerMsg::Noop => {}
             }
+            RAFT_EVENT_DURATION
+                .with_label_values(&[typ])
+                .observe(duration_to_sec(timer1.elapsed()) as f64);
         }
         // Propose batch request which may be still waiting for more raft-command
         self.propose_batch_raft_command();
+        PEER_MSG_LEN.observe(count as f64);
+        RAFT_EVENT_DURATION
+            .with_label_values(&["peer_msg"])
+            .observe(duration_to_sec(timer.elapsed()) as f64);
     }
 
     fn propose_batch_raft_command(&mut self) {
@@ -493,7 +504,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.on_schedule_half_split_region(&region_epoch, policy);
             }
             CasualMessage::GcSnap { snaps } => {
+                let timer = TiInstant::now_coarse();
                 self.on_gc_snap(snaps);
+                RAFT_EVENT_DURATION
+                    .with_label_values(&["peer_gc_snap"])
+                    .observe(duration_to_sec(timer.elapsed()) as f64);
             }
             CasualMessage::ClearRegionSize => {
                 self.on_clear_region_size();
@@ -702,7 +717,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 }
             }
             SignificantMsg::MergeResult { target, stale } => {
+                let timer = TiInstant::now_coarse();
                 self.on_merge_result(target, stale);
+                RAFT_EVENT_DURATION
+                    .with_label_values(&["merge_result"])
+                    .observe(duration_to_sec(timer.elapsed()) as f64);
             }
             SignificantMsg::CatchUpLogs(catch_up_logs) => {
                 self.on_catch_up_logs_for_merge(catch_up_logs);
@@ -1005,7 +1024,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             }
             ApplyTaskRes::Destroy { peer_id, .. } => {
                 assert_eq!(peer_id, self.fsm.peer.peer_id());
+                let timer = TiInstant::now_coarse();
                 self.destroy_peer(false);
+                RAFT_EVENT_DURATION
+                    .with_label_values(&["destroy_peer"])
+                    .observe(duration_to_sec(timer.elapsed()) as f64);
             }
         }
     }
@@ -2420,7 +2443,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     self.on_ready_compact_log(first_index, state)
                 }
                 ExecResult::SplitRegion { derived, regions } => {
-                    self.on_ready_split_region(derived, regions)
+                    let timer = TiInstant::now_coarse();
+                    self.on_ready_split_region(derived, regions);
+                    RAFT_EVENT_DURATION
+                        .with_label_values(&["split_region"])
+                        .observe(duration_to_sec(timer.elapsed()) as f64);
                 }
                 ExecResult::PrepareMerge { region, state } => {
                     self.on_ready_prepare_merge(region, state)
