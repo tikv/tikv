@@ -196,5 +196,5 @@ pub fn path_in_same_mount_point(path1: &str, path2: &str) -> bool {
     if path1_mount_point == path2_mount_point {
         return true;
     }
-    return false;
+    false
 }
