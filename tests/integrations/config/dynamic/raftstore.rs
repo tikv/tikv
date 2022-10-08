@@ -112,6 +112,7 @@ fn start_raftstore(
             CollectorRegHandle::new_for_test(),
             None,
             None,
+            None,
         )
         .unwrap();
 
