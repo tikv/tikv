@@ -254,6 +254,7 @@ where
                 self.snap_cache.cached_read_id = read_id.clone();
                 self.snap_cache.snapshot = Box::new(Some(Arc::new(engine.snapshot())));
 
+                // Ensures the snapshot is acquired before getting the time
                 atomic::fence(atomic::Ordering::Release);
                 self.snap_cache.cached_snapshot_ts = monotonic_raw_now();
 
@@ -264,6 +265,7 @@ where
             // request
             self.snapshot = Some(Arc::new(engine.snapshot()));
 
+            // Ensures the snapshot is acquired before getting the time
             atomic::fence(atomic::Ordering::Release);
             self.snapshot_ts = Some(monotonic_raw_now());
         }
