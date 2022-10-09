@@ -204,7 +204,7 @@ fn quote(bytes: BytesRef) -> Result<Option<Bytes>> {
     Ok(Some(result))
 }
 
-#[rpn_fn(nullable, raw_varg, min_args = 1)]
+#[rpn_fn(nullable, raw_varg, min_args = 1, max_args = 1)]
 #[inline]
 fn json_valid(args: &[ScalarValueRef]) -> Result<Option<Int>> {
     assert!(!args.is_empty() && args.len() == 1);
