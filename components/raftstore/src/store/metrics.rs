@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use prometheus::local::*;
 use prometheus::*;
 use prometheus_static_metric::*;
 
@@ -241,14 +242,14 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
-    pub static ref RAFT_EVENT_DURATION_VEC: RaftEventDurationVec =
-            register_static_histogram_vec!(
-            RaftEventDurationVec,
+    pub static ref RAFT_EVENT_DURATION_VEC: HistogramVec = register_histogram_vec!(
             "tikv_raftstore_event_duration",
             "Duration of raft store events.",
             &["type"],
             exponential_buckets(0.001, 1.59, 20).unwrap() // max 10s
         ).unwrap();
+    pub static ref RAFT_EVENT_DURATION_VEC_STATIC: RaftEventDurationVec =
+        RaftEventDurationVec::from(&RAFT_EVENT_DURATION_VEC);
 
     pub static ref RAFT_READ_INDEX_PENDING_DURATION: Histogram =
         register_histogram!(

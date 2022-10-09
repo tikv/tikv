@@ -18,9 +18,9 @@ use txn_types::TxnExtra;
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeCmd};
 use crate::store::fsm::PeerFsm;
+use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::SnapKey;
-use crate::store::metrics::RaftEventDurationType;
 use engine_rocks::CompactedEvent;
 use tikv_util::escape;
 
