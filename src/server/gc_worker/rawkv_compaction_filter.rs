@@ -391,7 +391,7 @@ pub mod tests {
 
         let engine = TestEngineBuilder::new()
             .api_version(ApiVersion::V2)
-            .build_with_cfg(&cfg, 0, 0)
+            .build_with_cfg(&cfg)
             .unwrap();
         let raw_engine = engine.get_rocksdb();
         let mut gc_runner = TestGcRunner::new(0);
@@ -455,7 +455,7 @@ pub mod tests {
     fn test_raw_call_gctask() {
         let engine = TestEngineBuilder::new()
             .api_version(ApiVersion::V2)
-            .build(0, 0)
+            .build()
             .unwrap();
         let raw_engine = engine.get_rocksdb();
         let mut gc_runner = TestGcRunner::new(0);

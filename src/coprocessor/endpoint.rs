@@ -860,7 +860,7 @@ mod tests {
 
     #[test]
     fn test_outdated_request() {
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig::default_for_test(),
             engine,
@@ -901,7 +901,7 @@ mod tests {
 
     #[test]
     fn test_stack_guard() {
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig::default_for_test(),
             engine,
@@ -939,7 +939,7 @@ mod tests {
 
     #[test]
     fn test_invalid_req_type() {
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig::default_for_test(),
             engine,
@@ -962,7 +962,7 @@ mod tests {
 
     #[test]
     fn test_invalid_req_body() {
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig::default_for_test(),
             engine,
@@ -992,7 +992,7 @@ mod tests {
 
         use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
 
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
 
         let read_pool = ReadPool::from(
             CoprReadPoolConfig {
@@ -1058,7 +1058,7 @@ mod tests {
 
     #[test]
     fn test_error_unary_response() {
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig::default_for_test(),
             engine,
@@ -1083,7 +1083,7 @@ mod tests {
 
     #[test]
     fn test_error_streaming_response() {
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig::default_for_test(),
             engine,
@@ -1136,7 +1136,7 @@ mod tests {
 
     #[test]
     fn test_empty_streaming_response() {
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig::default_for_test(),
             engine,
@@ -1164,7 +1164,7 @@ mod tests {
 
     #[test]
     fn test_special_streaming_handlers() {
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig::default_for_test(),
             engine,
@@ -1260,7 +1260,7 @@ mod tests {
 
     #[test]
     fn test_channel_size() {
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig::default_for_test(),
             engine,
@@ -1318,7 +1318,7 @@ mod tests {
         const PAYLOAD_SMALL: u64 = 3000;
         const PAYLOAD_LARGE: u64 = 6000;
 
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
 
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig {
@@ -1662,7 +1662,7 @@ mod tests {
 
     #[test]
     fn test_exceed_deadline() {
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig::default_for_test(),
             engine,
@@ -1709,7 +1709,7 @@ mod tests {
 
     #[test]
     fn test_check_memory_locks() {
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = ReadPool::from(build_read_pool_for_test(
             &CoprReadPoolConfig::default_for_test(),
             engine,

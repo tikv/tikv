@@ -190,7 +190,7 @@ pub mod tests {
 
     #[test]
     fn test_txn_heart_beat() {
-        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
         let (k, v) = (b"k1", b"v1");
 

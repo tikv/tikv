@@ -49,7 +49,7 @@ impl<F: KvFormat> SyncTestStorageBuilder<RocksEngine, F> {
         Self {
             engine: TestEngineBuilder::new()
                 .api_version(F::TAG)
-                .build(0, 0)
+                .build()
                 .unwrap(),
             config: None,
             gc_config: None,

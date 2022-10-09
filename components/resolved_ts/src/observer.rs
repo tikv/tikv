@@ -177,7 +177,7 @@ mod test {
     fn test_observing() {
         let (scheduler, mut rx) = dummy_scheduler();
         let observer = Observer::new(scheduler);
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap().get_rocksdb();
+        let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();
         let mut data = vec![
             put_cf(CF_LOCK, b"k1", b"v"),
             put_cf(CF_DEFAULT, b"k2", b"v"),

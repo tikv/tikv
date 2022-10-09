@@ -866,7 +866,7 @@ pub mod tests {
     #[test]
     fn test_async_commit_prewrite_check_max_commit_ts() {
         let mut engine = crate::storage::TestEngineBuilder::new()
-            .build(0, 0)
+            .build()
             .unwrap();
         let cm = ConcurrencyManager::new(42.into());
 
@@ -913,7 +913,7 @@ pub mod tests {
     #[test]
     fn test_async_commit_prewrite_min_commit_ts() {
         let mut engine = crate::storage::TestEngineBuilder::new()
-            .build(0, 0)
+            .build()
             .unwrap();
         let cm = ConcurrencyManager::new(41.into());
         let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -1047,7 +1047,7 @@ pub mod tests {
     #[test]
     fn test_1pc_check_max_commit_ts() {
         let mut engine = crate::storage::TestEngineBuilder::new()
-            .build(0, 0)
+            .build()
             .unwrap();
         let cm = ConcurrencyManager::new(42.into());
 
@@ -1130,7 +1130,7 @@ pub mod tests {
     #[test]
     fn test_async_commit_pessimistic_prewrite_check_max_commit_ts() {
         let mut engine = crate::storage::TestEngineBuilder::new()
-            .build(0, 0)
+            .build()
             .unwrap();
         let cm = ConcurrencyManager::new(42.into());
 
@@ -1182,7 +1182,7 @@ pub mod tests {
     #[test]
     fn test_1pc_pessimistic_prewrite_check_max_commit_ts() {
         let mut engine = crate::storage::TestEngineBuilder::new()
-            .build(0, 0)
+            .build()
             .unwrap();
         let cm = ConcurrencyManager::new(42.into());
 
@@ -1234,7 +1234,7 @@ pub mod tests {
     #[test]
     fn test_prewrite_check_gc_fence() {
         let mut engine = crate::storage::TestEngineBuilder::new()
-            .build(0, 0)
+            .build()
             .unwrap();
         let cm = ConcurrencyManager::new(1.into());
 
@@ -1414,7 +1414,7 @@ pub mod tests {
     #[test]
     fn test_resend_prewrite_non_pessimistic_lock() {
         let mut engine = crate::storage::TestEngineBuilder::new()
-            .build(0, 0)
+            .build()
             .unwrap();
 
         must_acquire_pessimistic_lock(&mut engine, b"k1", b"k1", 10, 10);
@@ -1620,7 +1620,7 @@ pub mod tests {
     #[test]
     fn test_old_value_rollback_and_lock() {
         let mut engine_rollback = crate::storage::TestEngineBuilder::new()
-            .build(0, 0)
+            .build()
             .unwrap();
 
         must_prewrite_put(&mut engine_rollback, b"k1", b"v1", b"k1", 10);
@@ -1630,7 +1630,7 @@ pub mod tests {
         must_rollback(&mut engine_rollback, b"k1", 40, false);
 
         let mut engine_lock = crate::storage::TestEngineBuilder::new()
-            .build(0, 0)
+            .build()
             .unwrap();
 
         must_prewrite_put(&mut engine_lock, b"k1", b"v1", b"k1", 10);
@@ -1694,7 +1694,7 @@ pub mod tests {
     #[test]
     fn test_old_value_put_delete_lock_insert() {
         let mut engine = crate::storage::TestEngineBuilder::new()
-            .build(0, 0)
+            .build()
             .unwrap();
         let start_ts = old_value_put_delete_lock_insert(&mut engine, b"k1");
         let txn_props = TransactionProperties {
@@ -1750,7 +1750,7 @@ pub mod tests {
 
         // Generate 1000 random cases;
         let mut engine = crate::storage::TestEngineBuilder::new()
-            .build(0, 0)
+            .build()
             .unwrap();
         let cases = 1000;
         for _ in 0..cases {
@@ -1904,7 +1904,7 @@ pub mod tests {
     #[test]
     fn test_prewrite_with_assertion() {
         let mut engine = crate::storage::TestEngineBuilder::new()
-            .build(0, 0)
+            .build()
             .unwrap();
 
         fn prewrite_put<E: Engine>(
@@ -2174,7 +2174,7 @@ pub mod tests {
     #[test]
     fn test_deferred_constraint_check() {
         let mut engine = crate::storage::TestEngineBuilder::new()
-            .build(0, 0)
+            .build()
             .unwrap();
         let key = b"key";
         let key2 = b"key2";

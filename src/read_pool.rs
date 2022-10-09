@@ -602,7 +602,7 @@ mod tests {
         };
         // max running tasks number should be 2*1 = 2
 
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let pool = build_yatp_read_pool(&config, DummyReporter, engine);
 
         let gen_task = || {
@@ -643,7 +643,7 @@ mod tests {
         };
         // max running tasks number should be 2*1 = 2
 
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let pool = build_yatp_read_pool(&config, DummyReporter, engine);
 
         let gen_task = || {
@@ -692,7 +692,7 @@ mod tests {
         };
         // max running tasks number should be 2*1 = 2
 
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let pool = build_yatp_read_pool(&config, DummyReporter, engine);
 
         let gen_task = || {

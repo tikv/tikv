@@ -502,7 +502,7 @@ mod tests {
     /// PUT     zz       -> zvzv....    (commit at 103)
     fn new_sample_engine() -> RocksEngine {
         let suffix = "v".repeat(SHORT_VALUE_MAX_LEN + 1);
-        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         must_prewrite_put(
             &mut engine,
             b"foo1",
@@ -566,7 +566,7 @@ mod tests {
     /// PUT     foo2    -> foo2vv...    (start at 4)
     fn new_sample_engine_2() -> RocksEngine {
         let suffix = "v".repeat(SHORT_VALUE_MAX_LEN + 1);
-        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         must_prewrite_put(
             &mut engine,
             b"foo1",
@@ -661,7 +661,7 @@ mod tests {
 
     #[test]
     fn test_use_prefix_seek() {
-        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         must_prewrite_put(&mut engine, b"foo1", b"bar1", b"foo1", 10);
         must_commit(&mut engine, b"foo1", 10, 20);
 
@@ -676,7 +676,7 @@ mod tests {
 
     #[test]
     fn test_tombstone() {
-        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
         must_prewrite_put(&mut engine, b"foo", b"bar", b"foo", 10);
         must_prewrite_put(&mut engine, b"foo1", b"bar1", b"foo", 10);
@@ -716,7 +716,7 @@ mod tests {
 
     #[test]
     fn test_with_iter_lower_bound() {
-        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         must_prewrite_put(&mut engine, b"foo", b"bar", b"foo", 10);
         must_commit(&mut engine, b"foo", 10, 20);
 
@@ -904,7 +904,7 @@ mod tests {
 
     #[test]
     fn test_get_latest_value() {
-        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
         let (key, val) = (b"foo", b"bar");
         must_prewrite_put(&mut engine, key, val, key, 10);
@@ -937,7 +937,7 @@ mod tests {
 
     #[test]
     fn test_get_bypass_locks() {
-        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
         let (key, val) = (b"foo", b"bar");
         must_prewrite_put(&mut engine, key, val, key, 10);
@@ -964,7 +964,7 @@ mod tests {
 
     #[test]
     fn test_get_access_locks() {
-        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let mut engine_clone = engine.clone();
         let mut build_getter = |ts: u64, bypass_locks, access_locks| {
             let snapshot = engine_clone.snapshot(Default::default()).unwrap();
@@ -1047,7 +1047,7 @@ mod tests {
 
     #[test]
     fn test_met_newer_ts_data() {
-        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
         let (key, val1) = (b"foo", b"bar1");
         must_prewrite_put(&mut engine, key, val1, key, 10);
@@ -1070,7 +1070,7 @@ mod tests {
 
     #[test]
     fn test_point_get_check_gc_fence() {
-        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
         // PUT,      Read
         //  `--------------^
@@ -1169,7 +1169,7 @@ mod tests {
 
     #[test]
     fn test_point_get_check_rc_ts() {
-        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
         let (key0, val0) = (b"k0", b"v0");
         must_prewrite_put(&mut engine, key0, val0, key0, 1);

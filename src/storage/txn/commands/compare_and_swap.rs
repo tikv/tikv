@@ -147,11 +147,15 @@ mod tests {
     /// `src/storage/mod.rs`.
     fn test_cas_basic_impl<F: KvFormat>() {
 <<<<<<< HEAD
+<<<<<<< HEAD
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let ts_provider = super::super::test_util::gen_ts_provider(F::TAG);
 =======
         let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 >>>>>>> f84f42812 (*: refactor TestTabletFactory)
+=======
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+>>>>>>> 658874f30 (*: revert unnecessary change)
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
         let key = b"rk";
 
@@ -241,12 +245,16 @@ mod tests {
 
     fn test_cas_process_write_impl<F: KvFormat>() {
 <<<<<<< HEAD
+<<<<<<< HEAD
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let ts_provider = super::super::test_util::gen_ts_provider(F::TAG);
 
 =======
         let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
 >>>>>>> f84f42812 (*: refactor TestTabletFactory)
+=======
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+>>>>>>> 658874f30 (*: revert unnecessary change)
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
         let raw_key = b"rk";
         let raw_value = b"valuek";

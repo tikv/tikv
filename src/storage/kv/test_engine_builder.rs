@@ -28,6 +28,8 @@ pub struct TestEngineBuilder {
     cfs: Option<Vec<CfName>>,
     io_rate_limiter: Option<Arc<IoRateLimiter>>,
     api_version: ApiVersion,
+    region_id: u64,
+    suffix_id: u64,
 }
 
 impl TestEngineBuilder {
@@ -37,6 +39,8 @@ impl TestEngineBuilder {
             cfs: None,
             io_rate_limiter: None,
             api_version: ApiVersion::V1,
+            region_id: 0,
+            suffix_id: 0,
         }
     }
 
@@ -66,31 +70,34 @@ impl TestEngineBuilder {
         self
     }
 
+    /// Called at multi-rocksdb scenarios
+    pub fn set_tablet_ids(mut self, region_id: u64, suffix_id: u64) -> Self {
+        self.region_id = region_id;
+        self.suffix_id = suffix_id;
+        self
+    }
+
     /// Build a `RocksEngine`.
-    pub fn build(self, region_id: u64, suffix_id: u64) -> Result<RocksEngine> {
+    pub fn build(self) -> Result<RocksEngine> {
         let cfg_rocksdb = crate::config::DbConfig::default();
-        self.do_build(&cfg_rocksdb, region_id, suffix_id, true)
+        self.do_build(&cfg_rocksdb,true)
     }
 
     pub fn build_with_cfg(
         self,
-        cfg_rocksdb: &crate::config::DbConfig,
-        region_id: u64,
-        suffix_id: u64,
+        cfg_rocksdb: &crate::config::DbConfig
     ) -> Result<RocksEngine> {
-        self.do_build(cfg_rocksdb, region_id, suffix_id, true)
+        self.do_build(cfg_rocksdb,true)
     }
 
-    pub fn build_without_cache(self, region_id: u64, suffix_id: u64) -> Result<RocksEngine> {
+    pub fn build_without_cache(self) -> Result<RocksEngine> {
         let cfg_rocksdb = crate::config::DbConfig::default();
-        self.do_build(&cfg_rocksdb, region_id, suffix_id, false)
+        self.do_build(&cfg_rocksdb,false)
     }
 
     fn do_build(
         self,
         cfg_rocksdb: &crate::config::DbConfig,
-        region_id: u64,
-        suffix_id: u64,
         enable_block_cache: bool,
     ) -> Result<RocksEngine> {
         let path = match self.path {
@@ -98,6 +105,8 @@ impl TestEngineBuilder {
             Some(p) => p.to_str().unwrap().to_owned(),
         };
         let api_version = self.api_version;
+        let region_id = self.region_id;
+        let suffix_id = self.suffix_id;
         let cfs = self.cfs.unwrap_or_else(|| ALL_CFS.to_vec());
         let mut cache_opt = BlockCacheConfig::default();
         if !enable_block_cache {
@@ -159,7 +168,7 @@ mod tests {
     fn test_rocksdb() {
         let mut engine = TestEngineBuilder::new()
             .cfs(TEST_ENGINE_CFS)
-            .build(0, 0)
+            .build()
             .unwrap();
         test_base_curd_options(&mut engine)
     }
@@ -168,7 +177,7 @@ mod tests {
     fn test_rocksdb_linear() {
         let mut engine = TestEngineBuilder::new()
             .cfs(TEST_ENGINE_CFS)
-            .build(0, 0)
+            .build()
             .unwrap();
         test_linear(&mut engine);
     }
@@ -177,7 +186,7 @@ mod tests {
     fn test_rocksdb_statistic() {
         let mut engine = TestEngineBuilder::new()
             .cfs(TEST_ENGINE_CFS)
-            .build(0, 0)
+            .build()
             .unwrap();
         test_cfs_statistics(&mut engine);
     }
@@ -192,7 +201,7 @@ mod tests {
             let engine = TestEngineBuilder::new()
                 .path(dir.path())
                 .cfs(TEST_ENGINE_CFS)
-                .build(0, 0)
+                .build()
                 .unwrap();
             must_put_cf(&engine, "cf", b"k", b"v1");
         }
@@ -200,7 +209,7 @@ mod tests {
             let mut engine = TestEngineBuilder::new()
                 .path(dir.path())
                 .cfs(TEST_ENGINE_CFS)
-                .build(0, 0)
+                .build()
                 .unwrap();
             assert_has_cf(&mut engine, "cf", b"k", b"v1");
         }
@@ -210,14 +219,14 @@ mod tests {
     fn test_rocksdb_perf_statistics() {
         let mut engine = TestEngineBuilder::new()
             .cfs(TEST_ENGINE_CFS)
-            .build(0, 0)
+            .build()
             .unwrap();
         test_perf_statistics(&mut engine);
     }
 
     #[test]
     fn test_max_skippable_internal_keys_error() {
-        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         must_put(&engine, b"foo", b"bar");
         must_delete(&engine, b"foo");
         must_put(&engine, b"foo1", b"bar1");
@@ -287,7 +296,7 @@ mod tests {
 
     #[test]
     fn test_prefix_seek_skip_tombstone() {
-        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         engine
             .put_cf(
                 &Context::default(),

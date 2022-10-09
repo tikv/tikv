@@ -152,7 +152,7 @@ pub mod tests {
     where
         F: Fn(&mut RocksEngine, &[u8], u64),
     {
-        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
         must_prewrite_put(&mut engine, k, v1, k, 5);
         must_commit(&mut engine, k, 5, 10);

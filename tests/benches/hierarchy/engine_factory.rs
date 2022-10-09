@@ -31,7 +31,7 @@ pub struct RocksEngineFactory {}
 
 impl EngineFactory<RocksEngine> for RocksEngineFactory {
     fn build(&self) -> RocksEngine {
-        TestEngineBuilder::new().build(0, 0).unwrap()
+        TestEngineBuilder::new().build().unwrap()
     }
 }
 

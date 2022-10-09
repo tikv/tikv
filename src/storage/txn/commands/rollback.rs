@@ -81,7 +81,7 @@ mod tests {
 
     #[test]
     fn rollback_lock_with_existing_rollback() {
-        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let (k1, k2) = (b"k1", b"k2");
         let v = b"v";
 

@@ -216,7 +216,7 @@ mod tests {
             ObserveHandle::new(),
             ObserveHandle::new(),
         );
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap().get_rocksdb();
+        let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();
 
         let mut cb = CmdBatch::new(&observe_info, 0);
         cb.push(&observe_info, 0, Cmd::default());

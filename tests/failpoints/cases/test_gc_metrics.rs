@@ -55,7 +55,7 @@ fn test_txn_create_compaction_filter() {
     cfg.writecf.dynamic_level_bytes = false;
     let dir = tempfile::TempDir::new().unwrap();
     let builder = TestEngineBuilder::new().path(dir.path());
-    let mut engine = builder.build_with_cfg(&cfg, 0, 0).unwrap();
+    let mut engine = builder.build_with_cfg(&cfg).unwrap();
     let raw_engine = engine.get_rocksdb();
 
     let mut gc_runner = TestGcRunner::new(0);
@@ -89,7 +89,7 @@ fn test_txn_mvcc_filtered() {
     MVCC_VERSIONS_HISTOGRAM.reset();
     GC_COMPACTION_FILTERED.reset();
 
-    let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
+    let mut engine = TestEngineBuilder::new().build().unwrap();
     let raw_engine = engine.get_rocksdb();
     let value = vec![b'v'; 512];
     let mut gc_runner = TestGcRunner::new(0);
@@ -135,7 +135,7 @@ fn test_txn_gc_keys_handled() {
     GC_COMPACTION_FILTER_MVCC_DELETION_MET.reset();
     GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.reset();
 
-    let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+    let engine = TestEngineBuilder::new().build().unwrap();
     let mut prefixed_engine = PrefixedEngine(engine.clone());
 
     let (tx, _rx) = mpsc::channel();
@@ -228,7 +228,7 @@ fn test_raw_mvcc_filtered() {
 
     let engine = TestEngineBuilder::new()
         .api_version(ApiVersion::V2)
-        .build_with_cfg(&cfg, 0, 0)
+        .build_with_cfg(&cfg)
         .unwrap();
     let raw_engine = engine.get_rocksdb();
     let mut gc_runner = TestGcRunner::new(0);
@@ -291,7 +291,7 @@ fn test_raw_gc_keys_handled() {
 
     let engine = TestEngineBuilder::new()
         .api_version(ApiVersion::V2)
-        .build(0, 0)
+        .build()
         .unwrap();
     let prefixed_engine = PrefixedEngine(engine.clone());
 

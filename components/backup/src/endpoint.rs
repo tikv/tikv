@@ -1286,7 +1286,7 @@ pub mod tests {
             ])
             .io_rate_limiter(limiter)
             .api_version(api_version)
-            .build(0, 0)
+            .build()
             .unwrap();
         let concurrency_manager = ConcurrencyManager::new(1.into());
         let need_encode_key = !is_raw_kv || api_version == ApiVersion::V2;

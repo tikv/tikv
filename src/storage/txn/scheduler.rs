@@ -1347,7 +1347,7 @@ mod tests {
 
     // TODO(cosven): use this in the following test cases to reduce duplicate code.
     fn new_test_scheduler() -> (Scheduler<RocksEngine, DummyLockManager>, RocksEngine) {
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let config = Config {
             scheduler_concurrency: 1024,
             scheduler_worker_pool_size: 1,
@@ -1495,7 +1495,7 @@ mod tests {
 
     #[test]
     fn test_acquire_latch_deadline() {
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let config = Config {
             scheduler_concurrency: 1024,
             scheduler_worker_pool_size: 1,
@@ -1600,7 +1600,7 @@ mod tests {
 
     #[test]
     fn test_pool_available_deadline() {
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let config = Config {
             scheduler_concurrency: 1024,
             scheduler_worker_pool_size: 1,
@@ -1659,7 +1659,7 @@ mod tests {
 
     #[test]
     fn test_flow_control_trottle_deadline() {
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let config = Config {
             scheduler_concurrency: 1024,
             scheduler_worker_pool_size: 1,
@@ -1726,7 +1726,7 @@ mod tests {
 
     #[test]
     fn test_accumulate_many_expired_commands() {
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let config = Config {
             scheduler_concurrency: 1024,
             scheduler_worker_pool_size: 1,
@@ -1785,7 +1785,7 @@ mod tests {
 
     #[test]
     fn test_pessimistic_lock_mode() {
-        let engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let engine = TestEngineBuilder::new().build().unwrap();
         let config = Config {
             scheduler_concurrency: 1024,
             scheduler_worker_pool_size: 1,

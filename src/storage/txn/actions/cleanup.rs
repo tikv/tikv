@@ -183,7 +183,7 @@ pub mod tests {
     #[test]
     fn test_must_cleanup_with_gc_fence() {
         // Tests the test util
-        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         must_prewrite_put(&mut engine, b"k", b"v", b"k", 10);
         must_commit(&mut engine, b"k", 10, 20);
         must_cleanup_with_gc_fence(&mut engine, b"k", 20, 0, 30, true);
@@ -196,7 +196,7 @@ pub mod tests {
     fn test_cleanup() {
         // Cleanup's logic is mostly similar to rollback, except the TTL check. Tests
         // that not related to TTL check should be covered by other test cases.
-        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
         // Shorthand for composing ts.
         let ts = TimeStamp::compose;

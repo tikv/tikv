@@ -33,7 +33,7 @@ fn test_ttl_checker_impl<F: KvFormat>() {
     let builder = TestEngineBuilder::new()
         .path(dir.path())
         .api_version(F::TAG);
-    let engine = builder.build_with_cfg(&cfg, 0, 0).unwrap();
+    let engine = builder.build_with_cfg(&cfg).unwrap();
 
     let kvdb = engine.get_rocksdb();
     let key1 = b"zr\0key1";
@@ -115,7 +115,7 @@ fn test_ttl_compaction_filter_impl<F: KvFormat>() {
     let builder = TestEngineBuilder::new()
         .path(dir.path())
         .api_version(F::TAG);
-    let engine = builder.build_with_cfg(&cfg, 0, 0).unwrap();
+    let engine = builder.build_with_cfg(&cfg).unwrap();
     let kvdb = engine.get_rocksdb();
 
     let key1 = b"zr\0key1";
@@ -179,7 +179,7 @@ fn test_ttl_snapshot_impl<F: KvFormat>() {
     let mut engine = TestEngineBuilder::new()
         .path(dir.path())
         .api_version(F::TAG)
-        .build(0, 0)
+        .build()
         .unwrap();
     let kvdb = engine.get_rocksdb();
 
@@ -276,7 +276,7 @@ fn test_ttl_iterator_impl<F: KvFormat>() {
     let mut engine = TestEngineBuilder::new()
         .path(dir.path())
         .api_version(F::TAG)
-        .build(0, 0)
+        .build()
         .unwrap();
     let kvdb = engine.get_rocksdb();
 

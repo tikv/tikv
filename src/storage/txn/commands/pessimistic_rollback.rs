@@ -151,7 +151,7 @@ pub mod tests {
 
     #[test]
     fn test_pessimistic_rollback() {
-        let mut engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
         let k = b"k1";
         let v = b"v1";

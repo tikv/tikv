@@ -315,7 +315,7 @@ mod tests {
 
     #[test]
     fn test_cmd_encode() {
-        let rocks_engine = TestEngineBuilder::new().build(0, 0).unwrap();
+        let rocks_engine = TestEngineBuilder::new().build().unwrap();
         let mut engine = MockEngineBuilder::from_rocks_engine(rocks_engine).build();
 
         let mut reqs = vec![Modify::Put("default", Key::from_raw(b"k1"), b"v1".to_vec()).into()];
