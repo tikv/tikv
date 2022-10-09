@@ -26,39 +26,43 @@ pub use self::{
     ttl::TtlPropertiesCollectorFactory,
 };
 
+/// A struct to help collect properties.
 #[derive(Clone, Debug, Default)]
-pub struct IndexHandle {
-    pub size: u64,   // The size of the stored block
-    pub offset: u64, // The offset of the block in the file
+pub struct PropIndex {
+    /// The properties calculated from the range. The range starts from
+    /// `offset`. How large the range is depends on the implementation.
+    pub prop: u64,
+    /// The offset in the file.
+    pub offset: u64,
 }
 
 #[derive(Debug, Default)]
-pub struct IndexHandles(BTreeMap<Vec<u8>, IndexHandle>);
+pub struct PropIndexes(BTreeMap<Vec<u8>, PropIndex>);
 
-impl Deref for IndexHandles {
-    type Target = BTreeMap<Vec<u8>, IndexHandle>;
-    fn deref(&self) -> &BTreeMap<Vec<u8>, IndexHandle> {
+impl Deref for PropIndexes {
+    type Target = BTreeMap<Vec<u8>, PropIndex>;
+    fn deref(&self) -> &BTreeMap<Vec<u8>, PropIndex> {
         &self.0
     }
 }
 
-impl DerefMut for IndexHandles {
-    fn deref_mut(&mut self) -> &mut BTreeMap<Vec<u8>, IndexHandle> {
+impl DerefMut for PropIndexes {
+    fn deref_mut(&mut self) -> &mut BTreeMap<Vec<u8>, PropIndex> {
         &mut self.0
     }
 }
 
-impl IndexHandles {
-    pub fn new() -> IndexHandles {
-        IndexHandles(BTreeMap::new())
+impl PropIndexes {
+    pub fn new() -> PropIndexes {
+        PropIndexes(BTreeMap::new())
     }
 
-    pub fn into_map(self) -> BTreeMap<Vec<u8>, IndexHandle> {
+    pub fn into_map(self) -> BTreeMap<Vec<u8>, PropIndex> {
         self.0
     }
 
-    pub fn add(&mut self, key: Vec<u8>, index_handle: IndexHandle) {
-        self.0.insert(key, index_handle);
+    pub fn add(&mut self, key: Vec<u8>, index: PropIndex) {
+        self.0.insert(key, index);
     }
 
     // Format: | klen | k | v.size | v.offset |
@@ -68,25 +72,25 @@ impl IndexHandles {
         for (k, v) in &self.0 {
             buf.write_u64(k.len() as u64).unwrap();
             buf.extend(k);
-            buf.write_u64(v.size).unwrap();
+            buf.write_u64(v.prop).unwrap();
             buf.write_u64(v.offset).unwrap();
         }
         buf
     }
 
-    pub fn decode(mut buf: &[u8]) -> codec::Result<IndexHandles> {
+    pub fn decode(mut buf: &[u8]) -> codec::Result<PropIndexes> {
         let mut res = BTreeMap::new();
         while !buf.is_empty() {
             let klen = buf.read_u64()?;
             let mut k = vec![0; klen as usize];
             buf.read_exact(&mut k)?;
-            let v = IndexHandle {
-                size: buf.read_u64()?,
+            let v = PropIndex {
+                prop: buf.read_u64()?,
                 offset: buf.read_u64()?,
             };
             res.insert(k, v);
         }
-        Ok(IndexHandles(res))
+        Ok(PropIndexes(res))
     }
 }
 
@@ -101,8 +105,8 @@ trait EncodeProperties {
     }
 
     #[inline]
-    fn encode_handles(&mut self, name: &str, handles: &IndexHandles) {
-        self.encode(name, &handles.encode());
+    fn encode_indexes(&mut self, name: &str, indexes: &PropIndexes) {
+        self.encode(name, &indexes.encode());
     }
 }
 
@@ -130,9 +134,9 @@ trait DecodeProperties {
     }
 
     #[inline]
-    fn decode_handles(&self, k: &str) -> codec::Result<IndexHandles> {
+    fn decode_indexes(&self, k: &str) -> codec::Result<PropIndexes> {
         let buf = self.decode(k)?;
-        IndexHandles::decode(buf)
+        PropIndexes::decode(buf)
     }
 }
 

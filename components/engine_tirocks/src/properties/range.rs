@@ -13,7 +13,7 @@ use tirocks::{
     titan::TitanBlobIndex,
 };
 
-use super::{mvcc::decode_mvcc, DecodeProperties, EncodeProperties, IndexHandles};
+use super::{mvcc::decode_mvcc, DecodeProperties, EncodeProperties, PropIndexes};
 use crate::RocksEngine;
 
 const PROP_TOTAL_SIZE: &str = "tikv.total_size";
@@ -26,14 +26,14 @@ pub const DEFAULT_PROP_KEYS_INDEX_DISTANCE: u64 = 40 * 1024;
 #[derive(Debug, Default)]
 pub struct SizeProperties {
     pub total_size: u64,
-    pub index_handles: IndexHandles,
+    pub prop_indexes: PropIndexes,
 }
 
 impl SizeProperties {
     fn decode(props: &impl DecodeProperties) -> codec::Result<SizeProperties> {
         Ok(SizeProperties {
             total_size: props.decode_u64(PROP_TOTAL_SIZE)?,
-            index_handles: props.decode_handles(PROP_SIZE_INDEX)?,
+            prop_indexes: props.decode_indexes(PROP_SIZE_INDEX)?,
         })
     }
 }
@@ -182,7 +182,7 @@ impl RangeProperties {
 impl From<SizeProperties> for RangeProperties {
     fn from(p: SizeProperties) -> RangeProperties {
         let mut res = RangeProperties::default();
-        for (key, size_handle) in p.index_handles.into_map() {
+        for (key, size_handle) in p.prop_indexes.into_map() {
             let range = RangeOffsets {
                 size: size_handle.offset,
                 ..Default::default()

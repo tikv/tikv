@@ -10,7 +10,7 @@ use tirocks::properties::table::user::{
 };
 use txn_types::{Key, TimeStamp, Write, WriteType};
 
-use super::{DecodeProperties, EncodeProperties, IndexHandle, IndexHandles};
+use super::{DecodeProperties, EncodeProperties, PropIndex, PropIndexes};
 use crate::RocksEngine;
 
 pub const PROP_NUM_ERRORS: &str = "tikv.num_errors";
@@ -32,8 +32,8 @@ pub struct MvccPropertiesCollector {
     last_row: Vec<u8>,
     num_errors: u64,
     row_versions: u64,
-    cur_index_handle: IndexHandle,
-    row_index_handles: IndexHandles,
+    cur_prop_index: PropIndex,
+    row_prop_indexes: PropIndexes,
     key_mode: KeyMode, // Use KeyMode::Txn for both TiDB & TxnKV, KeyMode::Raw for RawKV.
     current_ts: u64,
 }
@@ -46,8 +46,8 @@ impl MvccPropertiesCollector {
             last_row: Vec::new(),
             num_errors: 0,
             row_versions: 0,
-            cur_index_handle: IndexHandle::default(),
-            row_index_handles: IndexHandles::new(),
+            cur_prop_index: PropIndex::default(),
+            row_prop_indexes: PropIndexes::new(),
             key_mode,
             current_ts: ttl_current_ts(),
         }
@@ -55,13 +55,13 @@ impl MvccPropertiesCollector {
 
     fn finish(&mut self, properties: &mut impl EncodeProperties) {
         // Insert last handle.
-        if self.cur_index_handle.size > 0 {
-            self.row_index_handles
-                .insert(self.last_row.clone(), self.cur_index_handle.clone());
+        if self.cur_prop_index.prop > 0 {
+            self.row_prop_indexes
+                .insert(self.last_row.clone(), self.cur_prop_index.clone());
         }
         encode_mvcc(&self.props, properties);
         properties.encode_u64(PROP_NUM_ERRORS, self.num_errors);
-        properties.encode_handles(PROP_ROWS_INDEX, &self.row_index_handles);
+        properties.encode_indexes(PROP_ROWS_INDEX, &self.row_prop_indexes);
     }
 }
 
@@ -151,14 +151,14 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
 
         // Add new row.
         if self.row_versions == 1 {
-            self.cur_index_handle.size += 1;
-            self.cur_index_handle.offset += 1;
-            if self.cur_index_handle.offset == 1
-                || self.cur_index_handle.size >= PROP_ROWS_INDEX_DISTANCE
+            self.cur_prop_index.prop += 1;
+            self.cur_prop_index.offset += 1;
+            if self.cur_prop_index.offset == 1
+                || self.cur_prop_index.prop >= PROP_ROWS_INDEX_DISTANCE
             {
-                self.row_index_handles
-                    .insert(self.last_row.clone(), self.cur_index_handle.clone());
-                self.cur_index_handle.size = 0;
+                self.row_prop_indexes
+                    .insert(self.last_row.clone(), self.cur_prop_index.clone());
+                self.cur_prop_index.prop = 0;
             }
         }
         Ok(())
