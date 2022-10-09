@@ -80,19 +80,16 @@ impl TestEngineBuilder {
     /// Build a `RocksEngine`.
     pub fn build(self) -> Result<RocksEngine> {
         let cfg_rocksdb = crate::config::DbConfig::default();
-        self.do_build(&cfg_rocksdb,true)
+        self.do_build(&cfg_rocksdb, true)
     }
 
-    pub fn build_with_cfg(
-        self,
-        cfg_rocksdb: &crate::config::DbConfig
-    ) -> Result<RocksEngine> {
-        self.do_build(cfg_rocksdb,true)
+    pub fn build_with_cfg(self, cfg_rocksdb: &crate::config::DbConfig) -> Result<RocksEngine> {
+        self.do_build(cfg_rocksdb, true)
     }
 
     pub fn build_without_cache(self) -> Result<RocksEngine> {
         let cfg_rocksdb = crate::config::DbConfig::default();
-        self.do_build(&cfg_rocksdb,false)
+        self.do_build(&cfg_rocksdb, false)
     }
 
     fn do_build(

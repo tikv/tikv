@@ -8851,9 +8851,8 @@ mod tests {
 
         impl<T: 'static + StorageCallbackType + Send> Case<T> {
             fn run(self) {
-                let mut builder = MockEngineBuilder::from_rocks_engine(
-                    TestEngineBuilder::new().build().unwrap(),
-                );
+                let mut builder =
+                    MockEngineBuilder::from_rocks_engine(TestEngineBuilder::new().build().unwrap());
                 for expected_write in self.expected_writes {
                     builder = builder.add_expected_write(expected_write)
                 }
