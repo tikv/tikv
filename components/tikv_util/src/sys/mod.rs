@@ -163,29 +163,27 @@ pub fn cache_line_size(level: usize) -> Option<u64> {
 
 pub fn path_in_diff_mount_point(path1: &str, path2: &str) -> bool {
     if path1.is_empty() || path2.is_empty() {
-        return true;
+        return false;
     }
     let path1 = PathBuf::from(path1);
     let path2 = PathBuf::from(path2);
     match (get_mount(&path1), get_mount(&path2)) {
         (Err(e1), _) => {
             warn!("Get mount point error for path {}, {}", path1.display(), e1);
-            return false;
+            false
         }
         (_, Err(e2)) => {
             warn!("Get mount point error for path {}, {}", path2.display(), e2);
-            return false;
+            false
         }
         (Ok(None), _) => {
             warn!("No mount point for {}", path1.display());
-            return false;
+            false
         }
         (_, Ok(None)) => {
             warn!("No mount point for {}", path2.display());
-            return false;
+            false
         }
-        (Ok(Some(mount1)), Ok(Some(mount2))) => {
-            return mount1 != mount2;
-        }
+        (Ok(Some(mount1)), Ok(Some(mount2))) => mount1 != mount2,
     }
 }

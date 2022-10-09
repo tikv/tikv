@@ -116,7 +116,10 @@ use tikv_util::{
     math::MovingAvgU32,
     metrics::INSTANCE_BACKEND_CPU_QUOTA,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
-    sys::{cpu_time::ProcessStat, disk, register_memory_usage_high_water, SysQuota},
+    sys::{
+        cpu_time::ProcessStat, disk, path_in_diff_mount_point, register_memory_usage_high_water,
+        SysQuota,
+    },
     thread_group::GroupProperties,
     time::{Instant, Monitor},
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
@@ -1452,9 +1455,9 @@ where
             info!("disk space checker not enabled");
             return;
         }
-        let enable_raft_engine = self.config.raft_engine.enable;
-        let raft_db_path = self.config.raft_store.raftdb_path.clone();
-        let separate_raft_db = (!enable_raft_engine) && (!raft_db_path.is_empty());
+        let raft_path = engines.raft.path().to_string();
+        let separate_raft_path =
+            path_in_diff_mount_point(raft_path.as_str(), MiscExt::path(&engines.kv));
         let raftdb_almost_full_percent = self.config.raft_store.raftdb_almost_full_percent;
 
         let almost_full_threshold = reserve_space;
@@ -1486,12 +1489,12 @@ where
                     .expect("get raft engine size");
 
                 let mut raftdb_disk_status = disk::DiskUsage::Normal;
-                if separate_raft_db {
-                    let raftdb_disk_stats = match fs2::statvfs(&raft_db_path) {
+                if separate_raft_path {
+                    let raftdb_disk_stats = match fs2::statvfs(&raft_path) {
                         Err(e) => {
                             error!(
                                 "get disk stat for raftdb failed";
-                                "raftdb path" => raft_db_path.clone(),
+                                "raftdb path" => raft_path.clone(),
                                 "err" => ?e
                             );
                             return;
@@ -1521,7 +1524,7 @@ where
                 let placeholder_size: u64 =
                     file_system::get_file_size(&placeholer_file_path).unwrap_or(0);
 
-                let used_size = if !separate_raft_db {
+                let used_size = if !separate_raft_path {
                     snap_size + kv_size + raft_size + placeholder_size
                 } else {
                     snap_size + kv_size + placeholder_size
@@ -1557,7 +1560,7 @@ where
                         cur_disk_status,
                         raftdb_disk_status,
                         cur_kv_disk_status,
-                        separate_raft_db,
+                        separate_raft_path,
                         available,
                         snap_size,
                         kv_size,
