@@ -30,7 +30,10 @@ use raftstore::{
     store::{
         cmd_resp,
         fsm::{
-            apply::{APPLY_WB_SHRINK_SIZE, DEFAULT_APPLY_WB_SIZE, SHRINK_PENDING_CMD_QUEUE_CAP},
+            apply::{
+                ApplyResult, APPLY_WB_SHRINK_SIZE, DEFAULT_APPLY_WB_SIZE,
+                SHRINK_PENDING_CMD_QUEUE_CAP,
+            },
             Proposal,
         },
         local_metrics::RaftMetrics,
@@ -40,14 +43,14 @@ use raftstore::{
     },
     Error, Result,
 };
-use slog::error;
+use slog::{error, info};
 use tikv_util::{box_err, time::monotonic_raw_now};
 
 use crate::{
     batch::StoreContext,
     fsm::{ApplyFsm, ApplyResReporter, PeerFsmDelegate},
     raft::{Apply, Peer},
-    router::{ApplyRes, ApplyTask, CmdResChannel, PeerMsg},
+    router::{ApplyRes, ApplyTask, CmdResChannel, ExecResult, PeerMsg},
 };
 
 mod write;
@@ -320,12 +323,9 @@ impl<EK: KvEngine, ER: RaftEngine, R: ApplyResReporter> Apply<EK, ER, R> {
                 util::check_region_epoch(&req, self.region_state().get_region(), true)?;
                 if req.has_admin_request() {
                     // TODO: implement admin request.
-                    let req = req.get_admin_request();
-                    let (mut response, exec_result) = match req.get_cmd_type() {
-                        AdminCmdType::Split => unimplemented!(),
-                        AdminCmdType::BatchSplit => self.exec_batch_split(req, entry.index),
-                        _ => unimplemented!(),
-                    }?;
+                    let (resp, exec_res) = self.exec_admin_cmd(&req, entry)?;
+                    self.push_exec_result(exec_res);
+                    Ok(resp)
                 } else {
                     for r in req.get_requests() {
                         match r.get_cmd_type() {
@@ -351,10 +351,46 @@ impl<EK: KvEngine, ER: RaftEngine, R: ApplyResReporter> Apply<EK, ER, R> {
                             _ => unimplemented!(),
                         }
                     }
+                    Ok(new_response(req.get_header()))
                 }
-                Ok(new_response(req.get_header()))
             }
         }
+    }
+
+    fn exec_admin_cmd(
+        &mut self,
+        req: &RaftCmdRequest,
+        entry: &Entry,
+    ) -> Result<(RaftCmdResponse, ExecResult)> {
+        let request = req.get_admin_request();
+        let cmd_type = request.get_cmd_type();
+        if cmd_type != AdminCmdType::CompactLog && cmd_type != AdminCmdType::CommitMerge {
+            // info!(
+            //     self.logger,
+            //     "execute admin command";
+            //     "region_id" => self.region_state().get_region().id,
+            //     "peer_id" => self.id(),
+            //     "term" => ctx.exec_log_term,
+            //     "index" => ctx.exec_log_index,
+            //     "command" => ?request,
+            // );
+        }
+
+        let (mut response, exec_result) = match cmd_type {
+            AdminCmdType::Split => unimplemented!(),
+            AdminCmdType::BatchSplit => self.exec_batch_split(request, entry.index),
+            _ => unimplemented!(),
+        }?;
+
+        response.set_cmd_type(cmd_type);
+
+        let mut resp = RaftCmdResponse::default();
+        if !req.get_header().get_uuid().is_empty() {
+            let uuid = req.get_header().get_uuid().to_vec();
+            resp.mut_header().set_uuid(uuid);
+        }
+        resp.set_admin_response(response);
+        Ok((resp, exec_result))
     }
 
     #[inline]

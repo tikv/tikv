@@ -17,12 +17,9 @@ use kvproto::{
 use raftstore::{
     coprocessor::RegionChangeReason,
     store::{
-        fsm::{
-            apply::{
-                self, amend_new_split_regions, init_split_regions, validate_and_get_split_keys,
-                ApplyResult, NewSplitPeer,
-            },
-            ExecResult,
+        fsm::apply::{
+            self, amend_new_split_regions, init_split_regions, validate_and_get_split_keys,
+            ApplyResult, NewSplitPeer,
         },
         metrics::PEER_ADMIN_CMD_COUNTER,
         util::{self, KeysInfoFormatter},
@@ -37,7 +34,7 @@ use time::Timespec;
 use crate::{
     fsm::{PeerFsm, PeerFsmDelegate},
     raft::{write_initial_states, write_peer_state, Apply, Peer, Storage},
-    router::PeerMsg,
+    router::{ApplyRes, ExecResult, PeerMsg},
 };
 
 fn hard_link_tablet(
@@ -58,7 +55,7 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
         &mut self,
         req: &AdminRequest,
         log_index: u64,
-    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+    ) -> Result<(AdminResponse, ExecResult)> {
         PEER_ADMIN_CMD_COUNTER.batch_split.all.inc();
 
         let split_reqs = req.get_splits();
@@ -174,11 +171,11 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
 
         Ok((
             resp,
-            ApplyResult::Res(ExecResult::SplitRegion {
+            ExecResult::SplitRegion {
                 regions,
                 derived,
                 new_split_regions,
-            }),
+            },
         ))
     }
 }

@@ -9,4 +9,5 @@ mod cluster;
 mod test_basic_write;
 mod test_life;
 mod test_read;
+mod test_split;
 mod test_status;

@@ -1,6 +1,9 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex},
+};
 
 use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine, TabletFactory};
@@ -11,7 +14,7 @@ use slog::Logger;
 use super::Peer;
 use crate::{
     fsm::ApplyResReporter,
-    router::{ApplyRes, CmdResChannel},
+    router::{ApplyRes, CmdResChannel, ExecResult},
     tablet::CachedTablet,
 };
 
@@ -38,6 +41,8 @@ pub struct Apply<EK: KvEngine, ER: RaftEngine, R> {
     /// An uninitialized peer can be replaced to the one from splitting iff they
     /// are exactly the same peer.
     pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+
+    exec_results: VecDeque<ExecResult>,
 
     res_reporter: R,
     pub(crate) logger: Logger,
@@ -67,6 +72,7 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
             pending_create_peers: Arc::default(), // todo(SpadeA): init by parameter
             raft_engine,
             tablet_factory,
+            exec_results: VecDeque::new(),
             res_reporter,
             logger,
         }
@@ -119,6 +125,16 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
     #[inline]
     pub fn reset_state_changed(&mut self) -> bool {
         std::mem::take(&mut self.state_changed)
+    }
+
+    #[inline]
+    pub fn push_exec_result(&mut self, exec_result: ExecResult) {
+        self.exec_results.push_back(exec_result);
+    }
+
+    #[inline]
+    pub fn take_exec_result(&mut self) -> VecDeque<ExecResult> {
+        std::mem::take(&mut self.exec_results)
     }
 
     #[inline]
