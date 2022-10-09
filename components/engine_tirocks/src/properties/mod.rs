@@ -27,12 +27,17 @@ pub use self::{
 };
 
 /// A struct to help collect properties.
+///
+/// The properties of a file can be collected by ranges. Every range will be
+/// referenced by a `PropIndex`.
 #[derive(Clone, Debug, Default)]
 pub struct PropIndex {
     /// The properties calculated from the range. The range starts from
-    /// `offset`. How large the range is depends on the implementation.
+    /// `offset` of previous `PropIndex` to this `offset`. How large the range
+    /// is depends on the implementation.
     pub prop: u64,
-    /// The offset in the file.
+    /// The offset in the file. Offsets are not necessary the size of file. It
+    /// only makes sense to the implementations.
     pub offset: u64,
 }
 

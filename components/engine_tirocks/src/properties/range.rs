@@ -182,9 +182,10 @@ impl RangeProperties {
 impl From<SizeProperties> for RangeProperties {
     fn from(p: SizeProperties) -> RangeProperties {
         let mut res = RangeProperties::default();
-        for (key, size_handle) in p.prop_indexes.into_map() {
+        for (key, size_index) in p.prop_indexes.into_map() {
             let range = RangeOffsets {
-                size: size_handle.offset,
+                // For SizeProperties, the offset is accumulation of the size.
+                size: size_index.offset,
                 ..Default::default()
             };
             res.offsets.push((key, range));
