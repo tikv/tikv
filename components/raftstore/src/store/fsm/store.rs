@@ -454,8 +454,8 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             StoreTick::CleanupImportSST => self.on_cleanup_import_sst_tick(),
         }
         let elapsed = t.elapsed();
-        RAFT_EVENT_DURATION
-            .with_label_values(&[tick.tag()])
+        RAFT_EVENT_DURATION_VEC
+            .get(tick.tag())
             .observe(duration_to_sec(elapsed) as f64);
         slow_log!(
             elapsed,

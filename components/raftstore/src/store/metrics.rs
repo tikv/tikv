@@ -1,6 +1,37 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use prometheus::*;
+use prometheus_static_metric::*;
+
+make_static_metric! {
+    pub label_enum RaftEventDurationType {
+        compact_check,
+        pd_store_heartbeat,
+        snap_gc,
+        compact_lock_cf,
+        consistency_check,
+        cleanup_import_sst,
+        raft_engine_purge,
+        peer_msg,
+        destroy_peer,
+        split_region,
+        peer_gc_snap,
+        merge_result,
+        raft_message,
+        raft_command,
+        tick,
+        apply_res,
+        significant_msg,
+        start,
+        noop,
+        casual_message,
+        heartbeat_pd,
+    }
+
+    pub struct RaftEventDurationVec: Histogram {
+        "type" => RaftEventDurationType,
+    }
+}
 
 lazy_static! {
     pub static ref PEER_PROPOSAL_COUNTER_VEC: IntCounterVec =
@@ -210,8 +241,9 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
-    pub static ref RAFT_EVENT_DURATION: HistogramVec =
-        register_histogram_vec!(
+    pub static ref RAFT_EVENT_DURATION_VEC: RaftEventDurationVec =
+            register_static_histogram_vec!(
+            RaftEventDurationVec,
             "tikv_raftstore_event_duration",
             "Duration of raft store events.",
             &["type"],
