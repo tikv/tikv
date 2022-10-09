@@ -376,7 +376,7 @@ impl<EK: KvEngine> PeerMsg<EK> {
             PeerMsg::RaftMessage(_) => "raft_message",
             PeerMsg::RaftCommand(_) => "raft_command",
             PeerMsg::Tick(_) => "tick",
-            PeerMsg::ApplyRes { res: _ } => "apply_res",
+            PeerMsg::ApplyRes { .. } => "apply_res",
             PeerMsg::SignificantMsg(_) => "significant_msg",
             PeerMsg::Start => "start",
             PeerMsg::Noop => "noop",
