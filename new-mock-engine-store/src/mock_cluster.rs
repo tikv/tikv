@@ -21,6 +21,7 @@ use file_system::IoRateLimiter;
 use futures::executor::block_on;
 use kvproto::{
     errorpb::Error as PbError,
+    kvrpcpb::*,
     metapb::{self, PeerRole, RegionEpoch, StoreLabel},
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Request, *},
     raft_serverpb::RaftMessage,
@@ -51,7 +52,7 @@ pub use test_raftstore::{
     new_region_leader_cmd, new_request, new_status_request, new_store, new_tikv_config,
     new_transfer_leader_cmd, sleep_ms,
 };
-use tikv::{config::TikvConfig, server::Result as ServerResult};
+use tikv::{config::TikvConfig, server::Result as ServerResult, storage::mvcc::TimeStamp};
 use tikv_util::{
     debug, error, escape, safe_panic,
     sys::SysQuota,
@@ -82,6 +83,11 @@ pub struct EngineHelperSet {
     pub engine_store_server_helper: Box<engine_store_ffi::EngineStoreServerHelper>,
 }
 
+pub struct TestData {
+    pub expected_leader_safe_ts: u64,
+    pub expected_self_safe_ts: u64,
+}
+
 pub struct Cluster<T: Simulator<TiFlashEngine>> {
     // Helper to set ffi_helper_set.
     ffi_helper_lst: Vec<FFIHelperSet>,
@@ -101,6 +107,7 @@ pub struct Cluster<T: Simulator<TiFlashEngine>> {
     pub group_props: HashMap<u64, GroupProperties>,
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
+    pub test_data: TestData,
 }
 
 impl<T: Simulator<TiFlashEngine>> Cluster<T> {
@@ -139,6 +146,10 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
             group_props: HashMap::default(),
             sim,
             pd_client,
+            test_data: TestData {
+                expected_leader_safe_ts: 0,
+                expected_self_safe_ts: 0,
+            },
         }
     }
 
@@ -368,6 +379,11 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
             self.associate_ffi_helper_set(None, node_id);
         }
         Ok(())
+    }
+
+    pub fn set_expected_safe_ts(&mut self, leader_safe_ts: u64, self_safe_ts: u64) {
+        self.test_data.expected_leader_safe_ts = leader_safe_ts;
+        self.test_data.expected_self_safe_ts = self_safe_ts;
     }
 }
 

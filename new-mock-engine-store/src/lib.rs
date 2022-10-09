@@ -26,11 +26,12 @@ pub use mock_cluster::{
 use protobuf::Message;
 use tikv_util::{debug, error, info, warn};
 
-use crate::config::MockConfig;
+use crate::{config::MockConfig, server::ServerCluster};
 
 pub mod config;
 pub mod mock_cluster;
 pub mod node;
+pub mod server;
 pub mod transport_simulate;
 
 type RegionId = u64;
@@ -660,7 +661,7 @@ pub fn gen_engine_store_server_helper(
         fn_get_config: None,
         fn_set_store: None,
         fn_set_pb_msg_by_bytes: Some(ffi_set_pb_msg_by_bytes),
-        fn_handle_safe_ts_update: None,
+        fn_handle_safe_ts_update: Some(ffi_handle_safe_ts_update),
     }
 }
 
@@ -1048,6 +1049,18 @@ pub fn cf_to_name(cf: ffi_interfaces::ColumnFamilyType) -> &'static str {
         ffi_interfaces::ColumnFamilyType::Default => CF_DEFAULT,
         _ => unreachable!(),
     }
+}
+
+unsafe extern "C" fn ffi_handle_safe_ts_update(
+    arg1: *mut ffi_interfaces::EngineStoreServerWrap,
+    _region_id: u64,
+    self_safe_ts: u64,
+    leader_safe_ts: u64,
+) {
+    let store = into_engine_store_server_wrap(arg1);
+    let cluster = store.cluster_ptr as *const mock_cluster::Cluster<ServerCluster>;
+    assert_eq!(self_safe_ts, (*cluster).test_data.expected_self_safe_ts);
+    assert_eq!(leader_safe_ts, (*cluster).test_data.expected_leader_safe_ts);
 }
 
 unsafe extern "C" fn ffi_apply_pre_handled_snapshot(
