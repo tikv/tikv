@@ -853,6 +853,10 @@ impl FlashbackState {
         FlashbackState(ch)
     }
 
+    pub fn channel_is_none(&self) -> bool {
+        self.0.is_none()
+    }
+
     pub fn finish_wait_apply(&mut self) {
         if self.0.is_none() {
             return;

@@ -280,6 +280,21 @@ pub fn compare_region_epoch(
     Ok(())
 }
 
+pub fn check_flashback_state(req: &RaftCmdRequest, region: &metapb::Region) -> Result<()> {
+    // If admin flashback has not been applied but the region is already in a
+    // flashback state, the request is rejected
+    if region.get_is_in_flashback() {
+        if req.has_admin_request()
+            && (req.get_admin_request().get_cmd_type() == AdminCmdType::PrepareFlashback
+                || req.get_admin_request().get_cmd_type() == AdminCmdType::FinishFlashback)
+        {
+            return Ok(());
+        }
+        return Err(Error::FlashbackInProgress(region.get_id()));
+    }
+    Ok(())
+}
+
 pub fn is_region_epoch_equal(
     from_epoch: &metapb::RegionEpoch,
     current_epoch: &metapb::RegionEpoch,

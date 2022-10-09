@@ -1018,7 +1018,6 @@ where
                 self.region(),
             );
             if !state.get_region().get_is_in_flashback() {
-                // callback itself to wait for the new change to be applied completely.
                 let raft_router_clone = self.ctx.router.clone();
                 let ch_clone = ch.clone();
                 let cb = Callback::write(Box::new(move |resp| {
@@ -1027,6 +1026,7 @@ where
                         error!("send flashback prepare msg failed"; "region_id" => region_id);
                         return;
                     }
+                    // callback itself to wait for the new change to be applied completely.
                     raft_router_clone
                         .force_send(
                             region_id,
@@ -1046,8 +1046,13 @@ where
                 return;
             }
             // check memory state
-            if self.fsm.peer.flashback_state.is_none() {
-                self.fsm.peer.flashback_state = Some(FlashbackState::new(Some(ch)));
+            match self.fsm.peer.flashback_state.as_mut() {
+                None => self.fsm.peer.flashback_state = Some(FlashbackState::new(Some(ch))),
+                Some(state) => {
+                    if state.channel_is_none() {
+                        self.fsm.peer.flashback_state = Some(FlashbackState::new(Some(ch)));
+                    }
+                }
             }
         }
         // Let the leader lease to None to ensure that local reads are not executed.
@@ -1067,6 +1072,7 @@ where
             if resp.response.get_header().has_error() {
                 ch_clone.send(false).unwrap();
                 error!("send flashback prepare msg failed"; "region_id" => region_id);
+                return;
             }
             ch.send(true).unwrap();
         }));
