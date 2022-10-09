@@ -161,40 +161,31 @@ pub fn cache_line_size(level: usize) -> Option<u64> {
     read_size_in_cache(level, "coherency_line_size")
 }
 
-pub fn path_in_same_mount_point(path1: &str, path2: &str) -> bool {
+pub fn path_in_diff_mount_point(path1: &str, path2: &str) -> bool {
     if path1.is_empty() || path2.is_empty() {
         return true;
     }
     let path1 = PathBuf::from(path1);
-    let path1_mount_point = match get_mount(&path1) {
-        Ok(list) => match list {
-            Some(mount) => mount,
-            None => {
-                warn!("No mount point for {}", path1.display());
-                return false;
-            }
-        },
-        Err(e) => {
-            warn!("Error: {}", e);
-            return false;
-        }
-    };
     let path2 = PathBuf::from(path2);
-    let path2_mount_point = match get_mount(&path2) {
-        Ok(list) => match list {
-            Some(mount) => mount,
-            None => {
-                warn!("No mount point for {}", path2.display());
-                return false;
-            }
-        },
-        Err(e) => {
-            warn!("Error: {}", e);
+    match (get_mount(&path1), get_mount(&path2)) {
+        (Err(e1), _) => {
+            warn!("Get mount point error for path {}, {}", path1.display(), e1);
             return false;
         }
-    };
-    if path1_mount_point == path2_mount_point {
-        return true;
+        (_, Err(e2)) => {
+            warn!("Get mount point error for path {}, {}", path2.display(), e2);
+            return false;
+        }
+        (Ok(None), _) => {
+            warn!("No mount point for {}", path1.display());
+            return false;
+        }
+        (_, Ok(None)) => {
+            warn!("No mount point for {}", path2.display());
+            return false;
+        }
+        (Ok(Some(mount1)), Ok(Some(mount2))) => {
+            return mount1 != mount2;
+        }
     }
-    false
 }
