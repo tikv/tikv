@@ -1697,7 +1697,7 @@ fn future_flashback_to_version<
 ) -> impl Future<Output = ServerResult<FlashbackToVersionResponse>> {
     let storage_clone = storage.clone();
     let raft_router_clone = raft_router.clone();
-    // TODO: Make this func a two-phase request 
+    // TODO: Make this func a two-phase request
     async move {
         // Send a `SignificantMsg::PrepareFlashback` to prepare the raftstore for the
         // later flashback. This will first block all scheduling, read and write
