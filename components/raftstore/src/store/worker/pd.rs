@@ -2122,6 +2122,7 @@ where
             if self.slow_score.should_force_report_slow_store()
                 && interval_second >= self.store_heartbeat_interval.as_secs()
             {
+                warn!("scheduling store_heartbeat timeout, force to report slow-score to pd.");
                 self.force_report_store_heartbeat();
             }
         }
