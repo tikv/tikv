@@ -4855,6 +4855,7 @@ where
                 }
                 ExecResult::IngestSst { ssts } => self.on_ingest_sst_result(ssts),
                 ExecResult::TransferLeader { term } => self.on_transfer_leader(term),
+                ExecResult::SetFlashbackState { .. } => {}
             }
         }
 

@@ -275,6 +275,9 @@ pub enum ExecResult<S> {
     TransferLeader {
         term: u64,
     },
+    SetFlashbackState {
+        region: Region,
+    },
 }
 
 /// The possible returned value when applying logs.
@@ -1372,6 +1375,7 @@ where
                 ExecResult::CommitMerge { ref region, .. } => (Some(region.clone()), None),
                 ExecResult::RollbackMerge { ref region, .. } => (Some(region.clone()), None),
                 ExecResult::IngestSst { ref ssts } => (None, Some(ssts.clone())),
+                ExecResult::SetFlashbackState { region } => (Some(region.clone()), None),
                 _ => (None, None),
             },
             _ => (None, None),
@@ -1435,6 +1439,9 @@ where
                 ExecResult::RollbackMerge { ref region, .. } => {
                     self.region = region.clone();
                     self.is_merging = false;
+                }
+                ExecResult::SetFlashbackState { ref region } => {
+                    self.region = region.clone();
                 }
             }
         }
@@ -2828,7 +2835,12 @@ where
                 )
             });
 
-        Ok((AdminResponse::default(), ApplyResult::None))
+        Ok((
+            AdminResponse::default(),
+            ApplyResult::Res(ExecResult::SetFlashbackState {
+                region: self.region.clone(),
+            }),
+        ))
     }
 
     fn exec_compact_log(
@@ -5152,6 +5164,12 @@ mod tests {
                 AdminCmdType::PrepareFlashback => {
                     if let Some(region) = region_state.modified_region.as_ref() {
                         return region.get_is_in_flashback();
+                    }
+                    false
+                }
+                AdminCmdType::FinishFlashback => {
+                    if let Some(region) = region_state.modified_region.as_ref() {
+                        return !region.get_is_in_flashback();
                     }
                     false
                 }
