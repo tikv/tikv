@@ -361,6 +361,15 @@ where
     })
 }
 
+make_static_metric! {
+    pub struct LockWaitQueueEntriesGauge: IntGauge {
+        "type" => {
+            waiters,
+            keys,
+        },
+    }
+}
+
 lazy_static! {
     pub static ref KV_COMMAND_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_storage_command_total",
@@ -575,4 +584,19 @@ lazy_static! {
     .unwrap();
     pub static ref IN_MEMORY_PESSIMISTIC_LOCKING_COUNTER_STATIC: InMemoryPessimisticLockingCounter =
         auto_flush_from!(IN_MEMORY_PESSIMISTIC_LOCKING_COUNTER, InMemoryPessimisticLockingCounter);
+
+    pub static ref LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC: LockWaitQueueEntriesGauge = register_static_int_gauge_vec!(
+        LockWaitQueueEntriesGauge,
+        "tikv_lock_wait_queue_entries_gauge_vec",
+        "Statistics of the lock wait queue's state",
+        &["type"]
+    )
+    .unwrap();
+
+    pub static ref LOCK_WAIT_QUEUE_LENGTH_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_lock_wait_queue_length",
+        "Statistics  of length of queues counted when enqueueing",
+        exponential_buckets(1.0, 2.0, 16).unwrap()
+    )
+    .unwrap();
 }
