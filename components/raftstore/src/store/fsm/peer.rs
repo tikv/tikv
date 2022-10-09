@@ -419,7 +419,8 @@ where
     }
 
     fn can_batch(&self, cfg: &Config, req: &RaftCmdRequest, req_size: u32) -> bool {
-        // if has admin request
+        // Do not batch admin request with other requests in one entry, so witness can
+        // just skip applying the entries not having admin request.
         if req.has_admin_request() {
             return false;
         }

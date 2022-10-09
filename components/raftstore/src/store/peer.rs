@@ -5,7 +5,9 @@ use std::{
     cell::RefCell,
     cmp,
     collections::VecDeque,
-    fmt, mem,
+    fmt,
+    io::BufRead,
+    mem,
     sync::{
         atomic::{AtomicUsize, Ordering},
         mpsc::SyncSender,
@@ -45,7 +47,7 @@ use kvproto::{
 };
 use parking_lot::RwLockUpgradableReadGuard;
 use pd_client::{BucketStat, INVALID_ID};
-use protobuf::Message;
+use protobuf::{wire_format::WireType, CodedInputStream, Message};
 use raft::{
     self,
     eraftpb::{self, ConfChangeType, Entry, EntryType, MessageType},
@@ -231,6 +233,38 @@ impl<C: WriteCallback> ProposalQueue<C> {
     }
 }
 
+fn has_admin_request(data: &[u8]) -> bool {
+    // HACK: check admin request field in serialized data from `RaftCmdRequest`
+    // without deserializing all. It's done by checking the existence of the
+    // field number of `admin_request`.
+    // See the encoding in `write_to_with_cached_sizes()` of `RaftCmdRequest` in
+    // `raft_cmdpb.rs` for reference.
+    let mut is = CodedInputStream::from_bytes(data);
+    if is.eof().unwrap() {
+        return false;
+    }
+    let (mut field_number, wire_type) = is.read_tag_unpack().unwrap();
+    // Header field is of number 1
+    if field_number == 1 {
+        if wire_type != WireType::WireTypeLengthDelimited {
+            panic!("unexpected wire type");
+        }
+        let len = is.read_raw_varint32().unwrap();
+        // skip parsing the content of `Header`
+        is.consume(len as usize);
+        // read next field number
+        (field_number, _) = is.read_tag_unpack().unwrap();
+    }
+
+    // `Requests` field is of number 2 and `AdminRequest` field is of number 3.
+    // - If the next field is 2, there must be no admin request as in one
+    //   `RaftCmdRequest`, either requests or admin_request is filled.
+    // - If the next field is 3, it's exactly an admin request.
+    // - If the next field is others, neither requests nor admin_request is filled,
+    //   so there is no admin request.
+    field_number == 3
+}
+
 bitflags! {
     // TODO: maybe declare it as protobuf struct is better.
     /// A bitmap contains some useful flags when dealing with `eraftpb::Entry`.
@@ -239,7 +273,6 @@ bitflags! {
         const SPLIT          = 0b0000_0010;
         const PREPARE_MERGE  = 0b0000_0100;
         const COMMIT_MERGE   = 0b0000_1000;
-        const NO_ADMIN       = 0b0001_0000;
     }
 }
 
@@ -3002,10 +3035,7 @@ where
             if self.is_witness() {
                 committed_entries = committed_entries
                     .into_iter()
-                    .filter(|e| {
-                        let ctx = ProposalContext::from_bytes(&e.context);
-                        !ctx.contains(ProposalContext::NO_ADMIN)
-                    })
+                    .filter(|e| has_admin_request(e.get_data()))
                     .collect();
             }
             if committed_entries.is_empty() {
@@ -4522,7 +4552,6 @@ where
         }
 
         if !req.has_admin_request() {
-            ctx.insert(ProposalContext::NO_ADMIN);
             return Ok(ctx);
         }
 
@@ -5902,6 +5931,25 @@ mod tests {
 
     use super::*;
     use crate::store::{msg::ExtCallback, util::u64_to_timespec};
+
+    #[test]
+    fn test_has_admin_request() {
+        let mut req = RaftCmdRequest::default();
+        let data = req.write_to_bytes().unwrap();
+        assert!(!has_admin_request(&data));
+
+        req.mut_admin_request()
+            .set_cmd_type(AdminCmdType::CompactLog);
+        let data = req.write_to_bytes().unwrap();
+        assert!(has_admin_request(&data));
+
+        let mut req = RaftCmdRequest::default();
+        let mut request = raft_cmdpb::Request::default();
+        request.set_cmd_type(CmdType::Put);
+        req.set_requests(vec![request].into());
+        let data = req.write_to_bytes().unwrap();
+        assert!(!has_admin_request(&data));
+    }
 
     #[test]
     fn test_sync_log() {
