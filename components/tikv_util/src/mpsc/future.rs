@@ -4,15 +4,16 @@
 
 use std::{
     pin::Pin,
-    sync::atomic::{self, AtomicU8, AtomicUsize, Ordering},
-    task::{Context, Poll},
+    ptr,
+    sync::atomic::{self, AtomicPtr, AtomicU8, AtomicUsize, Ordering},
+    task::{Context, Poll, Waker},
 };
 
 use crossbeam::{
     channel::{SendError, TryRecvError},
     queue::SegQueue,
 };
-use futures::{task::AtomicWaker, Stream, StreamExt};
+use futures::{Stream, StreamExt};
 
 pub enum WakePolicy {
     Immediately,
@@ -31,7 +32,7 @@ impl WakePolicy {
 
 struct Queue<T> {
     queue: SegQueue<T>,
-    waker: AtomicWaker,
+    waker: AtomicPtr<Waker>,
     liveness: AtomicUsize,
     policy: WakePolicy,
 }
@@ -46,7 +47,38 @@ impl<T> Queue<T> {
             }
             tick.store(0, Ordering::Release);
         }
-        self.waker.wake();
+        let ptr = self.waker.swap(ptr::null_mut(), Ordering::AcqRel);
+        unsafe {
+            if !ptr.is_null() {
+                Box::from_raw(ptr).wake();
+            }
+        }
+    }
+
+    // If there is already a waker, true is returned.
+    fn register_waker(&self, waker: &Waker) -> bool {
+        let w = Box::new(waker.clone());
+        let ptr = self.waker.swap(Box::into_raw(w), Ordering::AcqRel);
+        unsafe {
+            if ptr.is_null() {
+                false
+            } else {
+                drop(Box::from_raw(ptr));
+                true
+            }
+        }
+    }
+}
+
+impl<T> Drop for Queue<T> {
+    #[inline]
+    fn drop(&mut self) {
+        let ptr = self.waker.swap(ptr::null_mut(), Ordering::SeqCst);
+        unsafe {
+            if !ptr.is_null() {
+                drop(Box::from_raw(ptr));
+            }
+        }
     }
 }
 
@@ -131,10 +163,13 @@ impl<T: Send> Stream for Receiver<T> {
         if let Some(t) = queue.queue.pop() {
             return Poll::Ready(Some(t));
         }
-        queue.waker.register(cx.waker());
-        // In case the message is pushed right before registering waker.
-        if let Some(t) = queue.queue.pop() {
-            return Poll::Ready(Some(t));
+        // If there is no previous waker, we still need to poll again in case some
+        // task is pushed before registering current waker.
+        if !queue.register_waker(cx.waker()) {
+            // In case the message is pushed right before registering waker.
+            if let Some(t) = queue.queue.pop() {
+                return Poll::Ready(Some(t));
+            }
         }
         if queue.liveness.load(Ordering::Acquire) & !RECEIVER_COUNT_BASE != 0 {
             return Poll::Pending;
@@ -177,7 +212,7 @@ unsafe impl<T: Send> Send for Receiver<T> {}
 pub fn unbounded<T>(policy: WakePolicy) -> (Sender<T>, Receiver<T>) {
     let queue = Box::into_raw(Box::new(Queue {
         queue: SegQueue::new(),
-        waker: AtomicWaker::default(),
+        waker: AtomicPtr::default(),
         liveness: AtomicUsize::new(SENDER_COUNT_BASE | RECEIVER_COUNT_BASE),
         policy,
     }));
