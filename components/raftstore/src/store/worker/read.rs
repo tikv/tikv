@@ -240,7 +240,7 @@ where
         // requests will have the same cache and the cache will be cleared after the
         // last request of the batch.
 
-        if self.read_id.is_some() {
+        if let Some(read_id) = self.read_id.as_ref() {
             if self.snap_cache.cached_read_id.is_some()
                 && *self.snap_cache.cached_read_id.as_ref().unwrap() == *read_id
                 && self.snap_cache.cached_snapshot_ts >= delegate_last_valid_ts
