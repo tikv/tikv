@@ -26,8 +26,8 @@ use raftstore::{
     store::{
         cmd_resp,
         util::{self, LeaseState, RegionReadProgress, RemoteLease},
-        ReadDelegate, ReadExecutor, ReadExecutorProvider, ReadProgress, ReadResponse,
-        RegionSnapshot, RequestInspector, RequestPolicy,
+        LocalReadContext, ReadDelegate, ReadExecutor, ReadExecutorProvider, ReadProgress,
+        ReadResponse, RegionSnapshot, RequestInspector, RequestPolicy,
     },
     Error, Result,
 };
@@ -86,10 +86,7 @@ where
         self.cached_tablet.latest().unwrap()
     }
 
-    fn get_snapshot(
-        &mut self,
-        _: &mut Option<&mut raftstore::store::LocalReadContext<'_, E>>,
-    ) -> Arc<E::Snapshot> {
+    fn get_snapshot(&mut self, _: &mut Option<&mut LocalReadContext<'_, E>>) -> Arc<E::Snapshot> {
         Arc::new(self.cached_tablet.latest().unwrap().snapshot())
     }
 }

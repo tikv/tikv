@@ -233,21 +233,26 @@ where
     }
 
     // Update the snapshot in the `snap_cache` if the read_id is None or does not
-    // match. When the read_id is None, it ok to just update the snapshot without
-    // touching the `cached_read_id` because only a consecutive requests will
-    // have the same read_id, which means this `cached_read_id` will not be matched
-    // anymore.
+    // match.
+    // When the read_id is None, it means the `snap_cache` has been cleared
+    // before and the `cached_read_id` of it is None because only a consecutive
+    // requests will have the same cache and the cache will be cleared after the
+    // last request of the batch.
     fn maybe_update_snapshot(&mut self, engine: &E, delegate_last_valid_ts: Timespec) -> bool {
         if let Some(read_id) = self.read_id.as_ref() {
-            if self.snap_cache.cached_read_id == *read_id
+            if self.snap_cache.cached_read_id.is_some()
+                && *self.snap_cache.cached_read_id.as_ref().unwrap() == *read_id
                 && self.snap_cache.cached_snapshot_ts >= delegate_last_valid_ts
             {
                 // Cache hit
                 assert!(self.snap_cache.snapshot.as_ref().is_some());
                 return false;
             } else {
-                self.snap_cache.cached_read_id = read_id.clone();
+                self.snap_cache.cached_read_id = Some(read_id.clone());
             }
+        } else {
+            // snap_cache should have been already cleared
+            assert!(self.snap_cache.cached_read_id.is_none());
         }
 
         self.snap_cache.snapshot = Box::new(Some(Arc::new(engine.snapshot())));
@@ -594,7 +599,7 @@ struct SnapCache<E>
 where
     E: KvEngine,
 {
-    cached_read_id: ThreadReadId,
+    cached_read_id: Option<ThreadReadId>,
     snapshot: Box<Option<Arc<E::Snapshot>>>,
     cached_snapshot_ts: Timespec,
 }
@@ -604,15 +609,15 @@ where
     E: KvEngine,
 {
     fn new() -> Self {
-        let cached_read_id = ThreadReadId::new();
         SnapCache {
-            cached_read_id,
+            cached_read_id: None,
             snapshot: Box::new(None),
             cached_snapshot_ts: Timespec::new(0, 0),
         }
     }
 
     fn clear(&mut self) {
+        self.cached_read_id.take();
         self.snapshot.take();
     }
 }
@@ -646,9 +651,6 @@ where
     // region id -> ReadDelegate
     // The use of `Arc` here is a workaround, see the comment at `get_delegate`
     pub delegates: LruCache<u64, D>,
-    // snap_cache: Box<Option<Arc<E::Snapshot>>>,
-    // cache_read_id: ThreadReadId,
-    // cached_snapshot_ts: Timespec,
     snap_cache: SnapCache<E>,
     // A channel to raftstore.
     router: C,
