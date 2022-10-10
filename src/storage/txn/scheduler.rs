@@ -1365,10 +1365,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let cb = task_ctx.cb.take().unwrap();
 
         let ctx = LockWaitContext::new(
-            self.inner.lock_mgr.clone(),
+            lock_info.key.clone(),
+            self.inner.lock_wait_queues.clone(),
             lock_wait_token,
-            lock_info.parameters.start_ts,
-            lock_info.parameters.for_update_ts,
             cb,
             lock_info.parameters.allow_lock_with_conflict,
         );
