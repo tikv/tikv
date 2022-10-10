@@ -6,6 +6,7 @@ publish = false
 
 [features]
 testexport = []
+failpoints = ["fail/failpoints"]
 
 [dependencies]
 api_version = { path = "../api_version", default-features = false }
