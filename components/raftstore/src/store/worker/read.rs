@@ -232,6 +232,11 @@ where
         }
     }
 
+    // Update the snapshot in the `snap_cache` if the read_id is None or does not
+    // match. When the read_id is None, it ok to just update the snapshot without
+    // touching the `cached_read_id` because only a consecutive requests will
+    // have the same read_id, which means this `cached_read_id` will not be matched
+    // anymore.
     fn maybe_update_snapshot(&mut self, engine: &E, delegate_last_valid_ts: Timespec) -> bool {
         if let Some(read_id) = self.read_id.as_ref() {
             if self.snap_cache.cached_read_id == *read_id
@@ -259,6 +264,7 @@ where
         self.snap_cache.cached_snapshot_ts
     }
 
+    // Note: must be called after `maybe_update_snapshot`
     fn snapshot(&self) -> Option<Arc<E::Snapshot>> {
         self.snap_cache.snapshot.deref().clone()
     }
@@ -829,6 +835,7 @@ where
                     RequestPolicy::ReadLocal => {
                         let mut local_read_ctx =
                             LocalReadContext::new(&mut self.snap_cache, read_id);
+
                         snap_updated = local_read_ctx
                             .maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
 
