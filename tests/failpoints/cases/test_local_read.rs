@@ -65,10 +65,14 @@ fn test_consistency_after_lease_pass() {
     cluster.must_transfer_leader(1, new_peer(2, 2));
     pd_client.must_remove_peer(region_id, leader);
     peer.id += 1000;
+    // After we pass the lease check, we should have got the snapshot, so the data
+    // that the region contains cannot be deleted.
+    // So we need to add the new peer for this region and stop before applying the
+    // snapshot so that the old data will be deleted and the snapshot data has not
+    // been written.
     fail::cfg("apply_snap_cleanup_range", "pause").unwrap();
     pd_client.must_add_peer(region_id, peer);
 
-    thread::sleep(Duration::from_millis(2000));
     // Wait for data to be cleaned
     must_get_none(&cluster.get_engine(1), b"key1");
     fail::cfg("after_pass_lease_check", "off").unwrap();
