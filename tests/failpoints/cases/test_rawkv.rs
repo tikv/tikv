@@ -111,19 +111,10 @@ impl TestSuite {
         self.cluster
             .must_try_merge(source.get_id(), target.get_id());
 
-        let mut merged = Region::default();
+        let mut merged;
         let timer = Instant::now();
         loop {
             if timer.saturating_elapsed() > Duration::from_secs(10) {
-                assert_eq!(
-                    merged.get_id(),
-                    target.get_id(),
-                    "region merge failed: merged region:{:?}, target region:{:?}, source_key:{:?}, target_key:{:?}",
-                    merged,
-                    target,
-                    source_key,
-                    target_key
-                );
                 panic!("region merge failed");
             }
             merged = self.cluster.get_region(source_key);
