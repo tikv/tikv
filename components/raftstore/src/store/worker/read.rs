@@ -46,16 +46,13 @@ use crate::{
 /// #[RaftstoreCommon]
 pub trait ReadExecutor<E: KvEngine> {
     fn get_tablet(&mut self) -> &E;
-    fn get_snapshot(
-        &mut self,
-        read_context: &mut Option<&mut LocalReadContext<'_, E>>,
-    ) -> Arc<E::Snapshot>;
+    fn get_snapshot(&mut self, read_context: &Option<LocalReadContext<'_, E>>) -> Arc<E::Snapshot>;
 
     fn get_value(
         &mut self,
         req: &Request,
         region: &metapb::Region,
-        read_context: &mut Option<&mut LocalReadContext<'_, E>>,
+        read_context: &Option<LocalReadContext<'_, E>>,
     ) -> Result<Response> {
         let key = req.get_get().get_key();
         // region key range has no data prefix, so we must use origin key to check.
@@ -100,7 +97,7 @@ pub trait ReadExecutor<E: KvEngine> {
         msg: &RaftCmdRequest,
         region: &Arc<metapb::Region>,
         read_index: Option<u64>,
-        mut local_read_ctx: Option<&mut LocalReadContext<'_, E>>,
+        local_read_ctx: Option<LocalReadContext<'_, E>>,
     ) -> ReadResponse<E::Snapshot> {
         let requests = msg.get_requests();
         let mut response = ReadResponse {
@@ -112,7 +109,7 @@ pub trait ReadExecutor<E: KvEngine> {
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = match cmd_type {
-                CmdType::Get => match self.get_value(req, region.as_ref(), &mut local_read_ctx) {
+                CmdType::Get => match self.get_value(req, region.as_ref(), &local_read_ctx) {
                     Ok(resp) => resp,
                     Err(e) => {
                         error!(?e;
@@ -125,7 +122,7 @@ pub trait ReadExecutor<E: KvEngine> {
                 },
                 CmdType::Snap => {
                     let snapshot = RegionSnapshot::from_snapshot(
-                        self.get_snapshot(&mut local_read_ctx),
+                        self.get_snapshot(&local_read_ctx),
                         region.clone(),
                     );
                     response.snapshot = Some(snapshot);
@@ -665,12 +662,8 @@ where
         &self.kv_engine
     }
 
-    fn get_snapshot(
-        &mut self,
-        read_context: &mut Option<&mut LocalReadContext<'_, E>>,
-    ) -> Arc<E::Snapshot> {
-        let ctx = read_context.as_mut().unwrap();
-        ctx.snapshot().unwrap()
+    fn get_snapshot(&mut self, read_context: &Option<LocalReadContext<'_, E>>) -> Arc<E::Snapshot> {
+        read_context.as_ref().unwrap().snapshot().unwrap()
     }
 }
 
@@ -851,8 +844,7 @@ where
                         }
 
                         let region = Arc::clone(&delegate.region);
-                        let response =
-                            delegate.execute(&req, &region, None, Some(&mut local_read_ctx));
+                        let response = delegate.execute(&req, &region, None, Some(local_read_ctx));
 
                         // Try renew lease in advance
                         delegate.maybe_renew_lease_advance(&self.router, snapshot_ts);
@@ -873,8 +865,7 @@ where
 
                         let region = Arc::clone(&delegate.region);
                         // Getting the snapshot
-                        let response =
-                            delegate.execute(&req, &region, None, Some(&mut local_read_ctx));
+                        let response = delegate.execute(&req, &region, None, Some(local_read_ctx));
 
                         // Double check in case `safe_ts` change after the first check and before
                         // getting snapshot
@@ -1568,10 +1559,10 @@ mod tests {
 
         let mut read_context = LocalReadContext::new(&mut snap_cache, Some(read_id));
         read_context.maybe_update_snapshot(tablet, last_valid_ts);
-        let mut read_context = Some(&mut read_context);
+        let read_context = Some(read_context);
 
         assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
-        let snapshot = delegate.get_snapshot(&mut read_context);
+        let snapshot = delegate.get_snapshot(&read_context);
         assert_eq!(
             b"val1".to_vec(),
             *snapshot.get_value(b"a1").unwrap().unwrap()
@@ -1581,7 +1572,7 @@ mod tests {
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
         assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
-        let snapshot = delegate.get_snapshot(&mut read_context);
+        let snapshot = delegate.get_snapshot(&read_context);
         assert_eq!(
             b"val1".to_vec(),
             *snapshot.get_value(b"a1").unwrap().unwrap()

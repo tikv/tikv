@@ -5618,7 +5618,7 @@ where
         &self.engines.kv
     }
 
-    fn get_snapshot(&mut self, _: &mut Option<&mut LocalReadContext<'_, EK>>) -> Arc<EK::Snapshot> {
+    fn get_snapshot(&mut self, _: &Option<LocalReadContext<'_, EK>>) -> Arc<EK::Snapshot> {
         Arc::new(self.engines.kv.snapshot())
     }
 }
