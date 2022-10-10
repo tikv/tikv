@@ -9,7 +9,7 @@ use futures::{
     compat::Future01CompatExt,
     future::{self, Future, FutureExt, TryFutureExt},
     sink::SinkExt,
-    stream::{StreamExt, TryStreamExt},
+    stream::{StreamExt, TryStreamExt}, channel::oneshot,
 };
 use grpcio::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, Result as GrpcResult,
@@ -20,7 +20,10 @@ use kvproto::{
     errorpb::{Error as RegionError, *},
     kvrpcpb::*,
     mpp::*,
-    raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest},
+    raft_cmdpb::{
+        AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, RaftRequestHeader,
+        Request as RaftRequest,
+    },
     raft_serverpb::*,
     tikvpb::*,
 };
@@ -31,7 +34,7 @@ use raftstore::{
     store::{
         memory::{MEMTRACE_APPLYS, MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES},
         metrics::RAFT_ENTRIES_CACHES_GAUGE,
-        Callback, CasualMessage, CheckLeaderTask, RaftCmdExtraOpts, SignificantMsg,
+        Callback, CasualMessage, CheckLeaderTask, RaftCmdExtraOpts,
     },
     DiscardReason, Error as RaftStoreError, Result as RaftStoreResult,
 };
@@ -43,6 +46,7 @@ use tikv_util::{
     time::{duration_to_ms, duration_to_sec, Instant},
     worker::Scheduler,
 };
+use tokio::sync::Mutex;
 use tracker::{set_tls_tracker_token, RequestInfo, RequestType, Tracker, GLOBAL_TRACKERS};
 use txn_types::{self, Key};
 
@@ -1696,27 +1700,23 @@ fn future_flashback_to_version<
     req: FlashbackToVersionRequest,
 ) -> impl Future<Output = ServerResult<FlashbackToVersionResponse>> {
     let storage_clone = storage.clone();
-    let raft_router_clone = raft_router.clone();
+    let raft_router = Mutex::new(raft_router.clone());
     // TODO: Make this func a two-phase request
     async move {
-        // Send a `SignificantMsg::PrepareFlashback` to prepare the raftstore for the
+        // Send an `AdminCmdType::PrepareFlashback' to prepare the raftstore for the
         // later flashback. This will first block all scheduling, read and write
-        // operations and then wait for the latest Raft log to be applied before
-        // we start the flashback command.
-        let region_id = req.get_context().get_region_id();
-        let (result_tx, result_rx) = crossbeam::channel::bounded(1);
-        raft_router_clone
-            .significant_send(region_id, SignificantMsg::PrepareFlashback(result_tx))
-            .unwrap();
-        if !result_rx.recv().unwrap() {
-            return Err(Error::Other(box_err!(
-                "failed to prepare the region {} for flashback",
-                region_id
-            )));
-        }
+        // operations, then wait for the latest Raft log to be applied before we start
+        // the flashback command. Once invoked, we update the persistence state
+        // in `RegionLocalState` and region's meta, and when that
+        // admin cmd is applied, the `PrepareFlashback` command will update the memory
+        // state of the flashback, rejecting all read and write operations at
+        // propose and applied. We make FlashbackToVersion a two-stage request
+        // and lock the region in the first stage.
+        send_flashback_msg::<T, E>(&raft_router, req.clone(), AdminCmdType::PrepareFlashback)
+            .await?;
 
         let (cb, f) = paired_future_callback();
-        let res = storage_clone.sched_txn_command(req.into(), cb);
+        let res = storage_clone.sched_txn_command(req.clone().into(), cb);
         // Avoid crossing `.await` to bypass the `Send` constraint.
         drop(storage_clone);
         let v = match res {
@@ -1726,18 +1726,13 @@ fn future_flashback_to_version<
         fail_point!("skip_finish_flashback_to_version", |_| {
             Ok(FlashbackToVersionResponse::default())
         });
-        // Send a `SignificantMsg::FinishFlashback` to notify the raftstore that the
-        // flashback has been finished.
-        let (result_tx, result_rx) = crossbeam::channel::bounded(1);
-        raft_router_clone
-            .significant_send(region_id, SignificantMsg::FinishFlashback(result_tx))
-            .unwrap();
-        if !result_rx.recv().unwrap() {
-            return Err(Error::Other(box_err!(
-                "failed to finish the region {} for flashback",
-                region_id
-            )));
-        }
+        // Send a `AdminCmdType::FinishFlashback` to unset the persistence state
+        // in `RegionLocalState` and region's meta, and when that
+        // admin cmd is applied, will update the memory
+        // state of the flashback
+        send_flashback_msg::<T, E>(&raft_router, req.clone(), AdminCmdType::FinishFlashback)
+            .await?;
+
         let mut resp = FlashbackToVersionResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
@@ -2409,6 +2404,60 @@ fn needs_reject_raft_append(reject_messages_on_memory_ratio: f64) -> bool {
         }
     }
     false
+}
+
+async fn send_flashback_msg<T: RaftStoreRouter<E::Local> + 'static, E: Engine>(
+    raft_router: &Mutex<T>,
+    req: FlashbackToVersionRequest,
+    cmd_type: AdminCmdType,
+) -> ServerResult<()> {
+    let raft_router = raft_router.lock().await;
+    let epoch = req.get_context().get_region_epoch();
+    let peer = req.get_context().get_peer();
+    let region_id = req.get_context().get_region_id();
+    let (result_tx, result_rx) = oneshot::channel();
+    let cb = Callback::write(Box::new(move |resp| {
+        if resp.response.get_header().has_error() {
+            result_tx.send(false).unwrap();
+            error!(
+                "send flashback msg {:?} to region {} failed, err: {:?}",
+                cmd_type,
+                region_id,
+                resp.response.get_header().get_error(),
+            );
+            return;
+        }
+        result_tx.send(true).unwrap();
+    }));
+
+    let mut admin = AdminRequest::default();
+    admin.set_cmd_type(cmd_type);
+    let mut req = RaftCmdRequest::default();
+    req.mut_header().set_region_id(region_id);
+    req.mut_header().set_region_epoch(epoch.clone());
+    req.mut_header().set_peer(peer.clone());
+    req.set_admin_request(admin);
+    if let Err(e) = raft_router.send_command(
+        req,
+        cb,
+        RaftCmdExtraOpts {
+            deadline: None,
+            disk_full_opt: DiskFullOpt::AllowedOnAlmostFull,
+        },
+    ) {
+        return Err(Error::Other(box_err!(
+            "flashback router send failed, err: {:?}",
+            e
+        )));
+    }
+    if !result_rx.await.unwrap() {
+        return Err(Error::Other(box_err!(
+            "send flashback msg {:?} to region {} failed",
+            cmd_type,
+            region_id
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -18,10 +18,7 @@ use std::{
 use bitflags::bitflags;
 use bytes::Bytes;
 use collections::{HashMap, HashSet};
-use crossbeam::{
-    atomic::AtomicCell,
-    channel::{Sender, TrySendError},
-};
+use crossbeam::{atomic::AtomicCell, channel::TrySendError};
 use engine_traits::{
     Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions, CF_LOCK,
 };
@@ -842,35 +839,6 @@ pub enum UnsafeRecoveryState {
     Destroy(UnsafeRecoveryExecutePlanSyncer),
 }
 
-// This state is set by the peer fsm when invoke msg PrepareFlashback. Once set,
-// it is checked every time this peer applies a new entry or a snapshot,
-// if the latest committed index is met, the syncer will be called to notify the
-// result.
-pub struct FlashbackState(Option<Sender<bool>>);
-
-impl FlashbackState {
-    pub fn new(ch: Option<Sender<bool>>) -> Self {
-        FlashbackState(ch)
-    }
-
-    pub fn channel_is_none(&self) -> bool {
-        self.0.is_none()
-    }
-
-    pub fn finish_wait_apply(&mut self) {
-        if self.0.is_none() {
-            return;
-        }
-        let ch = self.0.take().unwrap();
-        match ch.send(true) {
-            Ok(_) => {}
-            Err(e) => {
-                error!("Fail to notify flashback state"; "err" => ?e);
-            }
-        }
-    }
-}
-
 #[derive(Getters, MutGetters)]
 pub struct Peer<EK, ER>
 where
@@ -1052,7 +1020,7 @@ where
     /// lead_transferee if the peer is in a leadership transferring.
     pub lead_transferee: u64,
     pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
-    pub flashback_state: Option<FlashbackState>,
+    pub is_in_flashback: bool,
     pub snapshot_recovery_state: Option<SnapshotRecoveryState>,
 }
 
@@ -1185,9 +1153,7 @@ where
             last_region_buckets: None,
             lead_transferee: raft::INVALID_ID,
             unsafe_recovery_state: None,
-            flashback_state: region
-                .get_is_in_flashback()
-                .then(|| FlashbackState::new(None)),
+            is_in_flashback: region.get_is_in_flashback(),
             snapshot_recovery_state: None,
         };
 
@@ -2549,10 +2515,6 @@ where
                         debug!("unsafe recovery finishes applying a snapshot");
                         self.unsafe_recovery_maybe_finish_wait_apply(/* force= */ false);
                     }
-                    if self.flashback_state.is_some() {
-                        debug!("flashback finishes applying a snapshot");
-                        self.maybe_finish_flashback_wait_apply();
-                    }
                     if self.snapshot_recovery_state.is_some() {
                         debug!("snapshot recovery finishes applying a snapshot");
                         self.snapshot_recovery_maybe_finish_wait_apply(false);
@@ -3511,7 +3473,7 @@ where
             self.force_leader.is_some(),
         ) {
             None
-        } else if self.flashback_state.is_some() {
+        } else if self.is_in_flashback {
             debug!(
                 "prevents renew lease while in flashback state";
                 "region_id" => self.region_id,
@@ -5098,16 +5060,6 @@ where
                     "force" => force,
                 );
                 self.snapshot_recovery_state = None;
-            }
-        }
-    }
-
-    pub fn maybe_finish_flashback_wait_apply(&mut self) {
-        let finished =
-            self.raft_group.raft.raft_log.applied == self.raft_group.raft.raft_log.last_index();
-        if finished {
-            if let Some(flashback_state) = self.flashback_state.as_mut() {
-                flashback_state.finish_wait_apply();
             }
         }
     }

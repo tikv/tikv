@@ -2823,9 +2823,10 @@ where
                 return Err(box_err!("failed to get region state of {}", region_id));
             }
         };
-        old_state
-            .mut_region()
-            .set_is_in_flashback(req.get_cmd_type() == AdminCmdType::PrepareFlashback);
+        let is_in_flashback = req.get_cmd_type() == AdminCmdType::PrepareFlashback;
+        old_state.mut_region().set_is_in_flashback(is_in_flashback);
+        let mut region = self.region.clone();
+        region.set_is_in_flashback(is_in_flashback);
         ctx.kv_wb_mut()
             .put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &old_state)
             .unwrap_or_else(|e| {
@@ -2837,9 +2838,7 @@ where
 
         Ok((
             AdminResponse::default(),
-            ApplyResult::Res(ExecResult::SetFlashbackState {
-                region: old_state.get_region().clone(),
-            }),
+            ApplyResult::Res(ExecResult::SetFlashbackState { region }),
         ))
     }
 
@@ -4505,6 +4504,7 @@ mod tests {
         store::{new_learner_peer, new_peer},
         worker::dummy_scheduler,
     };
+    use txn_types::WriteBatchFlags;
     use uuid::Uuid;
 
     use super::*;
@@ -6638,6 +6638,10 @@ mod tests {
         region_state.mut_region().set_is_in_flashback(false);
         let mut flashback_req = EntryBuilder::new(2, 2).epoch(1, 3);
         flashback_req.req.set_admin_request(cmd.clone());
+        flashback_req
+            .req
+            .mut_header()
+            .set_flags(WriteBatchFlags::FLASHBACK.bits());
         router.schedule_task(
             1,
             Msg::apply(apply(

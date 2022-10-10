@@ -19,7 +19,7 @@ use engine_traits::{
     WriteBatchExt, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IoRateLimiter;
-use futures::{self, executor::block_on};
+use futures::{self, channel::oneshot, executor::block_on};
 use kvproto::{
     errorpb::Error as PbError,
     kvrpcpb::{ApiVersion, Context},
@@ -34,6 +34,7 @@ use kvproto::{
 use pd_client::{BucketStat, PdClient};
 use raft::eraftpb::ConfChangeType;
 use raftstore::{
+    router::RaftStoreRouter,
     store::{
         fsm::{
             create_raft_batch_system,
@@ -54,6 +55,7 @@ use tikv_util::{
     worker::LazyWorker,
     HandyRwLock,
 };
+use txn_types::WriteBatchFlags;
 
 use super::*;
 use crate::Config;
@@ -1419,26 +1421,48 @@ impl<T: Simulator> Cluster<T> {
             .unwrap();
     }
 
-    pub async fn call_and_wait_prepare_flashback(&mut self, region_id: u64, store_id: u64) {
-        let router = self.sim.rl().get_router(store_id).unwrap();
-        let (result_tx, result_rx) = crossbeam::channel::bounded(1);
+    pub async fn send_flashback_msg(
+        &mut self,
+        region_id: u64,
+        store_id: u64,
+        cmd_type: AdminCmdType,
+        epoch: metapb::RegionEpoch,
+        peer: metapb::Peer,
+    ) {
+        let (result_tx, result_rx) = oneshot::channel();
+        let cb = Callback::write(Box::new(move |resp| {
+            if resp.response.get_header().has_error() {
+                result_tx.send(false).unwrap();
+                error!("send flashback msg failed"; "region_id" => region_id);
+                return;
+            }
+            result_tx.send(true).unwrap();
+        }));
 
-        router
-            .significant_send(region_id, SignificantMsg::PrepareFlashback(result_tx))
-            .unwrap();
-        if !result_rx.recv().unwrap() {
-            panic!("Prepare Flashback failed");
+        let mut admin = AdminRequest::default();
+        admin.set_cmd_type(cmd_type);
+        let mut req = RaftCmdRequest::default();
+        req.mut_header().set_region_id(region_id);
+        req.mut_header().set_region_epoch(epoch);
+        req.mut_header().set_peer(peer);
+        req.set_admin_request(admin);
+        req.mut_header()
+            .set_flags(WriteBatchFlags::FLASHBACK.bits());
+
+        let router = self.sim.rl().get_router(store_id).unwrap();
+        if let Err(e) = router.send_command(
+            req,
+            cb,
+            RaftCmdExtraOpts {
+                deadline: None,
+                disk_full_opt: kvproto::kvrpcpb::DiskFullOpt::AllowedOnAlmostFull,
+            },
+        ) {
+            panic!("router send failed, error{}", e);
         }
-    }
 
-    pub async fn call_finish_flashback(&mut self, region_id: u64, store_id: u64) {
-        let router = self.sim.rl().get_router(store_id).unwrap();
-        let (result_tx, result_rx) = crossbeam::channel::bounded(1);
-        router
-            .significant_send(region_id, SignificantMsg::FinishFlashback(result_tx))
-            .unwrap();
-        if !result_rx.recv().unwrap() {
-            panic!("Finish Flashback failed");
+        if !result_rx.await.unwrap() {
+            panic!("Flashback call msg failed");
         }
     }
 

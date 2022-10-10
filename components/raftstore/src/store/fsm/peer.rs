@@ -18,7 +18,6 @@ use std::{
 
 use batch_system::{BasicMailbox, Fsm};
 use collections::{HashMap, HashSet};
-use crossbeam::channel::Sender;
 use engine_traits::{Engines, KvEngine, RaftEngine, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
@@ -83,11 +82,10 @@ use crate::{
         metrics::*,
         msg::{Callback, ExtCallback, InspectedRaftMessage},
         peer::{
-            ConsistencyState, FlashbackState, ForceLeaderState, Peer, PersistSnapshotResult,
-            SnapshotRecoveryState, SnapshotRecoveryWaitApplySyncer, StaleState,
-            UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
-            UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
-            TRANSFER_LEADER_COMMAND_REPLY_CTX,
+            ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult, SnapshotRecoveryState,
+            SnapshotRecoveryWaitApplySyncer, StaleState, UnsafeRecoveryExecutePlanSyncer,
+            UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
+            UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer, TRANSFER_LEADER_COMMAND_REPLY_CTX,
         },
         region_meta::RegionMeta,
         transport::Transport,
@@ -988,106 +986,6 @@ where
         syncer.report_for_self(self_report);
     }
 
-    // Call msg PrepareFlashback is to check if the persistent state is present in
-    // RegionLocalState. Once called, the persistent state and memory state will
-    // first be checked and if neither is found, then a Raft Admin Command will be
-    // proposed to persist the state in the RegionLocalState to lock the region.
-    // Once this Command is submitted, a callback will be invoked to call msg
-    // PrepareFlashback again to wait for the new change to be applied completely.
-    // So we can perform the flashback safely later. We make FlashbackToVersion
-    // become a two-phase request, and lock the region as the first phase.
-    fn on_prepare_flashback(&mut self, ch: Sender<bool>) {
-        let region_id = self.region().get_id();
-        info!(
-            "prepare flashback";
-            "region_id" => region_id,
-            "peer_id" => self.fsm.peer.peer_id(),
-        );
-        // check persist state
-        let state_key = keys::region_state_key(region_id);
-        if let Some(state) = self
-            .ctx
-            .engines
-            .kv
-            .get_msg_cf::<RegionLocalState>(CF_RAFT, &state_key)
-            .unwrap()
-        {
-            info!(
-                "Prepare Flashback, at now flashback persist state is: {} for {:?} ",
-                state.get_region().get_is_in_flashback(),
-                self.region(),
-            );
-            if !state.get_region().get_is_in_flashback() {
-                let raft_router_clone = self.ctx.router.clone();
-                let ch_clone = ch.clone();
-                let cb = Callback::write(Box::new(move |resp| {
-                    if resp.response.get_header().has_error() {
-                        ch.send(false).unwrap();
-                        error!("send flashback prepare msg failed"; "region_id" => region_id);
-                        return;
-                    }
-                    // callback itself to wait for the new change to be applied completely.
-                    raft_router_clone
-                        .force_send(
-                            region_id,
-                            PeerMsg::SignificantMsg(SignificantMsg::PrepareFlashback(ch_clone)),
-                        )
-                        .unwrap();
-                }));
-                // set persist state by a Raft Admin Command
-                let req = {
-                    let mut request = new_admin_request(region_id, self.fsm.peer.peer.clone());
-                    let mut admin = AdminRequest::default();
-                    admin.set_cmd_type(AdminCmdType::PrepareFlashback);
-                    request.set_admin_request(admin);
-                    request
-                };
-                self.propose_raft_command(req, cb, DiskFullOpt::AllowedOnAlmostFull);
-                return;
-            }
-            // check memory state
-            match self.fsm.peer.flashback_state.as_mut() {
-                None => self.fsm.peer.flashback_state = Some(FlashbackState::new(Some(ch))),
-                Some(state) => {
-                    if state.channel_is_none() {
-                        self.fsm.peer.flashback_state = Some(FlashbackState::new(Some(ch)));
-                    }
-                }
-            }
-        }
-        // Let the leader lease to None to ensure that local reads are not executed.
-        self.fsm.peer.leader_lease_mut().expire_remote_lease();
-        self.fsm.peer.maybe_finish_flashback_wait_apply();
-    }
-
-    fn on_finish_flashback(&mut self, ch: Sender<bool>) {
-        let region_id = self.region().get_id();
-        info!(
-            "finish flashback";
-            "region_id" => region_id,
-            "peer_id" => self.fsm.peer.peer_id(),
-        );
-        let ch_clone = ch.clone();
-        let cb = Callback::write(Box::new(move |resp| {
-            if resp.response.get_header().has_error() {
-                ch_clone.send(false).unwrap();
-                error!("send flashback prepare msg failed"; "region_id" => region_id);
-                return;
-            }
-            ch.send(true).unwrap();
-        }));
-        self.fsm.peer.flashback_state.take();
-
-        let req = {
-            let mut request = new_admin_request(self.region().get_id(), self.fsm.peer.peer.clone());
-            let mut admin = AdminRequest::default();
-            admin.set_cmd_type(AdminCmdType::FinishFlashback);
-            request.set_admin_request(admin);
-            request
-        };
-        self.propose_raft_command(req, cb, DiskFullOpt::AllowedOnAlmostFull);
-    }
-
     fn on_check_pending_admin(&mut self, ch: UnboundedSender<CheckAdminResponse>) {
         if !self.fsm.peer.is_leader() {
             // no need to check non-leader pending conf change.
@@ -1532,9 +1430,6 @@ where
             SignificantMsg::UnsafeRecoveryFillOutReport(syncer) => {
                 self.on_unsafe_recovery_fill_out_report(syncer)
             }
-
-            SignificantMsg::PrepareFlashback(ch) => self.on_prepare_flashback(ch),
-            SignificantMsg::FinishFlashback(ch) => self.on_finish_flashback(ch),
             // for snapshot recovery (safe recovery)
             SignificantMsg::SnapshotRecoveryWaitApply(syncer) => {
                 self.on_snapshot_recovery_wait_apply(syncer)
@@ -2376,10 +2271,6 @@ where
         }
         if self.fsm.peer.unsafe_recovery_state.is_some() {
             self.check_unsafe_recovery_state();
-        }
-        // TODO: combine recovery state and flashback state as a wait apply queue.
-        if self.fsm.peer.flashback_state.is_some() {
-            self.fsm.peer.maybe_finish_flashback_wait_apply();
         }
 
         if self.fsm.peer.snapshot_recovery_state.is_some() {
@@ -4855,7 +4746,9 @@ where
                 }
                 ExecResult::IngestSst { ssts } => self.on_ingest_sst_result(ssts),
                 ExecResult::TransferLeader { term } => self.on_transfer_leader(term),
-                ExecResult::SetFlashbackState { .. } => {}
+                ExecResult::SetFlashbackState { region } => {
+                    self.on_flashback_memory_set(region.get_is_in_flashback())
+                }
             }
         }
 
@@ -4963,7 +4856,7 @@ where
         let region_id = self.region_id();
         // When in the flashback state, we should not allow any other request to be
         // proposed.
-        if self.fsm.peer.flashback_state.is_some() {
+        if self.fsm.peer.is_in_flashback {
             self.ctx.raft_metrics.invalid_proposal.flashback.inc();
             let flags = WriteBatchFlags::from_bits_truncate(msg.get_header().get_flags());
             if !flags.contains(WriteBatchFlags::FLASHBACK) {
@@ -6196,6 +6089,13 @@ where
             true,
         );
         self.fsm.has_ready = true;
+    }
+
+    fn on_flashback_memory_set(&mut self, is_in_flashback: bool) {
+        // set flashback memory
+        self.fsm.peer.is_in_flashback = is_in_flashback;
+        // Let the leader lease to None to ensure that local reads are not executed.
+        self.fsm.peer.leader_lease_mut().expire_remote_lease();
     }
 
     /// Verify and store the hash to state. return true means the hash has been

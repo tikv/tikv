@@ -6,7 +6,6 @@ use std::sync::Arc;
 use std::{borrow::Cow, fmt};
 
 use collections::HashSet;
-use crossbeam::channel::Sender;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use futures::channel::mpsc::UnboundedSender;
 use kvproto::{
@@ -514,8 +513,6 @@ where
     UnsafeRecoveryWaitApply(UnsafeRecoveryWaitApplySyncer),
     UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSyncer),
     SnapshotRecoveryWaitApply(SnapshotRecoveryWaitApplySyncer),
-    PrepareFlashback(Sender<bool>),
-    FinishFlashback(Sender<bool>),
     CheckPendingAdmin(UnboundedSender<CheckAdminResponse>),
 }
 
