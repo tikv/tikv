@@ -2147,7 +2147,7 @@ mod tests {
         for i in 0..100 {
             let k = format!("k{:02}", i).into_bytes();
 
-            // Stale MVCC-PUTs will be cleaned in write CF's compaction filter.
+            // Stale MVCC-PUTs will be cleaned.
             must_get_none(&mut prefixed_engine, &k, 150);
 
             // However, MVCC-DELETIONs will be kept.
@@ -2804,7 +2804,7 @@ mod tests {
             for i in 10 * (region_id - 1)..10 * region_id {
                 let k = format!("k{:02}", i).into_bytes();
 
-                // Stale MVCC-PUTs will be cleaned in write CF's compaction filter.
+                // Stale MVCC-PUTs will be cleaned.
                 must_get_none_on_region(&mut engine, region_id, &k, delete_start_ts - 1);
 
                 // MVCC-DELETIONs is cleaned
