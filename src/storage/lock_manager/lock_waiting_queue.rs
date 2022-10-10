@@ -55,7 +55,6 @@
 //! for executing the future in a suitable place.
 
 use std::{
-    collections::BinaryHeap,
     future::Future,
     pin::Pin,
     result::Result,
@@ -71,7 +70,7 @@ use futures_util::compat::Future01CompatExt;
 use kvproto::kvrpcpb;
 use smallvec::SmallVec;
 use sync_wrapper::SyncWrapper;
-use tikv_util::{time::InstantExt, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{priority_queue::PriorityQueue, time::InstantExt, timer::GLOBAL_TIMER_HANDLE};
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
@@ -111,7 +110,7 @@ impl Eq for LockWaitEntry {}
 
 impl PartialOrd<Self> for LockWaitEntry {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        // Reverse it since the std BinaryHeap is max heap and we want to pop the
+        // Reverse it since the priority queue is a max heap and we want to pop the
         // minimal.
         other
             .parameters
@@ -122,7 +121,7 @@ impl PartialOrd<Self> for LockWaitEntry {
 
 impl Ord for LockWaitEntry {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Reverse it since the std BinaryHeap is max heap and we want to pop the
+        // Reverse it since the priority queue is a max heap and we want to pop the
         // minimal.
         other.parameters.start_ts.cmp(&self.parameters.start_ts)
     }
@@ -185,7 +184,7 @@ pub struct KeyLockWaitState {
     /// return it from a [`DelayedNotifyAllFuture`]. See
     /// [`LockWaitQueues::pop_for_waking_up`].
     legacy_wake_up_index: usize,
-    queue: BinaryHeap<Box<LockWaitEntry>>,
+    queue: PriorityQueue<LockWaitToken, Box<LockWaitEntry>>,
 
     /// The start_ts of the most recent waking up event.
     last_conflict_start_ts: TimeStamp,
@@ -201,7 +200,7 @@ impl KeyLockWaitState {
         Self {
             current_lock: kvrpcpb::LockInfo::default(),
             legacy_wake_up_index: 0,
-            queue: BinaryHeap::new(),
+            queue: PriorityQueue::new(),
             last_conflict_start_ts: TimeStamp::zero(),
             last_conflict_commit_ts: TimeStamp::zero(),
             delayed_notify_all_state: None,
@@ -219,7 +218,6 @@ pub struct LockWaitQueueInner {
 #[derive(Clone)]
 pub struct LockWaitQueues<L: LockManager> {
     inner: Arc<LockWaitQueueInner>,
-    #[allow(dead_code)]
     lock_mgr: L,
 }
 
@@ -256,7 +254,10 @@ impl<L: LockManager> LockWaitQueues<L> {
         if lock_wait_entry.legacy_wake_up_index.is_none() {
             lock_wait_entry.legacy_wake_up_index = Some(key_state.value().legacy_wake_up_index);
         }
-        key_state.value_mut().queue.push(lock_wait_entry);
+        key_state
+            .value_mut()
+            .queue
+            .push(lock_wait_entry.lock_wait_token, lock_wait_entry);
 
         let len = key_state.value_mut().queue.len();
         drop(key_state);
@@ -523,6 +524,62 @@ impl<L: LockManager> LockWaitQueues<L> {
         // Return the item to be woken up in resumable way.
         woken_up_resumable_entry
     }
+
+    /// Finds a specific LockWaitEntry by key and token, and removes it from the
+    /// queue. No extra operation will be performed on the removed entry.
+    /// The caller is responsible for finishing or cancelling the request to
+    /// let it return the response to the client.
+    pub fn remove_by_token(
+        &self,
+        key: &Key,
+        lock_wait_token: LockWaitToken,
+    ) -> Option<Box<LockWaitEntry>> {
+        let mut result = None;
+
+        // We don't want other threads insert any more entries between finding the
+        // queue is empty and removing the queue from the map. Wrap the logic
+        // within a call to `remove_if_mut` to avoid releasing lock during the
+        // procedure.
+        let removed_key = self.inner.queue_map.remove_if_mut(key, |_, v| {
+            if let Some(res) = v.queue.remove_by_key(lock_wait_token) {
+                LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.waiters.dec();
+                result = Some(res);
+            }
+            v.queue.is_empty()
+        });
+
+        if removed_key.is_some() {
+            LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.keys.dec();
+        }
+
+        result
+    }
+
+    #[allow(dead_code)]
+    pub(super) fn get_lock_mgr(&self) -> &L {
+        &self.lock_mgr
+    }
+
+    #[cfg(test)]
+    pub fn must_not_contain_key(&self, key: &[u8]) {
+        assert!(self.inner.queue_map.get(&Key::from_raw(key)).is_none());
+    }
+
+    #[cfg(test)]
+    pub fn must_have_next_entry(&self, key: &[u8], start_ts: impl Into<TimeStamp>) {
+        assert_eq!(
+            self.inner
+                .queue_map
+                .get(&Key::from_raw(key))
+                .unwrap()
+                .queue
+                .peek()
+                .unwrap()
+                .parameters
+                .start_ts,
+            start_ts.into()
+        );
+    }
 }
 
 #[cfg(test)]
@@ -540,6 +597,7 @@ mod tests {
     };
 
     struct TestLockWaitEntryHandle {
+        token: LockWaitToken,
         wake_up_rx: Receiver<Result<PessimisticLockRes, SharedError>>,
         cancel_cb: Box<dyn FnOnce()>,
     }
@@ -573,7 +631,7 @@ mod tests {
     // Additionally add some helper functions to the LockWaitQueues for simplifying
     // test code.
     impl<L: LockManager> LockWaitQueues<L> {
-        fn make_lock_info_pb(&self, key: &[u8], ts: impl Into<TimeStamp>) -> kvrpcpb::LockInfo {
+        pub fn make_lock_info_pb(&self, key: &[u8], ts: impl Into<TimeStamp>) -> kvrpcpb::LockInfo {
             let ts = ts.into();
             let mut lock_info = kvrpcpb::LockInfo::default();
             lock_info.set_lock_version(ts.into_inner());
@@ -590,13 +648,12 @@ mod tests {
             lock_info_pb: kvrpcpb::LockInfo,
         ) -> (Box<LockWaitEntry>, TestLockWaitEntryHandle) {
             let start_ts = start_ts.into();
-            let token = super::super::LockWaitToken(Some(1));
+            let token = LockWaitToken(Some(self.allocate_internal_id()));
             let dummy_request_cb = StorageCallback::PessimisticLock(Box::new(|_| ()));
             let dummy_ctx = LockWaitContext::new(
-                self.lock_mgr.clone(),
+                Key::from_raw(key),
+                self.clone(),
                 token,
-                start_ts,
-                start_ts,
                 dummy_request_cb,
                 false,
             );
@@ -638,6 +695,7 @@ mod tests {
             (
                 lock_wait_entry,
                 TestLockWaitEntryHandle {
+                    token,
                     wake_up_rx: rx,
                     cancel_cb: Box::new(cancel),
                 },
@@ -730,25 +788,6 @@ mod tests {
             res
         }
 
-        fn must_not_contain_key(&self, key: &[u8]) {
-            assert!(self.inner.queue_map.get(&Key::from_raw(key)).is_none());
-        }
-
-        fn must_have_next_entry(&self, key: &[u8], start_ts: impl Into<TimeStamp>) {
-            assert_eq!(
-                self.inner
-                    .queue_map
-                    .get(&Key::from_raw(key))
-                    .unwrap()
-                    .queue
-                    .peek()
-                    .unwrap()
-                    .parameters
-                    .start_ts,
-                start_ts.into()
-            );
-        }
-
         fn get_delayed_notify_id(&self, key: &[u8]) -> Option<u64> {
             self.inner
                 .queue_map
@@ -757,6 +796,13 @@ mod tests {
                 .delayed_notify_all_state
                 .as_ref()
                 .map(|(id, ..)| *id)
+        }
+
+        fn get_queue_length_of_key(&self, key: &[u8]) -> usize {
+            self.inner
+                .queue_map
+                .get(&Key::from_raw(key))
+                .map_or(0, |v| v.queue.len())
         }
     }
 
@@ -837,6 +883,47 @@ mod tests {
     }
 
     #[test]
+    fn test_removing_by_token() {
+        let queues = LockWaitQueues::new(DummyLockManager {});
+
+        queues.mock_lock_wait(b"k1", 10, 5, false);
+        let token11 = queues.mock_lock_wait(b"k1", 11, 5, false).token;
+        queues.mock_lock_wait(b"k1", 12, 5, false);
+        let token13 = queues.mock_lock_wait(b"k1", 13, 5, false).token;
+        queues.mock_lock_wait(b"k1", 14, 5, false);
+        assert_eq!(queues.get_queue_length_of_key(b"k1"), 5);
+
+        queues
+            .remove_by_token(&Key::from_raw(b"k1"), token11)
+            .unwrap()
+            .check_key(b"k1")
+            .check_start_ts(11);
+        queues
+            .remove_by_token(&Key::from_raw(b"k1"), token13)
+            .unwrap()
+            .check_key(b"k1")
+            .check_start_ts(13);
+        assert_eq!(queues.get_queue_length_of_key(b"k1"), 3);
+
+        // Removing not-existing entry takes no effect.
+        assert!(
+            queues
+                .remove_by_token(&Key::from_raw(b"k1"), token11)
+                .is_none()
+        );
+        assert!(
+            queues
+                .remove_by_token(&Key::from_raw(b"k2"), token11)
+                .is_none()
+        );
+        assert_eq!(queues.get_queue_length_of_key(b"k1"), 3);
+
+        queues.must_pop(b"k1", 5, 6).check_start_ts(10);
+        queues.must_pop(b"k1", 5, 6).check_start_ts(12);
+        queues.must_pop(b"k1", 5, 6).check_start_ts(14);
+    }
+
+    #[test]
     fn test_dropping_cancelled_entries() {
         let queues = LockWaitQueues::new(DummyLockManager {});
 
@@ -846,9 +933,13 @@ mod tests {
         let h13 = queues.mock_lock_wait(b"k1", 13, 5, false);
         queues.mock_lock_wait(b"k1", 14, 5, false);
 
+        assert_eq!(queues.get_queue_length_of_key(b"k1"), 5);
+
         h10.cancel();
         h11.cancel();
         h13.cancel();
+
+        assert_eq!(queues.get_queue_length_of_key(b"k1"), 2);
 
         for &expected_start_ts in &[12u64, 14] {
             queues
