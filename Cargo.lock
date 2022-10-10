@@ -395,6 +395,8 @@ version = "0.0.1"
 dependencies = [
  "api_version",
  "async-channel",
+ "aws",
+ "causal_ts",
  "collections",
  "concurrency_manager",
  "crc64fast",
@@ -1043,7 +1045,7 @@ dependencies = [
  "clap 2.33.0",
  "criterion-plot",
  "csv",
- "itertools 0.10.0",
+ "itertools",
  "lazy_static",
  "num-traits",
  "oorandom",
@@ -1085,7 +1087,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d00996de9f2f7559f7f4dc286073197f83e92256a59ed395f9aac01fe717da57"
 dependencies = [
  "cast",
- "itertools 0.10.0",
+ "itertools",
 ]
 
 [[package]]
@@ -2541,15 +2543,6 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "284f18f85651fe11e8a991b2adb42cb078325c996ed026d994719efcfca1d54b"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37d572918e350e82412fe766d24b15e6682fb2ed2bbe018280caa810397cb319"
@@ -2744,7 +2737,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#de8310c3983a30236ea03f802ed0c2401a4908ae"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.1#da5a68f76930f1f2f7ec5598f6996541fc64e53b"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2763,7 +2756,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#de8310c3983a30236ea03f802ed0c2401a4908ae"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.1#da5a68f76930f1f2f7ec5598f6996541fc64e53b"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3940,7 +3933,7 @@ checksum = "355f634b43cdd80724ee7848f95770e7e70eefa6dcf14fea676216573b8fd603"
 dependencies = [
  "bytes",
  "heck 0.3.1",
- "itertools 0.10.0",
+ "itertools",
  "log",
  "multimap",
  "petgraph",
@@ -3957,7 +3950,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "600d2f334aa05acb02a755e217ef1ab6dea4d51b58b7846588b747edec04efba"
 dependencies = [
  "anyhow",
- "itertools 0.10.0",
+ "itertools",
  "proc-macro2",
  "quote",
  "syn",
@@ -4050,8 +4043,9 @@ dependencies = [
 
 [[package]]
 name = "raft-engine"
-version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine.git#0e066f8626b43b2a8a0a6bc9c7f0502b6fdc3d05"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f0c797114b1503093f19fb2cb81eaf399b2e9a8c5ac04670910ed53cca3fb2b"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4081,8 +4075,9 @@ dependencies = [
 
 [[package]]
 name = "raft-engine-ctl"
-version = "0.1.0"
-source = "git+https://github.com/tikv/raft-engine.git#0e066f8626b43b2a8a0a6bc9c7f0502b6fdc3d05"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ad2f818a3c64f3228efd18c44bffbc27c5c6987d01919dbcd35eeb13b278550"
 dependencies = [
  "clap 3.1.6",
  "env_logger",
@@ -4149,7 +4144,7 @@ dependencies = [
  "getset",
  "grpcio-health",
  "into_other",
- "itertools 0.10.0",
+ "itertools",
  "keys",
  "kvproto",
  "lazy_static",
@@ -4572,7 +4567,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#de8310c3983a30236ea03f802ed0c2401a4908ae"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.1#da5a68f76930f1f2f7ec5598f6996541fc64e53b"
 dependencies = [
  "libc 0.2.125",
  "librocksdb_sys",
@@ -5888,7 +5883,7 @@ dependencies = [
  "collections",
  "fail",
  "futures 0.3.15",
- "itertools 0.10.0",
+ "itertools",
  "kvproto",
  "log_wrappers",
  "match_template",
@@ -5946,7 +5941,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "6.1.0-alpha"
+version = "6.1.1"
 dependencies = [
  "anyhow",
  "api_version",
@@ -5975,6 +5970,7 @@ dependencies = [
  "example_plugin",
  "fail",
  "file_system",
+ "flate2",
  "futures 0.3.15",
  "futures-executor",
  "futures-timer",
@@ -5987,7 +5983,7 @@ dependencies = [
  "hyper-openssl",
  "hyper-tls",
  "into_other",
- "itertools 0.10.0",
+ "itertools",
  "keys",
  "kvproto",
  "lazy_static",
@@ -6118,9 +6114,9 @@ dependencies = [
 
 [[package]]
 name = "tikv-jemalloc-ctl"
-version = "0.4.2"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb833c46ecbf8b6daeccb347cefcabf9c1beb5c9b0f853e1cec45632d9963e69"
+checksum = "e37706572f4b151dff7a0146e040804e9c26fe3a3118591112f05cf12a4216c1"
 dependencies = [
  "libc 0.2.125",
  "paste",
@@ -6129,9 +6125,9 @@ dependencies = [
 
 [[package]]
 name = "tikv-jemalloc-sys"
-version = "0.4.3+5.2.1-patched.2"
+version = "0.5.0+5.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1792ccb507d955b46af42c123ea8863668fae24d03721e40cad6a41773dbb49"
+checksum = "aeab4310214fe0226df8bfeb893a291a58b19682e8a07e1e1d4483ad4200d315"
 dependencies = [
  "cc",
  "fs_extra",
@@ -6140,9 +6136,9 @@ dependencies = [
 
 [[package]]
 name = "tikv-jemallocator"
-version = "0.4.3"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5b7bcecfafe4998587d636f9ae9d55eb9d0499877b88757767c346875067098"
+checksum = "20612db8a13a6c06d57ec83953694185a367e16945f66565e8028d2c0bd76979"
 dependencies = [
  "libc 0.2.125",
  "tikv-jemalloc-sys",
@@ -7028,12 +7024,10 @@ dependencies = [
 
 [[package]]
 name = "zstd-sys"
-version = "1.4.19+zstd.1.4.8"
+version = "2.0.1+zstd.1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec24a9273d24437afb8e71b16f3d9a5d569193cccdb7896213b59f552f387674"
+checksum = "9fd07cbbc53846d9145dbffdf6dd09a7a0aa52be46741825f5c97bdd4f73f12b"
 dependencies = [
  "cc",
- "glob",
- "itertools 0.9.0",
  "libc 0.2.125",
 ]
