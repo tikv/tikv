@@ -7,6 +7,7 @@
 extern crate tikv_alloc;
 
 mod lock;
+mod mark;
 mod timestamp;
 mod types;
 mod write;
@@ -16,6 +17,7 @@ use std::io;
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::kvrpcpb;
 pub use lock::{Lock, LockType, PessimisticLock};
+pub use mark::{Mark, MarkType};
 use thiserror::Error;
 pub use timestamp::{TimeStamp, TsSet, TSO_PHYSICAL_SHIFT_BITS};
 pub use types::{
