@@ -1026,18 +1026,15 @@ where
                 break;
             }
 
-            let peer = find_peer_by_id(&self.region, self.id).unwrap();
-            if !peer.is_witness {
-                let expect_index = self.apply_state.get_applied_index() + 1;
-                if expect_index != entry.get_index() {
-                    panic!(
-                        "{} expect index {}, but got {}, ctx {}",
-                        self.tag,
-                        expect_index,
-                        entry.get_index(),
-                        apply_ctx.tag,
-                    );
-                }
+            let expect_index = self.apply_state.get_applied_index() + 1;
+            if expect_index != entry.get_index() {
+                panic!(
+                    "{} expect index {}, but got {}, ctx {}",
+                    self.tag,
+                    expect_index,
+                    entry.get_index(),
+                    apply_ctx.tag,
+                );
             }
 
             // NOTE: before v5.0, `EntryType::EntryConfChangeV2` entry is handled by
@@ -3038,7 +3035,11 @@ pub struct Apply<C> {
     pub entries_size: usize,
     pub cbs: Vec<Proposal<C>>,
     pub bucket_meta: Option<Arc<BucketMeta>>,
-    pub prev_state: Option<u64>,
+    // Used for witness, as witness would skip applying write commands, so the applied index in the
+    // apply fsm is not updated in time. Some admin commands would check the current applied index,
+    // such as `CompactLog`. So pass it to the apply fsm to override applied index at begin to
+    // avoid unexpected failure.
+    pub last_applied_state: Option<(u64, u64)>, // (applied_index, applied_term)
 }
 
 impl<C: WriteCallback> Apply<C> {
@@ -3051,7 +3052,7 @@ impl<C: WriteCallback> Apply<C> {
         entries: Vec<Entry>,
         cbs: Vec<Proposal<C>>,
         buckets: Option<Arc<BucketMeta>>,
-        prev_state: Option<u64>,
+        last_applied_state: Option<(u64, u64)>,
     ) -> Apply<C> {
         let mut entries_size = 0;
         for e in &entries {
@@ -3068,7 +3069,7 @@ impl<C: WriteCallback> Apply<C> {
             entries_size,
             cbs,
             bucket_meta: buckets,
-            prev_state,
+            last_applied_state,
         }
     }
 
@@ -3492,8 +3493,10 @@ where
             return;
         }
 
-        if let Some(idx) = apply.prev_state.take() {
-            self.delegate.apply_state.applied_index = idx;
+        if let Some((idx, term)) = apply.last_applied_state.take() {
+            // override the applied index for witness, see more the comment of `Apply`
+            self.delegate.apply_state.set_applied_index(idx);
+            self.delegate.applied_term = term;
         }
 
         let mut entries = Vec::new();
@@ -3697,6 +3700,11 @@ where
 
     fn handle_snapshot(&mut self, apply_ctx: &mut ApplyContext<EK>, snap_task: GenSnapTask) {
         if self.delegate.pending_remove || self.delegate.stopped {
+            return;
+        }
+        let peer = find_peer_by_id(&self.delegate.region, self.delegate.id).unwrap();
+        if peer.is_witness {
+            // witness shouldn't generate snapshot.
             return;
         }
         let applied_index = self.delegate.apply_state.get_applied_index();

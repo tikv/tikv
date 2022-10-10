@@ -989,6 +989,8 @@ where
     pub pending_request_snapshot_count: Arc<AtomicUsize>,
     /// The index of last scheduled committed raft log.
     pub last_applying_idx: u64,
+    /// The term of last applying idx.
+    pub last_applying_term: u64,
     /// The index of last compacted raft log. It is used for the next compact
     /// log task.
     pub last_compacted_idx: u64,
@@ -1118,6 +1120,7 @@ where
         )?;
 
         let applied_index = ps.applied_index();
+        let applied_term = ps.applied_term();
 
         let raft_cfg = raft::Config {
             id: peer.get_id(),
@@ -1170,6 +1173,7 @@ where
             leader_missing_time: Some(Instant::now()),
             tag: tag.clone(),
             last_applying_idx: applied_index,
+            last_applying_term: applied_term,
             last_compacted_idx: 0,
             last_urgent_proposal_idx: u64::MAX,
             last_committed_split_idx: 0,
@@ -2573,6 +2577,7 @@ where
 
                     // Snapshot has been applied.
                     self.last_applying_idx = self.get_store().truncated_index();
+                    self.last_applying_term = self.get_store().truncated_term();
                     self.last_compacted_idx = self.last_applying_idx + 1;
                     self.raft_group.advance_apply_to(self.last_applying_idx);
                     self.cmd_epoch_checker.advance_apply(
@@ -2995,6 +3000,7 @@ where
         }
         if let Some(last_entry) = committed_entries.last() {
             self.last_applying_idx = last_entry.get_index();
+            self.last_applying_term = last_entry.get_term();
             if self.last_applying_idx >= self.last_urgent_proposal_idx {
                 // Urgent requests are flushed, make it lazy again.
                 self.raft_group.skip_bcast_commit(true);
@@ -3049,7 +3055,7 @@ where
                 cbs,
                 self.region_buckets.as_ref().map(|b| b.meta.clone()),
                 if self.is_witness() {
-                    Some(self.last_applying_idx)
+                    Some((self.last_applying_idx, self.last_applying_term))
                 } else {
                     None
                 },
