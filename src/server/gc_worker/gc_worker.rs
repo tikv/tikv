@@ -1639,6 +1639,7 @@ mod tests {
 
     use api_version::{ApiV2, KvFormat, RawValue};
 <<<<<<< HEAD
+<<<<<<< HEAD
     use engine_rocks::{util::get_cf_handle, RocksEngine};
 <<<<<<< HEAD
     use engine_traits::Peekable as _;
@@ -1646,6 +1647,9 @@ mod tests {
 =======
     use engine_rocks::{util::get_cf_handle, RocksDbOptions, RocksEngine};
 >>>>>>> 6ade98003 (*: fix case dependancy issue)
+=======
+    use engine_rocks::{util::get_cf_handle, RocksDbOptions, RocksEngine, RocksCfOptions};
+>>>>>>> 73b9ea379 (*: work-around a warning)
     use engine_test::{
         ctor::DbOptions,
         kv::{TestTabletFactory, TestTabletFactoryV2},
@@ -1706,6 +1710,8 @@ mod tests {
             Engine, Storage, TestStorageBuilderApiV1,
         },
     };
+
+    use engine_traits::CF_RAFT;
 
     fn init_region(
         start_key: &[u8],
@@ -2596,7 +2602,6 @@ mod tests {
         assert!(ks.is_empty());
     }
 
-    #[allow(non_snake_case)]
     // setup engine and prepare some data:
     //  three regions:
     //  region 1: includes ("k00", "value-00") to ("k09", "value-09")
@@ -2687,6 +2692,7 @@ mod tests {
                         cfg_rocksdb.writecf.build_opt(&cache, None, region_id, 10),
                     ),
                     CF_RAFT => (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
+                    _ => (*cf, RocksCfOptions::default()),
                 })
                 .collect();
             let tablet_path = factory.tablet_path(region_id, 10);
