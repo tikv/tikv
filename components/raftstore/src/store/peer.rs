@@ -453,7 +453,7 @@ impl<S: Snapshot> Drop for CmdEpochChecker<S> {
 }
 
 #[derive(PartialEq, Debug)]
-pub struct ApplyLocalReadContext {
+pub struct ApplySnapshotContext {
     /// The number of ready which has a snapshot.
     pub ready_number: u64,
     /// Whether this snapshot is scheduled.
@@ -1040,7 +1040,7 @@ where
     /// The last known persisted number.
     persisted_number: u64,
     /// The context of applying snapshot.
-    apply_snap_ctx: Option<ApplyLocalReadContext>,
+    apply_snap_ctx: Option<ApplySnapshotContext>,
     /// region buckets.
     pub region_buckets: Option<BucketStat>,
     pub last_region_buckets: Option<BucketStat>,
@@ -2861,7 +2861,7 @@ where
             // When applying snapshot, there is no log applied and not compacted yet.
             self.raft_log_size_hint = 0;
 
-            self.apply_snap_ctx = Some(ApplyLocalReadContext {
+            self.apply_snap_ctx = Some(ApplySnapshotContext {
                 ready_number,
                 scheduled: false,
                 msgs,
