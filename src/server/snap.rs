@@ -190,13 +190,18 @@ pub fn send_snap(
             Ok(_) => {
                 fail_point!("snapshot_delete_after_send");
                 mgr.delete_snapshot(&key, &chunks.snap, true);
-                let mut stat = SnapshotStat::default();
-                stat.set_region_id(key.region_id);
-                stat.set_transport_size(total_size);
-                stat.set_generate_duration_sec(key.generate_duration_sec);
-                stat.set_send_duration_sec(timer.saturating_elapsed().as_secs());
-                stat.set_total_duration_sec(UnixSecs::now().into_inner() - key.start);
-                mgr.collect_stat(stat);
+                let cost = UnixSecs::now().into_inner() - key.start;
+                // it should ignore if the duration of snapshot is less than 1s to decrease the
+                // grpc data size.
+                if cost >= 1 {
+                    let mut stat = SnapshotStat::default();
+                    stat.set_region_id(key.region_id);
+                    stat.set_transport_size(total_size);
+                    stat.set_generate_duration_sec(key.generate_duration_sec);
+                    stat.set_send_duration_sec(timer.saturating_elapsed().as_secs());
+                    stat.set_total_duration_sec(UnixSecs::now().into_inner() - key.start);
+                    mgr.collect_stat(stat);
+                }
                 // TODO: improve it after rustc resolves the bug.
                 // Call `info` in the closure directly will cause rustc
                 // panic with `Cannot create local mono-item for DefId`.
