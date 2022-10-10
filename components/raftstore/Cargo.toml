@@ -32,6 +32,7 @@ batch-system = { path = "../batch-system", default-features = false }
 bitflags = "1.0.1"
 byteorder = "1.2"
 bytes = "1.0"
+causal_ts = { path = "../causal_ts" }
 collections = { path = "../collections" }
 concurrency_manager = { path = "../concurrency_manager", default-features = false }
 crc32fast = "1.2"

@@ -13,6 +13,8 @@ pub enum ErrorInner {
 
     #[error("Data padding is incorrect")]
     BadPadding,
+    #[error("key not found")]
+    KeyNotFound,
 }
 
 impl ErrorInner {
@@ -56,6 +58,7 @@ impl ErrorCodeExt for Error {
         match self.0.as_ref() {
             ErrorInner::Io(_) => error_code::codec::IO,
             ErrorInner::BadPadding => error_code::codec::BAD_PADDING,
+            ErrorInner::KeyNotFound => error_code::codec::KEY_NOT_FOUND,
         }
     }
 }
