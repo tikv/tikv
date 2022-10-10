@@ -25,7 +25,6 @@ failpoints = [
   "raftstore/failpoints",
   "tikv_util/failpoints",
   "engine_rocks/failpoints",
-  "causal_ts/failpoints",
 ]
 cloud-aws = [
   "encryption_export/cloud-aws",
