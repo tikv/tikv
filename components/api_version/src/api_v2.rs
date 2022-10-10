@@ -262,6 +262,25 @@ impl ApiV2 {
         [key[1], key[2], key[3]]
     }
 
+    pub fn get_uint32_keyspace_id(keyspace_id: [u8; KEYSPACE_ID_LEN]) -> u32 {
+        let ksid = [0, keyspace_id[0], keyspace_id[1], keyspace_id[2]];
+        let num = unsafe { std::mem::transmute::<[u8; 4], u32>(ksid) }.to_be();
+        return num;
+    }
+
+    pub fn get_keyspace_id_str(key: &[u8]) -> String {
+        let key_mode = ApiV2::parse_key_mode(key);
+
+        // let mut keyspace_id_string = String::new();
+        if key_mode == KeyMode::Raw || key_mode == KeyMode::Txn {
+            let keyspace_id = ApiV2::get_keyspace_id(key);
+            let keyspace_id_u32 = ApiV2::get_uint32_keyspace_id(keyspace_id);
+            let keyspace_id_string = keyspace_id_u32.to_string();
+            return keyspace_id_string;
+        }
+        return String::new();
+    }
+
     pub const ENCODED_LOGICAL_DELETE: [u8; 1] = [ValueMeta::DELETE_FLAG.bits];
 }
 
@@ -301,6 +320,7 @@ mod tests {
     use txn_types::{Key, TimeStamp};
 
     use crate::{ApiV2, KvFormat, RawValue};
+    use crate::api_v2::TXN_KEY_PREFIX;
 
     #[test]
     fn test_key_decode_err() {
@@ -447,5 +467,21 @@ mod tests {
             assert_eq!(ts, decoded_ts1.unwrap(), "case {}", idx);
             assert_eq!(ts, decoded_ts2, "case {}", idx);
         }
+    }
+
+    #[test]
+    fn test_keyspace_id_to_string() {
+        let keyspace_id_pd_alloc = 1 as u32;
+        let keyspace_id_pd_alloc_str = keyspace_id_pd_alloc.to_string();
+        let mut keyspace_id_bytes = keyspace_id_pd_alloc.to_be_bytes();
+        let user_key_prefix = &[
+            TXN_KEY_PREFIX,
+            keyspace_id_bytes[1],
+            keyspace_id_bytes[2],
+            keyspace_id_bytes[3],
+        ];
+
+        let keyspace_id_str = ApiV2::get_keyspace_id_str(user_key_prefix);
+        assert_eq!(keyspace_id_pd_alloc_str, keyspace_id_str);
     }
 }
