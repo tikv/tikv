@@ -71,7 +71,7 @@ impl TestEngineBuilder {
     }
 
     /// Called at multi-rocksdb scenarios
-    pub fn set_tablet_ids(mut self, region_id: u64, suffix_id: u64) -> Self {
+    pub fn tablet_ids(mut self, region_id: u64, suffix_id: u64) -> Self {
         self.region_id = region_id;
         self.suffix_id = suffix_id;
         self
