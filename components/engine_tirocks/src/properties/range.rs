@@ -1,32 +1,20 @@
-// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    cmp,
-    collections::HashMap,
-    io::Read,
-    ops::{Deref, DerefMut},
-    u64,
-};
+use std::{ffi::CStr, io::Read, path::Path};
 
-use api_version::{ApiV2, KeyMode, KvFormat};
-use engine_traits::{raw_ttl::ttl_current_ts, MvccProperties, Range};
-use rocksdb::{
-    DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
-    UserCollectedProperties,
-};
-use tikv_util::{
-    codec::{
-        number::{self, NumberEncoder},
-        Error, Result,
+use codec::prelude::{NumberDecoder, NumberEncoder};
+use engine_traits::{MvccProperties, Range, Result, CF_DEFAULT, CF_LOCK, CF_WRITE, LARGE_CFS};
+use tikv_util::{box_err, box_try, debug, info};
+use tirocks::{
+    properties::table::user::{
+        Context, EntryType, SequenceNumber, TablePropertiesCollector,
+        TablePropertiesCollectorFactory, UserCollectedProperties,
     },
-    info,
+    titan::TitanBlobIndex,
 };
-use txn_types::{Key, Write, WriteType};
 
-use crate::{
-    decode_properties::{DecodeProperties, IndexHandle, IndexHandles},
-    mvcc_properties::*,
-};
+use super::{mvcc::decode_mvcc, DecodeProperties, EncodeProperties, PropIndexes};
+use crate::RocksEngine;
 
 const PROP_TOTAL_SIZE: &str = "tikv.total_size";
 const PROP_SIZE_INDEX: &str = "tikv.size_index";
@@ -34,100 +22,19 @@ const PROP_RANGE_INDEX: &str = "tikv.range_index";
 pub const DEFAULT_PROP_SIZE_INDEX_DISTANCE: u64 = 4 * 1024 * 1024;
 pub const DEFAULT_PROP_KEYS_INDEX_DISTANCE: u64 = 40 * 1024;
 
-fn get_entry_size(value: &[u8], entry_type: DBEntryType) -> std::result::Result<u64, ()> {
-    match entry_type {
-        DBEntryType::Put => Ok(value.len() as u64),
-        DBEntryType::BlobIndex => match TitanBlobIndex::decode(value) {
-            Ok(index) => Ok(index.blob_size + value.len() as u64),
-            Err(_) => Err(()),
-        },
-        _ => Err(()),
-    }
-}
-
 // Deprecated. Only for compatible issue from v2.0 or older version.
 #[derive(Debug, Default)]
 pub struct SizeProperties {
     pub total_size: u64,
-    pub index_handles: IndexHandles,
+    pub prop_indexes: PropIndexes,
 }
 
 impl SizeProperties {
-    pub fn encode(&self) -> UserProperties {
-        let mut props = UserProperties::new();
-        props.encode_u64(PROP_TOTAL_SIZE, self.total_size);
-        props.encode_handles(PROP_SIZE_INDEX, &self.index_handles);
-        props
-    }
-
-    pub fn decode<T: DecodeProperties>(props: &T) -> Result<SizeProperties> {
+    fn decode(props: &impl DecodeProperties) -> codec::Result<SizeProperties> {
         Ok(SizeProperties {
             total_size: props.decode_u64(PROP_TOTAL_SIZE)?,
-            index_handles: props.decode_handles(PROP_SIZE_INDEX)?,
+            prop_indexes: props.decode_indexes(PROP_SIZE_INDEX)?,
         })
-    }
-}
-
-pub struct UserProperties(pub HashMap<Vec<u8>, Vec<u8>>);
-
-impl Deref for UserProperties {
-    type Target = HashMap<Vec<u8>, Vec<u8>>;
-    fn deref(&self) -> &HashMap<Vec<u8>, Vec<u8>> {
-        &self.0
-    }
-}
-
-impl DerefMut for UserProperties {
-    fn deref_mut(&mut self) -> &mut HashMap<Vec<u8>, Vec<u8>> {
-        &mut self.0
-    }
-}
-
-impl UserProperties {
-    pub fn new() -> UserProperties {
-        UserProperties(HashMap::new())
-    }
-
-    fn encode(&mut self, name: &str, value: Vec<u8>) {
-        self.insert(name.as_bytes().to_owned(), value);
-    }
-
-    pub fn encode_u64(&mut self, name: &str, value: u64) {
-        let mut buf = Vec::with_capacity(8);
-        buf.encode_u64(value).unwrap();
-        self.encode(name, buf);
-    }
-
-    pub fn encode_handles(&mut self, name: &str, handles: &IndexHandles) {
-        self.encode(name, handles.encode())
-    }
-}
-
-impl Default for UserProperties {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl DecodeProperties for UserProperties {
-    fn decode(&self, k: &str) -> Result<&[u8]> {
-        match self.0.get(k.as_bytes()) {
-            Some(v) => Ok(v.as_slice()),
-            None => Err(Error::KeyNotFound),
-        }
-    }
-}
-
-// FIXME: This is a temporary hack to implement a foreign trait on a foreign
-// type until the engine abstraction situation is straightened out.
-pub struct UserCollectedPropertiesDecoder<'a>(pub &'a UserCollectedProperties);
-
-impl<'a> DecodeProperties for UserCollectedPropertiesDecoder<'a> {
-    fn decode(&self, k: &str) -> Result<&[u8]> {
-        match self.0.get(k.as_bytes()) {
-            Some(v) => Ok(v),
-            None => Err(Error::KeyNotFound),
-        }
     }
 }
 
@@ -151,20 +58,18 @@ impl RangeProperties {
         &self.offsets[idx].1
     }
 
-    pub fn encode(&self) -> UserProperties {
+    fn encode(&self, props: &mut impl EncodeProperties) {
         let mut buf = Vec::with_capacity(1024);
         for (k, offsets) in &self.offsets {
-            buf.encode_u64(k.len() as u64).unwrap();
+            buf.write_u64(k.len() as u64).unwrap();
             buf.extend(k);
-            buf.encode_u64(offsets.size).unwrap();
-            buf.encode_u64(offsets.keys).unwrap();
+            buf.write_u64(offsets.size).unwrap();
+            buf.write_u64(offsets.keys).unwrap();
         }
-        let mut props = UserProperties::new();
-        props.encode(PROP_RANGE_INDEX, buf);
-        props
+        props.encode(PROP_RANGE_INDEX, &buf);
     }
 
-    pub fn decode<T: DecodeProperties>(props: &T) -> Result<RangeProperties> {
+    pub(super) fn decode(props: &impl DecodeProperties) -> codec::Result<RangeProperties> {
         match RangeProperties::decode_from_range_properties(props) {
             Ok(res) => return Ok(res),
             Err(e) => info!(
@@ -175,16 +80,18 @@ impl RangeProperties {
         SizeProperties::decode(props).map(|res| res.into())
     }
 
-    fn decode_from_range_properties<T: DecodeProperties>(props: &T) -> Result<RangeProperties> {
+    fn decode_from_range_properties(
+        props: &impl DecodeProperties,
+    ) -> codec::Result<RangeProperties> {
         let mut res = RangeProperties::default();
         let mut buf = props.decode(PROP_RANGE_INDEX)?;
         while !buf.is_empty() {
-            let klen = number::decode_u64(&mut buf)?;
+            let klen = buf.read_u64()?;
             let mut k = vec![0; klen as usize];
             buf.read_exact(&mut k)?;
             let offsets = RangeOffsets {
-                size: number::decode_u64(&mut buf)?,
-                keys: number::decode_u64(&mut buf)?,
+                size: buf.read_u64()?,
+                keys: buf.read_u64()?,
             };
             res.offsets.push((k, offsets));
         }
@@ -275,15 +182,20 @@ impl RangeProperties {
 impl From<SizeProperties> for RangeProperties {
     fn from(p: SizeProperties) -> RangeProperties {
         let mut res = RangeProperties::default();
-        for (key, size_handle) in p.index_handles.into_map() {
+        for (key, size_index) in p.prop_indexes.into_map() {
             let range = RangeOffsets {
-                size: size_handle.offset,
+                // For SizeProperties, the offset is accumulation of the size.
+                size: size_index.offset,
                 ..Default::default()
             };
             res.offsets.push((key, range));
         }
         res
     }
+}
+
+fn range_properties_collector_name() -> &'static CStr {
+    CStr::from_bytes_with_nul(b"tikv.range-properties-collector\0").unwrap()
 }
 
 pub struct RangePropertiesCollector {
@@ -317,28 +229,58 @@ impl RangePropertiesCollector {
         }
     }
 
+    #[inline]
     fn size_in_last_range(&self) -> u64 {
         self.cur_offsets.size - self.last_offsets.size
     }
 
+    #[inline]
     fn keys_in_last_range(&self) -> u64 {
         self.cur_offsets.keys - self.last_offsets.keys
     }
 
+    #[inline]
     fn insert_new_point(&mut self, key: Vec<u8>) {
         self.last_offsets = self.cur_offsets;
         self.props.offsets.push((key, self.cur_offsets));
     }
+
+    #[inline]
+    fn finish(&mut self, props: &mut impl EncodeProperties) {
+        if self.size_in_last_range() > 0 || self.keys_in_last_range() > 0 {
+            let key = self.last_key.clone();
+            self.insert_new_point(key);
+        }
+        self.props.encode(props);
+    }
 }
 
 impl TablePropertiesCollector for RangePropertiesCollector {
-    fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
+    #[inline]
+    fn name(&self) -> &CStr {
+        range_properties_collector_name()
+    }
+
+    #[inline]
+    fn add(
+        &mut self,
+        key: &[u8],
+        value: &[u8],
+        entry_type: EntryType,
+        _: SequenceNumber,
+        _: u64,
+    ) -> tirocks::Result<()> {
         // size
-        let size = match get_entry_size(value, entry_type) {
-            Ok(entry_size) => key.len() as u64 + entry_size,
-            Err(_) => return,
+        let entry_size = match entry_type {
+            EntryType::kEntryPut => value.len() as u64,
+            EntryType::kEntryBlobIndex => match TitanBlobIndex::decode(value) {
+                Ok(index) => index.blob_size + value.len() as u64,
+                // Perhaps should panic?
+                Err(_) => return Ok(()),
+            },
+            _ => return Ok(()),
         };
-        self.cur_offsets.size += size;
+        self.cur_offsets.size += entry_size + key.len() as u64;
         // keys
         self.cur_offsets.keys += 1;
         // Add the start key for convenience.
@@ -350,14 +292,13 @@ impl TablePropertiesCollector for RangePropertiesCollector {
         }
         self.last_key.clear();
         self.last_key.extend_from_slice(key);
+        Ok(())
     }
 
-    fn finish(&mut self) -> HashMap<Vec<u8>, Vec<u8>> {
-        if self.size_in_last_range() > 0 || self.keys_in_last_range() > 0 {
-            let key = self.last_key.clone();
-            self.insert_new_point(key);
-        }
-        self.props.encode().0
+    #[inline]
+    fn finish(&mut self, prop: &mut UserCollectedProperties) -> tirocks::Result<()> {
+        self.finish(prop);
+        Ok(())
     }
 }
 
@@ -367,6 +308,7 @@ pub struct RangePropertiesCollectorFactory {
 }
 
 impl Default for RangePropertiesCollectorFactory {
+    #[inline]
     fn default() -> Self {
         RangePropertiesCollectorFactory {
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
@@ -375,169 +317,27 @@ impl Default for RangePropertiesCollectorFactory {
     }
 }
 
-impl TablePropertiesCollectorFactory<RangePropertiesCollector> for RangePropertiesCollectorFactory {
-    fn create_table_properties_collector(&mut self, _: u32) -> RangePropertiesCollector {
+impl TablePropertiesCollectorFactory for RangePropertiesCollectorFactory {
+    type Collector = RangePropertiesCollector;
+
+    #[inline]
+    fn name(&self) -> &CStr {
+        range_properties_collector_name()
+    }
+
+    #[inline]
+    fn create_table_properties_collector(&self, _: Context) -> RangePropertiesCollector {
         RangePropertiesCollector::new(self.prop_size_index_distance, self.prop_keys_index_distance)
     }
 }
 
-/// Can be used for write CF in TiDB & TxnKV scenario, or be used for default CF
-/// in RawKV scenario.
-pub struct MvccPropertiesCollector {
-    props: MvccProperties,
-    last_row: Vec<u8>,
-    num_errors: u64,
-    row_versions: u64,
-    cur_index_handle: IndexHandle,
-    row_index_handles: IndexHandles,
-    key_mode: KeyMode, // Use KeyMode::Txn for both TiDB & TxnKV, KeyMode::Raw for RawKV.
-    current_ts: u64,
-}
-
-impl MvccPropertiesCollector {
-    fn new(key_mode: KeyMode) -> MvccPropertiesCollector {
-        MvccPropertiesCollector {
-            props: MvccProperties::new(),
-            last_row: Vec::new(),
-            num_errors: 0,
-            row_versions: 0,
-            cur_index_handle: IndexHandle::default(),
-            row_index_handles: IndexHandles::new(),
-            key_mode,
-            current_ts: ttl_current_ts(),
-        }
-    }
-}
-
-impl TablePropertiesCollector for MvccPropertiesCollector {
-    fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
-        // TsFilter filters sst based on max_ts and min_ts during iterating.
-        // To prevent seeing outdated (GC) records, we should consider
-        // RocksDB delete entry type.
-        if entry_type != DBEntryType::Put && entry_type != DBEntryType::Delete {
-            return;
-        }
-
-        if !keys::validate_data_key(key) {
-            self.num_errors += 1;
-            return;
-        }
-
-        let (k, ts) = match Key::split_on_ts_for(key) {
-            Ok((k, ts)) => (k, ts),
-            Err(_) => {
-                self.num_errors += 1;
-                return;
-            }
-        };
-
-        self.props.min_ts = cmp::min(self.props.min_ts, ts);
-        self.props.max_ts = cmp::max(self.props.max_ts, ts);
-        if entry_type == DBEntryType::Delete {
-            // Empty value for delete entry type, skip following properties.
-            return;
-        }
-
-        self.props.num_versions += 1;
-
-        if k != self.last_row.as_slice() {
-            self.props.num_rows += 1;
-            self.row_versions = 1;
-            self.last_row.clear();
-            self.last_row.extend(k);
-        } else {
-            self.row_versions += 1;
-        }
-        if self.row_versions > self.props.max_row_versions {
-            self.props.max_row_versions = self.row_versions;
-        }
-
-        if self.key_mode == KeyMode::Raw {
-            let decode_raw_value = ApiV2::decode_raw_value(value);
-            match decode_raw_value {
-                Ok(raw_value) => {
-                    if raw_value.is_valid(self.current_ts) {
-                        self.props.num_puts += 1;
-                    } else {
-                        self.props.num_deletes += 1;
-                    }
-                }
-                Err(_) => {
-                    self.num_errors += 1;
-                }
-            }
-        } else {
-            let write_type = match Write::parse_type(value) {
-                Ok(v) => v,
-                Err(_) => {
-                    self.num_errors += 1;
-                    return;
-                }
-            };
-
-            match write_type {
-                WriteType::Put => self.props.num_puts += 1,
-                WriteType::Delete => self.props.num_deletes += 1,
-                _ => {}
-            }
-        }
-
-        // Add new row.
-        if self.row_versions == 1 {
-            self.cur_index_handle.size += 1;
-            self.cur_index_handle.offset += 1;
-            if self.cur_index_handle.offset == 1
-                || self.cur_index_handle.size >= PROP_ROWS_INDEX_DISTANCE
-            {
-                self.row_index_handles
-                    .insert(self.last_row.clone(), self.cur_index_handle.clone());
-                self.cur_index_handle.size = 0;
-            }
-        }
-    }
-
-    fn finish(&mut self) -> HashMap<Vec<u8>, Vec<u8>> {
-        // Insert last handle.
-        if self.cur_index_handle.size > 0 {
-            self.row_index_handles
-                .insert(self.last_row.clone(), self.cur_index_handle.clone());
-        }
-        let mut res = RocksMvccProperties::encode(&self.props);
-        res.encode_u64(PROP_NUM_ERRORS, self.num_errors);
-        res.encode_handles(PROP_ROWS_INDEX, &self.row_index_handles);
-        res.0
-    }
-}
-
-/// Can be used for write CF of TiDB/TxnKV, default CF of RawKV.
-#[derive(Default)]
-pub struct MvccPropertiesCollectorFactory {}
-
-impl TablePropertiesCollectorFactory<MvccPropertiesCollector> for MvccPropertiesCollectorFactory {
-    fn create_table_properties_collector(&mut self, _: u32) -> MvccPropertiesCollector {
-        MvccPropertiesCollector::new(KeyMode::Txn)
-    }
-}
-
-#[derive(Default)]
-pub struct RawMvccPropertiesCollectorFactory {}
-
-impl TablePropertiesCollectorFactory<MvccPropertiesCollector>
-    for RawMvccPropertiesCollectorFactory
-{
-    fn create_table_properties_collector(&mut self, _: u32) -> MvccPropertiesCollector {
-        MvccPropertiesCollector::new(KeyMode::Raw)
-    }
-}
-
-pub fn get_range_entries_and_versions(
+fn get_range_entries_and_versions(
     engine: &crate::RocksEngine,
     cf: &str,
     start: &[u8],
     end: &[u8],
 ) -> Option<(u64, u64)> {
-    let range = Range::new(start, end);
-    let collection = match engine.get_properties_of_tables_in_range(cf, &[range]) {
+    let collection = match engine.properties_of_tables_in_range(cf, &[(start, end)]) {
         Ok(v) => v,
         Err(_) => return None,
     };
@@ -549,8 +349,8 @@ pub fn get_range_entries_and_versions(
     // Aggregate total MVCC properties and total number entries.
     let mut props = MvccProperties::new();
     let mut num_entries = 0;
-    for (_, v) in collection.iter() {
-        let mvcc = match RocksMvccProperties::decode(v.user_collected_properties()) {
+    for (_, v) in &*collection {
+        let mvcc = match decode_mvcc(v.user_collected_properties()) {
             Ok(v) => v,
             Err(_) => return None,
         };
@@ -561,19 +361,226 @@ pub fn get_range_entries_and_versions(
     Some((num_entries, props.num_versions))
 }
 
+impl engine_traits::RangePropertiesExt for RocksEngine {
+    fn get_range_approximate_keys(&self, range: Range<'_>, large_threshold: u64) -> Result<u64> {
+        // try to get from RangeProperties first.
+        match self.get_range_approximate_keys_cf(CF_WRITE, range, large_threshold) {
+            Ok(v) => {
+                return Ok(v);
+            }
+            Err(e) => debug!(
+                "failed to get keys from RangeProperties";
+                "err" => ?e,
+            ),
+        }
+
+        let start = &range.start_key;
+        let end = &range.end_key;
+        let (_, keys) =
+            get_range_entries_and_versions(self, CF_WRITE, start, end).unwrap_or_default();
+        Ok(keys)
+    }
+
+    fn get_range_approximate_keys_cf(
+        &self,
+        cfname: &str,
+        range: Range<'_>,
+        large_threshold: u64,
+    ) -> Result<u64> {
+        let start_key = &range.start_key;
+        let end_key = &range.end_key;
+        let mut total_keys = 0;
+        let (mem_keys, _) =
+            self.approximate_memtable_stats(cfname, range.start_key, range.end_key)?;
+        total_keys += mem_keys;
+
+        let collection = box_try!(self.range_properties(cfname, start_key, end_key));
+        for (_, v) in &*collection {
+            let props = box_try!(RangeProperties::decode(v.user_collected_properties()));
+            total_keys += props.get_approximate_keys_in_range(start_key, end_key);
+        }
+
+        if large_threshold != 0 && total_keys > large_threshold {
+            let ssts = collection
+                .into_iter()
+                .map(|(k, v)| {
+                    let props = RangeProperties::decode(v.user_collected_properties()).unwrap();
+                    let keys = props.get_approximate_keys_in_range(start_key, end_key);
+                    let p = std::str::from_utf8(k).unwrap();
+                    format!(
+                        "{}:{}",
+                        Path::new(p)
+                            .file_name()
+                            .map(|f| f.to_str().unwrap())
+                            .unwrap_or(p),
+                        keys
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            info!(
+                "range contains too many keys";
+                "start" => log_wrappers::Value::key(range.start_key),
+                "end" => log_wrappers::Value::key(range.end_key),
+                "total_keys" => total_keys,
+                "memtable" => mem_keys,
+                "ssts_keys" => ssts,
+                "cf" => cfname,
+            )
+        }
+        Ok(total_keys)
+    }
+
+    fn get_range_approximate_size(&self, range: Range<'_>, large_threshold: u64) -> Result<u64> {
+        let mut size = 0;
+        for cf in LARGE_CFS {
+            size += self
+                .get_range_approximate_size_cf(cf, range, large_threshold)
+                // CF_LOCK doesn't have RangeProperties until v4.0, so we swallow the error for
+                // backward compatibility.
+                .or_else(|e| if cf == &CF_LOCK { Ok(0) } else { Err(e) })?;
+        }
+        Ok(size)
+    }
+
+    fn get_range_approximate_size_cf(
+        &self,
+        cf: &str,
+        range: Range<'_>,
+        large_threshold: u64,
+    ) -> Result<u64> {
+        let start_key = &range.start_key;
+        let end_key = &range.end_key;
+        let mut total_size = 0;
+        let (_, mem_size) = self.approximate_memtable_stats(cf, range.start_key, range.end_key)?;
+        total_size += mem_size;
+
+        let collection = box_try!(self.range_properties(cf, start_key, end_key));
+        for (_, v) in &*collection {
+            let props = box_try!(RangeProperties::decode(v.user_collected_properties()));
+            total_size += props.get_approximate_size_in_range(start_key, end_key);
+        }
+
+        if large_threshold != 0 && total_size > large_threshold {
+            let ssts = collection
+                .into_iter()
+                .map(|(k, v)| {
+                    let props = RangeProperties::decode(v.user_collected_properties()).unwrap();
+                    let size = props.get_approximate_size_in_range(start_key, end_key);
+                    let p = std::str::from_utf8(k).unwrap();
+                    format!(
+                        "{}:{}",
+                        Path::new(p)
+                            .file_name()
+                            .map(|f| f.to_str().unwrap())
+                            .unwrap_or(p),
+                        size
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            info!(
+                "range size is too large";
+                "start" => log_wrappers::Value::key(range.start_key),
+                "end" => log_wrappers::Value::key(range.end_key),
+                "total_size" => total_size,
+                "memtable" => mem_size,
+                "ssts_size" => ssts,
+                "cf" => cf,
+            )
+        }
+        Ok(total_size)
+    }
+
+    fn get_range_approximate_split_keys(
+        &self,
+        range: Range<'_>,
+        key_count: usize,
+    ) -> Result<Vec<Vec<u8>>> {
+        let get_cf_size = |cf: &str| self.get_range_approximate_size_cf(cf, range, 0);
+        let cfs = [
+            (CF_DEFAULT, box_try!(get_cf_size(CF_DEFAULT))),
+            (CF_WRITE, box_try!(get_cf_size(CF_WRITE))),
+            // CF_LOCK doesn't have RangeProperties until v4.0, so we swallow the error for
+            // backward compatibility.
+            (CF_LOCK, get_cf_size(CF_LOCK).unwrap_or(0)),
+        ];
+
+        let total_size: u64 = cfs.iter().map(|(_, s)| s).sum();
+        if total_size == 0 {
+            return Err(box_err!("all CFs are empty"));
+        }
+
+        let (cf, _) = cfs.iter().max_by_key(|(_, s)| s).unwrap();
+
+        self.get_range_approximate_split_keys_cf(cf, range, key_count)
+    }
+
+    fn get_range_approximate_split_keys_cf(
+        &self,
+        cfname: &str,
+        range: Range<'_>,
+        key_count: usize,
+    ) -> Result<Vec<Vec<u8>>> {
+        let start_key = &range.start_key;
+        let end_key = &range.end_key;
+        let collection = box_try!(self.range_properties(cfname, start_key, end_key));
+
+        let mut keys = vec![];
+        for (_, v) in &*collection {
+            let props = box_try!(RangeProperties::decode(v.user_collected_properties()));
+            keys.extend(
+                props
+                    .take_excluded_range(start_key, end_key)
+                    .into_iter()
+                    .map(|(k, _)| k),
+            );
+        }
+
+        if keys.is_empty() {
+            return Ok(vec![]);
+        }
+
+        const SAMPLING_THRESHOLD: usize = 20000;
+        const SAMPLE_RATIO: usize = 1000;
+        // If there are too many keys, reduce its amount before sorting, or it may take
+        // too much time to sort the keys.
+        if keys.len() > SAMPLING_THRESHOLD {
+            let len = keys.len();
+            keys = keys.into_iter().step_by(len / SAMPLE_RATIO).collect();
+        }
+        keys.sort();
+
+        // If the keys are too few, return them directly.
+        if keys.len() <= key_count {
+            return Ok(keys);
+        }
+
+        // Find `key_count` keys which divides the whole range into `parts` parts
+        // evenly.
+        let mut res = Vec::with_capacity(key_count);
+        let section_len = (keys.len() as f64) / ((key_count + 1) as f64);
+        for i in 1..=key_count {
+            res.push(keys[(section_len * (i as f64)) as usize].clone())
+        }
+        res.dedup();
+        Ok(res)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use api_version::RawValue;
-    use engine_traits::{MiscExt, SyncMutable, CF_WRITE, LARGE_CFS};
+    use collections::HashMap;
+    use engine_traits::{SyncMutable, CF_WRITE, LARGE_CFS};
     use rand::Rng;
     use tempfile::Builder;
-    use test::Bencher;
-    use txn_types::{Key, Write, WriteType};
+    use tirocks::properties::table::user::SysTablePropertiesCollectorFactory;
+    use txn_types::Key;
 
     use super::*;
     use crate::{
-        raw::{DBEntryType, TablePropertiesCollector},
-        RocksCfOptions, RocksDbOptions,
+        cf_options::RocksCfOptions, db_options::RocksDbOptions,
+        properties::mvcc::MvccPropertiesCollectorFactory,
     };
 
     #[allow(clippy::many_single_char_names)]
@@ -611,14 +618,19 @@ mod tests {
         for &(k, vlen, count) in &cases {
             let v = vec![0; vlen as usize];
             for _ in 0..count {
-                collector.add(k.as_bytes(), &v, DBEntryType::Put, 0, 0);
+                collector
+                    .add(k.as_bytes(), &v, EntryType::kEntryPut, 0, 0)
+                    .unwrap();
             }
         }
         for &(k, vlen, _) in &cases {
             let v = vec![0; vlen as usize];
-            collector.add(k.as_bytes(), &v, DBEntryType::Other, 0, 0);
+            collector
+                .add(k.as_bytes(), &v, EntryType::kEntryOther, 0, 0)
+                .unwrap();
         }
-        let result = UserProperties(collector.finish());
+        let mut result = HashMap::default();
+        collector.finish(&mut result);
 
         let props = RangeProperties::decode(&result).unwrap();
         assert_eq!(props.smallest_key().unwrap(), cases[0].0.as_bytes());
@@ -709,16 +721,20 @@ mod tests {
             if handles.contains(&k) || rng.gen_range(0..2) == 0 {
                 let v = vec![0; vlen as usize - extra_value_size as usize];
                 extra_value_size = 0;
-                collector.add(k.as_bytes(), &v, DBEntryType::Put, 0, 0);
+                collector
+                    .add(k.as_bytes(), &v, EntryType::kEntryPut, 0, 0)
+                    .unwrap();
             } else {
-                let mut blob_index = TitanBlobIndex::default();
-                blob_index.blob_size = vlen - extra_value_size;
+                let blob_index = TitanBlobIndex::new(0, vlen - extra_value_size, 0);
                 let v = blob_index.encode();
                 extra_value_size = v.len() as u64;
-                collector.add(k.as_bytes(), &v, DBEntryType::BlobIndex, 0, 0);
+                collector
+                    .add(k.as_bytes(), &v, EntryType::kEntryBlobIndex, 0, 0)
+                    .unwrap();
             }
         }
-        let result = UserProperties(collector.finish());
+        let mut result = HashMap::default();
+        collector.finish(&mut result);
 
         let props = RangeProperties::decode(&result).unwrap();
         assert_eq!(props.smallest_key().unwrap(), cases[0].0.as_bytes());
@@ -742,16 +758,22 @@ mod tests {
             .prefix("_test_get_range_entries_and_versions")
             .tempdir()
             .unwrap();
-        let path_str = path.path().to_str().unwrap();
         let db_opts = RocksDbOptions::default();
-        let mut cf_opts = RocksCfOptions::default();
-        cf_opts.set_level_zero_file_num_compaction_trigger(10);
-        cf_opts.add_table_properties_collector_factory(
-            "tikv.mvcc-properties-collector",
-            MvccPropertiesCollectorFactory::default(),
-        );
-        let cfs_opts = LARGE_CFS.iter().map(|cf| (*cf, cf_opts.clone())).collect();
-        let db = crate::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+        let cfs_opts = LARGE_CFS
+            .iter()
+            .map(|cf| {
+                let mut cf_opts = RocksCfOptions::default();
+                cf_opts
+                    .set_level0_file_num_compaction_trigger(10)
+                    .add_table_properties_collector_factory(
+                        &SysTablePropertiesCollectorFactory::new(
+                            MvccPropertiesCollectorFactory::default(),
+                        ),
+                    );
+                (*cf, cf_opts)
+            })
+            .collect();
+        let db = crate::util::new_engine_opt(path.path(), db_opts, cfs_opts).unwrap();
 
         let cases = ["a", "b", "c"];
         for &key in &cases {
@@ -768,7 +790,7 @@ mod tests {
                     .as_encoded(),
             );
             db.put_cf(CF_WRITE, &key, b"v2").unwrap();
-            db.flush_cf(CF_WRITE, true).unwrap();
+            db.flush(CF_WRITE, true).unwrap();
         }
 
         let start_keys = keys::data_key(&[]);
@@ -777,94 +799,5 @@ mod tests {
             get_range_entries_and_versions(&db, CF_WRITE, &start_keys, &end_keys).unwrap();
         assert_eq!(entries, (cases.len() * 2) as u64);
         assert_eq!(versions, cases.len() as u64);
-    }
-
-    #[test]
-    fn test_mvcc_properties() {
-        let cases = [
-            ("ab", 2, WriteType::Put, DBEntryType::Put),
-            ("ab", 1, WriteType::Delete, DBEntryType::Put),
-            ("ab", 1, WriteType::Delete, DBEntryType::Delete),
-            ("cd", 5, WriteType::Delete, DBEntryType::Put),
-            ("cd", 4, WriteType::Put, DBEntryType::Put),
-            ("cd", 3, WriteType::Put, DBEntryType::Put),
-            ("ef", 6, WriteType::Put, DBEntryType::Put),
-            ("ef", 6, WriteType::Put, DBEntryType::Delete),
-            ("gh", 7, WriteType::Delete, DBEntryType::Put),
-        ];
-        let mut collector = MvccPropertiesCollector::new(KeyMode::Txn);
-        for &(key, ts, write_type, entry_type) in &cases {
-            let ts = ts.into();
-            let k = Key::from_raw(key.as_bytes()).append_ts(ts);
-            let k = keys::data_key(k.as_encoded());
-            let v = Write::new(write_type, ts, None).as_ref().to_bytes();
-            collector.add(&k, &v, entry_type, 0, 0);
-        }
-        let result = UserProperties(collector.finish());
-
-        let props = RocksMvccProperties::decode(&result).unwrap();
-        assert_eq!(props.min_ts, 1.into());
-        assert_eq!(props.max_ts, 7.into());
-        assert_eq!(props.num_rows, 4);
-        assert_eq!(props.num_puts, 4);
-        assert_eq!(props.num_versions, 7);
-        assert_eq!(props.max_row_versions, 3);
-    }
-
-    #[test]
-    fn test_mvcc_properties_rawkv_mode() {
-        let test_raws = vec![
-            (b"r\0a", 1, false, u64::MAX),
-            (b"r\0a", 5, false, u64::MAX),
-            (b"r\0a", 7, false, u64::MAX),
-            (b"r\0b", 1, false, u64::MAX),
-            (b"r\0b", 1, true, u64::MAX),
-            (b"r\0c", 1, true, 10),
-            (b"r\0d", 1, true, 10),
-        ];
-
-        let mut collector = MvccPropertiesCollector::new(KeyMode::Raw);
-        for &(key, ts, is_delete, expire_ts) in &test_raws {
-            let encode_key = ApiV2::encode_raw_key(key, Some(ts.into()));
-            let k = keys::data_key(encode_key.as_encoded());
-            let v = ApiV2::encode_raw_value(RawValue {
-                user_value: &[0; 10][..],
-                expire_ts: Some(expire_ts),
-                is_delete,
-            });
-            collector.add(&k, &v, DBEntryType::Put, 0, 0);
-        }
-
-        let result = UserProperties(collector.finish());
-
-        let props = RocksMvccProperties::decode(&result).unwrap();
-        assert_eq!(props.min_ts, 1.into());
-        assert_eq!(props.max_ts, 7.into());
-        assert_eq!(props.num_rows, 4);
-        assert_eq!(props.num_deletes, 3);
-        assert_eq!(props.num_puts, 4);
-        assert_eq!(props.num_versions, 7);
-        assert_eq!(props.max_row_versions, 3);
-    }
-
-    #[bench]
-    fn bench_mvcc_properties(b: &mut Bencher) {
-        let ts = 1.into();
-        let num_entries = 100;
-        let mut entries = Vec::new();
-        for i in 0..num_entries {
-            let s = format!("{:032}", i);
-            let k = Key::from_raw(s.as_bytes()).append_ts(ts);
-            let k = keys::data_key(k.as_encoded());
-            let w = Write::new(WriteType::Put, ts, Some(s.as_bytes().to_owned()));
-            entries.push((k, w.as_ref().to_bytes()));
-        }
-
-        let mut collector = MvccPropertiesCollector::new(KeyMode::Txn);
-        b.iter(|| {
-            for &(ref k, ref v) in &entries {
-                collector.add(k, v, DBEntryType::Put, 0, 0);
-            }
-        });
     }
 }

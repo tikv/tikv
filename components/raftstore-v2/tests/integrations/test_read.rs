@@ -1,16 +1,10 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::assert_matches::assert_matches;
-
-use futures::executor::block_on;
-use kvproto::{
-    kvrpcpb::Context,
-    raft_cmdpb::{CmdType, GetRequest, RaftCmdRequest, ReadIndexRequest, Request, StatusCmdType},
-};
-use tikv_util::{codec::number::NumberEncoder, store::new_peer};
+use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, ReadIndexRequest, Request, StatusCmdType};
+use tikv_util::store::new_peer;
 use txn_types::WriteBatchFlags;
 
-use crate::Cluster;
+use crate::cluster::Cluster;
 
 #[test]
 fn test_read_index() {
