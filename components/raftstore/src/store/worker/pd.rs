@@ -16,7 +16,7 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::{KvEngine, MiscExt, RaftEngine};
 use fail::fail_point;
 use futures::{compat::Future01CompatExt, FutureExt};
 use grpcio_health::{HealthService, ServingStatus};
@@ -38,7 +38,7 @@ use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecord
 use tikv_util::{
     box_err, debug, error, info,
     metrics::ThreadInfoStatistics,
-    sys::thread::StdThreadBuildWrapper,
+    sys::{path_in_diff_mount_point, thread::StdThreadBuildWrapper},
     thd_name,
     time::{Instant as TiInstant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
@@ -1200,15 +1200,26 @@ where
             report_peers.insert(*region_id, read_stat);
         }
 
+        let raft_path = store_info.raft_engine.path();
+        let separate_raft_path =
+            path_in_diff_mount_point(raft_path, MiscExt::path(&store_info.kv_engine));
         stats = collect_report_read_peer_stats(HOTSPOT_REPORT_CAPACITY, report_peers, stats);
-        let (capacity, used_size, available) = match collect_engine_size(
-            &self.coprocessor_host,
-            Some(&store_info),
-            self.snap_mgr.get_total_snap_size().unwrap(),
-        ) {
-            Some((capacity, used_size, available)) => (capacity, used_size, available),
-            None => return,
-        };
+        let ((capacity, used_size, available), (raft_capactiy, raft_used_size, raft_available)) =
+            match collect_engine_size(
+                &self.coprocessor_host,
+                Some(&store_info),
+                self.snap_mgr.get_total_snap_size().unwrap(),
+                separate_raft_path,
+            ) {
+                Some((
+                    (capacity, used_size, available),
+                    (raft_capacity, raft_used_size, raft_available),
+                )) => (
+                    (capacity, used_size, available),
+                    (raft_capacity, raft_used_size, raft_available),
+                ),
+                None => return,
+            };
 
         stats.set_capacity(capacity);
         stats.set_used_size(used_size);
@@ -2277,11 +2288,42 @@ fn collect_engine_size<EK: KvEngine, ER: RaftEngine>(
     coprocessor_host: &CoprocessorHost<EK>,
     store_info: Option<&StoreInfo<EK, ER>>,
     snap_mgr_size: u64,
-) -> Option<(u64, u64, u64)> {
-    if let Some(engine_size) = coprocessor_host.on_compute_engine_size() {
-        return Some((engine_size.capacity, engine_size.used, engine_size.avail));
-    }
+    separate_raft_path: bool,
+) -> Option<((u64, u64, u64), (u64, u64, u64))> {
     let store_info = store_info.unwrap();
+    let raft_used_size = store_info
+        .raft_engine
+        .get_engine_size()
+        .expect("get raft engine size");
+    let (raft_disk_cap, raft_available) = if separate_raft_path {
+        let raft_path = store_info.raft_engine.path().to_string();
+        let raft_disk_stats = match fs2::statvfs(&raft_path) {
+            Err(e) => {
+                error!(
+                    "get disk stat for raftdb failed";
+                    "raftdb path" => raft_path.clone(),
+                    "err" => ?e
+                );
+                return None;
+            }
+            Ok(stats) => stats,
+        };
+        let raft_disk_cap = raft_disk_stats.total_space();
+        let mut raft_available = raft_disk_cap
+            .checked_sub(raft_used_size)
+            .unwrap_or_default();
+        raft_available = cmp::min(raft_available, raft_disk_stats.available_space());
+        (raft_disk_cap, raft_available)
+    } else {
+        (0, 0)
+    };
+    if let Some(engine_size) = coprocessor_host.on_compute_engine_size() {
+        return Some((
+            (engine_size.capacity, engine_size.used, engine_size.avail),
+            (raft_disk_cap, raft_used_size, raft_available),
+        ));
+    }
+
     let disk_stats = match fs2::statvfs(store_info.kv_engine.path()) {
         Err(e) => {
             error!(
@@ -2299,20 +2341,28 @@ fn collect_engine_size<EK: KvEngine, ER: RaftEngine>(
     } else {
         store_info.capacity
     };
-    let used_size = snap_mgr_size
-        + store_info
-            .kv_engine
-            .get_engine_used_size()
-            .expect("kv engine used size")
-        + store_info
-            .raft_engine
-            .get_engine_size()
-            .expect("raft engine used size");
+    let used_size = if !separate_raft_path {
+        snap_mgr_size
+            + store_info
+                .kv_engine
+                .get_engine_used_size()
+                .expect("kv engine used size")
+            + raft_used_size
+    } else {
+        snap_mgr_size
+            + store_info
+                .kv_engine
+                .get_engine_used_size()
+                .expect("kv engine used size")
+    };
     let mut available = capacity.checked_sub(used_size).unwrap_or_default();
     // We only care about rocksdb SST file size, so we should check disk available
     // here.
     available = cmp::min(available, disk_stats.available_space());
-    Some((capacity, used_size, available))
+    Some((
+        (capacity, used_size, available),
+        (raft_disk_cap, raft_used_size, raft_available),
+    ))
 }
 
 fn get_read_query_num(stat: &pdpb::QueryStats) -> u64 {
