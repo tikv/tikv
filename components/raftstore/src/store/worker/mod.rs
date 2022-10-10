@@ -1,4 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
+
 mod check_leader;
 mod cleanup;
 mod cleanup_snapshot;
@@ -34,8 +35,8 @@ pub use self::{
     },
     raftlog_gc::{Runner as RaftlogGcRunner, Task as RaftlogGcTask},
     read::{
-        CachedReadDelegate, LocalReader, Progress as ReadProgress, ReadDelegate, ReadExecutor,
-        ReadExecutorProvider, SnapshotContext, StoreMetaDelegate, TrackVer,
+        CachedReadDelegate, LocalReadContext, LocalReader, Progress as ReadProgress, ReadDelegate,
+        ReadExecutor, ReadExecutorProvider, StoreMetaDelegate, TrackVer,
     },
     refresh_config::{
         BatchComponent as RaftStoreBatchComponent, Runner as RefreshConfigRunner,

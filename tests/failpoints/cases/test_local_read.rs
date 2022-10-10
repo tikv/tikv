@@ -73,6 +73,8 @@ fn test_consistency_after_lease_pass() {
             .has_error()
     );
 
+    // Wait for data to be cleaned
+    thread::sleep(Duration::from_millis(2000));
     fail::cfg("after_pass_lease_check", "off").unwrap();
 
     assert_eq!(b"value1", receiver.receive_sync().unwrap().1.get_value());

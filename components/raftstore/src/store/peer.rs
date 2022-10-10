@@ -82,7 +82,7 @@ use super::{
         self, check_region_epoch, is_initial_msg, AdminCmdEpochState, ChangePeerI, ConfChangeKind,
         Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
     },
-    DestroyPeerJob, SnapshotContext,
+    DestroyPeerJob, LocalReadContext,
 };
 use crate::{
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason, RoleChange},
@@ -453,7 +453,7 @@ impl<S: Snapshot> Drop for CmdEpochChecker<S> {
 }
 
 #[derive(PartialEq, Debug)]
-pub struct ApplySnapshotContext {
+pub struct ApplyLocalReadContext {
     /// The number of ready which has a snapshot.
     pub ready_number: u64,
     /// Whether this snapshot is scheduled.
@@ -1040,7 +1040,7 @@ where
     /// The last known persisted number.
     persisted_number: u64,
     /// The context of applying snapshot.
-    apply_snap_ctx: Option<ApplySnapshotContext>,
+    apply_snap_ctx: Option<ApplyLocalReadContext>,
     /// region buckets.
     pub region_buckets: Option<BucketStat>,
     pub last_region_buckets: Option<BucketStat>,
@@ -2861,7 +2861,7 @@ where
             // When applying snapshot, there is no log applied and not compacted yet.
             self.raft_log_size_hint = 0;
 
-            self.apply_snap_ctx = Some(ApplySnapshotContext {
+            self.apply_snap_ctx = Some(ApplyLocalReadContext {
                 ready_number,
                 scheduled: false,
                 msgs,
@@ -5618,7 +5618,7 @@ where
         &self.engines.kv
     }
 
-    fn get_snapshot(&mut self, _: &mut Option<&mut SnapshotContext<'_, EK>>) -> Arc<EK::Snapshot> {
+    fn get_snapshot(&mut self, _: &mut Option<&mut LocalReadContext<'_, EK>>) -> Arc<EK::Snapshot> {
         Arc::new(self.engines.kv.snapshot())
     }
 }

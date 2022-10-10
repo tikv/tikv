@@ -48,14 +48,14 @@ pub trait ReadExecutor<E: KvEngine> {
     fn get_tablet(&mut self) -> &E;
     fn get_snapshot(
         &mut self,
-        read_context: &mut Option<&mut SnapshotContext<'_, E>>,
+        read_context: &mut Option<&mut LocalReadContext<'_, E>>,
     ) -> Arc<E::Snapshot>;
 
     fn get_value(
         &mut self,
         req: &Request,
         region: &metapb::Region,
-        read_context: &mut Option<&mut SnapshotContext<'_, E>>,
+        read_context: &mut Option<&mut LocalReadContext<'_, E>>,
     ) -> Result<Response> {
         let key = req.get_get().get_key();
         // region key range has no data prefix, so we must use origin key to check.
@@ -100,7 +100,7 @@ pub trait ReadExecutor<E: KvEngine> {
         msg: &RaftCmdRequest,
         region: &Arc<metapb::Region>,
         read_index: Option<u64>,
-        mut snap_cache_ctx: Option<&mut SnapshotContext<'_, E>>,
+        mut snap_cache_ctx: Option<&mut LocalReadContext<'_, E>>,
     ) -> ReadResponse<E::Snapshot> {
         let requests = msg.get_requests();
         let mut response = ReadResponse {
@@ -213,24 +213,15 @@ where
     }
 }
 
-// If SnapshotContext is initialized with `read_id`, it manages the `SnapCache`
-// of the LocalReader. Otherwise, it fetch snapshot from KvEngine in each
-// request.
-pub struct SnapshotContext<'a, E>
+pub struct LocalReadContext<'a, E>
 where
     E: KvEngine,
 {
     read_id: Option<ThreadReadId>,
     snap_cache: &'a mut SnapCache<E>,
-
-    snapshot: Option<Arc<E::Snapshot>>,
-    snapshot_ts: Option<Timespec>,
-
-    // It shows whether we have updated the snapshot in this request
-    updated: bool,
 }
 
-impl<'a, E> SnapshotContext<'a, E>
+impl<'a, E> LocalReadContext<'a, E>
 where
     E: KvEngine,
 {
@@ -238,54 +229,38 @@ where
         Self {
             snap_cache,
             read_id,
-            snapshot: None,
-            snapshot_ts: None,
-            updated: false,
         }
     }
 
-    fn maybe_update_snapshot(&mut self, engine: &E, delegate_last_valid_ts: Timespec) {
+    fn maybe_update_snapshot(&mut self, engine: &E, delegate_last_valid_ts: Timespec) -> bool {
         if let Some(read_id) = self.read_id.as_ref() {
-            if self.snap_cache.cached_read_id != *read_id
-                || self.snap_cache.snapshot.as_ref().is_none()
-                || self.snap_cache.cached_snapshot_ts < delegate_last_valid_ts
+            if self.snap_cache.cached_read_id == *read_id
+                && self.snap_cache.cached_snapshot_ts >= delegate_last_valid_ts
             {
+                // Cache hit
+                assert!(self.snap_cache.snapshot.as_ref().is_some());
+                return false;
+            } else {
                 self.snap_cache.cached_read_id = read_id.clone();
-                self.snap_cache.snapshot = Box::new(Some(Arc::new(engine.snapshot())));
-
-                // Ensures the snapshot is acquired before getting the time
-                atomic::fence(atomic::Ordering::Release);
-                self.snap_cache.cached_snapshot_ts = monotonic_raw_now();
-
-                self.updated = true;
             }
-        } else {
-            // read_id being None means the snapshot acquired will only be used in this
-            // request
-            self.snapshot = Some(Arc::new(engine.snapshot()));
-
-            // Ensures the snapshot is acquired before getting the time
-            atomic::fence(atomic::Ordering::Release);
-            self.snapshot_ts = Some(monotonic_raw_now());
         }
+
+        self.snap_cache.snapshot = Box::new(Some(Arc::new(engine.snapshot())));
+
+        // Ensures the snapshot is acquired before getting the time
+        atomic::fence(atomic::Ordering::Release);
+        self.snap_cache.cached_snapshot_ts = monotonic_raw_now();
+
+        true
     }
 
     // Note: must be called after `maybe_update_snapshot`
-    fn snapshot_ts(&self) -> Option<Timespec> {
-        if self.read_id.is_some() {
-            Some(self.snap_cache.cached_snapshot_ts)
-        } else {
-            self.snapshot_ts
-        }
+    fn snapshot_ts(&self) -> Timespec {
+        self.snap_cache.cached_snapshot_ts
     }
 
     fn snapshot(&self) -> Option<Arc<E::Snapshot>> {
-        // read_id being some means we go through cache
-        if self.read_id.is_some() {
-            self.snap_cache.snapshot.deref().clone()
-        } else {
-            self.snapshot.clone()
-        }
+        self.snap_cache.snapshot.deref().clone()
     }
 }
 
@@ -683,16 +658,9 @@ where
 
     fn get_snapshot(
         &mut self,
-        read_context: &mut Option<&mut SnapshotContext<'_, E>>,
+        read_context: &mut Option<&mut LocalReadContext<'_, E>>,
     ) -> Arc<E::Snapshot> {
         let ctx = read_context.as_mut().unwrap();
-        TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_requests.inc());
-
-        if !ctx.updated {
-            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_snapshot_cache_hit.inc());
-        }
-        ctx.updated = false;
-
         ctx.snapshot().unwrap()
     }
 }
@@ -854,15 +822,17 @@ where
     ) {
         match self.pre_propose_raft_command(&req) {
             Ok(Some((mut delegate, policy))) => {
+                let snap_updated;
                 let last_valid_ts = delegate.last_valid_ts;
                 let mut response = match policy {
                     // Leader can read local if and only if it is in lease.
                     RequestPolicy::ReadLocal => {
-                        let mut snap_cache_ctx =
-                            SnapshotContext::new(&mut self.snap_cache, read_id);
-                        snap_cache_ctx.maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
+                        let mut local_read_ctx =
+                            LocalReadContext::new(&mut self.snap_cache, read_id);
+                        snap_updated = local_read_ctx
+                            .maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
 
-                        let snapshot_ts = snap_cache_ctx.snapshot_ts().unwrap();
+                        let snapshot_ts = local_read_ctx.snapshot_ts();
                         if !delegate.is_in_leader_lease(snapshot_ts) {
                             fail_point!("localreader_before_redirect", |_| {});
                             // Forward to raftstore.
@@ -872,7 +842,7 @@ where
 
                         let region = Arc::clone(&delegate.region);
                         let response =
-                            delegate.execute(&req, &region, None, Some(&mut snap_cache_ctx));
+                            delegate.execute(&req, &region, None, Some(&mut local_read_ctx));
 
                         // Try renew lease in advance
                         delegate.maybe_renew_lease_advance(&self.router, snapshot_ts);
@@ -886,14 +856,15 @@ where
                             return;
                         }
 
-                        let mut snap_cache_ctx =
-                            SnapshotContext::new(&mut self.snap_cache, read_id);
-                        snap_cache_ctx.maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
+                        let mut local_read_ctx =
+                            LocalReadContext::new(&mut self.snap_cache, read_id);
+                        snap_updated = local_read_ctx
+                            .maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
 
                         let region = Arc::clone(&delegate.region);
                         // Getting the snapshot
                         let response =
-                            delegate.execute(&req, &region, None, Some(&mut snap_cache_ctx));
+                            delegate.execute(&req, &region, None, Some(&mut local_read_ctx));
 
                         // Double check in case `safe_ts` change after the first check and before
                         // getting snapshot
@@ -907,6 +878,13 @@ where
                     }
                     _ => unreachable!(),
                 };
+
+                TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_requests.inc());
+                if !snap_updated {
+                    TLS_LOCAL_READ_METRICS
+                        .with(|m| m.borrow_mut().local_executed_snapshot_cache_hit.inc());
+                }
+
                 cmd_resp::bind_term(&mut response.response, delegate.term);
                 if let Some(snap) = response.snapshot.as_mut() {
                     snap.txn_ext = Some(delegate.txn_ext.clone());
@@ -1578,7 +1556,7 @@ mod tests {
         let read_id = ThreadReadId::new();
         let mut snap_cache = SnapCache::new();
 
-        let mut read_context = SnapshotContext::new(&mut snap_cache, Some(read_id));
+        let mut read_context = LocalReadContext::new(&mut snap_cache, Some(read_id));
         read_context.maybe_update_snapshot(tablet, last_valid_ts);
         let mut read_context = Some(&mut read_context);
 
@@ -1600,123 +1578,6 @@ mod tests {
         );
 
         assert!(snap_cache.snapshot.as_ref().is_some());
-        assert_eq!(
-            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().local_executed_requests.get()),
-            2
-        );
-        assert_eq!(
-            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().local_executed_snapshot_cache_hit.get()),
-            1
-        );
-    }
-
-    #[test]
-    fn test_snap_cache_hit() {
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
-        let (_tmp, mut reader, _) = new_reader("test-local-reader", 1, store_meta.clone());
-
-        let mut region1 = metapb::Region::default();
-        region1.set_id(1);
-
-        // Register region 1
-        {
-            let mut meta = store_meta.lock().unwrap();
-            let read_delegate = ReadDelegate {
-                tag: String::new(),
-                region: Arc::new(region1.clone()),
-                peer_id: 1,
-                term: 1,
-                applied_term: 1,
-                leader_lease: None,
-                last_valid_ts: Timespec::new(0, 0),
-                txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
-                txn_ext: Arc::new(TxnExt::default()),
-                read_progress: Arc::new(RegionReadProgress::new(&region1, 1, 1, "".to_owned())),
-                pending_remove: false,
-                track_ver: TrackVer::new(),
-                bucket_meta: None,
-            };
-            meta.readers.insert(1, read_delegate);
-        }
-
-        let mut delegate = reader.get_delegate(region1.id).unwrap();
-        let read_id = Some(ThreadReadId::new());
-
-        {
-            let mut read_context = SnapshotContext::new(&mut reader.snap_cache, read_id);
-            let last_valid_ts = delegate.last_valid_ts;
-            read_context.maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
-            let mut read_context = Some(&mut read_context);
-
-            for _ in 0..10 {
-                // Different region id should reuse the cache
-                let _ = delegate.get_snapshot(&mut read_context);
-            }
-        }
-        // We should hit cache 9 times
-        assert_eq!(
-            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().local_executed_snapshot_cache_hit.get()),
-            9
-        );
-
-        let read_id = Some(ThreadReadId::new());
-
-        {
-            let mut read_context = SnapshotContext::new(&mut reader.snap_cache, read_id.clone());
-            let last_valid_ts = delegate.last_valid_ts;
-            read_context.maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
-            let mut read_context = Some(&mut read_context);
-
-            let _ = delegate.get_snapshot(&mut read_context);
-        }
-        // This time, we will miss the cache
-        assert_eq!(
-            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().local_executed_snapshot_cache_hit.get()),
-            9
-        );
-
-        {
-            let mut read_context = SnapshotContext::new(&mut reader.snap_cache, read_id.clone());
-            let last_valid_ts = delegate.last_valid_ts;
-            read_context.maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
-            let mut read_context = Some(&mut read_context);
-
-            let _ = delegate.get_snapshot(&mut read_context);
-            // We can hit it again.
-            assert_eq!(
-                TLS_LOCAL_READ_METRICS.with(|m| m.borrow().local_executed_snapshot_cache_hit.get()),
-                10
-            );
-        }
-
-        reader.release_snapshot_cache();
-        {
-            let mut read_context = SnapshotContext::new(&mut reader.snap_cache, read_id.clone());
-            let last_valid_ts = delegate.last_valid_ts;
-            read_context.maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
-            let mut read_context = Some(&mut read_context);
-
-            let _ = delegate.get_snapshot(&mut read_context);
-        }
-        // After release, we will mss the cache even with the prevsiou read_id.
-        assert_eq!(
-            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().local_executed_snapshot_cache_hit.get()),
-            10
-        );
-
-        {
-            let mut read_context = SnapshotContext::new(&mut reader.snap_cache, read_id);
-            let last_valid_ts = delegate.last_valid_ts;
-            read_context.maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
-            let mut read_context = Some(&mut read_context);
-
-            let _ = delegate.get_snapshot(&mut read_context);
-        }
-        // We can hit it again.
-        assert_eq!(
-            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().local_executed_snapshot_cache_hit.get()),
-            11
-        );
     }
 
     #[test]
@@ -1728,18 +1589,17 @@ mod tests {
 
         let db = create_engine("test_snap_cache_context");
         let mut snap_cache = SnapCache::new();
-        let mut read_context = SnapshotContext::new(&mut snap_cache, None);
+        let mut read_context = LocalReadContext::new(&mut snap_cache, None);
 
         // Have not inited the snap cache
         assert!(read_context.snapshot().is_none());
-        assert!(read_context.snapshot_ts().is_none());
 
         db.put(b"a1", b"val1").unwrap();
 
         let compare_ts = monotonic_raw_now();
         // Case 1: snap_cache_context.read_id is None
-        read_context.maybe_update_snapshot(&db, Timespec::new(0, 0));
-        assert!(read_context.snapshot_ts().unwrap() > compare_ts);
+        assert!(read_context.maybe_update_snapshot(&db, Timespec::new(0, 0)));
+        assert!(read_context.snapshot_ts() > compare_ts);
         assert_eq!(
             read_context
                 .snapshot()
@@ -1753,22 +1613,18 @@ mod tests {
         // snap_cache_context is *not* created with read_id, so calling
         // `maybe_update_snapshot` again will update the snapshot
         let compare_ts = monotonic_raw_now();
-        read_context.maybe_update_snapshot(&db, Timespec::new(0, 0));
-        assert!(read_context.snapshot_ts().unwrap() > compare_ts);
+        assert!(read_context.maybe_update_snapshot(&db, Timespec::new(0, 0)));
+        assert!(read_context.snapshot_ts() > compare_ts);
 
         let read_id = ThreadReadId::new();
-        let mut read_context = SnapshotContext::new(&mut snap_cache, Some(read_id));
-
-        // Have not inited the snap cache
-        assert!(read_context.snapshot().is_none());
-        assert_eq!(read_context.snapshot_ts().unwrap(), Timespec::new(0, 0));
+        let mut read_context = LocalReadContext::new(&mut snap_cache, Some(read_id));
 
         let compare_ts = monotonic_raw_now();
         // Case 2: snap_cache_context.read_id is not None but not equals to the
         // snap_cache.cached_read_id
-        read_context.maybe_update_snapshot(&db, Timespec::new(0, 0));
-        assert!(read_context.snapshot_ts().unwrap() > compare_ts);
-        let snap_ts = read_context.snapshot_ts().unwrap();
+        assert!(read_context.maybe_update_snapshot(&db, Timespec::new(0, 0)));
+        assert!(read_context.snapshot_ts() > compare_ts);
+        let snap_ts = read_context.snapshot_ts();
         assert_eq!(
             read_context
                 .snapshot()
@@ -1784,8 +1640,8 @@ mod tests {
         // `maybe_update_snapshot` again will *not* update the snapshot
         // Case 3: snap_cache_context.read_id is not None and equals to the
         // snap_cache.cached_read_id
-        read_context.maybe_update_snapshot(&db2, Timespec::new(0, 0));
-        assert_eq!(read_context.snapshot_ts().unwrap(), snap_ts);
+        assert!(!read_context.maybe_update_snapshot(&db2, Timespec::new(0, 0)));
+        assert_eq!(read_context.snapshot_ts(), snap_ts);
         assert_eq!(
             read_context
                 .snapshot()
@@ -1797,8 +1653,8 @@ mod tests {
         );
 
         // Case 4: delegate.last_valid_ts is larger
-        read_context.maybe_update_snapshot(&db2, monotonic_raw_now());
-        assert!(read_context.snapshot_ts().unwrap() > snap_ts);
+        assert!(read_context.maybe_update_snapshot(&db2, monotonic_raw_now()));
+        assert!(read_context.snapshot_ts() > snap_ts);
         assert!(
             read_context
                 .snapshot()
