@@ -1727,7 +1727,7 @@ fn future_flashback_to_version<
         fail_point!("skip_finish_flashback_to_version", |_| {
             Ok(FlashbackToVersionResponse::default())
         });
-        // Send a `AdminCmdType::FinishFlashback` to unset the persistence state
+        // Send an `AdminCmdType::FinishFlashback` to unset the persistence state
         // in `RegionLocalState` and region's meta, and when that
         // admin cmd is applied, will update the memory
         // state of the flashback

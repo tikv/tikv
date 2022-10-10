@@ -8,6 +8,7 @@ use test_raftstore::*;
 use tikv_util::time::InstantExt;
 use txn_types::WriteBatchFlags;
 
+#[test]
 fn test_flashback_for_schedule() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.run();
