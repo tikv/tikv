@@ -2604,7 +2604,7 @@ where
             let leader = self.get_peer_from_cache(leader_id);
             if let Some(leader) = leader {
                 let mut msg = ExtraMessage::default();
-                msg.set_type(ExtraMessageType::MsgTracePeerAvailabilityInfo);
+                msg.set_type(ExtraMessageType::MsgAvailabilityResponse);
                 msg.wait_data = false;
                 self.send_extra_message(msg, &mut ctx.trans, &leader);
                 info!(

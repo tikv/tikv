@@ -2628,20 +2628,8 @@ where
         self.fsm.hibernate_state.count_vote(from.get_id());
     }
 
-    fn on_trace_peer_availability_info(&mut self, from: &metapb::Peer, msg: &ExtraMessage) {
+    fn on_availability_request(&mut self, from: &metapb::Peer, msg: &ExtraMessage) {
         if !self.fsm.peer.is_leader() {
-            let mut resp = ExtraMessage::default();
-            resp.set_type(ExtraMessageType::MsgTracePeerAvailabilityInfo);
-            resp.wait_data = self.fsm.peer.wait_data;
-            self.fsm
-                .peer
-                .send_extra_message(resp, &mut self.ctx.trans, from);
-            debug!(
-                "peer responses availability info to leader";
-                "region_id" => self.region().get_id(),
-                "peer_id" => self.fsm.peer.peer.get_id(),
-                "leader_id" => from.id,
-            );
             return;
         }
         if !msg.wait_data {
@@ -2656,6 +2644,24 @@ where
             return;
         }
         self.register_check_peers_availability_tick();
+    }
+
+    fn on_availability_response(&mut self, from: &metapb::Peer) {
+        if self.fsm.peer.is_leader() {
+            return;
+        }
+        let mut resp = ExtraMessage::default();
+        resp.set_type(ExtraMessageType::MsgAvailabilityResponse);
+        resp.wait_data = self.fsm.peer.wait_data;
+        self.fsm
+            .peer
+            .send_extra_message(resp, &mut self.ctx.trans, from);
+        debug!(
+            "peer responses availability info to leader";
+            "region_id" => self.region().get_id(),
+            "peer_id" => self.fsm.peer.peer.get_id(),
+            "leader_id" => from.id,
+        );
     }
 
     fn on_extra_message(&mut self, mut msg: RaftMessage) {
@@ -2691,8 +2697,11 @@ where
             ExtraMessageType::MsgRejectRaftLogCausedByMemoryUsage => {
                 unimplemented!()
             }
-            ExtraMessageType::MsgTracePeerAvailabilityInfo => {
-                self.on_trace_peer_availability_info(msg.get_from_peer(), msg.get_extra_msg());
+            ExtraMessageType::MsgAvailabilityRequest => {
+                self.on_availability_request(msg.get_from_peer(), msg.get_extra_msg());
+            }
+            ExtraMessageType::MsgAvailabilityResponse => {
+                self.on_availability_response(msg.get_from_peer());
             }
         }
     }
@@ -5901,24 +5910,15 @@ where
 
     fn on_check_peers_availability(&mut self) {
         for peer_id in self.fsm.peer.wait_data_peers.iter() {
-            if let Some(peer) = self.fsm.peer.get_peer_from_cache(*peer_id) {
-                let mut msg = ExtraMessage::default();
-                msg.set_type(ExtraMessageType::MsgTracePeerAvailabilityInfo);
-                self.fsm
-                    .peer
-                    .send_extra_message(msg, &mut self.ctx.trans, &peer);
-                info!(
-                    "check peer availability";
-                    "target peer id" => *peer_id,
-                );
-                continue;
-            }
-            // TODO: make sure if the path is reasonable
-            warn!(
-                "peer not found, ignore check availability";
-                "region_id" => self.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "to_peer_id" => peer_id,
+            let peer = self.fsm.peer.get_peer_from_cache(*peer_id).unwrap();
+            let mut msg = ExtraMessage::default();
+            msg.set_type(ExtraMessageType::MsgAvailabilityRequest);
+            self.fsm
+                .peer
+                .send_extra_message(msg, &mut self.ctx.trans, &peer);
+            debug!(
+                "check peer availability";
+                "target peer id" => *peer_id,
             );
         }
     }
