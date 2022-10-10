@@ -1,8 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashMap;
-use std::fmt::Debug;
 use std::hash::Hash;
+
+use collections::HashMap;
 
 pub struct PriorityQueue<K: Eq + Hash + Copy, T: Ord> {
     index_map: HashMap<K, usize>,
@@ -133,7 +133,8 @@ impl<K: Eq + Hash + Copy, T: Ord> PriorityQueue<K, T> {
         let (removed_key, item) = self.heap.swap_remove(index).unwrap();
         debug_assert!(removed_key == key);
         if index == self.heap.len() {
-            // The item is at the tail of the heap. No need to do extra operation to keep the heap order.
+            // The item is at the tail of the heap. No need to do extra operation to keep
+            // the heap order.
             debug_assert_eq!(self.heap.len(), self.index_map.len());
             return Some(item);
         }
@@ -173,12 +174,14 @@ mod tests {
     extern crate rand;
     extern crate test;
 
-    use std::collections::{BinaryHeap, VecDeque};
-    use std::iter::Iterator;
-    use test::{black_box, Bencher};
+    use std::{
+        collections::{BinaryHeap, VecDeque},
+        fmt::Debug,
+        iter::Iterator,
+    };
 
-    use rand::{RngCore, thread_rng};
-    use rand::seq::SliceRandom;
+    use rand::{seq::SliceRandom, thread_rng, RngCore};
+    use test::{black_box, Bencher};
 
     use super::*;
 
@@ -194,7 +197,8 @@ mod tests {
             }
             assert!(passes.into_iter().all(|x| x));
 
-            // Check heap order: All elements must be greater than or equal to its children (if any).
+            // Check heap order: All elements must be greater than or equal to its children
+            // (if any).
             if self.heap.len() > 1 {
                 for i in 0..=Self::parent(self.heap.len() - 1) {
                     let item = &self.heap[i].as_ref().unwrap().1;
@@ -212,10 +216,7 @@ mod tests {
         fn from_raw(data: Vec<(K, T)>) -> Self {
             let index_map = data.iter().enumerate().map(|(i, (k, _))| (*k, i)).collect();
             let heap = data.into_iter().map(Some).collect();
-            let res = Self {
-                index_map,
-                heap,
-            };
+            let res = Self { index_map, heap };
             res.check_is_consistent();
             res
         }
@@ -329,20 +330,52 @@ mod tests {
 
     #[test]
     fn test_removing_by_key() {
-        // Each case contains the initial state of the heap, and the final state of the heap after
-        // removing the element with key = 0.
+        // Each case contains the initial state of the heap, and the final state of the
+        // heap after removing the element with key = 0.
         let cases = vec![
             (vec![(0, 0)], vec![], 0),
             (vec![(0, 1), (1, 0)], vec![(1, 0)], 1),
             (vec![(1, 1), (0, 0)], vec![(1, 1)], 0),
-            (vec![(1, 10), (0, 8), (2, 7), (3, 3)], vec![(1, 10), (3, 3), (2, 7)], 8),
-            (vec![(0, 10), (1, 8), (2, 7), (3, 3)], vec![(1, 8), (3, 3), (2, 7)], 10),
-            (vec![(1, 10), (2, 8), (3, 7), (0, 3)], vec![(1, 10), (2, 8), (3, 7)], 3),
-            (vec![(1, 10), (0, 8), (2, 7), (3, 3), (4, 0)], vec![(1, 10), (3, 3), (2, 7), (4, 0)], 8),
-            (vec![(1, 10), (0, 8), (2, 7), (3, 3), (4, 5)], vec![(1, 10), (4, 5), (2, 7), (3, 3)], 8),
-            (vec![(1, 10), (0, 9), (3, 10), (4, 8), (5, 7), (6, 10)], vec![(1, 10), (6, 10), (3, 10), (4, 8), (5, 7)], 9),
-            (vec![(1, 10), (0, 9), (3, 10), (4, 8), (5, 7), (6, 8)], vec![(1, 10), (6, 8), (3, 10), (4, 8), (5, 7)], 9),
-            (vec![(1, 10), (2, 9), (3, 10), (0, 8), (5, 7), (6, 10)], vec![(1, 10), (6, 10), (3, 10), (2, 9), (5, 7)], 8),
+            (
+                vec![(1, 10), (0, 8), (2, 7), (3, 3)],
+                vec![(1, 10), (3, 3), (2, 7)],
+                8,
+            ),
+            (
+                vec![(0, 10), (1, 8), (2, 7), (3, 3)],
+                vec![(1, 8), (3, 3), (2, 7)],
+                10,
+            ),
+            (
+                vec![(1, 10), (2, 8), (3, 7), (0, 3)],
+                vec![(1, 10), (2, 8), (3, 7)],
+                3,
+            ),
+            (
+                vec![(1, 10), (0, 8), (2, 7), (3, 3), (4, 0)],
+                vec![(1, 10), (3, 3), (2, 7), (4, 0)],
+                8,
+            ),
+            (
+                vec![(1, 10), (0, 8), (2, 7), (3, 3), (4, 5)],
+                vec![(1, 10), (4, 5), (2, 7), (3, 3)],
+                8,
+            ),
+            (
+                vec![(1, 10), (0, 9), (3, 10), (4, 8), (5, 7), (6, 10)],
+                vec![(1, 10), (6, 10), (3, 10), (4, 8), (5, 7)],
+                9,
+            ),
+            (
+                vec![(1, 10), (0, 9), (3, 10), (4, 8), (5, 7), (6, 8)],
+                vec![(1, 10), (6, 8), (3, 10), (4, 8), (5, 7)],
+                9,
+            ),
+            (
+                vec![(1, 10), (2, 9), (3, 10), (0, 8), (5, 7), (6, 10)],
+                vec![(1, 10), (6, 10), (3, 10), (2, 9), (5, 7)],
+                8,
+            ),
         ];
 
         for (initial_state, final_state, removed_value) in cases {
@@ -356,7 +389,9 @@ mod tests {
     #[test]
     fn test_random_removing() {
         let max_size = 1000usize;
-        let mut expected_items: Vec<_> = (0..max_size).map(|key| (key, thread_rng().next_u64() % 500)).collect();
+        let mut expected_items: Vec<_> = (0..max_size)
+            .map(|key| (key, thread_rng().next_u64() % 500))
+            .collect();
 
         let mut q = PriorityQueue::new();
         for i in 0..max_size {
