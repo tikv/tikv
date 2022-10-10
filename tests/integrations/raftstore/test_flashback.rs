@@ -8,7 +8,6 @@ use test_raftstore::*;
 use tikv_util::time::InstantExt;
 use txn_types::WriteBatchFlags;
 
-#[test]
 fn test_flashback_for_schedule() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.run();
@@ -58,7 +57,7 @@ fn test_flashback_for_schedule() {
 }
 
 #[test]
-fn test_flahsback_for_write() {
+fn test_flashback_for_write() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
@@ -99,7 +98,7 @@ fn test_flahsback_for_write() {
 }
 
 #[test]
-fn test_flahsback_for_read() {
+fn test_flashback_for_read() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
@@ -146,7 +145,7 @@ fn test_flahsback_for_read() {
 // However, when flashback is enabled, it will make the lease None and prevent
 // renew lease.
 #[test]
-fn test_flahsback_for_local_read() {
+fn test_flashback_for_local_read() {
     let mut cluster = new_node_cluster(0, 3);
     let election_timeout = configure_for_lease_read(&mut cluster, Some(50), None);
 
@@ -232,7 +231,7 @@ fn test_flahsback_for_local_read() {
 }
 
 #[test]
-fn test_flahsback_for_status_cmd_as_region_detail() {
+fn test_flashback_for_status_cmd_as_region_detail() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.run();
 

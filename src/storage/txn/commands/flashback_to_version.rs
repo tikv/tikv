@@ -9,8 +9,8 @@ use crate::storage::{
     mvcc::{MvccTxn, SnapshotReader},
     txn::{
         commands::{
-            Command, CommandExt, FlashbackToVersionReadPhase, ResponsePolicy, TypedCommand,
-            WriteCommand, WriteContext, WriteResult,
+            Command, CommandExt, FlashbackToVersionReadPhase, ReaderWithStats, ResponsePolicy,
+            TypedCommand, WriteCommand, WriteContext, WriteResult,
         },
         flashback_to_version, latch, Result,
     },
@@ -62,7 +62,10 @@ impl CommandExt for FlashbackToVersion {
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
     fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
-        let mut reader = SnapshotReader::new_with_ctx(self.version, snapshot, &self.ctx);
+        let mut reader = ReaderWithStats::new(
+            SnapshotReader::new_with_ctx(self.version, snapshot, &self.ctx),
+            context.statistics,
+        );
         let mut txn = MvccTxn::new(TimeStamp::zero(), context.concurrency_manager);
 
         let mut next_lock_key = self.next_lock_key.take();

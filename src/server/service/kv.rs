@@ -6,10 +6,11 @@ use std::{mem, sync::Arc};
 use api_version::KvFormat;
 use fail::fail_point;
 use futures::{
+    channel::oneshot,
     compat::Future01CompatExt,
     future::{self, Future, FutureExt, TryFutureExt},
     sink::SinkExt,
-    stream::{StreamExt, TryStreamExt}, channel::oneshot,
+    stream::{StreamExt, TryStreamExt},
 };
 use grpcio::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, Result as GrpcResult,

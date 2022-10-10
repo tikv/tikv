@@ -157,7 +157,7 @@ impl Engine for MockEngine {
         self.base.modify_on_kv_engine(region_modifies)
     }
 
-    fn async_snapshot(&self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()> {
+    fn async_snapshot(&mut self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()> {
         self.base.async_snapshot(ctx, cb)
     }
 
