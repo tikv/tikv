@@ -3,6 +3,7 @@
 //! A module provides the implementation of receiver that supports async/await.
 
 use std::{
+    mem::ManuallyDrop,
     pin::Pin,
     ptr,
     sync::{
@@ -82,13 +83,15 @@ impl Drop for QueueState {
 
 struct WakeOnDrop<T> {
     queue: Arc<QueueState>,
-    sender: channel::Sender<T>,
+    sender: ManuallyDrop<channel::Sender<T>>,
 }
 
 impl<T> Drop for WakeOnDrop<T> {
     #[inline]
     fn drop(&mut self) {
-        self.queue.wake(&self.queue.policy);
+        // Drop sender first, otherwise the receiver may not detect disconnection.
+        unsafe { ManuallyDrop::drop(&mut self.sender) };
+        self.queue.wake(&WakePolicy::Immediately);
     }
 }
 
@@ -180,7 +183,7 @@ pub fn unbounded<T>(policy: WakePolicy) -> (Sender<T>, Receiver<T>) {
         Sender {
             sender: Arc::new(WakeOnDrop {
                 queue: queue.clone(),
-                sender,
+                sender: ManuallyDrop::new(sender),
             }),
         },
         Receiver { queue, receiver },
@@ -438,15 +441,9 @@ mod tests {
         let (tx, rx) = super::unbounded(WakePolicy::Immediately);
         tx.send(SetOnDrop(dropped.clone())).unwrap();
         drop(rx);
-        assert!(!dropped.load(Ordering::SeqCst));
+        // Messages in queue should be dropped actively to release memory.
+        assert!(dropped.load(Ordering::SeqCst));
 
         tx.send(SetOnDrop::default()).unwrap_err();
-        let tx1 = tx.clone();
-        drop(tx);
-        assert!(!dropped.load(Ordering::SeqCst));
-
-        tx1.send(SetOnDrop::default()).unwrap_err();
-        drop(tx1);
-        assert!(dropped.load(Ordering::SeqCst));
     }
 }
