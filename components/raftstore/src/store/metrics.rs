@@ -489,6 +489,12 @@ lazy_static! {
     pub static ref STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER: SnapValidVec =
         auto_flush_from!(STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER_VEC, SnapValidVec);
 
+    pub static ref STORE_SNAPSHOT_RETIRES_COUNTER: IntCounter =
+        register_int_counter!(
+            "tikv_raftstore_snapshot_retires_total",
+            "Total number of retries to do snapshott.",
+        ).unwrap();
+
     pub static ref PEER_RAFT_PROCESS_DURATION: HistogramVec =
         register_histogram_vec!(
             "tikv_raftstore_raft_process_duration_secs",

@@ -23,15 +23,13 @@ use raft::{
     GetEntriesContext, RaftState, INVALID_ID,
 };
 use raftstore::store::{
-    metrics::STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER, util, EntryStorage, RaftlogFetchTask,
-    SnapState, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+    metrics::*, util, EntryStorage, RaftlogFetchTask, SnapState, RAFT_INIT_LOG_INDEX,
+    RAFT_INIT_LOG_TERM,
 };
 use slog::{error, info, o, warn, Logger};
 use tikv_util::{box_err, store::find_peer, worker::Scheduler};
 
 use crate::{router::GenSnapTask, Result};
-
-const MAX_SNAP_TRY_CNT: usize = 5;
 
 pub fn write_initial_states(wb: &mut impl RaftLogBatch, region: Region) -> Result<()> {
     let region_id = region.get_id();
@@ -76,7 +74,6 @@ pub struct Storage<ER> {
     /// Snapshot state
     snap_state: RefCell<SnapState>,
     gen_snap_task: RefCell<Option<GenSnapTask>>,
-    snap_tried_cnt: RefCell<usize>,
 }
 
 impl<ER> Debug for Storage<ER> {
@@ -236,7 +233,6 @@ impl<ER: RaftEngine> Storage<ER> {
             logger,
             snap_state: RefCell::new(SnapState::Relax),
             gen_snap_task: RefCell::new(None),
-            snap_tried_cnt: RefCell::new(0),
         })
     }
 
@@ -325,7 +321,6 @@ impl<ER: RaftEngine> Storage<ER> {
     /// unavailable snapshot.
     pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
         let mut snap_state = self.snap_state.borrow_mut();
-        let mut tried_cnt = self.snap_tried_cnt.borrow_mut();
 
         let mut tried = false;
         let mut last_canceled = false;
@@ -345,7 +340,6 @@ impl<ER: RaftEngine> Storage<ER> {
                 }
                 Ok(s) if !last_canceled => {
                     *snap_state = SnapState::Relax;
-                    *tried_cnt = 0;
                     if self.validate_snap(&s, request_index) {
                         return Ok(s);
                     }
@@ -357,7 +351,6 @@ impl<ER: RaftEngine> Storage<ER> {
                         "failed to try generating snapshot";
                         "region_id" => self.region().get_id(),
                         "peer_id" => self.peer().get_id(),
-                        "times" => *tried_cnt,
                         "request_peer" => to,
                     );
                 }
@@ -372,16 +365,8 @@ impl<ER: RaftEngine> Storage<ER> {
             );
         }
 
-        if *tried_cnt >= MAX_SNAP_TRY_CNT {
-            let cnt = *tried_cnt;
-            *tried_cnt = 0;
-            return Err(raft::Error::Store(box_err!(
-                "failed to get snapshot after {} times",
-                cnt
-            )));
-        }
         if !tried || !last_canceled {
-            *tried_cnt += 1;
+            STORE_SNAPSHOT_RETIRES_COUNTER.inc();
         }
 
         info!(
@@ -582,7 +567,6 @@ mod tests {
         let snap = s.snapshot(0, 0);
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);
-        assert_eq!(*s.snap_tried_cnt.borrow(), 1);
         let mut worker = Worker::new("region-worker").lazy_build("region-worker");
         let sched = worker.scheduler();
         worker.start(MockRegionRunner {});
