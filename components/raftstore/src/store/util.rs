@@ -29,7 +29,7 @@ use raft::{
 use raft_proto::ConfChangeI;
 use tikv_util::{box_err, debug, info, store::region, time::monotonic_raw_now, Either};
 use time::{Duration, Timespec};
-use txn_types::TimeStamp;
+use txn_types::{TimeStamp, WriteBatchFlags};
 
 use super::peer_storage;
 use crate::{coprocessor::CoprocessorHost, Error, Result};
@@ -284,6 +284,10 @@ pub fn check_flashback_state(req: &RaftCmdRequest, region: &metapb::Region) -> R
     // If admin flashback has not been applied but the region is already in a
     // flashback state, the request is rejected
     if region.get_is_in_flashback() {
+        let flags = WriteBatchFlags::from_bits_truncate(req.get_header().get_flags());
+        if flags.contains(WriteBatchFlags::FLASHBACK) {
+            return Ok(());
+        }
         if req.has_admin_request()
             && (req.get_admin_request().get_cmd_type() == AdminCmdType::PrepareFlashback
                 || req.get_admin_request().get_cmd_type() == AdminCmdType::FinishFlashback)

@@ -2838,7 +2838,7 @@ where
         Ok((
             AdminResponse::default(),
             ApplyResult::Res(ExecResult::SetFlashbackState {
-                region: self.region.clone(),
+                region: old_state.get_region().clone(),
             }),
         ))
     }
@@ -5161,18 +5161,7 @@ mod tests {
                     true
                 }
                 AdminCmdType::BatchSplit => true,
-                AdminCmdType::PrepareFlashback => {
-                    if let Some(region) = region_state.modified_region.as_ref() {
-                        return region.get_is_in_flashback();
-                    }
-                    false
-                }
-                AdminCmdType::FinishFlashback => {
-                    if let Some(region) = region_state.modified_region.as_ref() {
-                        return !region.get_is_in_flashback();
-                    }
-                    false
-                }
+                AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => true,
                 _ => false,
             }
         }
