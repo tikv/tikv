@@ -2597,6 +2597,11 @@ mod tests {
     }
 
     #[allow(non_snake_case)]
+    // setup engine and prepare some data:
+    //  three regions:
+    //  region 1: includes ("k00", "value-00") to ("k09", "value-09")
+    //  region 2: includes ("k10", "value-10") to ("k19", "value-19")
+    //  region 3: includes ("k20", "value-20") to ("k29", "value-29")
     fn multi_gc_engine_setup(
         path: &Path,
         store_id: u64,
@@ -2722,7 +2727,7 @@ mod tests {
             tx,
             GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
                 .0
-                .tracker("gc-woker".to_owned()),
+                .tracker("gc-worker".to_owned()),
             cfg,
         );
 
