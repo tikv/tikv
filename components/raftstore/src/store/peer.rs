@@ -2999,6 +2999,7 @@ where
             );
         }
         if let Some(last_entry) = committed_entries.last() {
+            let prev_applying_state = (self.last_applying_idx, self.last_applying_term);
             self.last_applying_idx = last_entry.get_index();
             self.last_applying_term = last_entry.get_term();
             if self.last_applying_idx >= self.last_urgent_proposal_idx {
@@ -3055,7 +3056,7 @@ where
                 cbs,
                 self.region_buckets.as_ref().map(|b| b.meta.clone()),
                 if self.is_witness() {
-                    Some((self.last_applying_idx, self.last_applying_term))
+                    Some(prev_applying_state)
                 } else {
                     None
                 },
@@ -5246,6 +5247,7 @@ where
             Some(ForceLeaderState::ForceLeader { .. })
         )
     }
+
     pub fn unsafe_recovery_maybe_finish_wait_apply(&mut self, force: bool) {
         if let Some(UnsafeRecoveryState::WaitApply { target_index, .. }) =
             &self.unsafe_recovery_state
