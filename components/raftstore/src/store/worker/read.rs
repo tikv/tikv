@@ -100,7 +100,7 @@ pub trait ReadExecutor<E: KvEngine> {
         msg: &RaftCmdRequest,
         region: &Arc<metapb::Region>,
         read_index: Option<u64>,
-        mut snap_cache_ctx: Option<&mut LocalReadContext<'_, E>>,
+        mut local_read_ctx: Option<&mut LocalReadContext<'_, E>>,
     ) -> ReadResponse<E::Snapshot> {
         let requests = msg.get_requests();
         let mut response = ReadResponse {
@@ -112,7 +112,7 @@ pub trait ReadExecutor<E: KvEngine> {
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = match cmd_type {
-                CmdType::Get => match self.get_value(req, region.as_ref(), &mut snap_cache_ctx) {
+                CmdType::Get => match self.get_value(req, region.as_ref(), &mut local_read_ctx) {
                     Ok(resp) => resp,
                     Err(e) => {
                         error!(?e;
@@ -125,7 +125,7 @@ pub trait ReadExecutor<E: KvEngine> {
                 },
                 CmdType::Snap => {
                     let snapshot = RegionSnapshot::from_snapshot(
-                        self.get_snapshot(&mut snap_cache_ctx),
+                        self.get_snapshot(&mut local_read_ctx),
                         region.clone(),
                     );
                     response.snapshot = Some(snapshot);
@@ -232,14 +232,15 @@ where
         }
     }
 
-    // Update the snapshot in the `snap_cache` if the read_id is None or does not
-    // match.
-    // When the read_id is None, it means the `snap_cache` has been cleared
-    // before and the `cached_read_id` of it is None because only a consecutive
-    // requests will have the same cache and the cache will be cleared after the
-    // last request of the batch.
+    /// Update the snapshot in the `snap_cache` if the read_id is None or does
+    /// not match.
     fn maybe_update_snapshot(&mut self, engine: &E, delegate_last_valid_ts: Timespec) -> bool {
-        if let Some(read_id) = self.read_id.as_ref() {
+        // When the read_id is None, it means the `snap_cache` has been cleared
+        // before and the `cached_read_id` of it is None because only a consecutive
+        // requests will have the same cache and the cache will be cleared after the
+        // last request of the batch.
+
+        if self.read_id.is_some() {
             if self.snap_cache.cached_read_id.is_some()
                 && *self.snap_cache.cached_read_id.as_ref().unwrap() == *read_id
                 && self.snap_cache.cached_snapshot_ts >= delegate_last_valid_ts
