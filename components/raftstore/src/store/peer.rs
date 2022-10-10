@@ -3922,12 +3922,13 @@ where
 
         let prs = self.raft_group.raft.prs();
         // find other peers that are not down
+        // TODO: fitler out non-witnesses waiting for data
         let (_, peer) = self
             .region()
             .get_peers()
             .iter()
             .filter(|peer| peer.id != self.peer.id)
-            .filter(|peer| !peer.is_witness)
+            .filter(|peer| !peer.is_witness && peer.role != PeerRole::Learner)
             .filter(|peer| {
                 if let Some(instant) = self.peer_heartbeats.get(&peer.get_id()) {
                     let elapsed = instant.saturating_elapsed();
