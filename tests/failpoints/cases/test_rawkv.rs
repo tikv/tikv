@@ -115,10 +115,16 @@ impl TestSuite {
         let timer = Instant::now();
         loop {
             if timer.saturating_elapsed() > Duration::from_secs(10) {
-                panic!(
+                assert_eq!(
+                    merged.get_id(),
+                    target.get_id(),
                     "region merge failed: merged region:{:?}, target region:{:?}, source_key:{:?}, target_key:{:?}",
-                    merged, target, source_key, target_key,
+                    merged,
+                    target,
+                    source_key,
+                    target_key
                 );
+                panic!("region merge failed");
             }
             merged = self.cluster.get_region(source_key);
             if merged.get_id() == target.get_id() {
