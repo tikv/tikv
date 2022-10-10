@@ -38,7 +38,7 @@ use engine_rocks::{
 };
 use engine_traits::{
     CfOptions as _, CfOptionsExt, DbOptions as _, DbOptionsExt, MiscExt, TabletAccessor,
-    TabletErrorCollector, TitanCfOptions as _, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    TabletErrorCollector, TitanCfOptions as _, CF_DEFAULT, CF_LOCK, CF_MARK, CF_RAFT, CF_WRITE,
 };
 use file_system::IoRateLimiter;
 use keys::region_raft_prefix_len;
@@ -111,6 +111,7 @@ fn memory_limit_for_cf(is_raft_db: bool, cf: &str, total_mem: u64) -> ReadableSi
         (false, CF_DEFAULT) => (0.25, 0, usize::MAX),
         (false, CF_LOCK) => (0.02, LOCKCF_MIN_MEM, LOCKCF_MAX_MEM),
         (false, CF_WRITE) => (0.15, 0, usize::MAX),
+        (false, CF_MARK) => (0.001, 0, usize::MAX),
         _ => unreachable!(),
     };
     let mut size = (total_mem as f64 * ratio) as usize;
@@ -119,7 +120,7 @@ fn memory_limit_for_cf(is_raft_db: bool, cf: &str, total_mem: u64) -> ReadableSi
     } else if size > max {
         size = max;
     }
-    ReadableSize::mb(size as u64 / MIB)
+    ReadableSize(size as u64)
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
@@ -901,6 +902,99 @@ impl LockCfConfig {
     }
 }
 
+cf_config!(MarkCfConfig);
+
+impl Default for MarkCfConfig {
+    fn default() -> MarkCfConfig {
+        let total_mem = SysQuota::memory_limit_in_bytes();
+
+        // The values in the mark CF are all small. It is unnecessary to use Titan.
+        // Setting blob_run_mode=read_only effectively disable Titan.
+        let titan = TitanCfConfig {
+            blob_run_mode: BlobRunMode::ReadOnly,
+            ..Default::default()
+        };
+
+        MarkCfConfig {
+            block_size: ReadableSize::kb(16),
+            block_cache_size: memory_limit_for_cf(false, CF_MARK, total_mem),
+            disable_block_cache: false,
+            cache_index_and_filter_blocks: true,
+            pin_l0_filter_and_index_blocks: true,
+            use_bloom_filter: true,
+            optimize_filters_for_hits: false,
+            whole_key_filtering: true,
+            bloom_filter_bits_per_key: 10,
+            block_based_bloom_filter: false,
+            read_amp_bytes_per_bit: 0,
+            compression_per_level: [DBCompressionType::No; 7],
+            write_buffer_size: ReadableSize::mb(32),
+            max_write_buffer_number: 5,
+            min_write_buffer_number_to_merge: 1,
+            max_bytes_for_level_base: ReadableSize::mb(128),
+            target_file_size_base: ReadableSize::mb(8),
+            level0_file_num_compaction_trigger: 1,
+            level0_slowdown_writes_trigger: None,
+            level0_stop_writes_trigger: None,
+            max_compaction_bytes: ReadableSize::gb(2),
+            compaction_pri: CompactionPriority::ByCompensatedSize,
+            dynamic_level_bytes: true,
+            num_levels: 7,
+            max_bytes_for_level_multiplier: 10,
+            compaction_style: DBCompactionStyle::Level,
+            disable_auto_compactions: false,
+            disable_write_stall: false,
+            soft_pending_compaction_bytes_limit: None,
+            hard_pending_compaction_bytes_limit: None,
+            force_consistency_checks: false,
+            prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+            prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+            enable_doubly_skiplist: true,
+            enable_compaction_guard: false,
+            compaction_guard_min_output_file_size: ReadableSize::mb(8),
+            compaction_guard_max_output_file_size: ReadableSize::mb(128),
+            bottommost_level_compression: DBCompressionType::Disable,
+            bottommost_zstd_compression_dict_size: 0,
+            bottommost_zstd_compression_sample_size: 0,
+            prepopulate_block_cache: PrepopulateBlockCache::Disabled,
+            format_version: 2,
+            checksum: ChecksumType::CRC32c,
+            titan,
+        }
+    }
+}
+
+impl MarkCfConfig {
+    pub fn build_opt(
+        &self,
+        cache: &Option<Cache>,
+        region_info_accessor: Option<&RegionInfoAccessor>,
+    ) -> RocksCfOptions {
+        let mut cf_opts = build_cf_opt!(self, CF_MARK, cache, region_info_accessor);
+        // Prefix extractor(trim the timestamp at tail) for mark cf.
+        cf_opts
+            .set_prefix_extractor(
+                "FixedSuffixSliceTransform",
+                FixedSuffixSliceTransform::new(8),
+            )
+            .unwrap();
+        // Create prefix bloom filter for memtable.
+        cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
+        // Collects user defined properties.
+        cf_opts.add_table_properties_collector_factory(
+            "tikv.mvcc-properties-collector",
+            MvccPropertiesCollectorFactory::default(),
+        );
+        let f = RangePropertiesCollectorFactory {
+            prop_size_index_distance: self.prop_size_index_distance,
+            prop_keys_index_distance: self.prop_keys_index_distance,
+        };
+        cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
+        cf_opts.set_titan_cf_options(&self.titan.build_opts());
+        cf_opts
+    }
+}
+
 cf_config!(RaftCfConfig);
 
 impl Default for RaftCfConfig {
@@ -1085,6 +1179,8 @@ pub struct DbConfig {
     #[online_config(submodule)]
     pub lockcf: LockCfConfig,
     #[online_config(submodule)]
+    pub markcf: MarkCfConfig,
+    #[online_config(submodule)]
     pub raftcf: RaftCfConfig,
     #[online_config(skip)]
     pub titan: TitanDbConfig,
@@ -1132,6 +1228,7 @@ impl Default for DbConfig {
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),
+            markcf: MarkCfConfig::default(),
             raftcf: RaftCfConfig::default(),
             titan: titan_config,
         }
@@ -1215,6 +1312,7 @@ impl DbConfig {
                 CF_WRITE,
                 self.writecf.build_opt(cache, region_info_accessor),
             ),
+            (CF_MARK, self.markcf.build_opt(cache, region_info_accessor)),
             // TODO: remove CF_RAFT.
             (CF_RAFT, self.raftcf.build_opt(cache)),
         ]
@@ -1224,6 +1322,7 @@ impl DbConfig {
         self.defaultcf.validate()?;
         self.lockcf.validate()?;
         self.writecf.validate()?;
+        self.markcf.validate()?;
         self.raftcf.validate()?;
         self.titan.validate()?;
         if self.enable_unordered_write {

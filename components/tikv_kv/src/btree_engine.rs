@@ -13,7 +13,7 @@ use std::{
 
 use collections::HashMap;
 use engine_panic::PanicEngine;
-use engine_traits::{CfName, IterOptions, ReadOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{CfName, IterOptions, ReadOptions, ALL_CFS, CF_DEFAULT, CF_LOCK};
 use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};
 
@@ -69,7 +69,7 @@ impl BTreeEngine {
 
 impl Default for BTreeEngine {
     fn default() -> Self {
-        let cfs = &[CF_WRITE, CF_DEFAULT, CF_LOCK];
+        let cfs = ALL_CFS;
         Self::new(cfs)
     }
 }

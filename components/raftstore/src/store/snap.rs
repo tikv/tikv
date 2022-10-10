@@ -16,7 +16,9 @@ use std::{
 
 use collections::{HashMap, HashMapEntry as Entry};
 use encryption::{create_aes_ctr_crypter, from_engine_encryption_method, DataKeyManager, Iv};
-use engine_traits::{CfName, EncryptionKeyManager, KvEngine, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{
+    CfName, EncryptionKeyManager, KvEngine, CF_DEFAULT, CF_LOCK, CF_MARK, CF_WRITE,
+};
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use fail::fail_point;
 use file_system::{
@@ -49,11 +51,12 @@ use crate::{
 pub mod snap_io;
 
 // Data in CF_RAFT should be excluded for a snapshot.
-pub const SNAPSHOT_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
+pub const SNAPSHOT_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_MARK];
 pub const SNAPSHOT_CFS_ENUM_PAIR: &[(CfNames, CfName)] = &[
     (CfNames::default, CF_DEFAULT),
     (CfNames::lock, CF_LOCK),
     (CfNames::write, CF_WRITE),
+    (CfNames::mark, CF_MARK),
 ];
 pub const SNAPSHOT_VERSION: u64 = 2;
 pub const IO_LIMITER_CHUNK_SIZE: usize = 4 * 1024;
@@ -2278,7 +2281,7 @@ pub mod tests {
             .unwrap();
         let dst_db_path = dst_db_dir.path().to_str().unwrap();
         // Change arbitrarily the cf order of ALL_CFS at destination db.
-        let dst_cfs = [CF_WRITE, CF_DEFAULT, CF_LOCK, CF_RAFT];
+        let dst_cfs = [CF_WRITE, CF_DEFAULT, CF_LOCK, CF_MARK, CF_RAFT];
         let dst_db = engine_test::kv::new_engine(dst_db_path, &dst_cfs).unwrap();
         let options = ApplyOptions {
             db: dst_db.clone(),

@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use engine_traits::{
-    MiscExt, Range, RangePropertiesExt, Result, CF_DEFAULT, CF_LOCK, CF_WRITE, LARGE_CFS,
+    MiscExt, Range, RangePropertiesExt, Result, CF_DEFAULT, CF_LOCK, CF_MARK, CF_WRITE, LARGE_CFS,
 };
 use tikv_util::{box_err, box_try, debug, info};
 
@@ -149,6 +149,7 @@ impl RangePropertiesExt for RocksEngine {
         let cfs = [
             (CF_DEFAULT, box_try!(get_cf_size(CF_DEFAULT))),
             (CF_WRITE, box_try!(get_cf_size(CF_WRITE))),
+            (CF_MARK, box_try!(get_cf_size(CF_MARK))),
             // CF_LOCK doesn't have RangeProperties until v4.0, so we swallow the error for
             // backward compatibility.
             (CF_LOCK, get_cf_size(CF_LOCK).unwrap_or(0)),

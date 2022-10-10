@@ -45,7 +45,7 @@ use engine_rocks::{
 use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
 use engine_traits::{
     CfOptions, CfOptionsExt, Engines, FlowControlFactorsExt, KvEngine, MiscExt, RaftEngine,
-    TabletFactory, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    TabletFactory, CF_DEFAULT, CF_WRITE, LARGE_CFS,
 };
 use error_code::ErrorCodeExt;
 use file_system::{
@@ -1980,7 +1980,7 @@ impl EnginesResourceInfo {
         // thread.
 
         for (_, (_, tablet)) in cached_latest_tablets.iter() {
-            for cf in &[CF_DEFAULT, CF_WRITE, CF_LOCK] {
+            for cf in LARGE_CFS {
                 fetch_engine_cf(tablet, cf, &mut normalized_pending_bytes);
             }
         }

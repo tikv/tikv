@@ -1,6 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use std::borrow::Cow;
+
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_MARK, CF_WRITE};
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request};
 use protobuf::{CodedInputStream, Message, SingularPtrField};
 
@@ -176,7 +178,8 @@ const DELETE_RANGE_TAG: u8 = 2;
 const DEFAULT_CF_TAG: u8 = 0;
 const WRITE_CF_TAG: u8 = 1;
 const LOCK_CF_TAG: u8 = 2;
-const ARBITRARY_CF_TAG: u8 = 3;
+const MARK_CF_TAG: u8 = 3;
+const ARBITRARY_CF_TAG: u8 = 255;
 
 // Generally the length of most key is within 128. The length of value is
 // within 2GiB.
@@ -250,6 +253,7 @@ fn encode_cf(cf: &str, buf: &mut Vec<u8>) {
         CF_DEFAULT => buf.push(DEFAULT_CF_TAG),
         CF_LOCK => buf.push(LOCK_CF_TAG),
         CF_WRITE => buf.push(WRITE_CF_TAG),
+        CF_MARK => buf.push(MARK_CF_TAG),
         cf => {
             // Perhaps should return error.
             buf.push(ARBITRARY_CF_TAG);
@@ -265,6 +269,7 @@ fn decode_cf(buf: &[u8]) -> (&str, &[u8]) {
         DEFAULT_CF_TAG => (CF_DEFAULT, left),
         LOCK_CF_TAG => (CF_LOCK, left),
         WRITE_CF_TAG => (CF_WRITE, left),
+        MARK_CF_TAG => (CF_MARK, left),
         ARBITRARY_CF_TAG => {
             let (cf, left) = decode_bytes(left);
             (
@@ -369,6 +374,13 @@ mod tests {
         delete_req.set_key(delete_key.clone());
         cmd.mut_requests().push(req);
 
+        req = Request::default();
+        req.set_cmd_type(CmdType::Delete);
+        let delete_req = req.mut_delete();
+        delete_req.set_cf(CF_MARK.to_string());
+        delete_req.set_key(delete_key.clone());
+        cmd.mut_requests().push(req);
+
         let mut encoder = SimpleWriteEncoder::new(cmd.clone(), usize::MAX).unwrap();
         cmd.clear_requests();
 
@@ -403,6 +415,11 @@ mod tests {
         let write = decoder.next().unwrap();
         let SimpleWrite::Delete(delete) = write else { panic!("should be delete") };
         assert_eq!(delete.cf, CF_WRITE);
+        assert_eq!(delete.key, &delete_key);
+
+        let write = decoder.next().unwrap();
+        let SimpleWrite::Delete(delete) = write else { panic!("should be delete") };
+        assert_eq!(delete.cf, CF_MARK);
         assert_eq!(delete.key, &delete_key);
 
         let write = decoder.next().unwrap();

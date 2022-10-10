@@ -30,7 +30,7 @@ use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
     util::SequenceNumber, DeleteStrategy, KvEngine, Mutable, PerfContext, PerfContextKind,
     RaftEngine, RaftEngineReadOnly, Range as EngineRange, Snapshot, SstMetaInfo, WriteBatch,
-    ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    ALL_CFS, CF_DEFAULT, CF_LOCK, CF_MARK, CF_RAFT, CF_WRITE,
 };
 use fail::fail_point;
 use kvproto::{
@@ -2999,6 +2999,8 @@ pub fn is_conf_change_cmd(msg: &RaftCmdRequest) -> bool {
     req.has_change_peer() || req.has_change_peer_v2()
 }
 
+const SST_CFS: &[&str] = &[CF_DEFAULT, CF_WRITE, CF_MARK];
+
 /// This function is used to check whether an sst is valid for ingestion.
 ///
 /// The `sst` must have epoch and range matched with `region`.
@@ -3009,7 +3011,7 @@ pub fn check_sst_for_ingestion(sst: &SstMeta, region: &Region) -> Result<()> {
     }
 
     let cf_name = sst.get_cf_name();
-    if cf_name != CF_DEFAULT && cf_name != CF_WRITE {
+    if SST_CFS.iter().all(|cf| *cf != cf_name) {
         return Err(box_err!("invalid cf name {}", cf_name));
     }
 
@@ -6242,6 +6244,8 @@ mod tests {
         sst.set_cf_name("test".to_owned());
         check_sst_for_ingestion(&sst, &region).unwrap_err();
         sst.set_cf_name(CF_WRITE.to_owned());
+        check_sst_for_ingestion(&sst, &region).unwrap();
+        sst.set_cf_name(CF_MARK.to_owned());
         check_sst_for_ingestion(&sst, &region).unwrap();
 
         // Check region id

@@ -64,6 +64,7 @@ make_auto_flush_static_metric! {
         default,
         lock,
         write,
+        mark,
         raft,
         ver_default,
     }

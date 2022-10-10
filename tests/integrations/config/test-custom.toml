@@ -438,6 +438,55 @@ prepopulate-block-cache = "flush-only"
 format-version = 5
 checksum = "xxh3"
 
+[rocksdb.markcf]
+block-size = "12KB"
+block-cache-size = "12GB"
+disable-block-cache = false
+cache-index-and-filter-blocks = false
+pin-l0-filter-and-index-blocks = false
+use-bloom-filter = false
+optimize-filters-for-hits = true
+whole-key-filtering = true
+bloom-filter-bits-per-key = 123
+block-based-bloom-filter = true
+read-amp-bytes-per-bit = 0
+compression-per-level = [
+    "no",
+    "no",
+    "zstd",
+    "zstd",
+    "no",
+    "zstd",
+    "lz4",
+]
+write-buffer-size = "1MB"
+max-write-buffer-number = 12
+min-write-buffer-number-to-merge = 12
+max-bytes-for-level-base = "12KB"
+target-file-size-base = "123KB"
+level0-file-num-compaction-trigger = 123
+level0-slowdown-writes-trigger = 123
+level0-stop-writes-trigger = 123
+max-compaction-bytes = "1GB"
+compaction-pri = "min-overlapping-ratio"
+dynamic-level-bytes = true
+num-levels = 4
+max-bytes-for-level-multiplier = 8
+compaction-style = "universal"
+disable-auto-compactions = true
+disable-write-stall = true
+soft-pending-compaction-bytes-limit = "12GB"
+hard-pending-compaction-bytes-limit = "12GB"
+force-consistency-checks = true
+prop-size-index-distance = 4000000
+prop-keys-index-distance = 40000
+enable-compaction-guard = true
+compaction-guard-min-output-file-size = "12MB"
+compaction-guard-max-output-file-size = "34MB"
+prepopulate-block-cache = "flush-only"
+format-version = 5
+checksum = "xxh3"
+
 [rocksdb.raftcf]
 block-size = "12KB"
 block-cache-size = "12GB"
