@@ -306,7 +306,7 @@ fn json_contains_validator(expr: &tipb::Expr) -> Result<()> {
 #[rpn_fn(nullable, raw_varg,min_args= 2, max_args = 3, extra_validator = json_contains_validator)]
 #[inline]
 fn json_contains(args: &[ScalarValueRef]) -> Result<Option<i64>> {
-    assert!(!args.is_empty() && (args.len() == 2 || args.len() == 3));
+    assert!(args.len() == 2 || args.len() == 3);
     let j: Option<JsonRef> = args[0].as_json();
     let mut j = match j {
         None => return Ok(None),
@@ -315,7 +315,7 @@ fn json_contains(args: &[ScalarValueRef]) -> Result<Option<i64>> {
     let target: Option<JsonRef> = args[1].as_json();
     let target = match target {
         None => return Ok(None),
-        Some(target) => target.to_owned(),
+        Some(target) => target,
     };
 
     if args.len() == 3 {
@@ -334,10 +334,7 @@ fn json_contains(args: &[ScalarValueRef]) -> Result<Option<i64>> {
             None => return Ok(None),
         };
     }
-    match j.as_ref().json_contains(target.as_ref())? {
-        true => Ok(Some(1)),
-        _ => Ok(Some(0)),
-    }
+    Ok(Some(j.as_ref().json_contains(target)? as i64))
 }
 
 #[rpn_fn(nullable, raw_varg, min_args = 2, extra_validator = json_with_paths_validator)]
