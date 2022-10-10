@@ -2095,7 +2095,7 @@ where
         self.fsm.peer.retry_pending_reads(&self.ctx.cfg);
 
         self.check_force_leader();
-        self.fsm.peer.maybe_witness_transfer_leader(&self.ctx);
+        self.fsm.peer.maybe_witness_transfer_leader(self.ctx);
 
         let mut res = None;
         if self.ctx.cfg.hibernate_regions {
@@ -4986,14 +4986,13 @@ where
         }
 
         // Forbid reads and writes when it's a witness except transfer leader
-        if self.fsm.peer.is_witness() {
-            if !(msg.has_admin_request()
+        if self.fsm.peer.is_witness()
+            && !(msg.has_admin_request()
                 && msg.get_admin_request().get_cmd_type() == AdminCmdType::TransferLeader)
-            {
-                self.ctx.raft_metrics.invalid_proposal.witness.inc();
-                // TODO: use a dedicated error type
-                return Err(Error::RecoveryInProgress(self.region_id()));
-            }
+        {
+            self.ctx.raft_metrics.invalid_proposal.witness.inc();
+            // TODO: use a dedicated error type
+            return Err(Error::RecoveryInProgress(self.region_id()));
         }
 
         // check whether the peer is initialized.

@@ -1826,8 +1826,8 @@ pub mod tests {
         s.set_region(r);
 
         let wait_snapshot = |snap: raft::Result<Snapshot>| -> Snapshot {
-            if snap.is_ok() {
-                return snap.unwrap();
+            if let Ok(s) = snap {
+                return s;
             }
             let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
             assert_eq!(snap.unwrap_err(), unavailable);

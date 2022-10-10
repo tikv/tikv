@@ -3033,20 +3033,11 @@ where
             let commit_term = self.get_store().term(commit_index).unwrap();
 
             if self.is_witness() {
-                committed_entries = committed_entries
-                    .into_iter()
-                    .filter(|e| has_admin_request(e.get_data()))
-                    .collect();
+                committed_entries.retain(|e| has_admin_request(e.get_data()));
+                if committed_entries.is_empty() {
+                    return;
+                }
             }
-            if committed_entries.is_empty() {
-                return;
-            }
-
-            let prev_state = if self.is_witness() {
-                Some(self.last_applying_idx)
-            } else {
-                None
-            };
 
             let mut apply = Apply::new(
                 self.peer_id(),
@@ -3057,7 +3048,11 @@ where
                 committed_entries,
                 cbs,
                 self.region_buckets.as_ref().map(|b| b.meta.clone()),
-                prev_state,
+                if self.is_witness() {
+                    Some(self.last_applying_idx)
+                } else {
+                    None
+                },
             );
             apply.on_schedule(&ctx.raft_metrics);
             self.mut_store()
