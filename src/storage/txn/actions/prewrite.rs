@@ -362,13 +362,6 @@ impl<'a> PrewriteMutation<'a> {
                 // Note: PessimisticLockNotFound can happen on a non-pessimistically locked key,
                 // if it is a retrying prewrite request.
                 TransactionKind::Pessimistic(for_update_ts) => {
-                    if let DoConstraintCheck = self.pessimistic_action {
-                        // Do the same as optimistic transactions if constraint checks are needed.
-                        if commit_ts > self.txn_props.start_ts {
-                            MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
-                            self.write_conflict_error(&write, commit_ts)?;
-                        }
-                    }
                     if commit_ts > for_update_ts {
                         // Don't treat newer Rollback records as write conflicts. They can cause
                         // false positive errors because they can be written even if the pessimistic
@@ -1506,15 +1499,7 @@ pub mod tests {
         // report WriteConflict.
         must_rollback(&engine, b"k2", 50, false);
         let err = must_retry_pessimistic_prewrite_put_err(
-            &engine,
-            b"k2",
-            b"v2",
-            b"k1",
-            &None,
-            50,
-            50,
-            SkipPessimisticCheck,
-            0,
+            &engine, b"k2", b"v2", b"k1", &None, 50, 50, false, 0,
         );
         assert!(
             matches!(err, Error(box ErrorInner::WriteConflict { .. })),
@@ -1529,7 +1514,7 @@ pub mod tests {
             b"k1",
             &None,
             48.into(),
-            SkipPessimisticCheck,
+            false,
             100,
             48.into(),
             1,
