@@ -1640,6 +1640,7 @@ mod tests {
     use api_version::{ApiV2, KvFormat, RawValue};
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
     use engine_rocks::{util::get_cf_handle, RocksEngine};
 <<<<<<< HEAD
     use engine_traits::Peekable as _;
@@ -1650,10 +1651,14 @@ mod tests {
 =======
     use engine_rocks::{util::get_cf_handle, RocksDbOptions, RocksEngine, RocksCfOptions};
 >>>>>>> 73b9ea379 (*: work-around a warning)
+=======
+    use engine_rocks::{util::get_cf_handle, RocksCfOptions, RocksDbOptions, RocksEngine};
+>>>>>>> b973bd92d (*: code format)
     use engine_test::{
         ctor::DbOptions,
         kv::{TestTabletFactory, TestTabletFactoryV2},
     };
+<<<<<<< HEAD
     use engine_traits::{OpenOptions, TabletFactory, ALL_CFS};
 <<<<<<< HEAD
 =======
@@ -1664,6 +1669,9 @@ mod tests {
 >>>>>>> 99ee97858 (*: remove unnecessary db field of GC_Context)
 =======
 >>>>>>> b140f0f4b (*: rebase)
+=======
+    use engine_traits::{OpenOptions, TabletFactory, ALL_CFS, CF_RAFT};
+>>>>>>> b973bd92d (*: code format)
     use futures::executor::block_on;
     use kvproto::{
         kvrpcpb::{ApiVersion, Op},
@@ -1710,8 +1718,6 @@ mod tests {
             Engine, Storage, TestStorageBuilderApiV1,
         },
     };
-
-    use engine_traits::CF_RAFT;
 
     fn init_region(
         start_key: &[u8],
