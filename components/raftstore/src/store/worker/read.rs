@@ -241,16 +241,16 @@ where
         // last request of the batch.
 
         if let Some(read_id) = self.read_id.as_ref() {
-            if self.snap_cache.cached_read_id.is_some()
-                && *self.snap_cache.cached_read_id.as_ref().unwrap() == *read_id
-                && self.snap_cache.cached_snapshot_ts >= delegate_last_valid_ts
-            {
-                // Cache hit
-                assert!(self.snap_cache.snapshot.as_ref().is_some());
-                return false;
-            } else {
-                self.snap_cache.cached_read_id = Some(read_id.clone());
+            if let Some(cached_read_id) = self.snap_cache.cached_read_id.as_ref() {
+                if cached_read_id == read_id && cached_read_id.create_time >= delegate_last_valid_ts
+                {
+                    // Cache hit
+                    assert!(self.snap_cache.snapshot.as_ref().is_some());
+                    return false;
+                }
             }
+
+            self.snap_cache.cached_read_id = Some(read_id.clone());
         } else {
             // snap_cache should have been already cleared
             assert!(self.snap_cache.cached_read_id.is_none());
