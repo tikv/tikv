@@ -87,6 +87,30 @@ impl RocksEngine {
     pub(crate) fn multi_batch_write(&self) -> bool {
         self.multi_batch_write
     }
+
+    #[inline]
+    pub(crate) fn approximate_memtable_stats(
+        &self,
+        cf: &str,
+        start: &[u8],
+        end: &[u8],
+    ) -> Result<(u64, u64)> {
+        let handle = self.cf(cf)?;
+        Ok(self
+            .as_inner()
+            .approximate_mem_table_stats(handle, start, end))
+    }
+
+    // TODO: move this function when MiscExt is implemented.
+    #[cfg(test)]
+    pub(crate) fn flush(&self, cf: &str, wait: bool) -> Result<()> {
+        use tirocks::option::FlushOptions;
+
+        let write_handle = self.cf(cf)?;
+        self.as_inner()
+            .flush(FlushOptions::default().set_wait(wait), write_handle)
+            .map_err(r2e)
+    }
 }
 
 impl engine_traits::Iterable for RocksEngine {

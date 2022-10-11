@@ -35,6 +35,7 @@ crossbeam = "0.8"
 engine_traits = { path = "../engine_traits" }
 error_code = { path = "../error_code" }
 fail = "0.5"
+file_system = { path = "../file_system" }
 futures = { version = "0.3", features = ["compat"] }
 keys = { path = "../keys", default-features = false }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
