@@ -8,3 +8,5 @@ mod ready;
 pub use command::{CommittedEntries, SimpleWriteDecoder, SimpleWriteEncoder};
 pub use life::DestroyProgress;
 pub use ready::AsyncWriter;
+
+pub(crate) use self::query::LocalReader;
