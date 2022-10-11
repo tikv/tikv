@@ -49,7 +49,7 @@ use tikv_util::{
 };
 use tokio::sync::Mutex;
 use tracker::{set_tls_tracker_token, RequestInfo, RequestType, Tracker, GLOBAL_TRACKERS};
-use txn_types::{self, Key};
+use txn_types::{self, Key, WriteBatchFlags};
 
 use super::batch::{BatcherBuilder, ReqBatcher};
 use crate::{
@@ -1713,8 +1713,12 @@ fn future_flashback_to_version<
         // state of the flashback, rejecting all read and write operations at
         // propose and applied. We make FlashbackToVersion a two-stage request
         // and lock the region in the first stage.
-        send_flashback_msg::<T, E>(&raft_router, req.clone(), AdminCmdType::PrepareFlashback)
-            .await?;
+        send_flashback_msg::<T, E>(
+            &raft_router,
+            req.get_context(),
+            AdminCmdType::PrepareFlashback,
+        )
+        .await?;
 
         let (cb, f) = paired_future_callback();
         let res = storage_clone.sched_txn_command(req.clone().into(), cb);
@@ -1731,8 +1735,12 @@ fn future_flashback_to_version<
         // in `RegionLocalState` and region's meta, and when that
         // admin cmd is applied, will update the memory
         // state of the flashback
-        send_flashback_msg::<T, E>(&raft_router, req.clone(), AdminCmdType::FinishFlashback)
-            .await?;
+        send_flashback_msg::<T, E>(
+            &raft_router,
+            req.get_context(),
+            AdminCmdType::FinishFlashback,
+        )
+        .await?;
 
         let mut resp = FlashbackToVersionResponse::default();
         if let Some(err) = extract_region_error(&v) {
@@ -2409,13 +2417,9 @@ fn needs_reject_raft_append(reject_messages_on_memory_ratio: f64) -> bool {
 
 async fn send_flashback_msg<T: RaftStoreRouter<E::Local> + 'static, E: Engine>(
     raft_router: &Mutex<T>,
-    req: FlashbackToVersionRequest,
+    ctx: &Context,
     cmd_type: AdminCmdType,
 ) -> ServerResult<()> {
-    let raft_router = raft_router.lock().await;
-    let epoch = req.get_context().get_region_epoch();
-    let peer = req.get_context().get_peer();
-    let region_id = req.get_context().get_region_id();
     let (result_tx, result_rx) = oneshot::channel();
     let cb = Callback::write(Box::new(move |resp| {
         if resp.response.get_header().has_error() {
@@ -2425,14 +2429,20 @@ async fn send_flashback_msg<T: RaftStoreRouter<E::Local> + 'static, E: Engine>(
         }
         result_tx.send(true).unwrap();
     }));
-
     let mut admin = AdminRequest::default();
     admin.set_cmd_type(cmd_type);
     let mut req = RaftCmdRequest::default();
-    req.mut_header().set_region_id(region_id);
-    req.mut_header().set_region_epoch(epoch.clone());
-    req.mut_header().set_peer(peer.clone());
+    req.mut_header().set_region_id(ctx.get_region_id());
+    req.mut_header()
+        .set_region_epoch(ctx.get_region_epoch().clone());
+    req.mut_header().set_peer(ctx.get_peer().clone());
+    req.mut_header()
+        .set_flags(WriteBatchFlags::FLASHBACK.bits());
     req.set_admin_request(admin);
+    req.mut_header()
+        .set_flags(WriteBatchFlags::FLASHBACK.bits());
+    // call admin request directly
+    let raft_router = raft_router.lock().await;
     if let Err(e) = raft_router.send_command(
         req,
         cb,
@@ -2450,7 +2460,7 @@ async fn send_flashback_msg<T: RaftStoreRouter<E::Local> + 'static, E: Engine>(
         return Err(Error::Other(box_err!(
             "send flashback msg {:?} to region {} failed",
             cmd_type,
-            region_id
+            ctx.get_region_id()
         )));
     }
     Ok(())
