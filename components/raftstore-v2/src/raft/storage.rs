@@ -608,7 +608,7 @@ mod tests {
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         gen_task.generate_and_schedule_snapshot(RegionLocalState::default(), 0, 0, &sched);
         s.cancel_generating_snap(None);
-        let snap = match *s.snap_state.borrow() {
+        match *s.snap_state.borrow() {
             SnapState::Generating { ref receiver, .. } => {
                 assert_eq!(receiver.recv_timeout(Duration::from_secs(1)).is_err(), true);
             }
