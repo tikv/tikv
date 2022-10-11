@@ -766,6 +766,29 @@ impl Clone for MockRegionInfoProvider {
 }
 
 impl RegionInfoProvider for MockRegionInfoProvider {
+    fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> Result<()> {
+        let region_infos = self.0.lock().unwrap();
+        let mut iter = region_infos.iter().filter(|&region_info| {
+            RangeKey::from_end_key(region_info.region.get_end_key().to_vec())
+                > RangeKey::from_start_key(from.to_vec())
+        });
+        callback(&mut iter);
+        Ok(())
+    }
+
+    fn find_region_by_key(&self, key: &[u8]) -> Result<Region> {
+        let region_infos = self.0.lock().unwrap();
+        let key = RangeKey::from_start_key(key.to_vec());
+        region_infos
+            .iter()
+            .find(|region_info| {
+                RangeKey::from_start_key(region_info.region.get_start_key().to_vec()) <= key
+                    && key < RangeKey::from_end_key(region_info.region.get_end_key().to_vec())
+            })
+            .map(|region_info| region_info.region.clone())
+            .ok_or(box_err!("Not found region containing {:?}", key))
+    }
+
     fn get_regions_in_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<Vec<Region>> {
         let mut regions = Vec::new();
         let (tx, rx) = mpsc::channel();
@@ -789,29 +812,6 @@ impl RegionInfoProvider for MockRegionInfoProvider {
             regions.push(region);
         }
         Ok(regions)
-    }
-
-    fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> Result<()> {
-        let region_infos = self.0.lock().unwrap();
-        let mut iter = region_infos.iter().filter(|&region_info| {
-            RangeKey::from_end_key(region_info.region.get_end_key().to_vec())
-                > RangeKey::from_start_key(from.to_vec())
-        });
-        callback(&mut iter);
-        Ok(())
-    }
-
-    fn find_region_by_key(&self, key: &[u8]) -> Result<Region> {
-        let region_infos = self.0.lock().unwrap();
-        let key = RangeKey::from_start_key(key.to_vec());
-        region_infos
-            .iter()
-            .find(|region_info| {
-                RangeKey::from_start_key(region_info.region.get_start_key().to_vec()) <= key
-                    && key < RangeKey::from_end_key(region_info.region.get_end_key().to_vec())
-            })
-            .map(|region_info| region_info.region.clone())
-            .ok_or(box_err!("Not found region containing {:?}", key))
     }
 }
 

@@ -1696,8 +1696,8 @@ mod tests {
     use crate::{
         config::DbConfig,
         server::gc_worker::{
-            compaction_filter::{get_rocksdb_from_factory, new_gc_context},
-            MockSafePointProvider, PrefixedEngine, TestGcRunner,
+            compaction_filter::get_rocksdb_from_factory, MockSafePointProvider, PrefixedEngine,
+            TestGcRunner,
         },
         storage::{
             config::BlockCacheConfig,
@@ -2731,39 +2731,45 @@ mod tests {
             r3.clone(),
         ]));
 
-        let cfg = GcConfig::default();
+        let mut cfg = GcConfig::default();
+        // let ratio_threshold less than 1
+        cfg.ratio_threshold = 0.5;
+        cfg.enable_compaction_filter = true;
+        let cfg_tracker = { GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone()))) };
+
         let gc_runner = GcRunner::new(
             store_id,
             engine.clone(),
             RaftStoreBlackHole,
-            tx,
+            tx.clone(),
             GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
                 .0
                 .tracker("gc-worker".to_owned()),
+            cfg.clone(),
+        );
+
+        let gc_worker = GcWorker::new(
+            engine.clone(),
+            RaftStoreBlackHole,
+            tx,
             cfg,
-        );
-
-        let cfg_tracker = {
-            let mut cfg = GcConfig::default();
-            // let ratio_threshold less than 1
-            cfg.ratio_threshold = 0.5;
-            cfg.enable_compaction_filter = true;
-            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg)))
-        };
-
-        let worker_builder = WorkerBuilder::new("gc-worker").pending_capacity(GC_MAX_PENDING_TASKS);
-        let worker = worker_builder.create().lazy_build("gc-worker");
-        let gc_scheduler = worker.scheduler();
-
-        new_gc_context(
-            store_id,
-            Arc::new(AtomicU64::new(0)),
-            cfg_tracker,
-            feature_gate,
-            gc_scheduler,
+            feature_gate.clone(),
             ri_provider.clone(),
-            factory.clone(),
         );
+
+        // use the first tablet to build the GC_context
+        factory
+            .open_tablet(1, Some(10), OpenOptions::default().set_cache_only(true))
+            .unwrap()
+            .init_compaction_filter(
+                store_id,
+                Arc::new(AtomicU64::new(0)),
+                cfg_tracker,
+                feature_gate,
+                gc_worker.scheduler(),
+                ri_provider.clone(),
+                factory.clone(),
+            );
 
         let mut region_id = 0;
         for i in 0..30 {
