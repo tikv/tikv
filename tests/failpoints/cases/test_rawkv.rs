@@ -141,7 +141,7 @@ impl TestSuite {
     }
 }
 
-const FP_CAUSAL_TS_PROVIDER_FLUSH: &str = "causal_ts_provider_flush";
+const FP_GET_TSO: &str = "test_raftstore_get_tso";
 
 /// Verify correctness on leader transfer.
 // TODO: simulate and test for the scenario of issue #12498.
@@ -164,8 +164,8 @@ fn test_leader_transfer() {
         assert_eq!(suite.must_raw_get(key1), Some(b"v4".to_vec()));
     }
 
-    // Disable CausalObserver::flush_timestamp to produce causality issue.
-    fail::cfg(FP_CAUSAL_TS_PROVIDER_FLUSH, "return").unwrap();
+    // Make causal_ts_provider.async_flush() & handle_update_max_timestamp fail.
+    fail::cfg(FP_GET_TSO, "return(50)").unwrap();
 
     // Transfer leader and write to store 2.
     {
@@ -182,8 +182,8 @@ fn test_leader_transfer() {
     // Transfer leader back.
     suite.must_transfer_leader(&region, 1);
     suite.must_leader_on_store(key1, 1);
-    // Enable CausalObserver::flush_timestamp.
-    fail::cfg(FP_CAUSAL_TS_PROVIDER_FLUSH, "off").unwrap();
+    // Make handle_update_max_timestamp succeed.
+    fail::cfg(FP_GET_TSO, "off").unwrap();
     // Transfer leader and write to store 2 again.
     {
         suite.must_transfer_leader(&region, 2);
@@ -195,7 +195,7 @@ fn test_leader_transfer() {
         assert_eq!(suite.must_raw_get(key1), Some(b"v8".to_vec()));
     }
 
-    fail::remove(FP_CAUSAL_TS_PROVIDER_FLUSH);
+    fail::remove(FP_GET_TSO);
     suite.stop();
 }
 
@@ -238,8 +238,8 @@ fn test_region_merge() {
         assert_eq!(suite.must_raw_get(keys[1]), Some(b"v4".to_vec()));
     }
 
-    // Disable CausalObserver::flush_timestamp to produce causality issue.
-    fail::cfg(FP_CAUSAL_TS_PROVIDER_FLUSH, "return").unwrap();
+    // Make causal_ts_provider.async_flush() & handle_update_max_timestamp fail.
+    fail::cfg(FP_GET_TSO, "return(50)").unwrap();
 
     // Merge region 1 to 3.
     {
@@ -253,8 +253,8 @@ fn test_region_merge() {
         assert_eq!(suite.must_raw_get(keys[1]), Some(b"v4".to_vec()));
     }
 
-    // Enable CausalObserver::flush_timestamp.
-    fail::cfg(FP_CAUSAL_TS_PROVIDER_FLUSH, "off").unwrap();
+    // Make handle_update_max_timestamp succeed.
+    fail::cfg(FP_GET_TSO, "off").unwrap();
 
     // Merge region 3 to 5.
     {
@@ -268,6 +268,6 @@ fn test_region_merge() {
         assert_eq!(suite.must_raw_get(keys[1]), Some(b"v8".to_vec()));
     }
 
-    fail::remove(FP_CAUSAL_TS_PROVIDER_FLUSH);
+    fail::remove(FP_GET_TSO);
     suite.stop();
 }
