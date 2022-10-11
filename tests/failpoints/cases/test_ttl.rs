@@ -176,7 +176,7 @@ fn test_ttl_snapshot() {
 fn test_ttl_snapshot_impl<F: KvFormat>() {
     fail::cfg("ttl_current_ts", "return(100)").unwrap();
     let dir = tempfile::TempDir::new().unwrap();
-    let engine = TestEngineBuilder::new()
+    let mut engine = TestEngineBuilder::new()
         .path(dir.path())
         .api_version(F::TAG)
         .build()
@@ -273,7 +273,7 @@ fn test_ttl_iterator() {
 fn test_ttl_iterator_impl<F: KvFormat>() {
     fail::cfg("ttl_current_ts", "return(100)").unwrap();
     let dir = tempfile::TempDir::new().unwrap();
-    let engine = TestEngineBuilder::new()
+    let mut engine = TestEngineBuilder::new()
         .path(dir.path())
         .api_version(F::TAG)
         .build()

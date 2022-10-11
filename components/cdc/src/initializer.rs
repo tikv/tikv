@@ -449,7 +449,7 @@ impl<E: KvEngine> Initializer<E> {
 
     fn finish_building_resolver(&self, mut resolver: Resolver, region: Region) {
         let observe_id = self.observe_id;
-        let rts = resolver.resolve(TimeStamp::zero()).min();
+        let rts = resolver.resolve(TimeStamp::zero());
         info!(
             "cdc resolver initialized and schedule resolver ready";
             "region_id" => region.get_id(),
@@ -652,7 +652,7 @@ mod tests {
 
     #[test]
     fn test_initializer_build_resolver() {
-        let engine = TestEngineBuilder::new().build_without_cache().unwrap();
+        let mut engine = TestEngineBuilder::new().build_without_cache().unwrap();
 
         let mut expected_locks = BTreeMap::<TimeStamp, HashSet<Arc<[u8]>>>::new();
 
@@ -662,7 +662,7 @@ mod tests {
             let k = &[b'k', i];
             total_bytes += k.len();
             let ts = TimeStamp::new(i as _);
-            must_acquire_pessimistic_lock(&engine, k, k, ts, ts);
+            must_acquire_pessimistic_lock(&mut engine, k, k, ts, ts);
         }
 
         for i in 10..100 {
@@ -670,7 +670,7 @@ mod tests {
             total_bytes += k.len();
             total_bytes += v.len();
             let ts = TimeStamp::new(i as _);
-            must_prewrite_put(&engine, k, v, k, ts);
+            must_prewrite_put(&mut engine, k, v, k, ts);
             expected_locks
                 .entry(ts)
                 .or_default()
@@ -760,7 +760,7 @@ mod tests {
     // handling `OldValue::SeekWrite` with `OldValueReader`.
     #[test]
     fn test_incremental_scanner_with_hint_min_ts() {
-        let engine = TestEngineBuilder::new().build_without_cache().unwrap();
+        let mut engine = TestEngineBuilder::new().build_without_cache().unwrap();
 
         let v_suffix = |suffix: usize| -> Vec<u8> {
             let suffix = suffix.to_string().into_bytes();
@@ -770,7 +770,11 @@ mod tests {
             v
         };
 
-        let check_handling_old_value_seek_write = || {
+        fn check_handling_old_value_seek_write<E, F>(engine: &mut E, v_suffix: F)
+        where
+            E: Engine<Local = RocksEngine>,
+            F: Fn(usize) -> Vec<u8>,
+        {
             // Do incremental scan with different `hint_min_ts` values.
             for checkpoint_ts in [200, 100, 150] {
                 let (mut worker, pool, mut initializer, _rx, mut drain) = mock_initializer(
@@ -807,29 +811,29 @@ mod tests {
                 block_on(th).unwrap();
                 worker.stop();
             }
-        };
+        }
 
         // Create the initial data with CF_WRITE L0: |zkey_110, zkey1_160|
-        must_prewrite_put(&engine, b"zkey", &v_suffix(100), b"zkey", 100);
-        must_commit(&engine, b"zkey", 100, 110);
-        must_prewrite_put(&engine, b"zzzz", &v_suffix(150), b"zzzz", 150);
-        must_commit(&engine, b"zzzz", 150, 160);
+        must_prewrite_put(&mut engine, b"zkey", &v_suffix(100), b"zkey", 100);
+        must_commit(&mut engine, b"zkey", 100, 110);
+        must_prewrite_put(&mut engine, b"zzzz", &v_suffix(150), b"zzzz", 150);
+        must_commit(&mut engine, b"zzzz", 150, 160);
         engine
             .kv_engine()
             .unwrap()
             .flush_cf(CF_WRITE, true)
             .unwrap();
-        must_prewrite_delete(&engine, b"zkey", b"zkey", 200);
-        check_handling_old_value_seek_write(); // For TxnEntry::Prewrite.
+        must_prewrite_delete(&mut engine, b"zkey", b"zkey", 200);
+        check_handling_old_value_seek_write(&mut engine, v_suffix); // For TxnEntry::Prewrite.
 
         // CF_WRITE L0: |zkey_110, zkey1_160|, |zkey_210|
-        must_commit(&engine, b"zkey", 200, 210);
+        must_commit(&mut engine, b"zkey", 200, 210);
         engine
             .kv_engine()
             .unwrap()
             .flush_cf(CF_WRITE, false)
             .unwrap();
-        check_handling_old_value_seek_write(); // For TxnEntry::Commit.
+        check_handling_old_value_seek_write(&mut engine, v_suffix); // For TxnEntry::Commit.
     }
 
     #[test]

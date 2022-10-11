@@ -1,9 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    mem,
     ops::{Deref, DerefMut},
-    sync::{atomic::AtomicUsize, Arc},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -13,6 +12,7 @@ use batch_system::{
 use collections::HashMap;
 use crossbeam::channel::{Sender, TrySendError};
 use engine_traits::{Engines, KvEngine, RaftEngine, TabletFactory};
+use file_system::{set_io_type, IoType};
 use futures::{compat::Future01CompatExt, FutureExt};
 use kvproto::{
     metapb::Store,
@@ -21,24 +21,26 @@ use kvproto::{
 use raft::INVALID_ID;
 use raftstore::store::{
     fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, RaftlogFetchRunner,
-    RaftlogFetchTask, StoreWriters, Transport, WriteMsg, WriteSenders,
+    RaftlogFetchTask, StoreWriters, Transport, WriteSenders,
 };
 use slog::Logger;
 use tikv_util::{
     box_err,
     config::{Tracker, VersionTrack},
+    defer,
     future::poll_future_notify,
+    sys::SysQuota,
     time::Instant as TiInstant,
     timer::SteadyTimer,
     worker::{Scheduler, Worker},
+    yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
     Either,
 };
 use time::Timespec;
 
-use super::apply::{create_apply_batch_system, ApplyPollerBuilder, ApplyRouter, ApplySystem};
 use crate::{
-    fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate},
-    raft::{Peer, Storage},
+    fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate, StoreMeta},
+    raft::Storage,
     router::{PeerMsg, PeerTick, StoreMsg},
     Error, Result,
 };
@@ -61,8 +63,11 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     /// The precise timer for scheduling tick.
     pub timer: SteadyTimer,
     pub write_senders: WriteSenders<EK, ER>,
+    /// store meta
+    pub store_meta: Arc<Mutex<StoreMeta<EK>>>,
     pub engine: ER,
     pub tablet_factory: Arc<dyn TabletFactory<EK>>,
+    pub apply_pool: FuturePool,
     pub log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
 }
 
@@ -212,7 +217,9 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     router: StoreRouter<EK, ER>,
     log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
     write_senders: WriteSenders<EK, ER>,
+    apply_pool: FuturePool,
     logger: Logger,
+    store_meta: Arc<Mutex<StoreMeta<EK>>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
@@ -226,7 +233,18 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         store_writers: &mut StoreWriters<EK, ER>,
         logger: Logger,
+        store_meta: Arc<Mutex<StoreMeta<EK>>>,
     ) -> Self {
+        let pool_size = cfg.value().apply_batch_system.pool_size;
+        let max_pool_size = std::cmp::max(
+            pool_size,
+            std::cmp::max(4, SysQuota::cpu_cores_quota() as usize),
+        );
+        let apply_pool = YatpPoolBuilder::new(DefaultTicker::default())
+            .thread_count(1, pool_size, max_pool_size)
+            .after_start(move || set_io_type(IoType::ForegroundWrite))
+            .name_prefix("apply")
+            .build_future_pool();
         StorePollerBuilder {
             cfg,
             store_id,
@@ -235,8 +253,10 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             trans,
             router,
             log_fetch_scheduler,
+            apply_pool,
             logger,
             write_senders: store_writers.senders(),
+            store_meta,
         }
     }
 
@@ -300,8 +320,10 @@ where
             tick_batch: vec![PeerTickBatch::default(); PeerTick::VARIANT_COUNT],
             timer: SteadyTimer::default(),
             write_senders: self.write_senders.clone(),
+            store_meta: self.store_meta.clone(),
             engine: self.engine.clone(),
             tablet_factory: self.tablet_factory.clone(),
+            apply_pool: self.apply_pool.clone(),
             log_fetch_scheduler: self.log_fetch_scheduler.clone(),
         };
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
@@ -329,8 +351,6 @@ impl<EK: KvEngine, ER: RaftEngine> Default for Workers<EK, ER> {
 /// The system used for polling Raft activities.
 pub struct StoreSystem<EK: KvEngine, ER: RaftEngine> {
     system: BatchSystem<PeerFsm<EK, ER>, StoreFsm>,
-    apply_router: ApplyRouter<EK>,
-    apply_system: ApplySystem<EK>,
     workers: Option<Workers<EK, ER>>,
     logger: Logger,
 }
@@ -344,6 +364,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         tablet_factory: Arc<dyn TabletFactory<EK>>,
         trans: T,
         router: &StoreRouter<EK, ER>,
+        store_meta: Arc<Mutex<StoreMeta<EK>>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -367,11 +388,10 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             log_fetch_scheduler,
             &mut workers.store_writers,
             self.logger.clone(),
+            store_meta.clone(),
         );
         self.workers = Some(workers);
         let peers = builder.init()?;
-        self.apply_system
-            .schedule_all(peers.values().map(|pair| pair.1.peer()));
         // Choose a different name so we know what version is actually used. rs stands
         // for raft store.
         let tag = format!("rs-{}", store_id);
@@ -379,12 +399,20 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
 
         let mut mailboxes = Vec::with_capacity(peers.len());
         let mut address = Vec::with_capacity(peers.len());
-        for (region_id, (tx, fsm)) in peers {
-            address.push(region_id);
-            mailboxes.push((
-                region_id,
-                BasicMailbox::new(tx, fsm, router.state_cnt().clone()),
-            ));
+        {
+            let mut meta = store_meta.as_ref().lock().unwrap();
+            for (region_id, (tx, fsm)) in peers {
+                meta.readers
+                    .insert(region_id, fsm.peer().generate_read_delegate());
+                meta.tablet_caches
+                    .insert(region_id, fsm.peer().tablet().clone());
+
+                address.push(region_id);
+                mailboxes.push((
+                    region_id,
+                    BasicMailbox::new(tx, fsm, router.state_cnt().clone()),
+                ));
+            }
         }
         router.register_all(mailboxes);
 
@@ -393,10 +421,6 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             router.force_send(addr, PeerMsg::Start).unwrap();
         }
         router.send_control(StoreMsg::Start).unwrap();
-
-        let apply_poller_builder = ApplyPollerBuilder::new(cfg);
-        self.apply_system
-            .spawn("apply".to_owned(), apply_poller_builder);
         Ok(())
     }
 
@@ -406,7 +430,8 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         }
         let mut workers = self.workers.take().unwrap();
 
-        self.apply_system.shutdown();
+        // TODO: gracefully shutdown future pool
+
         self.system.shutdown();
 
         workers.store_writers.shutdown();
@@ -483,11 +508,8 @@ where
     let (store_tx, store_fsm) = StoreFsm::new(cfg, store_id, logger.clone());
     let (router, system) =
         batch_system::create_system(&cfg.store_batch_system, store_tx, store_fsm);
-    let (apply_router, apply_system) = create_apply_batch_system(cfg);
     let system = StoreSystem {
         system,
-        apply_router,
-        apply_system,
         workers: None,
         logger: logger.clone(),
     };

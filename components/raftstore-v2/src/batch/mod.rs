@@ -5,8 +5,6 @@
 //! StoreSystem is used for polling raft state machines, ApplySystem is used for
 //! applying logs.
 
-mod apply;
 mod store;
 
-pub(crate) use apply::ApplyContext;
 pub use store::{create_store_batch_system, StoreContext, StoreRouter, StoreSystem};

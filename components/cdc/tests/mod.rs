@@ -7,6 +7,7 @@ use cdc::{recv_timeout, CdcObserver, FeatureGate, MemoryQuota, Task};
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
+use futures::executor::block_on;
 use grpcio::{
     ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, ClientUnaryReceiver, Environment,
 };
@@ -189,8 +190,7 @@ impl TestSuiteBuilder {
                 env,
                 sim.security_mgr.clone(),
                 MemoryQuota::new(usize::MAX),
-                sim.get_causal_ts_provider(*id)
-                    .map(|p| p as Arc<dyn CausalTsProvider>),
+                sim.get_causal_ts_provider(*id),
             );
             let mut updated_cfg = cfg.clone();
             updated_cfg.min_ts_interval = ReadableDuration::millis(100);
@@ -513,12 +513,14 @@ impl TestSuite {
 
     pub fn flush_causal_timestamp_for_region(&mut self, region_id: u64) {
         let leader = self.cluster.leader_of_region(region_id).unwrap();
-        self.cluster
-            .sim
-            .rl()
-            .get_causal_ts_provider(leader.get_store_id())
-            .unwrap()
-            .flush()
-            .unwrap();
+        block_on(
+            self.cluster
+                .sim
+                .rl()
+                .get_causal_ts_provider(leader.get_store_id())
+                .unwrap()
+                .async_flush(),
+        )
+        .unwrap();
     }
 }

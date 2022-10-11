@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{any::Any, fs, path::Path, sync::Arc};
+use std::{any::Any, sync::Arc};
 
 use engine_traits::{
     IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable, TabletAccessor,

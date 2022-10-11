@@ -5,7 +5,7 @@ use std::{borrow::Cow, collections::HashSet};
 use regex::Regex;
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::{collation::Collator, data_type::*};
+use tidb_query_datatype::codec::{collation::Collator, data_type::*, Error};
 use tipb::{Expr, ExprType};
 
 const PATTERN_IDX: usize = 1;
@@ -13,6 +13,10 @@ const LIKE_MATCH_IDX: usize = 2;
 const SUBSTR_MATCH_IDX: usize = 4;
 const INSTR_MATCH_IDX: usize = 5;
 const REPLACE_MATCH_IDX: usize = 5;
+
+fn invalid_pos_error(pos: i64, count: usize) -> Error {
+    Error::regexp_error(format!("Invalid pos: {} in regexp, count: {}", pos, count))
+}
 
 fn is_valid_match_type(m: char) -> bool {
     matches!(m, 'i' | 'c' | 'm' | 's')
@@ -28,7 +32,8 @@ fn get_match_type<C: Collator>(match_type: &[u8]) -> Result<String> {
 
     for m in match_type.chars() {
         if !is_valid_match_type(m) {
-            return Err(box_err!("invalid match type: {}", m));
+            let err = format!("Invalid match type: {} in regexp", m);
+            return Err(Error::regexp_error(err).into());
         }
         if m == 'c' {
             // re2 is case-sensitive by default, so we only need to delete 'i' flag
@@ -48,6 +53,10 @@ fn get_match_type<C: Collator>(match_type: &[u8]) -> Result<String> {
 }
 
 fn build_regexp<C: Collator>(pattern: &[u8], match_type: &[u8]) -> Result<Regex> {
+    if pattern.is_empty() {
+        return Err(Error::regexp_error("Empty pattern is invalid in regexp".into()).into());
+    }
+
     let match_type = get_match_type::<C>(match_type)?;
 
     let pattern = String::from_utf8(pattern.to_vec())?;
@@ -57,7 +66,8 @@ fn build_regexp<C: Collator>(pattern: &[u8], match_type: &[u8]) -> Result<Regex>
         pattern
     };
 
-    Regex::new(&pattern_with_tp).map_err(|e| box_err!("invalid regex pattern: {:?}", e))
+    Regex::new(&pattern_with_tp)
+        .map_err(|e| Error::regexp_error(format!("Invalid regexp pattern: {:?}", e)).into())
 }
 
 fn build_regexp_from_args<C: Collator>(
@@ -78,7 +88,7 @@ fn build_regexp_from_args<C: Collator>(
         b""
     };
 
-    build_regexp::<C>(pattern, match_type).map(|reg| Some(reg))
+    build_regexp::<C>(pattern, match_type).map(Some)
 }
 
 fn init_regexp_data<C: Collator, const N: usize>(expr: &mut Expr) -> Result<Option<Regex>> {
@@ -101,7 +111,7 @@ fn init_regexp_data<C: Collator, const N: usize>(expr: &mut Expr) -> Result<Opti
         b""
     };
 
-    build_regexp::<C>(pattern, match_type).map(|reg| Some(reg))
+    build_regexp::<C>(pattern, match_type).map(Some)
 }
 
 /// Currently, TiDB only supports regular expressions for utf-8 strings.
@@ -158,18 +168,10 @@ pub fn regexp_substr<C: Collator>(
                 expr = &expr[idx..];
             } else if pos != 1 {
                 // Char count == 0 && pos == 1 is valid.
-                return Err(box_err!(
-                    "invalid regex pos: {}, count: {}",
-                    pos,
-                    expr.chars().count()
-                ));
+                return Err(invalid_pos_error(pos, expr.chars().count()).into());
             }
         } else {
-            return Err(box_err!(
-                "invalid regex pos: {}, count: {}",
-                pos,
-                expr.chars().count()
-            ));
+            return Err(invalid_pos_error(pos, expr.chars().count()).into());
         }
     }
 
@@ -224,18 +226,10 @@ pub fn regexp_instr<C: Collator>(
                 expr = &expr[idx..];
             } else if pos != 1 {
                 // Char count == 0 && pos == 1 is valid.
-                return Err(box_err!(
-                    "invalid regex pos: {}, count: {}",
-                    pos,
-                    expr.chars().count()
-                ));
+                return Err(invalid_pos_error(pos, expr.chars().count()).into());
             }
         } else {
-            return Err(box_err!(
-                "invalid regex pos: {}, count: {}",
-                pos,
-                expr.chars().count()
-            ));
+            return Err(invalid_pos_error(pos, expr.chars().count()).into());
         }
     }
 
@@ -259,7 +253,8 @@ pub fn regexp_instr<C: Collator>(
         };
 
         if return_option != 0 && return_option != 1 {
-            return Err(box_err!("invalid regex return option: {}", return_option));
+            let err = format!("Invalid regexp return option: {}", return_option);
+            return Err(Error::regexp_error(err).into());
         }
     };
 
@@ -314,18 +309,10 @@ pub fn regexp_replace<C: Collator>(
                 trimmed = &expr[idx..];
             } else if pos != 1 {
                 // Char count == 0 && pos == 1 is valid.
-                return Err(box_err!(
-                    "invalid regex pos: {}, count: {}",
-                    pos,
-                    expr.chars().count()
-                ));
+                return Err(invalid_pos_error(pos, expr.chars().count()).into());
             }
         } else {
-            return Err(box_err!(
-                "invalid regex pos: {}, count: {}",
-                pos,
-                expr.chars().count()
-            ));
+            return Err(invalid_pos_error(pos, expr.chars().count()).into());
         }
     }
 
@@ -396,6 +383,8 @@ mod tests {
             ("", "(", None, None),
             ("", "(*", None, None),
             ("", "[a", None, None),
+            ("aa", "", None, None),
+            ("你好", "", None, None),
             // Test case-insensitive
             ("abc", "AbC", Some(""), Some(0)),
             ("abc", "AbC", Some("i"), Some(1)),

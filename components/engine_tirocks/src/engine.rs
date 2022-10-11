@@ -13,14 +13,20 @@ use crate::{
     db_vector::RocksPinSlice, engine_iterator, r2e, util, RocksEngineIterator, RocksSnapshot,
 };
 
-#[derive(Debug)]
-#[repr(transparent)]
-pub struct RocksEngine(Arc<Db>);
+#[derive(Clone, Debug)]
+pub struct RocksEngine {
+    db: Arc<Db>,
+    // TODO: always enable and remove following flag
+    multi_batch_write: bool,
+}
 
 impl RocksEngine {
     #[inline]
     pub(crate) fn new(db: Arc<Db>) -> Self {
-        RocksEngine(db)
+        RocksEngine {
+            multi_batch_write: db.db_options().multi_batch_write(),
+            db,
+        }
     }
 
     #[inline]
@@ -44,15 +50,14 @@ impl RocksEngine {
         }
     }
 
-    #[cfg(test)]
     #[inline]
     pub(crate) fn as_inner(&self) -> &Arc<Db> {
-        &self.0
+        &self.db
     }
 
     #[inline]
     pub fn cf(&self, name: &str) -> Result<&RawCfHandle> {
-        util::cf_handle(&self.0, name)
+        util::cf_handle(&self.db, name)
     }
 
     #[inline]
@@ -66,7 +71,7 @@ impl RocksEngine {
         opt.set_fill_cache(opts.fill_cache());
         // TODO: reuse slice.
         let mut slice = RocksPinSlice::default();
-        match self.0.get_pinned(&opt, handle, key, &mut slice.0) {
+        match self.db.get_pinned(&opt, handle, key, &mut slice.0) {
             Ok(true) => Ok(Some(slice)),
             Ok(false) => Ok(None),
             Err(s) => Err(r2e(s)),
@@ -75,7 +80,36 @@ impl RocksEngine {
 
     #[inline]
     fn snapshot(&self) -> RocksSnapshot {
-        RocksSnapshot::new(self.0.clone())
+        RocksSnapshot::new(self.db.clone())
+    }
+
+    #[inline]
+    pub(crate) fn multi_batch_write(&self) -> bool {
+        self.multi_batch_write
+    }
+
+    #[inline]
+    pub(crate) fn approximate_memtable_stats(
+        &self,
+        cf: &str,
+        start: &[u8],
+        end: &[u8],
+    ) -> Result<(u64, u64)> {
+        let handle = self.cf(cf)?;
+        Ok(self
+            .as_inner()
+            .approximate_mem_table_stats(handle, start, end))
+    }
+
+    // TODO: move this function when MiscExt is implemented.
+    #[cfg(test)]
+    pub(crate) fn flush(&self, cf: &str, wait: bool) -> Result<()> {
+        use tirocks::option::FlushOptions;
+
+        let write_handle = self.cf(cf)?;
+        self.as_inner()
+            .flush(FlushOptions::default().set_wait(wait), write_handle)
+            .map_err(r2e)
     }
 }
 
@@ -86,7 +120,7 @@ impl engine_traits::Iterable for RocksEngine {
         let opt = engine_iterator::to_tirocks_opt(opts);
         let handle = self.cf(cf)?;
         Ok(RocksEngineIterator::from_raw(Iterator::new(
-            self.0.clone(),
+            self.db.clone(),
             opt,
             handle,
         )))
@@ -102,7 +136,7 @@ impl engine_traits::Peekable for RocksEngine {
         opts: &engine_traits::ReadOptions,
         key: &[u8],
     ) -> Result<Option<RocksPinSlice>> {
-        self.get(opts, self.0.default_cf(), key)
+        self.get(opts, self.db.default_cf(), key)
     }
 
     #[inline]
@@ -119,43 +153,43 @@ impl engine_traits::Peekable for RocksEngine {
 
 impl engine_traits::SyncMutable for RocksEngine {
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
-        let handle = self.0.default_cf();
-        self.0
+        let handle = self.db.default_cf();
+        self.db
             .put(&WriteOptions::default(), handle, key, value)
             .map_err(r2e)
     }
 
     fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         let handle = self.cf(cf)?;
-        self.0
+        self.db
             .put(&WriteOptions::default(), handle, key, value)
             .map_err(r2e)
     }
 
     fn delete(&self, key: &[u8]) -> Result<()> {
-        let handle = self.0.default_cf();
-        self.0
+        let handle = self.db.default_cf();
+        self.db
             .delete(&WriteOptions::default(), handle, key)
             .map_err(r2e)
     }
 
     fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
         let handle = self.cf(cf)?;
-        self.0
+        self.db
             .delete(&WriteOptions::default(), handle, key)
             .map_err(r2e)
     }
 
     fn delete_range(&self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        let handle = self.0.default_cf();
-        self.0
+        let handle = self.db.default_cf();
+        self.db
             .delete_range(&WriteOptions::default(), handle, begin_key, end_key)
             .map_err(r2e)
     }
 
     fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         let handle = self.cf(cf)?;
-        self.0
+        self.db
             .delete_range(&WriteOptions::default(), handle, begin_key, end_key)
             .map_err(r2e)
     }
