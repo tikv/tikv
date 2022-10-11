@@ -2446,7 +2446,7 @@ async fn send_flashback_msg<T: RaftStoreRouter<E::Local> + 'static, E: Engine>(
             e
         )));
     }
-    if !result_rx.await.unwrap() {
+    if !result_rx.await? {
         return Err(Error::Other(box_err!(
             "send flashback msg {:?} to region {} failed",
             cmd_type,
