@@ -105,7 +105,6 @@ use crate::{
 type Key = Vec<u8>;
 
 pub const PENDING_MSG_CAP: usize = 100;
-const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
 const ENTRY_CACHE_EVICT_TICK_DURATION: Duration = Duration::from_secs(1);
 pub const MULTI_FILES_SNAPSHOT_FEATURE: Feature = Feature::require(6, 1, 0); // it only makes sense for large region
 
@@ -2652,13 +2651,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
     fn on_store_unreachable(&mut self, store_id: u64) {
         let now = Instant::now();
+        let unreachable_backoff = self.ctx.cfg.unreachable_backoff.0;
         if self
             .fsm
             .store
             .last_unreachable_report
             .get(&store_id)
-            .map_or(UNREACHABLE_BACKOFF, |t| now.saturating_duration_since(*t))
-            < UNREACHABLE_BACKOFF
+            .map_or(unreachable_backoff, |t| now.saturating_duration_since(*t))
+            < unreachable_backoff
         {
             return;
         }
@@ -2667,11 +2667,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             "store_id" => self.fsm.store.id,
             "unreachable_store_id" => store_id,
         );
-        self.fsm.store.last_unreachable_report.insert(store_id, now);
         // It's possible to acquire the lock and only send notification to
         // involved regions. However loop over all the regions can take a
         // lot of time, which may block other operations.
         self.ctx.router.report_unreachable(store_id);
+        self.fsm.store.last_unreachable_report.insert(store_id, now);
     }
 
     fn on_update_replication_mode(&mut self, status: ReplicationStatus) {
