@@ -31,6 +31,8 @@ use std::{
 };
 
 use async_trait::async_trait;
+#[cfg(test)]
+use futures::executor::block_on;
 use parking_lot::RwLock;
 use pd_client::PdClient;
 use tikv_util::{
@@ -560,6 +562,16 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
     pub fn tso_usage(&self) -> u32 {
         self.batch_list.usage()
     }
+
+    #[cfg(test)]
+    pub fn get_ts(&self) -> Result<TimeStamp> {
+        block_on(self.async_get_ts())
+    }
+
+    #[cfg(test)]
+    pub fn flush(&self) -> Result<TimeStamp> {
+        block_on(self.async_flush())
+    }
 }
 
 const GET_TS_MAX_RETRY: u32 = 3;
@@ -609,8 +621,14 @@ impl<C: PdClient + 'static> CausalTsProvider for BatchTsoProvider<C> {
         Err(Error::TsoBatchUsedUp(last_batch_size))
     }
 
-    async fn async_flush(&self) -> Result<()> {
-        self.renew_tso_batch(true, TsoBatchRenewReason::flush).await
+    async fn async_flush(&self) -> Result<TimeStamp> {
+        fail::fail_point!("causal_ts_provider_flush", |_| Err(box_err!(
+            "async_flush err(failpoints)"
+        )));
+        self.renew_tso_batch(true, TsoBatchRenewReason::flush)
+            .await?;
+        // TODO: Return the first tso by renew_tso_batch instead of async_get_ts
+        self.async_get_ts().await
     }
 }
 
@@ -634,8 +652,8 @@ impl CausalTsProvider for SimpleTsoProvider {
         Ok(ts)
     }
 
-    async fn async_flush(&self) -> Result<()> {
-        Ok(())
+    async fn async_flush(&self) -> Result<TimeStamp> {
+        self.async_get_ts().await
     }
 }
 
@@ -858,7 +876,7 @@ pub mod tests {
         let provider = SimpleTsoProvider::new(pd_cli.clone());
 
         pd_cli.set_tso(100.into());
-        let ts = provider.get_ts().unwrap();
+        let ts = block_on(provider.async_get_ts()).unwrap();
         assert_eq!(ts, 101.into(), "ts: {:?}", ts);
     }
 
@@ -886,12 +904,12 @@ pub mod tests {
         assert_eq!(provider.tso_remain(), 90);
         assert_eq!(provider.tso_usage(), 10);
 
-        provider.flush().unwrap(); // allocated: [1101, 1200]
-        assert_eq!(provider.tso_remain(), 100);
-        assert_eq!(provider.tso_usage(), 0);
+        assert_eq!(provider.flush().unwrap(), TimeStamp::from(1101)); // allocated: [1101, 1200]
+        assert_eq!(provider.tso_remain(), 99);
+        assert_eq!(provider.tso_usage(), 1);
         // used up
         pd_cli.trigger_tso_failure(); // make renew fail to verify used-up
-        for ts in 1101..=1200u64 {
+        for ts in 1102..=1200u64 {
             assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
         }
         assert_eq!(provider.tso_remain(), 0);
@@ -900,8 +918,8 @@ pub mod tests {
         assert_eq!(provider.tso_remain(), 0);
         assert_eq!(provider.tso_usage(), 100);
 
-        provider.flush().unwrap(); // allocated: [1201, 2200]
-        for ts in 1201..=1260u64 {
+        assert_eq!(provider.flush().unwrap(), TimeStamp::from(1201)); // allocated: [1201, 2200]
+        for ts in 1202..=1260u64 {
             assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
         }
         assert_eq!(provider.tso_remain(), 940);
@@ -979,9 +997,9 @@ pub mod tests {
         pd_cli.trigger_tso_failure();
         provider.flush().unwrap_err();
 
-        provider.flush().unwrap(); // allocated: [1301, 3300]
+        assert_eq!(provider.flush().unwrap(), TimeStamp::from(1301)); // allocated: [1301, 3300]
         pd_cli.trigger_tso_failure(); // make renew fail to verify used-up
-        for ts in 1301..=3300u64 {
+        for ts in 1302..=3300u64 {
             assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
         }
         provider.get_ts().unwrap_err();

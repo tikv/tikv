@@ -8,6 +8,7 @@ use kvproto::kvrpcpb;
 use txn_types::{Key, Value};
 
 use crate::storage::{
+    lock_manager::WaitTimeout,
     mvcc::{Lock, LockType, TimeStamp, Write, WriteType},
     txn::ProcessResult,
     Callback, Result,
@@ -119,6 +120,31 @@ pub struct PrewriteResult {
     pub locks: Vec<Result<()>>,
     pub min_commit_ts: TimeStamp,
     pub one_pc_commit_ts: TimeStamp,
+}
+
+#[cfg_attr(test, derive(Default))]
+pub struct PessimisticLockParameters {
+    pub pb_ctx: kvrpcpb::Context,
+    pub primary: Vec<u8>,
+    pub start_ts: TimeStamp,
+    pub lock_ttl: u64,
+    pub for_update_ts: TimeStamp,
+    pub wait_timeout: Option<WaitTimeout>,
+    pub return_values: bool,
+    pub min_commit_ts: TimeStamp,
+    pub check_existence: bool,
+    pub is_first_lock: bool,
+
+    /// Whether it's allowed for an pessimistic lock request to acquire the lock
+    /// even there is write conflict (i.e. the latest version's `commit_ts` is
+    /// greater than the current request's `for_update_ts`.
+    ///
+    /// When this is true, it's also inferred that the request is resumable,
+    /// which means, if such a request encounters a lock of another
+    /// transaction and it waits for the lock, it can resume executing and
+    /// continue trying to acquire the lock when it's woken up. Also see:
+    /// [`super::lock_manager::lock_waiting_queue`]
+    pub allow_lock_with_conflict: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
