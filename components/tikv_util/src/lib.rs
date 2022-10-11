@@ -52,7 +52,6 @@ pub mod math;
 pub mod memory;
 pub mod metrics;
 pub mod mpsc;
-pub mod priority_queue;
 pub mod quota_limiter;
 pub mod store;
 pub mod stream;
