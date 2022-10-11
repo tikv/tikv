@@ -67,10 +67,11 @@ use std::{
 
 use dashmap;
 use futures_util::compat::Future01CompatExt;
+use keyed_priority_queue::KeyedPriorityQueue;
 use kvproto::kvrpcpb;
 use smallvec::SmallVec;
 use sync_wrapper::SyncWrapper;
-use tikv_util::{priority_queue::PriorityQueue, time::InstantExt, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{time::InstantExt, timer::GLOBAL_TIMER_HANDLE};
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
@@ -184,7 +185,11 @@ pub struct KeyLockWaitState {
     /// return it from a [`DelayedNotifyAllFuture`]. See
     /// [`LockWaitQueues::pop_for_waking_up`].
     legacy_wake_up_index: usize,
-    queue: PriorityQueue<LockWaitToken, Box<LockWaitEntry>>,
+    queue: KeyedPriorityQueue<
+        LockWaitToken,
+        Box<LockWaitEntry>,
+        std::hash::BuildHasherDefault<fxhash::FxHasher>,
+    >,
 
     /// The start_ts of the most recent waking up event.
     last_conflict_start_ts: TimeStamp,
@@ -200,7 +205,7 @@ impl KeyLockWaitState {
         Self {
             current_lock: kvrpcpb::LockInfo::default(),
             legacy_wake_up_index: 0,
-            queue: PriorityQueue::new(),
+            queue: KeyedPriorityQueue::default(),
             last_conflict_start_ts: TimeStamp::zero(),
             last_conflict_commit_ts: TimeStamp::zero(),
             delayed_notify_all_state: None,
@@ -313,7 +318,7 @@ impl<L: LockManager> LockWaitQueues<L> {
             v.last_conflict_start_ts = conflicting_start_ts;
             v.last_conflict_commit_ts = conflicting_commit_ts;
 
-            while let Some(lock_wait_entry) = v.queue.pop() {
+            while let Some((_, lock_wait_entry)) = v.queue.pop() {
                 removed_waiters += 1;
 
                 if lock_wait_entry.req_states.as_ref().unwrap().is_finished() {
@@ -465,7 +470,7 @@ impl<L: LockManager> LockWaitQueues<L> {
 
             let legacy_wake_up_index = v.legacy_wake_up_index;
 
-            while let Some(front) = v.queue.peek() {
+            while let Some((_, front)) = v.queue.peek() {
                 if front.req_states.as_ref().unwrap().is_finished() {
                     // Skip already cancelled entries.
                     v.queue.pop();
@@ -480,7 +485,7 @@ impl<L: LockManager> LockWaitQueues<L> {
                     // delayed_notify_all operation. Keep it and other remaining items in the queue.
                     break;
                 }
-                let lock_wait_entry = v.queue.pop().unwrap();
+                let (_, lock_wait_entry) = v.queue.pop().unwrap();
                 removed_waiters += 1;
                 if lock_wait_entry.parameters.allow_lock_with_conflict {
                     woken_up_resumable_entry = Some(lock_wait_entry);
@@ -541,7 +546,7 @@ impl<L: LockManager> LockWaitQueues<L> {
         // within a call to `remove_if_mut` to avoid releasing lock during the
         // procedure.
         let removed_key = self.inner.queue_map.remove_if_mut(key, |_, v| {
-            if let Some(res) = v.queue.remove_by_key(lock_wait_token) {
+            if let Some(res) = v.queue.remove(&lock_wait_token) {
                 LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.waiters.dec();
                 result = Some(res);
             }
@@ -575,6 +580,7 @@ impl<L: LockManager> LockWaitQueues<L> {
                 .queue
                 .peek()
                 .unwrap()
+                .1
                 .parameters
                 .start_ts,
             start_ts.into()
