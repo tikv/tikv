@@ -18,6 +18,7 @@ use txn_types::TxnExtra;
 use crate::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::store::fsm::apply::{CatchUpLogs, ChangeCmd};
 use crate::store::fsm::PeerFsm;
+use crate::store::metrics::RaftEventDurationType;
 use crate::store::util::KeysInfoFormatter;
 use crate::store::SnapKey;
 use engine_rocks::CompactedEvent;
@@ -153,14 +154,14 @@ pub enum StoreTick {
 
 impl StoreTick {
     #[inline]
-    pub fn tag(self) -> &'static str {
+    pub fn tag(self) -> RaftEventDurationType {
         match self {
-            StoreTick::CompactCheck => "compact_check",
-            StoreTick::PdStoreHeartbeat => "pd_store_heartbeat",
-            StoreTick::SnapGc => "snap_gc",
-            StoreTick::CompactLockCf => "compact_lock_cf",
-            StoreTick::ConsistencyCheck => "consistency_check",
-            StoreTick::CleanupImportSST => "cleanup_import_sst",
+            StoreTick::CompactCheck => RaftEventDurationType::compact_check,
+            StoreTick::PdStoreHeartbeat => RaftEventDurationType::pd_store_heartbeat,
+            StoreTick::SnapGc => RaftEventDurationType::snap_gc,
+            StoreTick::CompactLockCf => RaftEventDurationType::compact_lock_cf,
+            StoreTick::ConsistencyCheck => RaftEventDurationType::consistency_check,
+            StoreTick::CleanupImportSST => RaftEventDurationType::cleanup_import_sst,
         }
     }
 }
@@ -366,6 +367,22 @@ impl<E: KvEngine> fmt::Debug for PeerMsg<E> {
             PeerMsg::Noop => write!(fmt, "Noop"),
             PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
+        }
+    }
+}
+
+impl<EK: KvEngine> PeerMsg<EK> {
+    pub fn tag(&self) -> RaftEventDurationType {
+        match self {
+            PeerMsg::RaftMessage(_) => RaftEventDurationType::raft_message,
+            PeerMsg::RaftCommand(_) => RaftEventDurationType::raft_command,
+            PeerMsg::Tick(_) => RaftEventDurationType::tick,
+            PeerMsg::ApplyRes { .. } => RaftEventDurationType::apply_res,
+            PeerMsg::SignificantMsg(_) => RaftEventDurationType::significant_msg,
+            PeerMsg::Start => RaftEventDurationType::start,
+            PeerMsg::Noop => RaftEventDurationType::noop,
+            PeerMsg::CasualMessage(_) => RaftEventDurationType::casual_message,
+            PeerMsg::HeartbeatPd => RaftEventDurationType::heartbeat_pd,
         }
     }
 }

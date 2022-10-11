@@ -454,8 +454,8 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             StoreTick::CleanupImportSST => self.on_cleanup_import_sst_tick(),
         }
         let elapsed = t.elapsed();
-        RAFT_EVENT_DURATION
-            .with_label_values(&[tick.tag()])
+        RAFT_EVENT_DURATION_VEC_STATIC
+            .get(tick.tag())
             .observe(duration_to_sec(elapsed) as f64);
         slow_log!(
             elapsed,
@@ -542,6 +542,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             self.poll_ctx.trans.flush();
             self.poll_ctx.need_flush_trans = false;
         }
+        let start_handle_early_apply = TiInstant::now_coarse();
         let ready_cnt = self.poll_ctx.ready_res.len();
         if ready_cnt != 0 && self.poll_ctx.cfg.early_apply {
             let mut batch_pos = 0;
@@ -559,6 +560,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             }
             self.poll_ctx.ready_res = ready_res;
         }
+        let start_handle_kv_wb = TiInstant::now_coarse();
         self.poll_ctx.raft_metrics.ready.has_ready_region += ready_cnt as u64;
         fail_point!("raft_before_save");
         if !self.poll_ctx.kv_wb.is_empty() {
@@ -579,6 +581,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                 self.poll_ctx.kv_wb.clear();
             }
         }
+        let start_handle_raft_wb = TiInstant::now_coarse();
         fail_point!("raft_between_save");
         if !self.poll_ctx.raft_wb.is_empty() {
             fail_point!(
@@ -648,13 +651,16 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         slow_log!(
             dur,
             "{} handle {} pending peers include {} ready, {} entries, {} messages and {} \
-             snapshots",
+             snapshots, handle apply {}, handle kv wb {}, handle raft wb {}",
             self.tag,
             self.poll_ctx.pending_count,
             ready_cnt,
             self.poll_ctx.raft_metrics.ready.append - self.previous_metrics.ready.append,
             self.poll_ctx.raft_metrics.ready.message - self.previous_metrics.ready.message,
-            self.poll_ctx.raft_metrics.ready.snapshot - self.previous_metrics.ready.snapshot
+            self.poll_ctx.raft_metrics.ready.snapshot - self.previous_metrics.ready.snapshot,
+            duration_to_sec(start_handle_kv_wb.duration_since(start_handle_early_apply)),
+            duration_to_sec(start_handle_raft_wb.duration_since(start_handle_kv_wb)),
+            duration_to_sec(start_handle_raft_wb.elapsed()),
         );
     }
 

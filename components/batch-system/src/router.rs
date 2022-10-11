@@ -2,12 +2,17 @@
 
 use crate::fsm::{Fsm, FsmScheduler};
 use crate::mailbox::{BasicMailbox, Mailbox};
+use crate::metrics::{
+    CHANNEL_FULL_COUNTER_VEC, ROUTER_CACHE_MISS, ROUTER_MAILBOX_DURATION_HISTOGRAM,
+};
+
 use crossbeam::channel::{SendError, TrySendError};
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tikv_util::collections::HashMap;
 use tikv_util::lru::LruCache;
+use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::Either;
 
 enum CheckDoResult<T> {
@@ -94,6 +99,9 @@ where
             }
         }
 
+        ROUTER_CACHE_MISS.inc();
+        let now = TiInstant::now_coarse();
+
         let (cnt, mailbox) = {
             let mut boxes = self.normals.lock().unwrap();
             let cnt = boxes.len();
@@ -114,6 +122,8 @@ where
         }
 
         let res = f(&mailbox);
+        ROUTER_MAILBOX_DURATION_HISTOGRAM.observe(duration_to_sec(now.elapsed()));
+
         match res {
             Some(r) => {
                 caches.insert(addr, mailbox);
@@ -182,7 +192,9 @@ where
             match mailbox.try_send(m, &self.normal_scheduler) {
                 Ok(()) => Some(Ok(())),
                 r @ Err(TrySendError::Full(_)) => {
-                    // TODO: report channel full
+                    CHANNEL_FULL_COUNTER_VEC
+                        .with_label_values(&["normal"])
+                        .inc();
                     Some(r)
                 }
                 Err(TrySendError::Disconnected(m)) => {
@@ -230,7 +242,9 @@ where
         match self.control_box.try_send(msg, &self.control_scheduler) {
             Ok(()) => Ok(()),
             r @ Err(TrySendError::Full(_)) => {
-                // TODO: record metrics.
+                CHANNEL_FULL_COUNTER_VEC
+                    .with_label_values(&["control"])
+                    .inc();
                 r
             }
             r => r,

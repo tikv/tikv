@@ -4,6 +4,7 @@
 #![feature(cell_update)]
 #![feature(shrink_to)]
 #![feature(div_duration)]
+#![feature(proc_macro_hygiene)]
 #![feature(specialization)]
 
 #[macro_use]
