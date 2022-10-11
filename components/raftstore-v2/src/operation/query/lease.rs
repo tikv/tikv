@@ -3,24 +3,14 @@
 use std::sync::{Arc, Mutex};
 
 use engine_traits::{KvEngine, RaftEngine};
-use kvproto::{
-    kvrpcpb::ExtraOp as TxnExtraOp,
-    raft_cmdpb::{self, RaftCmdRequest, RaftCmdResponse},
+use kvproto::raft_cmdpb::RaftCmdRequest;
+use raftstore::store::{
+    can_amend_read, fsm::apply::notify_stale_req, metrics::RAFT_READ_INDEX_PENDING_COUNT,
+    msg::ReadCallback, propose_read_index, should_renew_lease, util::LeaseState, ReadDelegate,
+    ReadIndexRequest, ReadProgress, TrackVer, Transport,
 };
-use raftstore::{
-    store::{
-        can_amend_read, cmd_resp,
-        fsm::{apply::notify_stale_req, Proposal},
-        metrics::RAFT_READ_INDEX_PENDING_COUNT,
-        msg::{ErrorCallback, ReadCallback},
-        propose_read_index, should_renew_lease,
-        util::{check_region_epoch, LeaseState},
-        ReadDelegate, ReadIndexRequest, ReadProgress, TrackVer, Transport,
-    },
-    Error,
-};
-use slog::{debug, error, info, o, Logger};
-use tikv_util::{box_err, time::monotonic_raw_now, Either};
+use slog::debug;
+use tikv_util::time::monotonic_raw_now;
 use time::Timespec;
 use tracker::GLOBAL_TRACKERS;
 
@@ -28,8 +18,7 @@ use crate::{
     batch::StoreContext,
     fsm::StoreMeta,
     raft::Peer,
-    router::{CmdResChannel, QueryResChannel, QueryResult, ReadResponse},
-    Result,
+    router::{QueryResChannel, QueryResult, ReadResponse},
 };
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {

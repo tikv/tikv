@@ -196,7 +196,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // later. And the locks belonging to the old region will stay in the original
         // map.
         let region_locks = {
-            let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
+            let mut pessimistic_locks = self.txn_ext().pessimistic_locks.write();
             info!(self.logger, "moving {} locks to new regions", pessimistic_locks.len(); "region_id"=> region_id);
             // Update the version so the concurrent reader will fail due to EpochNotMatch
             // instead of PessimisticLockNotFound.
@@ -296,17 +296,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "region" => ?new_region,
             );
 
-            if let Some(r) = meta.regions.get(&new_region_id) {
+            if let Some(region) = meta.regions.get(&new_region_id) {
                 // Suppose a new node is added by conf change and the snapshot comes slowly.
                 // Then, the region splits and the first vote message comes to the new node
                 // before the old snapshot, which will create an uninitialized peer on the
                 // store. After that, the old snapshot comes, followed with the last split
                 // proposal. After it's applied, the uninitialized peer will be met.
                 // We can remove this uninitialized peer directly.
-                if util::is_region_initialized(r) {
+                if util::is_region_initialized(region) {
                     panic!(
                         "[region {}] duplicated region {:?} for split region {:?}",
-                        new_region_id, r, new_region
+                        new_region_id, region, new_region
                     );
                 }
                 store_ctx.router.close(new_region_id);
@@ -365,7 +365,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if is_leader {
                 new_peer.peer_mut().set_approximate_size(estimated_size);
                 new_peer.peer_mut().set_approximate_keys(estimated_keys);
-                *new_peer.peer_mut().txn_ext.pessimistic_locks.write() = locks;
+                *new_peer.peer_mut().txn_ext().pessimistic_locks.write() = locks;
                 // The new peer is likely to become leader, send a
                 // heartbeat immediately to reduce client query
                 // miss.
@@ -389,9 +389,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if last_region_id == new_region_id {
                 // To prevent from big region, the right region needs run split
                 // check again after split.
-                new_peer
-                    .peer_mut()
-                    .set_size_diff_hint(store_ctx.cfg.region_split_check_diff().0);
+                // new_peer
+                //     .peer_mut()
+                //     .set_size_diff_hint(store_ctx.cfg.
+                // region_split_check_diff().0);
             }
 
             // recover the auto_compaction
@@ -612,6 +613,7 @@ mod test {
             CachedTablet::new(Some(tablet)),
             raft_engine.clone(),
             factory.clone(),
+            Arc::default(),
             logger.clone(),
         );
 

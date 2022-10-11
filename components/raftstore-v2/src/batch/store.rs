@@ -1,10 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cell::Cell,
-    mem,
     ops::{Deref, DerefMut},
-    sync::{atomic::AtomicUsize, Arc, Mutex},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -46,8 +44,8 @@ use time::Timespec;
 
 use crate::{
     fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate, StoreMeta},
-    raft::{Peer, Storage},
-    router::{PeerMsg, PeerTick, QueryResChannel, StoreMsg},
+    raft::Storage,
+    router::{PeerMsg, PeerTick, StoreMsg},
     Error, Result,
 };
 
@@ -238,6 +236,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     apply_pool: FuturePool,
     logger: Logger,
     store_meta: Arc<Mutex<StoreMeta<EK>>>,
+    pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
@@ -275,6 +274,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             logger,
             write_senders: store_writers.senders(),
             store_meta,
+            pending_create_peers: Arc::default(),
         }
     }
 
@@ -352,7 +352,7 @@ where
             tablet_factory: self.tablet_factory.clone(),
             apply_pool: self.apply_pool.clone(),
             log_fetch_scheduler: self.log_fetch_scheduler.clone(),
-            pending_create_peers: Arc::default(),
+            pending_create_peers: self.pending_create_peers.clone(),
         };
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
         StorePoller::new(poll_ctx, cfg_tracker)
@@ -416,7 +416,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             log_fetch_scheduler,
             &mut workers.store_writers,
             self.logger.clone(),
-            store_meta,
+            store_meta.clone(),
         );
         self.workers = Some(workers);
         let peers = builder.init()?;
@@ -427,12 +427,20 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
 
         let mut mailboxes = Vec::with_capacity(peers.len());
         let mut address = Vec::with_capacity(peers.len());
-        for (region_id, (tx, fsm)) in peers {
-            address.push(region_id);
-            mailboxes.push((
-                region_id,
-                BasicMailbox::new(tx, fsm, router.state_cnt().clone()),
-            ));
+        {
+            let mut meta = store_meta.as_ref().lock().unwrap();
+            for (region_id, (tx, fsm)) in peers {
+                meta.readers
+                    .insert(region_id, fsm.peer().generate_read_delegate());
+                meta.tablet_caches
+                    .insert(region_id, fsm.peer().tablet().clone());
+
+                address.push(region_id);
+                mailboxes.push((
+                    region_id,
+                    BasicMailbox::new(tx, fsm, router.state_cnt().clone()),
+                ));
+            }
         }
         router.register_all(mailboxes);
 

@@ -32,8 +32,7 @@ use slog::{debug, error, trace, warn};
 pub use self::async_writer::AsyncWriter;
 use crate::{
     batch::StoreContext,
-    fsm::{PeerFsm, PeerFsmDelegate},
-    operation::DestroyProgress,
+    fsm::PeerFsmDelegate,
     raft::{Peer, Storage},
     router::PeerTick,
 };
@@ -83,7 +82,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         if msg.has_merge_target() {
             unimplemented!();
-            return;
+            // return;
         }
         // We don't handle stale message like v1, as we rely on leader to actively
         // cleanup stale peers.
@@ -103,7 +102,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         if msg.has_extra_msg() {
             unimplemented!();
-            return;
+            // return;
         }
         // TODO: drop all msg append when the peer is uninitialized and has conflict
         // ranges with other peers.

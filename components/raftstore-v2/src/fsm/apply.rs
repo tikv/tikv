@@ -4,12 +4,13 @@ use std::{
     pin::Pin,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     task::{Context, Poll},
 };
 
 use batch_system::{Fsm, FsmScheduler, Mailbox};
+use collections::HashMap;
 use crossbeam::channel::TryRecvError;
 use engine_traits::{KvEngine, RaftEngine, TabletFactory};
 use futures::{Future, StreamExt};
@@ -63,6 +64,7 @@ impl<EK: KvEngine, ER: RaftEngine, R> ApplyFsm<EK, ER, R> {
         remote_tablet: CachedTablet<EK>,
         raft_engine: ER,
         tablet_factory: Arc<dyn TabletFactory<EK>>,
+        pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
         logger: Logger,
     ) -> (ApplyScheduler, Self) {
         let (tx, rx) = future::unbounded(WakePolicy::Immediately);
@@ -73,6 +75,7 @@ impl<EK: KvEngine, ER: RaftEngine, R> ApplyFsm<EK, ER, R> {
             remote_tablet,
             raft_engine,
             tablet_factory,
+            pending_create_peers,
             logger,
         );
         (

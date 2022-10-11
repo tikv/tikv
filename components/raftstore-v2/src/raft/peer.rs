@@ -21,7 +21,7 @@ use raftstore::{
         metrics::PEER_PROPOSE_LOG_SIZE_HISTOGRAM,
         util::{Lease, RegionReadProgress},
         Config, EntryStorage, PeerStat, ProposalQueue, RaftlogFetchTask, ReadDelegate,
-        ReadIndexQueue, ReadIndexRequest, ReadProgress, Transport, TxnExt, WriteRouter,
+        ReadIndexQueue, ReadIndexRequest, ReadProgress, TrackVer, Transport, TxnExt, WriteRouter,
     },
     Error,
 };
@@ -33,6 +33,7 @@ use tikv_util::{
     worker::Scheduler,
     Either,
 };
+use time::Timespec;
 
 use super::{storage::Storage, Apply};
 use crate::{
@@ -40,7 +41,7 @@ use crate::{
     fsm::{ApplyFsm, ApplyScheduler},
     operation::{AsyncWriter, DestroyProgress, SimpleWriteEncoder},
     router::{CmdResChannel, QueryResChannel},
-    tablet::{self, CachedTablet},
+    tablet::CachedTablet,
     Result,
 };
 
@@ -68,20 +69,14 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
 
     destroy_progress: DestroyProgress,
 
-    pub(crate) logger: Logger,
-
-    /// Transaction extensions related to this peer.
-    pub(crate) txn_ext: Arc<TxnExt>,
-    pub(crate) txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
-    /// region buckets.
-    pub(crate) region_buckets: Option<BucketStat>,
-
     /// Write Statistics for PD to schedule hot spot.
     peer_stat: PeerStat,
 
     // An inaccurate difference in region size since last reset.
     /// It is used to decide whether split check is needed.
     size_diff_hint: u64,
+    /// The count of deleted keys since last reset.
+    delete_keys_hint: u64,
     /// Approximate size of the region.
     approximate_size: Option<u64>,
     /// Approximate keys of the region.
@@ -105,6 +100,16 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     ///   target peer.
     /// - all read requests must be rejected.
     pending_remove: bool,
+
+    /// region buckets.
+    region_buckets: Option<BucketStat>,
+    pub last_region_buckets: Option<BucketStat>,
+
+    /// Transaction extensions related to this peer.
+    txn_ext: Arc<TxnExt>,
+    txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+
+    pub(crate) logger: Logger,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -175,16 +180,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             destroy_progress: DestroyProgress::None,
             raft_group,
             logger,
-            txn_ext: Arc::default(),
-            txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
-            region_buckets: Some(BucketStat {
-                meta: Arc::default(),
-                stats: metapb::BucketStats::default(),
-                create_time: TiInstant::now(),
-            }),
             peer_stat: PeerStat::default(),
             last_compacted_idx: 0,
             size_diff_hint: 0,
+            delete_keys_hint: 0,
             approximate_keys: None,
             approximate_size: None,
             may_skip_split_check: false,
@@ -200,6 +199,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 cfg.renew_leader_lease_advance_duration(),
             ),
             pending_remove: false,
+            region_buckets: Some(BucketStat {
+                meta: Arc::default(),
+                stats: metapb::BucketStats::default(),
+                create_time: TiInstant::now(),
+            }),
+            last_region_buckets: None,
+            txn_ext: Arc::default(),
+            txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -493,24 +500,33 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     #[inline]
     pub fn post_split(&mut self) {
-        unimplemented!()
+        // Reset delete_keys_hint and size_diff_hint.
+        self.delete_keys_hint = 0;
+        self.size_diff_hint = 0;
+        self.reset_region_buckets();
+    }
+
+    pub fn reset_region_buckets(&mut self) {
+        if self.region_buckets.is_some() {
+            self.last_region_buckets = self.region_buckets.take();
+            self.region_buckets = None;
+        }
     }
 
     pub fn maybe_campaign(&mut self, parent_is_leader: bool) -> bool {
-        // if self.region().get_peers().len() <= 1 {
-        //     // The peer campaigned when it was created, no need to do it
-        // again.     return false;
-        // }
+        if self.region().get_peers().len() <= 1 {
+            // The peer campaigned when it was created, no need to do it again.
+            return false;
+        }
 
-        // if !parent_is_leader {
-        //     return false;
-        // }
+        if !parent_is_leader {
+            return false;
+        }
 
-        // // If last peer is the leader of the region before split, it's
-        // intuitional for // it to become the leader of new split
-        // region. let _ = self.raft_group.campaign();
-        // true
-        unimplemented!()
+        // If last peer is the leader of the region before split, it'sintuitional for it
+        // to become the leader of new split region.
+        let _ = self.raft_group.campaign();
+        true
     }
 
     /// Register self to apply_scheduler so that the peer is then usable.
@@ -526,6 +542,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         //     self.get_role(),
         // );
         // self.maybe_gen_approximate_buckets(ctx);
+    }
+
+    pub fn txn_ext(&self) -> &Arc<TxnExt> {
+        &self.txn_ext
     }
 
     fn get_role(&self) -> StateRole {

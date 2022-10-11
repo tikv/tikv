@@ -613,7 +613,7 @@ pub fn can_amend_read<C>(
     now: Timespec,
 ) -> bool {
     match lease_state {
-        // Here combine the new read request with the previous one even if the lease expired
+        // Here, combining the new read request with the previous one even if the lease expired
         // is ok because in this case, the previous read index must be sent out with a valid
         // lease instead of a suspect lease. So there must no pending transfer-leader
         // proposals before or after the previous read index, and the lease can be renewed
@@ -4716,7 +4716,7 @@ where
         Ok(propose_index)
     }
 
-    fn handle_read<E: ReadExecutor<EK>>(
+    fn handle_read<E: ReadExecutor<Tablet = EK>>(
         &self,
         reader: &mut E,
         req: RaftCmdRequest,
@@ -5609,11 +5609,13 @@ where
     }
 }
 
-impl<EK, ER, T> ReadExecutor<EK> for PollContext<EK, ER, T>
+impl<EK, ER, T> ReadExecutor for PollContext<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
 {
+    type Tablet = EK;
+
     fn get_tablet(&mut self) -> &EK {
         &self.engines.kv
     }

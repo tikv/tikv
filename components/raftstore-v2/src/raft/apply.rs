@@ -57,6 +57,7 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
         mut remote_tablet: CachedTablet<EK>,
         raft_engine: ER,
         tablet_factory: Arc<dyn TabletFactory<EK>>,
+        pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
         logger: Logger,
     ) -> Self {
         Apply {
@@ -69,7 +70,7 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
             applied_term: 0,
             region_state,
             state_changed: false,
-            pending_create_peers: Arc::default(), // todo(SpadeA): init by parameter
+            pending_create_peers,
             raft_engine,
             tablet_factory,
             exec_results: VecDeque::new(),

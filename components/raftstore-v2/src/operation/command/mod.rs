@@ -111,6 +111,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             tablet,
             store_ctx.engine.clone(),
             store_ctx.tablet_factory.clone(),
+            store_ctx.pending_create_peers.clone(),
             logger,
         );
         store_ctx

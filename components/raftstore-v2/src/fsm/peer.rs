@@ -7,12 +7,11 @@ use std::borrow::Cow;
 use batch_system::{BasicMailbox, Fsm};
 use crossbeam::channel::TryRecvError;
 use engine_traits::{KvEngine, RaftEngine, TabletFactory};
-use kvproto::metapb;
 use raftstore::store::{Config, Transport};
 use slog::{debug, error, info, trace, Logger};
 use tikv_util::{
     is_zero_duration,
-    mpsc::{self, LooseBoundedSender, Receiver, Sender},
+    mpsc::{self, LooseBoundedSender, Receiver},
     time::{duration_to_sec, Instant},
     yatp_pool::FuturePool,
 };

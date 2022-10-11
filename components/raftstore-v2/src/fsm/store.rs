@@ -4,7 +4,6 @@ use std::{collections::BTreeMap, time::SystemTime};
 
 use batch_system::Fsm;
 use collections::HashMap;
-use crossbeam::channel::TryRecvError;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{metapb::Region, raft_serverpb::RaftMessage};
 use raftstore::{
