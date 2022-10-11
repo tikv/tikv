@@ -508,6 +508,9 @@ mod tests {
 
     #[test]
     fn test_read() {
+        // It mocks that local reader communications with raftstore.
+        // rx receives msgs like raftstore, then call f() to do something (such as renew
+        // lease or something), then send the result back to the local reader through ch
         fn handle_msg<F: FnOnce() + Send + 'static>(
             f: F,
             rx: Receiver<(u64, PeerMsg)>,
@@ -627,10 +630,11 @@ mod tests {
 
         let (ch_tx, ch_rx) = sync_channel(1);
 
+        // Case: Applied term not match
+        let store_meta_clone = store_meta.clone();
         let handler = handle_msg(
             move || {
-                let mut meta = store_meta.lock().unwrap();
-
+                let mut meta = store_meta_clone.lock().unwrap();
                 meta.readers
                     .get_mut(&1)
                     .unwrap()
@@ -639,7 +643,6 @@ mod tests {
             rx,
             ch_tx.clone(),
         );
-
         // The first try will be rejected due to unmatched applied term but after update
         // the applied term by the above thread, the snapshot will be acquired by
         // retrying.
@@ -656,7 +659,34 @@ mod tests {
         handler.join().unwrap();
         rx = ch_rx.recv().unwrap();
 
-        // Read quorum.
+        // Case: Expire lease to make the local reader lease check fail.
+        lease.expire_remote_lease();
+        let remote = lease.maybe_new_remote_lease(term6).unwrap();
+        let handler = handle_msg(
+            move || {
+                let mut meta = store_meta.lock().unwrap();
+                meta.readers
+                    .get_mut(&1)
+                    .unwrap()
+                    .update(ReadProgress::leader_lease(remote));
+            },
+            rx,
+            ch_tx.clone(),
+        );
+        let snap = block_on(reader.snapshot(cmd.clone())).unwrap();
+        // Updating lease makes cache miss.
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.cache_miss.get()),
+            4
+        );
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.lease_expire.get()),
+            1
+        );
+        handler.join().unwrap();
+        rx = ch_rx.recv().unwrap();
+
+        // Case: Read quorum.
         let mut cmd_read_quorum = cmd.clone();
         cmd_read_quorum.mut_header().set_read_quorum(true);
         let handler = handle_msg(|| {}, rx, ch_tx);
@@ -664,7 +694,7 @@ mod tests {
         handler.join().unwrap();
         ch_rx.recv().unwrap();
 
-        // Stale read
+        // Case: Stale read
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.safe_ts.get()),
             0
