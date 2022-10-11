@@ -237,19 +237,18 @@ where
         // requests will have the same cache and the cache will be cleared after the
         // last request of the batch.
 
-        if let Some(read_id) = self.read_id.as_ref() {
-            if let Some(cached_read_id) = self.snap_cache.cached_read_id.as_ref() {
-                if cached_read_id == read_id && cached_read_id.create_time >= delegate_last_valid_ts
-                {
-                    // Cache hit
-                    assert!(self.snap_cache.snapshot.as_ref().is_some());
-                    return false;
-                }
+        if self.read_id.is_some() {
+            if self.snap_cache.cached_read_id == self.read_id
+                && self.read_id.as_ref().unwrap().create_time >= delegate_last_valid_ts
+            {
+                // Cache hit
+                assert!(self.snap_cache.snapshot.as_ref().is_some());
+                return false;
             }
 
-            self.snap_cache.cached_read_id = Some(read_id.clone());
+            self.snap_cache.cached_read_id = self.read_id.clone();
         } else {
-            // snap_cache should have been already cleared
+            // snap_cache should already have been cleared
             assert!(self.snap_cache.cached_read_id.is_none());
         }
 
@@ -989,7 +988,7 @@ impl<'r> RequestInspector for Inspector<'r> {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::mpsc::*, thread};
+    use std::{ops::Add, sync::mpsc::*, thread};
 
     use crossbeam::channel::TrySendError;
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
@@ -1618,6 +1617,7 @@ mod tests {
         assert!(read_context.snapshot_ts() > compare_ts);
 
         let read_id = ThreadReadId::new();
+        let read_id_clone = read_id.clone();
         let mut read_context = LocalReadContext::new(&mut snap_cache, Some(read_id));
 
         let compare_ts = monotonic_raw_now();
@@ -1653,8 +1653,10 @@ mod tests {
             b"val1"
         );
 
-        // Case 4: delegate.last_valid_ts is larger
-        assert!(read_context.maybe_update_snapshot(&db2, monotonic_raw_now()));
+        // Case 4: delegate.last_valid_ts is larger than create_time of read_id
+        let mut last_valid_ts = read_id_clone.create_time;
+        last_valid_ts = last_valid_ts.add(Duration::nanoseconds(1));
+        assert!(read_context.maybe_update_snapshot(&db2, last_valid_ts));
         assert!(read_context.snapshot_ts() > snap_ts);
         assert!(
             read_context
