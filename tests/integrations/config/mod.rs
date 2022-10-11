@@ -248,9 +248,7 @@ fn test_serde_custom_tikv_config() {
         report_region_buckets_tick_interval: ReadableDuration::secs(1234),
         check_long_uncommitted_interval: ReadableDuration::secs(1),
         long_uncommitted_base_threshold: ReadableDuration::secs(1),
-        pre_become_leader_state_tick_interval: ReadableDuration::secs(2),
-        exit_pre_become_leader_state_ticks: 2,
-        warm_up_raft_entry_cache_ticks: 2,
+        max_raft_entry_cache_warmup_time: ReadableDuration::secs(2),
         max_snapshot_file_raw_size: ReadableSize::gb(10),
         unreachable_backoff: ReadableDuration::secs(111),
     };

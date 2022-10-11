@@ -557,8 +557,6 @@ where
             self.cfg.report_region_buckets_tick_interval.0;
         self.tick_batch[PeerTick::CheckLongUncommitted as usize].wait_duration =
             self.cfg.check_long_uncommitted_interval.0;
-        self.tick_batch[PeerTick::PreBecomeLeaderState as usize].wait_duration =
-            self.cfg.pre_become_leader_state_tick_interval.0;
     }
 }
 

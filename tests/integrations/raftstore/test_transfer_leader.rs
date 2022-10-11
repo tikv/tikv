@@ -22,9 +22,8 @@ fn test_basic_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
             + cluster
                 .cfg
                 .raft_store
-                .pre_become_leader_state_tick_interval
-                .as_millis()
-                * cluster.cfg.raft_store.warm_up_raft_entry_cache_ticks as u64,
+                .max_raft_entry_cache_warmup_time
+                .as_millis(),
     );
     cluster.run();
 

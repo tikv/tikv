@@ -866,55 +866,6 @@ impl FlashbackState {
     }
 }
 
-/// When a peer(follower) receives a TransferLeaderMsg, it enters the
-/// PreBecomeLeaderState. When the peer becomes leader or it doesn't
-/// become leader before a deadline, it exits the state.
-#[derive(Clone, Debug)]
-pub struct PreBecomeLeaderState {
-    pub ticks: usize,
-    entry_cache_warmup_range: (u64, u64),
-    is_entry_cache_warmup_timeout: bool,
-    started_at: TiInstant,
-}
-
-impl PreBecomeLeaderState {
-    pub fn new() -> Self {
-        PreBecomeLeaderState::new_with_warmup_range(INVALID_INDEX, INVALID_INDEX)
-    }
-
-    pub fn new_with_warmup_range(low: u64, high: u64) -> Self {
-        PreBecomeLeaderState {
-            ticks: 0,
-            entry_cache_warmup_range: (low, high),
-            is_entry_cache_warmup_timeout: false,
-            started_at: TiInstant::now(),
-        }
-    }
-
-    pub fn entry_cache_warmup_range(&self) -> (u64, u64) {
-        self.entry_cache_warmup_range
-    }
-
-    /// How long has it been in this state.
-    pub fn elapsed(&self) -> Duration {
-        self.started_at.saturating_elapsed()
-    }
-
-    pub fn is_entry_cache_warmup_timeout(&self) -> bool {
-        self.is_entry_cache_warmup_timeout
-    }
-
-    pub fn acked_due_to_timeout(&mut self) {
-        self.is_entry_cache_warmup_timeout = true;
-    }
-}
-
-impl Default for PreBecomeLeaderState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[derive(Getters, MutGetters)]
 pub struct Peer<EK, ER>
 where
@@ -1095,11 +1046,6 @@ where
     pub last_region_buckets: Option<BucketStat>,
     /// lead_transferee if this peer(leader) is in a leadership transferring.
     pub lead_transferee: u64,
-    /// The state indicates this peer(follower) just receives a
-    /// TransferLeaderMsg and this peer may become leader in the near future.
-    /// This state is set only when cfg.warm_up_raft_entry_cache_ticks is not 0
-    /// because it only does warmup things in this state currently.
-    pub pre_become_leader_state: Option<PreBecomeLeaderState>,
     pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
     pub flashback_state: Option<FlashbackState>,
     pub snapshot_recovery_state: Option<SnapshotRecoveryState>,
@@ -1234,7 +1180,6 @@ where
             region_buckets: None,
             last_region_buckets: None,
             lead_transferee: raft::INVALID_ID,
-            pre_become_leader_state: None,
             unsafe_recovery_state: None,
             flashback_state: None,
             snapshot_recovery_state: None,
@@ -2321,6 +2266,8 @@ where
                     self.require_updating_max_ts(&ctx.pd_scheduler);
                     // Init the in-memory pessimistic lock table when the peer becomes leader.
                     self.activate_in_memory_pessimistic_locks();
+                    // Exit entry cache warmup state when the peer becomes leader.
+                    self.mut_store().exit_entry_cache_warmup_state();
 
                     if !ctx.store_disk_usages.is_empty() {
                         self.refill_disk_full_peers(ctx);
@@ -3487,7 +3434,7 @@ where
             self.raft_group.store().region(),
         );
 
-        if !self.is_leader() && self.pre_become_leader_state.is_none() {
+        if !self.is_leader() {
             self.mut_store()
                 .compact_entry_cache(apply_state.applied_index + 1);
         }
@@ -4599,20 +4546,15 @@ where
     }
 
     /// Before ack the transfer leader message sent by the leader.
-    /// For easy understanding, this stage is called `PreBecomeLeaderState`.
     /// Currently, it only warms up the entry cache in this stage.
     ///
-    /// This return a tuple: (should_ack, is_first_time).
-    /// * `should_ack` means that the the TransferLeaderMsg should be acked
-    ///   immediately. When cache is warmed up or the warmup operation is
-    ///   timeout, it is true.
-    /// * `is_first_time` implies whether it isthe first time entering this
-    ///   state.
+    /// This return whether the msg should be acked. When cache is warmed up
+    /// or the warmup operation is timeout, it is true.
     pub fn pre_ack_transfer_leader_msg<T>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         msg: &eraftpb::Message,
-    ) -> (bool, bool) {
+    ) -> bool {
         // The start index of warmup range is leader's entry_cache_start_index,
         // and it is equal to the lowest matched index in general.
         let warmup_range_start = msg.get_index();
@@ -4628,17 +4570,10 @@ where
             WARM_UP_ENTRY_CACHE_COUNTER.no_need.inc();
             should_ack_now = true;
         } else if warmup_range_start > last_index {
-            // warmup range start should not be large than the last index.
-            // Since the index is leader's entry_cache_first_index, so this is
-            // unlikely to happen.
-            WARM_UP_ENTRY_CACHE_COUNTER.invalid_index.inc();
-            warn!(
-                "the start index of warmup range is too large";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-                "warmup_range_start" => warmup_range_start,
-                "last_index" => last_index,
-            );
+            // There is little possibility that the warmup_range_start
+            // is larger than the last index. Check the test case
+            // `test_when_warmup_range_start_is_larger_than_last_index`
+            // for details.
             should_ack_now = true;
         } else {
             if warmup_range_start < self.last_compacted_idx {
@@ -4654,42 +4589,23 @@ where
         }
 
         if should_ack_now {
-            let is_first_time = if self.pre_become_leader_state.as_ref().is_none() {
-                self.pre_become_leader_state = Some(PreBecomeLeaderState::new());
-                true
-            } else {
-                false
-            };
-            return (should_ack_now, is_first_time);
+            return true;
         }
 
-        // Check if the warmup operation is timeout if it is already in
-        // PreBecomeLeaderState.
-        if let Some(state) = self.pre_become_leader_state.as_mut() {
+        // Check if the warmup operation is timeout if warmup is already started.
+        if let Some(state) = self.mut_store().entry_cache_warmup_state_mut() {
             // If it is timeout, this peer should ack the message so that
             // the leadership transfer process can continue.
-            if state.is_entry_cache_warmup_timeout() {
-                return (true, false);
+            if state.is_timeout() {
+                return true;
             }
-            let timeout = ctx.cfg.pre_become_leader_state_tick_interval.as_millis()
-                * ctx.cfg.warm_up_raft_entry_cache_ticks as u64;
-            let is_timeout = state.elapsed() >= Duration::from_millis(timeout);
+            let is_timeout = state.elapsed() >= ctx.cfg.max_raft_entry_cache_warmup_time.0;
             if is_timeout {
-                state.is_entry_cache_warmup_timeout = true;
-                WARM_UP_ENTRY_CACHE_COUNTER.timeout.inc();
+                state.set_timeout();
             }
-            (is_timeout, false)
+            is_timeout
         } else {
-            let is_first_time = true;
-            if let Some(high) = self.get_store().async_warm_up_entry_cache(low) {
-                WARM_UP_ENTRY_CACHE_COUNTER.started.inc();
-                self.pre_become_leader_state =
-                    Some(PreBecomeLeaderState::new_with_warmup_range(low, high));
-                return (false, is_first_time);
-            }
-            WARM_UP_ENTRY_CACHE_COUNTER.unexpected_err.inc();
-            self.pre_become_leader_state = Some(PreBecomeLeaderState::new());
-            (true, is_first_time)
+            self.mut_store().async_warm_up_entry_cache(low).is_none()
         }
     }
 

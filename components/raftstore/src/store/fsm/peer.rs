@@ -1217,7 +1217,6 @@ where
             PeerTick::ReactivateMemoryLock => self.on_reactivate_memory_lock_tick(),
             PeerTick::ReportBuckets => self.on_report_region_buckets_tick(),
             PeerTick::CheckLongUncommitted => self.on_check_long_uncommitted_tick(),
-            PeerTick::PreBecomeLeaderState => self.on_pre_become_leader_state_tick(),
         }
     }
 
@@ -1837,9 +1836,15 @@ where
 
     fn on_raft_log_fetched(&mut self, context: GetEntriesContext, res: Box<RaftlogFetchResult>) {
         let low = res.low;
-        // If the peer is not the leader anymore and it's not about to become leader,
-        // or it is being destroyed, ignore the result.
-        if !self.fsm.peer.is_leader() && self.fsm.peer.pre_become_leader_state.is_none()
+        // If the peer is not the leader anymore and it's not in entry cache warmup
+        // state, or it is being destroyed, ignore the result.
+        if !self.fsm.peer.is_leader()
+            && self
+                .fsm
+                .peer
+                .get_store()
+                .entry_cache_warmup_state()
+                .is_none()
             || self.fsm.peer.pending_remove
         {
             self.fsm.peer.mut_store().clean_async_fetch_res(low);
@@ -1849,68 +1854,17 @@ where
         if self.fsm.peer.term() != res.term {
             // term has changed, the result may be not correct.
             self.fsm.peer.mut_store().clean_async_fetch_res(low);
-        } else if !self.fsm.peer.is_leader() {
-            // The follower must in PreBecomeLeaderState. Warm up the entry cache
-            // if the low and high index are exactly the same as the warmup range.
-            let state = self.fsm.peer.pre_become_leader_state.as_ref().unwrap();
-            let entry_cache_warmup_range = state.entry_cache_warmup_range();
-            let is_entry_cache_warmup_timeout = state.is_entry_cache_warmup_timeout();
-
-            // Generally speaking, when the res.low is the same as the warmup
-            // range start, the fetch result is exactly used for warmup.
-            // As the low index of each async_fetch task is different.
-            // There should exist only one exception. A async fetch task
-            // with same low index is triggered before the warmup task.
-            //
-            // In other words, if this result is invalid for warmup, then
-            // the warmup operation is failed.
-            if entry_cache_warmup_range.0 != low {
-                self.fsm.peer.mut_store().clean_async_fetch_res(low);
-                return;
-            }
-            let valid_for_warmup = match &res.ents {
-                Ok(ents) => {
-                    let acture_high = ents.last().map(|e| e.index);
-                    let expected_high = entry_cache_warmup_range.1 - 1;
-                    let valid = acture_high == Some(expected_high);
-                    if !valid {
-                        warn!(
-                            "warm up the entry cache failed";
-                            "region_id" => self.fsm.region_id(),
-                            "peer_id" => self.fsm.peer_id(),
-                            "acture_high" => acture_high.unwrap_or(0),
-                            "expected_high" => expected_high,
-                        );
-                    }
-                    valid
-                }
-                Err(e) => {
-                    warn!(
-                        "warm up the entry cache failed";
-                        "region_id" => self.fsm.region_id(),
-                        "peer_id" => self.fsm.peer_id(),
-                        "err" => ?e,
-                    );
-                    false
-                }
-            };
-            // Use the result to warm up the entry cache if valid.
-            if valid_for_warmup {
-                self.fsm
-                    .peer
-                    .mut_store()
-                    .update_async_fetch_res(low, Some(res));
-                self.fsm
-                    .peer
-                    .mut_store()
-                    .on_warmup_range_fetched(entry_cache_warmup_range);
-                // Clean the async fetch result immediately if it is not used.
-                self.fsm.peer.mut_store().update_async_fetch_res(low, None);
-            }
-            // Need not to ack here if warmup is timeout.
-            if !is_entry_cache_warmup_timeout {
+        } else if self
+            .fsm
+            .peer
+            .get_store()
+            .entry_cache_warmup_state()
+            .is_some()
+        {
+            if self.fsm.peer.mut_store().maybe_warm_up_entry_cache(*res) {
                 self.fsm.peer.ack_transfer_leader_msg(false);
             }
+            self.fsm.peer.mut_store().clean_async_fetch_res(low);
         } else {
             self.fsm
                 .peer
@@ -3283,19 +3237,11 @@ where
             .peer
             .maybe_reject_transfer_leader_msg(self.ctx, msg, peer_disk_usage)
         {
-            // Skip pre_ack when the warmup ticks is 0, because it only does
-            // warmup related things in the pre_ack stage.
-            if self.ctx.cfg.warm_up_raft_entry_cache_ticks == 0 {
+            // If max warmup time is 0, then skip the warmup process and ack directly.
+            if self.ctx.cfg.max_raft_entry_cache_warmup_time.0 == Duration::from_secs(0)
+                || self.fsm.peer.pre_ack_transfer_leader_msg(self.ctx, msg)
+            {
                 self.fsm.peer.ack_transfer_leader_msg(false);
-            } else {
-                let (should_ack, should_tick) =
-                    self.fsm.peer.pre_ack_transfer_leader_msg(self.ctx, msg);
-                if should_tick {
-                    self.register_pre_become_leader_state_tick();
-                }
-                if should_ack {
-                    self.fsm.peer.ack_transfer_leader_msg(false);
-                }
             }
         }
     }
@@ -3833,10 +3779,15 @@ where
     }
 
     fn on_ready_compact_log(&mut self, first_index: u64, state: RaftTruncatedState) {
-        // Since this peer may be warming up the entry cache when it is in
-        // PreBecomeLeaderState, log compaction should be temporarily skipped.
-        // Otherwise, the warmup task may fail.
-        if self.fsm.peer.pre_become_leader_state.is_some() {
+        // Since this peer may be warming up the entry cache, log compaction should be
+        // temporarily skipped. Otherwise, the warmup task may fail.
+        if self
+            .fsm
+            .peer
+            .get_store()
+            .entry_cache_warmup_state()
+            .is_some()
+        {
             return;
         }
 
@@ -5392,28 +5343,6 @@ where
         }
         self.fsm.peer.check_long_uncommitted_proposals(self.ctx);
         self.register_check_long_uncommitted_tick();
-    }
-
-    fn register_pre_become_leader_state_tick(&mut self) {
-        self.schedule_tick(PeerTick::PreBecomeLeaderState)
-    }
-
-    fn on_pre_become_leader_state_tick(&mut self) {
-        if let Some(state) = self.fsm.peer.pre_become_leader_state.as_mut() {
-            state.ticks += 1;
-            if state.ticks >= self.ctx.cfg.exit_pre_become_leader_state_ticks {
-                self.fsm.peer.pre_become_leader_state = None;
-                return;
-            }
-
-            if state.ticks >= self.ctx.cfg.warm_up_raft_entry_cache_ticks
-                && !state.is_entry_cache_warmup_timeout()
-            {
-                WARM_UP_ENTRY_CACHE_COUNTER.timeout.inc();
-                self.fsm.peer.ack_transfer_leader_msg(false);
-            }
-        }
-        self.register_pre_become_leader_state_tick()
     }
 
     fn register_check_leader_lease_tick(&mut self) {

@@ -84,8 +84,6 @@ make_auto_flush_static_metric! {
         timeout,
         finished,
         no_need,
-        invalid_index,
-        unexpected_err,
     }
 
     pub label_enum RaftEventDurationType {
