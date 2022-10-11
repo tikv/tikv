@@ -1,13 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_MARK, CF_WRITE};
 use kvproto::{
     errorpb::{self, EpochNotMatch, StaleCommand},
     kvrpcpb::Context,
 };
 use tikv_kv::SnapshotExt;
-use txn_types::{Key, Lock, OldValue, TimeStamp, Value, Write, WriteRef, WriteType};
+use txn_types::{Key, Lock, Mark, OldValue, TimeStamp, Value, Write, WriteRef, WriteType};
 
 use crate::storage::{
     kv::{
@@ -58,6 +58,11 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
     #[inline(always)]
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
         self.reader.load_lock(key)
+    }
+
+    #[inline(always)]
+    pub fn load_mark(&mut self, key: &Key) -> Result<Option<Mark>> {
+        self.reader.load_mark(key)
     }
 
     #[inline(always)]
@@ -264,6 +269,13 @@ impl<S: EngineSnapshot> MvccReader<S> {
                 })
             })
             .transpose()
+    }
+
+    pub fn load_mark(&mut self, key: &Key) -> Result<Option<Mark>> {
+        match self.snapshot.get_cf(CF_MARK, key)? {
+            Some(v) => Ok(Some(Mark::parse(&v)?)),
+            None => Ok(None),
+        }
     }
 
     fn get_scan_mode(&self, allow_backward: bool) -> ScanMode {
@@ -739,6 +751,13 @@ impl<S: EngineSnapshot> MvccReader<S> {
         })
     }
 
+    pub fn get_mark(&mut self, key: Key, start_ts: TimeStamp) -> Result<Option<Mark>> {
+        let key = key.append_ts(start_ts);
+        let value = self.snapshot.get_cf(CF_MARK, &key)?;
+        let mark = value.map(|v| Mark::parse(&v)).transpose()?;
+        Ok(mark)
+    }
+
     pub fn set_range(&mut self, lower: Option<Key>, upper: Option<Key>) {
         self.lower_bound = lower;
         self.upper_bound = upper;
@@ -763,7 +782,7 @@ pub mod tests {
         metapb::{Peer, Region},
     };
     use raftstore::store::RegionSnapshot;
-    use txn_types::{LockType, Mutation};
+    use txn_types::{LockType, MarkType, Mutation};
 
     use super::*;
     use crate::storage::{
@@ -940,7 +959,14 @@ pub mod tests {
             let cm = ConcurrencyManager::new(start_ts);
             let mut txn = MvccTxn::new(start_ts, cm);
             let mut reader = SnapshotReader::new(start_ts, snap, true);
-            commit(&mut txn, &mut reader, Key::from_raw(pk), commit_ts.into()).unwrap();
+            commit(
+                &mut txn,
+                &mut reader,
+                Key::from_raw(pk),
+                commit_ts.into(),
+                true,
+            )
+            .unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -1033,6 +1059,7 @@ pub mod tests {
             (CF_DEFAULT, RocksCfOptions::default()),
             (CF_RAFT, RocksCfOptions::default()),
             (CF_LOCK, RocksCfOptions::default()),
+            (CF_MARK, RocksCfOptions::default()),
             (CF_WRITE, cf_opts),
         ];
         engine_rocks::util::new_engine_opt(path, db_opt, cfs_opts).unwrap()
@@ -2517,5 +2544,36 @@ pub mod tests {
             reader.seek_write(&k, ts).unwrap();
             assert_eq!(reader.statistics.write.seek_tombstone, *tombstones);
         }
+    }
+
+    #[test]
+    fn test_get_mark() {
+        let path = tempfile::Builder::new()
+            .prefix("_test_storage_mvcc_reader_get_mark")
+            .tempdir()
+            .unwrap();
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![], vec![]);
+        let db = open_db(path, true);
+        let k1 = Key::from_raw(b"k1");
+        let k2 = Key::from_raw(b"k2");
+        let mark = Mark {
+            mark_type: MarkType::Lock,
+            commit_ts: TimeStamp::new(10),
+        };
+        let mut buf = vec![b'z'];
+        buf.extend_from_slice(k1.clone().append_ts(5.into()).as_encoded());
+        db.put_cf(CF_MARK, &buf, &mark.to_bytes()).unwrap();
+        buf = vec![b'z'];
+        buf.extend_from_slice(k2.clone().append_ts(20.into()).as_encoded());
+        db.put_cf(CF_MARK, &buf, b"some_random_bytes").unwrap();
+        let engine = RegionEngine::new(&db, &region);
+        let mut reader = MvccReader::new(engine.snapshot(), None, false);
+        let v1 = reader.get_mark(k1.clone(), 5.into()).unwrap();
+        assert_eq!(v1, Some(mark));
+        let v2 = reader.get_mark(k2, 20.into());
+        v2.unwrap_err(); // v2 cannot be parsed into Mark
+        let v3 = reader.get_mark(k1, 15.into()).unwrap();
+        assert!(v3.is_none(), "{:?}", v3); // start_ts is not correct, cannot find mark
     }
 }

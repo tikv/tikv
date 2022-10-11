@@ -223,6 +223,9 @@ struct SchedulerInner<L: LockManager> {
 
     enable_async_apply_prewrite: bool,
 
+    // TODO: replace it with feature gate after development is done
+    enable_mark_cf: bool,
+
     resource_tag_factory: ResourceTagFactory,
 
     quota_limiter: Arc<QuotaLimiter>,
@@ -391,6 +394,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             pipelined_pessimistic_lock: dynamic_configs.pipelined_pessimistic_lock,
             in_memory_pessimistic_lock: dynamic_configs.in_memory_pessimistic_lock,
             enable_async_apply_prewrite: config.enable_async_apply_prewrite,
+            enable_mark_cf: config.enable_mark_cf,
             flow_controller,
             causal_ts_provider,
             resource_tag_factory,
@@ -878,6 +882,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 extra_op: task.extra_op,
                 statistics,
                 async_apply_prewrite: self.inner.enable_async_apply_prewrite,
+                enable_mark_cf: self.inner.enable_mark_cf,
                 raw_ext,
             };
             let begin_instant = Instant::now();

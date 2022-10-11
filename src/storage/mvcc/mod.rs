@@ -426,7 +426,7 @@ pub mod tests {
 
     use engine_traits::CF_WRITE;
     use kvproto::kvrpcpb::Context;
-    use txn_types::Key;
+    use txn_types::{Key, MarkType};
 
     use super::*;
     use crate::storage::kv::{Engine, Modify, ScanMode, SnapContext, Snapshot, WriteData};
@@ -816,5 +816,31 @@ pub mod tests {
             reader.scan_keys(start.map(Key::from_raw), limit).unwrap(),
             expect
         );
+    }
+
+    pub fn must_get_mark<E: Engine>(
+        engine: &mut E,
+        key: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        commit_ts: impl Into<TimeStamp>,
+        mark_type: MarkType,
+    ) {
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, true);
+        let mark = reader
+            .get_mark(Key::from_raw(key), start_ts.into())
+            .unwrap()
+            .unwrap();
+        assert_eq!(mark.mark_type, mark_type);
+        assert_eq!(mark.commit_ts, commit_ts.into());
+    }
+
+    pub fn must_get_no_mark<E: Engine>(engine: &mut E, key: &[u8], start_ts: impl Into<TimeStamp>) {
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, true);
+        let mark = reader
+            .get_mark(Key::from_raw(key), start_ts.into())
+            .unwrap();
+        assert!(mark.is_none(), "{:?}", mark);
     }
 }

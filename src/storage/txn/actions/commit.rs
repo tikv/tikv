@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use txn_types::{Key, TimeStamp, Write, WriteType};
+use txn_types::{Key, MarkType, TimeStamp, Write, WriteType};
 
 use crate::storage::{
     mvcc::{
@@ -16,6 +16,7 @@ pub fn commit<S: Snapshot>(
     reader: &mut SnapshotReader<S>,
     key: Key,
     commit_ts: TimeStamp,
+    enable_mark_cf: bool,
 ) -> MvccResult<Option<ReleasedLock>> {
     fail_point!("commit", |err| Err(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts,).into()
@@ -101,6 +102,9 @@ pub fn commit<S: Snapshot>(
     }
 
     txn.put_write(key.clone(), commit_ts, write.as_ref().to_bytes());
+    if enable_mark_cf && lock.lock_type == LockType::Lock {
+        txn.put_mark(key.clone(), MarkType::Lock, reader.start_ts, commit_ts);
+    }
     Ok(txn.unlock_key(key, lock.is_pessimistic_txn()))
 }
 
@@ -166,7 +170,14 @@ pub mod tests {
         let cm = ConcurrencyManager::new(start_ts);
         let mut txn = MvccTxn::new(start_ts, cm);
         let mut reader = SnapshotReader::new(start_ts, snapshot, true);
-        commit(&mut txn, &mut reader, Key::from_raw(key), commit_ts.into()).unwrap();
+        commit(
+            &mut txn,
+            &mut reader,
+            Key::from_raw(key),
+            commit_ts.into(),
+            true,
+        )
+        .unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
 
@@ -181,7 +192,14 @@ pub mod tests {
         let cm = ConcurrencyManager::new(start_ts);
         let mut txn = MvccTxn::new(start_ts, cm);
         let mut reader = SnapshotReader::new(start_ts, snapshot, true);
-        commit(&mut txn, &mut reader, Key::from_raw(key), commit_ts.into()).unwrap_err();
+        commit(
+            &mut txn,
+            &mut reader,
+            Key::from_raw(key),
+            commit_ts.into(),
+            true,
+        )
+        .unwrap_err();
     }
 
     #[cfg(test)]

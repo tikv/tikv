@@ -212,6 +212,7 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics: &mut statistic,
             async_apply_prewrite: false,
+            enable_mark_cf: true,
             raw_ext,
         };
         let ret = cmd.cmd.process_write(snap, context)?;
@@ -266,6 +267,7 @@ mod tests {
             extra_op: kvproto::kvrpcpb::ExtraOp::Noop,
             statistics: &mut statistic,
             async_apply_prewrite: false,
+            enable_mark_cf: true,
             raw_ext,
         };
         let cmd: Command = cmd.into();

@@ -139,6 +139,7 @@ pub mod tests {
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
                     async_apply_prewrite: false,
+                    enable_mark_cf: true,
                     raw_ext: None,
                 },
             )
@@ -181,6 +182,7 @@ pub mod tests {
                         extra_op: Default::default(),
                         statistics: &mut Default::default(),
                         async_apply_prewrite: false,
+                        enable_mark_cf: true,
                         raw_ext: None,
                     },
                 )

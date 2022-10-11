@@ -14,7 +14,9 @@ use kvproto::kvrpcpb::{
     PrewriteRequestPessimisticAction::{self, *},
 };
 use tikv_kv::SnapshotExt;
-use txn_types::{Key, Mutation, OldValue, OldValues, TimeStamp, TxnExtra, Write, WriteType};
+use txn_types::{
+    Key, LockType, MarkType, Mutation, OldValue, OldValues, TimeStamp, TxnExtra, Write, WriteType,
+};
 
 use super::ReaderWithStats;
 use crate::storage::{
@@ -461,6 +463,7 @@ impl<K: PrewriteKind> Prewriter<K> {
             final_min_commit_ts,
             rows,
             context.async_apply_prewrite,
+            context.enable_mark_cf,
             context.lock_mgr,
         ))
     }
@@ -645,6 +648,7 @@ impl<K: PrewriteKind> Prewriter<K> {
         final_min_commit_ts: TimeStamp,
         rows: usize,
         async_apply_prewrite: bool,
+        enable_mark_cf: bool,
         lock_manager: &impl LockManager,
     ) -> WriteResult {
         let async_commit_ts = if self.secondary_keys.is_some() {
@@ -662,6 +666,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                         self.try_one_pc,
                         &mut txn,
                         final_min_commit_ts,
+                        enable_mark_cf,
                         lock_manager,
                     ),
                 },
@@ -827,13 +832,14 @@ pub fn one_pc_commit_ts(
     try_one_pc: bool,
     txn: &mut MvccTxn,
     final_min_commit_ts: TimeStamp,
+    enable_mark_cf: bool,
     lock_manager: &impl LockManager,
 ) -> TimeStamp {
     if try_one_pc {
         assert_ne!(final_min_commit_ts, TimeStamp::zero());
         // All keys can be successfully locked and `try_one_pc` is set. Try to directly
         // commit them.
-        let released_locks = handle_1pc_locks(txn, final_min_commit_ts);
+        let released_locks = handle_1pc_locks(txn, final_min_commit_ts, enable_mark_cf);
         if !released_locks.is_empty() {
             released_locks.wake_up(lock_manager);
         }
@@ -845,7 +851,11 @@ pub fn one_pc_commit_ts(
 }
 
 /// Commit and delete all 1pc locks in txn.
-fn handle_1pc_locks(txn: &mut MvccTxn, commit_ts: TimeStamp) -> ReleasedLocks {
+fn handle_1pc_locks(
+    txn: &mut MvccTxn,
+    commit_ts: TimeStamp,
+    enable_mark_cf: bool,
+) -> ReleasedLocks {
     let mut released_locks = ReleasedLocks::new(txn.start_ts, commit_ts);
 
     for (key, lock, delete_pessimistic_lock) in std::mem::take(&mut txn.locks_for_1pc) {
@@ -857,6 +867,9 @@ fn handle_1pc_locks(txn: &mut MvccTxn, commit_ts: TimeStamp) -> ReleasedLocks {
         // Transactions committed with 1PC should be impossible to overwrite rollback
         // records.
         txn.put_write(key.clone(), commit_ts, write.as_ref().to_bytes());
+        if enable_mark_cf && lock.lock_type == LockType::Lock {
+            txn.put_mark(key.clone(), MarkType::Lock, txn.start_ts, commit_ts);
+        }
         if delete_pessimistic_lock {
             released_locks.push(txn.unlock_key(key, true));
         }
@@ -878,6 +891,7 @@ mod tests {
     use engine_rocks::ReadPerfInstant;
     use engine_traits::CF_WRITE;
     use kvproto::kvrpcpb::{Assertion, Context, ExtraOp};
+    use tikv_kv::RocksEngine;
     use txn_types::{Key, Mutation, TimeStamp};
 
     use super::*;
@@ -953,6 +967,7 @@ mod tests {
             vec![Key::from_raw(&[pri_key_number])],
             99,
             102,
+            true,
         )
         .unwrap();
         assert_eq!(3, statistic.write.seek);
@@ -1008,7 +1023,7 @@ mod tests {
         // All keys are prewritten successful with only one seek operations.
         assert_eq!(1, statistic.write.seek);
         let keys: Vec<Key> = mutations.iter().map(|m| m.key().clone()).collect();
-        commit(&mut engine, &mut statistic, keys.clone(), 104, 105).unwrap();
+        commit(&mut engine, &mut statistic, keys.clone(), 104, 105, true).unwrap();
         let snap = engine.snapshot(Default::default()).unwrap();
         for k in keys {
             let v = snap.get_cf(CF_WRITE, &k.append_ts(105.into())).unwrap();
@@ -1082,7 +1097,7 @@ mod tests {
         use crate::storage::mvcc::tests::{must_get, must_get_commit_ts, must_unlocked};
 
         let mut engine = TestEngineBuilder::new().build().unwrap();
-        let cm = concurrency_manager::ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new(1.into());
 
         let key = b"k";
         let value = b"v";
@@ -1183,7 +1198,7 @@ mod tests {
     #[test]
     fn test_prewrite_pessimsitic_1pc() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
-        let cm = concurrency_manager::ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new(1.into());
         let key = b"k";
         let value = b"v";
 
@@ -1318,7 +1333,7 @@ mod tests {
     #[test]
     fn test_prewrite_async_commit() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
-        let cm = concurrency_manager::ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new(1.into());
 
         let key = b"k";
         let value = b"v";
@@ -1384,7 +1399,7 @@ mod tests {
     #[test]
     fn test_prewrite_pessimsitic_async_commit() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
-        let cm = concurrency_manager::ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new(1.into());
 
         let key = b"k";
         let value = b"v";
@@ -1508,6 +1523,7 @@ mod tests {
                     extra_op: ExtraOp::Noop,
                     statistics: &mut Statistics::default(),
                     async_apply_prewrite: false,
+                    enable_mark_cf: true,
                     raw_ext: None,
                 }
             };
@@ -1678,6 +1694,7 @@ mod tests {
                 extra_op: ExtraOp::Noop,
                 statistics: &mut statistics,
                 async_apply_prewrite: case.async_apply_prewrite,
+                enable_mark_cf: true,
                 raw_ext: None,
             };
             let mut engine = TestEngineBuilder::new().build().unwrap();
@@ -1792,6 +1809,7 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
             async_apply_prewrite: false,
+            enable_mark_cf: true,
             raw_ext: None,
         };
         let snap = engine.snapshot(Default::default()).unwrap();
@@ -1820,6 +1838,7 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
             async_apply_prewrite: false,
+            enable_mark_cf: true,
             raw_ext: None,
         };
         let snap = engine.snapshot(Default::default()).unwrap();
@@ -1902,6 +1921,7 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
             async_apply_prewrite: false,
+            enable_mark_cf: true,
             raw_ext: None,
         };
         let snap = engine.snapshot(Default::default()).unwrap();
@@ -1934,6 +1954,7 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
             async_apply_prewrite: false,
+            enable_mark_cf: true,
             raw_ext: None,
         };
         let snap = engine.snapshot(Default::default()).unwrap();
@@ -2203,6 +2224,7 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
             async_apply_prewrite: false,
+            enable_mark_cf: true,
             raw_ext: None,
         };
         let snap = engine.snapshot(Default::default()).unwrap();
@@ -2227,6 +2249,7 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
             async_apply_prewrite: false,
+            enable_mark_cf: true,
             raw_ext: None,
         };
         let snap = engine.snapshot(Default::default()).unwrap();
@@ -2433,6 +2456,7 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
             async_apply_prewrite: false,
+            enable_mark_cf: true,
             raw_ext: None,
         };
         let snap = engine.snapshot(Default::default()).unwrap();
@@ -2509,5 +2533,57 @@ mod tests {
         // It should return the real commit TS as the min_commit_ts in the result.
         assert_eq!(res.min_commit_ts, 18.into(), "{:?}", res);
         must_unlocked(&mut engine, b"k2");
+    }
+
+    #[test]
+    fn test_prewrite_lock_1pc() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let cm = ConcurrencyManager::new(1.into());
+        let key = b"k";
+
+        let prewrite_lock = |engine: &mut RocksEngine, start_ts: TimeStamp, enable_mark_cf| {
+            let mut statistics = Statistics::default();
+            let snap = engine.snapshot(Default::default()).unwrap();
+            let context = WriteContext {
+                lock_mgr: &DummyLockManager {},
+                concurrency_manager: cm.clone(),
+                extra_op: ExtraOp::Noop,
+                statistics: &mut statistics,
+                async_apply_prewrite: false,
+                enable_mark_cf,
+                raw_ext: None,
+            };
+            let cmd = Prewrite::new(
+                vec![Mutation::make_lock(Key::from_raw(key))],
+                key.to_vec(),
+                start_ts.into(),
+                2000,
+                false,
+                1,
+                5.into(),
+                1000.into(),
+                Some(vec![]),
+                true,
+                AssertionLevel::Off,
+                Context::default(),
+            );
+            let ret = cmd.cmd.process_write(snap, context).unwrap();
+            let res = match ret.pr {
+                ProcessResult::PrewriteResult { result } => result,
+                _ => panic!("unexpected result: {:?}", ret.pr),
+            };
+            if !ret.to_be_write.modifies.is_empty() {
+                engine.write(&Context::default(), ret.to_be_write).unwrap();
+            }
+            res
+        };
+
+        let res = prewrite_lock(&mut engine, 5.into(), true);
+        must_get_mark(&mut engine, key, 5, res.one_pc_commit_ts, MarkType::Lock);
+
+        let new_start_ts = res.one_pc_commit_ts.next();
+        let res = prewrite_lock(&mut engine, new_start_ts, false);
+        assert!(!res.one_pc_commit_ts.is_zero());
+        must_get_no_mark(&mut engine, key, new_start_ts);
     }
 }

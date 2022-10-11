@@ -61,7 +61,13 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
         // Pessimistic txn needs key_hashes to wake up waiters
         let mut released_locks = ReleasedLocks::new(self.lock_ts, self.commit_ts);
         for k in self.keys {
-            released_locks.push(commit(&mut txn, &mut reader, k, self.commit_ts)?);
+            released_locks.push(commit(
+                &mut txn,
+                &mut reader,
+                k,
+                self.commit_ts,
+                context.enable_mark_cf,
+            )?);
         }
         released_locks.wake_up(context.lock_mgr);
 
@@ -79,5 +85,53 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tikv_kv::Statistics;
+    use txn_types::MarkType;
+
+    use super::*;
+    use crate::storage::{
+        mvcc::tests::{must_get_mark, must_get_no_mark},
+        txn::{actions::tests::must_prewrite_lock, commands::test_util::commit},
+        TestEngineBuilder,
+    };
+
+    // Test from command to check whether enable_mark_cf is correctly passed from
+    // the commit command to the commit action.
+    #[test]
+    fn test_commit_lock() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut statistics = Statistics::default();
+        let key = b"k";
+
+        // enable_mark_cf = true
+        must_prewrite_lock(&mut engine, key, key, 10);
+        commit(
+            &mut engine,
+            &mut statistics,
+            vec![Key::from_raw(key)],
+            10,
+            20,
+            true,
+        )
+        .unwrap();
+        must_get_mark(&mut engine, key, 10, 20, MarkType::Lock);
+
+        // enable_mark_cf = false
+        must_prewrite_lock(&mut engine, key, key, 30);
+        commit(
+            &mut engine,
+            &mut statistics,
+            vec![Key::from_raw(key)],
+            30,
+            40,
+            false,
+        )
+        .unwrap();
+        must_get_no_mark(&mut engine, key, 30);
     }
 }

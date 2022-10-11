@@ -6,7 +6,7 @@ use std::{
 };
 
 use engine_rocks::RocksCfOptions;
-use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_MARK, CF_RAFT, CF_WRITE};
 use file_system::IoRateLimiter;
 use kvproto::kvrpcpb::ApiVersion;
 use tikv_util::config::ReadableSize;
@@ -106,6 +106,7 @@ impl TestEngineBuilder {
                 ),
                 CF_LOCK => (CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
                 CF_WRITE => (CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
+                CF_MARK => (CF_MARK, cfg_rocksdb.markcf.build_opt(&cache, None)),
                 CF_RAFT => (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
                 _ => (*cf, RocksCfOptions::default()),
             })

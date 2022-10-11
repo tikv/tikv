@@ -3461,6 +3461,7 @@ mod tests {
                     extra_op: ExtraOp::Noop,
                     statistics: &mut Statistics::default(),
                     async_apply_prewrite: false,
+                    enable_mark_cf: true,
                     raw_ext: None,
                 },
             )

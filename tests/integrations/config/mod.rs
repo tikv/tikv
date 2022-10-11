@@ -739,6 +739,7 @@ fn test_serde_custom_tikv_config() {
         enable_async_apply_prewrite: true,
         api_version: 1,
         enable_ttl: true,
+        enable_mark_cf: false,
         ttl_check_poll_interval: ReadableDuration::hours(0),
         flow_control: FlowControlConfig {
             enable: false,

@@ -4,8 +4,8 @@
 use std::fmt;
 
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use txn_types::{Key, Lock, PessimisticLock, TimeStamp, Value};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_MARK, CF_WRITE};
+use txn_types::{Key, Lock, Mark, MarkType, PessimisticLock, TimeStamp, Value};
 
 use super::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
 use crate::storage::kv::Modify;
@@ -144,6 +144,22 @@ impl MvccTxn {
         let write = Modify::Delete(CF_WRITE, key.append_ts(ts));
         self.write_size += write.size();
         self.modifies.push(write);
+    }
+
+    pub(crate) fn put_mark(
+        &mut self,
+        key: Key,
+        mark_type: MarkType,
+        start_ts: TimeStamp,
+        commit_ts: TimeStamp,
+    ) {
+        let mark = Mark {
+            mark_type,
+            commit_ts,
+        };
+        let m = Modify::Put(CF_MARK, key.append_ts(start_ts), mark.to_bytes());
+        self.write_size += m.size();
+        self.modifies.push(m);
     }
 
     /// Add the timestamp of the current rollback operation to another
@@ -785,7 +801,7 @@ pub(crate) mod tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut txn = MvccTxn::new(10.into(), cm);
         let mut reader = SnapshotReader::new(10.into(), snapshot, true);
-        commit(&mut txn, &mut reader, key, 15.into()).unwrap();
+        commit(&mut txn, &mut reader, key, 15.into(), true).unwrap();
         assert!(txn.write_size() > 0);
         engine
             .write(&ctx, WriteData::from_modifies(txn.into_modifies()))

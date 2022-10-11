@@ -537,6 +537,7 @@ pub struct WriteContext<'a, L: LockManager> {
     pub extra_op: ExtraOp,
     pub statistics: &'a mut Statistics,
     pub async_apply_prewrite: bool,
+    pub enable_mark_cf: bool,
     pub raw_ext: Option<RawExt>, // use for apiv2
 }
 
@@ -774,6 +775,7 @@ pub mod test_util {
             extra_op: ExtraOp::Noop,
             statistics,
             async_apply_prewrite: false,
+            enable_mark_cf: true,
             raw_ext: None,
         };
         let ret = cmd.cmd.process_write(snap, context)?;
@@ -895,6 +897,7 @@ pub mod test_util {
         keys: Vec<Key>,
         lock_ts: u64,
         commit_ts: u64,
+        enable_mark_cf: bool,
     ) -> Result<()> {
         let ctx = Context::default();
         let snap = engine.snapshot(Default::default())?;
@@ -912,6 +915,7 @@ pub mod test_util {
             extra_op: ExtraOp::Noop,
             statistics,
             async_apply_prewrite: false,
+            enable_mark_cf,
             raw_ext: None,
         };
 
@@ -937,6 +941,7 @@ pub mod test_util {
             extra_op: ExtraOp::Noop,
             statistics,
             async_apply_prewrite: false,
+            enable_mark_cf: true,
             raw_ext: None,
         };
 

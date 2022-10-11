@@ -143,6 +143,7 @@ pub mod tests {
             extra_op: Default::default(),
             statistics: &mut Default::default(),
             async_apply_prewrite: false,
+            enable_mark_cf: true,
             raw_ext: None,
         };
         let result = command.process_write(snapshot, write_context).unwrap();

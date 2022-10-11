@@ -426,7 +426,7 @@ mod tests {
             SkipPessimisticCheck,
         )
         .unwrap();
-        one_pc_commit_ts(true, &mut txn, 10.into(), &DummyLockManager);
+        one_pc_commit_ts(true, &mut txn, 10.into(), true, &DummyLockManager);
         write(&engine, &Default::default(), txn.into_modifies());
         let one_pc_row = engine
             .take_last_modifies()
