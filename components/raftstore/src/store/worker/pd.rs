@@ -1204,7 +1204,7 @@ where
         let separate_raft_path =
             path_in_diff_mount_point(raft_path, MiscExt::path(&store_info.kv_engine));
         stats = collect_report_read_peer_stats(HOTSPOT_REPORT_CAPACITY, report_peers, stats);
-        let ((capacity, used_size, available), (raft_capactiy, raft_used_size, raft_available)) =
+        let ((capacity, used_size, available), (_raft_capactiy, _raft_used_size, _raft_available)) =
             match collect_engine_size(
                 &self.coprocessor_host,
                 Some(&store_info),
@@ -2290,12 +2290,13 @@ fn collect_engine_size<EK: KvEngine, ER: RaftEngine>(
     snap_mgr_size: u64,
     separate_raft_path: bool,
 ) -> Option<((u64, u64, u64), (u64, u64, u64))> {
-    let store_info = store_info.unwrap();
-    let raft_used_size = store_info
-        .raft_engine
-        .get_engine_size()
-        .expect("get raft engine size");
-    let (raft_disk_cap, raft_available) = if separate_raft_path {
+    let (raft_disk_cap, raft_used_size, raft_available) = if separate_raft_path {
+        let store_info = store_info.unwrap();
+        let raft_used_size = store_info
+            .raft_engine
+            .get_engine_size()
+            .expect("get raft engine size");
+
         let raft_path = store_info.raft_engine.path().to_string();
         let raft_disk_stats = match fs2::statvfs(&raft_path) {
             Err(e) => {
@@ -2313,9 +2314,9 @@ fn collect_engine_size<EK: KvEngine, ER: RaftEngine>(
             .checked_sub(raft_used_size)
             .unwrap_or_default();
         raft_available = cmp::min(raft_available, raft_disk_stats.available_space());
-        (raft_disk_cap, raft_available)
+        (raft_disk_cap, raft_used_size, raft_available)
     } else {
-        (0, 0)
+        (0, 0, 0)
     };
     if let Some(engine_size) = coprocessor_host.on_compute_engine_size() {
         return Some((
@@ -2323,6 +2324,7 @@ fn collect_engine_size<EK: KvEngine, ER: RaftEngine>(
             (raft_disk_cap, raft_used_size, raft_available),
         ));
     }
+    let store_info = store_info.unwrap();
 
     let disk_stats = match fs2::statvfs(store_info.kv_engine.path()) {
         Err(e) => {
@@ -2686,14 +2688,18 @@ mod tests {
         let obs = PdObserver::default();
         host.registry
             .register_pd_task_observer(1, BoxPdTaskObserver::new(obs));
-        let store_size = collect_engine_size::<KvTestEngine, RaftTestEngine>(&host, None, 0);
-        let (cap, used, avail) = if let Some((cap, used, avail)) = store_size {
-            (cap, used, avail)
-        } else {
-            panic!("store_size should not be none");
-        };
+        let store_size = collect_engine_size::<KvTestEngine, RaftTestEngine>(&host, None, 0, false);
+        let ((cap, used, avail), (raft_cap, raft_used, raft_avail)) =
+            if let Some(((cap, used, avail), (raft_cap, raft_used, raft_avail))) = store_size {
+                ((cap, used, avail), (raft_cap, raft_used, raft_avail))
+            } else {
+                panic!("store_size should not be none");
+            };
         assert_eq!(cap, 444);
         assert_eq!(used, 111);
         assert_eq!(avail, 333);
+        assert_eq!(raft_cap, 0);
+        assert_eq!(raft_used, 0);
+        assert_eq!(raft_avail, 0);
     }
 }
