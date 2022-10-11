@@ -270,6 +270,27 @@ impl<ER: RaftEngine> Storage<ER> {
         }
     }
 
+    /// Cancel generating snapshot.
+    pub fn cancel_generating_snap(&mut self, compact_to: Option<u64>) {
+        let snap_state = self.snap_state.borrow();
+        if let SnapState::Generating {
+            ref canceled,
+            ref index,
+            ..
+        } = *snap_state
+        {
+            if !canceled.load(Ordering::SeqCst) {
+                if let Some(idx) = compact_to {
+                    let snap_index = index.load(Ordering::SeqCst);
+                    if snap_index == 0 || idx <= snap_index + 1 {
+                        return;
+                    }
+                }
+                canceled.store(true, Ordering::SeqCst);
+            }
+        }
+    }
+
     fn validate_snap(&self, snap: &Snapshot, request_index: u64) -> bool {
         let idx = snap.get_metadata().get_index();
         // TODO(nolouch): check tuncated index
@@ -380,12 +401,11 @@ impl<ER: RaftEngine> Storage<ER> {
         );
 
         let (sender, receiver) = mpsc::sync_channel(1);
-        // TODO(nolouch): remove cancel?
         let canceled = Arc::new(AtomicBool::new(false));
         let index = Arc::new(AtomicU64::new(0));
         *snap_state = SnapState::Generating {
             canceled: canceled.clone(),
-            index,
+            index: index.clone(),
             receiver,
         };
 
@@ -400,6 +420,7 @@ impl<ER: RaftEngine> Storage<ER> {
         let task = GenSnapTask::new(
             self.region().get_id(),
             self.get_tablet_index(),
+            index,
             canceled,
             sender,
         );
@@ -571,7 +592,7 @@ mod tests {
         let sched = worker.scheduler();
         worker.start(MockRegionRunner {});
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
-        gen_task.generate_and_schedule_snapshot(&sched);
+        gen_task.generate_and_schedule_snapshot(RegionLocalState::default(), 0, 0, &sched);
         let snap = match *s.snap_state.borrow() {
             SnapState::Generating { ref receiver, .. } => {
                 receiver.recv_timeout(Duration::from_secs(3)).unwrap()

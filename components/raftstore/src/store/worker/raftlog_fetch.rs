@@ -7,6 +7,7 @@ use std::{
 
 use engine_traits::RaftEngine;
 use fail::fail_point;
+use kvproto::raft_serverpb::RegionLocalState;
 use raft::{eraftpb::Snapshot as RaftSnapshot, GetEntriesContext};
 use tikv_util::worker::Runnable;
 
@@ -27,6 +28,9 @@ pub enum Task {
     GenTabletSnapshot {
         region_id: u64,
         tablet_index: u64,
+        region_state: RegionLocalState,
+        last_applied_term: u64,
+        last_applied_index: u64,
         canceled: Arc<AtomicBool>,
         notifier: SyncSender<RaftSnapshot>,
         for_balance: bool,
