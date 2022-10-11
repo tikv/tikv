@@ -160,7 +160,7 @@ mod tests {
         let (_server, client, mut rx) = new_rpc_suite();
 
         let (tmp, endpoint) = new_endpoint();
-        let engine = endpoint.engine.clone();
+        let mut engine = endpoint.engine.clone();
         endpoint.region_info.set_regions(vec![
             (b"".to_vec(), b"2".to_vec(), 1),
             (b"2".to_vec(), b"5".to_vec(), 2),
@@ -172,14 +172,14 @@ mod tests {
             let start = alloc_ts();
             let key = format!("{}", i);
             must_prewrite_put(
-                &engine,
+                &mut engine,
                 key.as_bytes(),
                 key.as_bytes(),
                 key.as_bytes(),
                 start,
             );
             let commit = alloc_ts();
-            must_commit(&engine, key.as_bytes(), start, commit);
+            must_commit(&mut engine, key.as_bytes(), start, commit);
         }
 
         let now = alloc_ts();

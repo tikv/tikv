@@ -131,12 +131,6 @@ impl<'a> DecodeProperties for UserCollectedPropertiesDecoder<'a> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Copy)]
-pub enum RangeOffsetKind {
-    Size,
-    Keys,
-}
-
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RangeOffsets {
     pub size: u64,
