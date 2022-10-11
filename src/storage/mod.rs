@@ -9573,7 +9573,8 @@ mod tests {
     #[test]
     fn test_write_in_memory_pessimistic_locks() {
         let txn_ext = Arc::new(TxnExt::default());
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
+        let lock_mgr = DummyLockManager::new();
+        let storage = TestStorageBuilderApiV1::new(lock_mgr.clone())
             .pipelined_pessimistic_lock(true)
             .in_memory_pessimistic_lock(true)
             .build_for_txn(txn_ext.clone())
@@ -9634,7 +9635,7 @@ mod tests {
         rx.recv_timeout(Duration::from_millis(100)).unwrap_err();
         lock_mgr.simulate_timeout_all();
         // The lock-waiting request is cancelled.
-        rx.recv().unwrap();
+        rx.recv().unwrap().unwrap_err();
 
         let (tx, rx) = channel();
         storage
