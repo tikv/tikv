@@ -6092,7 +6092,7 @@ where
     }
 
     fn on_flashback_memory_set(&mut self, is_in_flashback: bool) {
-        // set flashback memory
+        // Set flashback memory
         self.fsm.peer.is_in_flashback = is_in_flashback;
         // Let the leader lease to None to ensure that local reads are not executed.
         self.fsm.peer.leader_lease_mut().expire_remote_lease();

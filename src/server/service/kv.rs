@@ -1704,7 +1704,7 @@ fn future_flashback_to_version<
     let raft_router = Mutex::new(raft_router.clone());
     // TODO: Make this func a two-phase request
     async move {
-        // Send an `AdminCmdType::PrepareFlashback' to prepare the raftstore for the
+        // Send an `AdminCmdType::PrepareFlashback` to prepare the raftstore for the
         // later flashback. This will first block all scheduling, read and write
         // operations, then wait for the latest Raft log to be applied before we start
         // the flashback command. Once invoked, we update the persistence state
@@ -2420,12 +2420,7 @@ async fn send_flashback_msg<T: RaftStoreRouter<E::Local> + 'static, E: Engine>(
     let cb = Callback::write(Box::new(move |resp| {
         if resp.response.get_header().has_error() {
             result_tx.send(false).unwrap();
-            error!(
-                "send flashback msg {:?} to region {} failed, err: {:?}",
-                cmd_type,
-                region_id,
-                resp.response.get_header().get_error(),
-            );
+            error!("send flashback msg failed"; "error" => ?resp.response.get_header().get_error());
             return;
         }
         result_tx.send(true).unwrap();
@@ -2447,7 +2442,7 @@ async fn send_flashback_msg<T: RaftStoreRouter<E::Local> + 'static, E: Engine>(
         },
     ) {
         return Err(Error::Other(box_err!(
-            "flashback router send failed, err: {:?}",
+            "flashback router send failed, error {:?}",
             e
         )));
     }
