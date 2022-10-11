@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use api_version::KvFormat;
+use api_version::{ApiV1, ApiV2, KvFormat};
 use causal_ts::CausalTsProvider;
 use collections::HashMap;
 use engine_traits::DummyFactory;
@@ -511,7 +511,12 @@ fn test_pipelined_pessimistic_lock() {
 
 #[test]
 fn test_async_commit_prewrite_with_stale_max_ts() {
-    let mut cluster = new_server_cluster(0, 2);
+    test_async_commit_prewrite_with_stale_max_ts_impl::<ApiV1>();
+    test_async_commit_prewrite_with_stale_max_ts_impl::<ApiV2>();
+}
+
+fn test_async_commit_prewrite_with_stale_max_ts_impl<F: KvFormat>() {
+    let mut cluster = new_server_cluster_with_api_ver(0, 2, F::TAG);
     cluster.run();
 
     let mut engine = cluster
@@ -522,10 +527,12 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage =
-        TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine.clone(), DummyLockManager::new())
-            .build()
-            .unwrap();
+    let storage = TestStorageBuilder::<_, _, F>::from_engine_and_lock_mgr(
+        engine.clone(),
+        DummyLockManager::new(),
+    )
+    .build()
+    .unwrap();
 
     // Fail to get timestamp from PD at first
     fail::cfg("test_raftstore_get_tso", "pause").unwrap();
@@ -534,6 +541,7 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);
+    ctx.set_api_version(F::TAG);
     ctx.set_region_epoch(cluster.get_region_epoch(1));
     ctx.set_peer(cluster.leader_of_region(1).unwrap());
 
@@ -543,15 +551,15 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
         storage
             .sched_txn_command(
                 commands::Prewrite::new(
-                    vec![Mutation::make_put(Key::from_raw(b"k1"), b"v".to_vec())],
-                    b"k1".to_vec(),
+                    vec![Mutation::make_put(Key::from_raw(b"xk1"), b"v".to_vec())],
+                    b"xk1".to_vec(),
                     10.into(),
                     100,
                     false,
                     2,
                     TimeStamp::default(),
                     TimeStamp::default(),
-                    Some(vec![b"k2".to_vec()]),
+                    Some(vec![b"xk2".to_vec()]),
                     false,
                     AssertionLevel::Off,
                     ctx.clone(),
@@ -576,17 +584,17 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
                     vec![(
-                        Mutation::make_put(Key::from_raw(b"k1"), b"v".to_vec()),
+                        Mutation::make_put(Key::from_raw(b"xk1"), b"v".to_vec()),
                         DoPessimisticCheck,
                     )],
-                    b"k1".to_vec(),
+                    b"xk1".to_vec(),
                     10.into(),
                     100,
                     20.into(),
                     2,
                     TimeStamp::default(),
                     TimeStamp::default(),
-                    Some(vec![b"k2".to_vec()]),
+                    Some(vec![b"xk2".to_vec()]),
                     false,
                     AssertionLevel::Off,
                     ctx.clone(),
@@ -1494,7 +1502,7 @@ fn test_raw_put_key_guard() {
     let node_id = leader.get_id();
     let leader_cm = cluster.sim.rl().get_concurrency_manager(node_id);
     let ts_provider = cluster.sim.rl().get_causal_ts_provider(node_id).unwrap();
-    let ts = ts_provider.get_ts().unwrap();
+    let ts = block_on(ts_provider.async_get_ts()).unwrap();
 
     let env = Arc::new(Environment::new(1));
     let channel =

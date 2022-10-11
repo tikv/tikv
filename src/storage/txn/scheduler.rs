@@ -34,6 +34,7 @@ use std::{
     u64,
 };
 
+use causal_ts::CausalTsProviderImpl;
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use crossbeam::utils::CachePadded;
@@ -52,12 +53,13 @@ use tikv_util::{
     deadline::Deadline, quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE,
 };
 use tracker::{get_tls_tracker_token, set_tls_tracker_token, TrackerToken};
+use txn_types::TimeStamp;
 
 use crate::{
     server::lock_manager::waiter_manager,
     storage::{
         config::Config,
-        get_priority_tag,
+        get_causal_ts, get_priority_tag, get_raw_key_guard,
         kv::{
             self, with_tls_engine, Engine, ExtCallback, FlowStatsReporter, Result as EngineResult,
             SnapContext, Statistics,
@@ -72,13 +74,13 @@ use crate::{
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, ReleasedLock},
         txn::{
             commands::{
-                Command, ReleasedLocks, ResponsePolicy, WriteContext, WriteResult,
+                Command, RawExt, ReleasedLocks, ResponsePolicy, WriteContext, WriteResult,
                 WriteResultLockInfo,
             },
             flow_controller::FlowController,
             latch::{Latches, Lock},
             sched_pool::{tls_collect_query, tls_collect_scan_details, SchedPool},
-            Error, ProcessResult,
+            Error, ErrorInner, ProcessResult,
         },
         types::StorageCallback,
         DynamicConfigs, Error as StorageError, ErrorInner as StorageErrorInner,
@@ -212,6 +214,9 @@ struct SchedulerInner<L: LockManager> {
     running_write_bytes: CachePadded<AtomicUsize>,
 
     flow_controller: Arc<FlowController>,
+
+    // used for apiv2
+    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
 
     control_mutex: Arc<tokio::sync::Mutex<bool>>,
 
@@ -361,6 +366,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         config: &Config,
         dynamic_configs: DynamicConfigs,
         flow_controller: Arc<FlowController>,
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
         reporter: R,
         resource_tag_factory: ResourceTagFactory,
         quota_limiter: Arc<QuotaLimiter>,
@@ -400,6 +406,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             enable_async_apply_prewrite: config.enable_async_apply_prewrite,
             pessimistic_lock_wake_up_delay_duration_ms: dynamic_configs.wake_up_delay_duration_ms,
             flow_controller,
+            causal_ts_provider,
             resource_tag_factory,
             lock_wait_queues,
             quota_limiter,
@@ -951,16 +958,34 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let pipelined =
             task.cmd.can_be_pipelined() && pessimistic_lock_mode == PessimisticLockMode::Pipelined;
         let txn_ext = snapshot.ext().get_txn_ext().cloned();
+        let max_ts_synced = snapshot.ext().is_max_ts_synced();
+        let causal_ts_provider = self.inner.causal_ts_provider.clone();
+        let concurrency_manager = self.inner.concurrency_manager.clone();
+
+        let raw_ext = get_raw_ext(
+            causal_ts_provider,
+            concurrency_manager.clone(),
+            max_ts_synced,
+            &task.cmd,
+        )
+        .await;
+        if let Err(err) = raw_ext {
+            info!("get_raw_ext failed"; "cid" => cid, "err" => ?err);
+            scheduler.finish_with_err(cid, err);
+            return;
+        }
+        let raw_ext = raw_ext.unwrap();
 
         let deadline = task.cmd.deadline();
         let write_result = {
             let _guard = sample.observe_cpu();
             let context = WriteContext {
                 lock_mgr: &self.inner.lock_mgr,
-                concurrency_manager: self.inner.concurrency_manager.clone(),
+                concurrency_manager,
                 extra_op: task.extra_op,
                 statistics,
                 async_apply_prewrite: self.inner.enable_async_apply_prewrite,
+                raw_ext,
             };
             let begin_instant = Instant::now();
             let res = unsafe {
@@ -1385,6 +1410,44 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     }
 }
 
+pub async fn get_raw_ext(
+    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
+    concurrency_manager: ConcurrencyManager,
+    max_ts_synced: bool,
+    cmd: &Command,
+) -> Result<Option<RawExt>, Error> {
+    if causal_ts_provider.is_some() {
+        match cmd {
+            Command::RawCompareAndSwap(_) | Command::RawAtomicStore(_) => {
+                if !max_ts_synced {
+                    return Err(ErrorInner::MaxTimestampNotSynced {
+                        region_id: cmd.ctx().get_region_id(),
+                        start_ts: TimeStamp::zero(),
+                    }
+                    .into());
+                }
+                let key_guard = get_raw_key_guard(&causal_ts_provider, concurrency_manager)
+                    .await
+                    .map_err(|err: StorageError| {
+                        ErrorInner::Other(box_err!("failed to key guard: {:?}", err))
+                    })?;
+                let ts =
+                    get_causal_ts(&causal_ts_provider)
+                        .await
+                        .map_err(|err: StorageError| {
+                            ErrorInner::Other(box_err!("failed to get casual ts: {:?}", err))
+                        })?;
+                return Ok(Some(RawExt {
+                    ts: ts.unwrap(),
+                    key_guard: key_guard.unwrap(),
+                }));
+            }
+            _ => {}
+        }
+    }
+    Ok(None)
+}
+
 #[derive(Debug, PartialEq)]
 enum PessimisticLockMode {
     // Return success only if the pessimistic lock is persisted.
@@ -1450,6 +1513,7 @@ mod tests {
                     wake_up_delay_duration_ms: Arc::new(AtomicU64::new(0)),
                 },
                 Arc::new(FlowController::Singleton(EngineFlowController::empty())),
+                None,
                 DummyReporter,
                 ResourceTagFactory::new_for_test(),
                 Arc::new(QuotaLimiter::default()),
@@ -1597,6 +1661,7 @@ mod tests {
                 wake_up_delay_duration_ms: Arc::new(AtomicU64::new(0)),
             },
             Arc::new(FlowController::Singleton(EngineFlowController::empty())),
+            None,
             DummyReporter,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
@@ -1702,6 +1767,7 @@ mod tests {
                 wake_up_delay_duration_ms: Arc::new(AtomicU64::new(0)),
             },
             Arc::new(FlowController::Singleton(EngineFlowController::empty())),
+            None,
             DummyReporter,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
@@ -1761,6 +1827,7 @@ mod tests {
                 wake_up_delay_duration_ms: Arc::new(AtomicU64::new(0)),
             },
             Arc::new(FlowController::Singleton(EngineFlowController::empty())),
+            None,
             DummyReporter,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
@@ -1828,6 +1895,7 @@ mod tests {
                 wake_up_delay_duration_ms: Arc::new(AtomicU64::new(0)),
             },
             Arc::new(FlowController::Singleton(EngineFlowController::empty())),
+            None,
             DummyReporter,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
@@ -1890,6 +1958,7 @@ mod tests {
                 wake_up_delay_duration_ms: Arc::new(AtomicU64::new(0)),
             },
             Arc::new(FlowController::Singleton(EngineFlowController::empty())),
+            None,
             DummyReporter,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),

@@ -758,7 +758,6 @@ dependencies = [
  "prometheus",
  "prometheus-static-metric",
  "raft",
- "raftstore",
  "serde",
  "serde_derive",
  "slog",
@@ -2650,6 +2649,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "keyed_priority_queue"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d63b6407b66fc81fc539dccf3ddecb669f393c5101b6a2be3976c95099a06e8"
+dependencies = [
+ "indexmap",
+]
+
+[[package]]
 name = "keys"
 version = "0.1.0"
 dependencies = [
@@ -4175,6 +4183,7 @@ dependencies = [
  "bitflags",
  "byteorder",
  "bytes",
+ "causal_ts",
  "collections",
  "concurrency_manager",
  "crc32fast",
@@ -4247,6 +4256,7 @@ dependencies = [
  "engine_traits",
  "error_code",
  "fail",
+ "file_system",
  "futures 0.3.15",
  "keys",
  "kvproto",
@@ -6144,7 +6154,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "6.2.0-alpha"
+version = "6.4.0-alpha"
 dependencies = [
  "anyhow",
  "api_version",
@@ -6179,6 +6189,7 @@ dependencies = [
  "futures-executor",
  "futures-timer",
  "futures-util",
+ "fxhash",
  "getset",
  "grpcio",
  "grpcio-health",
@@ -6189,6 +6200,7 @@ dependencies = [
  "hyper-tls",
  "into_other",
  "itertools",
+ "keyed_priority_queue",
  "keys",
  "kvproto",
  "lazy_static",

@@ -88,7 +88,7 @@ fn build_regexp_from_args<C: Collator>(
         b""
     };
 
-    build_regexp::<C>(pattern, match_type).map(|reg| Some(reg))
+    build_regexp::<C>(pattern, match_type).map(Some)
 }
 
 fn init_regexp_data<C: Collator, const N: usize>(expr: &mut Expr) -> Result<Option<Regex>> {
@@ -111,7 +111,7 @@ fn init_regexp_data<C: Collator, const N: usize>(expr: &mut Expr) -> Result<Opti
         b""
     };
 
-    build_regexp::<C>(pattern, match_type).map(|reg| Some(reg))
+    build_regexp::<C>(pattern, match_type).map(Some)
 }
 
 /// Currently, TiDB only supports regular expressions for utf-8 strings.
