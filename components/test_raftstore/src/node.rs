@@ -325,6 +325,7 @@ impl Simulator for NodeCluster {
             AutoSplitController::default(),
             cm,
             CollectorRegHandle::new_for_test(),
+            None,
         )?;
         assert!(
             engines

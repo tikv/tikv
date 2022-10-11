@@ -758,7 +758,6 @@ dependencies = [
  "prometheus",
  "prometheus-static-metric",
  "raft",
- "raftstore",
  "serde",
  "serde_derive",
  "slog",
@@ -4184,6 +4183,7 @@ dependencies = [
  "bitflags",
  "byteorder",
  "bytes",
+ "causal_ts",
  "collections",
  "concurrency_manager",
  "crc32fast",
@@ -4256,6 +4256,7 @@ dependencies = [
  "engine_traits",
  "error_code",
  "fail",
+ "file_system",
  "futures 0.3.15",
  "keys",
  "kvproto",
@@ -6153,7 +6154,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "6.2.0-alpha"
+version = "6.4.0-alpha"
 dependencies = [
  "anyhow",
  "api_version",
