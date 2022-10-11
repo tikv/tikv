@@ -2327,7 +2327,7 @@ fn collect_engine_size<EK: KvEngine, ER: RaftEngine>(
             Err(e) => {
                 error!(
                     "get disk stat for raftdb failed";
-                    "raftdb path" => raft_path.clone(),
+                    "raftdb path" => raft_path,
                     "err" => ?e
                 );
                 return None;
