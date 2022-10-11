@@ -16,7 +16,7 @@
 //! - Applied result are sent back to peer fsm, and update memory state in
 //!   `on_apply_res`.
 
-use std::cmp;
+use std::{cmp, collections::VecDeque};
 
 use batch_system::{Fsm, FsmScheduler, Mailbox};
 use engine_traits::{KvEngine, RaftEngine, WriteBatch, WriteOptions};
@@ -83,7 +83,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> PeerFsmDelegate<'a, EK, ER, T> {
                 .peer_mut()
                 .on_write_command(self.store_ctx, req, ch)
         } else if req.has_admin_request() {
-            // self.on_admin_request(req, ch)
+            self.fsm
+                .peer_mut()
+                .on_admin_request(self.store_ctx, req, ch)
         } else if req.has_status_request() {
             error!(self.fsm.logger(), "status command should be sent by Query");
         }
@@ -103,7 +105,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let tablet = self.tablet().clone();
         let logger = self.logger.clone();
         let (apply_scheduler, mut apply_fsm) = ApplyFsm::new(
-            0, // todo(SpadeA): fix it.
+            store_ctx.store_id,
             region_state,
             mailbox,
             tablet,
@@ -234,7 +236,28 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .send(ApplyTask::CommittedEntries(apply));
     }
 
-    pub fn on_apply_res(&mut self, apply_res: ApplyRes) {
+    fn on_ready_result<T>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        exec_results: &mut VecDeque<ExecResult>,
+    ) {
+        // handle executing commiited log results
+        while let Some(result) = exec_results.pop_front() {
+            match result {
+                ExecResult::SplitRegion {
+                    regions,
+                    derived,
+                    new_split_regions,
+                } => self.on_ready_split_region(store_ctx, derived, regions, new_split_regions),
+            }
+        }
+    }
+
+    pub fn on_apply_res<T>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        mut apply_res: ApplyRes,
+    ) {
         if !self.serving() {
             return;
         }
@@ -243,6 +266,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // TODO: handle admin side effects like split/merge.
             return;
         }
+
+        self.on_ready_result(store_ctx, &mut apply_res.exec_res);
+
         self.raft_group_mut()
             .advance_apply_to(apply_res.applied_index);
         let is_leader = self.is_leader();
@@ -257,6 +283,34 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         } else {
             // TODO: handle read.
         }
+    }
+
+    fn on_admin_request<T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        req: RaftCmdRequest,
+        ch: CmdResChannel,
+    ) {
+        let res = self.propose_command(ctx, req);
+        self.post_propose_admin(ctx, res, vec![ch]);
+    }
+
+    fn post_propose_admin<T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        res: Result<u64>,
+        ch: Vec<CmdResChannel>,
+    ) {
+        let idx = match res {
+            Ok(i) => i,
+            Err(e) => {
+                ch.report_error(cmd_resp::err_resp(e, self.term()));
+                return;
+            }
+        };
+        let p = Proposal::new(idx, self.term(), ch);
+        self.enqueue_pending_proposal(ctx, p);
+        self.set_has_ready();
     }
 }
 
@@ -421,6 +475,7 @@ impl<EK: KvEngine, ER: RaftEngine, R: ApplyResReporter> Apply<EK, ER, R> {
         if self.reset_state_changed() {
             apply_res.region_state = Some(self.region_state().clone());
         }
+        apply_res.exec_res = self.take_exec_result();
         self.res_reporter().report(apply_res);
     }
 }

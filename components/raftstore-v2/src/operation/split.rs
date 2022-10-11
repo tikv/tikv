@@ -23,7 +23,7 @@ use raftstore::{
         },
         metrics::PEER_ADMIN_CMD_COUNTER,
         util::{self, KeysInfoFormatter},
-        ReadDelegate, TrackVer, Transport, RAFT_INIT_LOG_INDEX,
+        ReadDelegate, ReadProgress, TrackVer, Transport, RAFT_INIT_LOG_INDEX,
     },
     Result,
 };
@@ -32,6 +32,7 @@ use tikv_util::box_err;
 use time::Timespec;
 
 use crate::{
+    batch::StoreContext,
     fsm::{PeerFsm, PeerFsmDelegate},
     raft::{write_initial_states, write_peer_state, Apply, Peer, Storage},
     router::{ApplyRes, ExecResult, PeerMsg},
@@ -180,9 +181,10 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
     }
 }
 
-impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
-    pub fn on_ready_split_region(
+impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    pub fn on_ready_split_region<T>(
         &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
         derived: Region,
         regions: Vec<Region>,
         new_split_regions: HashMap<u64, apply::NewSplitPeer>,
@@ -194,8 +196,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         // later. And the locks belonging to the old region will stay in the original
         // map.
         let region_locks = {
-            let mut pessimistic_locks = self.fsm.peer().txn_ext.pessimistic_locks.write();
-            info!(self.store_ctx.logger, "moving {} locks to new regions", pessimistic_locks.len(); "region_id"=> region_id);
+            let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
+            info!(self.logger, "moving {} locks to new regions", pessimistic_locks.len(); "region_id"=> region_id);
             // Update the version so the concurrent reader will fail due to EpochNotMatch
             // instead of PessimisticLockNotFound.
             pessimistic_locks.version = derived.get_region_epoch().get_version();
@@ -204,33 +206,20 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
         // Roughly estimate the size and keys for new regions.
         let new_region_count = regions.len() as u64;
-        let estimated_size = self
-            .fsm
-            .peer()
-            .approximate_size()
-            .map(|v| v / new_region_count);
-        let estimated_keys = self
-            .fsm
-            .peer()
-            .approximate_keys()
-            .map(|v| v / new_region_count);
-        let mut meta = self.store_ctx.store_meta.lock().unwrap();
-        meta.set_region(
-            self.store_ctx.coprocessor_host.as_ref().unwrap(),
-            derived,
-            self.fsm.peer_mut(),
-            RegionChangeReason::Split,
-        );
-        self.fsm.peer_mut().post_split();
+        let estimated_size = self.approximate_size().map(|v| v / new_region_count);
+        let estimated_keys = self.approximate_keys().map(|v| v / new_region_count);
+        let mut meta = store_ctx.store_meta.lock().unwrap();
+        meta.set_region(derived, self, RegionChangeReason::Split);
+        self.post_split();
 
         // It's not correct anymore, so set it to false to schedule a split
         // check task.
-        self.fsm.peer_mut().set_may_skip_split_check(false);
+        self.set_may_skip_split_check(false);
 
-        let is_leader = self.fsm.peer().is_leader();
+        let is_leader = self.is_leader();
         if is_leader {
-            self.fsm.peer_mut().set_approximate_size(estimated_size);
-            self.fsm.peer_mut().set_approximate_keys(estimated_keys);
+            self.set_approximate_size(estimated_size);
+            self.set_approximate_keys(estimated_keys);
 
             // todo(SpadeA): report regions to PD
 
@@ -259,10 +248,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
         let last_key = enc_end_key(regions.last().unwrap());
         if meta.region_ranges.remove(&last_key).is_none() {
-            panic!(
-                "{:?} original region should exist",
-                self.store_ctx.logger.list()
-            );
+            panic!("{:?} original region should exist", self.logger.list());
         }
         let last_region_id = regions.last().unwrap().get_id();
         for (new_region, locks) in regions.into_iter().zip(region_locks) {
@@ -278,7 +264,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 // recover the auto_compaction
                 // todo(SpadeA): is it possible that the previous setting for
                 // disable_auto_compaction is true?
-                let tablet = self.fsm.peer_mut().tablet_mut().latest().unwrap().clone();
+                let tablet = self.tablet_mut().latest().unwrap().clone();
                 for &cf in DATA_CFS {
                     let mut cf_option = tablet.get_options_cf(cf).unwrap();
                     cf_option.set_disable_auto_compactions(false);
@@ -295,7 +281,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
             // Now all checking passed.
             {
-                let mut pending_create_peers = self.store_ctx.pending_create_peers.lock().unwrap();
+                let mut pending_create_peers = store_ctx.pending_create_peers.lock().unwrap();
                 assert_eq!(
                     pending_create_peers.remove(&new_region_id),
                     Some((new_split_peer.peer_id, true))
@@ -304,7 +290,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
             // Insert new regions and validation
             info!(
-                self.store_ctx.logger,
+                self.logger,
                 "insert new region";
                 "region_id" => new_region_id,
                 "region" => ?new_region,
@@ -323,31 +309,28 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                         new_region_id, r, new_region
                     );
                 }
-                self.store_ctx.router.close(new_region_id);
+                store_ctx.router.close(new_region_id);
             }
 
             let storage = Storage::new(
                 new_region_id,
-                self.store_ctx.store.id,
-                self.store_ctx.engine.clone(),
-                self.store_ctx.log_fetch_scheduler.clone(),
-                &self.store_ctx.logger,
+                store_ctx.store_id,
+                store_ctx.engine.clone(),
+                store_ctx.log_fetch_scheduler.clone(),
+                &store_ctx.logger,
             )
             .unwrap_or_else(|e| panic!("fail to create storage: {:?}", e))
             .unwrap();
 
-            let (sender, mut new_peer) = match PeerFsm::new(
-                &self.store_ctx.cfg,
-                self.store_ctx.tablet_factory.as_ref(),
-                storage,
-            ) {
-                Ok((sender, new_peer)) => (sender, new_peer),
-                Err(e) => {
-                    // peer information is already written into db, can't recover.
-                    // there is probably a bug.
-                    panic!("create new split region {:?} err {:?}", new_region, e);
-                }
-            };
+            let (sender, mut new_peer) =
+                match PeerFsm::new(&store_ctx.cfg, store_ctx.tablet_factory.as_ref(), storage) {
+                    Ok((sender, new_peer)) => (sender, new_peer),
+                    Err(e) => {
+                        // peer information is already written into db, can't recover.
+                        // there is probably a bug.
+                        panic!("create new split region {:?} err {:?}", new_region, e);
+                    }
+                };
 
             // todo(SpadeA)
             // let mut replication_state =
@@ -364,9 +347,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
             // New peer derive write flow from parent region,
             // this will be used by balance write flow.
-            new_peer
-                .peer_mut()
-                .set_peer_stat(self.fsm.peer().peer_stat().clone());
+            new_peer.peer_mut().set_peer_stat(self.peer_stat().clone());
             let last_compacted_idx = new_peer
                 .peer()
                 .storage()
@@ -393,7 +374,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
             meta.tablet_caches
                 .insert(new_region_id, new_peer.peer().tablet().clone());
-            new_peer.peer().activate(self.store_ctx);
+            new_peer.peer().activate(store_ctx);
             meta.regions.insert(new_region_id, new_region.clone());
             let not_exist = meta
                 .region_ranges
@@ -410,7 +391,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 // check again after split.
                 new_peer
                     .peer_mut()
-                    .set_size_diff_hint(self.store_ctx.cfg.region_split_check_diff().0);
+                    .set_size_diff_hint(store_ctx.cfg.region_split_check_diff().0);
             }
 
             // recover the auto_compaction
@@ -422,10 +403,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 cf_option.set_disable_auto_compactions(false);
             }
 
-            let mailbox =
-                BasicMailbox::new(sender, new_peer, self.store_ctx.router.state_cnt().clone());
-            self.store_ctx.router.register(new_region_id, mailbox);
-            self.store_ctx
+            let mailbox = BasicMailbox::new(sender, new_peer, store_ctx.router.state_cnt().clone());
+            store_ctx.router.register(new_region_id, mailbox);
+            store_ctx
                 .router
                 .force_send(new_region_id, PeerMsg::Start)
                 .unwrap();
@@ -436,7 +416,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     .swap_remove_front(|m| m.get_to_peer() == &meta_peer)
                 {
                     let peer_msg = PeerMsg::RaftMessage(Box::new(msg));
-                    if let Err(e) = self.store_ctx.router.force_send(new_region_id, peer_msg) {
+                    if let Err(e) = store_ctx.router.force_send(new_region_id, peer_msg) {
                         // warn!("handle first requset failed"; "region_id" =>
                         // region_id, "error" => ?e);
                     }
@@ -445,7 +425,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         }
         drop(meta);
         if is_leader {
-            self.on_split_region_check_tick();
+            // self.on_split_region_check_tick();
         }
     }
 }

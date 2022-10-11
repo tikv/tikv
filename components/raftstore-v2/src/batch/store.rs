@@ -16,6 +16,7 @@ use crossbeam::channel::{Sender, TrySendError};
 use engine_traits::{Engines, KvEngine, RaftEngine, TabletFactory};
 use file_system::{set_io_type, IoType};
 use futures::{compat::Future01CompatExt, FutureExt};
+use keys::enc_end_key;
 use kvproto::{
     metapb::{self, Store},
     raft_serverpb::{PeerState, RaftMessage},
@@ -52,7 +53,7 @@ use crate::{
 
 /// A per-thread context shared by the [`StoreFsm`] and multiple [`PeerFsm`]s.
 pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
-    pub store: metapb::Store,
+    pub store_id: u64,
     /// A logger without any KV. It's clean for creating new PeerFSM.
     pub logger: Logger,
     /// The transport for sending messages to peers on other stores.
@@ -75,8 +76,6 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub tablet_factory: Arc<dyn TabletFactory<EK>>,
     pub apply_pool: FuturePool,
     pub log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
-    // todo(SpadeA): remove option
-    pub coprocessor_host: Option<CoprocessorHost<EK>>,
     /// region_id -> (peer_id, is_splitting)
     /// Used for handling race between splitting and creating new peer.
     /// An uninitialized peer can be replaced to the one from splitting iff they
@@ -283,6 +282,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
     fn init(&self) -> Result<HashMap<u64, SenderFsmPair<EK, ER>>> {
         let mut regions = HashMap::default();
         let cfg = self.cfg.value();
+        let mut meta = self.store_meta.lock().unwrap();
         self.engine
             .for_each_raft_group::<Error, _>(&mut |region_id| {
                 assert_ne!(region_id, INVALID_ID);
@@ -296,8 +296,14 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                     Some(p) => p,
                     None => return Ok(()),
                 };
-                let pair = PeerFsm::new(&cfg, &*self.tablet_factory, storage)?;
-                let prev = regions.insert(region_id, pair);
+                let (sender, peer_fsm) = PeerFsm::new(&cfg, &*self.tablet_factory, storage)?;
+                let region = peer_fsm.as_ref().peer().region().clone();
+                meta.region_ranges.insert(enc_end_key(&region), region_id);
+                meta.regions.insert(region_id, region);
+                meta.region_read_progress
+                    .insert(region_id, peer_fsm.as_ref().peer().read_progress().clone());
+
+                let prev = regions.insert(region_id, (sender, peer_fsm));
                 if let Some((_, p)) = prev {
                     return Err(box_err!(
                         "duplicate region {:?} vs {:?}",
@@ -305,6 +311,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                         regions[&region_id].1.logger().list()
                     ));
                 }
+
                 Ok(())
             })?;
         self.clean_up_tablets(&regions)?;
@@ -329,7 +336,7 @@ where
     fn build(&mut self, priority: batch_system::Priority) -> Self::Handler {
         let cfg = self.cfg.value().clone();
         let poll_ctx = StoreContext {
-            store: metapb::Store::default(), // todo(SpadeA)
+            store_id: self.store_id,
             logger: self.logger.clone(),
             trans: self.trans.clone(),
             current_time: None,
@@ -345,7 +352,6 @@ where
             tablet_factory: self.tablet_factory.clone(),
             apply_pool: self.apply_pool.clone(),
             log_fetch_scheduler: self.log_fetch_scheduler.clone(),
-            coprocessor_host: None,
             pending_create_peers: Arc::default(),
         };
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());

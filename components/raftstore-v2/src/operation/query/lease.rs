@@ -217,7 +217,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
-    fn maybe_update_read_progress(&self, reader: &mut ReadDelegate, progress: ReadProgress) {
+    pub(crate) fn maybe_update_read_progress(
+        &self,
+        reader: &mut ReadDelegate,
+        progress: ReadProgress,
+    ) {
         debug!(
             self.logger,
             "update read progress";

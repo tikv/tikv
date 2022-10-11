@@ -66,7 +66,6 @@ where
     #[inline]
     pub fn set_region<ER: RaftEngine>(
         &mut self,
-        host: &CoprocessorHost<E>,
         region: Region,
         peer: &mut Peer<E, ER>,
         reason: RegionChangeReason,
@@ -74,11 +73,10 @@ where
         let prev = self.regions.insert(region.get_id(), region.clone());
         if prev.map_or(true, |r| r.get_id() != region.get_id()) {
             // TODO: may not be a good idea to panic when holding a lock.
-            // panic!("{} region corrupted", peer.tag);
-            unimplemented!()
+            panic!("{:?} region corrupted", peer.logger.list());
         }
         let reader = self.readers.get_mut(&region.get_id()).unwrap();
-        peer.set_region(host, reader, region, reason);
+        peer.set_region(reader, region, reason);
     }
 }
 

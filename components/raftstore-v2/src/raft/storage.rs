@@ -103,6 +103,11 @@ impl<ER> Storage<ER> {
     }
 
     #[inline]
+    pub fn set_region(&mut self, region: metapb::Region) {
+        self.region_state.set_region(region);
+    }
+
+    #[inline]
     pub fn peer(&self) -> &metapb::Peer {
         &self.peer
     }

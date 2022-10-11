@@ -242,7 +242,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     self.on_command(cmd.request, cmd.ch)
                 }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
-                PeerMsg::ApplyRes(res) => self.fsm.peer.on_apply_res(res),
+                PeerMsg::ApplyRes(res) => self.fsm.peer.on_apply_res(self.store_ctx, res),
                 PeerMsg::Start => self.on_start(),
                 PeerMsg::Noop => unimplemented!(),
                 PeerMsg::Persisted {
@@ -260,9 +260,5 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         }
         // TODO: instead of propose pending commands immediately, we should use timeout.
         self.fsm.peer.propose_pending_command(self.store_ctx);
-    }
-
-    pub fn on_split_region_check_tick(&mut self) {
-        unimplemented!()
     }
 }

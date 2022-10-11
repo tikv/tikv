@@ -21,7 +21,7 @@ use raftstore::{
         metrics::PEER_PROPOSE_LOG_SIZE_HISTOGRAM,
         util::{Lease, RegionReadProgress},
         Config, EntryStorage, PeerStat, ProposalQueue, RaftlogFetchTask, ReadDelegate,
-        ReadIndexQueue, ReadIndexRequest, Transport, TxnExt, WriteRouter,
+        ReadIndexQueue, ReadIndexRequest, ReadProgress, Transport, TxnExt, WriteRouter,
     },
     Error,
 };
@@ -98,6 +98,13 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     pending_reads: ReadIndexQueue<QueryResChannel>,
     read_progress: Arc<RegionReadProgress>,
     leader_lease: Lease,
+
+    /// Whether this peer is destroyed asynchronously.
+    /// If it's true,
+    /// - when merging, its data in storeMeta will be removed early by the
+    ///   target peer.
+    /// - all read requests must be rejected.
+    pending_remove: bool,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -192,6 +199,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 cfg.raft_store_max_leader_lease(),
                 cfg.renew_leader_lease_advance_duration(),
             ),
+            pending_remove: false,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -223,12 +231,40 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// has been preserved in a durable device.
     pub fn set_region(
         &mut self,
-        host: &CoprocessorHost<impl KvEngine>,
         reader: &mut ReadDelegate,
         region: metapb::Region,
         reason: RegionChangeReason,
     ) {
-        unimplemented!()
+        if self.region().get_region_epoch().get_version() < region.get_region_epoch().get_version()
+        {
+            // Epoch version changed, disable read on the local reader for this region.
+            self.leader_lease.expire_remote_lease();
+        }
+        self.storage_mut().set_region(region.clone());
+        let progress = ReadProgress::region(region);
+        // Always update read delegate's region to avoid stale region info after a
+        // follower becoming a leader.
+        self.maybe_update_read_progress(reader, progress);
+
+        // Update leader info
+        self.read_progress
+            .update_leader_info(self.leader_id(), self.term(), self.region());
+
+        {
+            let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
+            pessimistic_locks.term = self.term();
+            pessimistic_locks.version = self.region().get_region_epoch().get_version();
+        }
+
+        // todo: CoprocessorHost::new needs a CasualRouter where v2 does not
+        // have this now.
+        // if !self.pending_remove {
+        //     host.on_region_changed(
+        //         self.region(),
+        //         RegionChangeEvent::Update(reason),
+        //         self.get_role(),
+        //     )
+        // }
     }
 
     #[inline]
@@ -482,11 +518,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn activate<T>(&self, ctx: &StoreContext<EK, ER, T>) {
         // self.schedule_apply_fsm(ctx)
 
-        ctx.coprocessor_host.as_ref().unwrap().on_region_changed(
-            self.region(),
-            RegionChangeEvent::Create,
-            self.get_role(),
-        );
+        // todo: CoprocessorHost::new needs a CasualRouter where v2 does not
+        // have this now.
+        // ctx.coprocessor_host.on_region_changed(
+        //     self.region(),
+        //     RegionChangeEvent::Create,
+        //     self.get_role(),
+        // );
         // self.maybe_gen_approximate_buckets(ctx);
     }
 
