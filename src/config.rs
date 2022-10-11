@@ -100,7 +100,8 @@ const LOCKCF_MIN_MEM: usize = 256 * MIB as usize;
 const LOCKCF_MAX_MEM: usize = GIB as usize;
 const RAFT_MIN_MEM: usize = 256 * MIB as usize;
 const RAFT_MAX_MEM: usize = 2 * GIB as usize;
-const LAST_CONFIG_FILE: &str = "last_tikv.toml";
+/// Configs that actually took effect in the last run
+pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
 const TMP_CONFIG_FILE: &str = "tmp_tikv.toml";
 const MAX_BLOCK_SIZE: usize = 32 * MIB as usize;
 
@@ -2562,11 +2563,10 @@ pub struct CdcConfig {
     pub sink_memory_quota: ReadableSize,
     pub old_value_cache_memory_quota: ReadableSize,
 
-    /// Threshold of raw regions' resolved_ts outlier detection. 60s by default.
+    // Deprecated! preserved for compatibility check.
     #[online_config(skip)]
     #[doc(hidden)]
     pub raw_min_ts_outlier_threshold: ReadableDuration,
-    // Deprecated! preserved for compatibility check.
     #[online_config(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]

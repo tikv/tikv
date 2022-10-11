@@ -113,7 +113,7 @@ pub mod tests {
     };
 
     pub fn must_success<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         primary_key: &[u8],
         start_ts: impl Into<TimeStamp>,
         advise_ttl: u64,
@@ -139,6 +139,7 @@ pub mod tests {
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
                     async_apply_prewrite: false,
+                    raw_ext: None,
                 },
             )
             .unwrap();
@@ -154,7 +155,7 @@ pub mod tests {
     }
 
     pub fn must_err<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         primary_key: &[u8],
         start_ts: impl Into<TimeStamp>,
         advise_ttl: u64,
@@ -180,6 +181,7 @@ pub mod tests {
                         extra_op: Default::default(),
                         statistics: &mut Default::default(),
                         async_apply_prewrite: false,
+                        raw_ext: None,
                     },
                 )
                 .is_err()
@@ -188,50 +190,50 @@ pub mod tests {
 
     #[test]
     fn test_txn_heart_beat() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
         let (k, v) = (b"k1", b"v1");
 
-        let test = |ts| {
+        fn test(ts: u64, k: &[u8], engine: &mut impl Engine) {
             // Do nothing if advise_ttl is less smaller than current TTL.
-            must_success(&engine, k, ts, 90, 100);
+            must_success(engine, k, ts, 90, 100);
             // Return the new TTL if the TTL when the TTL is updated.
-            must_success(&engine, k, ts, 110, 110);
+            must_success(engine, k, ts, 110, 110);
             // The lock's TTL is updated and persisted into the db.
-            must_success(&engine, k, ts, 90, 110);
+            must_success(engine, k, ts, 90, 110);
             // Heart beat another transaction's lock will lead to an error.
-            must_err(&engine, k, ts - 1, 150);
-            must_err(&engine, k, ts + 1, 150);
+            must_err(engine, k, ts - 1, 150);
+            must_err(engine, k, ts + 1, 150);
             // The existing lock is not changed.
-            must_success(&engine, k, ts, 90, 110);
-        };
+            must_success(engine, k, ts, 90, 110);
+        }
 
         // No lock.
-        must_err(&engine, k, 5, 100);
+        must_err(&mut engine, k, 5, 100);
 
         // Create a lock with TTL=100.
         // The initial TTL will be set to 0 after calling must_prewrite_put. Update it
         // first.
-        must_prewrite_put(&engine, k, v, k, 5);
-        must_locked(&engine, k, 5);
-        must_success(&engine, k, 5, 100, 100);
+        must_prewrite_put(&mut engine, k, v, k, 5);
+        must_locked(&mut engine, k, 5);
+        must_success(&mut engine, k, 5, 100, 100);
 
-        test(5);
+        test(5, k, &mut engine);
 
-        must_locked(&engine, k, 5);
-        must_commit(&engine, k, 5, 10);
-        must_unlocked(&engine, k);
+        must_locked(&mut engine, k, 5);
+        must_commit(&mut engine, k, 5, 10);
+        must_unlocked(&mut engine, k);
 
         // No lock.
-        must_err(&engine, k, 5, 100);
-        must_err(&engine, k, 10, 100);
+        must_err(&mut engine, k, 5, 100);
+        must_err(&mut engine, k, 10, 100);
 
-        must_acquire_pessimistic_lock(&engine, k, k, 8, 15);
-        must_pessimistic_locked(&engine, k, 8, 15);
-        must_success(&engine, k, 8, 100, 100);
+        must_acquire_pessimistic_lock(&mut engine, k, k, 8, 15);
+        must_pessimistic_locked(&mut engine, k, 8, 15);
+        must_success(&mut engine, k, 8, 100, 100);
 
-        test(8);
+        test(8, k, &mut engine);
 
-        must_pessimistic_locked(&engine, k, 8, 15);
+        must_pessimistic_locked(&mut engine, k, 8, 15);
     }
 }

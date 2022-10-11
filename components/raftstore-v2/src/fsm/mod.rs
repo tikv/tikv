@@ -9,6 +9,6 @@ mod apply;
 mod peer;
 mod store;
 
-pub use apply::{ApplyFsm, ApplyFsmDelegate};
+pub use apply::{ApplyFsm, ApplyResReporter, ApplyScheduler};
 pub use peer::{PeerFsm, PeerFsmDelegate, SenderFsmPair};
 pub use store::{Store, StoreFsm, StoreFsmDelegate, StoreMeta};

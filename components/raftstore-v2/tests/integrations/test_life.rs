@@ -11,13 +11,12 @@ use engine_traits::{RaftEngine, RaftEngineReadOnly};
 use futures::executor::block_on;
 use kvproto::{
     metapb,
-    raft_cmdpb::{RaftCmdRequest, StatusCmdType},
     raft_serverpb::{PeerState, RaftMessage},
 };
-use raftstore::store::util::new_peer;
 use raftstore_v2::router::{DebugInfoChannel, PeerMsg};
+use tikv_util::store::new_peer;
 
-use crate::{Cluster, TestRouter};
+use crate::cluster::{Cluster, TestRouter};
 
 fn assert_peer_not_exist(region_id: u64, peer_id: u64, router: &TestRouter) {
     let timer = Instant::now();
@@ -119,7 +118,7 @@ fn test_life_by_message() {
         .must_query_debug_info(test_region_id, timeout)
         .unwrap();
     assert_eq!(meta.raft_status.id, test_peer_id);
-    let raft_engine = &cluster.node(0).running_state.as_ref().unwrap().raft_engine;
+    let raft_engine = &cluster.node(0).running_state().unwrap().raft_engine;
     raft_engine.get_raft_state(test_region_id).unwrap().unwrap();
     raft_engine
         .get_apply_state(test_region_id)
@@ -137,7 +136,7 @@ fn test_life_by_message() {
     cluster.restart(0);
     let router = cluster.router(0);
     assert_peer_not_exist(test_region_id, test_peer_id, &router);
-    let raft_engine = &cluster.node(0).running_state.as_ref().unwrap().raft_engine;
+    let raft_engine = &cluster.node(0).running_state().unwrap().raft_engine;
     assert_tombstone(raft_engine, test_region_id, &new_peer(1, test_peer_id));
 }
 
