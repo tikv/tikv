@@ -9,6 +9,12 @@ pub struct PriorityQueue<K: Eq + Hash + Copy, T: Ord> {
     heap: Vec<Option<(K, T)>>,
 }
 
+impl<K: Eq + Hash + Copy, T: Ord> Default for PriorityQueue<K, T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<K: Eq + Hash + Copy, T: Ord> PriorityQueue<K, T> {
     pub fn new() -> Self {
         Self {
@@ -109,7 +115,7 @@ impl<K: Eq + Hash + Copy, T: Ord> PriorityQueue<K, T> {
     }
 
     pub fn pop(&mut self) -> Option<T> {
-        if self.heap.len() == 0 {
+        if self.heap.is_empty() {
             return None;
         }
         if self.heap.len() == 1 {
@@ -139,7 +145,7 @@ impl<K: Eq + Hash + Copy, T: Ord> PriorityQueue<K, T> {
             return Some(item);
         }
         let (tail_key, tail_item) = self.heap[index].as_ref().unwrap();
-        *self.index_map.get_mut(&tail_key).unwrap() = index;
+        *self.index_map.get_mut(tail_key).unwrap() = index;
 
         let less_than_parent = if index > 0 {
             let parent = Self::parent(index);
@@ -171,9 +177,6 @@ impl<K: Eq + Hash + Copy, T: Ord> PriorityQueue<K, T> {
 
 #[cfg(test)]
 mod tests {
-    extern crate rand;
-    extern crate test;
-
     use std::{
         collections::{BinaryHeap, VecDeque},
         fmt::Debug,
