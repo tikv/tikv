@@ -7,6 +7,7 @@ mod response_channel;
 
 pub(crate) use self::internal_message::ApplyTask;
 pub use self::{
+    imp::RaftRouter,
     internal_message::{ApplyRes, GenSnapTask},
     message::{PeerMsg, PeerTick, RaftRequest, StoreMsg, StoreTick},
     response_channel::{

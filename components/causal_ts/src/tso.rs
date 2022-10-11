@@ -622,9 +622,6 @@ impl<C: PdClient + 'static> CausalTsProvider for BatchTsoProvider<C> {
     }
 
     async fn async_flush(&self) -> Result<TimeStamp> {
-        fail::fail_point!("causal_ts_provider_flush", |_| Err(box_err!(
-            "async_flush err(failpoints)"
-        )));
         self.renew_tso_batch(true, TsoBatchRenewReason::flush)
             .await?;
         // TODO: Return the first tso by renew_tso_batch instead of async_get_ts

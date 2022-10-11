@@ -19,7 +19,7 @@ use kvproto::{
 };
 use protobuf::Message;
 use raft::{
-    eraftpb::{ConfState, Entry, HardState, Snapshot},
+    eraftpb::{ConfState, Entry, Snapshot},
     GetEntriesContext, RaftState, INVALID_ID,
 };
 use raftstore::store::{
@@ -409,14 +409,6 @@ impl<ER: RaftEngine> Storage<ER> {
             receiver,
         };
 
-        let store_id = self
-            .region()
-            .get_peers()
-            .iter()
-            .find(|p| p.id == to)
-            .map(|p| p.store_id)
-            .unwrap_or(0);
-
         let task = GenSnapTask::new(
             self.region().get_id(),
             self.get_tablet_index(),
@@ -515,7 +507,13 @@ mod tests {
         type Task = RegionTask;
         fn run(&mut self, task: RegionTask) {
             match task {
-                RegionTask::GenTabletSnapshot { notifier, .. } => {
+                RegionTask::GenTabletSnapshot {
+                    notifier, canceled, ..
+                } => {
+                    if canceled.load(Ordering::SeqCst) {
+                        drop(notifier);
+                        return;
+                    }
                     notifier.send(RaftSnapshot::default()).unwrap();
                 }
                 _ => unreachable!(),
@@ -602,5 +600,19 @@ mod tests {
         assert_eq!(snap.get_metadata().get_index(), 0);
         assert_eq!(snap.get_metadata().get_term(), 0);
         assert!(snap.get_data().is_empty());
+
+        // cancel snapshot
+        let snap = s.snapshot(0, 0);
+        let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
+        assert_eq!(snap.unwrap_err(), unavailable);
+        let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
+        gen_task.generate_and_schedule_snapshot(RegionLocalState::default(), 0, 0, &sched);
+        s.cancel_generating_snap(None);
+        let snap = match *s.snap_state.borrow() {
+            SnapState::Generating { ref receiver, .. } => {
+                assert_eq!(receiver.recv_timeout(Duration::from_secs(1)).is_err(), true);
+            }
+            ref s => panic!("unexpected state: {:?}", s),
+        };
     }
 }
