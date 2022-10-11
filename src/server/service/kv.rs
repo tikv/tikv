@@ -2436,8 +2436,6 @@ async fn send_flashback_msg<T: RaftStoreRouter<E::Local> + 'static, E: Engine>(
     req.mut_header()
         .set_region_epoch(ctx.get_region_epoch().clone());
     req.mut_header().set_peer(ctx.get_peer().clone());
-    req.mut_header()
-        .set_flags(WriteBatchFlags::FLASHBACK.bits());
     req.set_admin_request(admin);
     req.mut_header()
         .set_flags(WriteBatchFlags::FLASHBACK.bits());

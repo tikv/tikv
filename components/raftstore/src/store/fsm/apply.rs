@@ -1562,7 +1562,7 @@ where
             AdminCmdType::CommitMerge => self.exec_commit_merge(ctx, request),
             AdminCmdType::RollbackMerge => self.exec_rollback_merge(ctx, request),
             AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => {
-                self.set_flashback_state_persist(ctx, request)
+                self.exec_flashback(ctx, request)
             }
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
         }?;
@@ -2808,7 +2808,7 @@ where
         ))
     }
 
-    fn set_flashback_state_persist(
+    fn exec_flashback(
         &self,
         ctx: &mut ApplyContext<EK>,
         req: &AdminRequest,

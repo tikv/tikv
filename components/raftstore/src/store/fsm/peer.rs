@@ -4747,7 +4747,7 @@ where
                 ExecResult::IngestSst { ssts } => self.on_ingest_sst_result(ssts),
                 ExecResult::TransferLeader { term } => self.on_transfer_leader(term),
                 ExecResult::SetFlashbackState { region } => {
-                    self.on_flashback_memory_set(region.get_is_in_flashback())
+                    self.on_set_flashback_state(region.get_is_in_flashback())
                 }
             }
         }
@@ -6091,7 +6091,7 @@ where
         self.fsm.has_ready = true;
     }
 
-    fn on_flashback_memory_set(&mut self, is_in_flashback: bool) {
+    fn on_set_flashback_state(&mut self, is_in_flashback: bool) {
         // Set flashback memory
         self.fsm.peer.is_in_flashback = is_in_flashback;
         // Let the leader lease to None to ensure that local reads are not executed.
