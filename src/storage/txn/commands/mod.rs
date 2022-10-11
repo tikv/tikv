@@ -396,7 +396,7 @@ pub struct WriteResult {
 }
 
 pub struct WriteResultLockInfo {
-    pub lock: lock_manager::LockDigest,
+    pub lock_digest: lock_manager::LockDigest,
     pub key: Key,
     pub lock_info_pb: LockInfo,
     pub parameters: PessimisticLockParameters,
@@ -410,7 +410,7 @@ impl WriteResultLockInfo {
         };
         let key = Key::from_raw(lock_info_pb.get_key());
         Self {
-            lock,
+            lock_digest: lock,
             key,
             lock_info_pb,
             parameters,

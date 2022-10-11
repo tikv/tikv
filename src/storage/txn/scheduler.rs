@@ -66,7 +66,7 @@ use crate::{
             self,
             lock_wait_context::LockWaitContext,
             lock_waiting_queue::{DelayedNotifyAllFuture, LockWaitEntry, LockWaitQueues},
-            DiagnosticContext, LockDigest, LockManager, LockWaitToken,
+            DiagnosticContext, LockManager, LockWaitToken,
         },
         metrics::*,
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, ReleasedLock},
@@ -730,32 +730,48 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// Event handler for the request of waiting for lock
     fn on_wait_for_lock(
         &self,
-        context: &Context,
-        token: LockWaitToken,
-        lock_wait_entry: &LockWaitEntry,
-        lock_info_pb: &kvrpcpb::LockInfo,
-        cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
-        diag_ctx: DiagnosticContext,
+        ctx: &Context,
+        cid: u64,
+        lock_info: WriteResultLockInfo,
+        tracker: TrackerToken,
     ) {
-        // debug!("command waits for lock released"; "cid" => cid);
+        let key = lock_info.key.clone();
+        let lock_digest = lock_info.lock_digest;
+        let start_ts = lock_info.parameters.start_ts;
+        let is_first_lock = lock_info.parameters.is_first_lock;
+        let wait_timeout = lock_info.parameters.wait_timeout;
+
+        let diag_ctx = DiagnosticContext {
+            key: lock_info.key.to_raw().unwrap(),
+            resource_group_tag: ctx.get_resource_group_tag().into(),
+            tracker,
+        };
+        let wait_token = self.inner.lock_mgr.allocate_token();
+
+        let (lock_req_ctx, lock_wait_entry, lock_info_pb) =
+            self.make_lock_waiting(cid, wait_token, lock_info);
+
+        if !lock_req_ctx.get_shared_states().is_finished() {
+            self.inner
+                .lock_wait_queues
+                .push_lock_wait(lock_wait_entry, lock_info_pb.clone());
+        }
+
         let wait_info = lock_manager::KeyLockWaitInfo {
-            key: lock_wait_entry.key.clone(),
-            lock_digest: LockDigest {
-                ts: lock_info_pb.get_lock_version().into(),
-                hash: lock_wait_entry.lock_hash,
-            },
-            lock_info: lock_info_pb.clone(),
+            key,
+            lock_digest,
+            lock_info: lock_info_pb,
         };
         self.inner.lock_mgr.wait_for(
-            token,
-            context.get_region_id(),
-            context.get_region_epoch().clone(),
-            context.get_term(),
-            lock_wait_entry.parameters.start_ts,
+            wait_token,
+            ctx.get_region_id(),
+            ctx.get_region_epoch().clone(),
+            ctx.get_term(),
+            start_ts,
             wait_info,
-            lock_wait_entry.parameters.is_first_lock,
-            lock_wait_entry.parameters.wait_timeout,
-            cancel_callback,
+            is_first_lock,
+            wait_timeout,
+            Box::new(lock_req_ctx.get_callback_for_cancellation()),
             diag_ctx,
         );
     }
@@ -1009,36 +1025,16 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         // TODO: Lock wait handling here.
         if let Some(lock_info) = lock_info {
-            assert_eq!(to_be_write.size(), 0);
-            // let cmd_meta = pessimistic_lock_single_request_meta.unwrap();
-            let diag_ctx = DiagnosticContext {
-                key: lock_info.key.to_raw().unwrap(),
-                resource_group_tag: ctx.get_resource_group_tag().into(),
-                tracker,
-            };
-            let wait_token = scheduler.inner.lock_mgr.allocate_token();
+            // Only handle lock waiting if `wait_timeout` is set. Otherwise it indicates
+            // that it's a lock-no-wait request and we need to report error
+            // immediately.
+            if lock_info.parameters.wait_timeout.is_some() {
+                assert_eq!(to_be_write.size(), 0);
+                pr = Some(ProcessResult::Res);
+                // allow_lock_with_conflict is not supported yet in this version.
+                assert!(!lock_info.parameters.allow_lock_with_conflict);
 
-            // allow_lock_with_conflict is not supported yet in this version.
-            assert!(!lock_info.parameters.allow_lock_with_conflict);
-
-            pr = Some(ProcessResult::Res);
-            let (lock_req_ctx, lock_wait_entry, lock_info_pb) =
-                scheduler.make_lock_waiting(cid, wait_token, lock_info);
-
-            scheduler.on_wait_for_lock(
-                &ctx,
-                wait_token,
-                &lock_wait_entry,
-                &lock_info_pb,
-                Box::new(lock_req_ctx.get_callback_for_cancellation()),
-                diag_ctx,
-            );
-            // It's possible that the request is cancelled immediately due to no timeout
-            // (non-blocking locking).
-            if !lock_req_ctx.get_shared_states().is_finished() {
-                self.inner
-                    .lock_wait_queues
-                    .push_lock_wait(lock_wait_entry, lock_info_pb);
+                scheduler.on_wait_for_lock(&ctx, cid, lock_info, tracker);
             }
         }
 
@@ -1377,7 +1373,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         let lock_wait_entry = Box::new(LockWaitEntry {
             key: lock_info.key,
-            lock_hash: lock_info.lock.hash,
+            lock_hash: lock_info.lock_digest.hash,
             parameters: lock_info.parameters,
             lock_wait_token,
             req_states: Some(ctx.get_shared_states().clone()),

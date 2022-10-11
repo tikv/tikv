@@ -215,8 +215,8 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(lock_info.lock.ts, ts.into());
-        assert_eq!(lock_info.lock.hash, key.gen_hash());
+        assert_eq!(lock_info.lock_digest.ts, ts.into());
+        assert_eq!(lock_info.lock_digest.hash, key.gen_hash());
         assert_eq!(lock_info.key.into_raw().unwrap(), raw_key);
         assert_eq!(lock_info.parameters.is_first_lock, is_first_lock);
         assert_eq!(lock_info.parameters.wait_timeout, wait_timeout);

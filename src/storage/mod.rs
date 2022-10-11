@@ -3188,7 +3188,7 @@ pub mod test_util {
     };
 
     use super::*;
-    use crate::storage::txn::commands;
+    use crate::storage::{lock_manager::WaitTimeout, txn::commands};
 
     pub fn expect_none(x: Option<Value>) {
         assert_eq!(x, None);
@@ -3292,7 +3292,7 @@ pub mod test_util {
             3000,
             false,
             for_update_ts,
-            None,
+            Some(WaitTimeout::Default),
             return_values,
             for_update_ts.next(),
             OldValues::default(),
@@ -7686,7 +7686,8 @@ mod tests {
     }
 
     fn test_pessimistic_lock_impl(pipelined_pessimistic_lock: bool) {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
+        let lock_mgr = DummyLockManager::new();
+        let storage = TestStorageBuilderApiV1::new(lock_mgr.clone())
             .pipelined_pessimistic_lock(pipelined_pessimistic_lock)
             .build()
             .unwrap();
@@ -7778,9 +7779,11 @@ mod tests {
                     }),
                 )
                 .unwrap();
-            // The DummyLockManager calls the callback immediately if wait_timeout is not
-            // set.
-            rx.recv_timeout(Duration::from_millis(1000)).unwrap();
+            // The request enters lock waiting state.
+            rx.recv_timeout(Duration::from_millis(100)).unwrap_err();
+            lock_mgr.simulate_timeout_all();
+            // The lock-waiting request is cancelled.
+            rx.recv().unwrap();
         }
 
         // Needn't update max_ts when failing to read value
@@ -9627,9 +9630,11 @@ mod tests {
                 }),
             )
             .unwrap();
-        // DummyLockManager will call the callback immediately if wait_timeout
-        // is not set.
-        rx.recv().unwrap().unwrap_err();
+        // The request enters lock waiting state.
+        rx.recv_timeout(Duration::from_millis(100)).unwrap_err();
+        lock_mgr.simulate_timeout_all();
+        // The lock-waiting request is cancelled.
+        rx.recv().unwrap();
 
         let (tx, rx) = channel();
         storage
