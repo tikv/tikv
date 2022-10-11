@@ -225,7 +225,7 @@ where
     #[inline]
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let ctx = self.get_mut();
-        let mut collector = match ctx.rx.poll_next_unpin(cx) {
+        let mut collector = match Pin::new(&mut ctx.rx).poll_next(cx) {
             Poll::Ready(Some(m)) => {
                 let mut c = (ctx.initializer)();
                 (ctx.collector)(&mut c, m);
@@ -235,7 +235,7 @@ where
             Poll::Pending => return Poll::Pending,
         };
         for _ in 1..ctx.max_batch_size {
-            if let Poll::Ready(Some(m)) = ctx.rx.poll_next_unpin(cx) {
+            if let Poll::Ready(Some(m)) = Pin::new(&mut ctx.rx).poll_next(cx) {
                 (ctx.collector)(&mut collector, m);
             }
         }
