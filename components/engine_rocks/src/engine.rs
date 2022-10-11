@@ -50,18 +50,6 @@ impl RocksEngine {
         self.db.clone()
     }
 
-    pub fn exists(path: &str) -> bool {
-        let path = Path::new(path);
-        if !path.exists() || !path.is_dir() {
-            return false;
-        }
-
-        // If path is not an empty directory, we say db exists. If path is not an empty
-        // directory but db has not been created, `DB::list_column_families` fails and
-        // we can clean up the directory by this indication.
-        fs::read_dir(&path).unwrap().next().is_some()
-    }
-
     pub fn set_shared_block_cache(&mut self, enable: bool) {
         self.shared_block_cache = enable;
     }
