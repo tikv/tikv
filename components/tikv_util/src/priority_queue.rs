@@ -4,8 +4,13 @@ use std::hash::Hash;
 
 use collections::HashMap;
 
+/// A priority queue implemented with binary heap, and additionally supports
+/// efficiently removing element by key.
 pub struct PriorityQueue<K: Eq + Hash + Copy, T: Ord> {
+    /// Indexes key to the element's index(position) in `heap`.
     index_map: HashMap<K, usize>,
+    /// The binary heap. `None` indicates a hole, which only exists temporarily
+    /// when some modification is being made.
     heap: Vec<Option<(K, T)>>,
 }
 
@@ -23,6 +28,9 @@ impl<K: Eq + Hash + Copy, T: Ord> PriorityQueue<K, T> {
         }
     }
 
+    /// Moves specified element (a key-value pair) to the specified index in the
+    /// heap. The caller must guarantee the element at the target index `i`
+    /// is currently a hole.
     #[inline]
     fn move_to_index(&mut self, i: usize, data: (K, T)) {
         *self.index_map.get_mut(&data.0).unwrap() = i;
@@ -30,21 +38,28 @@ impl<K: Eq + Hash + Copy, T: Ord> PriorityQueue<K, T> {
         self.heap[i] = Some(data);
     }
 
+    /// Calculates index of the left child of the specified index.
     #[inline]
     fn left_child(index: usize) -> usize {
         (index << 1) + 1
     }
 
+    /// Calculates the parent index of the specified index. Assuming the given
+    /// index is not the root (`index != 0`).
     #[inline]
     fn parent(index: usize) -> usize {
         (index - 1) >> 1
     }
 
+    /// Perform the percolate-down operation on the element at the specified
+    /// index in the heap.
     fn percolate_down(&mut self, mut index: usize) {
         let tmp_item = self.heap[index].take().unwrap();
         let initial_index = index;
         loop {
             let mut max_index = index;
+            // Let max_index = the index of max{index, left_child(index),
+            // right_child(index)} (if any).
             let l = Self::left_child(index);
             if l < self.heap.len() {
                 let mut max_item = &tmp_item.1;
@@ -79,6 +94,8 @@ impl<K: Eq + Hash + Copy, T: Ord> PriorityQueue<K, T> {
         }
     }
 
+    /// Perform the percolate-up operation on the element at the specified index
+    /// in the heap.
     fn percolate_up(&mut self, mut index: usize) {
         let tmp_item = self.heap[index].take().unwrap();
         let initial_index = index;
@@ -102,6 +119,11 @@ impl<K: Eq + Hash + Copy, T: Ord> PriorityQueue<K, T> {
         }
     }
 
+    /// Pushes an element `item`, which can be found by the specified key `key`,
+    /// to the priority queue.
+    ///
+    /// The caller must guarantee the uniqueness of the `key`. Panics if the
+    /// `key` already exists in the priority queue.
     pub fn push(&mut self, key: K, item: T) {
         let replaced = self.index_map.insert(key, self.index_map.len());
         // Duplicated key is disallowed.
@@ -110,10 +132,14 @@ impl<K: Eq + Hash + Copy, T: Ord> PriorityQueue<K, T> {
         self.percolate_up(self.heap.len() - 1);
     }
 
+    /// Accesses the element at top of the priority queue. Returns `None` if the
+    /// queue is empty.
     pub fn peek(&self) -> Option<&T> {
         self.heap.first().map(|data| &data.as_ref().unwrap().1)
     }
 
+    /// Pops the element at the top of the priority queue. Returns `None` if the
+    /// queue is empty.
     pub fn pop(&mut self) -> Option<T> {
         if self.heap.is_empty() {
             return None;
@@ -125,17 +151,27 @@ impl<K: Eq + Hash + Copy, T: Ord> PriorityQueue<K, T> {
             return Some(item);
         }
 
+        // Take the top element from the heap, and replace the top position with the
+        // last element in the heap.
         let (key, item) = self.heap.swap_remove(0).unwrap();
         self.index_map.remove(&key).unwrap();
         let new_head_key = self.heap[0].as_ref().unwrap().0;
         *self.index_map.get_mut(&new_head_key).unwrap() = 0;
+
         self.percolate_down(0);
 
         Some(item)
     }
 
+    /// Removes the element corresponding to the specified key from the priority
+    /// queue. Returns the element if it's successfully removed from the
+    /// priority queue, or `None` if `key` is not found.
+    ///
+    /// This function has `O(log(n))` complexity.
     pub fn remove_by_key(&mut self, key: K) -> Option<T> {
         let index = self.index_map.remove(&key)?;
+        // Take the element from the heap, and replace the original position with the
+        // last element at the end of the heap.
         let (removed_key, item) = self.heap.swap_remove(index).unwrap();
         debug_assert!(removed_key == key);
         if index == self.heap.len() {
@@ -144,9 +180,12 @@ impl<K: Eq + Hash + Copy, T: Ord> PriorityQueue<K, T> {
             debug_assert_eq!(self.heap.len(), self.index_map.len());
             return Some(item);
         }
+        // Adjust the index map after moving the last element to the removed position.
         let (tail_key, tail_item) = self.heap[index].as_ref().unwrap();
         *self.index_map.get_mut(tail_key).unwrap() = index;
 
+        // The element that takes place of the previously removed one may either need to
+        // percolate up or down.
         let less_than_parent = if index > 0 {
             let parent = Self::parent(index);
             let (_, parent_item) = self.heap[parent].as_ref().unwrap();
