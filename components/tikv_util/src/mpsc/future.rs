@@ -14,7 +14,7 @@ use std::{
 };
 
 use crossbeam::channel::{self, SendError, TryRecvError, TrySendError};
-use futures::{Stream, StreamExt};
+use futures::Stream;
 
 pub enum WakePolicy {
     Immediately,
@@ -225,18 +225,36 @@ where
     #[inline]
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let ctx = self.get_mut();
-        let mut collector = match Pin::new(&mut ctx.rx).poll_next(cx) {
-            Poll::Ready(Some(m)) => {
+        let mut collector = match ctx.rx.try_recv() {
+            Ok(m) => {
                 let mut c = (ctx.initializer)();
                 (ctx.collector)(&mut c, m);
                 c
             }
-            Poll::Ready(None) => return Poll::Ready(None),
-            Poll::Pending => return Poll::Pending,
+            Err(TryRecvError::Disconnected) => return Poll::Ready(None),
+            Err(TryRecvError::Empty) => {
+                // If there is no previous waker, we still need to poll again in case some
+                // task is pushed before registering current waker.
+                if ctx.rx.queue.register_waker(cx.waker()) {
+                    return Poll::Pending;
+                } else {
+                    match ctx.rx.try_recv() {
+                        Ok(m) => {
+                            let mut c = (ctx.initializer)();
+                            (ctx.collector)(&mut c, m);
+                            c
+                        }
+                        Err(TryRecvError::Disconnected) => return Poll::Ready(None),
+                        Err(TryRecvError::Empty) => return Poll::Pending,
+                    }
+                }
+            }
         };
         for _ in 1..ctx.max_batch_size {
             if let Poll::Ready(Some(m)) = Pin::new(&mut ctx.rx).poll_next(cx) {
                 (ctx.collector)(&mut collector, m);
+            } else {
+                break;
             }
         }
         Poll::Ready(Some(collector))
