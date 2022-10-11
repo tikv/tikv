@@ -114,7 +114,7 @@ fn bench_crossbeam_channel(b: &mut Bencher) {
 
 #[bench]
 fn bench_receiver_stream_unbounded_batch(b: &mut Bencher) {
-    let (tx, rx) = mpsc::future::unbounded::<i32>(mpsc::future::WakePolicy::period(8));
+    let (tx, rx) = mpsc::future::unbounded::<i32>(mpsc::future::WakePolicy::TillReach(8));
     for _ in 0..1 {
         let tx1 = tx.clone();
         thread::spawn(move || {

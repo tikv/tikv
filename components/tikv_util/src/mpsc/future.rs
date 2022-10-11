@@ -3,145 +3,105 @@
 //! A module provides the implementation of receiver that supports async/await.
 
 use std::{
-    mem::ManuallyDrop,
     pin::Pin,
-    ptr,
-    sync::{
-        atomic::{AtomicPtr, AtomicU8, Ordering},
-        Arc,
-    },
-    task::{Context, Poll, Waker},
+    sync::atomic::{self, AtomicUsize, Ordering},
+    task::{Context, Poll},
 };
 
-use crossbeam::channel::{self, SendError, TryRecvError, TrySendError};
-use futures::Stream;
+use crossbeam::{
+    channel::{SendError, TryRecvError},
+    queue::SegQueue,
+};
+use futures::{task::AtomicWaker, Stream, StreamExt};
 
+#[derive(Clone, Copy)]
 pub enum WakePolicy {
     Immediately,
-    // Notify by period.
-    Period { step: u8, tick: AtomicU8 },
+    TillReach(usize),
 }
 
-impl WakePolicy {
-    pub fn period(step: u8) -> WakePolicy {
-        WakePolicy::Period {
-            step,
-            tick: AtomicU8::new(0),
-        }
-    }
-}
-
-struct QueueState {
-    waker: AtomicPtr<Waker>,
+struct Queue<T> {
+    queue: SegQueue<T>,
+    waker: AtomicWaker,
+    liveness: AtomicUsize,
     policy: WakePolicy,
 }
 
-impl QueueState {
+impl<T> Queue<T> {
     #[inline]
-    fn wake(&self, policy: &WakePolicy) {
-        if let WakePolicy::Period { step, tick } = policy {
-            let t = tick.fetch_add(1, Ordering::AcqRel);
-            if t + 1 < *step {
-                return;
-            }
-            tick.store(0, Ordering::Release);
-        }
-        let ptr = self.waker.swap(ptr::null_mut(), Ordering::AcqRel);
-        unsafe {
-            if !ptr.is_null() {
-                Box::from_raw(ptr).wake();
-            }
-        }
-    }
-
-    // If there is already a waker, true is returned.
-    fn register_waker(&self, waker: &Waker) -> bool {
-        let w = Box::new(waker.clone());
-        let ptr = self.waker.swap(Box::into_raw(w), Ordering::AcqRel);
-        unsafe {
-            if ptr.is_null() {
-                false
-            } else {
-                drop(Box::from_raw(ptr));
-                true
+    fn wake(&self, policy: WakePolicy) {
+        match policy {
+            WakePolicy::Immediately => self.waker.wake(),
+            WakePolicy::TillReach(n) => {
+                if self.queue.len() < n {
+                    return;
+                }
+                self.waker.wake();
             }
         }
     }
 }
 
-impl Drop for QueueState {
-    #[inline]
-    fn drop(&mut self) {
-        let ptr = self.waker.swap(ptr::null_mut(), Ordering::SeqCst);
-        unsafe {
-            if !ptr.is_null() {
-                drop(Box::from_raw(ptr));
-            }
-        }
-    }
-}
-
-struct WakeOnDrop<T> {
-    queue: Arc<QueueState>,
-    sender: ManuallyDrop<channel::Sender<T>>,
-}
-
-impl<T> Drop for WakeOnDrop<T> {
-    #[inline]
-    fn drop(&mut self) {
-        // Drop sender first, otherwise the receiver may not detect disconnection.
-        unsafe { ManuallyDrop::drop(&mut self.sender) };
-        self.queue.wake(&WakePolicy::Immediately);
-    }
-}
+const SENDER_COUNT_BASE: usize = 1 << 1;
+const RECEIVER_COUNT_BASE: usize = 1;
 
 pub struct Sender<T> {
-    sender: Arc<WakeOnDrop<T>>,
+    queue: *mut Queue<T>,
 }
 
 impl<T: Send> Sender<T> {
     /// Sends the message with predefined wake policy.
     #[inline]
     pub fn send(&self, t: T) -> Result<(), SendError<T>> {
-        let policy = &self.sender.queue.policy;
+        let policy = unsafe { (*self.queue).policy };
         self.send_with(t, policy)
     }
 
     /// Sends the message with the specified wake policy.
     #[inline]
-    fn send_with(&self, t: T, policy: &WakePolicy) -> Result<(), SendError<T>> {
-        match self.sender.sender.try_send(t) {
-            Ok(()) => (),
-            Err(TrySendError::Disconnected(t)) => return Err(SendError(t)),
-            // Channel is unbounded, can't be full.
-            Err(TrySendError::Full(_)) => unreachable!(),
+    pub fn send_with(&self, t: T, policy: WakePolicy) -> Result<(), SendError<T>> {
+        let queue = unsafe { &*self.queue };
+        if queue.liveness.load(Ordering::Acquire) & RECEIVER_COUNT_BASE != 0 {
+            queue.queue.push(t);
+            queue.wake(policy);
+            return Ok(());
         }
-        self.sender.queue.wake(policy);
-        Ok(())
-    }
-
-    /// Send and notify immediately despite the configured wake policy.
-    #[inline]
-    pub fn send_immediately(&self, t: T) -> Result<(), SendError<T>> {
-        if let WakePolicy::Period { tick, .. } = &self.sender.queue.policy {
-            tick.store(0, Ordering::Release);
-        }
-        self.send_with(t, &WakePolicy::Immediately)
+        Err(SendError(t))
     }
 }
 
 impl<T> Clone for Sender<T> {
+    fn clone(&self) -> Self {
+        let queue = unsafe { &*self.queue };
+        queue
+            .liveness
+            .fetch_add(SENDER_COUNT_BASE, Ordering::Relaxed);
+        Self { queue: self.queue }
+    }
+}
+
+impl<T> Drop for Sender<T> {
     #[inline]
-    fn clone(&self) -> Sender<T> {
-        Sender {
-            sender: self.sender.clone(),
+    fn drop(&mut self) {
+        let queue = unsafe { &*self.queue };
+        let previous = queue
+            .liveness
+            .fetch_sub(SENDER_COUNT_BASE, Ordering::Release);
+        if previous == SENDER_COUNT_BASE | RECEIVER_COUNT_BASE {
+            // The last sender is dropped, we need to wake up the receiver.
+            queue.waker.wake();
+        } else if previous == SENDER_COUNT_BASE {
+            atomic::fence(Ordering::Acquire);
+            drop(unsafe { Box::from_raw(self.queue) });
         }
     }
 }
 
+unsafe impl<T: Send> Send for Sender<T> {}
+unsafe impl<T: Send> Sync for Sender<T> {}
+
 pub struct Receiver<T> {
-    queue: Arc<QueueState>,
-    receiver: channel::Receiver<T>,
+    queue: *mut Queue<T>,
 }
 
 impl<T: Send> Stream for Receiver<T> {
@@ -149,45 +109,61 @@ impl<T: Send> Stream for Receiver<T> {
 
     #[inline]
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match self.receiver.try_recv() {
-            Ok(t) => Poll::Ready(Some(t)),
-            Err(TryRecvError::Empty) => {
-                // If there is no previous waker, we still need to poll again in case some
-                // task is pushed before registering current waker.
-                if self.queue.register_waker(cx.waker()) {
-                    Poll::Pending
-                } else {
-                    // In case the message is pushed right before registering waker.
-                    self.poll_next(cx)
-                }
-            }
-            Err(TryRecvError::Disconnected) => Poll::Ready(None),
+        let queue = unsafe { &*self.queue };
+        if let Some(t) = queue.queue.pop() {
+            return Poll::Ready(Some(t));
         }
+        queue.waker.register(cx.waker());
+        // In case the message is pushed right before registering waker.
+        if let Some(t) = queue.queue.pop() {
+            return Poll::Ready(Some(t));
+        }
+        if queue.liveness.load(Ordering::Acquire) & !RECEIVER_COUNT_BASE != 0 {
+            return Poll::Pending;
+        }
+        Poll::Ready(None)
     }
 }
 
 impl<T: Send> Receiver<T> {
     #[inline]
     pub fn try_recv(&mut self) -> Result<T, TryRecvError> {
-        self.receiver.try_recv()
+        let queue = unsafe { &*self.queue };
+        if let Some(t) = queue.queue.pop() {
+            return Ok(t);
+        }
+        if queue.liveness.load(Ordering::Acquire) & !RECEIVER_COUNT_BASE != 0 {
+            return Err(TryRecvError::Empty);
+        }
+        Err(TryRecvError::Disconnected)
     }
 }
 
+impl<T> Drop for Receiver<T> {
+    #[inline]
+    fn drop(&mut self) {
+        let queue = unsafe { &*self.queue };
+        if RECEIVER_COUNT_BASE
+            == queue
+                .liveness
+                .fetch_sub(RECEIVER_COUNT_BASE, Ordering::Release)
+        {
+            atomic::fence(Ordering::Acquire);
+            drop(unsafe { Box::from_raw(self.queue) });
+        }
+    }
+}
+
+unsafe impl<T: Send> Send for Receiver<T> {}
+
 pub fn unbounded<T>(policy: WakePolicy) -> (Sender<T>, Receiver<T>) {
-    let queue = Arc::new(QueueState {
-        waker: AtomicPtr::default(),
+    let queue = Box::into_raw(Box::new(Queue {
+        queue: SegQueue::new(),
+        waker: AtomicWaker::new(),
+        liveness: AtomicUsize::new(SENDER_COUNT_BASE | RECEIVER_COUNT_BASE),
         policy,
-    });
-    let (sender, receiver) = channel::unbounded();
-    (
-        Sender {
-            sender: Arc::new(WakeOnDrop {
-                queue: queue.clone(),
-                sender: ManuallyDrop::new(sender),
-            }),
-        },
-        Receiver { queue, receiver },
-    )
+    }));
+    (Sender { queue }, Receiver { queue })
 }
 
 /// `BatchReceiver` is a `futures::Stream`, which returns a batched type.
@@ -225,33 +201,17 @@ where
     #[inline]
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let ctx = self.get_mut();
-        let mut collector = match ctx.rx.try_recv() {
-            Ok(m) => {
+        let mut collector = match ctx.rx.poll_next_unpin(cx) {
+            Poll::Ready(Some(m)) => {
                 let mut c = (ctx.initializer)();
                 (ctx.collector)(&mut c, m);
                 c
             }
-            Err(TryRecvError::Disconnected) => return Poll::Ready(None),
-            Err(TryRecvError::Empty) => {
-                // If there is no previous waker, we still need to poll again in case some
-                // task is pushed before registering current waker.
-                if ctx.rx.queue.register_waker(cx.waker()) {
-                    return Poll::Pending;
-                } else {
-                    match ctx.rx.try_recv() {
-                        Ok(m) => {
-                            let mut c = (ctx.initializer)();
-                            (ctx.collector)(&mut c, m);
-                            c
-                        }
-                        Err(TryRecvError::Disconnected) => return Poll::Ready(None),
-                        Err(TryRecvError::Empty) => return Poll::Pending,
-                    }
-                }
-            }
+            Poll::Ready(None) => return Poll::Ready(None),
+            Poll::Pending => return Poll::Pending,
         };
         for _ in 1..ctx.max_batch_size {
-            if let Poll::Ready(Some(m)) = Pin::new(&mut ctx.rx).poll_next(cx) {
+            if let Poll::Ready(Some(m)) = ctx.rx.poll_next_unpin(cx) {
                 (ctx.collector)(&mut collector, m);
             } else {
                 break;
@@ -310,8 +270,8 @@ mod tests {
     }
 
     #[test]
-    fn test_period_wake() {
-        let (tx, rx) = unbounded::<u64>(WakePolicy::period(4));
+    fn test_till_reach_wake() {
+        let (tx, rx) = unbounded::<u64>(WakePolicy::TillReach(4));
 
         let (_pool, msg_counter) = spawn_and_wait(move || rx);
 
@@ -361,7 +321,7 @@ mod tests {
 
     #[test]
     fn test_batch_receiver() {
-        let (tx, rx) = unbounded::<u64>(WakePolicy::period(4));
+        let (tx, rx) = unbounded::<u64>(WakePolicy::TillReach(4));
 
         let len = Arc::new(AtomicUsize::new(0));
         let l = len.clone();
@@ -391,7 +351,7 @@ mod tests {
 
     #[test]
     fn test_switch_between_sender_and_receiver() {
-        let (tx, mut rx) = unbounded::<i32>(WakePolicy::period(4));
+        let (tx, mut rx) = unbounded::<i32>(WakePolicy::TillReach(4));
         let future = async move { rx.next().await };
         let task = Task {
             future: Arc::new(Mutex::new(Some(future.boxed()))),
@@ -459,9 +419,15 @@ mod tests {
         let (tx, rx) = super::unbounded(WakePolicy::Immediately);
         tx.send(SetOnDrop(dropped.clone())).unwrap();
         drop(rx);
-        // Messages in queue should be dropped actively to release memory.
-        assert!(dropped.load(Ordering::SeqCst));
+        assert!(!dropped.load(Ordering::SeqCst));
 
         tx.send(SetOnDrop::default()).unwrap_err();
+        let tx1 = tx.clone();
+        drop(tx);
+        assert!(!dropped.load(Ordering::SeqCst));
+
+        tx1.send(SetOnDrop::default()).unwrap_err();
+        drop(tx1);
+        assert!(dropped.load(Ordering::SeqCst));
     }
 }
