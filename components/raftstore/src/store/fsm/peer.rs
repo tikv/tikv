@@ -2628,7 +2628,7 @@ where
         self.fsm.hibernate_state.count_vote(from.get_id());
     }
 
-    fn on_availability_request(&mut self, from: &metapb::Peer, msg: &ExtraMessage) {
+    fn on_availability_response(&mut self, from: &metapb::Peer, msg: &ExtraMessage) {
         if !self.fsm.peer.is_leader() {
             return;
         }
@@ -2646,7 +2646,7 @@ where
         self.register_check_peers_availability_tick();
     }
 
-    fn on_availability_response(&mut self, from: &metapb::Peer) {
+    fn on_availability_request(&mut self, from: &metapb::Peer) {
         if self.fsm.peer.is_leader() {
             return;
         }
@@ -2698,10 +2698,10 @@ where
                 unimplemented!()
             }
             ExtraMessageType::MsgAvailabilityRequest => {
-                self.on_availability_request(msg.get_from_peer(), msg.get_extra_msg());
+                self.on_availability_request(msg.get_from_peer());
             }
             ExtraMessageType::MsgAvailabilityResponse => {
-                self.on_availability_response(msg.get_from_peer());
+                self.on_availability_response(msg.get_from_peer(), msg.get_extra_msg());
             }
         }
     }
