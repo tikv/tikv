@@ -1791,7 +1791,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_on_warmup_range_fetched() {
+    fn test_warmup_entry_cache() {
         let ents = vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)];
 
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
@@ -1800,6 +1800,7 @@ pub mod tests {
         let (dummy_scheduler, _rx) = dummy_scheduler();
         let mut store = new_storage_from_ents(region_scheduler, dummy_scheduler, &td, &ents);
         store.cache.compact_to(6);
+        store.cache_warmup_state = Some(CacheWarmupState::new_with_range(5, 6));
 
         let res = RaftlogFetchResult {
             ents: Ok(ents[1..2].to_vec()),
