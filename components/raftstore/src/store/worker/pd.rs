@@ -120,6 +120,7 @@ pub struct HeartbeatTask {
     pub approximate_size: Option<u64>,
     pub approximate_keys: Option<u64>,
     pub replication_status: Option<RegionReplicationStatus>,
+    pub wait_data_peers: Vec<u64>,
 }
 
 /// Uses an asynchronous thread to tell PD something.

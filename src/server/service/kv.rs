@@ -1375,6 +1375,7 @@ fn handle_batch_commands_request<
                     response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::$metric_name, source);
                 })*
                 Some(batch_commands_request::request::Cmd::Import(_)) => unimplemented!(),
+                Some(batch_commands_request::request::Cmd::PrepareFlashbackToVersion(_)) => unimplemented!(),
             }
         }
     }

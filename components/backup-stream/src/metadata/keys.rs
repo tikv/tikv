@@ -162,6 +162,10 @@ impl MetaKey {
         Self(format!("{}{}/{}/{}", PREFIX, PATH_LAST_ERROR, name, store).into_bytes())
     }
 
+    pub fn central_global_checkpoint_of(name: &str) -> Self {
+        Self(format!("{}/checkpoint/{}/central_global", PREFIX, name).into_bytes())
+    }
+
     /// return the key that keeps the range [self, self.next()) contains only
     /// `self`.
     pub fn next(&self) -> Self {
