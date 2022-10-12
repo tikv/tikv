@@ -2,21 +2,21 @@
 
 set -e
 
-source env.sh
+export PROXY_PROFILE=${PROXY_PROFILE-debug}
+export ENGINE_LABEL_VALUE=${ENGINE_LABEL_VALUE-tiflash}
+export PROMETHEUS_METRIC_NAME_PREFIX=${PROMETHEUS_METRIC_NAME_PREFIX-"${ENGINE_LABEL_VALUE}_proxy_"}
 
-echo "profile is ${PROXY_PROFILE}"
-echo "engine is ${ENGINE_LABEL_VALUE}"
-echo "prometheus metric name prefix is ${PROMETHEUS_METRIC_NAME_PREFIX}"
+echo "INFO: PROXY_PROFILE=${PROXY_PROFILE}"
+echo "INFO: ENGINE_LABEL_VALUE=${ENGINE_LABEL_VALUE}"
+echo "INFO: PROMETHEUS_METRIC_NAME_PREFIX=${PROMETHEUS_METRIC_NAME_PREFIX}"
 
 if [[ -n "${PROXY_FRAME_POINTER}" && "${PROXY_FRAME_POINTER}" != 0 ]]; then
-  echo "frame pointer is enabled"
+  echo "INFO: frame pointer is enabled"
 else
-  echo "frame pointer is disabled"
+  echo "INFO: frame pointer is disabled"
 fi
 
-lib_suffix="so"
 if [[ $(uname -s) == "Darwin" ]]; then
-  lib_suffix="dylib"
   # use the openssl 1.1 lib from system
   export OPENSSL_DIR=${OPENSSL_DIR:-$(brew --prefix openssl@1.1)}  # for openssl-sys
   export OPENSSL_ROOT_DIR=${OPENSSL_DIR}  # for Cmake
@@ -26,23 +26,53 @@ if [[ $(uname -s) == "Darwin" ]]; then
     exit -1
   fi
 
-  echo "OPENSSL_DIR: ${OPENSSL_DIR}"
+  echo "INFO: OPENSSL_DIR=${OPENSSL_DIR}"
   export OPENSSL_NO_VENDOR=1  # for openssl-sys
   export OPENSSL_STATIC=1     # for openssl-sys
 fi
 
-PROXY_ENABLE_FEATURES=${PROXY_ENABLE_FEATURES} ./cargo-build.sh
+CARGO_EXTRA_ARGS=""
 
-target_name="lib${ENGINE_LABEL_VALUE}_proxy.${lib_suffix}"
-ori_build_path="target/${PROXY_PROFILE}/libraftstore_proxy.${lib_suffix}"
-target_path=${PROXY_LIB_TARGET_COPY_PATH-"target/${PROXY_PROFILE}/${target_name}"}
+if [[ "${PROXY_PROFILE}" == "release" ]]; then
+  CARGO_EXTRA_ARGS="--release"
+fi
 
-echo "forcibly remove ${target_path}"
-rm -rf "${target_path}"
-echo "copy ${ori_build_path} to ${target_path}"
-cp "${ori_build_path}" "${target_path}"
+if [[ -n "${PROXY_FRAME_POINTER}" && "${PROXY_FRAME_POINTER}" != "0" ]]; then
+  CARGO_EXTRA_ARGS="${CARGO_EXTRA_ARGS} -Z build-std=core,std,alloc,proc_macro,test --target=$(rustc -vV | awk '/host/ { print $2 }')"
+  CARGO_EXTRA_ARGS="${CARGO_EXTRA_ARGS} -Z unstable-options"
+
+  # When `-Z build-std` is enabled, `--target` must be specified explicitly,
+  # and specifying `--target` will cause the generated binary to be located
+  # in the `target/${TARGET}/release|debug` directory instead of
+  # `target/release|debug`, so we need to explicitly specify `--out-dir` here,
+  # to avoid errors when copying the output binary later.
+  # Note: CARGO_TARGET_DIR may be set in tiflash-proxy-cmake.
+  CARGO_EXTRA_ARGS="${CARGO_EXTRA_ARGS} --out-dir=${CARGO_TARGET_DIR:-target}/${PROXY_PROFILE}"
+
+  rustup component add rust-src
+fi
+
+echo "INFO: CARGO_EXTRA_ARGS=${CARGO_EXTRA_ARGS}"
+echo "INFO: PROXY_ENABLE_FEATURES=${PROXY_ENABLE_FEATURES}"
+
+cargo build --no-default-features --features "${PROXY_ENABLE_FEATURES}" ${CARGO_EXTRA_ARGS}
+
+# The generated file is libraftstore_proxy.so
+# Let's rename it according to the engine label.
+
+LIB_SUFFIX="so"
+if [[ $(uname -s) == "Darwin" ]]; then
+  LIB_SUFFIX="dylib"
+fi
+
+OUT_DIR="${CARGO_TARGET_DIR:-target}/${PROXY_PROFILE}"
+CURRENT_LIB_PATH="${OUT_DIR}/libraftstore_proxy.${LIB_SUFFIX}"
+DEST_LIB_PATH="${OUT_DIR}/lib${ENGINE_LABEL_VALUE}_proxy.${LIB_SUFFIX}"
+
+echo "Copy ${CURRENT_LIB_PATH} to ${DEST_LIB_PATH}"
+rm -f "${DEST_LIB_PATH}"
+cp "${CURRENT_LIB_PATH}" "${DEST_LIB_PATH}"
 
 if [[ $(uname -s) == "Darwin" ]]; then
-  target_install_name="@rpath/${target_name}"
-  install_name_tool -id "${target_install_name}" "${target_path}"
+  install_name_tool -id "@rpath/lib${ENGINE_LABEL_VALUE}_proxy.dylib" "${DEST_LIB_PATH}"
 fi
