@@ -35,7 +35,7 @@ use raftstore::{
     store::{
         memory::{MEMTRACE_APPLYS, MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES},
         metrics::RAFT_ENTRIES_CACHES_GAUGE,
-        Callback, CasualMessage, CheckLeaderTask, RaftCmdExtraOpts,
+        Callback, CasualMessage, CheckLeaderTask, RaftCmdExtraOpts, SignificantMsg,
     },
     DiscardReason, Error as RaftStoreError, Result as RaftStoreResult,
 };
@@ -1722,8 +1722,8 @@ fn future_delete_range<E: Engine, L: LockManager, F: KvFormat>(
     }
 }
 
-// Preparing the flashback for a region/key range will "lock" the region so that
-// there is no any read, write or schedule operation could be proposed before
+// Preparing the flashback for a region will "lock" the region so that
+// there is no any read, write or scheduling operation could be proposed before
 // the actual flashback operation.
 fn future_prepare_flashback_to_version<
     E: Engine,
@@ -1733,11 +1733,33 @@ fn future_prepare_flashback_to_version<
 >(
     // Keep this param to hint the type of E for the compiler.
     _storage: &Storage<E, L, F>,
-    _raft_router: &T,
-    _req: PrepareFlashbackToVersionRequest,
+    raft_router: &T,
+    req: PrepareFlashbackToVersionRequest,
 ) -> impl Future<Output = ServerResult<PrepareFlashbackToVersionResponse>> {
-    // TODO: implement this.
-    async move { unimplemented!() }
+    let region_id = req.get_context().get_region_id();
+    let raft_router = Mutex::new(raft_router.clone());
+    async move {
+        // Send an `AdminCmdType::PrepareFlashback` to prepare the raftstore for the
+        // later flashback. Once invoked, we will update the persistent region meta and
+        // the memory state of the flashback in Peer FSM to reject all read, write
+        // and scheduling operations for this region when propose/apply before we
+        // start the actual data flashback transaction command in the next phase.
+        if let Err(e) = send_flashback_msg::<T, E>(
+            &raft_router,
+            req.get_context(),
+            AdminCmdType::PrepareFlashback,
+        )
+        .await
+        {
+            // TODO: maybe should set it into the resp.
+            return Err(Error::Other(box_err!(
+                "failed to prepare the region {} for flashback, {:?}",
+                region_id,
+                e
+            )));
+        }
+        Ok(PrepareFlashbackToVersionResponse::default())
+    }
 }
 
 // Flashback the region to a specific point with the given `version`, please
@@ -1753,25 +1775,22 @@ fn future_flashback_to_version<
     raft_router: &T,
     req: FlashbackToVersionRequest,
 ) -> impl Future<Output = ServerResult<FlashbackToVersionResponse>> {
-    let storage_clone = storage.clone();
+    let region_id = req.get_context().get_region_id();
     let raft_router = Mutex::new(raft_router.clone());
+    let storage_clone = storage.clone();
     async move {
-        // Send an `AdminCmdType::PrepareFlashback` to prepare the raftstore for the
-        // later flashback. This will first block all scheduling, read and write
-        // operations, then wait for the latest Raft log to be applied before we start
-        // the flashback command. Once invoked, we update the persistence state
-        // in `RegionLocalState` and region's meta, and when that
-        // admin cmd is applied, the `PrepareFlashback` command will update the memory
-        // state of the flashback, rejecting all read and write operations at
-        // propose and applied. We make FlashbackToVersion a two-stage request
-        // and lock the region in the first stage.
-        send_flashback_msg::<T, E>(
-            &raft_router,
-            req.get_context(),
-            AdminCmdType::PrepareFlashback,
-        )
-        .await?;
-
+        // Check the flashback state first.
+        let (result_tx, result_rx) = oneshot::channel();
+        raft_router
+            .lock()
+            .await
+            .significant_send(region_id, SignificantMsg::CheckFlashback(result_tx))?;
+        if !result_rx.await? {
+            let mut resp = FlashbackToVersionResponse::default();
+            resp.set_error(format!("unprepared region {} for flashback", region_id));
+            return Ok(resp);
+        }
+        // Perform the actual data flashback transaction command.
         let (cb, f) = paired_future_callback();
         let res = storage_clone.sched_txn_command(req.clone().into(), cb);
         // Avoid crossing `.await` to bypass the `Send` constraint.

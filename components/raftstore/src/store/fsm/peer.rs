@@ -21,7 +21,7 @@ use collections::{HashMap, HashSet};
 use engine_traits::{Engines, KvEngine, RaftEngine, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
-use futures::channel::mpsc::UnboundedSender;
+use futures::channel::{mpsc::UnboundedSender, oneshot::Sender};
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::{
     brpb::CheckAdminResponse,
@@ -986,6 +986,12 @@ where
         syncer.report_for_self(self_report);
     }
 
+    // Check if the region is in the flashback state.
+    fn on_check_flashback(&mut self, ch: Sender<bool>) {
+        // TODO: maybe should check the persistent state also.
+        ch.send(self.fsm.peer.is_in_flashback).unwrap();
+    }
+
     fn on_check_pending_admin(&mut self, ch: UnboundedSender<CheckAdminResponse>) {
         if !self.fsm.peer.is_leader() {
             // no need to check non-leader pending conf change.
@@ -1436,6 +1442,7 @@ where
                 self.on_snapshot_recovery_wait_apply(syncer)
             }
             SignificantMsg::CheckPendingAdmin(ch) => self.on_check_pending_admin(ch),
+            SignificantMsg::CheckFlashback(ch) => self.on_check_flashback(ch),
         }
     }
 

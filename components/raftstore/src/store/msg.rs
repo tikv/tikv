@@ -7,7 +7,7 @@ use std::{borrow::Cow, fmt};
 
 use collections::HashSet;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
-use futures::channel::mpsc::UnboundedSender;
+use futures::channel::{mpsc::UnboundedSender, oneshot::Sender};
 use kvproto::{
     brpb::CheckAdminResponse,
     import_sstpb::SstMeta,
@@ -517,6 +517,8 @@ where
     UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSyncer),
     SnapshotRecoveryWaitApply(SnapshotRecoveryWaitApplySyncer),
     CheckPendingAdmin(UnboundedSender<CheckAdminResponse>),
+    // Check if the region is in the flashback state.
+    CheckFlashback(Sender<bool>),
 }
 
 /// Message that will be sent to a peer.

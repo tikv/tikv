@@ -658,18 +658,8 @@ fn test_mvcc_flashback() {
     assert!(get_resp.get_error().has_locked());
     assert!(get_resp.value.is_empty());
     // Flashback
-    let mut flashback_to_version_req = FlashbackToVersionRequest::default();
-    flashback_to_version_req.set_context(ctx.clone());
-    ts += 1;
-    flashback_to_version_req.set_start_ts(ts);
-    ts += 1;
-    flashback_to_version_req.set_commit_ts(ts);
-    flashback_to_version_req.version = 5;
-    flashback_to_version_req.start_key = b"a".to_vec();
-    flashback_to_version_req.end_key = b"z".to_vec();
-    let flashback_resp = client
-        .kv_flashback_to_version(&flashback_to_version_req)
-        .unwrap();
+    let flashback_resp = must_flashback_to_version(&client, ctx.clone(), 5, ts + 1, ts + 2);
+    ts += 2;
     assert!(!flashback_resp.has_region_error());
     assert!(flashback_resp.get_error().is_empty());
     // Should not meet the lock and can not get the latest data any more.
@@ -682,16 +672,7 @@ fn test_mvcc_flashback_block_rw() {
     let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
     fail::cfg("skip_finish_flashback_to_version", "return").unwrap();
     // Flashback
-    let mut flashback_to_version_req = FlashbackToVersionRequest::default();
-    flashback_to_version_req.set_context(ctx.clone());
-    flashback_to_version_req.set_start_ts(1);
-    flashback_to_version_req.set_commit_ts(2);
-    flashback_to_version_req.version = 0;
-    flashback_to_version_req.start_key = b"a".to_vec();
-    flashback_to_version_req.end_key = b"z".to_vec();
-    let flashback_resp = client
-        .kv_flashback_to_version(&flashback_to_version_req)
-        .unwrap();
+    let flashback_resp = must_flashback_to_version(&client, ctx.clone(), 0, 1, 2);
     assert!(!flashback_resp.has_region_error());
     assert!(flashback_resp.get_error().is_empty());
     // Try to read.
@@ -731,16 +712,7 @@ fn test_mvcc_flashback_block_scheduling() {
     let (mut cluster, client, ctx) = must_new_cluster_and_kv_client();
     fail::cfg("skip_finish_flashback_to_version", "return").unwrap();
     // Flashback
-    let mut flashback_to_version_req = FlashbackToVersionRequest::default();
-    flashback_to_version_req.set_context(ctx);
-    flashback_to_version_req.set_start_ts(1);
-    flashback_to_version_req.set_commit_ts(2);
-    flashback_to_version_req.version = 0;
-    flashback_to_version_req.start_key = b"a".to_vec();
-    flashback_to_version_req.end_key = b"z".to_vec();
-    let flashback_resp = client
-        .kv_flashback_to_version(&flashback_to_version_req)
-        .unwrap();
+    let flashback_resp = must_flashback_to_version(&client, ctx, 0, 1, 2);
     assert!(!flashback_resp.has_region_error());
     assert!(flashback_resp.get_error().is_empty());
     // Try to transfer leader.
