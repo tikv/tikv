@@ -111,6 +111,10 @@ where
         match self.pre_propose_raft_command(&req) {
             Ok(Some((mut delegate, policy))) => match policy {
                 RequestPolicy::ReadLocal => {
+                    if !delegate.initialized() {
+                        return Ok(None);
+                    }
+
                     let region = Arc::clone(&delegate.region);
                     let snap = RegionSnapshot::from_snapshot(delegate.get_snapshot(&None), region);
                     // Ensures the snapshot is acquired before getting the time
@@ -256,6 +260,12 @@ where
     // raftstore/src/store/worker/read.rs
     delegate: Arc<ReadDelegate>,
     cached_tablet: CachedTablet<E>,
+}
+
+impl<E: KvEngine> CachedReadDelegate<E> {
+    fn initialized(&mut self) -> bool {
+        self.cached_tablet.latest().is_some()
+    }
 }
 
 impl<E> Deref for CachedReadDelegate<E>
@@ -604,7 +614,7 @@ mod tests {
                 region: Arc::new(region1.clone()),
                 peer_id: 1,
                 term: term6,
-                applied_term: term6 - 1,
+                applied_term: term6,
                 leader_lease: Some(remote),
                 last_valid_ts: Timespec::new(0, 0),
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
@@ -615,18 +625,45 @@ mod tests {
                 bucket_meta: None,
             };
             meta.readers.insert(1, read_delegate);
-            // create tablet with region_id 1 and prepare some data
-            let tablet1 = factory
-                .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
-                .unwrap();
-            let cache = CachedTablet::new(Some(tablet1));
+            let cache = CachedTablet::new(None);
             meta.tablet_caches.insert(1, cache);
         }
 
         let (ch_tx, ch_rx) = sync_channel(1);
 
+        // Case: Tablet has not been created
+        let store_meta_clone = store_meta.clone();
+        let tablet1 = factory
+            .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
+            .unwrap();
+        let handler = handle_msg(
+            move || {
+                let mut meta = store_meta_clone.lock().unwrap();
+                meta.tablet_caches.get_mut(&1).unwrap().set(tablet1);
+            },
+            rx,
+            ch_tx.clone(),
+        );
+        // The first try will be rejected due to tablet has not been created
+        let snap = block_on(reader.snapshot(cmd.clone())).unwrap();
+        assert_eq!(*snap.get_region(), region1);
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.cache_miss.get()),
+            2
+        );
+        handler.join().unwrap();
+        rx = ch_rx.recv().unwrap();
+
         // Case: Applied term not match
         let store_meta_clone = store_meta.clone();
+        // make applied term out of date
+        store_meta_clone
+            .lock()
+            .unwrap()
+            .readers
+            .get_mut(&1)
+            .unwrap()
+            .update(ReadProgress::applied_term(term6 - 1));
         let handler = handle_msg(
             move || {
                 let mut meta = store_meta_clone.lock().unwrap();
@@ -645,7 +682,7 @@ mod tests {
         assert_eq!(*snap.get_region(), region1);
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.cache_miss.get()),
-            3
+            4
         );
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.applied_term.get()),
@@ -672,7 +709,7 @@ mod tests {
         // Updating lease makes cache miss.
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.cache_miss.get()),
-            4
+            5
         );
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.lease_expire.get()),
