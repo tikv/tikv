@@ -19371,7 +19371,7 @@
               "yaxis": 2
             },
             {
-              "alias": "pending-bytes",
+              "alias": "pending-compaction-bytes",
               "yaxis": 2
             }
           ],
@@ -19396,7 +19396,7 @@
               "hide": false,
               "interval": "",
               "intervalFactor": 2,
-              "legendFormat": "pending-bytes-{{instance}}",
+              "legendFormat": "pending-compaction-bytes-{{instance}}",
               "metric": "tikv_engine_pending_compaction_bytes",
               "refId": "B",
               "step": 10
@@ -19406,7 +19406,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Compaction pending bytes",
+          "title": "Pending compaction bytes",
           "tooltip": {
             "shared": true,
             "sort": 0,
