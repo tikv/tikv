@@ -758,11 +758,17 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let (lock_req_ctx, lock_wait_entry, lock_info_pb) =
             self.make_lock_waiting(cid, wait_token, lock_info);
 
-        if !lock_req_ctx.get_shared_states().is_finished() {
-            self.inner
-                .lock_wait_queues
-                .push_lock_wait(lock_wait_entry, lock_info_pb.clone());
-        }
+        // The entry must be pushed to the lock waiting queue before sending to
+        // `lock_mgr`. When the request is canceled in anywhere outside the lock
+        // waiting queue (including `lock_mgr`), it first tries to remove the
+        // entry from the lock waiting queue. If the entry doesn't exist
+        // in the queue, it will be regarded as already popped out from the queue and
+        // therefore will woken up, thus the canceling operation will be
+        // skipped. So pushing the entry to the queue must be done before any
+        // possible cancellation.
+        self.inner
+            .lock_wait_queues
+            .push_lock_wait(lock_wait_entry, lock_info_pb.clone());
 
         let wait_info = lock_manager::KeyLockWaitInfo {
             key,
@@ -1401,7 +1407,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             lock_hash: lock_info.lock_digest.hash,
             parameters: lock_info.parameters,
             lock_wait_token,
-            req_states: Some(ctx.get_shared_states().clone()),
             legacy_wake_up_index: None,
             key_cb: Some(ctx.get_callback_for_blocked_key().into()),
         });
