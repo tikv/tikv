@@ -3039,6 +3039,13 @@ where
                 vec![]
             };
 
+            if self.is_witness() {
+                committed_entries.retain(|e| !can_witness_skip(e));
+                if committed_entries.is_empty() {
+                    return;
+                }
+            }
+
             // Note that the `commit_index` and `commit_term` here may be used to
             // forward the commit index. So it must be less than or equal to persist
             // index.
@@ -3047,13 +3054,6 @@ where
                 self.raft_group.raft.raft_log.persisted,
             );
             let commit_term = self.get_store().term(commit_index).unwrap();
-
-            if self.is_witness() {
-                committed_entries.retain(|e| !can_witness_skip(e));
-                if committed_entries.is_empty() {
-                    return;
-                }
-            }
 
             let mut apply = Apply::new(
                 self.peer_id(),
