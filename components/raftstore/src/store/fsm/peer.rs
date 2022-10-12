@@ -5220,9 +5220,17 @@ where
         let last_idx = self.fsm.peer.get_store().last_index();
 
         let (mut replicated_idx, mut alive_cache_idx) = (last_idx, last_idx);
+        let mut witness_replicated_idx = None;
+        let witness_peer = self.region().get_peers().iter().find(|p| p.is_witness);
+
         for (peer_id, p) in self.fsm.peer.raft_group.raft.prs().iter() {
             if replicated_idx > p.matched {
                 replicated_idx = p.matched;
+            }
+            if let Some(witness) = witness_peer {
+                if witness.get_id() == *peer_id {
+                    witness_replicated_idx = Some(p.matched);
+                }
             }
             if let Some(last_heartbeat) = self.fsm.peer.peer_heartbeats.get(peer_id) {
                 if *last_heartbeat > cache_alive_limit {
@@ -5260,14 +5268,11 @@ where
             }
         }
 
-        let has_witness = self.region().get_peers().iter().any(|p| p.is_witness);
-
         let mut compact_idx = if force_compact && replicated_idx > first_idx {
             replicated_idx
-        } else if !has_witness
-            && ((applied_idx > first_idx
-                && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit())
-                || (self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit().0))
+        } else if (applied_idx > first_idx
+            && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit())
+            || (self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit().0)
         {
             std::cmp::max(first_idx + (last_idx - first_idx) / 2, replicated_idx)
         } else if replicated_idx < first_idx || last_idx - first_idx < 3 {
@@ -5296,6 +5301,15 @@ where
             replicated_idx
         };
         assert!(compact_idx >= first_idx);
+
+        if let Some(idx) = witness_replicated_idx {
+            // do not compact the log not replicated to witness, except witness is the most
+            // lagging peer
+            if idx != replicated_idx {
+                compact_idx = std::cmp::min(compact_idx, idx);
+            }
+        }
+
         // Have no idea why subtract 1 here, but original code did this by magic.
         compact_idx -= 1;
         if compact_idx < first_idx {
