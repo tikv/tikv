@@ -224,7 +224,6 @@ where
         // before and the `cached_read_id` of it is None because only a consecutive
         // requests will have the same cache and the cache will be cleared after the
         // last request of the batch.
-
         if self.read_id.is_some() {
             if self.snap_cache.cached_read_id == self.read_id
                 && self.read_id.as_ref().unwrap().create_time >= delegate_last_valid_ts
@@ -1601,14 +1600,13 @@ mod tests {
     }
 
     #[test]
-    fn test_read_delegate() {
+    fn test_read_executor_provider() {
         let path = Builder::new()
             .prefix("test-local-reader")
             .tempdir()
             .unwrap();
         let kv_engine =
             engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
-        kv_engine.put(b"a1", b"val1").unwrap();
         let store_meta =
             StoreMetaDelegate::new(Arc::new(Mutex::new(StoreMeta::new(0))), kv_engine.clone());
 
@@ -1624,36 +1622,19 @@ mod tests {
             meta.readers.insert(2, read_delegate);
         }
 
-        let (_, delegate) = store_meta.get_executor_and_len(1);
+        let (len, delegate) = store_meta.get_executor_and_len(1);
+        assert_eq!(2, len);
         let mut delegate = delegate.unwrap();
-        let last_valid_ts = delegate.last_valid_ts;
-        let tablet = delegate.get_tablet();
-
-        let read_id = ThreadReadId::new();
-        let mut snap_cache = SnapCache::new();
-
-        let mut read_context = LocalReadContext::new(&mut snap_cache, Some(read_id));
-        read_context.maybe_update_snapshot(tablet, last_valid_ts);
-        let read_context = Some(read_context);
-
-        assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
-        let snapshot = delegate.get_snapshot(&read_context).unwrap();
-        assert_eq!(
-            b"val1".to_vec(),
-            *snapshot.get_value(b"a1").unwrap().unwrap()
-        );
-
-        let (_, delegate) = store_meta.get_executor_and_len(2);
-        let mut delegate = delegate.unwrap();
+        assert_eq!(1, delegate.region.id);
         let tablet = delegate.get_tablet();
         assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
-        let snapshot = delegate.get_snapshot(&read_context).unwrap();
-        assert_eq!(
-            b"val1".to_vec(),
-            *snapshot.get_value(b"a1").unwrap().unwrap()
-        );
 
-        assert!(snap_cache.snapshot.as_ref().is_some());
+        let (len, delegate) = store_meta.get_executor_and_len(2);
+        assert_eq!(2, len);
+        let mut delegate = delegate.unwrap();
+        assert_eq!(2, delegate.region.id);
+        let tablet = delegate.get_tablet();
+        assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
     }
 
     #[test]
