@@ -1737,7 +1737,7 @@ fn future_prepare_flashback_to_version<
     _req: PrepareFlashbackToVersionRequest,
 ) -> impl Future<Output = ServerResult<PrepareFlashbackToVersionResponse>> {
     // TODO: implement this.
-    async move { Ok(PrepareFlashbackToVersionResponse::default()) }
+    async move { unimplemented!() }
 }
 
 // Flashback the region to a specific point with the given `version`, please

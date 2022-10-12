@@ -16,7 +16,7 @@ fn test_flashback_for_schedule() {
     cluster.must_transfer_leader(1, new_peer(2, 2));
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
-    // prepare for flashback
+    // Prepare for flashback
     let region = cluster.get_region(b"k1");
     block_on(cluster.send_flashback_msg(
         region.get_id(),
@@ -26,7 +26,7 @@ fn test_flashback_for_schedule() {
         new_peer(1, 1),
     ));
 
-    // verify the schedule is unabled.
+    // Verify the schedule is unabled.
     let mut region = cluster.get_region(b"k3");
     let admin_req = new_transfer_leader_cmd(new_peer(2, 2));
     let transfer_leader =
@@ -43,7 +43,7 @@ fn test_flashback_for_schedule() {
         }
     );
 
-    // verify the schedule can be executed if add flashback flag in request's
+    // Verify the schedule can be executed if add flashback flag in request's
     // header.
     must_transfer_leader(&mut cluster, region.get_id(), new_peer(2, 2));
     block_on(cluster.send_flashback_msg(
@@ -53,7 +53,7 @@ fn test_flashback_for_schedule() {
         cluster.get_region_epoch(1),
         new_peer(2, 2),
     ));
-    // transfer leader to (1, 1)
+    // Transfer leader to (1, 1)
     cluster.must_transfer_leader(1, new_peer(1, 1));
 }
 
@@ -63,11 +63,11 @@ fn test_flashback_for_write() {
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
-    // write for cluster
+    // Write for cluster
     let value = vec![1_u8; 8096];
     multi_do_cmd(&mut cluster, new_put_cf_cmd("write", b"k1", &value));
 
-    // prepare for flashback
+    // Prepare for flashback
     let region = cluster.get_region(b"k1");
     block_on(cluster.send_flashback_msg(
         region.get_id(),
@@ -77,7 +77,7 @@ fn test_flashback_for_write() {
         new_peer(1, 1),
     ));
 
-    // write will be blocked
+    // Write will be blocked
     let value = vec![1_u8; 8096];
     must_get_error_flashback_in_progress(&mut cluster, &region, new_put_cmd(b"k1", &value));
 
@@ -104,13 +104,13 @@ fn test_flashback_for_read() {
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
-    // write for cluster
+    // Write for cluster
     let value = vec![1_u8; 8096];
     multi_do_cmd(&mut cluster, new_put_cf_cmd("write", b"k1", &value));
     // read for cluster
     multi_do_cmd(&mut cluster, new_get_cf_cmd("write", b"k1"));
 
-    // prepare for flashback
+    // Prepare for flashback
     let region = cluster.get_region(b"k1");
     block_on(cluster.send_flashback_msg(
         region.get_id(),
@@ -123,7 +123,7 @@ fn test_flashback_for_read() {
     // read will be blocked
     must_get_error_flashback_in_progress(&mut cluster, &region, new_get_cf_cmd("write", b"k1"));
 
-    // verify the read can be executed if add flashback flag in request's
+    // Verify the read can be executed if add flashback flag in request's
     // header.
     must_cmd_add_flashback_flag(
         &mut cluster,
@@ -162,7 +162,7 @@ fn test_flashback_for_local_read() {
     let region = cluster.get_region(b"k1");
     cluster.must_transfer_leader(region.get_id(), peer.clone());
 
-    // check local read before prepare flashback
+    // Check local read before prepare flashback
     let state = cluster.raft_local_state(region.get_id(), store_id);
     let last_index = state.get_last_index();
     // Make sure the leader transfer procedure timeouts.
@@ -172,7 +172,7 @@ fn test_flashback_for_local_read() {
     let state = cluster.raft_local_state(region.get_id(), store_id);
     assert_eq!(state.get_last_index(), last_index);
 
-    // prepare for flashback
+    // Prepare for flashback
     block_on(cluster.send_flashback_msg(
         region.get_id(),
         store_id,
@@ -184,6 +184,8 @@ fn test_flashback_for_local_read() {
     // Check the leader does a local read.
     let state = cluster.raft_local_state(region.get_id(), store_id);
     assert_eq!(state.get_last_index(), last_index + 1);
+    // Wait for apply_res to set leader lease .
+    sleep_ms(500);
 
     must_error_read_on_peer(
         &mut cluster,
@@ -219,7 +221,7 @@ fn test_flashback_for_local_read() {
     let state = cluster.raft_local_state(region.get_id(), store_id);
     assert_eq!(state.get_last_index(), last_index + 2);
 
-    // check local read after finish flashback
+    // Check local read after finish flashback
     let state = cluster.raft_local_state(region.get_id(), store_id);
     let last_index = state.get_last_index();
     // Make sure the leader transfer procedure timeouts.
@@ -272,7 +274,7 @@ fn test_flashback_for_check_is_in_persist() {
     let local_state = cluster.region_local_state(1, 2);
     assert!(!local_state.get_region().get_is_in_flashback());
 
-    // prepare for flashback
+    // Prepare for flashback
     block_on(cluster.send_flashback_msg(
         1,
         2,
@@ -300,17 +302,17 @@ fn test_flashback_for_apply_snapshot() {
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
-    // make node3 isolationed
+    // Make node3 isolationed
     cluster.add_send_filter(IsolationFilterFactory::new(5));
 
     let local_state = cluster.region_local_state(1, 1);
     assert!(!local_state.get_region().get_is_in_flashback());
 
-    // write for cluster
+    // Write for cluster
     let value = vec![1_u8; 8096];
     multi_do_cmd(&mut cluster, new_put_cf_cmd("write", b"k1", &value));
 
-    // prepare for flashback
+    // Prepare for flashback
     block_on(cluster.send_flashback_msg(
         1,
         1,
@@ -323,7 +325,7 @@ fn test_flashback_for_apply_snapshot() {
 
     // Add node 3 back.
     cluster.clear_send_filters();
-    // wait for snapshot
+    // Wait for snapshot
     sleep_ms(500);
 
     must_transfer_leader(&mut cluster, 1, new_peer(5, 5));
@@ -393,7 +395,7 @@ fn must_cmd_add_flashback_flag<T: Simulator>(
     region: &mut metapb::Region,
     cmd: kvproto::raft_cmdpb::Request,
 ) {
-    // verify the read can be executed if add flashback flag in request's
+    // Verify the read can be executed if add flashback flag in request's
     // header.
     let mut req = new_request(
         region.get_id(),
