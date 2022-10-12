@@ -1819,6 +1819,7 @@ where
         // scheduler. That is, the current node must in `busy` state.
         stats.set_is_busy(true);
 
+        // We do not need to report store_info, so we just set `None` here.
         let task = Task::StoreHeartbeat {
             stats,
             store_info: None,
@@ -1831,7 +1832,7 @@ where
                 "err" => ?e
             );
         } else {
-            info!("force report store slow score to pd.";
+            warn!("scheduling store_heartbeat timeout, force report store slow score to pd.";
                 "store_id" => self.store_id,
             );
         }
@@ -2115,14 +2116,13 @@ where
         }
         if !self.slow_score.last_tick_finished {
             self.slow_score.record_timeout();
-            // TODO: insert a judgement whether the last slow_score is delayed for reporting
-            // to PD.
+            // If the last slow_score already reached abnormal state and was delayed for
+            // reporting by `store-heartbeat` to PD, we should report it here manually.
             let now = UnixSecs::now();
             let interval_second = now.into_inner() - self.store_stat.last_report_ts.into_inner();
             if self.slow_score.should_force_report_slow_store()
                 && interval_second >= self.store_heartbeat_interval.as_secs()
             {
-                warn!("scheduling store_heartbeat timeout, force to report slow-score to pd.");
                 self.force_report_store_heartbeat();
             }
         }
