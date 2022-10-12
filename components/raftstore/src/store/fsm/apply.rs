@@ -1026,15 +1026,19 @@ where
                 break;
             }
 
-            let expect_index = self.apply_state.get_applied_index() + 1;
-            if expect_index != entry.get_index() {
-                panic!(
-                    "{} expect index {}, but got {}, ctx {}",
-                    self.tag,
-                    expect_index,
-                    entry.get_index(),
-                    apply_ctx.tag,
-                );
+            let peer = find_peer_by_id(&self.region, self.id).unwrap();
+            // the applied index of witness is not continuous, skip index check
+            if !peer.is_witness {
+                let expect_index = self.apply_state.get_applied_index() + 1;
+                if expect_index != entry.get_index() {
+                    panic!(
+                        "{} expect index {}, but got {}, ctx {}",
+                        self.tag,
+                        expect_index,
+                        entry.get_index(),
+                        apply_ctx.tag,
+                    );
+                }
             }
 
             // NOTE: before v5.0, `EntryType::EntryConfChangeV2` entry is handled by

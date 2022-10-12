@@ -2999,7 +2999,11 @@ where
             );
         }
         if let Some(last_entry) = committed_entries.last() {
-            let prev_applying_state = (self.last_applying_idx, self.last_applying_term);
+            let prev_applying_state = if self.is_witness() {
+                Some((self.last_applying_idx, self.last_applying_term))
+            } else {
+                None
+            };
             self.last_applying_idx = last_entry.get_index();
             self.last_applying_term = last_entry.get_term();
             if self.last_applying_idx >= self.last_urgent_proposal_idx {
@@ -3055,11 +3059,7 @@ where
                 committed_entries,
                 cbs,
                 self.region_buckets.as_ref().map(|b| b.meta.clone()),
-                if self.is_witness() {
-                    Some(prev_applying_state)
-                } else {
-                    None
-                },
+                prev_applying_state,
             );
             apply.on_schedule(&ctx.raft_metrics);
             self.mut_store()
