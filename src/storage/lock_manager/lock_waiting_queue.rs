@@ -76,7 +76,7 @@ use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
     errors::SharedError,
-    lock_manager::{lock_wait_context::LockWaitContextSharedState, LockManager, LockWaitToken},
+    lock_manager::{LockManager, LockWaitToken},
     metrics::*,
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
     txn::Error as TxnError,
@@ -92,11 +92,8 @@ pub type PessimisticLockKeyCallback = CallbackWithSharedError<PessimisticLockRes
 pub struct LockWaitEntry {
     pub key: Key,
     pub lock_hash: u64,
-    // TODO: Use term to filter out stale entries in the queue.
-    // pub term: Option<NonZeroU64>,
     pub parameters: PessimisticLockParameters,
     pub lock_wait_token: LockWaitToken,
-    pub req_states: Option<Arc<LockWaitContextSharedState>>,
     pub legacy_wake_up_index: Option<usize>,
     pub key_cb: Option<SyncWrapper<PessimisticLockKeyCallback>>,
 }
@@ -318,13 +315,8 @@ impl<L: LockManager> LockWaitQueues<L> {
             v.last_conflict_start_ts = conflicting_start_ts;
             v.last_conflict_commit_ts = conflicting_commit_ts;
 
-            while let Some((_, lock_wait_entry)) = v.queue.pop() {
+            if let Some((_, lock_wait_entry)) = v.queue.pop() {
                 removed_waiters += 1;
-
-                if lock_wait_entry.req_states.as_ref().unwrap().is_finished() {
-                    // Skip already cancelled entries.
-                    continue;
-                }
 
                 if !lock_wait_entry.parameters.allow_lock_with_conflict {
                     // If a pessimistic lock request in legacy mode is woken up, increase the
@@ -340,7 +332,6 @@ impl<L: LockManager> LockWaitQueues<L> {
                 } else {
                     result = Some((lock_wait_entry, None));
                 }
-                break;
             }
 
             // Remove the queue if it's emptied.
@@ -471,12 +462,6 @@ impl<L: LockManager> LockWaitQueues<L> {
             let legacy_wake_up_index = v.legacy_wake_up_index;
 
             while let Some((_, front)) = v.queue.peek() {
-                if front.req_states.as_ref().unwrap().is_finished() {
-                    // Skip already cancelled entries.
-                    v.queue.pop();
-                    removed_waiters += 1;
-                    continue;
-                }
                 if front
                     .legacy_wake_up_index
                     .map_or(false, |idx| idx >= legacy_wake_up_index)
@@ -686,7 +671,6 @@ mod tests {
                 lock_hash,
                 parameters,
                 lock_wait_token: token,
-                req_states: Some(dummy_ctx.get_shared_states().clone()),
                 legacy_wake_up_index: None,
                 key_cb: Some(SyncWrapper::new(Box::new(move |res| tx.send(res).unwrap()))),
             });
