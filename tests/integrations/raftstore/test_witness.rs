@@ -8,6 +8,7 @@ use kvproto::{metapb, raft_serverpb::RaftApplyState};
 use pd_client::PdClient;
 use test_raftstore::*;
 use tikv_util::store::find_peer;
+use more_asserts::assert_ge;
 
 // Test the case that region split or merge with witness peer
 #[test]
@@ -230,7 +231,7 @@ fn test_witness_raftlog_gc_lagged_follower() {
     // the truncated index is advanced now, as all the peers has replicated
     for (&id, engines) in &cluster.engines {
         let state: RaftApplyState = get_raft_msg_or_default(engines, &keys::apply_state_key(1));
-        assert!(state.get_truncated_state().get_index() - before_states[&id].get_index() > 1000);
+        assert_ge!(state.get_truncated_state().get_index() - before_states[&id].get_index(), 900);
     }
 }
 
@@ -241,6 +242,7 @@ fn test_witness_raftlog_gc_lagged_follower() {
 #[test]
 fn test_witness_raftlog_gc_lagged_witness() {
     let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(100);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
@@ -279,20 +281,16 @@ fn test_witness_raftlog_gc_lagged_witness() {
         cluster.must_put(key, value);
     }
 
-    // make sure raft log gc is triggered
-    std::thread::sleep(Duration::from_millis(100));
-
-    // the truncated index is advanced
-    for (&id, engines) in &cluster.engines {
-        let state: RaftApplyState = get_raft_msg_or_default(engines, &keys::apply_state_key(1));
-        assert!(state.get_truncated_state().get_index() - before_states[&id].get_index() > 1000);
-    }
-
     // the witness is back online
     cluster.run_node(nodes[2]).unwrap();
 
     cluster.must_put(b"k00", b"v00");
-    must_get_equal(&cluster.get_engine(nodes[2]), b"k00", b"v00");
+    
+    // the truncated index is advanced
+    for (&id, engines) in &cluster.engines {
+        let state: RaftApplyState = get_raft_msg_or_default(engines, &keys::apply_state_key(1));
+        assert_ge!(state.get_truncated_state().get_index() - before_states[&id].get_index(), 900);
+    }
 }
 
 // TODO: test forbid stale read
