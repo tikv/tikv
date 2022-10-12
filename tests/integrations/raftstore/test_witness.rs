@@ -174,7 +174,7 @@ fn test_witness_election_priority() {
 // Test the case that truncated index won't advance when there is a witness even
 // if the gap gap exceeds the gc count limit
 #[test]
-fn test_witness_raftlog_gc() {
+fn test_witness_raftlog_gc_lagged_follower() {
     let mut cluster = new_server_cluster(0, 3);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
@@ -234,10 +234,69 @@ fn test_witness_raftlog_gc() {
     }
 }
 
+// TODO: test witness is lagging behind, the gc is advanced
+
+// Test the case that truncated index is advance when there is a witness even
+// if the gap gap exceeds the gc count limit
+#[test]
+fn test_witness_raftlog_gc_lagged_witness() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+    let nodes = Vec::from_iter(cluster.get_node_ids());
+    assert_eq!(nodes.len(), 3);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.must_put(b"k0", b"v0");
+
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+    let peer_on_store1 = find_peer(&region, nodes[0]).unwrap().clone();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1);
+    // nonwitness -> witness
+    let mut peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
+    peer_on_store3.set_is_witness(true);
+    cluster
+        .pd_client
+        .must_add_peer(region.get_id(), peer_on_store3.clone());
+
+    // make sure raft log gc is triggered
+    std::thread::sleep(Duration::from_millis(200));
+    let mut before_states = HashMap::default();
+    for (&id, engines) in &cluster.engines {
+        let mut state: RaftApplyState = get_raft_msg_or_default(engines, &keys::apply_state_key(1));
+        before_states.insert(id, state.take_truncated_state());
+    }
+
+    // the witness is down
+    cluster.stop_node(nodes[2]);
+
+    // write some data to make log gap exceeds the gc limit
+    for i in 1..1000 {
+        let (k, v) = (format!("k{}", i), format!("v{}", i));
+        let key = k.as_bytes();
+        let value = v.as_bytes();
+        cluster.must_put(key, value);
+    }
+
+    // make sure raft log gc is triggered
+    std::thread::sleep(Duration::from_millis(100));
+
+    // the truncated index is advanced
+    for (&id, engines) in &cluster.engines {
+        let state: RaftApplyState = get_raft_msg_or_default(engines, &keys::apply_state_key(1));
+        assert!(state.get_truncated_state().get_index() - before_states[&id].get_index() > 1000);
+    }
+
+    // the witness is back online
+    cluster.run_node(nodes[2]).unwrap();
+
+    cluster.must_put(b"k00", b"v00");
+    must_get_equal(&cluster.get_engine(nodes[2]), b"k00", b"v00");
+}
+
 // TODO: test forbid stale read
 
 // TODO: test with cdc
 
 // TODO: test witness hasn't the log
-
-// TODO: test witness is lagging behind, the gc is advanced
