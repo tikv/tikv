@@ -219,7 +219,7 @@ fn test_local_read() {
 
     // FIXME: Get snapshot from local reader, but it will fail as the leader has not
     // applied in the current term (due to unimplementation of ApplyRes).
-    let resp = block_on(async { router.snapshot(req.clone()).await.unwrap_err() });
+    let resp = block_on(async { router.get_snapshot(req.clone()).await.unwrap_err() });
     assert!(
         resp.get_header()
             .get_error()

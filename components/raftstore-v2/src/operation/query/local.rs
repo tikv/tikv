@@ -16,10 +16,8 @@ use kvproto::{
 use raftstore::{
     errors::RAFTSTORE_IS_BUSY,
     store::{
-        cmd_resp,
-        util::{self, LeaseState, RegionReadProgress, RemoteLease},
-        LocalReadContext, LocalReaderCore, ReadDelegate, ReadExecutor, ReadExecutorProvider,
-        ReadProgress, ReadResponse, RegionSnapshot, RequestInspector, RequestPolicy,
+        cmd_resp, util::LeaseState, LocalReadContext, LocalReaderCore, ReadDelegate, ReadExecutor,
+        ReadExecutorProvider, RegionSnapshot, RequestInspector, RequestPolicy,
         TLS_LOCAL_READ_METRICS,
     },
     Error, Result,
@@ -112,14 +110,7 @@ where
             Ok(Some((mut delegate, policy))) => match policy {
                 RequestPolicy::ReadLocal => {
                     let region = Arc::clone(&delegate.region);
-                    let snap = {
-                        match delegate.get_snapshot(&None) {
-                            Some(snap) => RegionSnapshot::from_snapshot(snap, region),
-                            None => {
-                                return Ok(None);
-                            }
-                        }
-                    };
+                    let snap = RegionSnapshot::from_snapshot(delegate.get_snapshot(&None), region);
                     // Ensures the snapshot is acquired before getting the time
                     atomic::fence(atomic::Ordering::Release);
                     let snapshot_ts = monotonic_raw_now();
@@ -139,10 +130,7 @@ where
                     delegate.check_stale_read_safe(read_ts)?;
 
                     let region = Arc::clone(&delegate.region);
-                    let snap = RegionSnapshot::from_snapshot(
-                        delegate.get_snapshot(&None).unwrap(),
-                        region,
-                    );
+                    let snap = RegionSnapshot::from_snapshot(delegate.get_snapshot(&None), region);
 
                     TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_requests.inc());
 
@@ -301,10 +289,8 @@ where
         self.cached_tablet.latest().unwrap()
     }
 
-    fn get_snapshot(&mut self, _: &Option<LocalReadContext<'_, E>>) -> Option<Arc<E::Snapshot>> {
-        self.cached_tablet
-            .latest()
-            .map(|tablet| Arc::new(tablet.snapshot()))
+    fn get_snapshot(&mut self, _: &Option<LocalReadContext<'_, Self::Tablet>>) -> Arc<E::Snapshot> {
+        Arc::new(self.cached_tablet.latest().unwrap().snapshot())
     }
 }
 
@@ -366,7 +352,6 @@ struct SnapRequestInspector<'r> {
 }
 
 impl<'r> SnapRequestInspector<'r> {
-    #[inline]
     fn inspect(&mut self, req: &RaftCmdRequest) -> Result<RequestPolicy> {
         assert!(!req.has_admin_request());
         if req.get_requests().len() != 1
@@ -386,8 +371,8 @@ impl<'r> SnapRequestInspector<'r> {
             return Ok(RequestPolicy::ReadIndex);
         }
 
-        // If applied index's term is different from current raft's term, leader
-        // transfer must happened, if read locally, we may read old value.
+        // If applied index's term is differ from current raft's term, leader transfer
+        // must happened, if read locally, we may read old value.
         if !self.has_applied_to_current_term() {
             return Ok(RequestPolicy::ReadIndex);
         }
@@ -403,7 +388,6 @@ impl<'r> SnapRequestInspector<'r> {
         }
     }
 
-    #[inline]
     fn has_applied_to_current_term(&mut self) -> bool {
         if self.delegate.applied_term == self.delegate.term {
             true
@@ -422,7 +406,6 @@ impl<'r> SnapRequestInspector<'r> {
         }
     }
 
-    #[inline]
     fn inspect_lease(&mut self) -> LeaseState {
         // TODO: disable localreader if we did not enable raft's check_quorum.
         if self.delegate.leader_lease.is_some() {
@@ -616,7 +599,7 @@ mod tests {
                 region: Arc::new(region1.clone()),
                 peer_id: 1,
                 term: term6,
-                applied_term: term6,
+                applied_term: term6 - 1,
                 leader_lease: Some(remote),
                 last_valid_ts: Timespec::new(0, 0),
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
@@ -627,45 +610,18 @@ mod tests {
                 bucket_meta: None,
             };
             meta.readers.insert(1, read_delegate);
-            let cache = CachedTablet::new(None);
+            // create tablet with region_id 1 and prepare some data
+            let tablet1 = factory
+                .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
+                .unwrap();
+            let cache = CachedTablet::new(Some(tablet1));
             meta.tablet_caches.insert(1, cache);
         }
 
         let (ch_tx, ch_rx) = sync_channel(1);
 
-        // Case: Tablet has not been created
-        let store_meta_clone = store_meta.clone();
-        let tablet1 = factory
-            .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
-            .unwrap();
-        let handler = handle_msg(
-            move || {
-                let mut meta = store_meta_clone.lock().unwrap();
-                meta.tablet_caches.get_mut(&1).unwrap().set(tablet1);
-            },
-            rx,
-            ch_tx.clone(),
-        );
-        // The first try will be rejected due to tablet has not been created
-        let snap = block_on(reader.snapshot(cmd.clone())).unwrap();
-        assert_eq!(*snap.get_region(), region1);
-        assert_eq!(
-            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.cache_miss.get()),
-            2
-        );
-        handler.join().unwrap();
-        rx = ch_rx.recv().unwrap();
-
         // Case: Applied term not match
         let store_meta_clone = store_meta.clone();
-        // make applied term out of date
-        store_meta_clone
-            .lock()
-            .unwrap()
-            .readers
-            .get_mut(&1)
-            .unwrap()
-            .update(ReadProgress::applied_term(term6 - 1));
         let handler = handle_msg(
             move || {
                 let mut meta = store_meta_clone.lock().unwrap();
@@ -684,7 +640,7 @@ mod tests {
         assert_eq!(*snap.get_region(), region1);
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.cache_miss.get()),
-            4
+            3
         );
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.applied_term.get()),
@@ -711,7 +667,7 @@ mod tests {
         // Updating lease makes cache miss.
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.cache_miss.get()),
-            5
+            4
         );
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.lease_expire.get()),
@@ -803,7 +759,7 @@ mod tests {
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
         assert_eq!(tablet1.as_inner().path(), tablet.as_inner().path());
-        let snapshot = delegate.get_snapshot(&None).unwrap();
+        let snapshot = delegate.get_snapshot(&None);
         assert_eq!(
             b"val1".to_vec(),
             *snapshot.get_value(b"a1").unwrap().unwrap()
@@ -813,7 +769,7 @@ mod tests {
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
         assert_eq!(tablet2.as_inner().path(), tablet.as_inner().path());
-        let snapshot = delegate.get_snapshot(&None).unwrap();
+        let snapshot = delegate.get_snapshot(&None);
         assert_eq!(
             b"val2".to_vec(),
             *snapshot.get_value(b"a2").unwrap().unwrap()

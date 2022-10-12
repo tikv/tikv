@@ -55,7 +55,7 @@ pub trait ReadExecutor {
     fn get_snapshot(
         &mut self,
         read_context: &Option<LocalReadContext<'_, Self::Tablet>>,
-    ) -> Option<Arc<<Self::Tablet as KvEngine>::Snapshot>>;
+    ) -> Arc<<Self::Tablet as KvEngine>::Snapshot>;
 
     fn get_value(
         &mut self,
@@ -69,7 +69,7 @@ pub trait ReadExecutor {
 
         let mut resp = Response::default();
         // For v1, it's safe to unwrap
-        let snapshot = self.get_snapshot(read_context).unwrap();
+        let snapshot = self.get_snapshot(read_context);
         let res = if !req.get_get().get_cf().is_empty() {
             let cf = req.get_get().get_cf();
             snapshot
@@ -132,7 +132,7 @@ pub trait ReadExecutor {
                 },
                 CmdType::Snap => {
                     let snapshot = RegionSnapshot::from_snapshot(
-                        self.get_snapshot(&local_read_ctx).unwrap(),
+                        self.get_snapshot(&local_read_ctx),
                         region.clone(),
                     );
                     response.snapshot = Some(snapshot);
@@ -1029,11 +1029,8 @@ where
         &self.kv_engine
     }
 
-    fn get_snapshot(
-        &mut self,
-        read_context: &Option<LocalReadContext<'_, E>>,
-    ) -> Option<Arc<E::Snapshot>> {
-        Some(read_context.as_ref().unwrap().snapshot().unwrap())
+    fn get_snapshot(&mut self, read_context: &Option<LocalReadContext<'_, E>>) -> Arc<E::Snapshot> {
+        read_context.as_ref().unwrap().snapshot().unwrap()
     }
 }
 
@@ -1080,7 +1077,7 @@ mod tests {
     use crossbeam::channel::TrySendError;
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
     use engine_traits::{Peekable, SyncMutable, ALL_CFS};
-    use kvproto::raft_cmdpb::*;
+    use kvproto::{metapb::RegionEpoch, raft_cmdpb::*};
     use tempfile::{Builder, TempDir};
     use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
     use time::Duration;
@@ -1184,7 +1181,16 @@ mod tests {
         rx: &Receiver<RaftCommand<KvTestSnapshot>>,
         task: RaftCommand<KvTestSnapshot>,
     ) {
-        reader.propose_raft_command(None, task.request, task.callback);
+        must_not_redirect_with_read_id(reader, rx, task, None);
+    }
+
+    fn must_not_redirect_with_read_id(
+        reader: &mut LocalReader<KvTestEngine, MockRouter>,
+        rx: &Receiver<RaftCommand<KvTestSnapshot>>,
+        task: RaftCommand<KvTestSnapshot>,
+        read_id: Option<ThreadReadId>,
+    ) {
+        reader.propose_raft_command(read_id, task.request, task.callback);
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
     }
 
@@ -1635,6 +1641,158 @@ mod tests {
         assert_eq!(2, delegate.region.id);
         let tablet = delegate.get_tablet();
         assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
+    }
+
+    #[test]
+    fn test_snap_across_regions() {
+        let store_id = 2;
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
+        let (_tmp, mut reader, rx) = new_reader("test-local-reader", store_id, store_meta.clone());
+
+        fn prepare_read_delegate(
+            store_id: u64,
+            region_id: u64,
+            term: u64,
+            pr_ids: Vec<u64>,
+            region_epoch: RegionEpoch,
+            store_meta: Arc<Mutex<StoreMeta>>,
+        ) {
+            let mut region = metapb::Region::default();
+            region.set_id(region_id);
+            let prs = new_peers(store_id, pr_ids);
+            region.set_peers(prs.clone().into());
+
+            let leader = prs[0].clone();
+            region.set_region_epoch(region_epoch);
+            let mut lease = Lease::new(Duration::seconds(1), Duration::milliseconds(250)); // 1s is long enough.
+            let read_progress = Arc::new(RegionReadProgress::new(&region, 1, 1, "".to_owned()));
+
+            // Register region
+            lease.renew(monotonic_raw_now());
+            let remote = lease.maybe_new_remote_lease(term).unwrap();
+            // But the applied_term is stale.
+            {
+                let mut meta = store_meta.lock().unwrap();
+                let read_delegate = ReadDelegate {
+                    tag: String::new(),
+                    region: Arc::new(region.clone()),
+                    peer_id: leader.get_id(),
+                    term,
+                    applied_term: term,
+                    leader_lease: Some(remote),
+                    last_valid_ts: Timespec::new(0, 0),
+                    txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
+                    txn_ext: Arc::new(TxnExt::default()),
+                    read_progress,
+                    pending_remove: false,
+                    track_ver: TrackVer::new(),
+                    bucket_meta: None,
+                };
+                meta.readers.insert(region_id, read_delegate);
+            }
+        }
+
+        let epoch13 = {
+            let mut ep = metapb::RegionEpoch::default();
+            ep.set_conf_ver(1);
+            ep.set_version(3);
+            ep
+        };
+        let term6 = 6;
+
+        // Register region1
+        let pr_ids1 = vec![2, 3, 4];
+        let prs1 = new_peers(store_id, pr_ids1.clone());
+        prepare_read_delegate(
+            store_id,
+            1,
+            term6,
+            pr_ids1,
+            epoch13.clone(),
+            store_meta.clone(),
+        );
+        let leader1 = prs1[0].clone();
+
+        // Register region2
+        let pr_ids2 = vec![22, 33, 44];
+        let prs2 = new_peers(store_id, pr_ids2.clone());
+        prepare_read_delegate(store_id, 2, term6, pr_ids2, epoch13.clone(), store_meta);
+        let leader2 = prs2[0].clone();
+
+        reader.kv_engine.put(b"a1", b"val1").unwrap();
+
+        let mut cmd = RaftCmdRequest::default();
+        let mut header = RaftRequestHeader::default();
+        header.set_region_id(1);
+        header.set_peer(leader1);
+        header.set_region_epoch(epoch13.clone());
+        header.set_term(term6);
+        cmd.set_header(header);
+        let mut req = Request::default();
+        req.set_cmd_type(CmdType::Snap);
+        cmd.set_requests(vec![req].into());
+
+        let task = RaftCommand::<KvTestSnapshot>::new(
+            cmd.clone(),
+            Callback::read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
+                let snap = resp.snapshot.unwrap();
+                assert_eq!(snap.get_region().id, 1);
+                assert_eq!(
+                    snap.get_snapshot().get_value(b"a1").unwrap().unwrap(),
+                    b"val1"
+                );
+            })),
+        );
+
+        // First request will not hit cache
+        let read_id = Some(ThreadReadId::new());
+        must_not_redirect_with_read_id(&mut reader, &rx, task, read_id.clone());
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_snapshot_cache_hit.get()),
+            0
+        );
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_requests.get()),
+            1
+        );
+
+        // Change the value of a1, but if cache hit, it still reader "val1"
+        reader.kv_engine.put(b"a1", b"val2").unwrap();
+
+        let mut header = RaftRequestHeader::default();
+        header.set_region_id(2);
+        header.set_peer(leader2);
+        header.set_region_epoch(epoch13);
+        header.set_term(term6);
+        cmd.set_header(header);
+        let task = RaftCommand::<KvTestSnapshot>::new(
+            cmd.clone(),
+            Callback::read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
+                let snap = resp.snapshot.unwrap();
+                assert_eq!(snap.get_region().id, 2);
+                assert_eq!(
+                    snap.get_snapshot().get_value(b"a1").unwrap().unwrap(),
+                    b"val1"
+                );
+            })),
+        );
+        must_not_redirect_with_read_id(&mut reader, &rx, task, read_id);
+
+        // If we use a new read id, the cache will be miss and we will read the new
+        // value
+        let read_id = Some(ThreadReadId::new());
+        let task = RaftCommand::<KvTestSnapshot>::new(
+            cmd.clone(),
+            Callback::read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
+                let snap = resp.snapshot.unwrap();
+                assert_eq!(snap.get_region().id, 2);
+                assert_eq!(
+                    snap.get_snapshot().get_value(b"a1").unwrap().unwrap(),
+                    b"val2"
+                );
+            })),
+        );
+        must_not_redirect_with_read_id(&mut reader, &rx, task, read_id);
     }
 
     #[test]
