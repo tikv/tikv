@@ -5,10 +5,10 @@ use std::{iter::FromIterator, sync::Arc, time::Duration};
 use collections::HashMap;
 use futures::executor::block_on;
 use kvproto::{metapb, raft_serverpb::RaftApplyState};
+use more_asserts::assert_ge;
 use pd_client::PdClient;
 use test_raftstore::*;
 use tikv_util::store::find_peer;
-use more_asserts::assert_ge;
 
 // Test the case that region split or merge with witness peer
 #[test]
@@ -231,7 +231,10 @@ fn test_witness_raftlog_gc_lagged_follower() {
     // the truncated index is advanced now, as all the peers has replicated
     for (&id, engines) in &cluster.engines {
         let state: RaftApplyState = get_raft_msg_or_default(engines, &keys::apply_state_key(1));
-        assert_ge!(state.get_truncated_state().get_index() - before_states[&id].get_index(), 900);
+        assert_ge!(
+            state.get_truncated_state().get_index() - before_states[&id].get_index(),
+            900
+        );
     }
 }
 
@@ -285,11 +288,14 @@ fn test_witness_raftlog_gc_lagged_witness() {
     cluster.run_node(nodes[2]).unwrap();
 
     cluster.must_put(b"k00", b"v00");
-    
+
     // the truncated index is advanced
     for (&id, engines) in &cluster.engines {
         let state: RaftApplyState = get_raft_msg_or_default(engines, &keys::apply_state_key(1));
-        assert_ge!(state.get_truncated_state().get_index() - before_states[&id].get_index(), 900);
+        assert_ge!(
+            state.get_truncated_state().get_index() - before_states[&id].get_index(),
+            900
+        );
     }
 }
 

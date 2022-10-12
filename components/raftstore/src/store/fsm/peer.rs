@@ -3084,7 +3084,8 @@ where
 
         if !snap_data.get_meta().get_for_witness() {
             // Check if snapshot file exists.
-            // No need to get snapshot for witness, as witness's empty snapshot bypass snapshot manager.
+            // No need to get snapshot for witness, as witness's empty snapshot bypass
+            // snapshot manager.
             self.ctx.snap_mgr.get_snapshot_for_applying(&key)?;
         }
 
