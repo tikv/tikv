@@ -987,7 +987,7 @@ where
     }
 
     // Check if the region is in the flashback state.
-    fn on_check_flashback(&mut self, ch: Sender<bool>) {
+    fn on_check_flashback_state(&mut self, ch: Sender<bool>) {
         let mut is_in_flashback = self.fsm.peer.is_in_flashback;
         // Read the region local state to check whether the region is in the flashback
         // state when the memory flag is false.
@@ -1456,7 +1456,7 @@ where
                 self.on_snapshot_recovery_wait_apply(syncer)
             }
             SignificantMsg::CheckPendingAdmin(ch) => self.on_check_pending_admin(ch),
-            SignificantMsg::CheckFlashback(ch) => self.on_check_flashback(ch),
+            SignificantMsg::CheckFlashbackState(ch) => self.on_check_flashback_state(ch),
         }
     }
 

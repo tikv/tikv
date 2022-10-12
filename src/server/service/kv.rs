@@ -1775,7 +1775,7 @@ fn future_flashback_to_version<
         raft_router
             .lock()
             .await
-            .significant_send(region_id, SignificantMsg::CheckFlashback(result_tx))?;
+            .significant_send(region_id, SignificantMsg::CheckFlashbackState(result_tx))?;
         if !result_rx.await? {
             let mut resp = FlashbackToVersionResponse::default();
             resp.set_error(format!("unprepared region {} for flashback", region_id));

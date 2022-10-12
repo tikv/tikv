@@ -518,7 +518,7 @@ where
     SnapshotRecoveryWaitApply(SnapshotRecoveryWaitApplySyncer),
     CheckPendingAdmin(UnboundedSender<CheckAdminResponse>),
     // Check if the region is in the flashback state.
-    CheckFlashback(Sender<bool>),
+    CheckFlashbackState(Sender<bool>),
 }
 
 /// Message that will be sent to a peer.
