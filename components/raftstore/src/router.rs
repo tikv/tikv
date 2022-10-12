@@ -11,8 +11,8 @@ use crate::{
     store::{
         fsm::RaftRouter,
         transport::{CasualRouter, ProposalRouter, SignificantRouter},
-        CachedReadDelegate, Callback, CasualMessage, LocalReader, PeerMsg, RaftCmdExtraOpts,
-        RaftCommand, SignificantMsg, StoreMetaDelegate, StoreMsg, StoreRouter,
+        Callback, CasualMessage, LocalReader, PeerMsg, RaftCmdExtraOpts, RaftCommand,
+        SignificantMsg, StoreMsg, StoreRouter,
     },
     DiscardReason, Error as RaftStoreError, Result as RaftStoreResult,
 };
@@ -171,8 +171,7 @@ where
     ER: RaftEngine,
 {
     router: RaftRouter<EK, ER>,
-    local_reader:
-        LocalReader<RaftRouter<EK, ER>, EK, CachedReadDelegate<EK>, StoreMetaDelegate<EK>>,
+    local_reader: LocalReader<EK, RaftRouter<EK, ER>>,
 }
 
 impl<EK, ER> Clone for ServerRaftStoreRouter<EK, ER>
@@ -192,12 +191,7 @@ impl<EK: KvEngine, ER: RaftEngine> ServerRaftStoreRouter<EK, ER> {
     /// Creates a new router.
     pub fn new(
         router: RaftRouter<EK, ER>,
-        local_reader: LocalReader<
-            RaftRouter<EK, ER>,
-            EK,
-            CachedReadDelegate<EK>,
-            StoreMetaDelegate<EK>,
-        >,
+        local_reader: LocalReader<EK, RaftRouter<EK, ER>>,
     ) -> ServerRaftStoreRouter<EK, ER> {
         ServerRaftStoreRouter {
             router,
