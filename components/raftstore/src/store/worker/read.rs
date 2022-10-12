@@ -6,8 +6,7 @@ use std::{
     fmt::{self, Display, Formatter},
     ops::Deref,
     sync::{
-        atomic,
-        atomic::{AtomicU64, Ordering},
+        atomic::{self, AtomicU64, Ordering},
         Arc, Mutex,
     },
 };
@@ -51,7 +50,7 @@ pub trait ReadExecutor {
 
     /// Get the snapshot fo the tablet.
     ///
-    /// If the tablet has not been ready, `None` is returned.
+    /// If the tablet is not ready, `None` is returned.
     /// Currently, only multi-rocksdb version may return `None`.
     fn get_snapshot(
         &mut self,
@@ -231,17 +230,13 @@ where
                 && self.read_id.as_ref().unwrap().create_time >= delegate_last_valid_ts
             {
                 // Cache hit
-                assert!(self.snap_cache.snapshot.as_ref().is_some());
                 return false;
             }
 
             self.snap_cache.cached_read_id = self.read_id.clone();
-        } else {
-            // snap_cache should already have been cleared
-            assert!(self.snap_cache.cached_read_id.is_none());
         }
 
-        self.snap_cache.snapshot = Box::new(Some(Arc::new(engine.snapshot())));
+        self.snap_cache.snapshot = Some(Arc::new(engine.snapshot()));
 
         // Ensures the snapshot is acquired before getting the time
         atomic::fence(atomic::Ordering::Release);
@@ -257,7 +252,7 @@ where
 
     // Note: must be called after `maybe_update_snapshot`
     fn snapshot(&self) -> Option<Arc<E::Snapshot>> {
-        self.snap_cache.snapshot.deref().clone()
+        self.snap_cache.snapshot.clone()
     }
 }
 
@@ -637,7 +632,7 @@ where
     E: KvEngine,
 {
     cached_read_id: Option<ThreadReadId>,
-    snapshot: Box<Option<Arc<E::Snapshot>>>,
+    snapshot: Option<Arc<E::Snapshot>>,
     cached_snapshot_ts: Timespec,
 }
 
@@ -648,7 +643,7 @@ where
     fn new() -> Self {
         SnapCache {
             cached_read_id: None,
-            snapshot: Box::new(None),
+            snapshot: None,
             cached_snapshot_ts: Timespec::new(0, 0),
         }
     }
