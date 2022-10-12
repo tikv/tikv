@@ -111,12 +111,15 @@ where
         match self.pre_propose_raft_command(&req) {
             Ok(Some((mut delegate, policy))) => match policy {
                 RequestPolicy::ReadLocal => {
-                    if !delegate.initialized() {
-                        return Ok(None);
-                    }
-
                     let region = Arc::clone(&delegate.region);
-                    let snap = RegionSnapshot::from_snapshot(delegate.get_snapshot(&None), region);
+                    let snap = {
+                        match delegate.get_snapshot(&None) {
+                            Some(snap) => RegionSnapshot::from_snapshot(snap, region),
+                            None => {
+                                return Ok(None);
+                            }
+                        }
+                    };
                     // Ensures the snapshot is acquired before getting the time
                     atomic::fence(atomic::Ordering::Release);
                     let snapshot_ts = monotonic_raw_now();
@@ -136,7 +139,10 @@ where
                     delegate.check_stale_read_safe(read_ts)?;
 
                     let region = Arc::clone(&delegate.region);
-                    let snap = RegionSnapshot::from_snapshot(delegate.get_snapshot(&None), region);
+                    let snap = RegionSnapshot::from_snapshot(
+                        delegate.get_snapshot(&None).unwrap(),
+                        region,
+                    );
 
                     TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_requests.inc());
 
@@ -262,12 +268,6 @@ where
     cached_tablet: CachedTablet<E>,
 }
 
-impl<E: KvEngine> CachedReadDelegate<E> {
-    fn initialized(&mut self) -> bool {
-        self.cached_tablet.latest().is_some()
-    }
-}
-
 impl<E> Deref for CachedReadDelegate<E>
 where
     E: KvEngine,
@@ -301,8 +301,10 @@ where
         self.cached_tablet.latest().unwrap()
     }
 
-    fn get_snapshot(&mut self, _: &Option<LocalReadContext<'_, E>>) -> Arc<E::Snapshot> {
-        Arc::new(self.cached_tablet.latest().unwrap().snapshot())
+    fn get_snapshot(&mut self, _: &Option<LocalReadContext<'_, E>>) -> Option<Arc<E::Snapshot>> {
+        self.cached_tablet
+            .latest()
+            .map(|tablet| Arc::new(tablet.snapshot()))
     }
 }
 
@@ -801,7 +803,7 @@ mod tests {
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
         assert_eq!(tablet1.as_inner().path(), tablet.as_inner().path());
-        let snapshot = delegate.get_snapshot(&None);
+        let snapshot = delegate.get_snapshot(&None).unwrap();
         assert_eq!(
             b"val1".to_vec(),
             *snapshot.get_value(b"a1").unwrap().unwrap()
@@ -811,7 +813,7 @@ mod tests {
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
         assert_eq!(tablet2.as_inner().path(), tablet.as_inner().path());
-        let snapshot = delegate.get_snapshot(&None);
+        let snapshot = delegate.get_snapshot(&None).unwrap();
         assert_eq!(
             b"val2".to_vec(),
             *snapshot.get_value(b"a2").unwrap().unwrap()

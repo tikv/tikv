@@ -49,10 +49,14 @@ pub trait ReadExecutor {
 
     fn get_tablet(&mut self) -> &Self::Tablet;
 
+    /// Get the snapshot fo the tablet.
+    ///
+    /// If the tablet has not been ready, `None` is returned.
+    /// Currently, only multi-rocksdb version may return `None`.
     fn get_snapshot(
         &mut self,
         read_context: &Option<LocalReadContext<'_, Self::Tablet>>,
-    ) -> Arc<<Self::Tablet as KvEngine>::Snapshot>;
+    ) -> Option<Arc<<Self::Tablet as KvEngine>::Snapshot>>;
 
     fn get_value(
         &mut self,
@@ -65,7 +69,8 @@ pub trait ReadExecutor {
         util::check_key_in_region(key, region)?;
 
         let mut resp = Response::default();
-        let snapshot = self.get_snapshot(read_context);
+        // For v1, it's safe to unwrap
+        let snapshot = self.get_snapshot(read_context).unwrap();
         let res = if !req.get_get().get_cf().is_empty() {
             let cf = req.get_get().get_cf();
             snapshot
@@ -128,7 +133,7 @@ pub trait ReadExecutor {
                 },
                 CmdType::Snap => {
                     let snapshot = RegionSnapshot::from_snapshot(
-                        self.get_snapshot(&local_read_ctx),
+                        self.get_snapshot(&local_read_ctx).unwrap(),
                         region.clone(),
                     );
                     response.snapshot = Some(snapshot);
@@ -1030,8 +1035,11 @@ where
         &self.kv_engine
     }
 
-    fn get_snapshot(&mut self, read_context: &Option<LocalReadContext<'_, E>>) -> Arc<E::Snapshot> {
-        read_context.as_ref().unwrap().snapshot().unwrap()
+    fn get_snapshot(
+        &mut self,
+        read_context: &Option<LocalReadContext<'_, E>>,
+    ) -> Option<Arc<E::Snapshot>> {
+        Some(read_context.as_ref().unwrap().snapshot().unwrap())
     }
 }
 
@@ -1634,7 +1642,7 @@ mod tests {
         let read_context = Some(read_context);
 
         assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
-        let snapshot = delegate.get_snapshot(&read_context);
+        let snapshot = delegate.get_snapshot(&read_context).unwrap();
         assert_eq!(
             b"val1".to_vec(),
             *snapshot.get_value(b"a1").unwrap().unwrap()
@@ -1644,7 +1652,7 @@ mod tests {
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
         assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
-        let snapshot = delegate.get_snapshot(&read_context);
+        let snapshot = delegate.get_snapshot(&read_context).unwrap();
         assert_eq!(
             b"val1".to_vec(),
             *snapshot.get_value(b"a1").unwrap().unwrap()
