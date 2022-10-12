@@ -8,7 +8,7 @@ use kvproto::{
     raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState},
 };
 use raft::{
-    eraftpb::{ConfState, Entry, HardState, Snapshot},
+    eraftpb::{ConfState, Entry, Snapshot},
     GetEntriesContext, RaftState, INVALID_ID,
 };
 use raftstore::store::{
@@ -17,7 +17,7 @@ use raftstore::store::{
 use slog::{o, Logger};
 use tikv_util::{box_err, store::find_peer, worker::Scheduler};
 
-use crate::{Error, Result};
+use crate::Result;
 
 pub fn write_initial_states(wb: &mut impl RaftLogBatch, region: Region) -> Result<()> {
     let region_id = region.get_id();
