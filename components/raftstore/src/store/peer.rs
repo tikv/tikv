@@ -613,7 +613,7 @@ pub fn can_amend_read<C>(
     now: Timespec,
 ) -> bool {
     match lease_state {
-        // Here combine the new read request with the previous one even if the lease expired
+        // Here, combining the new read request with the previous one even if the lease expired
         // is ok because in this case, the previous read index must be sent out with a valid
         // lease instead of a suspect lease. So there must no pending transfer-leader
         // proposals before or after the previous read index, and the lease can be renewed
@@ -888,6 +888,8 @@ where
     peer_cache: RefCell<HashMap<u64, metapb::Peer>>,
     /// Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: HashMap<u64, Instant>,
+    /// Record the waiting data status of each follower or learner peer.
+    pub wait_data_peers: Vec<u64>,
 
     proposals: ProposalQueue<Callback<EK::Snapshot>>,
     leader_missing_time: Option<Instant>,
@@ -910,6 +912,13 @@ where
     ///   target peer.
     /// - all read requests must be rejected.
     pub pending_remove: bool,
+    /// Currently it's used to indicate whether the witness -> non-witess
+    /// convertion operation is complete. The meaning of completion is that
+    /// this peer must contain the applied data, then PD can consider that
+    /// the conversion operation is complete, and can continue to schedule
+    /// other operators to prevent the existence of multiple witnesses in
+    /// the same time period.
+    pub wait_data: bool,
 
     /// Force leader state is only used in online recovery when the majority of
     /// peers are missing. In this state, it forces one peer to become leader
@@ -1112,6 +1121,7 @@ where
             long_uncommitted_threshold: cfg.long_uncommitted_base_threshold.0,
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
+            wait_data_peers: Vec::default(),
             peers_start_pending_time: vec![],
             down_peer_ids: vec![],
             size_diff_hint: 0,
@@ -1122,6 +1132,7 @@ where
             compaction_declined_bytes: 0,
             leader_unreachable: false,
             pending_remove: false,
+            wait_data: false,
             should_wake_up: false,
             force_leader: None,
             pending_merge_state: None,
@@ -2005,6 +2016,7 @@ where
         if !self.is_leader() {
             self.peer_heartbeats.clear();
             self.peers_start_pending_time.clear();
+            self.wait_data_peers.clear();
             return;
         }
 
@@ -2564,6 +2576,7 @@ where
                 // Update apply index to `last_applying_idx`
                 self.read_progress
                     .update_applied(self.last_applying_idx, &ctx.coprocessor_host);
+                self.notify_leader_the_peer_is_available(ctx);
             }
             CheckApplyingSnapStatus::Idle => {
                 // FIXME: It's possible that the snapshot applying task is canceled.
@@ -2578,6 +2591,29 @@ where
         }
         assert_eq!(self.apply_snap_ctx, None);
         true
+    }
+
+    fn notify_leader_the_peer_is_available<T: Transport>(
+        &mut self,
+        ctx: &mut PollContext<EK, ER, T>,
+    ) {
+        if self.wait_data {
+            self.wait_data = false;
+            fail_point!("ignore notify leader the peer is available", |_| {});
+            let leader_id = self.leader_id();
+            let leader = self.get_peer_from_cache(leader_id);
+            if let Some(leader) = leader {
+                let mut msg = ExtraMessage::default();
+                msg.set_type(ExtraMessageType::MsgAvailabilityResponse);
+                msg.wait_data = false;
+                self.send_extra_message(msg, &mut ctx.trans, &leader);
+                info!(
+                    "notify leader the leader is available";
+                    "region id" => self.region().get_id(),
+                    "peer id" => self.peer.id
+                );
+            }
+        }
     }
 
     pub fn handle_raft_ready_append<T: Transport>(
@@ -4716,7 +4752,7 @@ where
         Ok(propose_index)
     }
 
-    fn handle_read<E: ReadExecutor<EK>>(
+    fn handle_read<E: ReadExecutor<Tablet = EK>>(
         &self,
         reader: &mut E,
         req: RaftCmdRequest,
@@ -5221,6 +5257,7 @@ where
             approximate_size: self.approximate_size,
             approximate_keys: self.approximate_keys,
             replication_status: self.region_replication_status(),
+            wait_data_peers: self.wait_data_peers.clone(),
         });
         if let Err(e) = ctx.pd_scheduler.schedule(task) {
             error!(
@@ -5609,11 +5646,13 @@ where
     }
 }
 
-impl<EK, ER, T> ReadExecutor<EK> for PollContext<EK, ER, T>
+impl<EK, ER, T> ReadExecutor for PollContext<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
 {
+    type Tablet = EK;
+
     fn get_tablet(&mut self) -> &EK {
         &self.engines.kv
     }
