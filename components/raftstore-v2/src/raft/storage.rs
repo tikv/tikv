@@ -272,7 +272,7 @@ impl<ER: RaftEngine> Storage<ER> {
 
     /// Cancel generating snapshot.
     pub fn cancel_generating_snap(&mut self, compact_to: Option<u64>) {
-        let snap_state = self.snap_state.borrow();
+        let mut snap_state = self.snap_state.borrow_mut();
         if let SnapState::Generating {
             ref canceled,
             ref index,
@@ -287,6 +287,12 @@ impl<ER: RaftEngine> Storage<ER> {
                     }
                 }
                 canceled.store(true, Ordering::SeqCst);
+                *snap_state = SnapState::Relax;
+                info!(
+                    self.logger(),
+                    "snapshot is canceled";
+                    "compact_to" => compact_to,
+                );
             }
         }
     }
@@ -299,8 +305,6 @@ impl<ER: RaftEngine> Storage<ER> {
             info!(
                 self.logger(),
                 "snapshot is stale, generate again";
-                "region_id" => self.region_state.get_region().get_id(),
-                "peer_id" => self.peer.get_id(),
                 "snap_index" => idx,
                 "request_index" => request_index,
             );
@@ -313,8 +317,6 @@ impl<ER: RaftEngine> Storage<ER> {
             error!(
                 self.logger(),
                 "failed to decode snapshot, it may be corrupted";
-                "region_id" => self.region_state.get_region().get_id(),
-                "peer_id" => self.peer.get_id(),
                 "err" => ?e,
             );
             STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.decode.inc();
@@ -326,8 +328,6 @@ impl<ER: RaftEngine> Storage<ER> {
             info!(
                 self.logger(),
                 "snapshot epoch is stale";
-                "region_id" => self.region_state.get_region().get_id(),
-                "peer_id" => self.peer.get_id(),
                 "snap_epoch" => ?snap_epoch,
                 "latest_epoch" => ?latest_epoch,
             );
@@ -343,37 +343,28 @@ impl<ER: RaftEngine> Storage<ER> {
     pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
         let mut snap_state = self.snap_state.borrow_mut();
 
-        let mut tried = false;
-        let mut last_canceled = false;
-        if let SnapState::Generating {
-            ref canceled,
-            ref receiver,
-            ..
-        } = *snap_state
-        {
-            tried = true;
-            last_canceled = canceled.load(Ordering::SeqCst);
+        if let SnapState::Generating { ref receiver, .. } = *snap_state {
             match receiver.try_recv() {
                 Err(TryRecvError::Empty) => {
                     return Err(raft::Error::Store(
                         raft::StorageError::SnapshotTemporarilyUnavailable,
                     ));
                 }
-                Ok(s) if !last_canceled => {
+                Ok(s) => {
                     *snap_state = SnapState::Relax;
                     if self.validate_snap(&s, request_index) {
                         return Ok(s);
                     }
+                    STORE_SNAPSHOT_RETIRES_COUNTER.inc();
                 }
-                Err(TryRecvError::Disconnected) | Ok(_) => {
+                Err(TryRecvError::Disconnected) => {
                     *snap_state = SnapState::Relax;
                     warn!(
                         self.logger(),
                         "failed to try generating snapshot";
-                        "region_id" => self.region().get_id(),
-                        "peer_id" => self.peer().get_id(),
                         "request_peer" => to,
                     );
+                    STORE_SNAPSHOT_RETIRES_COUNTER.inc();
                 }
             }
         }
@@ -386,15 +377,9 @@ impl<ER: RaftEngine> Storage<ER> {
             );
         }
 
-        if !tried || !last_canceled {
-            STORE_SNAPSHOT_RETIRES_COUNTER.inc();
-        }
-
         info!(
             self.logger(),
             "requesting snapshot";
-            "region_id" => self.region().get_id(),
-            "peer_id" => self.peer().get_id(),
             "tablet_index" => self.get_tablet_index(),
             "request_index" => request_index,
             "request_peer" => to,
