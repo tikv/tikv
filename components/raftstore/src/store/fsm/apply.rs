@@ -626,6 +626,7 @@ where
         let is_synced = self.write_to_db();
 
         if !self.apply_res.is_empty() {
+            fail_point!("before_nofity_apply_res");
             let apply_res = mem::take(&mut self.apply_res);
             self.notifier.notify(apply_res);
         }
@@ -2928,6 +2929,10 @@ impl<S: Snapshot> Apply<S> {
         assert_eq!(self.region_id, other.region_id);
         assert_eq!(self.peer_id, other.peer_id);
         if self.entries_size + other.entries_size <= MAX_APPLY_BATCH_SIZE {
+            if other.bucket_meta.is_some() {
+                self.bucket_meta = other.bucket_meta.take();
+            }
+
             assert!(other.term >= self.term);
             self.term = other.term;
 
