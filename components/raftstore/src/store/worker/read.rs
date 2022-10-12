@@ -1774,13 +1774,13 @@ mod tests {
         assert!(!std::ptr::eq(snap1.get_snapshot(), snap2.get_snapshot()));
     }
 
+    fn create_engine(path: &str) -> KvTestEngine {
+        let path = Builder::new().prefix(path).tempdir().unwrap();
+        engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap()
+    }
+
     #[test]
     fn test_snap_cache_context() {
-        fn create_engine(path: &str) -> KvTestEngine {
-            let path = Builder::new().prefix(path).tempdir().unwrap();
-            engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap()
-        }
-
         let db = create_engine("test_snap_cache_context");
         let mut snap_cache = SnapCache::new();
         let mut read_context = LocalReadContext::new(&mut snap_cache, None);
