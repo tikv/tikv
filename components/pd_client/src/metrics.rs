@@ -45,7 +45,7 @@ lazy_static! {
     )
     .unwrap();
     pub static ref STORE_SIZE_GAUGE_VEC: IntGaugeVec =
-        register_int_gauge_vec!("tikv_store_size_bytes", "Size of storage.", &["type"]).unwrap();
+        register_int_gauge_vec!("tikv_store_size_bytes", "Size of storage.", &["type","region_id","keyspace_id"]).unwrap();
     pub static ref REGION_READ_KEYS_HISTOGRAM: Histogram = register_histogram!(
         "tikv_region_read_keys",
         "Histogram of keys written for regions",
@@ -70,12 +70,12 @@ lazy_static! {
         exponential_buckets(1.0, 2.0, 20).unwrap()
     )
     .unwrap();
-    pub static ref REGION_STORE_ENGINE_SIZE_GAUGE_VEC: IntCounterVec = register_int_counter_vec!(
-        "tikv_region_store_size_bytes",
-        "Sizes of each column families",
-        &["keyspace_id"]
-    )
-    .unwrap();
+    // pub static ref REGION_STORE_ENGINE_SIZE_GAUGE_VEC: IntCounterVec = register_int_counter_vec!(
+    //     "tikv_region_store_size_bytes",
+    //     "Sizes of each column families",
+    //     &["keyspace_id"]
+    // )
+    // .unwrap();
     pub static ref REQUEST_FORWARDED_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_pd_request_forwarded",
         "The status to indicate if the request is forwarded",
