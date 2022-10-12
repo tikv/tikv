@@ -64,7 +64,7 @@ fn test_consistency_after_lease_pass() {
     let mut peer = leader.clone();
     cluster.must_transfer_leader(1, new_peer(2, 2));
     pd_client.must_remove_peer(region_id, leader);
-    peer.id += 1000;
+    peer.id = 1000;
     // After we pass the lease check, we should have got the snapshot, so the data
     // that the region contains cannot be deleted.
     // So we need to add the new peer for this region and stop before applying the

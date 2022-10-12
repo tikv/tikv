@@ -1642,54 +1642,54 @@ mod tests {
         assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
     }
 
+    fn prepare_read_delegate(
+        store_id: u64,
+        region_id: u64,
+        term: u64,
+        pr_ids: Vec<u64>,
+        region_epoch: RegionEpoch,
+        store_meta: Arc<Mutex<StoreMeta>>,
+    ) {
+        let mut region = metapb::Region::default();
+        region.set_id(region_id);
+        let prs = new_peers(store_id, pr_ids);
+        region.set_peers(prs.clone().into());
+
+        let leader = prs[0].clone();
+        region.set_region_epoch(region_epoch);
+        let mut lease = Lease::new(Duration::seconds(1), Duration::milliseconds(250)); // 1s is long enough.
+        let read_progress = Arc::new(RegionReadProgress::new(&region, 1, 1, "".to_owned()));
+
+        // Register region
+        lease.renew(monotonic_raw_now());
+        let remote = lease.maybe_new_remote_lease(term).unwrap();
+        // But the applied_term is stale.
+        {
+            let mut meta = store_meta.lock().unwrap();
+            let read_delegate = ReadDelegate {
+                tag: String::new(),
+                region: Arc::new(region.clone()),
+                peer_id: leader.get_id(),
+                term,
+                applied_term: term,
+                leader_lease: Some(remote),
+                last_valid_ts: Timespec::new(0, 0),
+                txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
+                txn_ext: Arc::new(TxnExt::default()),
+                read_progress,
+                pending_remove: false,
+                track_ver: TrackVer::new(),
+                bucket_meta: None,
+            };
+            meta.readers.insert(region_id, read_delegate);
+        }
+    }
+
     #[test]
     fn test_snap_across_regions() {
         let store_id = 2;
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
         let (_tmp, mut reader, rx) = new_reader("test-local-reader", store_id, store_meta.clone());
-
-        fn prepare_read_delegate(
-            store_id: u64,
-            region_id: u64,
-            term: u64,
-            pr_ids: Vec<u64>,
-            region_epoch: RegionEpoch,
-            store_meta: Arc<Mutex<StoreMeta>>,
-        ) {
-            let mut region = metapb::Region::default();
-            region.set_id(region_id);
-            let prs = new_peers(store_id, pr_ids);
-            region.set_peers(prs.clone().into());
-
-            let leader = prs[0].clone();
-            region.set_region_epoch(region_epoch);
-            let mut lease = Lease::new(Duration::seconds(1), Duration::milliseconds(250)); // 1s is long enough.
-            let read_progress = Arc::new(RegionReadProgress::new(&region, 1, 1, "".to_owned()));
-
-            // Register region
-            lease.renew(monotonic_raw_now());
-            let remote = lease.maybe_new_remote_lease(term).unwrap();
-            // But the applied_term is stale.
-            {
-                let mut meta = store_meta.lock().unwrap();
-                let read_delegate = ReadDelegate {
-                    tag: String::new(),
-                    region: Arc::new(region.clone()),
-                    peer_id: leader.get_id(),
-                    term,
-                    applied_term: term,
-                    leader_lease: Some(remote),
-                    last_valid_ts: Timespec::new(0, 0),
-                    txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
-                    txn_ext: Arc::new(TxnExt::default()),
-                    read_progress,
-                    pending_remove: false,
-                    track_ver: TrackVer::new(),
-                    bucket_meta: None,
-                };
-                meta.readers.insert(region_id, read_delegate);
-            }
-        }
 
         let epoch13 = {
             let mut ep = metapb::RegionEpoch::default();
@@ -1718,8 +1718,6 @@ mod tests {
         prepare_read_delegate(store_id, 2, term6, pr_ids2, epoch13.clone(), store_meta);
         let leader2 = prs2[0].clone();
 
-        reader.kv_engine.put(b"a1", b"val1").unwrap();
-
         let mut cmd = RaftCmdRequest::default();
         let mut header = RaftRequestHeader::default();
         header.set_region_id(1);
@@ -1731,32 +1729,18 @@ mod tests {
         req.set_cmd_type(CmdType::Snap);
         cmd.set_requests(vec![req].into());
 
+        let (snap_tx, snap_rx) = channel();
         let task = RaftCommand::<KvTestSnapshot>::new(
             cmd.clone(),
             Callback::read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
-                let snap = resp.snapshot.unwrap();
-                assert_eq!(snap.get_region().id, 1);
-                assert_eq!(
-                    snap.get_snapshot().get_value(b"a1").unwrap().unwrap(),
-                    b"val1"
-                );
+                snap_tx.send(resp.snapshot.unwrap()).unwrap();
             })),
         );
 
         // First request will not hit cache
         let read_id = Some(ThreadReadId::new());
         must_not_redirect_with_read_id(&mut reader, &rx, task, read_id.clone());
-        assert_eq!(
-            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_snapshot_cache_hit.get()),
-            0
-        );
-        assert_eq!(
-            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_requests.get()),
-            1
-        );
-
-        // Change the value of a1, but if cache hit, it still reader "val1"
-        reader.kv_engine.put(b"a1", b"val2").unwrap();
+        let snap1 = snap_rx.recv().unwrap();
 
         let mut header = RaftRequestHeader::default();
         header.set_region_id(2);
@@ -1764,50 +1748,30 @@ mod tests {
         header.set_region_epoch(epoch13);
         header.set_term(term6);
         cmd.set_header(header);
+        let (snap_tx, snap_rx) = channel();
         let task = RaftCommand::<KvTestSnapshot>::new(
             cmd.clone(),
             Callback::read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
-                let snap = resp.snapshot.unwrap();
-                assert_eq!(snap.get_region().id, 2);
-                assert_eq!(
-                    snap.get_snapshot().get_value(b"a1").unwrap().unwrap(),
-                    b"val1"
-                );
+                snap_tx.send(resp.snapshot.unwrap()).unwrap();
             })),
         );
         must_not_redirect_with_read_id(&mut reader, &rx, task, read_id);
-        assert_eq!(
-            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_snapshot_cache_hit.get()),
-            1
-        );
-        assert_eq!(
-            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_requests.get()),
-            2
-        );
+        let snap2 = snap_rx.recv().unwrap();
+        assert!(std::ptr::eq(snap1.get_snapshot(), snap2.get_snapshot()));
 
-        // If we use a new read id, the cache will be miss and we will read the new
-        // value
+        // If we use a new read id, the cache will be miss and a new snapshot will be
+        // generated
         let read_id = Some(ThreadReadId::new());
+        let (snap_tx, snap_rx) = channel();
         let task = RaftCommand::<KvTestSnapshot>::new(
             cmd.clone(),
             Callback::read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
-                let snap = resp.snapshot.unwrap();
-                assert_eq!(snap.get_region().id, 2);
-                assert_eq!(
-                    snap.get_snapshot().get_value(b"a1").unwrap().unwrap(),
-                    b"val2"
-                );
+                snap_tx.send(resp.snapshot.unwrap()).unwrap();
             })),
         );
         must_not_redirect_with_read_id(&mut reader, &rx, task, read_id);
-        assert_eq!(
-            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_snapshot_cache_hit.get()),
-            1
-        );
-        assert_eq!(
-            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_requests.get()),
-            3
-        );
+        let snap2 = snap_rx.recv().unwrap();
+        assert!(!std::ptr::eq(snap1.get_snapshot(), snap2.get_snapshot()));
     }
 
     #[test]
