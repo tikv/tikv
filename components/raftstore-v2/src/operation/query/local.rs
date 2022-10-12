@@ -442,7 +442,7 @@ mod tests {
         ctor::{CfOptions, DbOptions},
         kv::{KvTestEngine, TestTabletFactoryV2},
     };
-    use engine_traits::{OpenOptions, Peekable, SyncMutable, TabletFactory, ALL_CFS};
+    use engine_traits::{MiscExt, OpenOptions, Peekable, SyncMutable, TabletFactory, ALL_CFS};
     use futures::executor::block_on;
     use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, raft_cmdpb::*};
     use raftstore::store::{
@@ -768,7 +768,7 @@ mod tests {
         let (_, delegate) = store_meta.get_executor_and_len(1);
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
-        // assert_eq!(tablet1.as_inner().path(), tablet.as_inner().path());
+        assert_eq!(tablet1.path(), tablet.path());
         let snapshot = delegate.get_snapshot(None, &mut None);
         assert_eq!(
             b"val1".to_vec(),
@@ -778,7 +778,7 @@ mod tests {
         let (_, delegate) = store_meta.get_executor_and_len(2);
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
-        // assert_eq!(tablet2.as_inner().path(), tablet.as_inner().path());
+        assert_eq!(tablet2.path(), tablet.path());
         let snapshot = delegate.get_snapshot(None, &mut None);
         assert_eq!(
             b"val2".to_vec(),

@@ -161,7 +161,7 @@ pub mod kv {
         ) -> Result<KvTestEngine> {
             if let Some(db) = self.root_db.lock().unwrap().as_ref() {
                 if options.create_new() {
-                    return Err(box_err!("root tablet already exists"));
+                    return Err(box_err!("root tablet {} already exists", db.path()));
                 }
                 return Ok(db.clone());
             }
@@ -271,7 +271,7 @@ pub mod kv {
                     // Target tablet exist in the cache
 
                     if options.create_new() {
-                        return Err(box_err!("region {} already exists", id));
+                        return Err(box_err!("region {} {} already exists", id, tablet.path()));
                     }
                     return Ok(tablet.clone());
                 } else if !options.cache_only() {
@@ -375,8 +375,8 @@ pub mod kv {
         fn load_tablet(&self, path: &Path, id: u64, suffix: u64) -> Result<KvTestEngine> {
             {
                 let reg = self.registry.lock().unwrap();
-                if reg.get(&(id, suffix)).is_some() {
-                    return Err(box_err!("region {} already exists", id));
+                if let Some(db) = reg.get(&(id, suffix)) {
+                    return Err(box_err!("region {} {} already exists", id, db.path()));
                 }
             }
 

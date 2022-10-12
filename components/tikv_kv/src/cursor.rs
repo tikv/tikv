@@ -579,7 +579,6 @@ mod tests {
         util::{new_engine_opt, FixedPrefixSliceTransform},
         RocksCfOptions, RocksDbOptions, RocksEngine, RocksSnapshot,
     };
-    use engine_test::new_temp_engine;
     use engine_traits::{IterOptions, SyncMutable, CF_DEFAULT};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
@@ -670,7 +669,7 @@ mod tests {
             .prefix("test_reverse_iterate")
             .tempdir()
             .unwrap();
-        let mut cf_opts = RocksCfOptions::default();
+        let cf_opts = RocksCfOptions::default();
         let engine = new_engine_opt(
             path.path().to_str().unwrap(),
             RocksDbOptions::default(),

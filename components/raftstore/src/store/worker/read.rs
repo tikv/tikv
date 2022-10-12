@@ -1002,7 +1002,7 @@ mod tests {
 
     use crossbeam::channel::TrySendError;
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
-    use engine_traits::{Peekable, SyncMutable, ALL_CFS};
+    use engine_traits::{MiscExt, Peekable, SyncMutable, ALL_CFS};
     use kvproto::raft_cmdpb::*;
     use tempfile::{Builder, TempDir};
     use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
@@ -1559,7 +1559,7 @@ mod tests {
         let (_, delegate) = store_meta.get_executor_and_len(1);
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
-        // assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
+        assert_eq!(kv_engine.path(), tablet.path());
         let snapshot = delegate.get_snapshot(read_id_copy.clone(), &mut read_context);
         assert_eq!(
             b"val1".to_vec(),
@@ -1569,7 +1569,7 @@ mod tests {
         let (_, delegate) = store_meta.get_executor_and_len(2);
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
-        // assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
+        assert_eq!(kv_engine.path(), tablet.path());
         let snapshot = delegate.get_snapshot(read_id_copy, &mut read_context);
         assert_eq!(
             b"val1".to_vec(),
