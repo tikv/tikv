@@ -1736,7 +1736,6 @@ fn future_prepare_flashback_to_version<
     raft_router: &T,
     req: PrepareFlashbackToVersionRequest,
 ) -> impl Future<Output = ServerResult<PrepareFlashbackToVersionResponse>> {
-    let region_id = req.get_context().get_region_id();
     let raft_router = Mutex::new(raft_router.clone());
     async move {
         // Send an `AdminCmdType::PrepareFlashback` to prepare the raftstore for the
@@ -1744,20 +1743,12 @@ fn future_prepare_flashback_to_version<
         // the memory state of the flashback in Peer FSM to reject all read, write
         // and scheduling operations for this region when propose/apply before we
         // start the actual data flashback transaction command in the next phase.
-        if let Err(e) = send_flashback_msg::<T, E>(
+        send_flashback_msg::<T, E>(
             &raft_router,
             req.get_context(),
             AdminCmdType::PrepareFlashback,
         )
-        .await
-        {
-            // TODO: maybe should set it into the resp.
-            return Err(Error::Other(box_err!(
-                "failed to prepare the region {} for flashback, {:?}",
-                region_id,
-                e
-            )));
-        }
+        .await?;
         Ok(PrepareFlashbackToVersionResponse::default())
     }
 }
@@ -1812,7 +1803,6 @@ fn future_flashback_to_version<
             AdminCmdType::FinishFlashback,
         )
         .await?;
-
         let mut resp = FlashbackToVersionResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
@@ -2491,11 +2481,15 @@ async fn send_flashback_msg<T: RaftStoreRouter<E::Local> + 'static, E: Engine>(
     ctx: &Context,
     cmd_type: AdminCmdType,
 ) -> ServerResult<()> {
+    let region_id = ctx.get_region_id();
     let (result_tx, result_rx) = oneshot::channel();
     let cb = Callback::write(Box::new(move |resp| {
         if resp.response.get_header().has_error() {
             result_tx.send(false).unwrap();
-            error!("send flashback msg failed"; "error" => ?resp.response.get_header().get_error());
+            error!("exec flashback msg failed";
+                "region_id" => region_id,
+                "type" => ?cmd_type,
+                "error" => ?resp.response.get_header().get_error());
             return;
         }
         result_tx.send(true).unwrap();
@@ -2503,7 +2497,7 @@ async fn send_flashback_msg<T: RaftStoreRouter<E::Local> + 'static, E: Engine>(
     let mut admin = AdminRequest::default();
     admin.set_cmd_type(cmd_type);
     let mut req = RaftCmdRequest::default();
-    req.mut_header().set_region_id(ctx.get_region_id());
+    req.mut_header().set_region_id(region_id);
     req.mut_header()
         .set_region_epoch(ctx.get_region_epoch().clone());
     req.mut_header().set_peer(ctx.get_peer().clone());
@@ -2521,15 +2515,17 @@ async fn send_flashback_msg<T: RaftStoreRouter<E::Local> + 'static, E: Engine>(
         },
     ) {
         return Err(Error::Other(box_err!(
-            "flashback router send failed, error {:?}",
+            "send flashback msg {:?} failed for region {}, error {:?}",
+            cmd_type,
+            region_id,
             e
         )));
     }
     if !result_rx.await? {
         return Err(Error::Other(box_err!(
-            "send flashback msg {:?} to region {} failed",
+            "wait flashback msg {:?} result failed for region {} failed",
             cmd_type,
-            ctx.get_region_id()
+            region_id
         )));
     }
     Ok(())

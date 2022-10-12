@@ -726,6 +726,21 @@ fn test_mvcc_flashback_block_scheduling() {
     fail::remove("skip_finish_flashback_to_version");
 }
 
+#[test]
+fn test_mvcc_flashback_unprepared() {
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    // Try to flashback without preparing first.
+    let mut req = FlashbackToVersionRequest::default();
+    req.set_context(ctx);
+    req.set_start_ts(1);
+    req.set_commit_ts(2);
+    req.version = 0;
+    req.start_key = b"a".to_vec();
+    req.end_key = b"z".to_vec();
+    let resp = client.kv_flashback_to_version(&req).unwrap();
+    assert!(resp.get_error().contains("unprepared region"));
+}
+
 // raft related RPC is tested as parts of test_snapshot.rs, so skip here.
 
 #[test]
