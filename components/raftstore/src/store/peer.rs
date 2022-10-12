@@ -233,15 +233,20 @@ impl<C: WriteCallback> ProposalQueue<C> {
     }
 }
 
-fn has_admin_request(data: &[u8]) -> bool {
+fn can_witness_skip(entry: &Entry) -> bool {
+    // need to handle ConfChange entry type
+    if entry.get_entry_type() != EntryType::EntryNormal {
+        return false;
+    }
+
     // HACK: check admin request field in serialized data from `RaftCmdRequest`
     // without deserializing all. It's done by checking the existence of the
     // field number of `admin_request`.
     // See the encoding in `write_to_with_cached_sizes()` of `RaftCmdRequest` in
     // `raft_cmdpb.rs` for reference.
-    let mut is = CodedInputStream::from_bytes(data);
+    let mut is = CodedInputStream::from_bytes(entry.get_data());
     if is.eof().unwrap() {
-        return false;
+        return true;
     }
     let (mut field_number, wire_type) = is.read_tag_unpack().unwrap();
     // Header field is of number 1
@@ -262,7 +267,7 @@ fn has_admin_request(data: &[u8]) -> bool {
     // - If the next field is 3, it's exactly an admin request.
     // - If the next field is others, neither requests nor admin_request is filled,
     //   so there is no admin request.
-    field_number == 3
+    field_number != 3
 }
 
 bitflags! {
@@ -3044,7 +3049,7 @@ where
             let commit_term = self.get_store().term(commit_index).unwrap();
 
             if self.is_witness() {
-                committed_entries.retain(|e| has_admin_request(e.get_data()));
+                committed_entries.retain(|e| !can_witness_skip(e));
                 if committed_entries.is_empty() {
                     return;
                 }
@@ -5932,27 +5937,45 @@ mod memtrace {
 mod tests {
     use kvproto::raft_cmdpb;
     use protobuf::ProtobufEnum;
+    use raft::eraftpb::{ConfChange, ConfChangeV2};
 
     use super::*;
     use crate::store::{msg::ExtCallback, util::u64_to_timespec};
 
     #[test]
-    fn test_has_admin_request() {
+    fn test_can_witness_skip() {
+        let mut entry = Entry::new();
         let mut req = RaftCmdRequest::default();
+        entry.set_entry_type(EntryType::EntryNormal);
         let data = req.write_to_bytes().unwrap();
-        assert!(!has_admin_request(&data));
+        entry.set_data(Bytes::copy_from_slice(&data));
+        assert!(can_witness_skip(&entry));
 
         req.mut_admin_request()
             .set_cmd_type(AdminCmdType::CompactLog);
         let data = req.write_to_bytes().unwrap();
-        assert!(has_admin_request(&data));
+        entry.set_data(Bytes::copy_from_slice(&data));
+        assert!(!can_witness_skip(&entry));
 
         let mut req = RaftCmdRequest::default();
         let mut request = raft_cmdpb::Request::default();
         request.set_cmd_type(CmdType::Put);
         req.set_requests(vec![request].into());
         let data = req.write_to_bytes().unwrap();
-        assert!(!has_admin_request(&data));
+        entry.set_data(Bytes::copy_from_slice(&data));
+        assert!(can_witness_skip(&entry));
+
+        entry.set_entry_type(EntryType::EntryConfChange);
+        let conf_change = ConfChange::new();
+        let data = conf_change.write_to_bytes().unwrap();
+        entry.set_data(Bytes::copy_from_slice(&data));
+        assert!(!can_witness_skip(&entry));
+
+        entry.set_entry_type(EntryType::EntryConfChangeV2);
+        let conf_change_v2 = ConfChangeV2::new();
+        let data = conf_change_v2.write_to_bytes().unwrap();
+        entry.set_data(Bytes::copy_from_slice(&data));
+        assert!(!can_witness_skip(&entry));
     }
 
     #[test]
