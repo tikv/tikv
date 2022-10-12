@@ -8,7 +8,7 @@ publish = false
 tonic = ["dep:tonic"]
 
 [dependencies]
-collections = { path = "../collections" }
+collections = { path = "../collections", default-features = false }
 encryption = { path = "../encryption", default-features = false }
 grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 serde = "1.0"

@@ -12,7 +12,7 @@ cloud-azure = ["encryption_export/cloud-azure"]
 
 [dependencies]
 backtrace = "0.3"
-collections = { path = "../collections" }
+collections = { path = "../collections", default-features = false }
 encryption_export = { path = "../encryption/export", default-features = false }
 fail = "0.5"
 grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }

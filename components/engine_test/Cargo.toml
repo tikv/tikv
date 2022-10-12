@@ -32,6 +32,6 @@ engine_traits = { path = "../engine_traits", default-features = false }
 file_system = { path = "../file_system", default-features = false }
 raft_log_engine = { path = "../raft_log_engine", default-features = false }
 tempfile = "3.0"
-tikv_alloc = { path = "../tikv_alloc" }
+tikv_alloc = { path = "../tikv_alloc", default-features = false }
 # FIXME: Remove this dep from the engine_traits interface
 tikv_util = { path = "../tikv_util", default-features = false }

@@ -7,7 +7,7 @@ description = "Vector aggr functions of query engine to run TiDB pushed down exe
 
 [dependencies]
 match-template = "0.0.1"
-tidb_query_codegen = { path = "../tidb_query_codegen" }
+tidb_query_codegen = { path = "../tidb_query_codegen", default-features = false }
 tidb_query_common = { path = "../tidb_query_common", default-features = false }
 tidb_query_datatype = { path = "../tidb_query_datatype", default-features = false }
 tidb_query_expr = { path = "../tidb_query_expr", default-features = false }
@@ -15,5 +15,5 @@ tikv_util = { path = "../tikv_util", default-features = false }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 
 [dev-dependencies]
-panic_hook = { path = "../panic_hook" }
+panic_hook = { path = "../panic_hook", default-features = false }
 tipb_helper = { path = "../tipb_helper", default-features = false }

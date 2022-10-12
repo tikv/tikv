@@ -9,8 +9,8 @@ publish = false
 engine_traits = { path = "../engine_traits", default-features = false }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
-tikv_alloc = { path = "../tikv_alloc" }
+tikv_alloc = { path = "../tikv_alloc", default-features = false }
 # FIXME: Remove this dep from the engine_traits interface
 tikv_util = { path = "../tikv_util", default-features = false }
-tracker = { path = "../tracker" }
+tracker = { path = "../tracker", default-features = false }
 txn_types = { path = "../txn_types", default-features = false }

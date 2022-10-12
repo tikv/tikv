@@ -70,13 +70,13 @@ async-trait = "0.1"
 backtrace = "0.3"
 batch-system = { path = "components/batch-system", default-features = false }
 byteorder = "1.2"
-case_macros = { path = "components/case_macros" }
-causal_ts = { path = "components/causal_ts" }
+case_macros = { path = "components/case_macros", default-features = false }
+causal_ts = { path = "components/causal_ts", default-features = false }
 chrono = "0.4"
 codec = { path = "components/codec", default-features = false }
-collections = { path = "components/collections" }
+collections = { path = "components/collections", default-features = false }
 concurrency_manager = { path = "components/concurrency_manager", default-features = false }
-coprocessor_plugin_api = { path = "components/coprocessor_plugin_api" }
+coprocessor_plugin_api = { path = "components/coprocessor_plugin_api", default-features = false }
 crc32fast = "1.2"
 crc64fast = "0.1"
 crossbeam = "0.8"
@@ -110,9 +110,9 @@ lazy_static = "1.3"
 libc = "0.2"
 libloading = "0.7"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
-log_wrappers = { path = "components/log_wrappers" }
+log_wrappers = { path = "components/log_wrappers", default-features = false }
 match-template = "0.0.1"
-memory_trace_macros = { path = "components/memory_trace_macros" }
+memory_trace_macros = { path = "components/memory_trace_macros", default-features = false }
 mime = "0.3.13"
 more-asserts = "0.2"
 murmur3 = "0.5.1"
@@ -120,7 +120,7 @@ nom = { version = "5.1.0", default-features = false, features = ["std"] }
 notify = "4"
 num-traits = "0.2.14"
 num_cpus = "1"
-online_config = { path = "components/online_config" }
+online_config = { path = "components/online_config", default-features = false }
 openssl = "0.10"
 parking_lot = "0.12"
 paste = "1.0"
@@ -136,7 +136,7 @@ raft_log_engine = { path = "components/raft_log_engine", default-features = fals
 raftstore = { path = "components/raftstore", default-features = false, features = ["engine_rocks"] }
 rand = "0.7.3"
 regex = "1.3"
-resource_metering = { path = "components/resource_metering" }
+resource_metering = { path = "components/resource_metering", default-features = false }
 rev_lines = "0.2.1"
 seahash = "4.1.0"
 security = { path = "components/security", default-features = false }
@@ -159,7 +159,7 @@ tidb_query_common = { path = "components/tidb_query_common", default-features = 
 tidb_query_datatype = { path = "components/tidb_query_datatype", default-features = false }
 tidb_query_executors = { path = "components/tidb_query_executors", default-features = false }
 tidb_query_expr = { path = "components/tidb_query_expr", default-features = false }
-tikv_alloc = { path = "components/tikv_alloc" }
+tikv_alloc = { path = "components/tikv_alloc", default-features = false }
 tikv_kv = { path = "components/tikv_kv", default-features = false }
 tikv_util = { path = "components/tikv_util", default-features = false }
 time = "0.1"
@@ -168,7 +168,7 @@ tokio = { version = "1.17", features = ["full"] }
 tokio-openssl = "0.6"
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 toml = "0.5"
-tracker = { path = "components/tracker" }
+tracker = { path = "components/tracker", default-features = false }
 txn_types = { path = "components/txn_types", default-features = false }
 url = "2"
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
@@ -176,10 +176,10 @@ walkdir = "2"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [dev-dependencies]
-api_version = { path = "components/api_version", features = ["testexport"] }
-example_plugin = { path = "components/test_coprocessor_plugin/example_plugin" } # should be a binary dependency
+api_version = { path = "components/api_version", default-features = false, features = ["testexport"] }
+example_plugin = { path = "components/test_coprocessor_plugin/example_plugin", default-features = false } # should be a binary dependency
 hyper-openssl = "0.9"
-panic_hook = { path = "components/panic_hook" }
+panic_hook = { path = "components/panic_hook", default-features = false }
 reqwest = { version = "0.11", features = ["blocking"] }
 test_sst_importer = { path = "components/test_sst_importer", default-features = false }
 test_util = { path = "components/test_util", default-features = false }

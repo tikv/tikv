@@ -4,24 +4,24 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-api_version = { path = "../api_version" }
-codec = { path = "../codec" }
-collections = { path = "../collections" }
+api_version = { path = "../api_version", default-features = false }
+codec = { path = "../codec", default-features = false }
+collections = { path = "../collections", default-features = false }
 derive_more = "0.99.3"
-engine_traits = { path = "../engine_traits" }
-keys = { path = "../keys" }
+engine_traits = { path = "../engine_traits", default-features = false }
+keys = { path = "../keys", default-features = false }
 lazy_static = "1.4.0"
-log_wrappers = { path = "../log_wrappers" }
+log_wrappers = { path = "../log_wrappers", default-features = false }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 slog_derive = "0.2"
-tikv_alloc = { path = "../tikv_alloc" }
-tikv_util = { path = "../tikv_util" }
+tikv_alloc = { path = "../tikv_alloc", default-features = false }
+tikv_util = { path = "../tikv_util", default-features = false }
 tirocks = { git = "https://github.com/busyjay/tirocks.git", branch = "dev" }
-tracker = { path = "../tracker" }
-txn_types = { path = "../txn_types" }
+tracker = { path = "../tracker", default-features = false }
+txn_types = { path = "../txn_types", default-features = false }
 
 [dev-dependencies]
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }

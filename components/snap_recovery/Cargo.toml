@@ -25,8 +25,8 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 structopt = "0.3"
 tempfile = "3.0"
 thiserror = "1.0"
-tikv = { path = "../.." }
-tikv_alloc = { path = "../../components/tikv_alloc" }
+tikv = { path = "../..", default-features = false }
+tikv_alloc = { path = "../../components/tikv_alloc", default-features = false }
 tikv_util = { path = "../../components/tikv_util", default-features = false }
 toml = "0.5"
 txn_types = { path = "../../components/txn_types", default-features = false }

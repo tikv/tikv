@@ -28,10 +28,10 @@ mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
 
 [dependencies]
-api_version = { path = "../api_version" }
+api_version = { path = "../api_version", default-features = false }
 bitflags = "1.0"
-causal_ts = { path = "../causal_ts" }
-collections = { path = "../collections" }
+causal_ts = { path = "../causal_ts", default-features = false }
+collections = { path = "../collections", default-features = false }
 concurrency_manager = { path = "../concurrency_manager", default-features = false }
 crossbeam = "0.8"
 engine_rocks = { path = "../engine_rocks", default-features = false }
@@ -41,11 +41,11 @@ futures = "0.3"
 futures-timer = "3.0"
 getset = "0.1"
 grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
-keys = { path = "../keys" }
+keys = { path = "../keys", default-features = false }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 lazy_static = "1.3"
-log_wrappers = { path = "../log_wrappers" }
-online_config = { path = "../online_config" }
+log_wrappers = { path = "../log_wrappers", default-features = false }
+online_config = { path = "../online_config", default-features = false }
 pd_client = { path = "../pd_client", default-features = false }
 prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
 prometheus-static-metric = "0.5"
@@ -70,7 +70,7 @@ engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 tempfile = "3.0"
-test_pd_client = { path = "../test_pd_client" }
+test_pd_client = { path = "../test_pd_client", default-features = false }
 test_raftstore = { path = "../test_raftstore", default-features = false }
 test_util = { path = "../test_util", default-features = false }
 

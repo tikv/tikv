@@ -72,20 +72,20 @@ api_version = { path = "../components/api_version", default-features = false }
 async-trait = "0.1"
 batch-system = { path = "../components/batch-system", default-features = false }
 cdc = { path = "../components/cdc", default-features = false }
-collections = { path = "../components/collections" }
+collections = { path = "../components/collections", default-features = false }
 crc64fast = "0.1"
 crossbeam = "0.8"
 encryption = { path = "../components/encryption", default-features = false }
-engine_rocks_helper = { path = "../components/engine_rocks_helper" }
+engine_rocks_helper = { path = "../components/engine_rocks_helper", default-features = false }
 error_code = { path = "../components/error_code", default-features = false }
 fail = "0.5"
-file_system = { path = "../components/file_system" }
+file_system = { path = "../components/file_system", default-features = false }
 futures = "0.3"
 grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 grpcio-health = { version = "0.10", default-features = false }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 libc = "0.2"
-log_wrappers = { path = "../components/log_wrappers" }
+log_wrappers = { path = "../components/log_wrappers", default-features = false }
 more-asserts = "0.2"
 online_config = { path = "../components/online_config", default-features = false }
 paste = "1.0"
@@ -119,7 +119,7 @@ arrow = "13.0"
 byteorder = "1.2"
 # See https://bheisler.github.io/criterion.rs/book/user_guide/known_limitations.html for the usage
 # of `real_blackbox` feature.
-causal_ts = { path = "../components/causal_ts" }
+causal_ts = { path = "../components/causal_ts", default-features = false }
 concurrency_manager = { path = "../components/concurrency_manager", default-features = false }
 criterion = "0.3"
 criterion-cpu-time = "0.1"
@@ -127,20 +127,20 @@ engine_rocks = { path = "../components/engine_rocks", default-features = false }
 engine_test = { path = "../components/engine_test", default-features = false }
 engine_traits = { path = "../components/engine_traits", default-features = false }
 external_storage_export = { path = "../components/external_storage/export", default-features = false }
-file_system = { path = "../components/file_system" }
+file_system = { path = "../components/file_system", default-features = false }
 hyper = { version = "0.14", default-features = false, features = ["runtime"] }
 keys = { path = "../components/keys", default-features = false }
-panic_hook = { path = "../components/panic_hook" }
-profiler = { path = "../components/profiler" }
+panic_hook = { path = "../components/panic_hook", default-features = false }
+profiler = { path = "../components/profiler", default-features = false }
 rand_xorshift = "0.3"
-resource_metering = { path = "../components/resource_metering" }
+resource_metering = { path = "../components/resource_metering", default-features = false }
 security = { path = "../components/security", default-features = false }
 serde_json = "1.0"
 sst_importer = { path = "../components/sst_importer", default-features = false }
 test_backup = { path = "../components/test_backup", default-features = false }
 test_coprocessor = { path = "../components/test_coprocessor", default-features = false }
 test_pd = { path = "../components/test_pd", default-features = false }
-test_pd_client = { path = "../components/test_pd_client" }
+test_pd_client = { path = "../components/test_pd_client", default-features = false }
 test_raftstore = { path = "../components/test_raftstore", default-features = false }
 test_sst_importer = { path = "../components/test_sst_importer", default-features = false }
 test_storage = { path = "../components/test_storage", default-features = false }

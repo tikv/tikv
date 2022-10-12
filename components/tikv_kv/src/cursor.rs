@@ -666,11 +666,20 @@ mod tests {
 
     #[test]
     fn test_reverse_iterate() {
-        let path = Builder::new().prefix("test-cursor").tempdir().unwrap();
-        let engines = new_temp_engine(&path);
-        let (region, test_data) = load_default_dataset(engines.kv.clone());
+        let path = Builder::new()
+            .prefix("test_reverse_iterate")
+            .tempdir()
+            .unwrap();
+        let mut cf_opts = RocksCfOptions::default();
+        let engine = new_engine_opt(
+            path.path().to_str().unwrap(),
+            RocksDbOptions::default(),
+            vec![(CF_DEFAULT, cf_opts)],
+        )
+        .unwrap();
+        let (region, test_data) = load_default_dataset(engine.clone());
 
-        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(engines.kv.clone(), region);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(engine.clone(), region);
         let mut statistics = CfStatistics::default();
         let it = snap.iter(CF_DEFAULT, IterOptions::default()).unwrap();
         let mut iter = Cursor::new(it, ScanMode::Mixed, false);
@@ -725,7 +734,7 @@ mod tests {
         // test last region
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());
-        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(engines.kv, region);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(engine, region);
         let it = snap.iter(CF_DEFAULT, IterOptions::default()).unwrap();
         let mut iter = Cursor::new(it, ScanMode::Mixed, false);
         assert!(
