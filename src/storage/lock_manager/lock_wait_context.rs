@@ -14,14 +14,7 @@
 //! Note: The corresponding implementation in `WaiterManager` is not yet
 //! implemented, and this mod is currently not used yet.
 
-use std::{
-    convert::TryInto,
-    result::Result,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-};
+use std::{convert::TryInto, result::Result, sync::Arc};
 
 use parking_lot::Mutex;
 use txn_types::Key;
@@ -53,23 +46,15 @@ pub struct LockWaitContextInner {
 ///   and the request is going to be finished, they need to take the
 ///   [`LockWaitContextInner`] to call the callback.
 /// * The [`LockWaitEntry`](crate::storage::lock_manager::lock_waiting_queue::LockWaitEntry), for
-///   checking whether the request is already finished (cancelled).
+///   providing information
 pub struct LockWaitContextSharedState {
     ctx_inner: Mutex<Option<LockWaitContextInner>>,
-    pub finished: AtomicBool,
 
     /// The token to identify the waiter.
     lock_wait_token: LockWaitToken,
 
     /// The key on which lock waiting occurs.
     key: Key,
-}
-
-impl LockWaitContextSharedState {
-    /// Checks whether the lock-waiting request is already finished.
-    pub fn is_finished(&self) -> bool {
-        self.finished.load(Ordering::Acquire)
-    }
 }
 
 #[derive(Clone)]
@@ -91,7 +76,6 @@ impl<L: LockManager> LockWaitContext<L> {
         Self {
             shared_states: Arc::new(LockWaitContextSharedState {
                 ctx_inner: Mutex::new(Some(inner)),
-                finished: AtomicBool::new(false),
                 key,
                 lock_wait_token,
             }),
@@ -164,8 +148,6 @@ impl<L: LockManager> LockWaitContext<L> {
         // canceled and removed from the queue. There should be no chance to try
         // to take the `ctx_inner` more than once.
         let ctx_inner = self.shared_states.ctx_inner.lock().take().unwrap();
-
-        self.shared_states.finished.store(true, Ordering::Release);
 
         if !self.allow_lock_with_conflict {
             // The result must be an owned error.
@@ -276,7 +258,6 @@ mod tests {
                     ..Default::default()
                 },
                 lock_wait_token: token,
-                req_states: Some(ctx.get_shared_states().clone()),
                 legacy_wake_up_index: None,
                 key_cb: None,
             }),
@@ -293,7 +274,7 @@ mod tests {
             )))
         ));
         // Since the cancellation callback can fully execute only when it's successfully
-        // removed from the lock waiting queues, it's impossible that `finished_request`
+        // removed from the lock waiting queues, it's impossible that `finish_request`
         // is called again after that.
 
         // The tx should be dropped.
