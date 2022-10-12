@@ -3781,14 +3781,10 @@ where
     fn on_ready_compact_log(&mut self, first_index: u64, state: RaftTruncatedState) {
         // Since this peer may be warming up the entry cache, log compaction should be
         // temporarily skipped. Otherwise, the warmup task may fail.
-        if self
-            .fsm
-            .peer
-            .get_store()
-            .entry_cache_warmup_state()
-            .is_some()
-        {
-            return;
+        if let Some(state) = self.fsm.peer.get_store().entry_cache_warmup_state() {
+            if !state.is_stale() {
+                return;
+            }
         }
 
         let total_cnt = self.fsm.peer.last_applying_idx - first_index;

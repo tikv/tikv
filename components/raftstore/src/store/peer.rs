@@ -4566,10 +4566,7 @@ where
         // There are two cases where index can be 0:
         // 1. During rolling upgrade, old instances may not support warmup.
         // 2. The leader's entry cache is empty.
-        if warmup_range_start == 0 {
-            WARM_UP_ENTRY_CACHE_COUNTER.no_need.inc();
-            should_ack_now = true;
-        } else if warmup_range_start > last_index {
+        if warmup_range_start == 0 || warmup_range_start > last_index {
             // There is little possibility that the warmup_range_start
             // is larger than the last index. Check the test case
             // `test_when_warmup_range_start_is_larger_than_last_index`
@@ -4582,7 +4579,6 @@ where
             // Check if the entry cache is already warmed up.
             if let Some(first_index) = self.get_store().entry_cache_first_index() {
                 if low >= first_index {
-                    WARM_UP_ENTRY_CACHE_COUNTER.already.inc();
                     should_ack_now = true;
                 }
             }
@@ -4596,14 +4592,11 @@ where
         if let Some(state) = self.mut_store().entry_cache_warmup_state_mut() {
             // If it is timeout, this peer should ack the message so that
             // the leadership transfer process can continue.
-            if state.is_timeout() {
-                return true;
+            let is_task_timeout = state.elapsed() >= ctx.cfg.max_raft_entry_cache_warmup_time.0;
+            if is_task_timeout {
+                state.mark_task_timeout();
             }
-            let is_timeout = state.elapsed() >= ctx.cfg.max_raft_entry_cache_warmup_time.0;
-            if is_timeout {
-                state.set_timeout();
-            }
-            is_timeout
+            is_task_timeout
         } else {
             self.mut_store().async_warm_up_entry_cache(low).is_none()
         }

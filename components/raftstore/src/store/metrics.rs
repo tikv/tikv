@@ -79,11 +79,9 @@ make_auto_flush_static_metric! {
     }
 
     pub label_enum WarmUpEntryCacheType {
-        already,
         started,
         timeout,
         finished,
-        no_need,
     }
 
     pub label_enum RaftEventDurationType {

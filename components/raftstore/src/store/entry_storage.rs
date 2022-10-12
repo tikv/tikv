@@ -149,13 +149,13 @@ impl EntryCache {
         }
     }
 
-    /// Append entries to the left.
+    /// Push entries to the left of the cache.
     ///
-    /// Please ensure
-    /// 1. Index of the last entry in entries should exactly equal to
-    ///    `start index of the cached entries - 1` when cache is not empty.
-    /// 2. entries is not empty.
-    fn appendleft(&mut self, entries: &[Entry]) {
+    /// When cache is not empty, the index of the last entry in entries
+    /// should be equal to `cache first index - 1`. When cache is
+    /// empty, it should be equal to the store's last index. Otherwise,
+    /// append new entries may fail due to unexpected hole.
+    fn push_front(&mut self, entries: &[Entry]) {
         let mut mem_size_change = 0;
         let old_capacity = self.cache.capacity();
         for e in entries.iter().rev() {
@@ -557,7 +557,7 @@ pub fn init_applied_term<ER: RaftEngine>(
 #[derive(Clone, Debug)]
 pub struct CacheWarmupState {
     range: (u64, u64),
-    is_timeout: bool,
+    is_task_timeout: bool,
     started_at: Instant,
 }
 
@@ -569,7 +569,7 @@ impl CacheWarmupState {
     pub fn new_with_range(low: u64, high: u64) -> Self {
         CacheWarmupState {
             range: (low, high),
-            is_timeout: false,
+            is_task_timeout: false,
             started_at: Instant::now(),
         }
     }
@@ -583,13 +583,21 @@ impl CacheWarmupState {
         self.started_at.saturating_elapsed()
     }
 
-    pub fn is_timeout(&self) -> bool {
-        self.is_timeout
+    /// Whenther the warmup task is timeout.
+    pub fn is_task_timeout(&self) -> bool {
+        self.is_task_timeout
     }
 
-    pub fn set_timeout(&mut self) {
+    pub fn mark_task_timeout(&mut self) {
         WARM_UP_ENTRY_CACHE_COUNTER.timeout.inc();
-        self.is_timeout = true;
+        self.is_task_timeout = true;
+    }
+
+    /// Whether the state is stale.
+    ///
+    /// Exit the state when the state is stale.
+    pub fn is_stale(&self) -> bool {
+        self.elapsed() >= MAX_WARMED_UP_CACHE_KEEP_TIME
     }
 }
 
@@ -1112,7 +1120,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
         // exactly the same as the warmup range.
         let state = self.entry_cache_warmup_state().as_ref().unwrap();
         let range = state.range();
-        let is_timeout = state.is_timeout();
+        let is_task_timeout = state.is_task_timeout();
 
         // Generally speaking, when the res.low is the same as the warmup
         // range start, the fetch result is exactly used for warmup.
@@ -1140,8 +1148,8 @@ impl<ER: RaftEngine> EntryStorage<ER> {
                     if index + 1 == range.1 {
                         fail_point!("on_entry_cache_warmed_up");
                         WARM_UP_ENTRY_CACHE_COUNTER.finished.inc();
-                        self.cache.appendleft(entries);
-                        return !is_timeout;
+                        self.cache.push_front(entries);
+                        return !is_task_timeout;
                     }
                 }
                 warn!(
@@ -1167,7 +1175,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
     pub fn compact_entry_cache(&mut self, idx: u64) {
         let mut can_compact = true;
         if let Some(state) = self.entry_cache_warmup_state() {
-            if state.elapsed() >= MAX_WARMED_UP_CACHE_KEEP_TIME {
+            if state.is_stale() {
                 self.exit_entry_cache_warmup_state();
             } else {
                 can_compact = false;
@@ -1285,7 +1293,7 @@ pub mod tests {
         );
         assert_eq!(rx.try_recv().unwrap(), 3);
 
-        cache.appendleft(&[new_padded_entry(100, 1, 1)]);
+        cache.push_front(&[new_padded_entry(100, 1, 1)]);
         assert_eq!(rx.try_recv().unwrap(), 1);
         cache.persisted = 100;
         cache.compact_to(101);
@@ -1722,7 +1730,7 @@ pub mod tests {
         entries = vec![new_entry(6, 6), new_entry(7, 6)];
         append_ents(&mut store, &entries);
         validate_cache(&store, &entries);
-        store.cache.appendleft(&[new_entry(6, 5)]);
+        store.cache.push_front(&[new_entry(6, 5)]);
 
         // rewrite old entry
         entries = vec![new_entry(5, 6), new_entry(6, 6)];
