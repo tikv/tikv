@@ -2,6 +2,7 @@
 
 use std::{iter::*, sync::*, thread, time::*};
 
+use api_version::{test_kv_format_impl, KvFormat};
 use engine_traits::{Peekable, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::{
     kvrpcpb::Context,
@@ -1145,7 +1146,11 @@ fn test_merge_remove_target_peer_isolated() {
 
 #[test]
 fn test_sync_max_ts_after_region_merge() {
-    let mut cluster = new_server_cluster(0, 3);
+    test_kv_format_impl!(test_sync_max_ts_after_region_merge_impl);
+}
+
+fn test_sync_max_ts_after_region_merge_impl<F: KvFormat>() {
+    let mut cluster = new_server_cluster_with_api_ver(0, 3, F::TAG);
     configure_for_merge(&mut cluster);
     cluster.run();
 
@@ -1161,7 +1166,7 @@ fn test_sync_max_ts_after_region_merge() {
     let right = cluster.get_region(b"k3");
 
     let cm = cluster.sim.read().unwrap().get_concurrency_manager(1);
-    let storage = cluster
+    let mut storage = cluster
         .sim
         .read()
         .unwrap()
@@ -1169,7 +1174,7 @@ fn test_sync_max_ts_after_region_merge() {
         .get(&1)
         .unwrap()
         .clone();
-    let wait_for_synced = |cluster: &mut Cluster<ServerCluster>| {
+    let mut wait_for_synced = |cluster: &mut Cluster<ServerCluster>| {
         let region_id = right.get_id();
         let leader = cluster.leader_of_region(region_id).unwrap();
         let epoch = cluster.get_region_epoch(region_id);

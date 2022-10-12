@@ -100,7 +100,8 @@ const LOCKCF_MIN_MEM: usize = 256 * MIB as usize;
 const LOCKCF_MAX_MEM: usize = GIB as usize;
 const RAFT_MIN_MEM: usize = 256 * MIB as usize;
 const RAFT_MAX_MEM: usize = 2 * GIB as usize;
-const LAST_CONFIG_FILE: &str = "last_tikv.toml";
+/// Configs that actually took effect in the last run
+pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
 const TMP_CONFIG_FILE: &str = "tmp_tikv.toml";
 const MAX_BLOCK_SIZE: usize = 32 * MIB as usize;
 
@@ -2496,9 +2497,6 @@ pub struct BackupStreamConfig {
     pub initial_scan_pending_memory_quota: ReadableSize,
     #[online_config(skip)]
     pub initial_scan_rate_limit: ReadableSize,
-    #[serde(skip)]
-    #[online_config(skip)]
-    pub use_checkpoint_v3: bool,
 }
 
 impl BackupStreamConfig {
@@ -2531,7 +2529,6 @@ impl Default for BackupStreamConfig {
             file_size_limit: ReadableSize::mb(256),
             initial_scan_pending_memory_quota: ReadableSize(quota_size as _),
             initial_scan_rate_limit: ReadableSize::mb(60),
-            use_checkpoint_v3: true,
         }
     }
 }

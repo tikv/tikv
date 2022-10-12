@@ -4,39 +4,23 @@ use std::{mem, sync::Arc};
 
 use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory};
-use fail::fail_point;
-use kvproto::{
-    metapb,
-    raft_cmdpb::{self, RaftCmdRequest},
-    raft_serverpb::RegionLocalState,
+use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb};
+use pd_client::BucketStat;
+use raft::{RawNode, StateRole};
+use raftstore::store::{
+    util::{Lease, RegionReadProgress},
+    Config, EntryStorage, ProposalQueue, ReadDelegate, ReadIndexQueue, TrackVer, TxnExt,
 };
-use protobuf::Message;
-use raft::{RawNode, StateRole, INVALID_ID};
-use raftstore::{
-    store::{
-        fsm::Proposal,
-        metrics::PEER_PROPOSE_LOG_SIZE_HISTOGRAM,
-        util::{Lease, RegionReadProgress},
-        Config, EntryStorage, ProposalQueue, RaftlogFetchTask, ReadIndexQueue, ReadIndexRequest,
-        Transport, WriteRouter,
-    },
-    Error,
-};
-use slog::{debug, error, info, o, warn, Logger};
-use tikv_util::{
-    box_err,
-    config::ReadableSize,
-    time::{monotonic_raw_now, Instant as TiInstant},
-    worker::Scheduler,
-    Either,
-};
+use slog::Logger;
+use tikv_util::{box_err, config::ReadableSize};
+use time::Timespec;
 
-use super::storage::Storage;
+use super::{storage::Storage, Apply};
 use crate::{
-    batch::StoreContext,
+    fsm::{ApplyFsm, ApplyScheduler},
     operation::{AsyncWriter, DestroyProgress, SimpleWriteEncoder},
     router::{CmdResChannel, QueryResChannel},
-    tablet::{self, CachedTablet},
+    tablet::CachedTablet,
     Result,
 };
 
@@ -55,6 +39,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// than protobuf.
     raw_write_encoder: Option<SimpleWriteEncoder>,
     proposals: ProposalQueue<Vec<CmdResChannel>>,
+    apply_scheduler: Option<ApplyScheduler>,
 
     /// Set to true if any side effect needs to be handled.
     has_ready: bool,
@@ -67,6 +52,12 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     pending_reads: ReadIndexQueue<QueryResChannel>,
     read_progress: Arc<RegionReadProgress>,
     leader_lease: Lease,
+
+    /// region buckets.
+    region_buckets: Option<BucketStat>,
+    /// Transaction extensions related to this peer.
+    txn_ext: Arc<TxnExt>,
+    txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -121,15 +112,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             None
         };
 
+        let tablet = CachedTablet::new(tablet);
+
         let raft_group = RawNode::new(&raft_cfg, storage, &logger)?;
         let region = raft_group.store().region_state().get_region().clone();
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
         let mut peer = Peer {
-            tablet: CachedTablet::new(tablet),
+            tablet,
             peer_cache: vec![],
             raw_write_encoder: None,
             proposals: ProposalQueue::new(region_id, raft_group.raft.id),
             async_writer: AsyncWriter::new(region_id, peer_id),
+            apply_scheduler: None,
             has_ready: false,
             destroy_progress: DestroyProgress::None,
             raft_group,
@@ -145,6 +139,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 cfg.raft_store_max_leader_lease(),
                 cfg.renew_leader_lease_advance_duration(),
             ),
+            region_buckets: None,
+            txn_ext: Arc::default(),
+            txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -364,12 +361,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.entry_storage().applied_term() == self.term()
     }
 
-    pub fn raw_write_encoder_mut(&mut self) -> &mut Option<SimpleWriteEncoder> {
+    #[inline]
+    pub fn simple_write_encoder_mut(&mut self) -> &mut Option<SimpleWriteEncoder> {
         &mut self.raw_write_encoder
     }
 
     #[inline]
-    pub fn raw_write_encoder(&self) -> &Option<SimpleWriteEncoder> {
+    pub fn simple_write_encoder(&self) -> &Option<SimpleWriteEncoder> {
         &self.raw_write_encoder
     }
 
@@ -381,5 +379,30 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn proposals_mut(&mut self) -> &mut ProposalQueue<Vec<CmdResChannel>> {
         &mut self.proposals
+    }
+
+    #[inline]
+    pub fn apply_scheduler(&self) -> &ApplyScheduler {
+        self.apply_scheduler.as_ref().unwrap()
+    }
+
+    #[inline]
+    pub fn set_apply_scheduler(&mut self, apply_scheduler: ApplyScheduler) {
+        self.apply_scheduler = Some(apply_scheduler);
+    }
+
+    pub fn generate_read_delegate(&self) -> ReadDelegate {
+        let peer_id = self.peer().get_id();
+
+        ReadDelegate::new(
+            peer_id,
+            self.term(),
+            self.region().clone(),
+            self.storage().entry_storage().applied_term(),
+            self.txn_extra_op.clone(),
+            self.txn_ext.clone(),
+            self.read_progress().clone(),
+            self.region_buckets.as_ref().map(|b| b.meta.clone()),
+        )
     }
 }

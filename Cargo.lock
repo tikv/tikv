@@ -758,7 +758,6 @@ dependencies = [
  "prometheus",
  "prometheus-static-metric",
  "raft",
- "raftstore",
  "serde",
  "serde_derive",
  "slog",
@@ -2793,7 +2792,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#4c859a208355bc15ceb7dc1f05303f68acfb4791"
+source = "git+https://github.com/tikv/rust-rocksdb.git#bd07e9e598db63574cf06edaeea3c4687eadff59"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2812,7 +2811,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#4c859a208355bc15ceb7dc1f05303f68acfb4791"
+source = "git+https://github.com/tikv/rust-rocksdb.git#bd07e9e598db63574cf06edaeea3c4687eadff59"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4175,6 +4174,7 @@ dependencies = [
  "bitflags",
  "byteorder",
  "bytes",
+ "causal_ts",
  "collections",
  "concurrency_manager",
  "crc32fast",
@@ -4247,6 +4247,7 @@ dependencies = [
  "engine_traits",
  "error_code",
  "fail",
+ "file_system",
  "futures 0.3.15",
  "keys",
  "kvproto",
@@ -4655,7 +4656,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#4c859a208355bc15ceb7dc1f05303f68acfb4791"
+source = "git+https://github.com/tikv/rust-rocksdb.git#bd07e9e598db63574cf06edaeea3c4687eadff59"
 dependencies = [
  "libc 0.2.132",
  "librocksdb_sys",
@@ -5562,6 +5563,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "sync_wrapper"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "20518fe4a4c9acf048008599e464deb21beeae3d3578418951a189c235a7a9a8"
+
+[[package]]
 name = "sysinfo"
 version = "0.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6138,7 +6145,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "6.2.0-alpha"
+version = "6.4.0-alpha"
 dependencies = [
  "anyhow",
  "api_version",
@@ -6157,6 +6164,7 @@ dependencies = [
  "crc32fast",
  "crc64fast",
  "crossbeam",
+ "dashmap",
  "encryption_export",
  "engine_panic",
  "engine_rocks",
@@ -6228,8 +6236,10 @@ dependencies = [
  "serde_json",
  "slog",
  "slog-global",
+ "smallvec",
  "sst_importer",
  "strum 0.20.0",
+ "sync_wrapper",
  "sysinfo",
  "tempfile",
  "test_sst_importer",
