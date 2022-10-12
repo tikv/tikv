@@ -7,21 +7,13 @@ use std::{
     iter::FromIterator,
 };
 
-use kvproto::{
-    brpb::{Noop, StorageBackend},
-    metapb::Region,
-};
+use kvproto::brpb::{Noop, StorageBackend};
 use tokio_stream::StreamExt;
-use txn_types::TimeStamp;
 
 use super::{keys::MetaKey, MetadataClient, StreamTask};
 use crate::{
     errors::Result,
-    metadata::{
-        client::{Checkpoint, CheckpointProvider},
-        store::SlashEtcStore,
-        MetadataEvent,
-    },
+    metadata::{store::SlashEtcStore, MetadataEvent},
 };
 
 fn test_meta_cli() -> MetadataClient<SlashEtcStore> {
@@ -97,12 +89,6 @@ fn task_matches(expected: &[StreamTask], real: &[StreamTask]) {
         name_set,
         real
     );
-}
-
-fn fake_region(id: u64) -> Region {
-    let mut r = Region::new();
-    r.set_id(id);
-    r
 }
 
 #[tokio::test]
@@ -195,63 +181,5 @@ async fn test_init() -> Result<()> {
     let progress = cli.global_progress_of_task(&task.info.name).await?;
     assert_eq!(progress, 43);
 
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_region_checkpoint() -> Result<()> {
-    let cli = test_meta_cli();
-    let task = simple_task("simple_2");
-    cli.insert_task_with_range(&task, &[]).await?;
-
-    let cps = [
-        (fake_region(1), TimeStamp::new(42)),
-        (fake_region(2), TimeStamp::new(64)),
-    ];
-    cli.upload_region_checkpoint("simple_2", &cps).await?;
-    cli.set_local_task_checkpoint("simple_2", 50).await?;
-
-    let rcp = cli
-        .get_region_checkpoint("simple_2", &fake_region(1))
-        .await?;
-    assert_eq!(
-        rcp,
-        Checkpoint {
-            provider: CheckpointProvider::Region { id: 1, version: 0 },
-            ts: TimeStamp::new(42)
-        }
-    );
-    let gcp = cli
-        .get_region_checkpoint("simple_2", &fake_region(3))
-        .await?;
-    assert_eq!(
-        gcp,
-        Checkpoint {
-            provider: CheckpointProvider::Store(42),
-            ts: TimeStamp::new(50)
-        }
-    );
-    cli.clear_region_checkpoint("simple_2", &[fake_region(1)])
-        .await?;
-    let rcp = cli
-        .get_region_checkpoint("simple_2", &fake_region(2))
-        .await?;
-    assert_eq!(
-        rcp,
-        Checkpoint {
-            provider: CheckpointProvider::Region { id: 2, version: 0 },
-            ts: TimeStamp::new(64)
-        }
-    );
-    let gcp = cli
-        .get_region_checkpoint("simple_2", &fake_region(1))
-        .await?;
-    assert_eq!(
-        gcp,
-        Checkpoint {
-            provider: CheckpointProvider::Store(42),
-            ts: TimeStamp::new(50)
-        }
-    );
     Ok(())
 }
