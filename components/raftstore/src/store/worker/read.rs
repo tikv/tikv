@@ -68,7 +68,6 @@ pub trait ReadExecutor {
         util::check_key_in_region(key, region)?;
 
         let mut resp = Response::default();
-        // For v1, it's safe to unwrap
         let snapshot = self.get_snapshot(read_context);
         let res = if !req.get_get().get_cf().is_empty() {
             let cf = req.get_get().get_cf();
@@ -1777,6 +1776,14 @@ mod tests {
             })),
         );
         must_not_redirect_with_read_id(&mut reader, &rx, task, read_id);
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_snapshot_cache_hit.get()),
+            1
+        );
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_requests.get()),
+            2
+        );
 
         // If we use a new read id, the cache will be miss and we will read the new
         // value
@@ -1793,6 +1800,14 @@ mod tests {
             })),
         );
         must_not_redirect_with_read_id(&mut reader, &rx, task, read_id);
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_snapshot_cache_hit.get()),
+            1
+        );
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_requests.get()),
+            3
+        );
     }
 
     #[test]
