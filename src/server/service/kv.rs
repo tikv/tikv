@@ -405,6 +405,37 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
         );
     }
 
+    fn kv_prepare_flashback_to_version(
+        &mut self,
+        ctx: RpcContext<'_>,
+        mut req: PrepareFlashbackToVersionRequest,
+        sink: UnarySink<PrepareFlashbackToVersionResponse>,
+    ) {
+        let begin_instant = Instant::now();
+
+        let source = req.mut_context().take_request_source();
+        let resp = future_prepare_flashback_to_version(&self.storage, &self.ch, req);
+        let task = async move {
+            let resp = resp.await?;
+            let elapsed = begin_instant.saturating_elapsed();
+            sink.success(resp).await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .kv_prepare_flashback_to_version
+                .observe(elapsed.as_secs_f64());
+            record_request_source_metrics(source, elapsed);
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            log_net_error!(e, "kv rpc failed";
+                "request" => stringify!($fn_name)
+            );
+            GRPC_MSG_FAIL_COUNTER.kv_prepare_flashback_to_version.inc();
+        })
+        .map(|_| ());
+
+        ctx.spawn(task);
+    }
+
     fn kv_flashback_to_version(
         &mut self,
         ctx: RpcContext<'_>,
@@ -1379,7 +1410,6 @@ fn handle_batch_commands_request<
                     response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::$metric_name, source);
                 })*
                 Some(batch_commands_request::request::Cmd::Import(_)) => unimplemented!(),
-                Some(batch_commands_request::request::Cmd::PrepareFlashbackToVersion(_)) => unimplemented!(),
             }
         }
     }
@@ -1398,6 +1428,7 @@ fn handle_batch_commands_request<
         ResolveLock, future_resolve_lock(storage), kv_resolve_lock;
         Gc, future_gc(), kv_gc;
         DeleteRange, future_delete_range(storage), kv_delete_range;
+        PrepareFlashbackToVersion, future_prepare_flashback_to_version(storage, ch), kv_prepare_flashback_to_version;
         FlashbackToVersion, future_flashback_to_version(storage, ch), kv_flashback_to_version;
         RawBatchGet, future_raw_batch_get(storage), raw_batch_get;
         RawPut, future_raw_put(storage), raw_put;
@@ -1691,6 +1722,27 @@ fn future_delete_range<E: Engine, L: LockManager, F: KvFormat>(
     }
 }
 
+// Preparing the flashback for a region/key range will "lock" the region so that
+// there is no any read, write or schedule operation could be proposed before
+// the actual flashback operation.
+fn future_prepare_flashback_to_version<
+    E: Engine,
+    L: LockManager,
+    F: KvFormat,
+    T: RaftStoreRouter<E::Local> + 'static,
+>(
+    // Keep this param to hint the type of E for the compiler.
+    _storage: &Storage<E, L, F>,
+    _raft_router: &T,
+    _req: PrepareFlashbackToVersionRequest,
+) -> impl Future<Output = ServerResult<PrepareFlashbackToVersionResponse>> {
+    // TODO: implement this.
+    async move { Ok(PrepareFlashbackToVersionResponse::default()) }
+}
+
+// Flashback the region to a specific point with the given `version`, please
+// make sure the region is "locked" by `PrepareFlashbackToVersion` first,
+// otherwise this request will fail.
 fn future_flashback_to_version<
     T: RaftStoreRouter<E::Local> + 'static,
     E: Engine,
@@ -1703,7 +1755,6 @@ fn future_flashback_to_version<
 ) -> impl Future<Output = ServerResult<FlashbackToVersionResponse>> {
     let storage_clone = storage.clone();
     let raft_router = Mutex::new(raft_router.clone());
-    // TODO: Make this func a two-phase request
     async move {
         // Send an `AdminCmdType::PrepareFlashback` to prepare the raftstore for the
         // later flashback. This will first block all scheduling, read and write

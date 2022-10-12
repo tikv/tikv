@@ -35,6 +35,7 @@ make_auto_flush_static_metric! {
         kv_resolve_lock,
         kv_gc,
         kv_delete_range,
+        kv_prepare_flashback_to_version,
         kv_flashback_to_version,
         raw_get,
         raw_batch_get,
