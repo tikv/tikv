@@ -49,6 +49,8 @@ mod lease;
 mod local;
 mod replica;
 
+pub(crate) use self::local::LocalReader;
+
 impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
     PeerFsmDelegate<'a, EK, ER, T>
 {

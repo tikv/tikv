@@ -25,7 +25,7 @@ use tikv_util::store::find_peer;
 
 use crate::{
     batch::StoreContext,
-    fsm::{PeerFsm, Store, StoreFsmDelegate},
+    fsm::{PeerFsm, Store},
     raft::{Peer, Storage},
     router::PeerMsg,
 };
