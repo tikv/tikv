@@ -11,9 +11,12 @@ use file_system::IoRateLimiter;
 use kvproto::kvrpcpb::ApiVersion;
 use tikv_util::config::ReadableSize;
 
-use crate::storage::{
-    config::BlockCacheConfig,
-    kv::{Result, RocksEngine},
+use crate::{
+    server::gc_worker::{RawCompactionFilterFactory, WriteCompactionFilterFactory},
+    storage::{
+        config::BlockCacheConfig,
+        kv::{Result, RocksEngine},
+    },
 };
 
 // Duplicated from rocksdb_engine
@@ -100,12 +103,30 @@ impl TestEngineBuilder {
         let cfs_opts = cfs
             .iter()
             .map(|cf| match *cf {
-                CF_DEFAULT => (
-                    CF_DEFAULT,
-                    cfg_rocksdb.defaultcf.build_opt(&cache, None, api_version),
-                ),
+                CF_DEFAULT => (CF_DEFAULT, {
+                    let mut default_cf_opts =
+                        cfg_rocksdb.defaultcf.build_opt(&cache, None, api_version);
+                    if api_version == ApiVersion::V2 {
+                        default_cf_opts
+                            .set_compaction_filter_factory(
+                                "apiv2_gc_compaction_filter_factory",
+                                RawCompactionFilterFactory::new(0, 0),
+                            )
+                            .unwrap()
+                    }
+                    default_cf_opts
+                }),
                 CF_LOCK => (CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
-                CF_WRITE => (CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
+                CF_WRITE => (CF_WRITE, {
+                    let mut write_cf_opts = cfg_rocksdb.writecf.build_opt(&cache, None);
+                    write_cf_opts
+                        .set_compaction_filter_factory(
+                            "write_compaction_filter_factory",
+                            WriteCompactionFilterFactory::new(0, 0),
+                        )
+                        .unwrap();
+                    write_cf_opts
+                }),
                 CF_RAFT => (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
                 _ => (*cf, RocksCfOptions::default()),
             })
