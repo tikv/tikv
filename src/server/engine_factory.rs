@@ -7,8 +7,8 @@ use std::{
 
 use engine_rocks::{
     raw::{Cache, Env},
-    CompactedEventSender, CompactionListener, FlowListener, RocksCfOptions, RocksCompactionJobInfo,
-    RocksEngine, RocksEventListener,
+    CompactedEventSender, CompactionListener, FlowListener, RocksCompactionJobInfo, RocksEngine,
+    RocksEventListener,
 };
 use engine_traits::{
     CfOptions, CfOptionsExt, CompactionJobInfo, OpenOptions, Result, TabletAccessor, TabletFactory,
@@ -151,13 +151,37 @@ impl KvEngineFactory {
         if let Some(listener) = &self.inner.flow_listener {
             kv_db_opts.add_event_listener(listener.clone_with(region_id, suffix));
         }
-        let kv_cfs_opts = self.inner.rocksdb_config.build_cf_opts(
+        let mut kv_cfs_opts = self.inner.rocksdb_config.build_cf_opts(
             &self.inner.block_cache,
             self.inner.region_info_accessor.as_ref(),
             self.inner.api_version,
         );
 
-        self.set_compaction_filters(kv_cfs_opts.clone(), region_id, suffix);
+        // Post-process to generate compaction filter factories
+        {
+            for cf_opts in kv_cfs_opts.iter_mut() {
+                if cf_opts.0 == CF_WRITE {
+                    cf_opts
+                        .1
+                        .set_compaction_filter_factory(
+                            "write_compaction_filter_factory",
+                            WriteCompactionFilterFactory::new(region_id, suffix),
+                        )
+                        .unwrap();
+                }
+
+                if cf_opts.0 == CF_DEFAULT && self.inner.api_version == ApiVersion::V2 {
+                    cf_opts
+                        .1
+                        .set_compaction_filter_factory(
+                            "apiv2_gc_compaction_filter_factory",
+                            RawCompactionFilterFactory::new(region_id, suffix),
+                        )
+                        .unwrap();
+                }
+            }
+        }
+
         let kv_engine = engine_rocks::util::new_engine_opt(
             tablet_path.to_str().unwrap(),
             kv_db_opts,
@@ -221,47 +245,9 @@ impl KvEngineFactory {
     fn kv_engine_path(&self) -> PathBuf {
         self.inner.store_path.join(DEFAULT_ROCKSDB_SUB_DIR)
     }
-
-    fn set_compaction_filters(
-        &self,
-        kv_cfs_opts: Vec<(&str, RocksCfOptions)>,
-        region_id: u64,
-        suffix: u64,
-    ) {
-        if let Some(x) = kv_cfs_opts.iter().find(|x| x.0 == CF_WRITE) {
-            let mut write_cf_opts = x.1.clone();
-            write_cf_opts
-                .set_compaction_filter_factory(
-                    "write_compaction_filter_factory",
-                    WriteCompactionFilterFactory::new(region_id, suffix),
-                )
-                .unwrap();
-        }
-
-        if let Some(x) = kv_cfs_opts.iter().find(|x| x.0 == CF_DEFAULT) {
-            if self.inner.api_version == ApiVersion::V2 {
-                let mut default_cf_opts = x.1.clone();
-                default_cf_opts
-                    .set_compaction_filter_factory(
-                        "apiv2_gc_compaction_filter_factory",
-                        RawCompactionFilterFactory::new(region_id, suffix),
-                    )
-                    .unwrap();
-            }
-        }
-    }
 }
 
 impl TabletFactory<RocksEngine> for KvEngineFactory {
-    #[inline]
-    fn create_shared_db(&self) -> Result<RocksEngine> {
-        let root_path = self.kv_engine_path();
-        let tablet = self.create_tablet(&root_path, 0, 0)?;
-        let mut root_db = self.inner.root_db.lock().unwrap();
-        root_db.replace(tablet.clone());
-        Ok(tablet)
-    }
-
     /// Open the root tablet according to the OpenOptions.
     ///
     /// If options.create_new is true, create the root tablet. If the tablet
@@ -303,6 +289,20 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
         self.create_shared_db()
     }
 
+    #[inline]
+    fn create_shared_db(&self) -> Result<RocksEngine> {
+        let root_path = self.kv_engine_path();
+        let tablet = self.create_tablet(&root_path, 0, 0)?;
+        let mut root_db = self.inner.root_db.lock().unwrap();
+        root_db.replace(tablet.clone());
+        Ok(tablet)
+    }
+
+    #[inline]
+    fn destroy_tablet(&self, _id: u64, _suffix: u64) -> engine_traits::Result<()> {
+        Ok(())
+    }
+
     fn exists_raw(&self, _path: &Path) -> bool {
         false
     }
@@ -313,11 +313,6 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
 
     fn tablets_path(&self) -> PathBuf {
         self.kv_engine_path()
-    }
-
-    #[inline]
-    fn destroy_tablet(&self, _id: u64, _suffix: u64) -> engine_traits::Result<()> {
-        Ok(())
     }
 
     fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()> {
