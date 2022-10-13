@@ -33,6 +33,7 @@ make_auto_flush_static_metric! {
         default,
         lock,
         write,
+        mark,
     }
 
     pub label_enum ScanKeysKind {
@@ -218,6 +219,7 @@ impl From<GcKeysCF> for CF {
             GcKeysCF::default => CF::default,
             GcKeysCF::lock => CF::lock,
             GcKeysCF::write => CF::write,
+            GcKeysCF::mark => CF::mark,
         }
     }
 }

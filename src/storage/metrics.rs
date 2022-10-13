@@ -189,6 +189,7 @@ make_auto_flush_static_metric! {
         default,
         lock,
         write,
+        mark,
     }
 
     pub label_enum GcKeysDetail {
@@ -279,6 +280,7 @@ impl From<ServerGcKeysCF> for GcKeysCF {
             ServerGcKeysCF::default => GcKeysCF::default,
             ServerGcKeysCF::lock => GcKeysCF::lock,
             ServerGcKeysCF::write => GcKeysCF::write,
+            ServerGcKeysCF::mark => GcKeysCF::mark,
         }
     }
 }

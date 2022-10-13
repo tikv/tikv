@@ -2,6 +2,7 @@
 
 use std::{
     fmt::{self, Display, Formatter},
+    iter,
     iter::Peekable,
     mem,
     sync::{
@@ -18,7 +19,7 @@ use concurrency_manager::ConcurrencyManager;
 use engine_rocks::FlowInfo;
 use engine_traits::{
     raw_ttl::ttl_current_ts, DeleteStrategy, Error as EngineError, KvEngine, MiscExt, Range,
-    WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_MARK, CF_WRITE,
 };
 use file_system::{IoType, WithIoType};
 use futures::executor::block_on;
@@ -40,7 +41,7 @@ use tikv_util::{
     worker::{Builder as WorkerBuilder, LazyWorker, Runnable, ScheduleError, Scheduler},
     Either,
 };
-use txn_types::{Key, TimeStamp};
+use txn_types::{Key, Mark, TimeStamp};
 
 use super::{
     applied_lock_collector::{AppliedLockCollector, Callback as LockCollectorCallback},
@@ -57,7 +58,7 @@ use crate::{
     server::metrics::*,
     storage::{
         kv::{metrics::GcKeyMode, Engine, ScanMode, Statistics},
-        mvcc::{GcInfo, MvccReader, MvccTxn},
+        mvcc::{Error as MvccError, GcInfo, MvccReader, MvccTxn},
         txn::{gc, Error as TxnError},
     },
 };
@@ -340,13 +341,20 @@ where
     fn need_gc(&self, start_key: &[u8], end_key: &[u8], safe_point: TimeStamp) -> bool {
         // todo(SpadeA): multi-rocks db version should handle with this differently
         // which will be reflected in the imlementation of the v2's RaftKv.
-        let props = match self
+        let mut props = match self
             .engine
             .get_mvcc_properties_cf(CF_WRITE, safe_point, start_key, end_key)
         {
             Some(c) => c,
             None => return true,
         };
+        if let Some(mark_props) = self
+            .engine
+            .get_mvcc_properties_cf(CF_MARK, safe_point, start_key, end_key)
+        {
+            // All versions in the mark CF are non-effective versions.
+            props.num_versions += mark_props.num_versions;
+        }
         check_need_gc(safe_point, self.cfg.ratio_threshold, &props)
     }
 
@@ -398,11 +406,25 @@ where
             return Ok(());
         }
 
-        let mut reader = MvccReader::new(
-            self.get_snapshot(self.store_id, &region)?,
-            Some(ScanMode::Forward),
-            false,
+        let snapshot = self.get_snapshot(self.store_id, &region)?;
+        self.gc_mark_cf(&snapshot, &region, safe_point)?;
+        self.gc_write_cf(snapshot, &region, safe_point)?;
+        debug!(
+            "gc has finished";
+            "start_key" => log_wrappers::Value::key(region.get_start_key()),
+            "end_key" => log_wrappers::Value::key(region.get_end_key()),
+            "safe_point" => safe_point
         );
+        Ok(())
+    }
+
+    fn gc_write_cf(
+        &mut self,
+        snapshot: <E as Engine>::Snap,
+        region: &Region,
+        safe_point: TimeStamp,
+    ) -> Result<()> {
+        let mut reader = MvccReader::new(snapshot, Some(ScanMode::Forward), false);
 
         let mut next_key = Some(Key::from_encoded_slice(region.get_start_key()));
         while next_key.is_some() {
@@ -420,12 +442,42 @@ where
         }
 
         self.mut_stats(GcKeyMode::txn).add(&reader.statistics);
-        debug!(
-            "gc has finished";
-            "start_key" => log_wrappers::Value::key(region.get_start_key()),
-            "end_key" => log_wrappers::Value::key(region.get_end_key()),
-            "safe_point" => safe_point
-        );
+        Ok(())
+    }
+
+    fn gc_mark_cf(
+        &mut self,
+        snapshot: &<E as Engine>::Snap,
+        region: &Region,
+        safe_point: TimeStamp,
+    ) -> Result<()> {
+        let mut stats = CfStatistics::default();
+        let mut cursor = CursorBuilder::new(snapshot, CF_MARK)
+            .fill_cache(false)
+            .scan_mode(ScanMode::Forward)
+            .build()?;
+        let start_key = Key::from_encoded_slice(region.get_start_key());
+        if !cursor.seek(&start_key, &mut stats)? {
+            return Ok(());
+        }
+        let mut modifies = Vec::with_capacity(self.cfg.batch_keys);
+        while cursor.next(&mut stats) {
+            let mark = Mark::parse(cursor.value(&mut stats))
+                .map_err(MvccError::from)
+                .map_err(TxnError::from)?;
+            if mark.commit_ts <= safe_point {
+                let key = Key::from_encoded(cursor.key(&mut stats).to_vec());
+                modifies.push(Modify::Delete(CF_MARK, key));
+                if modifies.len() >= self.cfg.batch_keys {
+                    self.engine.modify_on_kv_engine(
+                        iter::once((region.get_id(), mem::take(&mut modifies))).collect(),
+                    )?;
+                }
+            }
+        }
+        self.engine
+            .modify_on_kv_engine(iter::once((region.get_id(), modifies)).collect())?;
+        self.mut_stats(GcKeyMode::txn).mark.add(&stats);
         Ok(())
     }
 
@@ -1652,7 +1704,7 @@ mod tests {
     use tikv_util::{
         codec::number::NumberEncoder, future::paired_future_callback, store::new_peer,
     };
-    use txn_types::Mutation;
+    use txn_types::{MarkType, Mutation};
 
     use super::{test_gc_worker::MultiRocksEngine, *};
     use crate::{
@@ -1662,15 +1714,18 @@ mod tests {
             kv::{metrics::GcKeyMode, Modify, TestEngineBuilder, WriteData},
             lock_manager::DummyLockManager,
             mvcc::{
-                tests::{must_get_none, must_get_none_on_region, must_get_on_region},
+                tests::{
+                    must_get_mark, must_get_no_mark, must_get_none, must_get_none_on_region,
+                    must_get_on_region,
+                },
                 MAX_TXN_WRITE_SIZE,
             },
             txn::{
                 commands,
                 tests::{
                     must_commit, must_commit_on_region, must_gc, must_prewrite_delete,
-                    must_prewrite_delete_on_region, must_prewrite_put, must_prewrite_put_on_region,
-                    must_rollback,
+                    must_prewrite_delete_on_region, must_prewrite_lock, must_prewrite_put,
+                    must_prewrite_put_on_region, must_rollback,
                 },
             },
             Engine, Storage, TestStorageBuilderApiV1,
@@ -2991,5 +3046,48 @@ mod tests {
         // Cover two regions
         test_destroy_range_for_multi_rocksdb_impl(b"k05", b"k195", vec![1, 2]);
         test_destroy_range_for_multi_rocksdb_impl(b"k099", b"k25", vec![2, 3]);
+    }
+
+    #[test]
+    fn test_gc_mark_cf() {
+        let store_id = 1;
+
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut prefixed_engine = PrefixedEngine(engine.clone());
+
+        let (tx, _rx) = mpsc::channel();
+        let mut cfg = GcConfig::default();
+        cfg.batch_keys = 3;
+        let mut gc_runner = GcRunner::new(
+            store_id,
+            prefixed_engine.clone(),
+            RaftStoreBlackHole,
+            tx,
+            Default::default(),
+            cfg,
+        );
+
+        for i in 20..=30 {
+            let k = format!("k{:02}", i).into_bytes();
+            for ts in 10..15 {
+                must_prewrite_lock(&mut prefixed_engine, &k, &k, ts);
+                must_commit(&mut prefixed_engine, &k, ts, ts + 1);
+            }
+        }
+
+        let r = init_region(b"k20", b"k30", 2, Some(store_id));
+        let safe_point = TimeStamp::from(13);
+        gc_runner.gc(r, safe_point).unwrap();
+
+        for i in 20..30 {
+            let k = format!("k{:02}", i).into_bytes();
+            for ts in 10..15 {
+                if (ts + 1) <= safe_point.into_inner() {
+                    must_get_no_mark(&mut prefixed_engine, &k, ts);
+                } else {
+                    must_get_mark(&mut prefixed_engine, &k, ts, ts + 1, MarkType::Lock);
+                }
+            }
+        }
     }
 }

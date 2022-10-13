@@ -390,8 +390,8 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
         }
     }
 
-    /// Scans all regions on the TiKV whose leader is this TiKV, and does GC on
-    /// all of them. Regions are scanned and GC-ed in lexicographical order.
+    /// Scans all regions on the TiKV, and does GC on all of them. Regions are
+    /// scanned and GC-ed in lexicographical order.
     ///
     /// While the `gc_a_round` function is running, it will periodically check
     /// whether safe_point is updated before the function `gc_a_round` finishes.
