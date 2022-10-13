@@ -331,12 +331,12 @@ impl RaftLogEngine {
 
 
     pub fn get_top_n_regions(&self, n: u64) -> Option<Vec<u64>> {
-        if n <= 0 {
-            return None
+        if n == 0 {
+            return None;
         }
         let mut _heap: BinaryHeap<RegionRaftCnt> = BinaryHeap::new();
 
-        return None;
+        None
     }
 
     /// If path is not an empty directory, we say db exists.
