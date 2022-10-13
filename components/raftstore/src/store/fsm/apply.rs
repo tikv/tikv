@@ -3380,6 +3380,13 @@ where
             merge_from_snapshot,
         })
     }
+
+    pub fn entries_size(&self) -> usize {
+        match self {
+            Msg::Apply{apply, ..} => apply.entries_size,
+            _ => 0,
+        }
+    }
 }
 
 impl<EK> Debug for Msg<EK>
@@ -4037,6 +4044,7 @@ where
     msg_buf: Vec<Msg<EK>>,
     apply_ctx: ApplyContext<EK>,
     messages_per_tick: usize,
+    messages_size_per_tick: usize,
     cfg_tracker: Tracker<Config>,
 
     trace_event: TraceEvent,
@@ -4062,6 +4070,7 @@ where
                 }
                 _ => {}
             }
+            self.messages_size_per_tick = incoming.messages_size_per_tick;
             update_cfg(&incoming.apply_batch_system);
         }
     }
@@ -4106,9 +4115,13 @@ where
             normal.delegate.id() == 1003,
             |_| { HandleResult::KeepProcessing }
         );
-        while self.msg_buf.len() < self.messages_per_tick {
+        let mut total_size = 0;
+        while self.msg_buf.len() < self.messages_per_tick && total_size < self.messages_size_per_tick {
             match normal.receiver.try_recv() {
-                Ok(msg) => self.msg_buf.push(msg),
+                Ok(msg) => {
+                    total_size += msg.entries_size();
+                    self.msg_buf.push(msg);
+                }
                 Err(TryRecvError::Empty) => {
                     handle_result = HandleResult::stop_at(0, false);
                     break;
@@ -4205,6 +4218,7 @@ where
                 priority,
             ),
             messages_per_tick: cfg.messages_per_tick,
+            messages_size_per_tick: cfg.messages_size_per_tick,
             cfg_tracker: self.cfg.clone().tracker(self.tag.clone()),
             trace_event: Default::default(),
         }

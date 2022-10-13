@@ -116,6 +116,7 @@ pub struct Config {
     #[online_config(skip)]
     pub notify_capacity: usize,
     pub messages_per_tick: usize,
+    pub messages_size_per_tick: usize,
 
     /// When a peer is not active for max_peer_down_duration,
     /// the peer is considered to be down and is reported to PD.
@@ -346,6 +347,7 @@ impl Default for Config {
             snap_mgr_gc_tick_interval: ReadableDuration::minutes(1),
             snap_gc_timeout: ReadableDuration::hours(4),
             messages_per_tick: 4096,
+            messages_size_per_tick: 32768,
             max_peer_down_duration: ReadableDuration::minutes(10),
             max_leader_missing_duration: ReadableDuration::hours(2),
             abnormal_leader_missing_duration: ReadableDuration::minutes(10),
@@ -838,6 +840,9 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["messages_per_tick"])
             .set(self.messages_per_tick as f64);
+            CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["messages_size_per_tick"])
+            .set(self.messages_size_per_tick as f64);
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["max_peer_down_duration"])
