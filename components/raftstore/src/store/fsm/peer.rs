@@ -988,22 +988,7 @@ where
 
     // Check if the region is in the flashback state.
     fn on_check_flashback_state(&mut self, ch: Sender<bool>) {
-        let mut is_in_flashback = self.fsm.peer.is_in_flashback;
-        // Read the region local state to check whether the region is in the flashback
-        // state when the memory flag is false.
-        if !is_in_flashback {
-            let state_key = keys::region_state_key(self.region_id());
-            if let Ok(region_local_state) = self
-                .ctx
-                .engines
-                .kv
-                .get_msg_cf::<RegionLocalState>(CF_RAFT, &state_key)
-            {
-                is_in_flashback = region_local_state
-                    .map_or(false, |state| state.get_region().get_is_in_flashback());
-            }
-        }
-        ch.send(is_in_flashback).unwrap();
+        ch.send(self.fsm.peer.is_in_flashback).unwrap();
     }
 
     fn on_check_pending_admin(&mut self, ch: UnboundedSender<CheckAdminResponse>) {
