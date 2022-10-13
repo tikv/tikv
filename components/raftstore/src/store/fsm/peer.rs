@@ -21,7 +21,7 @@ use collections::{HashMap, HashSet};
 use engine_traits::{Engines, KvEngine, RaftEngine, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
-use futures::channel::{mpsc::UnboundedSender, oneshot::Sender};
+use futures::channel::mpsc::UnboundedSender;
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::{
     brpb::CheckAdminResponse,
@@ -986,11 +986,6 @@ where
         syncer.report_for_self(self_report);
     }
 
-    // Check if the region is in the flashback state.
-    fn on_check_flashback_state(&mut self, ch: Sender<bool>) {
-        ch.send(self.fsm.peer.is_in_flashback).unwrap();
-    }
-
     fn on_check_pending_admin(&mut self, ch: UnboundedSender<CheckAdminResponse>) {
         if !self.fsm.peer.is_leader() {
             // no need to check non-leader pending conf change.
@@ -1441,7 +1436,6 @@ where
                 self.on_snapshot_recovery_wait_apply(syncer)
             }
             SignificantMsg::CheckPendingAdmin(ch) => self.on_check_pending_admin(ch),
-            SignificantMsg::CheckFlashbackState(ch) => self.on_check_flashback_state(ch),
         }
     }
 
@@ -4905,14 +4899,23 @@ where
         }
 
         let region_id = self.region_id();
-        // When in the flashback state, we should not allow any other request to be
-        // proposed.
-        if self.fsm.peer.is_in_flashback {
-            self.ctx.raft_metrics.invalid_proposal.flashback.inc();
-            let flags = WriteBatchFlags::from_bits_truncate(msg.get_header().get_flags());
-            if !flags.contains(WriteBatchFlags::FLASHBACK) {
-                return Err(Error::FlashbackInProgress(self.region_id()));
+        if let Err(e) = util::check_flashback_state(self.fsm.peer.is_in_flashback, msg, region_id) {
+            match e {
+                Error::FlashbackInProgress(_) => self
+                    .ctx
+                    .raft_metrics
+                    .invalid_proposal
+                    .flashback_in_progress
+                    .inc(),
+                Error::FlashbackNotPrepared(_) => self
+                    .ctx
+                    .raft_metrics
+                    .invalid_proposal
+                    .flashback_not_prepared
+                    .inc(),
+                _ => unreachable!(),
             }
+            return Err(e);
         }
 
         // Check whether the store has the right peer to handle the request.

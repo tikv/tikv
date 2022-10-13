@@ -3,10 +3,38 @@
 use std::time::{Duration, Instant};
 
 use futures::executor::block_on;
-use kvproto::metapb;
+use kvproto::{
+    metapb,
+    raft_cmdpb::{CmdType, Request},
+};
 use test_raftstore::*;
 use tikv_util::time::InstantExt;
 use txn_types::WriteBatchFlags;
+
+#[test]
+fn test_flashback_unprepared() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.run();
+
+    cluster.must_transfer_leader(1, new_peer(2, 2));
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    let mut region = cluster.get_region(b"k1");
+    let mut cmd = Request::default();
+    cmd.set_cmd_type(CmdType::Put);
+    let mut req = new_request(
+        region.get_id(),
+        region.take_region_epoch(),
+        vec![cmd],
+        false,
+    );
+    let new_leader = cluster.query_leader(1, region.get_id(), Duration::from_secs(1));
+    req.mut_header().set_peer(new_leader.unwrap());
+    req.mut_header()
+        .set_flags(WriteBatchFlags::FLASHBACK.bits());
+    let resp = cluster.call_command(req, Duration::from_secs(5)).unwrap();
+    assert!(resp.get_header().get_error().has_flashback_not_prepared());
+}
 
 #[test]
 fn test_flashback_for_schedule() {
@@ -26,7 +54,7 @@ fn test_flashback_for_schedule() {
         new_peer(1, 1),
     ));
 
-    // Verify the schedule is unabled.
+    // Verify the schedule is disabled.
     let mut region = cluster.get_region(b"k3");
     let admin_req = new_transfer_leader_cmd(new_peer(2, 2));
     let transfer_leader =

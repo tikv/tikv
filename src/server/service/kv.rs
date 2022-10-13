@@ -35,7 +35,7 @@ use raftstore::{
     store::{
         memory::{MEMTRACE_APPLYS, MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES},
         metrics::RAFT_ENTRIES_CACHES_GAUGE,
-        Callback, CasualMessage, CheckLeaderTask, RaftCmdExtraOpts, SignificantMsg,
+        Callback, CasualMessage, CheckLeaderTask, RaftCmdExtraOpts,
     },
     DiscardReason, Error as RaftStoreError, Result as RaftStoreResult,
 };
@@ -1766,22 +1766,11 @@ fn future_flashback_to_version<
     raft_router: &T,
     req: FlashbackToVersionRequest,
 ) -> impl Future<Output = ServerResult<FlashbackToVersionResponse>> {
-    let region_id = req.get_context().get_region_id();
     let raft_router = Mutex::new(raft_router.clone());
     let storage_clone = storage.clone();
     async move {
-        // Check the flashback state first.
-        let (result_tx, result_rx) = oneshot::channel();
-        raft_router
-            .lock()
-            .await
-            .significant_send(region_id, SignificantMsg::CheckFlashbackState(result_tx))?;
-        if !result_rx.await? {
-            let mut resp = FlashbackToVersionResponse::default();
-            resp.set_error(format!("unprepared region {} for flashback", region_id));
-            return Ok(resp);
-        }
-        // Perform the actual data flashback transaction command.
+        // Perform the data flashback transaction command. We will check if the region
+        // is in the flashback state when proposing the flashback modification.
         let (cb, f) = paired_future_callback();
         let res = storage_clone.sched_txn_command(req.clone().into(), cb);
         // Avoid crossing `.await` to bypass the `Send` constraint.
