@@ -660,7 +660,6 @@ fn test_mvcc_flashback() {
     // Flashback
     let flashback_resp = must_flashback_to_version(&client, ctx.clone(), 5, ts + 1, ts + 2);
     ts += 2;
-    println!("{:?}", flashback_resp.get_region_error());
     assert!(!flashback_resp.has_region_error());
     assert!(flashback_resp.get_error().is_empty());
     // Should not meet the lock and can not get the latest data any more.
@@ -725,6 +724,32 @@ fn test_mvcc_flashback_block_scheduling() {
             .has_flashback_in_progress()
     );
     fail::remove("skip_finish_flashback_to_version");
+}
+
+#[test]
+fn test_mvcc_flashback_unprepared() {
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+    // Prewrite
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k.clone());
+    mutation.set_value(v.clone());
+    must_kv_prewrite(&client, ctx.clone(), vec![mutation], k.clone(), 1);
+    // Commit
+    must_kv_commit(&client, ctx.clone(), vec![k.clone()], 1, 2, 2);
+    must_kv_read_equal(&client, ctx.clone(), k.clone(), v.clone(), 3);
+    // Try to flashback without preparing first.
+    let mut req = FlashbackToVersionRequest::default();
+    req.set_context(ctx.clone());
+    req.set_start_ts(4);
+    req.set_commit_ts(5);
+    req.version = 0;
+    req.start_key = b"a".to_vec();
+    req.end_key = b"z".to_vec();
+    let resp = client.kv_flashback_to_version(&req).unwrap();
+    assert!(resp.get_region_error().has_flashback_not_prepared());
+    must_kv_read_equal(&client, ctx, k, v, 6);
 }
 
 // raft related RPC is tested as parts of test_snapshot.rs, so skip here.
