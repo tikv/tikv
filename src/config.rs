@@ -73,7 +73,7 @@ use crate::{
     coprocessor_v2::Config as CoprocessorV2Config,
     import::Config as ImportConfig,
     server::{
-        gc_worker::{GcConfig, RawCompactionFilterFactory, WriteCompactionFilterFactory},
+        gc_worker::{GcConfig},
         lock_manager::Config as PessimisticTxnConfig,
         ttl::TtlCompactionFilterFactory,
         Config as ServerConfig, CONFIG_ROCKSDB_GAUGE,
@@ -675,8 +675,6 @@ impl DefaultCfConfig {
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
         api_version: ApiVersion,
-        region_id: u64,
-        suffix_id: u64,
     ) -> RocksCfOptions {
         let mut cf_opts = build_cf_opt!(self, CF_DEFAULT, cache, region_info_accessor);
         let f = RangePropertiesCollectorFactory {
@@ -705,12 +703,7 @@ impl DefaultCfConfig {
                     .unwrap();
             }
             ApiVersion::V2 => {
-                cf_opts
-                    .set_compaction_filter_factory(
-                        "apiv2_gc_compaction_filter_factory",
-                        RawCompactionFilterFactory::new(region_id, suffix_id),
-                    )
-                    .unwrap();
+              // nothing to do here
             }
         }
         cf_opts.set_titan_cf_options(&self.titan.build_opts());
@@ -792,8 +785,6 @@ impl WriteCfConfig {
         &self,
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
-        region_id: u64,
-        suffix_id: u64,
     ) -> RocksCfOptions {
         let mut cf_opts = build_cf_opt!(self, CF_WRITE, cache, region_info_accessor);
         // Prefix extractor(trim the timestamp at tail) for write cf.
@@ -815,12 +806,6 @@ impl WriteCfConfig {
             prop_keys_index_distance: self.prop_keys_index_distance,
         };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
-        cf_opts
-            .set_compaction_filter_factory(
-                "write_compaction_filter_factory",
-                WriteCompactionFilterFactory::new(region_id, suffix_id),
-            )
-            .unwrap();
         cf_opts.set_titan_cf_options(&self.titan.build_opts());
 
         cf_opts
@@ -1208,8 +1193,6 @@ impl DbConfig {
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
         api_version: ApiVersion,
-        region_id: u64,
-        suffix_id: u64,
     ) -> Vec<(&'static str, RocksCfOptions)> {
         vec![
             (
@@ -1218,15 +1201,13 @@ impl DbConfig {
                     cache,
                     region_info_accessor,
                     api_version,
-                    region_id,
-                    suffix_id,
                 ),
             ),
             (CF_LOCK, self.lockcf.build_opt(cache)),
             (
                 CF_WRITE,
                 self.writecf
-                    .build_opt(cache, region_info_accessor, region_id, suffix_id),
+                    .build_opt(cache, region_info_accessor),
             ),
             // TODO: remove CF_RAFT.
             (CF_RAFT, self.raftcf.build_opt(cache)),
@@ -4520,8 +4501,6 @@ mod tests {
                 &cfg.storage.block_cache.build_shared_cache(),
                 None,
                 cfg.storage.api_version(),
-                0,
-                0,
             ),
             true,
             None,

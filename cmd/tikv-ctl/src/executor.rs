@@ -74,9 +74,6 @@ pub fn new_debug_executor(
         &cache,
         None,
         cfg.storage.api_version(),
-        // FIXME when tikv-ctl multi-rocksdb support is needed
-        0,
-        0,
     );
     let kv_path = PathBuf::from(kv_path).canonicalize().unwrap();
     let kv_path = kv_path.to_str().unwrap();

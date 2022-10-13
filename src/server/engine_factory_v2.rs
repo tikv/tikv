@@ -179,7 +179,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
     fn destroy_tablet(&self, id: u64, suffix: u64) -> engine_traits::Result<()> {
         let path = self.tablet_path(id, suffix);
         self.registry.lock().unwrap().remove(&(id, suffix));
-        self.inner.destroy_tablet(&path, id, suffix)?;
+        self.inner.destroy_tablet(&path)?;
         self.inner.on_tablet_destroy(id, suffix);
         Ok(())
     }

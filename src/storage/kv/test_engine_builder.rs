@@ -28,8 +28,6 @@ pub struct TestEngineBuilder {
     cfs: Option<Vec<CfName>>,
     io_rate_limiter: Option<Arc<IoRateLimiter>>,
     api_version: ApiVersion,
-    region_id: u64,
-    suffix_id: u64,
 }
 
 impl TestEngineBuilder {
@@ -39,8 +37,6 @@ impl TestEngineBuilder {
             cfs: None,
             io_rate_limiter: None,
             api_version: ApiVersion::V1,
-            region_id: 0,
-            suffix_id: 0,
         }
     }
 
@@ -70,13 +66,6 @@ impl TestEngineBuilder {
         self
     }
 
-    /// Called at multi-rocksdb scenarios
-    pub fn tablet_ids(mut self, region_id: u64, suffix_id: u64) -> Self {
-        self.region_id = region_id;
-        self.suffix_id = suffix_id;
-        self
-    }
-
     /// Build a `RocksEngine`.
     pub fn build(self) -> Result<RocksEngine> {
         let cfg_rocksdb = crate::config::DbConfig::default();
@@ -102,8 +91,6 @@ impl TestEngineBuilder {
             Some(p) => p.to_str().unwrap().to_owned(),
         };
         let api_version = self.api_version;
-        let region_id = self.region_id;
-        let suffix_id = self.suffix_id;
         let cfs = self.cfs.unwrap_or_else(|| ALL_CFS.to_vec());
         let mut cache_opt = BlockCacheConfig::default();
         if !enable_block_cache {
@@ -119,8 +106,6 @@ impl TestEngineBuilder {
                         &cache,
                         None,
                         api_version,
-                        region_id,
-                        suffix_id,
                     ),
                 ),
                 CF_LOCK => (CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
@@ -128,12 +113,13 @@ impl TestEngineBuilder {
                     CF_WRITE,
                     cfg_rocksdb
                         .writecf
-                        .build_opt(&cache, None, region_id, suffix_id),
+                        .build_opt(&cache, None),
                 ),
                 CF_RAFT => (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
                 _ => (*cf, RocksCfOptions::default()),
             })
             .collect();
+
         let engine =
             RocksEngine::new(&path, None, cfs_opts, cache.is_some(), self.io_rate_limiter)?;
 

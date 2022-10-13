@@ -5,11 +5,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use engine_rocks::{
-    raw::{Cache, Env},
-    CompactedEventSender, CompactionListener, FlowListener, RocksCompactionJobInfo, RocksEngine,
-    RocksEventListener,
-};
+use engine_rocks::{raw::{Cache, Env}, CompactedEventSender, CompactionListener, FlowListener, RocksCompactionJobInfo, RocksEngine, RocksEventListener, RocksCfOptions};
 use engine_traits::{
     CfOptions, CfOptionsExt, CompactionJobInfo, OpenOptions, Result, TabletAccessor, TabletFactory,
     CF_DEFAULT, CF_WRITE,
@@ -20,6 +16,7 @@ use tikv_util::worker::Scheduler;
 
 use super::engine_factory_v2::KvEngineFactoryV2;
 use crate::config::{DbConfig, TikvConfig, DEFAULT_ROCKSDB_SUB_DIR};
+use crate::server::gc_worker::{RawCompactionFilterFactory, WriteCompactionFilterFactory};
 
 struct FactoryInner {
     env: Arc<Env>,
@@ -152,10 +149,9 @@ impl KvEngineFactory {
             &self.inner.block_cache,
             self.inner.region_info_accessor.as_ref(),
             self.inner.api_version,
-            region_id,
-            suffix,
         );
 
+        self.set_compaction_filters(kv_cfs_opts.clone(), region_id, suffix);
         let kv_engine = engine_rocks::util::new_engine_opt(
             tablet_path.to_str().unwrap(),
             kv_db_opts,
@@ -184,8 +180,6 @@ impl KvEngineFactory {
     pub fn destroy_tablet(
         &self,
         tablet_path: &Path,
-        id: u64,
-        suffix: u64,
     ) -> engine_traits::Result<()> {
         info!("destroy tablet"; "path" => %tablet_path.display());
         // Create kv engine.
@@ -198,8 +192,6 @@ impl KvEngineFactory {
             &self.inner.block_cache,
             self.inner.region_info_accessor.as_ref(),
             self.inner.api_version,
-            id,
-            suffix,
         );
         // TODOTODO: call rust-rocks or tirocks to destroy_engine;
         // engine_rocks::util::destroy_engine(
@@ -225,6 +217,28 @@ impl KvEngineFactory {
     #[inline]
     fn kv_engine_path(&self) -> PathBuf {
         self.inner.store_path.join(DEFAULT_ROCKSDB_SUB_DIR)
+    }
+
+    fn set_compaction_filters(&self, kv_cfs_opts: Vec<(&str, RocksCfOptions)>, region_id: u64, suffix: u64) {
+        if let Some(x) = kv_cfs_opts.iter().find(|x| x.0 == CF_WRITE) {
+            let mut write_cf_opts = x.1.clone();
+            write_cf_opts.set_compaction_filter_factory(
+                "write_compaction_filter_factory",
+                WriteCompactionFilterFactory::new(region_id, suffix),
+            )
+                .unwrap();
+        }
+
+        if let Some(x) = kv_cfs_opts.iter().find(|x| x.0 == CF_DEFAULT) {
+            if self.inner.api_version == ApiVersion::V2 {
+                let mut default_cf_opts = x.1.clone();
+                default_cf_opts.set_compaction_filter_factory(
+                    "apiv2_gc_compaction_filter_factory",
+                    RawCompactionFilterFactory::new(region_id, suffix),
+                )
+                    .unwrap();
+            }
+        }
     }
 }
 

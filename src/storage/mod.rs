@@ -3951,10 +3951,10 @@ mod tests {
                     CF_DEFAULT,
                     cfg_rocksdb
                         .defaultcf
-                        .build_opt(&cache, None, ApiVersion::V1, 0, 0),
+                        .build_opt(&cache, None, ApiVersion::V1),
                 ),
                 (CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
-                (CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None, 0, 0)),
+                (CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
                 (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
             ];
             RocksEngine::new(
