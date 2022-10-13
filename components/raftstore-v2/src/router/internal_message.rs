@@ -11,7 +11,7 @@ use std::{
 
 use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
-use raftstore::store::RaftlogFetchTask as RegionTask;
+use raftstore::store::StorageTask;
 use tikv_util::{box_try, worker::Scheduler};
 
 use crate::{operation::CommittedEntries, Result};
@@ -56,10 +56,10 @@ impl GenSnapTask {
         region_state: RegionLocalState,
         last_applied_term: u64,
         last_applied_index: u64,
-        region_sched: &Scheduler<RegionTask>,
+        region_sched: &Scheduler<StorageTask>,
     ) -> Result<()> {
         self.index.store(last_applied_index, Ordering::SeqCst);
-        let snapshot = RegionTask::GenTabletSnapshot {
+        let snapshot = StorageTask::GenTabletSnapshot {
             region_id: self.region_id,
             tablet_index: self.tablet_index,
             region_state,

@@ -37,7 +37,7 @@ use super::{metrics::*, worker::RegionTask, SnapEntry, SnapKey, SnapManager};
 use crate::{
     store::{
         async_io::write::WriteTask, entry_storage::EntryStorage, fsm::GenSnapTask,
-        peer::PersistSnapshotResult, util, worker::RaftlogFetchTask,
+        peer::PersistSnapshotResult, util, worker::StorageTask,
     },
     Error, Result,
 };
@@ -286,7 +286,7 @@ where
         engines: Engines<EK, ER>,
         region: &metapb::Region,
         region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
-        raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+        raftlog_fetch_scheduler: Scheduler<StorageTask>,
         peer_id: u64,
         tag: String,
     ) -> Result<PeerStorage<EK, ER>> {
@@ -1142,15 +1142,15 @@ pub mod tests {
             fsm::apply::compact_raft_log,
             initial_region, prepare_bootstrap_cluster,
             worker::{
-                make_region_worker_raftstore_cfg, FetchedLogs, LogFetchedNotifier,
-                RaftlogFetchRunner, RegionRunner, RegionTask,
+                make_region_worker_raftstore_cfg, FetchedLogs, LogFetchedNotifier, RegionRunner,
+                RegionTask, StorageRunner,
             },
         },
     };
 
     fn new_storage(
         region_scheduler: Scheduler<RegionTask<KvTestSnapshot>>,
-        raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+        raftlog_fetch_scheduler: Scheduler<StorageTask>,
         path: &TempDir,
     ) -> PeerStorage<KvTestEngine, RaftTestEngine> {
         let kv_db = engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
@@ -1183,7 +1183,7 @@ pub mod tests {
 
     pub fn new_storage_from_ents(
         region_scheduler: Scheduler<RegionTask<KvTestSnapshot>>,
-        raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+        raftlog_fetch_scheduler: Scheduler<StorageTask>,
         path: &TempDir,
         ents: &[Entry],
     ) -> PeerStorage<KvTestEngine, RaftTestEngine> {
@@ -1455,7 +1455,7 @@ pub mod tests {
             let raftlog_fetch_scheduler = raftlog_fetch_worker.scheduler();
             let mut store =
                 new_storage_from_ents(region_scheduler, raftlog_fetch_scheduler, &td, &ents);
-            raftlog_fetch_worker.start(RaftlogFetchRunner::new(router, store.engines.raft.clone()));
+            raftlog_fetch_worker.start(StorageRunner::new(router, store.engines.raft.clone()));
             store.compact_entry_cache(5);
             let mut e = store.entries(lo, hi, maxsize, GetEntriesContext::empty(true));
             if e == Err(raft::Error::Store(
