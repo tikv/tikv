@@ -76,7 +76,7 @@ pub use self::{
     util::{RegionReadProgress, RegionReadProgressRegistry},
     worker::{
         AutoSplitController, Bucket, BucketRange, CachedReadDelegate, CheckLeaderRunner,
-        CheckLeaderTask, FetchedLogs, FlowStatistics, FlowStatsReporter, KeyEntry,
+        CheckLeaderTask, FetchedLogs, FlowStatistics, FlowStatsReporter, HeartbeatTask, KeyEntry,
         LocalReadContext, LocalReader, LocalReaderCore, LogFetchedNotifier, PdTask,
         RaftlogFetchRunner, RaftlogFetchTask, ReadDelegate, ReadExecutor, ReadExecutorProvider,
         ReadProgress, ReadStats, RefreshConfigTask, RegionTask, SplitCheckRunner, SplitCheckTask,

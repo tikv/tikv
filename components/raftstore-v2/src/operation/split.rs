@@ -23,11 +23,11 @@ use raftstore::{
         },
         metrics::PEER_ADMIN_CMD_COUNTER,
         util::{self, KeysInfoFormatter},
-        ReadDelegate, ReadProgress, TrackVer, Transport, RAFT_INIT_LOG_INDEX,
+        PdTask, ReadDelegate, ReadProgress, TrackVer, Transport, RAFT_INIT_LOG_INDEX,
     },
     Result,
 };
-use slog::{info, warn};
+use slog::{error, info, warn};
 use tikv_util::box_err;
 use time::Timespec;
 
@@ -220,27 +220,27 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if is_leader {
             self.set_approximate_size(estimated_size);
             self.set_approximate_keys(estimated_keys);
+            self.heartbeat_pd(store_ctx);
 
-            // todo(SpadeA): report regions to PD
-
-            // self.fsm.peer.heartbeat_pd(self.ctx);
             // info!(
-            //     self.store_ctx.logger,
+            //     self.logger,
             //     "notify pd with split";
-            //     "region_id" => self.fsm.region_id(),
-            //     "peer_id" => self.fsm.peer_id(),
+            //     "region_id" => self.region_id(),
+            //     "peer_id" => self.peer_id(),
             //     "split_count" => regions.len(),
             // );
+
             // // Now pd only uses ReportBatchSplit for history operation show,
             // // so we send it independently here.
             // let task = PdTask::ReportBatchSplit {
             //     regions: regions.to_vec(),
             // };
-            // if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
+            // if let Err(e) = store_ctx.pd_scheduler.schedule(task) {
             //     error!(
+            //         self.logger,
             //         "failed to notify pd";
-            //         "region_id" => self.fsm.region_id(),
-            //         "peer_id" => self.fsm.peer_id(),
+            //         "region_id" => self.region_id(),
+            //         "peer_id" => self.peer_id(),
             //         "err" => %e,
             //     );
             // }
@@ -276,7 +276,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // Check if this new region should be splitted
             let new_split_peer = new_split_regions.get(&new_region.get_id()).unwrap();
             if new_split_peer.result.is_some() {
-                unimplemented!()
+                // todo(SpadeA): clear extra split data
+                continue;
             }
 
             // Now all checking passed.
@@ -366,10 +367,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 new_peer.peer_mut().set_approximate_size(estimated_size);
                 new_peer.peer_mut().set_approximate_keys(estimated_keys);
                 *new_peer.peer_mut().txn_ext().pessimistic_locks.write() = locks;
-                // The new peer is likely to become leader, send a
-                // heartbeat immediately to reduce client query
-                // miss.
-                // new_peer.peer.heartbeat_pd(self.ctx);
+                // The new peer is likely to become leader, send a heartbeat immediately to
+                // reduce client query miss.
+                new_peer.peer().heartbeat_pd(store_ctx);
             }
 
             meta.tablet_caches
@@ -418,15 +418,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 {
                     let peer_msg = PeerMsg::RaftMessage(Box::new(msg));
                     if let Err(e) = store_ctx.router.force_send(new_region_id, peer_msg) {
-                        // warn!("handle first requset failed"; "region_id" =>
-                        // region_id, "error" => ?e);
+                        warn!(self.logger, "handle first requset failed"; "region_id" => region_id, "error" => ?e);
                     }
                 }
             }
         }
         drop(meta);
         if is_leader {
-            // self.on_split_region_check_tick();
+            self.on_split_region_check_tick();
         }
     }
 }

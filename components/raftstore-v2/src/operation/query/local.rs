@@ -546,7 +546,7 @@ mod tests {
             .unwrap();
         let factory = Arc::new(TestTabletFactoryV2::new(path.path(), ops, cf_opts));
 
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new()));
+        let store_meta = Arc::new(Mutex::new(StoreMeta::default()));
         let (mut reader, mut rx) = new_reader(store_id, store_meta.clone());
 
         let mut region1 = metapb::Region::default();

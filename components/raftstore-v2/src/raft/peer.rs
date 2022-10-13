@@ -20,8 +20,9 @@ use raftstore::{
         fsm::Proposal,
         metrics::PEER_PROPOSE_LOG_SIZE_HISTOGRAM,
         util::{Lease, RegionReadProgress},
-        Config, EntryStorage, PeerStat, ProposalQueue, RaftlogFetchTask, ReadDelegate,
-        ReadIndexQueue, ReadIndexRequest, ReadProgress, TrackVer, Transport, TxnExt, WriteRouter,
+        Config, EntryStorage, HeartbeatTask, PdTask, PeerStat, ProposalQueue, RaftlogFetchTask,
+        ReadDelegate, ReadIndexQueue, ReadIndexRequest, ReadProgress, TrackVer, Transport, TxnExt,
+        WriteRouter,
     },
     Error,
 };
@@ -598,6 +599,36 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     pub fn set_may_skip_split_check(&mut self, may_skip_split_check: bool) {
         self.may_skip_split_check = may_skip_split_check;
+    }
+
+    pub fn heartbeat_pd<T>(&self, store_ctx: &StoreContext<EK, ER, T>) {
+        // let task = PdTask::Heartbeat(HeartbeatTask {
+        //     term: self.term(),
+        //     region: self.region().clone(),
+        //     down_peers: Vec::new(), // todo(SpadeA)
+        //     peer: self.storage().peer().clone(),
+        //     pending_peers: Vec::new(), // todo(SpadeA)
+        //     written_bytes: self.peer_stat.written_bytes,
+        //     written_keys: self.peer_stat.written_keys,
+        //     approximate_size: self.approximate_size,
+        //     approximate_keys: self.approximate_keys,
+        //     replication_status: None, // todo(SpadeA)
+        // });
+
+        // if let Err(e) = store_ctx.pd_scheduler.schedule(task) {
+        //     error!(
+        //         self.logger,
+        //         "failed to notify pd";
+        //         "region_id" => self.region_id(),
+        //         "peer_id" => self.storage().peer().get_id(),
+        //         "err" => ?e,
+        //     );
+        //     return;
+        // }
+    }
+
+    pub fn on_split_region_check_tick(&self) {
+        // todo(SpadeA)
     }
 
     pub fn generate_read_delegate(&self) -> ReadDelegate {

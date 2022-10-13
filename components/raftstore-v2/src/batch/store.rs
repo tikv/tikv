@@ -23,7 +23,7 @@ use raft::INVALID_ID;
 use raftstore::{
     coprocessor::CoprocessorHost,
     store::{
-        fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, RaftlogFetchRunner,
+        fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, PdTask, RaftlogFetchRunner,
         RaftlogFetchTask, StoreWriters, Transport, WriteMsg, WriteSenders,
     },
 };
