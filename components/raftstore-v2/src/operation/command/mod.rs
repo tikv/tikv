@@ -94,7 +94,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     fn propose<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>, data: Vec<u8>) -> Result<u64> {
         ctx.raft_metrics.propose.normal.inc();
-        PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
+        ctx.raft_metrics.propose_log_size.observe(data.len() as f64);
         if data.len() as u64 > ctx.cfg.raft_entry_max_size.0 {
             return Err(Error::RaftEntryTooLarge {
                 region_id: self.region_id(),

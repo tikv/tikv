@@ -4650,9 +4650,7 @@ where
         };
 
         let data = req.write_to_bytes()?;
-
-        // TODO: use local histogram metrics
-        PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
+        poll_ctx.raft_metrics.propose_log_size.observe(data.len() as f64);
 
         if data.len() as u64 > poll_ctx.cfg.raft_entry_max_size.0 {
             error!(
@@ -4894,8 +4892,7 @@ where
         self.check_conf_change(ctx, changes.as_ref(), &cc)?;
 
         ctx.raft_metrics.propose.conf_change.inc();
-        // TODO: use local histogram metrics
-        PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data_size as f64);
+        ctx.raft_metrics.propose_log_size.observe(data_size as f64);
         info!(
             "propose conf change peer";
             "region_id" => self.region_id,

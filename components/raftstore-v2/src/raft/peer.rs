@@ -15,7 +15,6 @@ use raft::{RawNode, StateRole, INVALID_ID};
 use raftstore::{
     store::{
         fsm::Proposal,
-        metrics::PEER_PROPOSE_LOG_SIZE_HISTOGRAM,
         util::{Lease, RegionReadProgress},
         Config, EntryStorage, ProposalQueue, RaftlogFetchTask, ReadIndexQueue, ReadIndexRequest,
         Transport, WriteRouter,
