@@ -5558,7 +5558,7 @@ pub trait RequestInspector {
             return Ok(RequestPolicy::ReadIndex);
         }
 
-        // If applied index's term is different from current raft's term, leader
+        // If applied index's term differs from current raft's term, leader
         // transfer must happened, if read locally, we may read old value.
         if !self.has_applied_to_current_term() {
             return Ok(RequestPolicy::ReadIndex);

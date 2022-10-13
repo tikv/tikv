@@ -56,7 +56,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
             return Ok(RequestPolicy::ReadIndex);
         }
 
-        // If applied index's term is different from current raft's term, leader
+        // If applied index's term differs from current raft's term, leader
         // transfer must happened, if read locally, we may read old value.
         // TODO: to add the block back when apply is implemented.
         // if !self.fsm.peer().has_applied_to_current_term() {
