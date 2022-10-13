@@ -28,7 +28,7 @@ use kvproto::{
         AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest,
         SplitRequest,
     },
-    raft_serverpb::{ExtraMessage, ExtraMessageType, RaftMessage},
+    raft_serverpb::RaftMessage,
     replication_modepb::{RegionReplicationStatus, StoreDrAutoSyncStatus},
 };
 use ordered_float::OrderedFloat;
@@ -53,6 +53,7 @@ use yatp::Remote;
 
 use crate::{
     coprocessor::CoprocessorHost,
+    router::RaftStoreRouter,
     store::{
         cmd_resp::new_error,
         metrics::*,
@@ -1348,25 +1349,13 @@ where
                             }
                         }
                     }
-                    // Awaken all hibernated regions if there existed slow stores in this cluster
-                    // Forcely awake hibernated regions.
-                    // let unhealthy_state = !self.slow_score.should_force_report_slow_store()
-                    //     || self.curr_health_status == ServingStatus::Serving;
-                    // if !true {
-                    //     // Healthy node
-                    //     send_awaken_regions_message(
-                    //         &router,
-                    //         region_id,
-                    //         peer.clone(),
-                    //         epoch.clone(),
-                    //     );
-                    // }
+                    // Forcely awaken all hibernated regions if there existed slow stores in this cluster.
                     if let Some(awaken_regions) = resp.awaken_regions.take() {
                         info!("forcely awaken hibernated regions in this store");
-                        if awaken_regions.get_all_regions() {
-                            // TODO: Awaken all regions
-                            info!("awaken all hibernated regions");
-                        }
+                        let _ = router.send_store_msg(StoreMsg::AwakenRegions {
+                            to_all: awaken_regions.get_to_all_regions(),
+                            region_ids: awaken_regions.get_region_ids().to_vec(),
+                        });
                     }
                 }
                 Err(e) => {
@@ -2327,32 +2316,6 @@ fn send_destroy_peer_message<EK, ER>(
         error!(
             "send gc peer request failed";
             "region_id" => local_region.get_id(),
-            "err" => ?e
-        )
-    }
-}
-
-fn send_awaken_regions_message<EK, ER>(
-    router: &RaftRouter<EK, ER>,
-    region_id: u64,
-    peer: metapb::Peer,
-    epoch: metapb::RegionEpoch,
-) where
-    EK: KvEngine,
-    ER: RaftEngine,
-{
-    let mut message = RaftMessage::default();
-    message.set_region_id(region_id);
-    message.set_from_peer(peer.clone());
-    message.set_to_peer(peer);
-    message.set_region_epoch(epoch);
-    let mut msg = ExtraMessage::default();
-    msg.set_type(ExtraMessageType::MsgRegionWakeUp);
-    message.set_extra_msg(msg);
-    if let Err(e) = router.send_raft_message(message) {
-        error!(
-            "send awaken region message failed";
-            "region_id" => region_id,
             "err" => ?e
         )
     }

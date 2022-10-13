@@ -36,7 +36,7 @@ use kvproto::{
     metapb::{self, Region, RegionEpoch},
     pdpb::{self, QueryStats, StoreStats},
     raft_cmdpb::{AdminCmdType, AdminRequest},
-    raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState},
+    raft_serverpb::{ExtraMessage, ExtraMessageType, PeerState, RaftMessage, RegionLocalState},
     replication_modepb::{ReplicationMode, ReplicationStatus},
 };
 use pd_client::{Feature, FeatureGate, PdClient};
@@ -754,6 +754,9 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     drop(syncer);
                 }
                 StoreMsg::GcSnapshotFinish => self.register_snap_mgr_gc_tick(),
+                StoreMsg::AwakenRegions { to_all, region_ids } => {
+                    self.on_wake_up_regions(to_all, region_ids);
+                }
             }
         }
     }
@@ -2523,6 +2526,41 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
 
         self.register_compact_lock_cf_tick();
+    }
+
+    fn on_wake_up_regions(&self, to_all: bool, _region_ids: Vec<u64>) {
+        info!("awaken all hibernated regions in this store";
+            "to_all" => to_all);
+        {
+            let meta = self.ctx.store_meta.lock().unwrap();
+            for region_id in meta.regions.keys() {
+                let peer = {
+                    match find_peer(&meta.regions[&region_id], self.ctx.store_id()) {
+                        None => continue,
+                        Some(p) => p.clone(),
+                    }
+                };
+                let region = &meta.regions[region_id];
+                let region_epoch = region.get_region_epoch();
+                {
+                    let mut message = RaftMessage::default();
+                    message.set_region_id(*region_id);
+                    message.set_from_peer(peer.clone());
+                    message.set_to_peer(peer);
+                    message.set_region_epoch(region_epoch.clone());
+                    let mut msg = ExtraMessage::default();
+                    msg.set_type(ExtraMessageType::MsgRegionWakeUp);
+                    message.set_extra_msg(msg);
+                    if let Err(e) = self.ctx.router.send_raft_message(message) {
+                        error!(
+                            "send awaken region message failed";
+                            "region_id" => region_id,
+                            "err" => ?e
+                        )
+                    }
+                }
+            }
+        }
     }
 
     fn register_pd_store_heartbeat_tick(&self) {

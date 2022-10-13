@@ -847,6 +847,11 @@ where
     },
 
     GcSnapshotFinish,
+
+    AwakenRegions {
+        to_all: bool,
+        region_ids: Vec<u64>,
+    },
 }
 
 impl<EK> fmt::Debug for StoreMsg<EK>
@@ -880,6 +885,7 @@ where
                 write!(fmt, "UnsafeRecoveryCreatePeer")
             }
             StoreMsg::GcSnapshotFinish => write!(fmt, "GcSnapshotFinish"),
+            StoreMsg::AwakenRegions { .. } => write!(fmt, "AwakenRegions"),
         }
     }
 }
