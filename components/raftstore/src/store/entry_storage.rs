@@ -1123,22 +1123,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
         let range = state.range();
         let is_task_timeout = state.is_task_timeout();
 
-        // Generally speaking, when the res.low is the same as the warmup
-        // range start, the fetch result is exactly used for warmup.
-        // As the low index of each async_fetch task is different.
-        // There should exist only one exception. A async fetch task
-        // with same low index is triggered before the warmup task.
         if range.0 != low {
-            return false;
-        }
-
-        // Check the warmup range is still valid.
-        let is_valid = if let Some(first_index) = self.entry_cache_first_index() {
-            range.1 == first_index
-        } else {
-            range.1 == self.last_index() + 1
-        };
-        if !is_valid {
             return false;
         }
 
@@ -1146,9 +1131,20 @@ impl<ER: RaftEngine> EntryStorage<ER> {
             Ok(entries) => {
                 let last_entry_index = entries.last().map(|e| e.index);
                 if let Some(index) = last_entry_index {
+                    // Generally speaking, when the res.low is the same as the warmup
+                    // range start, the fetch result is exactly used for warmup.
+                    // As the low index of each async_fetch task is different.
+                    // There should exist only one exception. A async fetch task
+                    // with same low index is triggered before the warmup task.
                     if index + 1 == range.1 {
-                        WARM_UP_ENTRY_CACHE_COUNTER.finished.inc();
+                        let is_valid = if let Some(first_index) = self.entry_cache_first_index() {
+                            range.1 == first_index
+                        } else {
+                            range.1 == self.last_index() + 1
+                        };
+                        assert!(is_valid, "the warmup range should still be valid");
                         self.cache.push_front(entries);
+                        WARM_UP_ENTRY_CACHE_COUNTER.finished.inc();
                         fail_point!("on_entry_cache_warmed_up");
                         return !is_task_timeout;
                     }
