@@ -1,16 +1,12 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    collections::VecDeque,
-    sync::{atomic::AtomicUsize, Arc},
-};
+use std::collections::VecDeque;
 
-use crossbeam::channel::Sender;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::store::{
-    local_metrics::RaftMetrics, Config, PersistedNotifier, WriteMsg, WriteRouter,
-    WriteRouterContext, WriteSenders, WriteTask,
+    local_metrics::RaftMetrics, Config, PersistedNotifier, WriteRouter, WriteRouterContext,
+    WriteSenders, WriteTask,
 };
 use slog::{warn, Logger};
 

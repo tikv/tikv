@@ -7,7 +7,7 @@ use error_code::ErrorCodeExt;
 use fail::fail_point;
 use kvproto::{
     metapb::{Region, Store},
-    raft_serverpb::{RaftLocalState, RegionLocalState, StoreIdent},
+    raft_serverpb::{RaftLocalState, StoreIdent},
 };
 use pd_client::PdClient;
 use raft::INVALID_ID;
