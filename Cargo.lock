@@ -2649,6 +2649,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "keyed_priority_queue"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d63b6407b66fc81fc539dccf3ddecb669f393c5101b6a2be3976c95099a06e8"
+dependencies = [
+ "indexmap",
+]
+
+[[package]]
 name = "keys"
 version = "0.1.0"
 dependencies = [
@@ -2663,7 +2672,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#f6d05706948aa296cff4db060e0962d3720f32eb"
+source = "git+https://github.com/pingcap/kvproto.git#4c6f1502851ed55b3ed023d180b6b10766446630"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -6180,6 +6189,7 @@ dependencies = [
  "futures-executor",
  "futures-timer",
  "futures-util",
+ "fxhash",
  "getset",
  "grpcio",
  "grpcio-health",
@@ -6190,6 +6200,7 @@ dependencies = [
  "hyper-tls",
  "into_other",
  "itertools",
+ "keyed_priority_queue",
  "keys",
  "kvproto",
  "lazy_static",

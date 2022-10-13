@@ -28,8 +28,8 @@ use pd_client::RpcClient;
 use raftstore::store::{region_meta::RegionMeta, Config, Transport, RAFT_INIT_LOG_INDEX};
 use raftstore_v2::{
     create_store_batch_system,
-    router::{DebugInfoChannel, PeerMsg, QueryResult},
-    Bootstrap, StoreMeta, StoreRouter, StoreSystem,
+    router::{DebugInfoChannel, PeerMsg, QueryResult, RaftRouter},
+    Bootstrap, StoreMeta, StoreSystem,
 };
 use slog::{o, Logger};
 use tempfile::TempDir;
@@ -37,10 +37,10 @@ use test_pd::mocker::Service;
 use tikv_util::config::{ReadableDuration, VersionTrack};
 
 #[derive(Clone)]
-pub struct TestRouter(StoreRouter<KvTestEngine, RaftTestEngine>);
+pub struct TestRouter(RaftRouter<KvTestEngine, RaftTestEngine>);
 
 impl Deref for TestRouter {
-    type Target = StoreRouter<KvTestEngine, RaftTestEngine>;
+    type Target = RaftRouter<KvTestEngine, RaftTestEngine>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -112,6 +112,8 @@ pub struct RunningState {
     pub system: StoreSystem<KvTestEngine, RaftTestEngine>,
     pub cfg: Arc<VersionTrack<Config>>,
     pub transport: TestTransport,
+    // We need this to clear the ref counts of CachedTablet when shutdown
+    store_meta: Arc<Mutex<StoreMeta<KvTestEngine>>>,
 }
 
 impl RunningState {
@@ -160,7 +162,9 @@ impl RunningState {
             logger.clone(),
         );
 
-        let store_meta = Arc::new(Mutex::new(StoreMeta::<KvTestEngine>::new()));
+        let router = RaftRouter::new(store_id, router);
+        let store_meta = router.store_meta().clone();
+
         system
             .start(
                 store_id,
@@ -168,8 +172,8 @@ impl RunningState {
                 raft_engine.clone(),
                 factory.clone(),
                 transport.clone(),
-                &router,
-                store_meta,
+                router.store_router(),
+                store_meta.clone(),
             )
             .unwrap();
 
@@ -179,6 +183,7 @@ impl RunningState {
             system,
             cfg,
             transport,
+            store_meta,
         };
         (TestRouter(router), state)
     }
@@ -223,7 +228,10 @@ impl TestNode {
     }
 
     fn stop(&mut self) {
-        self.running_state.take();
+        if let Some(state) = std::mem::take(&mut self.running_state) {
+            let mut meta = state.store_meta.lock().unwrap();
+            meta.tablet_caches.clear();
+        }
     }
 
     fn restart(&mut self) -> TestRouter {
