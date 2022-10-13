@@ -2704,14 +2704,6 @@ mod tests {
                 })
                 .collect();
             let tablet_path = factory.tablet_path(region_id, 10);
-            // if let Some(x) = cf_opts.iter().find(|x| x.0 == CF_WRITE) {
-            // let mut write_cf_opts = x.1.clone();
-            // write_cf_opts.set_compaction_filter_factory(
-            // "write_compaction_filter_factory",
-            // WriteCompactionFilterFactory::new(region_id, 10),
-            // )
-            // .unwrap();
-            // }
 
             let tablet = engine_rocks::util::new_engine_opt(
                 tablet_path.to_str().unwrap(),
