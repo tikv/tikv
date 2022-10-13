@@ -1697,7 +1697,7 @@ mod tests {
         config::DbConfig,
         server::gc_worker::{
             compaction_filter::get_rocksdb_from_factory, MockSafePointProvider, PrefixedEngine,
-            TestGcRunner,
+            TestGcRunner, WriteCompactionFilterFactory,
         },
         storage::{
             config::BlockCacheConfig,
@@ -1718,7 +1718,6 @@ mod tests {
             Engine, Storage, TestStorageBuilderApiV1,
         },
     };
-    use crate::server::gc_worker::WriteCompactionFilterFactory;
 
     fn init_region(
         start_key: &[u8],
@@ -2685,37 +2684,34 @@ mod tests {
                 .map(|cf| match *cf {
                     CF_DEFAULT => (
                         CF_DEFAULT,
-                        cfg_rocksdb.defaultcf.build_opt(
-                            &cache,
-                            None,
-                            ApiVersion::V1,
-                        ),
+                        cfg_rocksdb
+                            .defaultcf
+                            .build_opt(&cache, None, ApiVersion::V1),
                     ),
                     CF_LOCK => (CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
-                    CF_WRITE => (
-                        CF_WRITE,
-                        {
-                            let mut write_cf_opts = cfg_rocksdb.writecf.build_opt(&cache, None);
-                            write_cf_opts.set_compaction_filter_factory("write_compaction_filter_factory",
-                                                                        WriteCompactionFilterFactory::new(region_id, 10)).unwrap();
-                            write_cf_opts
-                        }
-                    ),
+                    CF_WRITE => (CF_WRITE, {
+                        let mut write_cf_opts = cfg_rocksdb.writecf.build_opt(&cache, None);
+                        write_cf_opts
+                            .set_compaction_filter_factory(
+                                "write_compaction_filter_factory",
+                                WriteCompactionFilterFactory::new(region_id, 10),
+                            )
+                            .unwrap();
+                        write_cf_opts
+                    }),
                     CF_RAFT => (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
                     _ => (*cf, RocksCfOptions::default()),
                 })
                 .collect();
             let tablet_path = factory.tablet_path(region_id, 10);
-            /*
-            if let Some(x) = cf_opts.iter().find(|x| x.0 == CF_WRITE) {
-                let mut write_cf_opts = x.1.clone();
-                write_cf_opts.set_compaction_filter_factory(
-                    "write_compaction_filter_factory",
-                    WriteCompactionFilterFactory::new(region_id, 10),
-                )
-                    .unwrap();
-            }
-             */
+            // if let Some(x) = cf_opts.iter().find(|x| x.0 == CF_WRITE) {
+            // let mut write_cf_opts = x.1.clone();
+            // write_cf_opts.set_compaction_filter_factory(
+            // "write_compaction_filter_factory",
+            // WriteCompactionFilterFactory::new(region_id, 10),
+            // )
+            // .unwrap();
+            // }
 
             let tablet = engine_rocks::util::new_engine_opt(
                 tablet_path.to_str().unwrap(),

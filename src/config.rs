@@ -73,10 +73,8 @@ use crate::{
     coprocessor_v2::Config as CoprocessorV2Config,
     import::Config as ImportConfig,
     server::{
-        gc_worker::{GcConfig},
-        lock_manager::Config as PessimisticTxnConfig,
-        ttl::TtlCompactionFilterFactory,
-        Config as ServerConfig, CONFIG_ROCKSDB_GAUGE,
+        gc_worker::GcConfig, lock_manager::Config as PessimisticTxnConfig,
+        ttl::TtlCompactionFilterFactory, Config as ServerConfig, CONFIG_ROCKSDB_GAUGE,
     },
     storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR},
 };
@@ -703,7 +701,7 @@ impl DefaultCfConfig {
                     .unwrap();
             }
             ApiVersion::V2 => {
-              // nothing to do here
+                // nothing to do here
             }
         }
         cf_opts.set_titan_cf_options(&self.titan.build_opts());
@@ -1197,17 +1195,13 @@ impl DbConfig {
         vec![
             (
                 CF_DEFAULT,
-                self.defaultcf.build_opt(
-                    cache,
-                    region_info_accessor,
-                    api_version,
-                ),
+                self.defaultcf
+                    .build_opt(cache, region_info_accessor, api_version),
             ),
             (CF_LOCK, self.lockcf.build_opt(cache)),
             (
                 CF_WRITE,
-                self.writecf
-                    .build_opt(cache, region_info_accessor),
+                self.writecf.build_opt(cache, region_info_accessor),
             ),
             // TODO: remove CF_RAFT.
             (CF_RAFT, self.raftcf.build_opt(cache)),

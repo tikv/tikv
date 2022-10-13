@@ -102,19 +102,10 @@ impl TestEngineBuilder {
             .map(|cf| match *cf {
                 CF_DEFAULT => (
                     CF_DEFAULT,
-                    cfg_rocksdb.defaultcf.build_opt(
-                        &cache,
-                        None,
-                        api_version,
-                    ),
+                    cfg_rocksdb.defaultcf.build_opt(&cache, None, api_version),
                 ),
                 CF_LOCK => (CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
-                CF_WRITE => (
-                    CF_WRITE,
-                    cfg_rocksdb
-                        .writecf
-                        .build_opt(&cache, None),
-                ),
+                CF_WRITE => (CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
                 CF_RAFT => (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
                 _ => (*cf, RocksCfOptions::default()),
             })

@@ -5,7 +5,11 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use engine_rocks::{raw::{Cache, Env}, CompactedEventSender, CompactionListener, FlowListener, RocksCompactionJobInfo, RocksEngine, RocksEventListener, RocksCfOptions};
+use engine_rocks::{
+    raw::{Cache, Env},
+    CompactedEventSender, CompactionListener, FlowListener, RocksCfOptions, RocksCompactionJobInfo,
+    RocksEngine, RocksEventListener,
+};
 use engine_traits::{
     CfOptions, CfOptionsExt, CompactionJobInfo, OpenOptions, Result, TabletAccessor, TabletFactory,
     CF_DEFAULT, CF_WRITE,
@@ -15,8 +19,10 @@ use raftstore::RegionInfoAccessor;
 use tikv_util::worker::Scheduler;
 
 use super::engine_factory_v2::KvEngineFactoryV2;
-use crate::config::{DbConfig, TikvConfig, DEFAULT_ROCKSDB_SUB_DIR};
-use crate::server::gc_worker::{RawCompactionFilterFactory, WriteCompactionFilterFactory};
+use crate::{
+    config::{DbConfig, TikvConfig, DEFAULT_ROCKSDB_SUB_DIR},
+    server::gc_worker::{RawCompactionFilterFactory, WriteCompactionFilterFactory},
+};
 
 struct FactoryInner {
     env: Arc<Env>,
@@ -177,10 +183,7 @@ impl KvEngineFactory {
         }
     }
 
-    pub fn destroy_tablet(
-        &self,
-        tablet_path: &Path,
-    ) -> engine_traits::Result<()> {
+    pub fn destroy_tablet(&self, tablet_path: &Path) -> engine_traits::Result<()> {
         info!("destroy tablet"; "path" => %tablet_path.display());
         // Create kv engine.
         let mut kv_db_opts = self.inner.rocksdb_config.build_opt();
@@ -219,23 +222,30 @@ impl KvEngineFactory {
         self.inner.store_path.join(DEFAULT_ROCKSDB_SUB_DIR)
     }
 
-    fn set_compaction_filters(&self, kv_cfs_opts: Vec<(&str, RocksCfOptions)>, region_id: u64, suffix: u64) {
+    fn set_compaction_filters(
+        &self,
+        kv_cfs_opts: Vec<(&str, RocksCfOptions)>,
+        region_id: u64,
+        suffix: u64,
+    ) {
         if let Some(x) = kv_cfs_opts.iter().find(|x| x.0 == CF_WRITE) {
             let mut write_cf_opts = x.1.clone();
-            write_cf_opts.set_compaction_filter_factory(
-                "write_compaction_filter_factory",
-                WriteCompactionFilterFactory::new(region_id, suffix),
-            )
+            write_cf_opts
+                .set_compaction_filter_factory(
+                    "write_compaction_filter_factory",
+                    WriteCompactionFilterFactory::new(region_id, suffix),
+                )
                 .unwrap();
         }
 
         if let Some(x) = kv_cfs_opts.iter().find(|x| x.0 == CF_DEFAULT) {
             if self.inner.api_version == ApiVersion::V2 {
                 let mut default_cf_opts = x.1.clone();
-                default_cf_opts.set_compaction_filter_factory(
-                    "apiv2_gc_compaction_filter_factory",
-                    RawCompactionFilterFactory::new(region_id, suffix),
-                )
+                default_cf_opts
+                    .set_compaction_filter_factory(
+                        "apiv2_gc_compaction_filter_factory",
+                        RawCompactionFilterFactory::new(region_id, suffix),
+                    )
                     .unwrap();
             }
         }
