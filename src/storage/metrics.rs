@@ -595,7 +595,7 @@ lazy_static! {
 
     pub static ref LOCK_WAIT_QUEUE_LENGTH_HISTOGRAM: Histogram = register_histogram!(
         "tikv_lock_wait_queue_length",
-        "Statistics  of length of queues counted when enqueueing",
+        "Statistics of length of queues counted when enqueueing",
         exponential_buckets(1.0, 2.0, 16).unwrap()
     )
     .unwrap();
