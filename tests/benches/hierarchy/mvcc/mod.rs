@@ -147,6 +147,7 @@ fn mvcc_rollback_prewrote<E: Engine, F: EngineFactory<E>>(
                     key,
                     TimeStamp::zero(),
                     false,
+                    true,
                 ))
                 .unwrap();
             }
@@ -173,6 +174,7 @@ fn mvcc_rollback_conflict<E: Engine, F: EngineFactory<E>>(
                     key,
                     TimeStamp::zero(),
                     false,
+                    true,
                 ))
                 .unwrap();
             }
@@ -209,6 +211,7 @@ fn mvcc_rollback_non_prewrote<E: Engine, F: EngineFactory<E>>(
                     key,
                     TimeStamp::zero(),
                     false,
+                    true,
                 ))
                 .unwrap();
             }

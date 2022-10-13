@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use txn_types::{Key, Lock, WriteType};
+use txn_types::{Key, Lock, MarkType, WriteType};
 
 use crate::storage::{
     kv::WriteData,
@@ -122,6 +122,14 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
                 if let Some(write) = make_rollback(self.start_ts, true, rollback_overlapped_write) {
                     txn.put_write(key.clone(), self.start_ts, write.as_ref().to_bytes());
                     collapse_prev_rollback(&mut txn, &mut reader, &key)?;
+                }
+                if context.enable_mark_cf {
+                    txn.put_mark(
+                        key.clone(),
+                        MarkType::Rollback,
+                        self.start_ts,
+                        self.start_ts,
+                    );
                 }
             }
             released_locks.push(released_lock);
@@ -277,6 +285,7 @@ pub mod tests {
         must_get_commit_ts(&mut engine, b"k1", 7, 9);
         assert_eq!(check_secondary(b"k1", 5), SecondaryLocksStatus::RolledBack);
         must_get_rollback_ts(&mut engine, b"k1", 5);
+        must_get_mark(&mut engine, b"k1", 5, 5, MarkType::Rollback);
         assert_eq!(
             check_secondary(b"k1", 1),
             SecondaryLocksStatus::Committed(3.into())
@@ -284,6 +293,7 @@ pub mod tests {
         must_get_commit_ts(&mut engine, b"k1", 1, 3);
         assert_eq!(check_secondary(b"k1", 6), SecondaryLocksStatus::RolledBack);
         must_get_rollback_protected(&mut engine, b"k1", 6, true);
+        must_get_mark(&mut engine, b"k1", 6, 6, MarkType::Rollback);
 
         // ----------------------------
 
@@ -300,6 +310,7 @@ pub mod tests {
         let status = check_secondary(b"k1", 11);
         assert_eq!(status, SecondaryLocksStatus::RolledBack);
         must_get_rollback_protected(&mut engine, b"k1", 11, true);
+        must_get_mark(&mut engine, b"k1", 11, 11, MarkType::Rollback);
 
         // ----------------------------
 
@@ -339,11 +350,14 @@ pub mod tests {
             res => panic!("unexpected lock status: {:?}", res),
         }
         must_get_rollback_protected(&mut engine, b"k1", 14, true);
+        must_get_mark(&mut engine, b"k1", 14, 14, MarkType::Rollback);
 
         match check_secondary(b"k1", 15) {
             SecondaryLocksStatus::RolledBack => {}
             res => panic!("unexpected lock status: {:?}", res),
         }
         must_get_overlapped_rollback(&mut engine, b"k1", 15, 13, WriteType::Lock, Some(0));
+        must_get_mark(&mut engine, b"k1", 13, 15, MarkType::Lock);
+        must_get_mark(&mut engine, b"k1", 15, 15, MarkType::Rollback);
     }
 }

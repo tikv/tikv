@@ -65,7 +65,14 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockLite {
                     context.enable_mark_cf,
                 )?
             } else {
-                cleanup(&mut txn, &mut reader, key, TimeStamp::zero(), false)?
+                cleanup(
+                    &mut txn,
+                    &mut reader,
+                    key,
+                    TimeStamp::zero(),
+                    false,
+                    context.enable_mark_cf,
+                )?
             });
         }
         released_locks.wake_up(context.lock_mgr);

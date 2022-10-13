@@ -54,7 +54,14 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Rollback {
         for k in self.keys {
             // Rollback is called only if the transaction is known to fail. Under the
             // circumstances, the rollback record needn't be protected.
-            let released_lock = cleanup(&mut txn, &mut reader, k, TimeStamp::zero(), false)?;
+            let released_lock = cleanup(
+                &mut txn,
+                &mut reader,
+                k,
+                TimeStamp::zero(),
+                false,
+                context.enable_mark_cf,
+            )?;
             released_locks.push(released_lock);
         }
         released_locks.wake_up(context.lock_mgr);

@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use txn_types::{Key, Lock, TimeStamp, Write, WriteType};
+use txn_types::{Key, Lock, MarkType, TimeStamp, Write, WriteType};
 
 use crate::storage::{
     mvcc::{
@@ -23,6 +23,7 @@ pub fn check_txn_status_lock_exists(
     caller_start_ts: TimeStamp,
     force_sync_commit: bool,
     resolving_pessimistic_lock: bool,
+    enable_mark_cf: bool,
 ) -> Result<(TxnStatus, Option<ReleasedLock>)> {
     // Never rollback or push forward min_commit_ts in check_txn_status if it's
     // using async commit. Rollback of async-commit locks are done during
@@ -49,8 +50,15 @@ pub fn check_txn_status_lock_exists(
             MVCC_CHECK_TXN_STATUS_COUNTER_VEC.pessimistic_rollback.inc();
             Ok((TxnStatus::PessimisticRollBack, released))
         } else {
-            let released =
-                rollback_lock(txn, reader, primary_key, &lock, is_pessimistic_txn, true)?;
+            let released = rollback_lock(
+                txn,
+                reader,
+                primary_key,
+                &lock,
+                is_pessimistic_txn,
+                true,
+                enable_mark_cf,
+            )?;
             MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
             Ok((TxnStatus::TtlExpire, released))
         };
@@ -93,6 +101,7 @@ pub fn check_txn_status_missing_lock(
     mismatch_lock: Option<Lock>,
     action: MissingLockAction,
     resolving_pessimistic_lock: bool,
+    enable_mark_cf: bool,
 ) -> Result<TxnStatus> {
     MVCC_CHECK_TXN_STATUS_COUNTER_VEC.get_commit_info.inc();
 
@@ -135,7 +144,10 @@ pub fn check_txn_status_missing_lock(
             // Insert a Rollback to Write CF in case that a stale prewrite
             // command is received after a cleanup command.
             if let Some(write) = action.construct_write(ts, overlapped_write) {
-                txn.put_write(primary_key, ts, write.as_ref().to_bytes());
+                txn.put_write(primary_key.clone(), ts, write.as_ref().to_bytes());
+            }
+            if enable_mark_cf {
+                txn.put_mark(primary_key, MarkType::Rollback, ts, ts);
             }
             MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
 
@@ -151,6 +163,7 @@ pub fn rollback_lock(
     lock: &Lock,
     is_pessimistic_txn: bool,
     collapse_rollback: bool,
+    enable_mark_cf: bool,
 ) -> Result<Option<ReleasedLock>> {
     let overlapped_write = match reader.get_txn_commit_record(&key)? {
         TxnCommitRecord::None { overlapped_write } => overlapped_write,
@@ -174,6 +187,15 @@ pub fn rollback_lock(
 
     if collapse_rollback {
         collapse_prev_rollback(txn, reader, &key)?;
+    }
+
+    if enable_mark_cf {
+        txn.put_mark(
+            key.clone(),
+            MarkType::Rollback,
+            reader.start_ts,
+            reader.start_ts,
+        );
     }
 
     Ok(txn.unlock_key(key, is_pessimistic_txn))

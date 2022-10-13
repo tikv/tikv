@@ -153,6 +153,9 @@ impl MvccTxn {
         start_ts: TimeStamp,
         commit_ts: TimeStamp,
     ) {
+        if mark_type == MarkType::Rollback {
+            assert_eq!(start_ts, commit_ts);
+        }
         let mark = Mark {
             mark_type,
             commit_ts,

@@ -79,6 +79,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
             self.key_old_writes,
             self.start_ts,
             self.commit_ts,
+            context.enable_mark_cf,
         )?;
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
         write_data.extra.for_flashback = true;

@@ -25,6 +25,7 @@ pub fn cleanup<S: Snapshot>(
     key: Key,
     current_ts: TimeStamp,
     protect_rollback: bool,
+    enable_mark_cf: bool,
 ) -> MvccResult<Option<ReleasedLock>> {
     fail_point!("cleanup", |err| Err(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts).into()
@@ -46,6 +47,7 @@ pub fn cleanup<S: Snapshot>(
                 lock,
                 lock.is_pessimistic_txn(),
                 !protect_rollback,
+                enable_mark_cf,
             )
         }
         l => match check_txn_status_missing_lock(
@@ -55,6 +57,7 @@ pub fn cleanup<S: Snapshot>(
             l,
             MissingLockAction::rollback_protect(protect_rollback),
             false,
+            enable_mark_cf,
         )? {
             TxnStatus::Committed { commit_ts } => {
                 MVCC_CONFLICT_COUNTER.rollback_committed.inc();
@@ -82,7 +85,7 @@ pub mod tests {
     use kvproto::kvrpcpb::Context;
     #[cfg(test)]
     use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
-    use txn_types::TimeStamp;
+    use txn_types::{MarkType, TimeStamp};
 
     use super::*;
     #[cfg(test)]
@@ -97,7 +100,7 @@ pub mod tests {
     };
     use crate::storage::{
         mvcc::{
-            tests::{must_have_write, must_not_have_write, write},
+            tests::{must_get_mark, must_have_write, must_not_have_write, write},
             Error as MvccError, WriteType,
         },
         txn::tests::{must_commit, must_prewrite_put},
@@ -117,7 +120,15 @@ pub mod tests {
         let start_ts = start_ts.into();
         let mut txn = MvccTxn::new(start_ts, cm);
         let mut reader = SnapshotReader::new(start_ts, snapshot, true);
-        cleanup(&mut txn, &mut reader, Key::from_raw(key), current_ts, true).unwrap();
+        cleanup(
+            &mut txn,
+            &mut reader,
+            Key::from_raw(key),
+            current_ts,
+            true,
+            true,
+        )
+        .unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
 
@@ -133,7 +144,15 @@ pub mod tests {
         let start_ts = start_ts.into();
         let mut txn = MvccTxn::new(start_ts, cm);
         let mut reader = SnapshotReader::new(start_ts, snapshot, true);
-        cleanup(&mut txn, &mut reader, Key::from_raw(key), current_ts, true).unwrap_err()
+        cleanup(
+            &mut txn,
+            &mut reader,
+            Key::from_raw(key),
+            current_ts,
+            true,
+            true,
+        )
+        .unwrap_err()
     }
 
     pub fn must_cleanup_with_gc_fence<E: Engine>(
@@ -160,9 +179,18 @@ pub mod tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut txn = MvccTxn::new(start_ts, cm);
         let mut reader = SnapshotReader::new(start_ts, snapshot, true);
-        cleanup(&mut txn, &mut reader, Key::from_raw(key), current_ts, true).unwrap();
+        cleanup(
+            &mut txn,
+            &mut reader,
+            Key::from_raw(key),
+            current_ts,
+            true,
+            true,
+        )
+        .unwrap();
 
         write(engine, &ctx, txn.into_modifies());
+        must_get_mark(engine, key, start_ts, start_ts, MarkType::Rollback);
 
         let w = must_have_write(engine, key, start_ts);
         assert_ne!(w.start_ts, start_ts, "no overlapping write record");
@@ -218,6 +246,8 @@ pub mod tests {
         // If there is no existing lock when cleanup, it may be a pessimistic
         // transaction, so the rollback should be protected.
         must_get_rollback_protected(&mut engine, k, ts(10, 1), true);
+        must_get_mark(&mut engine, k, ts(10, 1), ts(10, 1), MarkType::Rollback);
+
         must_locked(&mut engine, k, ts(10, 0));
 
         // TTL expired. The lock should be removed.
@@ -226,11 +256,13 @@ pub mod tests {
         // Rollbacks of optimistic transactions needn't be protected
         must_get_rollback_protected(&mut engine, k, ts(10, 0), false);
         must_get_rollback_ts(&mut engine, k, ts(10, 0));
+        must_get_mark(&mut engine, k, ts(10, 0), ts(10, 0), MarkType::Rollback);
 
         // Rollbacks of primary keys in pessimistic transactions should be protected
         must_acquire_pessimistic_lock(&mut engine, k, k, ts(11, 1), ts(12, 1));
         must_succeed(&mut engine, k, ts(11, 1), ts(120, 0));
         must_get_rollback_protected(&mut engine, k, ts(11, 1), true);
+        must_get_mark(&mut engine, k, ts(11, 1), ts(11, 1), MarkType::Rollback);
 
         must_acquire_pessimistic_lock(&mut engine, k, k, ts(13, 1), ts(14, 1));
         must_pessimistic_prewrite_put(
@@ -244,5 +276,6 @@ pub mod tests {
         );
         must_succeed(&mut engine, k, ts(13, 1), ts(120, 0));
         must_get_rollback_protected(&mut engine, k, ts(13, 1), true);
+        must_get_mark(&mut engine, k, ts(13, 1), ts(13, 1), MarkType::Rollback);
     }
 }

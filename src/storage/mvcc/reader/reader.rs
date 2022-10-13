@@ -982,6 +982,7 @@ pub mod tests {
                 Key::from_raw(pk),
                 TimeStamp::zero(),
                 true,
+                true,
             )
             .unwrap();
             self.write(txn.into_modifies());

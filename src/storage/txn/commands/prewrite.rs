@@ -2556,7 +2556,7 @@ mod tests {
             let cmd = Prewrite::new(
                 vec![Mutation::make_lock(Key::from_raw(key))],
                 key.to_vec(),
-                start_ts.into(),
+                start_ts,
                 2000,
                 false,
                 1,

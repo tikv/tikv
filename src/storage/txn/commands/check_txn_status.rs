@@ -107,6 +107,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
                 self.caller_start_ts,
                 self.force_sync_commit,
                 self.resolving_pessimistic_lock,
+                context.enable_mark_cf,
             )?,
             l => (
                 check_txn_status_missing_lock(
@@ -116,6 +117,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
                     l,
                     MissingLockAction::rollback(self.rollback_if_not_exist),
                     self.resolving_pessimistic_lock,
+                    context.enable_mark_cf,
                 )?,
                 None,
             ),
@@ -149,7 +151,7 @@ pub mod tests {
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::{Context, PrewriteRequestPessimisticAction::*};
     use tikv_util::deadline::Deadline;
-    use txn_types::{Key, WriteType};
+    use txn_types::{Key, MarkType, WriteType};
 
     use super::{TxnStatus::*, *};
     use crate::storage::{
@@ -381,6 +383,7 @@ pub mod tests {
             );
             must_unlocked(&mut engine, b"k1");
             must_get_rollback_protected(&mut engine, b"k1", 1, false);
+            must_get_mark(&mut engine, b"k1", 1, 1, MarkType::Rollback);
 
             // case 2: primary is prewritten (pessimistic)
             must_acquire_pessimistic_lock(&mut engine, b"k2", b"k2", 15, 15);
@@ -482,6 +485,7 @@ pub mod tests {
             );
             must_unlocked(&mut engine, b"k2");
             must_get_rollback_protected(&mut engine, b"k2", 15, true);
+            must_get_mark(&mut engine, b"k2", 15, 15, MarkType::Rollback);
 
             // case 3: pessimistic transaction with two keys (large txn), secondary is
             // prewritten first
@@ -570,6 +574,7 @@ pub mod tests {
             );
             // A protected rollback record will be written.
             must_get_rollback_protected(&mut engine, k, ts(3, 0), true);
+            must_get_mark(&mut engine, k, ts(3, 0), ts(3, 0), MarkType::Rollback);
         } else {
             must_err(
                 &mut engine,
@@ -1148,6 +1153,7 @@ pub mod tests {
         );
         must_unlocked(&mut engine, k);
         must_get_rollback_ts(&mut engine, k, ts(30, 0));
+        must_get_mark(&mut engine, k, ts(30, 0), ts(30, 0), MarkType::Rollback);
 
         // Path: the resolving_pessimistic_lock is false and the primary key lock is
         // pessimistic lock, the transaction is in commit phase and the rollback
@@ -1168,5 +1174,6 @@ pub mod tests {
         );
         must_unlocked(&mut engine, k);
         must_get_rollback_ts(&mut engine, k, ts(50, 0));
+        must_get_mark(&mut engine, k, ts(50, 0), ts(50, 0), MarkType::Rollback);
     }
 }

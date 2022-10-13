@@ -813,6 +813,7 @@ pub fn must_rollback<E: Engine>(
         Key::from_raw(key),
         TimeStamp::zero(),
         protect_rollback,
+        true,
     )
     .unwrap();
     write(engine, &ctx, txn.into_modifies());
@@ -830,6 +831,7 @@ pub fn must_rollback_err<E: Engine>(engine: &mut E, key: &[u8], start_ts: impl I
         Key::from_raw(key),
         TimeStamp::zero(),
         false,
+        true,
     )
     .unwrap_err();
 }

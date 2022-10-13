@@ -98,6 +98,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
                     current_key.clone(),
                     TimeStamp::zero(),
                     false,
+                    context.enable_mark_cf,
                 )?
             } else if commit_ts > current_lock.ts {
                 // Continue to resolve locks if the not found committed locks are pessimistic

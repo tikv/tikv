@@ -144,7 +144,7 @@ fn txn_rollback_prewrote<E: Engine, F: EngineFactory<E>>(
                 let snapshot = engine.snapshot(Default::default()).unwrap();
                 let mut txn = mvcc::MvccTxn::new(1.into(), cm.clone());
                 let mut reader = SnapshotReader::new(1.into(), snapshot, true);
-                cleanup(&mut txn, &mut reader, key, TimeStamp::zero(), false).unwrap();
+                cleanup(&mut txn, &mut reader, key, TimeStamp::zero(), false, true).unwrap();
                 let write_data = WriteData::from_modifies(txn.into_modifies());
                 black_box(engine.write(&ctx, write_data)).unwrap();
             }
@@ -168,7 +168,7 @@ fn txn_rollback_conflict<E: Engine, F: EngineFactory<E>>(
                 let snapshot = engine.snapshot(Default::default()).unwrap();
                 let mut txn = mvcc::MvccTxn::new(1.into(), cm.clone());
                 let mut reader = SnapshotReader::new(1.into(), snapshot, true);
-                cleanup(&mut txn, &mut reader, key, TimeStamp::zero(), false).unwrap();
+                cleanup(&mut txn, &mut reader, key, TimeStamp::zero(), false, true).unwrap();
                 let write_data = WriteData::from_modifies(txn.into_modifies());
                 black_box(engine.write(&ctx, write_data)).unwrap();
             }
@@ -196,7 +196,7 @@ fn txn_rollback_non_prewrote<E: Engine, F: EngineFactory<E>>(
                 let snapshot = engine.snapshot(Default::default()).unwrap();
                 let mut txn = mvcc::MvccTxn::new(1.into(), cm.clone());
                 let mut reader = SnapshotReader::new(1.into(), snapshot, true);
-                cleanup(&mut txn, &mut reader, key, TimeStamp::zero(), false).unwrap();
+                cleanup(&mut txn, &mut reader, key, TimeStamp::zero(), false, true).unwrap();
                 let write_data = WriteData::from_modifies(txn.into_modifies());
                 black_box(engine.write(&ctx, write_data)).unwrap();
             }

@@ -90,6 +90,7 @@ pub fn flashback_to_version(
     key_old_writes: Vec<(Key, Option<Write>)>,
     start_ts: TimeStamp,
     commit_ts: TimeStamp,
+    enable_mark_cf: bool,
 ) -> TxnResult<usize> {
     // To flashback the `CF_LOCK`, we need to delete all locks records whose
     // `start_ts` is greater than the specified version, and if it's not a
@@ -110,6 +111,7 @@ pub fn flashback_to_version(
             &lock,
             lock.is_pessimistic_txn(),
             true,
+            enable_mark_cf,
         )?;
     }
     // To flashback the `CF_WRITE` and `CF_DEFAULT`, we need to write a new MVCC
@@ -214,6 +216,7 @@ pub mod tests {
             key_old_writes,
             start_ts,
             commit_ts,
+            true,
         )
         .unwrap();
         write(engine, &ctx, txn.into_modifies());
@@ -330,7 +333,7 @@ pub mod tests {
         // Flashback to version 17 with start_ts = 35, commit_ts = 40.
         // Distinguish from pessimistic start_ts 30 to make sure rollback ts is by lock
         // ts.
-        assert_eq!(must_flashback_to_version(&mut engine, k, 17, 35, 40), 3);
+        assert_eq!(must_flashback_to_version(&mut engine, k, 17, 35, 40), 4);
 
         // Pessimistic Prewrite Put(k -> v3) with stat_ts = 30 will be error with
         // Rollback.

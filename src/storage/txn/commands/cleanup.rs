@@ -65,6 +65,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Cleanup {
             self.key,
             self.current_ts,
             true,
+            context.enable_mark_cf,
         )?);
         released_locks.wake_up(context.lock_mgr);
 
