@@ -4,39 +4,23 @@ use std::{mem, sync::Arc};
 
 use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory};
-use fail::fail_point;
-use kvproto::{
-    metapb,
-    raft_cmdpb::{self, RaftCmdRequest},
-    raft_serverpb::RegionLocalState,
+use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb};
+use pd_client::BucketStat;
+use raft::{RawNode, StateRole};
+use raftstore::store::{
+    util::{Lease, RegionReadProgress},
+    Config, EntryStorage, ProposalQueue, ReadDelegate, ReadIndexQueue, TrackVer, TxnExt,
 };
-use protobuf::Message;
-use raft::{RawNode, StateRole, INVALID_ID};
-use raftstore::{
-    store::{
-        fsm::Proposal,
-        metrics::PEER_PROPOSE_LOG_SIZE_HISTOGRAM,
-        util::{Lease, RegionReadProgress},
-        Config, EntryStorage, ProposalQueue, RaftlogFetchTask, ReadIndexQueue, ReadIndexRequest,
-        Transport, WriteRouter,
-    },
-    Error,
-};
-use slog::{debug, error, info, o, warn, Logger};
-use tikv_util::{
-    box_err,
-    config::ReadableSize,
-    time::{monotonic_raw_now, Instant as TiInstant},
-    worker::Scheduler,
-    Either,
-};
+use slog::Logger;
+use tikv_util::{box_err, config::ReadableSize};
+use time::Timespec;
 
 use super::{storage::Storage, Apply};
 use crate::{
     fsm::{ApplyFsm, ApplyScheduler},
     operation::{AsyncWriter, DestroyProgress, SimpleWriteEncoder},
     router::{CmdResChannel, QueryResChannel},
-    tablet::{self, CachedTablet},
+    tablet::CachedTablet,
     Result,
 };
 
@@ -68,6 +52,12 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     pending_reads: ReadIndexQueue<QueryResChannel>,
     read_progress: Arc<RegionReadProgress>,
     leader_lease: Lease,
+
+    /// region buckets.
+    region_buckets: Option<BucketStat>,
+    /// Transaction extensions related to this peer.
+    txn_ext: Arc<TxnExt>,
+    txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -149,6 +139,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 cfg.raft_store_max_leader_lease(),
                 cfg.renew_leader_lease_advance_duration(),
             ),
+            region_buckets: None,
+            txn_ext: Arc::default(),
+            txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -396,5 +389,20 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn set_apply_scheduler(&mut self, apply_scheduler: ApplyScheduler) {
         self.apply_scheduler = Some(apply_scheduler);
+    }
+
+    pub fn generate_read_delegate(&self) -> ReadDelegate {
+        let peer_id = self.peer().get_id();
+
+        ReadDelegate::new(
+            peer_id,
+            self.term(),
+            self.region().clone(),
+            self.storage().entry_storage().applied_term(),
+            self.txn_extra_op.clone(),
+            self.txn_ext.clone(),
+            self.read_progress().clone(),
+            self.region_buckets.as_ref().map(|b| b.meta.clone()),
+        )
     }
 }

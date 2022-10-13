@@ -403,7 +403,7 @@ where
                     self.subs.deregister_region_if(region, |_, _| true);
                 }
                 ObserveOp::Destroy { ref region } => {
-                    let stopped = self.subs.deregister_region_if(region, |old, new| {
+                    self.subs.deregister_region_if(region, |old, new| {
                         raftstore::store::util::compare_region_epoch(
                             old.meta.get_region_epoch(),
                             new,
@@ -414,9 +414,6 @@ where
                         .map_err(|err| warn!("check epoch and stop failed."; "err" => %err))
                         .is_ok()
                     });
-                    if stopped {
-                        self.subs.destroy_stopped_region(region.get_id());
-                    }
                 }
                 ObserveOp::RefreshResolver { ref region } => self.refresh_resolver(region).await,
                 ObserveOp::NotifyFailToStartObserve {

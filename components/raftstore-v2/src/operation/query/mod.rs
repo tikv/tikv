@@ -25,7 +25,7 @@ use raftstore::{
     store::{
         cmd_resp, local_metrics::RaftMetrics, metrics::RAFT_READ_INDEX_PENDING_COUNT,
         msg::ErrorCallback, region_meta::RegionMeta, util, util::LeaseState, GroupState,
-        ReadCallback, ReadIndexContext, RequestPolicy, Transport,
+        ReadIndexContext, RequestPolicy, Transport,
     },
     Error, Result,
 };
@@ -45,6 +45,8 @@ use crate::{
 mod lease;
 mod local;
 mod replica;
+
+pub(crate) use self::local::LocalReader;
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
     PeerFsmDelegate<'a, EK, ER, T>
