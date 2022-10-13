@@ -708,7 +708,7 @@ where
                             fail_point!("localreader_before_redirect", |_| {});
                             // Forward to raftstore.
                             self.redirect(RaftCommand::new(req, cb));
-                            if !read_id_exist {
+                            if self.snap_cache.cached_read_id.is_none() {
                                 self.snap_cache.clear();
                             }
                             return;
@@ -723,7 +723,7 @@ where
                             &mut self.metrics,
                         );
 
-                        if !read_id_exist {
+                        if self.snap_cache.cached_read_id.is_none() {
                             self.snap_cache.clear();
                         }
                         response
