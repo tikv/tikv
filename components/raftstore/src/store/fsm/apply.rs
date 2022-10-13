@@ -3383,7 +3383,7 @@ where
 
     pub fn entries_size(&self) -> usize {
         match self {
-            Msg::Apply{apply, ..} => apply.entries_size,
+            Msg::Apply { apply, .. } => apply.entries_size,
             _ => 0,
         }
     }
@@ -4116,7 +4116,9 @@ where
             |_| { HandleResult::KeepProcessing }
         );
         let mut total_size = 0;
-        while self.msg_buf.len() < self.messages_per_tick && total_size < self.messages_size_per_tick {
+        while self.msg_buf.len() < self.messages_per_tick
+            && total_size < self.messages_size_per_tick
+        {
             match normal.receiver.try_recv() {
                 Ok(msg) => {
                     total_size += msg.entries_size();

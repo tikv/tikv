@@ -2964,7 +2964,10 @@ where
         for (i, entry) in committed_entries.into_iter().enumerate() {
             batch_size += entry.get_data().len();
             entry_batch.push(entry);
-            if batch_size >= ctx.cfg.messages_size_per_tick || entry_batch.len() >= ctx.cfg.messages_per_tick || i == length - 1 {
+            if batch_size >= ctx.cfg.messages_size_per_tick
+                || entry_batch.len() >= ctx.cfg.messages_per_tick
+                || i == length - 1
+            {
                 let entries = mem::take(&mut entry_batch);
                 batch_size = 0;
                 let cbs = if !self.proposals.is_empty() {
@@ -2977,13 +2980,13 @@ where
                         })
                         .map(|mut p| {
                             if p.must_pass_epoch_check {
-                                // In this case the apply can be guaranteed to be successful. Invoke the
-                                // on_committed callback if necessary.
+                                // In this case the apply can be guaranteed to be successful. Invoke
+                                // the on_committed callback if necessary.
                                 p.cb.invoke_committed();
                             }
                             p
                         })
-                        .collect()    
+                        .collect()
                 } else {
                     vec![]
                 };

@@ -840,7 +840,7 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["messages_per_tick"])
             .set(self.messages_per_tick as f64);
-            CONFIG_RAFTSTORE_GAUGE
+        CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["messages_size_per_tick"])
             .set(self.messages_size_per_tick as f64);
 
