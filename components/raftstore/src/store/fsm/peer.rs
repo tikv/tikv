@@ -1863,18 +1863,20 @@ where
         {
             if self.fsm.peer.mut_store().maybe_warm_up_entry_cache(*res) {
                 self.fsm.peer.ack_transfer_leader_msg(false);
+                self.fsm.has_ready = true;
             }
             self.fsm.peer.mut_store().clean_async_fetch_res(low);
+            return;
         } else {
             self.fsm
                 .peer
                 .mut_store()
                 .update_async_fetch_res(low, Some(res));
-            self.fsm.peer.raft_group.on_entries_fetched(context);
-            // clean the async fetch result immediately if not used to free memory
-            self.fsm.peer.mut_store().update_async_fetch_res(low, None);
-            self.fsm.has_ready = true;
         }
+        self.fsm.peer.raft_group.on_entries_fetched(context);
+        // clean the async fetch result immediately if not used to free memory
+        self.fsm.peer.mut_store().update_async_fetch_res(low, None);
+        self.fsm.has_ready = true;
     }
 
     fn on_persisted_msg(&mut self, peer_id: u64, ready_number: u64) {

@@ -408,6 +408,7 @@ fn run_cluster_and_warm_up_cache_for_store2() -> Cluster<NodeCluster> {
     assert!(rx2.recv_timeout(Duration::from_millis(500)).unwrap());
     // It should ack the message just after cache is warmed up.
     assert_eq!(rx.recv_timeout(Duration::from_millis(500)).unwrap(), 2);
+    cluster.sim.wl().clear_recv_filters(1);
     cluster
 }
 
