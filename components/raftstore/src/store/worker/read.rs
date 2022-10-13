@@ -696,6 +696,7 @@ where
                 let mut response = match policy {
                     // Leader can read local if and only if it is in lease.
                     RequestPolicy::ReadLocal => {
+                        let read_id_exist = read_id.is_some();
                         snap_updated = self.snap_cache.maybe_update_snapshot(
                             &self.kv_engine,
                             read_id,
@@ -707,11 +708,13 @@ where
                             fail_point!("localreader_before_redirect", |_| {});
                             // Forward to raftstore.
                             self.redirect(RaftCommand::new(req, cb));
+                            if !read_id_exist {
+                                self.snap_cache.clear();
+                            }
                             return;
                         }
 
-                        let region = Arc::clone(&delegate.region);
-                        let response = self.execute(&req, &region, None);
+                        let response = self.execute(&req, &delegate.region, None);
 
                         // Try renew lease in advance
                         delegate.maybe_renew_lease_advance(
@@ -719,6 +722,10 @@ where
                             snapshot_ts,
                             &mut self.metrics,
                         );
+
+                        if !read_id_exist {
+                            self.snap_cache.clear();
+                        }
                         response
                     }
                     // Replica can serve stale read if and only if its `safe_ts` >= `read_ts`
@@ -738,9 +745,8 @@ where
                             last_valid_ts,
                         );
 
-                        let region = Arc::clone(&delegate.region);
                         // Getting the snapshot
-                        let response = self.execute(&req, &region, None);
+                        let response = self.execute(&req, &delegate.region, None);
 
                         // Double check in case `safe_ts` change after the first check and before getting snapshot
                         if let Err(resp) =
