@@ -1766,8 +1766,8 @@ fn future_flashback_to_version<
     raft_router: &T,
     req: FlashbackToVersionRequest,
 ) -> impl Future<Output = ServerResult<FlashbackToVersionResponse>> {
-    let raft_router = Mutex::new(raft_router.clone());
     let storage_clone = storage.clone();
+    let raft_router = Mutex::new(raft_router.clone());
     async move {
         // Perform the data flashback transaction command. We will check if the region
         // is in the flashback state when proposing the flashback modification.
