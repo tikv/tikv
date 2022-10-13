@@ -4,7 +4,7 @@ use std::{
     fs,
     io::{Read, Result as IoResult, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::Arc, cmp::Ordering, collections::BinaryHeap,
 };
 
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
@@ -293,6 +293,26 @@ impl FileSystem for ManagedFileSystem {
 #[derive(Clone)]
 pub struct RaftLogEngine(Arc<RawRaftEngine<ManagedFileSystem>>);
 
+#[derive(Copy, Clone, Eq, PartialEq)]
+struct RegionRaftCnt {
+    region_id: u64,
+    index_cnt: u64,
+}
+
+// Explicitly implement the trait so the queue becomes a min-heap to get top N.
+impl Ord for RegionRaftCnt {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other.index_cnt.cmp(&self.index_cnt)
+    }
+}
+
+// `PartialOrd` needs to be implemented as well.
+impl PartialOrd for RegionRaftCnt {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 impl RaftLogEngine {
     pub fn new(
         config: RaftEngineConfig,
@@ -307,6 +327,16 @@ impl RaftLogEngine {
 
     pub fn path(&self) -> &str {
         self.0.path()
+    }
+
+
+    pub fn get_top_n_regions(&self, n: u64) -> Option<Vec<u64>> {
+        if n <= 0 {
+            return None
+        }
+        let mut _heap: BinaryHeap<RegionRaftCnt> = BinaryHeap::new();
+
+        return None;
     }
 
     /// If path is not an empty directory, we say db exists.
