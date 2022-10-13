@@ -17,7 +17,7 @@ impl<'a> JsonRef<'a> {
 
     /// Return the `i`th key in current Object json
     ///
-    /// See `arrayGetElem()` in TiDB `json/binary.go`
+    /// See `objectGetKey()` in TiDB `types/json_binary.go`
     pub fn object_get_key(&self, i: usize) -> &'a [u8] {
         let key_off_start = HEADER_LEN + i * KEY_ENTRY_LEN;
         let key_off = NumberCodec::decode_u32_le(&self.value()[key_off_start..]) as usize;
@@ -28,7 +28,7 @@ impl<'a> JsonRef<'a> {
 
     /// Returns the JsonRef of `i`th value in current Object json
     ///
-    /// See `arrayGetElem()` in TiDB `json/binary.go`
+    /// See `objectGetVal()` in TiDB `types/json_binary.go`
     pub fn object_get_val(&self, i: usize) -> Result<JsonRef<'a>> {
         let ele_count = self.get_elem_count();
         let val_entry_off = HEADER_LEN + ele_count * KEY_ENTRY_LEN + i * VALUE_ENTRY_LEN;

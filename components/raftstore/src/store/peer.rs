@@ -60,7 +60,7 @@ use tikv_util::{
     codec::number::decode_u64,
     debug, error, info,
     sys::disk::DiskUsage,
-    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, InstantExt, ThreadReadId},
+    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, InstantExt},
     warn,
     worker::Scheduler,
     Either,
@@ -4766,7 +4766,7 @@ where
             }
         }
 
-        let mut resp = reader.execute(&req, &Arc::new(region), read_index, None, None);
+        let mut resp = reader.execute(&req, &Arc::new(region), read_index, None);
         if let Some(snap) = resp.snapshot.as_mut() {
             snap.txn_ext = Some(self.txn_ext.clone());
             snap.bucket_meta = self.region_buckets.as_ref().map(|b| b.meta.clone());
@@ -5558,8 +5558,8 @@ pub trait RequestInspector {
             return Ok(RequestPolicy::ReadIndex);
         }
 
-        // If applied index's term is differ from current raft's term, leader transfer
-        // must happened, if read locally, we may read old value.
+        // If applied index's term differs from current raft's term, leader
+        // transfer must happened, if read locally, we may read old value.
         if !self.has_applied_to_current_term() {
             return Ok(RequestPolicy::ReadIndex);
         }
@@ -5616,11 +5616,7 @@ where
         &self.engines.kv
     }
 
-    fn get_snapshot(
-        &mut self,
-        _: Option<ThreadReadId>,
-        _: &mut Option<LocalReadContext<'_, EK>>,
-    ) -> Arc<EK::Snapshot> {
+    fn get_snapshot(&mut self, _: &Option<LocalReadContext<'_, EK>>) -> Arc<EK::Snapshot> {
         Arc::new(self.engines.kv.snapshot())
     }
 }
