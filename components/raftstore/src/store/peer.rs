@@ -24,7 +24,6 @@ use engine_traits::{
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
-use futures::channel::oneshot::Sender;
 use getset::{Getters, MutGetters};
 use kvproto::{
     errorpb,
@@ -840,32 +839,6 @@ pub enum UnsafeRecoveryState {
     Destroy(UnsafeRecoveryExecutePlanSyncer),
 }
 
-// This state is set by the peer fsm when invoke msg PrepareFlashback. Once set,
-// it is checked every time this peer applies a new entry or a snapshot,
-// if the latest committed index is met, the syncer will be called to notify the
-// result.
-#[derive(Debug)]
-pub struct FlashbackState(Option<Sender<bool>>);
-
-impl FlashbackState {
-    pub fn new(ch: Sender<bool>) -> Self {
-        FlashbackState(Some(ch))
-    }
-
-    pub fn finish_wait_apply(&mut self) {
-        if self.0.is_none() {
-            return;
-        }
-        let ch = self.0.take().unwrap();
-        match ch.send(true) {
-            Ok(_) => {}
-            Err(e) => {
-                error!("Fail to notify flashback state"; "err" => ?e);
-            }
-        }
-    }
-}
-
 #[derive(Getters, MutGetters)]
 pub struct Peer<EK, ER>
 where
@@ -1056,7 +1029,8 @@ where
     /// lead_transferee if the peer is in a leadership transferring.
     pub lead_transferee: u64,
     pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
-    pub flashback_state: Option<FlashbackState>,
+    // Used as the memory state for Flashback to reject RW/Schedule before proposing.
+    pub is_in_flashback: bool,
     pub snapshot_recovery_state: Option<SnapshotRecoveryState>,
 }
 
@@ -1089,7 +1063,6 @@ where
             peer.get_id(),
             tag.clone(),
         )?;
-
         let applied_index = ps.applied_index();
 
         let raft_cfg = raft::Config {
@@ -1192,7 +1165,7 @@ where
             last_region_buckets: None,
             lead_transferee: raft::INVALID_ID,
             unsafe_recovery_state: None,
-            flashback_state: None,
+            is_in_flashback: region.get_is_in_flashback(),
             snapshot_recovery_state: None,
         };
 
@@ -2555,10 +2528,6 @@ where
                         debug!("unsafe recovery finishes applying a snapshot");
                         self.unsafe_recovery_maybe_finish_wait_apply(/* force= */ false);
                     }
-                    if self.flashback_state.is_some() {
-                        debug!("flashback finishes applying a snapshot");
-                        self.maybe_finish_flashback_wait_apply();
-                    }
                     if self.snapshot_recovery_state.is_some() {
                         debug!("snapshot recovery finishes applying a snapshot");
                         self.snapshot_recovery_maybe_finish_wait_apply(false);
@@ -3541,7 +3510,7 @@ where
             self.force_leader.is_some(),
         ) {
             None
-        } else if self.flashback_state.is_some() {
+        } else if self.is_in_flashback {
             debug!(
                 "prevents renew lease while in flashback state";
                 "region_id" => self.region_id,
@@ -5131,16 +5100,6 @@ where
             }
         }
     }
-
-    pub fn maybe_finish_flashback_wait_apply(&mut self) {
-        let finished =
-            self.raft_group.raft.raft_log.applied == self.raft_group.raft.raft_log.last_index();
-        if finished {
-            if let Some(flashback_state) = self.flashback_state.as_mut() {
-                flashback_state.finish_wait_apply();
-            }
-        }
-    }
 }
 
 #[derive(Default, Debug)]
@@ -5686,6 +5645,8 @@ pub fn get_sync_log_from_request(msg: &RaftCmdRequest) -> bool {
                 | AdminCmdType::PrepareMerge
                 | AdminCmdType::CommitMerge
                 | AdminCmdType::RollbackMerge
+                | AdminCmdType::PrepareFlashback
+                | AdminCmdType::FinishFlashback
         );
     }
 
