@@ -696,7 +696,6 @@ where
                 let mut response = match policy {
                     // Leader can read local if and only if it is in lease.
                     RequestPolicy::ReadLocal => {
-                        let read_id_exist = read_id.is_some();
                         snap_updated = self.snap_cache.maybe_update_snapshot(
                             &self.kv_engine,
                             read_id,
