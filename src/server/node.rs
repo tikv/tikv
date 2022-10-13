@@ -103,6 +103,8 @@ pub struct Node<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {
     state: Arc<Mutex<GlobalReplicationState>>,
     bg_worker: Worker,
     health_service: Option<HealthService>,
+    // Label key for availability zone.
+    zone_label_key: String,
 }
 
 impl<C, EK, ER> Node<C, EK, ER>
@@ -121,6 +123,7 @@ where
         state: Arc<Mutex<GlobalReplicationState>>,
         bg_worker: Worker,
         health_service: Option<HealthService>,
+        zone_label_key: String,
         default_store: Option<metapb::Store>,
     ) -> Node<C, EK, ER> {
         let mut store = match default_store {
@@ -187,6 +190,7 @@ where
             state,
             bg_worker,
             health_service,
+            zone_label_key,
         }
     }
 
@@ -383,6 +387,7 @@ where
             Err(e) => panic!("failed to load all stores: {:?}", e),
         };
         let mut state = self.state.lock().unwrap();
+        state.set_zone_label_key(self.zone_label_key.clone());
         if let Some(s) = status {
             state.set_status(s);
         }
