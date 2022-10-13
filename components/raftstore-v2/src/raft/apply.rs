@@ -2,8 +2,9 @@
 
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
-use raftstore::store::fsm::apply::DEFAULT_APPLY_WB_SIZE;
+use raftstore::store::{fsm::apply::DEFAULT_APPLY_WB_SIZE, RaftlogFetchTask as RegionTask};
 use slog::Logger;
+use tikv_util::worker::Scheduler;
 
 use super::Peer;
 use crate::{
@@ -27,6 +28,7 @@ pub struct Apply<EK: KvEngine, R> {
     state_changed: bool,
 
     res_reporter: R,
+    region_scheduler: Scheduler<RegionTask>,
     pub(crate) logger: Logger,
 }
 
@@ -36,6 +38,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         region_state: RegionLocalState,
         res_reporter: R,
         mut remote_tablet: CachedTablet<EK>,
+        region_scheduler: Scheduler<RegionTask>,
         logger: Logger,
     ) -> Self {
         Apply {
@@ -47,6 +50,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             applied_term: 0,
             region_state,
             state_changed: false,
+            region_scheduler,
             res_reporter,
             logger,
         }
@@ -84,6 +88,11 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn apply_progress(&self) -> (u64, u64) {
         (self.applied_index, self.applied_term)
+    }
+
+    #[inline]
+    pub fn region_scheduler(&self) -> &Scheduler<RegionTask> {
+        &self.region_scheduler
     }
 
     #[inline]

@@ -34,7 +34,7 @@ use crate::{
     batch::StoreContext,
     fsm::PeerFsmDelegate,
     raft::{Peer, Storage},
-    router::PeerTick,
+    router::{ApplyTask, PeerTick},
 };
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
     /// Raft relies on periodic ticks to keep the state machine sync with other
@@ -274,6 +274,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.apply_reads(ctx, &ready);
         if !ready.committed_entries().is_empty() {
             self.handle_raft_committed_entries(ctx, ready.take_committed_entries());
+        }
+
+        // Check whether there is a pending generate snapshot task, the task
+        // needs to be sent to the apply system.
+        // Always sending snapshot task behind apply task, so it gets latest
+        // snapshot.
+        if let Some(gen_task) = self.storage_mut().take_gen_snap_task() {
+            self.apply_scheduler().send(ApplyTask::Snapshot(gen_task));
         }
 
         let ready_number = ready.number();

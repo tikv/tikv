@@ -1028,6 +1028,10 @@ impl<ER: RaftEngine> EntryStorage<ER> {
     pub fn clear(&mut self) {
         self.cache = EntryCache::default();
     }
+
+    pub fn scheduler(&self) -> Scheduler<RaftlogFetchTask> {
+        self.raftlog_fetch_scheduler.clone()
+    }
 }
 
 #[cfg(test)]

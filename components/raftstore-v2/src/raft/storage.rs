@@ -242,6 +242,11 @@ impl<ER: RaftEngine> Storage<ER> {
     }
 
     #[inline]
+    pub fn scheduler(&self) -> Scheduler<RaftlogFetchTask> {
+        self.entry_storage.scheduler()
+    }
+
+    #[inline]
     pub fn apply_state(&self) -> &RaftApplyState {
         self.entry_storage.apply_state()
     }

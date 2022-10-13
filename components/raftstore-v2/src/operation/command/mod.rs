@@ -47,7 +47,7 @@ use crate::{
     batch::StoreContext,
     fsm::{ApplyFsm, ApplyResReporter, PeerFsmDelegate},
     raft::{Apply, Peer},
-    router::{ApplyRes, ApplyTask, CmdResChannel, PeerMsg},
+    router::{ApplyRes, ApplyTask, CmdResChannel, GenSnapTask, PeerMsg},
 };
 
 mod write;
@@ -99,7 +99,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let mailbox = store_ctx.router.mailbox(self.region_id()).unwrap();
         let tablet = self.tablet().clone();
         let logger = self.logger.clone();
-        let (apply_scheduler, mut apply_fsm) = ApplyFsm::new(region_state, mailbox, tablet, logger);
+        let region_scheduler = self.storage().scheduler();
+        let (apply_scheduler, mut apply_fsm) =
+            ApplyFsm::new(region_state, mailbox, tablet, region_scheduler, logger);
         store_ctx
             .apply_pool
             .spawn(async move { apply_fsm.handle_all_tasks().await })
@@ -340,6 +342,28 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 }
                 Ok(new_response(req.get_header()))
             }
+        }
+    }
+
+    pub fn handle_snapshot(&mut self, snap_task: GenSnapTask) {
+        // Flush before do snapshot.
+        self.flush();
+
+        // Send generate snapshot task to region worker.
+        let (region_id, tablet_index) = (snap_task.region_id, snap_task.tablet_index);
+        let (last_applied_index, last_applied_term) = self.apply_progress();
+        if let Err(e) = snap_task.generate_and_schedule_snapshot(
+            self.region_state().clone(),
+            last_applied_index,
+            last_applied_term,
+            self.region_scheduler(),
+        ) {
+            error!(
+                self.logger,
+                "schedule snapshot failed";
+                "error" => ?e,
+                "tablet_index" => tablet_index,
+            );
         }
     }
 

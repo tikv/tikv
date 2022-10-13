@@ -85,6 +85,7 @@ impl Debug for GenSnapTask {
 #[derive(Debug)]
 pub enum ApplyTask {
     CommittedEntries(CommittedEntries),
+    Snapshot(GenSnapTask),
 }
 
 #[derive(Debug, Default)]
