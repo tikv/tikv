@@ -44,9 +44,9 @@ use crate::{
 
 pub trait ReadExecutor<E: KvEngine> {
     fn get_engine(&self) -> &E;
-    fn get_snapshot(&mut self) -> Arc<E::Snapshot>;
+    fn get_snapshot(&self) -> Arc<E::Snapshot>;
 
-    fn get_value(&mut self, req: &Request, region: &metapb::Region) -> Result<Response> {
+    fn get_value(&self, req: &Request, region: &metapb::Region) -> Result<Response> {
         let key = req.get_get().get_key();
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, region)?;
@@ -524,7 +524,7 @@ where
         &self.kv_engine
     }
 
-    fn get_snapshot(&mut self) -> Arc<E::Snapshot> {
+    fn get_snapshot(&self) -> Arc<E::Snapshot> {
         self.snap_cache.snapshot().unwrap()
     }
 }

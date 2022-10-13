@@ -5359,7 +5359,7 @@ where
         &self.engines.kv
     }
 
-    fn get_snapshot(&mut self) -> Arc<EK::Snapshot> {
+    fn get_snapshot(&self) -> Arc<EK::Snapshot> {
         Arc::new(self.engines.kv.snapshot())
     }
 }
