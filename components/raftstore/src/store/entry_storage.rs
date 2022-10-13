@@ -597,6 +597,7 @@ impl CacheWarmupState {
     ///
     /// Exit the state when the state is stale.
     pub fn is_stale(&self) -> bool {
+        fail_point!("entry_cache_warmed_up_state_is_stale", |_| true);
         self.elapsed() >= MAX_WARMED_UP_CACHE_KEEP_TIME
     }
 }
@@ -1146,9 +1147,9 @@ impl<ER: RaftEngine> EntryStorage<ER> {
                 let last_entry_index = entries.last().map(|e| e.index);
                 if let Some(index) = last_entry_index {
                     if index + 1 == range.1 {
-                        fail_point!("on_entry_cache_warmed_up");
                         WARM_UP_ENTRY_CACHE_COUNTER.finished.inc();
                         self.cache.push_front(entries);
+                        fail_point!("on_entry_cache_warmed_up");
                         return !is_task_timeout;
                     }
                 }

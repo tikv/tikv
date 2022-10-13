@@ -4579,6 +4579,7 @@ where
             // Check if the entry cache is already warmed up.
             if let Some(first_index) = self.get_store().entry_cache_first_index() {
                 if low >= first_index {
+                    fail_point!("entry_cache_already_warmed_up");
                     should_ack_now = true;
                 }
             }

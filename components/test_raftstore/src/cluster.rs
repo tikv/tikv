@@ -1137,6 +1137,23 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn wait_applied_index(&mut self, region_id: u64, store_id: u64, index: u64) {
+        let timer = Instant::now();
+        loop {
+            let applied_index = self.apply_state(region_id, store_id).applied_index;
+            if applied_index >= index {
+                return;
+            }
+            if timer.saturating_elapsed() >= Duration::from_secs(5) {
+                panic!(
+                    "[region {}] log is still not applied to {}: {} on store {}",
+                    region_id, index, applied_index, store_id,
+                );
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     pub fn wait_tombstone(&self, region_id: u64, peer: metapb::Peer, check_exist: bool) {
         let timer = Instant::now();
         let mut state;
