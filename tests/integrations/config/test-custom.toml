@@ -173,6 +173,7 @@ lock-cf-compact-interval = "12m"
 lock-cf-compact-bytes-threshold = "123MB"
 notify-capacity = 12345
 messages-per-tick = 12345
+messages-size-per-tick = 123456
 max-peer-down-duration = "12m"
 max-leader-missing-duration = "12h"
 abnormal-leader-missing-duration = "6h"
