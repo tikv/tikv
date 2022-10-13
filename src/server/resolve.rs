@@ -104,22 +104,18 @@ where
             Err(e) => return Err(box_err!(e)),
         };
         let mut group_id = None;
+        let mut zone_id = None;
         let mut state = self.state.lock().unwrap();
         if state.status().get_mode() == ReplicationMode::DrAutoSync {
             let state_id = state.status().get_dr_auto_sync().state_id;
             if state.group.group_id(state_id, store_id).is_none() {
-                group_id = state
-                    .group
-                    .register_store(store_id, s.take_labels().into())
-                    .0;
+                (group_id, zone_id) = state.group.register_store(store_id, s.take_labels().into());
             }
         } else {
-            state.group.backup_store_labels(&mut s);
+            zone_id = state.group.backup_store_labels(&mut s);
         }
         drop(state);
-        if let Some(group_id) = group_id {
-            self.router.report_resolved(store_id, group_id);
-        }
+        self.router.report_resolved(store_id, group_id, zone_id);
         let addr = take_peer_address(&mut s);
         // In some tests, we use empty address for store first,
         // so we should ignore here.

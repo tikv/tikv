@@ -471,7 +471,7 @@ mod tests {
         let mut status = new_status(1, "zone");
         state.group.recalculate(&status);
         let mut expected_group = vec![2, 1, 2, 1];
-        expected_zone = vec![1, 2, 1, 2];
+        expected_zone = vec![2, 1, 2, 1];
         validate_group_state(&state, 1, &expected_group);
         validate_zone_state(&state, &expected_zone);
 

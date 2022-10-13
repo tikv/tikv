@@ -1414,7 +1414,16 @@ where
             SignificantMsg::CatchUpLogs(catch_up_logs) => {
                 self.on_catch_up_logs_for_merge(catch_up_logs);
             }
-            SignificantMsg::StoreResolved { group_id, .. } => {
+            SignificantMsg::StoreResolved {
+                group_id, zone_id, ..
+            } => {
+                if let Some(zone_id) = zone_id {
+                    self.fsm
+                        .peer
+                        .raft_group
+                        .raft
+                        .assign_broadcast_groups(&[(self.fsm.peer_id(), zone_id)]);
+                }
                 let state = self.ctx.global_replication_state.lock().unwrap();
                 if state.status().get_mode() != ReplicationMode::DrAutoSync {
                     return;
@@ -1423,11 +1432,13 @@ where
                     return;
                 }
                 drop(state);
-                self.fsm
-                    .peer
-                    .raft_group
-                    .raft
-                    .assign_commit_groups(&[(self.fsm.peer_id(), group_id)]);
+                if let Some(group_id) = group_id {
+                    self.fsm
+                        .peer
+                        .raft_group
+                        .raft
+                        .assign_commit_groups(&[(self.fsm.peer_id(), group_id)]);
+                }
             }
             SignificantMsg::CaptureChange {
                 cmd,
@@ -3624,20 +3635,27 @@ where
             let (store_id, peer_id) = (peer.get_store_id(), peer.get_id());
             match change_type {
                 ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
-                    let group_id = self
-                        .ctx
-                        .global_replication_state
-                        .lock()
-                        .unwrap()
+                    let state = self.ctx.global_replication_state.lock().unwrap();
+                    let group_id = state
                         .group
                         .group_id(self.fsm.peer.replication_mode_version, store_id);
+                    let zone_id = state.group.zone_id(store_id);
+                    drop(state);
                     if group_id.unwrap_or(0) != 0 {
-                        info!("updating group"; "peer_id" => peer_id, "group_id" => group_id.unwrap());
+                        info!("updating commit group"; "peer_id" => peer_id, "group_id" => group_id.unwrap());
                         self.fsm
                             .peer
                             .raft_group
                             .raft
                             .assign_commit_groups(&[(peer_id, group_id.unwrap())]);
+                    }
+                    if zone_id.unwrap_or(0) != 0 {
+                        info!("updating broadcast group"; "peer_id" => peer_id, "group_id" => zone_id.unwrap());
+                        self.fsm
+                            .peer
+                            .raft_group
+                            .raft
+                            .assign_broadcast_groups(&[(peer_id, zone_id.unwrap())]);
                     }
                     // Add this peer to peer_heartbeats.
                     self.fsm.peer.peer_heartbeats.insert(peer_id, now);
@@ -4636,6 +4654,9 @@ where
         self.fsm.peer.raft_group.raft.clear_commit_group();
         self.fsm.peer.raft_group.raft.assign_commit_groups(gb);
         fail_point!("after_assign_commit_groups_on_apply_snapshot");
+        let zgb = state.calculate_availability_zone_group(region.get_peers());
+        self.fsm.peer.raft_group.raft.clear_broadcast_group();
+        self.fsm.peer.raft_group.raft.assign_broadcast_groups(zgb);
         // drop it before access `store_meta`.
         drop(state);
 

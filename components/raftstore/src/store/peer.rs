@@ -1194,13 +1194,16 @@ where
         Ok(peer)
     }
 
-    /// Sets commit group to the peer.
+    /// Sets commit and broadcast group to the peer.
     pub fn init_replication_mode(&mut self, state: &mut GlobalReplicationState) {
         debug!("init commit group"; "state" => ?state, "region_id" => self.region_id, "peer_id" => self.peer.id);
         if self.is_initialized() {
             let version = state.status().get_dr_auto_sync().state_id;
             let gb = state.calculate_commit_group(version, self.get_store().region().get_peers());
             self.raft_group.raft.assign_commit_groups(gb);
+            let zgb =
+                state.calculate_availability_zone_group(self.get_store().region().get_peers());
+            self.raft_group.raft.assign_broadcast_groups(zgb);
         }
         self.replication_sync = false;
         if state.status().get_mode() == ReplicationMode::Majority {
