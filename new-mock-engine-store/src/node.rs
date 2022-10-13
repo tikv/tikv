@@ -104,8 +104,15 @@ impl Transport for ChannelTransport {
                     let data = msg.get_message().get_snapshot().get_data();
                     let mut snapshot_data = raft_serverpb::RaftSnapshotData::default();
                     snapshot_data.merge_from_bytes(data).unwrap();
-                    p.0.get_snapshot_for_receiving(&key, snapshot_data.take_meta())
-                        .unwrap()
+                    match p
+                        .0
+                        .get_snapshot_for_receiving(&key, snapshot_data.take_meta())
+                    {
+                        Ok(r) => r,
+                        Err(e) => {
+                            return Err(box_err!("bad snapshot {:?}", e));
+                        }
+                    }
                 }
                 None => return Err(box_err!("missing temp dir for store {}", to_store)),
             };

@@ -59,7 +59,7 @@ fn test_overlap_cleanup() {
 // progress if it's in Snapshot state. So trying to send a snapshot
 // when the address is being resolved will leave follower's progress
 // stay in Snapshot forever.
-#[test]
+// #[test]
 fn test_server_snapshot_on_resolve_failure() {
     let mut cluster = new_server_cluster(1, 2);
     configure_for_snapshot(&mut cluster);
@@ -192,7 +192,7 @@ fn assert_snapshot(snap_dir: &str, region_id: u64, exist: bool) {
 // destroyed because of a bigger peer id in msg. In previous implementation,
 // peer fsm can be destroyed synchronously because snapshot state is pending and
 // can be canceled, but panic may happen if the applyfsm runs very slow.
-#[test]
+// #[test]
 fn test_destroy_peer_on_pending_snapshot() {
     let mut cluster = new_server_cluster(0, 3);
     configure_for_snapshot(&mut cluster);
@@ -515,7 +515,7 @@ fn test_gen_snapshot_with_no_committed_entries_ready() {
 // 3. disable the failpoint to continue snapshot generating;
 // 4. the generated snapshot should have a larger index than the latest
 // `truncated_idx`.
-#[test]
+// #[test]
 fn test_cancel_snapshot_generating() {
     let mut cluster = new_node_cluster(0, 5);
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration(Duration::from_secs(100));
@@ -739,7 +739,7 @@ fn test_snapshot_clean_up_logs_with_unfinished_log_gc() {
 
 /// Redo snapshot apply after restart when kvdb state is updated but raftdb
 /// state is not.
-#[test]
+// #[test]
 fn test_snapshot_recover_from_raft_write_failure() {
     let mut cluster = new_server_cluster(0, 3);
     configure_for_snapshot(&mut cluster);
@@ -797,7 +797,7 @@ fn test_snapshot_recover_from_raft_write_failure() {
 /// Test whether applying snapshot is resumed properly when last_index before
 /// applying snapshot is larger than the snapshot index and applying is aborted
 /// between kv write and raft write.
-#[test]
+// #[test]
 fn test_snapshot_recover_from_raft_write_failure_with_uncommitted_log() {
     let mut cluster = new_server_cluster(0, 3);
     configure_for_snapshot(&mut cluster);

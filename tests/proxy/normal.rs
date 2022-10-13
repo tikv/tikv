@@ -250,7 +250,6 @@ mod config {
             ProxyConfig::from_file(path, Some(&mut proxy_unrecognized_keys)).unwrap();
         assert_eq!(proxy_config.raft_store.snap_handle_pool_size, 4);
         assert_eq!(proxy_config.server.engine_addr, "1.2.3.4:5");
-        assert!(proxy_unrecognized_keys.contains(&"rocksdb".to_string()));
         assert!(proxy_unrecognized_keys.contains(&"memory-usage-high-water".to_string()));
         assert!(proxy_unrecognized_keys.contains(&"nosense".to_string()));
         let v1 = vec!["a.b", "b"]
@@ -1801,7 +1800,8 @@ mod snapshot {
         let (mut cluster, pd_client) = new_mock_cluster(0, 3);
 
         disable_auto_gen_compact_log(&mut cluster);
-        assert_eq!(cluster.cfg.proxy_cfg.raft_store.snap_handle_pool_size, 2);
+        // Is now dynamicly computed.
+        // assert_eq!(cluster.cfg.proxy_cfg.raft_store.snap_handle_pool_size, 4);
 
         // Disable default max peer count check.
         pd_client.disable_default_operator();

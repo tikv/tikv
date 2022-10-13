@@ -1,3 +1,4 @@
+set -uxeo pipefail
 if [[ $M == "fmt" ]]; then
     make gen_proxy_ffi
     GIT_STATUS=$(git status -s) && if [[ ${GIT_STATUS} ]]; then echo "Error: found illegal git status"; echo ${GIT_STATUS}; [[ -z ${GIT_STATUS} ]]; fi
