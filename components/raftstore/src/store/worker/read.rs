@@ -203,6 +203,9 @@ where
 {
     read_id: Option<ThreadReadId>,
     snap_cache: &'a mut SnapCache<E>,
+
+    snapshot: Option<Arc<E::Snapshot>>,
+    snapshot_ts: Option<Timespec>,
 }
 
 impl<'a, E> LocalReadContext<'a, E>
@@ -213,6 +216,8 @@ where
         Self {
             snap_cache,
             read_id,
+            snapshot: None,
+            snapshot_ts: None,
         }
     }
 
@@ -232,25 +237,41 @@ where
             }
 
             self.snap_cache.cached_read_id = self.read_id.clone();
+            self.snap_cache.snapshot = Some(Arc::new(engine.snapshot()));
+
+            // Ensures the snapshot is acquired before getting the time
+            atomic::fence(atomic::Ordering::Release);
+            self.snap_cache.cached_snapshot_ts = monotonic_raw_now();
+        } else {
+            // read_id being None means the snapshot acquired will only be used in this
+            // request
+            self.snapshot = Some(Arc::new(engine.snapshot()));
+
+            // Ensures the snapshot is acquired before getting the time
+            atomic::fence(atomic::Ordering::Release);
+            self.snapshot_ts = Some(monotonic_raw_now());
         }
-
-        self.snap_cache.snapshot = Some(Arc::new(engine.snapshot()));
-
-        // Ensures the snapshot is acquired before getting the time
-        atomic::fence(atomic::Ordering::Release);
-        self.snap_cache.cached_snapshot_ts = monotonic_raw_now();
 
         true
     }
 
     // Note: must be called after `maybe_update_snapshot`
-    fn snapshot_ts(&self) -> Timespec {
-        self.snap_cache.cached_snapshot_ts
+    fn snapshot_ts(&self) -> Option<Timespec> {
+        if self.read_id.is_some() {
+            Some(self.snap_cache.cached_snapshot_ts)
+        } else {
+            self.snapshot_ts
+        }
     }
 
     // Note: must be called after `maybe_update_snapshot`
     fn snapshot(&self) -> Option<Arc<E::Snapshot>> {
-        self.snap_cache.snapshot.clone()
+        // read_id being some means we go through cache
+        if self.read_id.is_some() {
+            self.snap_cache.snapshot.clone()
+        } else {
+            self.snapshot.clone()
+        }
     }
 }
 
@@ -894,7 +915,7 @@ where
                         snap_updated = local_read_ctx
                             .maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
 
-                        let snapshot_ts = local_read_ctx.snapshot_ts();
+                        let snapshot_ts = local_read_ctx.snapshot_ts().unwrap();
                         if !delegate.is_in_leader_lease(snapshot_ts) {
                             fail_point!("localreader_before_redirect", |_| {});
                             // Forward to raftstore.
@@ -1785,15 +1806,15 @@ mod tests {
         let mut snap_cache = SnapCache::new();
         let mut read_context = LocalReadContext::new(&mut snap_cache, None);
 
-        // Have not inited the snap cache
         assert!(read_context.snapshot().is_none());
+        assert!(read_context.snapshot_ts().is_none());
 
         db.put(b"a1", b"val1").unwrap();
 
         let compare_ts = monotonic_raw_now();
         // Case 1: snap_cache_context.read_id is None
         assert!(read_context.maybe_update_snapshot(&db, Timespec::new(0, 0)));
-        assert!(read_context.snapshot_ts() > compare_ts);
+        assert!(read_context.snapshot_ts().unwrap() > compare_ts);
         assert_eq!(
             read_context
                 .snapshot()
@@ -1808,7 +1829,7 @@ mod tests {
         // `maybe_update_snapshot` again will update the snapshot
         let compare_ts = monotonic_raw_now();
         assert!(read_context.maybe_update_snapshot(&db, Timespec::new(0, 0)));
-        assert!(read_context.snapshot_ts() > compare_ts);
+        assert!(read_context.snapshot_ts().unwrap() > compare_ts);
 
         let read_id = ThreadReadId::new();
         let read_id_clone = read_id.clone();
@@ -1818,8 +1839,8 @@ mod tests {
         // Case 2: snap_cache_context.read_id is not None but not equals to the
         // snap_cache.cached_read_id
         assert!(read_context.maybe_update_snapshot(&db, Timespec::new(0, 0)));
-        assert!(read_context.snapshot_ts() > compare_ts);
-        let snap_ts = read_context.snapshot_ts();
+        assert!(read_context.snapshot_ts().unwrap() > compare_ts);
+        let snap_ts = read_context.snapshot_ts().unwrap();
         assert_eq!(
             read_context
                 .snapshot()
@@ -1836,7 +1857,7 @@ mod tests {
         // Case 3: snap_cache_context.read_id is not None and equals to the
         // snap_cache.cached_read_id
         assert!(!read_context.maybe_update_snapshot(&db2, Timespec::new(0, 0)));
-        assert_eq!(read_context.snapshot_ts(), snap_ts);
+        assert_eq!(read_context.snapshot_ts().unwrap(), snap_ts);
         assert_eq!(
             read_context
                 .snapshot()
@@ -1851,7 +1872,7 @@ mod tests {
         let mut last_valid_ts = read_id_clone.create_time;
         last_valid_ts = last_valid_ts.add(Duration::nanoseconds(1));
         assert!(read_context.maybe_update_snapshot(&db2, last_valid_ts));
-        assert!(read_context.snapshot_ts() > snap_ts);
+        assert!(read_context.snapshot_ts().unwrap() > snap_ts);
         assert!(
             read_context
                 .snapshot()
