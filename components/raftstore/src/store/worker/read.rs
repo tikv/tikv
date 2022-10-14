@@ -943,14 +943,14 @@ where
                             return;
                         }
 
-                        let mut local_read_ctx =
-                            LocalReadContext::new(&mut self.snap_cache, read_id);
+                        // Stale read does not use cache, so we pass None for read_id
+                        let mut local_read_ctx = LocalReadContext::new(&mut self.snap_cache, None);
                         snap_updated = local_read_ctx
                             .maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
 
                         let region = Arc::clone(&delegate.region);
-                        // Stale read ignore the read_id
-                        let response = delegate.execute(&req, &region, None, None);
+                        // Getting the snapshot
+                        let response = delegate.execute(&req, &region, None, Some(local_read_ctx));
 
                         // Double check in case `safe_ts` change after the first check and before
                         // getting snapshot
