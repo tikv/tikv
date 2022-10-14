@@ -1145,6 +1145,7 @@ fn test_double_run_node() {
             CollectorRegHandle::new_for_test(),
             None,
             None,
+            None,
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);

@@ -113,6 +113,7 @@ fn start_raftstore(
             None,
             None,
             None,
+            None,
         )
         .unwrap();
 

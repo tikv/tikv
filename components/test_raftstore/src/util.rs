@@ -16,8 +16,9 @@ use encryption_export::{
 use engine_rocks::{config::BlobRunMode, FlushListener, RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    util::MemtableEventNotifier, Engines, Iterable, Peekable, RaftEngineDebug, RaftEngineReadOnly,
-    TabletFactory, ALL_CFS, CF_DEFAULT, CF_RAFT,
+    util::{MemtableEventNotifier, SequenceNumberProgress},
+    Engines, Iterable, Peekable, RaftEngineDebug, RaftEngineReadOnly, TabletFactory, ALL_CFS,
+    CF_DEFAULT, CF_RAFT,
 };
 use file_system::IoRateLimiter;
 use futures::executor::block_on;
@@ -619,7 +620,8 @@ pub fn create_test_engine(
         }));
     }
     let flush_listener = if cfg.raft_store.disable_kv_wal {
-        let listener = FlushListener::new(TestNotifier);
+        let listener =
+            FlushListener::new(TestNotifier, Arc::new(SequenceNumberProgress::default()));
         builder = builder.flush_listener(listener.clone());
         Some(listener)
     } else {

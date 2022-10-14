@@ -24,9 +24,9 @@ use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{unbounded, TryRecvError, TrySendError};
 use engine_traits::{
-    util::MemtableEventNotifier, CompactedEvent, DeleteStrategy, Engines, KvEngine, Mutable,
-    PerfContextKind, RaftEngine, RaftLogBatch, Range, WriteBatch, WriteOptions, CF_DEFAULT,
-    CF_LOCK, CF_RAFT, CF_WRITE,
+    util::{MemtableEventNotifier, SequenceNumberProgress},
+    CompactedEvent, DeleteStrategy, Engines, KvEngine, Mutable, PerfContextKind, RaftEngine,
+    RaftLogBatch, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use fail::fail_point;
 use futures::{compat::Future01CompatExt, FutureExt};
@@ -1559,6 +1559,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         health_service: Option<HealthService>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         seqno_worker: Option<LazyWorker<SeqnoRelationTask<EK::Snapshot>>>,
+        seqno_progress: Option<Arc<SequenceNumberProgress>>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1710,6 +1711,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             region_read_progress,
             health_service,
             causal_ts_provider,
+            seqno_progress,
         )?;
         Ok(())
     }
@@ -1727,6 +1729,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         region_read_progress: RegionReadProgressRegistry,
         health_service: Option<HealthService>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        seqno_progress: Option<Arc<SequenceNumberProgress>>,
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
@@ -1738,6 +1741,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 workers.seqno_worker.as_ref().map(|w| w.scheduler()),
             )),
             self.apply_router.clone(),
+            seqno_progress,
         );
         self.apply_system
             .schedule_all(region_peers.iter().map(|pair| pair.1.get_peer()));

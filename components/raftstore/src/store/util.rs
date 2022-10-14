@@ -1378,6 +1378,7 @@ pub fn gc_seqno_relations<ER: RaftEngine>(
                     if region_state.get_state() == PeerState::Tombstone {
                         wb.delete_apply_state(region_id).unwrap();
                         if let Some(raft_state) = raft_engine.get_raft_state(region_id).unwrap() {
+                            // TODO: delay cleaning if peer fsm is not destroyed.
                             raft_engine.clean(region_id, 0, &raft_state, wb).unwrap();
                         }
                     }

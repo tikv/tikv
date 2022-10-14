@@ -28,28 +28,65 @@ pub fn check_key_in_range(
     }
 }
 
-/// An auxiliary counter to determine write order. Unlike sequence number, it is
-/// guaranteed to be allocated contiguously.
-static WRITE_COUNTER_ALLOCATOR: AtomicU64 = AtomicU64::new(0);
-/// Everytime active memtable switched, this version should be increased.
-static MEMTABLE_VERSION_COUNTER_ALLOCATOR: AtomicU64 = AtomicU64::new(0);
-/// Max sequence number that was synced and persisted.
-static MAX_SYNCED_SEQUENCE_NUMBER: AtomicU64 = AtomicU64::new(0);
-
-pub fn max_synced_sequence_number() -> u64 {
-    MAX_SYNCED_SEQUENCE_NUMBER.load(Ordering::SeqCst)
+#[derive(Default)]
+pub struct SequenceNumberProgress {
+    /// An auxiliary counter to determine write order. Unlike sequence number,
+    /// it is guaranteed to be allocated contiguously.
+    write_counter_allocator: AtomicU64,
+    /// Max sequence number that was synced and persisted.
+    max_synced_sequence_number: AtomicU64,
+    /// Everytime active memtable switched, this version should be increased.
+    memtable_version_counter_allocator: AtomicU64,
 }
 
-pub fn current_memtable_version() -> u64 {
-    MEMTABLE_VERSION_COUNTER_ALLOCATOR.load(Ordering::SeqCst)
-}
+impl SequenceNumberProgress {
+    pub fn max_synced_sequence_number(&self) -> u64 {
+        self.max_synced_sequence_number.load(Ordering::SeqCst)
+    }
 
-pub fn increase_memtable_version() -> u64 {
-    MEMTABLE_VERSION_COUNTER_ALLOCATOR.fetch_add(1, Ordering::SeqCst) + 1
-}
+    pub fn update_max_synced_sequence_number(&self, seqno: u64) {
+        self.max_synced_sequence_number
+            .store(seqno, Ordering::SeqCst);
+    }
 
-pub fn set_max_synced_sequence_number(seqno: u64) {
-    MAX_SYNCED_SEQUENCE_NUMBER.store(seqno, Ordering::SeqCst);
+    pub fn current_memtable_version(&self) -> u64 {
+        self.memtable_version_counter_allocator
+            .load(Ordering::SeqCst)
+    }
+
+    pub fn fetch_add_memtable_version(&self) -> u64 {
+        self.memtable_version_counter_allocator
+            .fetch_add(1, Ordering::SeqCst)
+    }
+
+    pub fn current_seqno_write_counter(&self) -> u64 {
+        self.write_counter_allocator.load(Ordering::SeqCst)
+    }
+
+    pub fn pre_write(&self) -> SequenceNumber {
+        SequenceNumber {
+            number: 0,
+            start_counter: self.write_counter_allocator.fetch_add(1, Ordering::SeqCst) + 1,
+            end_counter: 0,
+            memtable_version: 0,
+        }
+    }
+
+    pub fn post_write(&self, s: &mut SequenceNumber, number: u64) {
+        s.number = number;
+        s.end_counter = self.write_counter_allocator.load(Ordering::SeqCst);
+        s.memtable_version = self
+            .memtable_version_counter_allocator
+            .load(Ordering::SeqCst);
+    }
+
+    // Only used for test
+    pub fn reset(&self) {
+        self.write_counter_allocator.store(0, Ordering::SeqCst);
+        self.max_synced_sequence_number.store(0, Ordering::SeqCst);
+        self.memtable_version_counter_allocator
+            .store(0, Ordering::SeqCst);
+    }
 }
 
 pub trait MemtableEventNotifier: Send {
@@ -75,20 +112,6 @@ pub struct SequenceNumber {
 }
 
 impl SequenceNumber {
-    pub fn pre_write() -> Self {
-        SequenceNumber {
-            number: 0,
-            start_counter: WRITE_COUNTER_ALLOCATOR.fetch_add(1, Ordering::SeqCst) + 1,
-            end_counter: 0,
-            memtable_version: 0,
-        }
-    }
-
-    pub fn post_write(&mut self, number: u64) {
-        self.number = number;
-        self.end_counter = WRITE_COUNTER_ALLOCATOR.load(Ordering::SeqCst);
-    }
-
     pub fn max(left: Self, right: Self) -> Self {
         cmp::max_by_key(left, right, |s| s.number)
     }
@@ -162,13 +185,7 @@ impl SequenceNumberWindow {
             .split_off(&(self.ack_start_counter + 1));
         std::mem::swap(&mut sequences, &mut self.pending_sequence);
         if let Some(sequence) = sequences.values().max() {
-            assert!(
-                self.committed_seqno <= sequence.number,
-                "committed_seqno {}, seqno{}",
-                self.committed_seqno,
-                sequence.number
-            );
-            self.committed_seqno = sequence.number;
+            self.committed_seqno = cmp::max(self.committed_seqno, sequence.number);
         }
     }
 
@@ -178,57 +195,6 @@ impl SequenceNumberWindow {
 
     pub fn pending_count(&self) -> usize {
         self.write_status_window.len()
-    }
-}
-
-pub struct FlushedSeqno {
-    seqno: HashMap<String, u64>,
-    min_seqno: u64,
-}
-
-impl FlushedSeqno {
-    pub fn new(cfs: &[&str], min_seqno: u64) -> Self {
-        let mut seqno = HashMap::new();
-        for cf in cfs {
-            seqno.insert(cf.to_string(), 0);
-        }
-        Self { seqno, min_seqno }
-    }
-
-    pub fn update(&mut self, cf: &str, seqno: u64) -> Option<u64> {
-        self.seqno
-            .entry(cf.to_string())
-            .and_modify(|v| *v = u64::max(*v, seqno));
-        let min = self.seqno.values().min().copied();
-        match min {
-            Some(min) if min > self.min_seqno => {
-                self.min_seqno = min;
-                Some(min)
-            }
-            _ => None,
-        }
-    }
-
-    pub fn update_all(&mut self, seqno: u64) -> Option<u64> {
-        self.seqno
-            .iter_mut()
-            .for_each(|(_, v)| *v = u64::max(*v, seqno));
-        let min = self.seqno.values().min().copied();
-        match min {
-            Some(min) if min > self.min_seqno => {
-                self.min_seqno = min;
-                Some(min)
-            }
-            _ => None,
-        }
-    }
-
-    pub fn min_seqno(&self) -> u64 {
-        self.min_seqno
-    }
-
-    pub fn max_seqno(&self) -> u64 {
-        self.seqno.values().max().copied().unwrap()
     }
 }
 
@@ -242,19 +208,20 @@ mod tests {
 
     #[test]
     fn test_sequence_number_window() {
+        let progress = SequenceNumberProgress::default();
         let mut window = SequenceNumberWindow::default();
-        let mut sn1 = SequenceNumber::pre_write();
-        sn1.post_write(1);
+        let mut sn1 = progress.pre_write();
+        progress.post_write(&mut sn1, 1);
         window.push(sn1);
         assert_eq!(window.committed_seqno(), 1);
-        let mut sn2 = SequenceNumber::pre_write();
-        let mut sn3 = SequenceNumber::pre_write();
-        let mut sn4 = SequenceNumber::pre_write();
-        let mut sn5 = SequenceNumber::pre_write();
-        sn5.post_write(3);
-        sn2.post_write(5);
-        sn3.post_write(2);
-        sn4.post_write(4);
+        let mut sn2 = progress.pre_write();
+        let mut sn3 = progress.pre_write();
+        let mut sn4 = progress.pre_write();
+        let mut sn5 = progress.pre_write();
+        progress.post_write(&mut sn5, 3);
+        progress.post_write(&mut sn2, 5);
+        progress.post_write(&mut sn3, 2);
+        progress.post_write(&mut sn4, 4);
         window.push(sn2);
         assert_eq!(window.committed_seqno(), 1);
         window.push(sn5);
@@ -263,12 +230,12 @@ mod tests {
         assert_eq!(window.committed_seqno(), 1);
         window.push(sn4);
         assert_eq!(window.committed_seqno(), 5);
-        let mut sn6 = SequenceNumber::pre_write();
-        let mut sn7 = SequenceNumber::pre_write();
-        sn6.post_write(7);
-        sn7.post_write(6);
-        let mut sn8 = SequenceNumber::pre_write();
-        sn8.post_write(8);
+        let mut sn6 = progress.pre_write();
+        let mut sn7 = progress.pre_write();
+        progress.post_write(&mut sn6, 7);
+        progress.post_write(&mut sn7, 6);
+        let mut sn8 = progress.pre_write();
+        progress.post_write(&mut sn8, 8);
         window.push(sn6);
         assert_eq!(window.committed_seqno(), 5);
         window.push(sn7);
@@ -281,16 +248,18 @@ mod tests {
     fn bench_sequence_number_window(b: &mut Bencher) {
         fn produce_random_seqno(producer: usize, number: usize) -> Vec<SequenceNumber> {
             let mock_seqno_allocator = Arc::new(AtomicU64::new(1));
+            let progress = Arc::new(SequenceNumberProgress::default());
             let (tx, rx) = std::sync::mpsc::sync_channel(number);
             let handles: Vec<_> = (0..producer)
                 .map(|_| {
                     let allocator = mock_seqno_allocator.clone();
                     let count = number / producer;
                     let tx = tx.clone();
+                    let progress = progress.clone();
                     std::thread::spawn(move || {
                         for _ in 0..count {
-                            let mut sn = SequenceNumber::pre_write();
-                            sn.post_write(allocator.fetch_add(1, Ordering::AcqRel));
+                            let mut sn = progress.pre_write();
+                            progress.post_write(&mut sn, allocator.fetch_add(1, Ordering::AcqRel));
                             tx.send(sn).unwrap();
                         }
                     })

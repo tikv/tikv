@@ -1,5 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+#![feature(unzip_option)]
+
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]

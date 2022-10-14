@@ -9,7 +9,10 @@ use std::{
 use api_version::{api_v2::TIDB_RANGES_COMPLEMENT, KvFormat};
 use causal_ts::CausalTsProviderImpl;
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{Engines, Iterable, KvEngine, RaftEngine, DATA_CFS, DATA_KEY_PREFIX_LEN};
+use engine_traits::{
+    util::SequenceNumberProgress, Engines, Iterable, KvEngine, RaftEngine, DATA_CFS,
+    DATA_KEY_PREFIX_LEN,
+};
 use grpcio_health::HealthService;
 use kvproto::{
     kvrpcpb::ApiVersion, metapb, raft_serverpb::StoreIdent, replication_modepb::ReplicationStatus,
@@ -224,6 +227,7 @@ where
         collector_reg_handle: CollectorRegHandle,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         seqno_worker: Option<LazyWorker<SeqnoRelationTask<EK::Snapshot>>>,
+        seqno_progress: Option<Arc<SequenceNumberProgress>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -262,6 +266,7 @@ where
             collector_reg_handle,
             causal_ts_provider,
             seqno_worker,
+            seqno_progress,
         )?;
 
         Ok(())
@@ -510,6 +515,7 @@ where
         collector_reg_handle: CollectorRegHandle,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         seqno_worker: Option<LazyWorker<SeqnoRelationTask<EK::Snapshot>>>,
+        seqno_progress: Option<Arc<SequenceNumberProgress>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -544,6 +550,7 @@ where
             self.health_service.clone(),
             causal_ts_provider,
             seqno_worker,
+            seqno_progress,
         )?;
         Ok(())
     }

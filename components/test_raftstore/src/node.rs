@@ -316,13 +316,17 @@ impl Simulator for NodeCluster {
             Box::new(SplitCheckConfigManager(split_scheduler.clone())),
         );
 
-        let seqno_worker = flush_listener.map(|listener| {
-            let worker = LazyWorker::new("seqno_relation");
-            let scheduler = worker.scheduler();
-            let notifier = ApplyResNotifier::new(router.clone(), Some(scheduler));
-            listener.update_notifier(notifier);
-            worker
-        });
+        let (seqno_worker, seqno_progress) = flush_listener
+            .map(|listener| {
+                let worker = LazyWorker::new("seqno_relation");
+                let scheduler = worker.scheduler();
+                let notifier = ApplyResNotifier::new(router.clone(), Some(scheduler));
+                listener.update_notifier(notifier);
+                let progress = listener.get_seqno_progress();
+                progress.reset();
+                (worker, progress)
+            })
+            .unzip();
 
         node.try_bootstrap_store(engines.clone())?;
         node.start(
@@ -339,6 +343,7 @@ impl Simulator for NodeCluster {
             CollectorRegHandle::new_for_test(),
             None,
             seqno_worker,
+            seqno_progress,
         )?;
         assert!(
             engines
