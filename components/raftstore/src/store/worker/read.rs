@@ -1924,7 +1924,12 @@ mod tests {
             Callback::read(Box::new(move |_: ReadResponse<KvTestSnapshot>| {})),
         );
         must_not_redirect_with_read_id(&mut reader, &rx, task, Some(read_id));
-        assert!(reader.snap_cache.snapshot.is_some());
+        assert!(
+            reader
+                .kv_engine
+                .get_oldest_snapshot_sequence_number()
+                .is_some()
+        );
         reader.release_snapshot_cache();
         assert!(
             reader
