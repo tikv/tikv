@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp::Ordering, collections::HashMap, fmt::Debug, path::Path, time::Duration};
+use std::{cmp::Ordering, collections::HashMap, fmt::Debug, path::Path};
 
 use kvproto::{
     brpb::{StreamBackupError, StreamBackupTaskInfo},
@@ -13,8 +13,8 @@ use txn_types::TimeStamp;
 use super::{
     keys::{self, KeyValue, MetaKey},
     store::{
-        CondTransaction, Condition, GetExtra, Keys, KvEvent, KvEventType, MetaStore, PutOption,
-        Snapshot, Subscription, Transaction, WithRevision,
+        CondTransaction, Condition, GetExtra, Keys, KvEvent, KvEventType, MetaStore, Snapshot,
+        Subscription, Transaction, WithRevision,
     },
 };
 use crate::{
@@ -669,37 +669,6 @@ impl<Store: MetaStore> MetadataClient<Store> {
         self.meta_store
             .delete(Keys::Key(MetaKey::task_of(name)))
             .await
-    }
-
-    /// upload a region-level checkpoint.
-    pub async fn upload_region_checkpoint(
-        &self,
-        task_name: &str,
-        checkpoints: &[(Region, TimeStamp)],
-    ) -> Result<()> {
-        let txn = checkpoints
-            .iter()
-            .fold(Transaction::default(), |txn, (region, cp)| {
-                txn.put_opt(
-                    KeyValue(
-                        MetaKey::next_bakcup_ts_of_region(task_name, region),
-                        (*cp).into_inner().to_be_bytes().to_vec(),
-                    ),
-                    PutOption {
-                        ttl: Duration::from_secs(600),
-                    },
-                )
-            });
-        self.meta_store.txn(txn).await
-    }
-
-    pub async fn clear_region_checkpoint(&self, task_name: &str, regions: &[Region]) -> Result<()> {
-        let txn = regions.iter().fold(Transaction::default(), |txn, region| {
-            txn.delete(Keys::Key(MetaKey::next_bakcup_ts_of_region(
-                task_name, region,
-            )))
-        });
-        self.meta_store.txn(txn).await
     }
 
     pub async fn global_checkpoint_of(&self, task: &str) -> Result<Option<Checkpoint>> {

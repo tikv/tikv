@@ -304,6 +304,12 @@ pub struct Config {
 
     pub unreachable_backoff: ReadableDuration,
 
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    // Interval to check peers availability info.
+    pub check_peers_availability_interval: ReadableDuration,
+
     /// Disable WAL for kvdb. After this option was enabled, TiKV would replay
     /// raft logs after restart, so the time of startup would be longer.
     pub disable_kv_wal: bool,
@@ -411,6 +417,8 @@ impl Default for Config {
             report_region_buckets_tick_interval: ReadableDuration::secs(10),
             max_snapshot_file_raw_size: ReadableSize::mb(100),
             unreachable_backoff: ReadableDuration::secs(10),
+            // TODO: make its value reasonable
+            check_peers_availability_interval: ReadableDuration::secs(30),
             disable_kv_wal: false,
         }
     }
