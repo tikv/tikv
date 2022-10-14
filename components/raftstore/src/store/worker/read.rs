@@ -949,8 +949,8 @@ where
                             .maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
 
                         let region = Arc::clone(&delegate.region);
-                        // Getting the snapshot
-                        let response = delegate.execute(&req, &region, None, Some(local_read_ctx));
+                        // Stale read ignore the read_id
+                        let response = delegate.execute(&req, &region, None, None);
 
                         // Double check in case `safe_ts` change after the first check and before
                         // getting snapshot
