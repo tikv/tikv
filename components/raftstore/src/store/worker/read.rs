@@ -1903,14 +1903,7 @@ mod tests {
         // Register region1
         let pr_ids1 = vec![2, 3, 4];
         let prs1 = new_peers(store_id, pr_ids1.clone());
-        prepare_read_delegate(
-            store_id,
-            1,
-            term6,
-            pr_ids1,
-            epoch13.clone(),
-            store_meta.clone(),
-        );
+        prepare_read_delegate(store_id, 1, term6, pr_ids1, epoch13.clone(), store_meta);
         let leader1 = prs1[0].clone();
 
         // Local read
@@ -1926,7 +1919,7 @@ mod tests {
         cmd.set_requests(vec![req].into());
 
         let task = RaftCommand::<KvTestSnapshot>::new(
-            cmd.clone(),
+            cmd,
             Callback::read(Box::new(move |_: ReadResponse<KvTestSnapshot>| {})),
         );
 
