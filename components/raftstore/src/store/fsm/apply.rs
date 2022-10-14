@@ -1382,22 +1382,25 @@ where
             _ => (None, None),
         };
         let old_pending_count = self.pending_delete_ssts.len() as i64;
-        let mut apply_ctx_info = ApplyCtxInfo {
-            pending_handle_ssts: &mut pending_handle_ssts,
-            delete_ssts: &mut ctx.delete_ssts,
-            pending_delete_ssts: &mut self.pending_delete_ssts,
+        let region_state = RegionState {
+            peer_id: self.id(),
+            pending_remove: self.pending_remove,
+            modified_region,
         };
-        let should_write = ctx.host.post_exec(
-            &self.region,
-            &cmd,
-            &self.apply_state,
-            &RegionState {
-                peer_id: self.id(),
-                pending_remove: self.pending_remove,
-                modified_region,
-            },
-            &mut apply_ctx_info,
-        );
+        let should_write = {
+            let mut apply_ctx_info = ApplyCtxInfo {
+                pending_handle_ssts: &mut pending_handle_ssts,
+                delete_ssts: &mut ctx.delete_ssts,
+                pending_delete_ssts: &mut self.pending_delete_ssts,
+            };
+            ctx.host.post_exec(
+                &self.region,
+                &cmd,
+                &self.apply_state,
+                &region_state,
+                &mut apply_ctx_info,
+            )
+        };
         match pending_handle_ssts {
             None => (),
             Some(mut v) => {
@@ -1410,7 +1413,7 @@ where
                 }
                 RAFT_APPLYING_SST_GAUGE
                     .with_label_values(&["pending_delete"])
-                    .add((self.pending_delete_ssts.len() as i64 - old_pending_count));
+                    .add(self.pending_delete_ssts.len() as i64 - old_pending_count);
             }
         }
 
