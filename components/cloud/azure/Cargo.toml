@@ -6,7 +6,7 @@ publish = false
 
 [dependencies]
 async-trait = "0.1"
-azure_core = { version = "0.1.0", git = "https://github.com/Azure/azure-sdk-for-rust"}
+azure_core = { version = "0.1.0", git = "https://github.com/Azure/azure-sdk-for-rust" }
 azure_identity = { version = "0.1.0", git = "https://github.com/Azure/azure-sdk-for-rust" }
 azure_storage = { version = "0.1.0", git = "https://github.com/Azure/azure-sdk-for-rust", features = ["account", "blob"] }
 base64 = "0.13"
