@@ -1910,7 +1910,7 @@ mod tests {
         let mut header = RaftRequestHeader::default();
         header.set_region_id(1);
         header.set_peer(leader1);
-        header.set_region_epoch(epoch13.clone());
+        header.set_region_epoch(epoch13);
         header.set_term(term6);
         cmd.set_header(header.clone());
         let mut req = Request::default();
@@ -1923,7 +1923,7 @@ mod tests {
             cmd.clone(),
             Callback::read(Box::new(move |_: ReadResponse<KvTestSnapshot>| {})),
         );
-        must_not_redirect_with_read_id(&mut reader, &rx, task, Some(read_id.clone()));
+        must_not_redirect_with_read_id(&mut reader, &rx, task, Some(read_id));
         assert!(reader.snap_cache.snapshot.is_some());
         reader.release_snapshot_cache();
         assert!(
