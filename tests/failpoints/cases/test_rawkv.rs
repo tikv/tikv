@@ -276,7 +276,7 @@ fn test_region_merge() {
     suite.stop();
 }
 
-// verify the raw key guard correctness in apiv2
+// Verify the raw key guard correctness in apiv2
 #[test]
 fn test_raw_put_key_guard() {
     let mut suite = TestSuite::new(3, ApiVersion::V2);
@@ -303,7 +303,8 @@ fn test_raw_put_key_guard() {
     });
     thread::sleep(Duration::from_millis(apply_wait_timeout));
 
-    // before raw_put finish, min_ts should be the ts of the key on the way.
+    // Before raw_put finish, min_ts should be the ts of "key guard" of the raw_put
+    // request.
     assert_eq!(suite.must_raw_get(&test_key), None);
     let min_ts = leader_cm.global_min_lock_ts();
     assert_eq!(min_ts.unwrap(), ts.next());
@@ -311,7 +312,7 @@ fn test_raw_put_key_guard() {
     fail::remove(pause_write_fp);
     handle.join().unwrap();
 
-    // after raw_put is finished, lock guard is released.
+    // After raw_put is finished, lock guard is released.
     assert_eq!(suite.must_raw_get(&test_key), Some(test_value));
     let min_ts = leader_cm.global_min_lock_ts();
     assert!(min_ts.is_none());
