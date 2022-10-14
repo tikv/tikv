@@ -1924,6 +1924,7 @@ mod tests {
             Callback::read(Box::new(move |_: ReadResponse<KvTestSnapshot>| {})),
         );
         must_not_redirect_with_read_id(&mut reader, &rx, task, Some(read_id.clone()));
+        assert!(reader.snap_cache.snapshot.is_some());
         reader.release_snapshot_cache();
         assert!(
             reader
@@ -1957,7 +1958,10 @@ mod tests {
             cmd,
             Callback::read(Box::new(move |_: ReadResponse<KvTestSnapshot>| {})),
         );
-        must_not_redirect_with_read_id(&mut reader, &rx, task, None);
+        let read_id = ThreadReadId::new();
+        must_not_redirect_with_read_id(&mut reader, &rx, task, Some(read_id));
+        // Stale read will not use snap cache
+        assert!(reader.snap_cache.snapshot.is_none());
         assert!(
             reader
                 .kv_engine
