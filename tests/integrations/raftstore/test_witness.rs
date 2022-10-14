@@ -238,10 +238,7 @@ fn test_witness_raftlog_gc_lagged_follower() {
     }
 }
 
-// TODO: test witness is lagging behind, the gc is advanced
-
-// Test the case that truncated index is advance when there is a witness even
-// if the gap gap exceeds the gc count limit
+// Test the case that truncated index is advance when there is a lagged witness
 #[test]
 fn test_witness_raftlog_gc_lagged_witness() {
     let mut cluster = new_server_cluster(0, 3);
@@ -299,8 +296,48 @@ fn test_witness_raftlog_gc_lagged_witness() {
     }
 }
 
-// TODO: test forbid stale read
+// Test the case replica read can't be performed on witness peer.
+#[test]
+fn test_witness_replica_read() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+    let nodes = Vec::from_iter(cluster.get_node_ids());
+    assert_eq!(nodes.len(), 3);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.must_put(b"k0", b"v0");
+
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+    let peer_on_store1 = find_peer(&region, nodes[0]).unwrap().clone();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1);
+    // nonwitness -> witness
+    let mut peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
+    peer_on_store3.set_is_witness(true);
+    cluster
+        .pd_client
+        .must_add_peer(region.get_id(), peer_on_store3.clone());
+
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_get_cmd(b"k0")],
+        false,
+    );
+    request.mut_header().set_peer(peer_on_store3);
+    request.mut_header().set_replica_read(true);
+
+    let resp = cluster
+        .call_command_on_node(nodes[2], request, Duration::from_millis(100))
+        .unwrap();
+    assert_eq!(
+        resp.get_header().get_error().get_recovery_in_progress(),
+        &kvproto::errorpb::RecoveryInProgress {
+            region_id: region.get_id(),
+            ..Default::default()
+        }
+    );
+}
 
 // TODO: test with cdc
-
-// TODO: test witness hasn't the log

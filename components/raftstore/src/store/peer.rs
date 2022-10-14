@@ -4650,7 +4650,10 @@ where
         };
 
         let data = req.write_to_bytes()?;
-        poll_ctx.raft_metrics.propose_log_size.observe(data.len() as f64);
+        poll_ctx
+            .raft_metrics
+            .propose_log_size
+            .observe(data.len() as f64);
 
         if data.len() as u64 > poll_ctx.cfg.raft_entry_max_size.0 {
             error!(
