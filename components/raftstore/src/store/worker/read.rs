@@ -707,9 +707,6 @@ where
                             fail_point!("localreader_before_redirect", |_| {});
                             // Forward to raftstore.
                             self.redirect(RaftCommand::new(req, cb));
-                            if self.snap_cache.cached_read_id.is_none() {
-                                self.snap_cache.clear();
-                            }
                             return;
                         }
 
@@ -722,9 +719,6 @@ where
                             &mut self.metrics,
                         );
 
-                        if self.snap_cache.cached_read_id.is_none() {
-                            self.snap_cache.clear();
-                        }
                         response
                     }
                     // Replica can serve stale read if and only if its `safe_ts` >= `read_ts`
@@ -740,7 +734,7 @@ where
 
                         snap_updated = self.snap_cache.maybe_update_snapshot(
                             &self.kv_engine,
-                            read_id,
+                            None,
                             last_valid_ts,
                         );
 
@@ -802,6 +796,9 @@ where
         cb: Callback<E::Snapshot>,
     ) {
         self.propose_raft_command(read_id, req, cb);
+        if self.snap_cache.cached_read_id.is_none() {
+            self.snap_cache.clear();
+        }
         self.metrics.maybe_flush();
     }
 
@@ -1003,7 +1000,7 @@ mod tests {
 
     use crossbeam::channel::TrySendError;
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
-    use engine_traits::{Peekable, SyncMutable, ALL_CFS};
+    use engine_traits::{MiscExt, Peekable, SyncMutable, ALL_CFS};
     use kvproto::{metapb::RegionEpoch, raft_cmdpb::*};
     use tempfile::{Builder, TempDir};
     use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
@@ -1118,7 +1115,7 @@ mod tests {
         task: RaftCommand<KvTestSnapshot>,
         read_id: Option<ThreadReadId>,
     ) {
-        reader.propose_raft_command(read_id, task.request, task.callback);
+        reader.read(read_id, task.request, task.callback);
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
     }
 
@@ -1494,6 +1491,7 @@ mod tests {
         region.set_region_epoch(region_epoch);
         let mut lease = Lease::new(Duration::seconds(1), Duration::milliseconds(250)); // 1s is long enough.
         let read_progress = Arc::new(RegionReadProgress::new(&region, 1, 1, "".to_owned()));
+        read_progress.update_safe_ts(1, 10);
 
         // Register region
         lease.renew(monotonic_raw_now());
@@ -1681,6 +1679,98 @@ mod tests {
                 .get_value(b"a1")
                 .unwrap()
                 .is_none(),
+        );
+    }
+
+    #[test]
+    fn test_snap_release_for_not_using_cache() {
+        let store_id = 2;
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
+        let (_tmp, mut reader, rx) = new_reader("test-local-reader", store_id, store_meta.clone());
+        reader.kv_engine.put(b"key", b"value").unwrap();
+
+        let epoch13 = {
+            let mut ep = metapb::RegionEpoch::default();
+            ep.set_conf_ver(1);
+            ep.set_version(3);
+            ep
+        };
+        let term6 = 6;
+
+        // Register region1
+        let pr_ids1 = vec![2, 3, 4];
+        let prs1 = new_peers(store_id, pr_ids1.clone());
+        prepare_read_delegate(store_id, 1, term6, pr_ids1, epoch13.clone(), store_meta);
+        let leader1 = prs1[0].clone();
+
+        // Local read
+        let mut cmd = RaftCmdRequest::default();
+        let mut header = RaftRequestHeader::default();
+        header.set_region_id(1);
+        header.set_peer(leader1);
+        header.set_region_epoch(epoch13);
+        header.set_term(term6);
+        cmd.set_header(header.clone());
+        let mut req = Request::default();
+        req.set_cmd_type(CmdType::Snap);
+        cmd.set_requests(vec![req].into());
+
+        // using cache and release
+        let read_id = ThreadReadId::new();
+        let task = RaftCommand::<KvTestSnapshot>::new(
+            cmd.clone(),
+            Callback::Read(Box::new(move |_: ReadResponse<KvTestSnapshot>| {})),
+        );
+        must_not_redirect_with_read_id(&mut reader, &rx, task, Some(read_id));
+        assert!(
+            reader
+                .kv_engine
+                .get_oldest_snapshot_sequence_number()
+                .is_some()
+        );
+        reader.release_snapshot_cache();
+        assert!(
+            reader
+                .kv_engine
+                .get_oldest_snapshot_sequence_number()
+                .is_none()
+        );
+
+        let task = RaftCommand::<KvTestSnapshot>::new(
+            cmd.clone(),
+            Callback::Read(Box::new(move |_: ReadResponse<KvTestSnapshot>| {})),
+        );
+
+        // not use cache
+        must_not_redirect_with_read_id(&mut reader, &rx, task, None);
+        assert!(
+            reader
+                .kv_engine
+                .get_oldest_snapshot_sequence_number()
+                .is_none()
+        );
+
+        // Stale read
+        let mut data = [0u8; 8];
+        // Safe ts is updated to be 10 in `prepare_read_delegate`
+        (&mut data[..]).encode_u64(5).unwrap();
+        header.set_flags(header.get_flags() | WriteBatchFlags::STALE_READ.bits());
+        header.set_flag_data(data.into());
+
+        cmd.set_header(header);
+        let task = RaftCommand::<KvTestSnapshot>::new(
+            cmd,
+            Callback::Read(Box::new(move |_: ReadResponse<KvTestSnapshot>| {})),
+        );
+        let read_id = ThreadReadId::new();
+        must_not_redirect_with_read_id(&mut reader, &rx, task, Some(read_id));
+        // Stale read will not use snap cache
+        assert!(reader.snap_cache.snapshot.is_none());
+        assert!(
+            reader
+                .kv_engine
+                .get_oldest_snapshot_sequence_number()
+                .is_none()
         );
     }
 }
