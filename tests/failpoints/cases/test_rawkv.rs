@@ -312,7 +312,7 @@ fn test_raw_put_key_guard() {
     fail::remove(pause_write_fp);
     handle.join().unwrap();
 
-    // After raw_put is finished, lock guard is released.
+    // After raw_put is finished, "key guard" is released.
     assert_eq!(suite.must_raw_get(&test_key), Some(test_value));
     let min_ts = leader_cm.global_min_lock_ts();
     assert!(min_ts.is_none());
