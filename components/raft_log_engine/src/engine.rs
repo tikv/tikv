@@ -1,10 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    cmp::Ordering,
+    collections::BinaryHeap,
     fs,
     io::{Read, Result as IoResult, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    sync::Arc, cmp::Ordering, collections::BinaryHeap,
+    sync::Arc,
 };
 
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
@@ -329,14 +331,40 @@ impl RaftLogEngine {
         self.0.path()
     }
 
-
-    pub fn get_top_n_regions(&self, n: u64) -> Option<Vec<u64>> {
+    pub fn get_top_n_regions(&self, n: usize) -> Option<Vec<u64>> {
         if n == 0 {
             return None;
         }
-        let mut _heap: BinaryHeap<RegionRaftCnt> = BinaryHeap::new();
-
-        None
+        let mut heap: BinaryHeap<RegionRaftCnt> = BinaryHeap::with_capacity(n);
+        let raft_groups = self.raft_groups();
+        for raft_id in raft_groups {
+            if let (Some(first_index), Some(last_index)) =
+                (self.first_index(raft_id), self.last_index(raft_id))
+            {
+                let index_count = last_index - first_index;
+                if heap.len() < n {
+                    heap.push(RegionRaftCnt {
+                        region_id: raft_id,
+                        index_cnt: index_count,
+                    });
+                } else {
+                    if index_count <= heap.peek().unwrap().index_cnt {
+                        continue;
+                    }
+                    heap.push(RegionRaftCnt {
+                        region_id: raft_id,
+                        index_cnt: index_count,
+                    });
+                    heap.pop();
+                }
+            }
+        }
+        Some(
+            heap.into_sorted_vec()
+                .into_iter()
+                .map(|r| r.region_id)
+                .collect(),
+        )
     }
 
     /// If path is not an empty directory, we say db exists.
