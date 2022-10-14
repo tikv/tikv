@@ -1087,7 +1087,12 @@ where
         self.metrics.written_keys += apply_ctx.delta_keys();
     }
 
-    fn write_apply_state(&self, wb: &mut EK::WriteBatch, host: &CoprocessorHost<EK>, skip_observer: bool) {
+    fn write_apply_state(
+        &self,
+        wb: &mut EK::WriteBatch,
+        host: &CoprocessorHost<EK>,
+        skip_observer: bool,
+    ) {
         let can_write = skip_observer || host.pre_write_apply_state(&self.region);
         if can_write {
             wb.put_msg_cf(
@@ -1288,7 +1293,8 @@ where
             .applied_batch
             .push(cmd_cb, cmd, &self.observe_info, self.region_id());
         if should_write {
-            // An observer can prevent a write_apply_state here by not return true when `post_exec`.
+            // An observer can prevent a write_apply_state here by not return true when
+            // `post_exec`.
             write_apply_state(apply_ctx.kv_wb_mut(), &apply_ctx.host, true);
             apply_ctx.commit(self);
         }
@@ -3740,7 +3746,8 @@ where
             if apply_ctx.timer.is_none() {
                 apply_ctx.timer = Some(Instant::now_coarse());
             }
-            self.delegate.write_apply_state(apply_ctx.kv_wb_mut(), &apply_ctx.host, false);
+            self.delegate
+                .write_apply_state(apply_ctx.kv_wb_mut(), &apply_ctx.host, false);
             fail_point!(
                 "apply_on_handle_snapshot_1_1",
                 self.delegate.id == 1 && self.delegate.region_id() == 1,

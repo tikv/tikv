@@ -655,12 +655,10 @@ impl<E: KvEngine> CoprocessorHost<E> {
         true
     }
 
-    /// Should be called everytime before we want to write apply state when applying.
-    /// Return a bool which indicates whether we can actually do this write.
-    pub fn pre_write_apply_state(
-        &self,
-        region: &Region,
-    ) -> bool {
+    /// Should be called everytime before we want to write apply state when
+    /// applying. Return a bool which indicates whether we can actually do
+    /// this write.
+    pub fn pre_write_apply_state(&self, region: &Region) -> bool {
         let mut ctx = ObserverContext::new(region);
         for observer in &self.registry.region_change_observers {
             let observer = observer.observer.inner();
@@ -942,10 +940,7 @@ mod tests {
             true
         }
 
-        fn pre_write_apply_state(
-            &self,
-            region: &Region,
-        ) -> bool {
+        fn pre_write_apply_state(&self, region: &Region) -> bool {
             self.called
                 .fetch_add(ObserverIndex::PreWriteApplyState as usize, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
