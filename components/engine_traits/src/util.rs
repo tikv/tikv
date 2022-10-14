@@ -2,7 +2,7 @@
 
 use std::{
     cmp,
-    collections::{BTreeMap, HashMap, VecDeque},
+    collections::{BTreeMap, VecDeque},
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -90,9 +90,7 @@ impl SequenceNumberProgress {
 }
 
 pub trait MemtableEventNotifier: Send {
-    fn notify_memtable_sealed(&self, seqno: u64);
     fn notify_memtable_flushed(&self, cf: &str, seqno: u64);
-    fn notify_flush_cfs(&self, seqno: u64);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

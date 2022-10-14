@@ -475,20 +475,6 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn notify_memtable_sealed(&self, seqno: u64) {
-        if let Err(e) = self
-            .seqno_scheduler
-            .as_ref()
-            .unwrap()
-            .schedule(SeqnoRelationTask::MemtableSealed(seqno))
-        {
-            warn!(
-                "failed to schedule memtable sealed seqno to seqno relation worker";
-                "err" => ?e,
-            );
-        }
-    }
-
     fn notify_memtable_flushed(&self, cf: &str, seqno: u64) {
         if let Err(e) =
             self.seqno_scheduler
@@ -498,20 +484,6 @@ where
                     cf: Some(cf.to_string()),
                     seqno,
                 })
-        {
-            warn!(
-                "failed to schedule memtable flushed seqno to seqno relation worker";
-                "err" => ?e,
-            );
-        }
-    }
-
-    fn notify_flush_cfs(&self, seqno: u64) {
-        if let Err(e) = self
-            .seqno_scheduler
-            .as_ref()
-            .unwrap()
-            .schedule(SeqnoRelationTask::MemtableFlushed { cf: None, seqno })
         {
             warn!(
                 "failed to schedule memtable flushed seqno to seqno relation worker";

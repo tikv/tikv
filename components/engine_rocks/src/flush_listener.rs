@@ -6,7 +6,7 @@ use std::{
 };
 
 use engine_traits::util::{MemtableEventNotifier, SequenceNumberProgress};
-use rocksdb::{EventListener, FlushJobInfo, MemTableInfo};
+use rocksdb::{EventListener, FlushJobInfo};
 use tikv_util::debug;
 
 use crate::RocksEngine;
@@ -40,11 +40,6 @@ impl FlushListener {
         *n = Box::new(notifier);
     }
 
-    pub fn notify_flush_cfs(&self, seqno: u64) {
-        let n = self.notifier.lock().unwrap();
-        n.notify_flush_cfs(seqno);
-    }
-
     pub fn get_seqno_progress(&self) -> Arc<SequenceNumberProgress> {
         self.seqno_progress.clone()
     }
@@ -58,19 +53,6 @@ impl EventListener for FlushListener {
         let notifier = self.notifier.lock().unwrap();
         notifier.notify_memtable_flushed(cf, largest_seqno);
         debug!("flush completed"; "seqno" => largest_seqno);
-    }
-
-    fn on_memtable_sealed(&self, info: &MemTableInfo) {
-        let version = self.seqno_progress.fetch_add_memtable_version();
-        debug!(
-            "memtable sealed";
-            "cf" => info.cf_name(),
-            "first_seqno" => info.first_seqno(),
-            "earliest_seqno" => info.earliest_seqno(),
-            "version" => version,
-        );
-        let notifier = self.notifier.lock().unwrap();
-        notifier.notify_memtable_sealed(info.largest_seqno());
     }
 }
 
@@ -108,15 +90,11 @@ mod tests {
     struct TestNotifier(SyncSender<FlushEvent>);
 
     impl MemtableEventNotifier for TestNotifier {
-        fn notify_memtable_sealed(&self, seqno: u64) {
-            let _ = self.0.send(FlushEvent::MemtableSealed(seqno));
-        }
         fn notify_memtable_flushed(&self, cf: &str, seqno: u64) {
             let _ = self
                 .0
                 .send(FlushEvent::FlushCompleted(cf.to_string(), seqno));
         }
-        fn notify_flush_cfs(&self, _seqno: u64) {}
     }
 
     #[test]

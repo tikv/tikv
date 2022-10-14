@@ -19,7 +19,7 @@ use crate::{
         ENGINE_HIST_TYPES, ENGINE_TICKER_TYPES, TITAN_ENGINE_HIST_TYPES, TITAN_ENGINE_TICKER_TYPES,
     },
     util::get_cf_handle,
-    FlushListener, RocksEngineIterator, RocksSnapshot,
+    RocksEngineIterator, RocksSnapshot,
 };
 
 #[derive(Clone, Debug)]
@@ -27,7 +27,6 @@ pub struct RocksEngine {
     db: Arc<DB>,
     shared_block_cache: bool,
     support_multi_batch_write: bool,
-    pub(crate) flush_listener: Option<FlushListener>,
 }
 
 impl RocksEngine {
@@ -40,7 +39,6 @@ impl RocksEngine {
             db: db.clone(),
             shared_block_cache: false,
             support_multi_batch_write: db.get_db_options().is_enable_multi_batch_write(),
-            flush_listener: None,
         }
     }
 
@@ -66,10 +64,6 @@ impl RocksEngine {
 
     pub fn set_shared_block_cache(&mut self, enable: bool) {
         self.shared_block_cache = enable;
-    }
-
-    pub fn set_flush_listener(&mut self, listener: FlushListener) {
-        self.flush_listener = Some(listener);
     }
 
     pub fn shared_block_cache(&self) -> bool {
