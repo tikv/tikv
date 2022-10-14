@@ -2529,7 +2529,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     }
 
     fn on_wake_up_regions(&self, to_all: bool, _region_ids: Vec<u64>) {
-        info!("awaken all hibernated regions in this store";
+        info!("try to wake up all hibernated regions in this store";
             "to_all" => to_all);
         {
             let meta = self.ctx.store_meta.lock().unwrap();
@@ -2556,7 +2556,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                             "send awaken region message failed";
                             "region_id" => region_id,
                             "err" => ?e
-                        )
+                        );
                     }
                 }
             }
