@@ -3,7 +3,7 @@
 use std::io::{Read, Write};
 
 pub use cloud::kms::Config as CloudConfig;
-#[cfg(feature = "aws")]
+#[cfg(feature = "cloud-aws")]
 use encryption_export::{create_cloud_backend, KmsConfig};
 use encryption_export::{Backend, Error, Result};
 use file_system::{File, OpenOptions};

@@ -10,7 +10,7 @@ failpoints = ["fail/failpoints"]
 [dependencies]
 async-trait = "0.1"
 bytes = "1.0"
-cloud = { path = "../", default-features = false }
+cloud = { workspace = true }
 fail = "0.5"
 futures = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
@@ -31,7 +31,7 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 # better to not use slog-global, but pass in the logger
 tokio = { version = "1.5", features = ["time"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
-tikv_util = { path = "../../tikv_util", default-features = false }
+tikv_util = { workspace = true }
 url = "2.0"
 thiserror = "1.0"
 lazy_static = "1.3"

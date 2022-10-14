@@ -11,14 +11,14 @@ cloud-gcp = ["external_storage_export/cloud-gcp"]
 cloud-azure = ["external_storage_export/cloud-azure"]
 
 [dependencies]
-api_version = { path = "../api_version", default-features = false }
-backup = { path = "../backup", default-features = false }
-collections = { path = "../collections", default-features = false }
-concurrency_manager = { path = "../concurrency_manager", default-features = false }
+api_version = { workspace = true }
+backup = { workspace = true }
+collections = { workspace = true }
+concurrency_manager = { workspace = true }
 crc64fast = "0.1"
-engine_traits = { path = "../engine_traits", default-features = false }
-external_storage_export = { path = "../external_storage/export", default-features = false }
-file_system = { path = "../file_system", default-features = false }
+engine_traits = { workspace = true }
+external_storage_export = { workspace = true }
+file_system = { workspace = true }
 futures = "0.3"
 futures-executor = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
@@ -27,8 +27,8 @@ kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 protobuf = "2"
 rand = "0.8"
 tempfile = "3.0"
-test_raftstore = { path = "../test_raftstore", default-features = false }
-tidb_query_common = { path = "../tidb_query_common", default-features = false }
-tikv = { path = "../../", default-features = false }
-tikv_util = { path = "../tikv_util", default-features = false }
-txn_types = { path = "../txn_types", default-features = false }
+test_raftstore = { workspace = true }
+tidb_query_common = { workspace = true }
+tikv = { workspace = true }
+tikv_util = { workspace = true }
+txn_types = { workspace = true }

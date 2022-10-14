@@ -5,7 +5,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-online_config_derive = { path = "./online_config_derive", default-features = false }
+online_config_derive = { path = "./online_config_derive" }
 serde = { version = "1.0", features = ["derive"] }
 
 [dev-dependencies]
