@@ -734,14 +734,12 @@ where
 
                         snap_updated = self.snap_cache.maybe_update_snapshot(
                             &self.kv_engine,
-                            read_id,
+                            None,
                             last_valid_ts,
                         );
 
                         // Getting the snapshot
                         let response = self.execute(&req, &delegate.region, None);
-                        // Always clear it for stale read
-                        self.snap_cache.clear();
 
                         // Double check in case `safe_ts` change after the first check and before getting snapshot
                         if let Err(resp) =
@@ -797,9 +795,8 @@ where
         req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
     ) {
-        let use_cache = read_id.is_some();
         self.propose_raft_command(read_id, req, cb);
-        if !use_cache {
+        if self.snap_cache.cached_read_id.is_none() {
             self.snap_cache.clear();
         }
         self.metrics.maybe_flush();
