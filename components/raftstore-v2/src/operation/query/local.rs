@@ -16,7 +16,7 @@ use kvproto::{
 use raftstore::{
     errors::RAFTSTORE_IS_BUSY,
     store::{
-        cmd_resp, util::LeaseState, LocalReaderCore, ReadDelegate, ReadExecutor,
+        cmd_resp, util::LeaseState, LocalReadContext, LocalReaderCore, ReadDelegate, ReadExecutor,
         ReadExecutorProvider, RegionSnapshot, RequestInspector, RequestPolicy,
         TLS_LOCAL_READ_METRICS,
     },
@@ -110,10 +110,7 @@ where
             Ok(Some((mut delegate, policy))) => match policy {
                 RequestPolicy::ReadLocal => {
                     let region = Arc::clone(&delegate.region);
-                    let snap = RegionSnapshot::from_snapshot(
-                        delegate.get_snapshot(None, &mut None),
-                        region,
-                    );
+                    let snap = RegionSnapshot::from_snapshot(delegate.get_snapshot(&None), region);
                     // Ensures the snapshot is acquired before getting the time
                     atomic::fence(atomic::Ordering::Release);
                     let snapshot_ts = monotonic_raw_now();
@@ -133,10 +130,7 @@ where
                     delegate.check_stale_read_safe(read_ts)?;
 
                     let region = Arc::clone(&delegate.region);
-                    let snap = RegionSnapshot::from_snapshot(
-                        delegate.get_snapshot(None, &mut None),
-                        region,
-                    );
+                    let snap = RegionSnapshot::from_snapshot(delegate.get_snapshot(&None), region);
 
                     TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_requests.inc());
 
@@ -295,11 +289,7 @@ where
         self.cached_tablet.latest().unwrap()
     }
 
-    fn get_snapshot(
-        &mut self,
-        _: Option<ThreadReadId>,
-        _: &mut Option<raftstore::store::LocalReadContext<'_, E>>,
-    ) -> Arc<E::Snapshot> {
+    fn get_snapshot(&mut self, _: &Option<LocalReadContext<'_, Self::Tablet>>) -> Arc<E::Snapshot> {
         Arc::new(self.cached_tablet.latest().unwrap().snapshot())
     }
 }
@@ -381,7 +371,7 @@ impl<'r> SnapRequestInspector<'r> {
             return Ok(RequestPolicy::ReadIndex);
         }
 
-        // If applied index's term is differ from current raft's term, leader transfer
+        // If applied index's term differs from current raft's term, leader transfer
         // must happened, if read locally, we may read old value.
         if !self.has_applied_to_current_term() {
             return Ok(RequestPolicy::ReadIndex);
@@ -769,7 +759,7 @@ mod tests {
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
         assert_eq!(tablet1.path(), tablet.path());
-        let snapshot = delegate.get_snapshot(None, &mut None);
+        let snapshot = delegate.get_snapshot(&None);
         assert_eq!(
             b"val1".to_vec(),
             *snapshot.get_value(b"a1").unwrap().unwrap()
@@ -779,7 +769,7 @@ mod tests {
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
         assert_eq!(tablet2.path(), tablet.path());
-        let snapshot = delegate.get_snapshot(None, &mut None);
+        let snapshot = delegate.get_snapshot(&None);
         assert_eq!(
             b"val2".to_vec(),
             *snapshot.get_value(b"a2").unwrap().unwrap()

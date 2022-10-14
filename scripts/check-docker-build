@@ -14,4 +14,4 @@ for i in $(git ls-files | grep 'Cargo.toml' | grep -v 'fuzz/\|./profiler/'); do
     done
 done
 
-echo "Cargo manifest check passed."
+echo "Docker build check passed."
