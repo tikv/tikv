@@ -104,10 +104,7 @@ impl TestSuite {
     }
 
     pub fn get_causal_ts_provider(&mut self, node_id: u64) -> Option<Arc<CausalTsProviderImpl>> {
-        self.cluster
-                .sim
-                .rl()
-                .get_causal_ts_provider(node_id)
+        self.cluster.sim.rl().get_causal_ts_provider(node_id)
     }
 
     pub fn must_merge_region_by_key(&mut self, source_key: &[u8], target_key: &[u8]) {
@@ -306,6 +303,7 @@ fn test_raw_put_key_guard() {
     });
     thread::sleep(Duration::from_millis(apply_wait_timeout));
 
+    // before raw_put finish, min_ts should be the ts of the key on the way.
     assert_eq!(suite.must_raw_get(&test_key), None);
     let min_ts = leader_cm.global_min_lock_ts();
     assert_eq!(min_ts.unwrap(), ts.next());
@@ -318,4 +316,3 @@ fn test_raw_put_key_guard() {
     let min_ts = leader_cm.global_min_lock_ts();
     assert!(min_ts.is_none());
 }
-
