@@ -1919,7 +1919,7 @@ mod tests {
         cmd.set_requests(vec![req].into());
 
         let task = RaftCommand::<KvTestSnapshot>::new(
-            cmd,
+            cmd.clone(),
             Callback::read(Box::new(move |_: ReadResponse<KvTestSnapshot>| {})),
         );
 
