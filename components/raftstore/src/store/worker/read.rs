@@ -204,8 +204,8 @@ where
     read_id: Option<ThreadReadId>,
     snap_cache: &'a mut SnapCache<E>,
 
-    // Used for case where read_id is not set, in which cases we don't use snapshot in case not
-    // releasing cache properly
+    // Used when read_id is not set, duplicated definition to avoid cache invalidation in case
+    // stale read and local read are mixed in one batch.
     snapshot: Option<Arc<E::Snapshot>>,
     snapshot_ts: Option<Timespec>,
 }
@@ -257,7 +257,6 @@ where
         true
     }
 
-    // Note: must be called after `maybe_update_snapshot`
     fn snapshot_ts(&self) -> Option<Timespec> {
         if self.read_id.is_some() {
             Some(self.snap_cache.cached_snapshot_ts)
@@ -1918,11 +1917,27 @@ mod tests {
         req.set_cmd_type(CmdType::Snap);
         cmd.set_requests(vec![req].into());
 
+        // using cache and release
+        let read_id = ThreadReadId::new();
+        let task = RaftCommand::<KvTestSnapshot>::new(
+            cmd.clone(),
+            Callback::read(Box::new(move |_: ReadResponse<KvTestSnapshot>| {})),
+        );
+        must_not_redirect_with_read_id(&mut reader, &rx, task, Some(read_id.clone()));
+        reader.release_snapshot_cache();
+        assert!(
+            reader
+                .kv_engine
+                .get_oldest_snapshot_sequence_number()
+                .is_none()
+        );
+
         let task = RaftCommand::<KvTestSnapshot>::new(
             cmd.clone(),
             Callback::read(Box::new(move |_: ReadResponse<KvTestSnapshot>| {})),
         );
 
+        // not use cache
         must_not_redirect_with_read_id(&mut reader, &rx, task, None);
         assert!(
             reader
