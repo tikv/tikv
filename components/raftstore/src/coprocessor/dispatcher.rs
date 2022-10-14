@@ -655,6 +655,22 @@ impl<E: KvEngine> CoprocessorHost<E> {
         true
     }
 
+    /// Should be called everytime before we want to write apply state when applying.
+    /// Return a bool which indicates whether we can actually do this write.
+    pub fn pre_write_apply_state(
+        &self,
+        region: &Region,
+    ) -> bool {
+        let mut ctx = ObserverContext::new(region);
+        for observer in &self.registry.region_change_observers {
+            let observer = observer.observer.inner();
+            if !observer.pre_write_apply_state(&mut ctx) {
+                return false;
+            }
+        }
+        true
+    }
+
     pub fn on_flush_applied_cmd_batch(
         &self,
         max_level: ObserveLevel,
@@ -763,6 +779,8 @@ mod tests {
         PostApplySnapshot = 21,
         ShouldPreApplySnapshot = 22,
         OnUpdateSafeTs = 23,
+        PrePersist = 24,
+        PreWriteApplyState = 25,
     }
 
     impl Coprocessor for TestCoprocessor {}
@@ -910,6 +928,28 @@ mod tests {
             self.called
                 .fetch_add(ObserverIndex::OnRegionChanged as usize, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
+        }
+
+        fn pre_persist(
+            &self,
+            ctx: &mut ObserverContext<'_>,
+            _: bool,
+            _: Option<&RaftCmdRequest>,
+        ) -> bool {
+            self.called
+                .fetch_add(ObserverIndex::PrePersist as usize, Ordering::SeqCst);
+            ctx.bypass = self.bypass.load(Ordering::SeqCst);
+            true
+        }
+
+        fn pre_write_apply_state(
+            &self,
+            region: &Region,
+        ) -> bool {
+            self.called
+                .fetch_add(ObserverIndex::PreWriteApplyState as usize, Ordering::SeqCst);
+            ctx.bypass = self.bypass.load(Ordering::SeqCst);
+            true
         }
     }
 
@@ -1131,6 +1171,10 @@ mod tests {
 
         host.on_update_safe_ts(1, 1, 1);
         index += ObserverIndex::OnUpdateSafeTs as usize;
+        assert_all!([&ob.called], &[index]);
+
+        host.pre_write_apply_state(&region);
+        index += ObserverIndex::PreWriteApplyState as usize;
         assert_all!([&ob.called], &[index]);
     }
 
