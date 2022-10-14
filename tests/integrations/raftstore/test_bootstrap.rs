@@ -114,7 +114,6 @@ fn test_node_bootstrap_with_prepared_data() {
         CollectorRegHandle::new_for_test(),
         None,
         None,
-        None,
     )
     .unwrap();
     assert!(

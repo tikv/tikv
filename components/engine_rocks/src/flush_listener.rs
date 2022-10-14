@@ -5,43 +5,25 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use engine_traits::util::{MemtableEventNotifier, SequenceNumberProgress};
+use engine_traits::util::MemtableEventNotifier;
 use rocksdb::{EventListener, FlushJobInfo};
 use tikv_util::debug;
-
-use crate::RocksEngine;
 
 #[derive(Clone)]
 pub struct FlushListener {
     notifier: Arc<Mutex<Box<dyn MemtableEventNotifier>>>,
-    engine: Arc<Mutex<Option<RocksEngine>>>,
-    seqno_progress: Arc<SequenceNumberProgress>,
 }
 
 impl FlushListener {
-    pub fn new<N: MemtableEventNotifier + 'static>(
-        notifier: N,
-        seqno_progress: Arc<SequenceNumberProgress>,
-    ) -> Self {
+    pub fn new<N: MemtableEventNotifier + 'static>(notifier: N) -> Self {
         FlushListener {
             notifier: Arc::new(Mutex::new(Box::new(notifier))),
-            engine: Arc::default(),
-            seqno_progress,
         }
-    }
-
-    pub fn set_engine(&self, engine: RocksEngine) {
-        let mut e = self.engine.lock().unwrap();
-        *e = Some(engine);
     }
 
     pub fn update_notifier(&self, notifier: impl MemtableEventNotifier + 'static) {
         let mut n = self.notifier.lock().unwrap();
         *n = Box::new(notifier);
-    }
-
-    pub fn get_seqno_progress(&self) -> Arc<SequenceNumberProgress> {
-        self.seqno_progress.clone()
     }
 }
 
@@ -65,16 +47,13 @@ impl Debug for FlushListener {
 #[cfg(test)]
 mod tests {
     use std::{
-        sync::{
-            mpsc::{self, SyncSender},
-            Arc,
-        },
+        sync::mpsc::{self, SyncSender},
         time::Duration,
     };
 
     use engine_traits::{
-        util::{MemtableEventNotifier, SequenceNumberProgress},
-        MiscExt, Mutable, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
+        util::MemtableEventNotifier, MiscExt, Mutable, WriteBatch, WriteBatchExt, WriteOptions,
+        CF_DEFAULT,
     };
     use rocksdb::{ColumnFamilyOptions, DBOptions as RawDBOptions};
 
@@ -105,10 +84,9 @@ mod tests {
             .unwrap();
         let path = dir.path().to_str().unwrap();
         let mut db_opts = RawDBOptions::new();
-        let seqno_progress = Arc::new(SequenceNumberProgress::default());
         let (tx, rx) = mpsc::sync_channel(2);
-        let listener = FlushListener::new(TestNotifier(tx), seqno_progress);
-        db_opts.add_event_listener(listener.clone());
+        let listener = FlushListener::new(TestNotifier(tx));
+        db_opts.add_event_listener(listener);
         let cf_opts = ColumnFamilyOptions::new();
         let engine = new_engine_opt(
             path,
@@ -116,7 +94,6 @@ mod tests {
             vec![(CF_DEFAULT, RocksCfOptions::from_raw(cf_opts))],
         )
         .unwrap();
-        listener.set_engine(engine.clone());
         let mut batch = engine.write_batch();
         batch.put_cf(CF_DEFAULT, b"k", b"v").unwrap();
         let mut write_opts = WriteOptions::new();

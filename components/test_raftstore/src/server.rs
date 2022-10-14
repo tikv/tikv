@@ -586,17 +586,13 @@ impl ServerCluster {
         );
         let causal_ts_provider = self.get_causal_ts_provider(node_id);
 
-        let (seqno_worker, seqno_progress) = flush_listener
-            .map(|listener| {
-                let worker = LazyWorker::new("seqno-relation");
-                let scheduler = worker.scheduler();
-                let notifier = ApplyResNotifier::new(router.clone(), Some(scheduler));
-                listener.update_notifier(notifier);
-                let progress = listener.get_seqno_progress();
-                progress.reset();
-                (worker, progress)
-            })
-            .unzip();
+        let seqno_worker = flush_listener.map(|listener| {
+            let worker = LazyWorker::new("seqno-relation");
+            let scheduler = worker.scheduler();
+            let notifier = ApplyResNotifier::new(router.clone(), Some(scheduler));
+            listener.update_notifier(notifier);
+            worker
+        });
 
         node.start(
             engines,
@@ -612,7 +608,6 @@ impl ServerCluster {
             collector_reg_handle,
             causal_ts_provider,
             seqno_worker,
-            seqno_progress,
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();

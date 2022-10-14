@@ -1533,7 +1533,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         health_service: Option<HealthService>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         seqno_worker: Option<LazyWorker<SeqnoRelationTask<EK::Snapshot>>>,
-        seqno_progress: Option<Arc<SequenceNumberProgress>>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1685,7 +1684,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             region_read_progress,
             health_service,
             causal_ts_provider,
-            seqno_progress,
         )?;
         Ok(())
     }
@@ -1703,10 +1701,14 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         region_read_progress: RegionReadProgressRegistry,
         health_service: Option<HealthService>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
-        seqno_progress: Option<Arc<SequenceNumberProgress>>,
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
+        let seqno_progress = if cfg.disable_kv_wal {
+            Some(Arc::new(SequenceNumberProgress::default()))
+        } else {
+            None
+        };
 
         let apply_poller_builder = ApplyPollerBuilder::<EK>::new(
             &builder,

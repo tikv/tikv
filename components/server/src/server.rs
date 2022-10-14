@@ -44,8 +44,8 @@ use engine_rocks::{
 };
 use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
 use engine_traits::{
-    util::SequenceNumberProgress, CfOptions, CfOptionsExt, Engines, FlowControlFactorsExt,
-    KvEngine, MiscExt, RaftEngine, TabletFactory, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    CfOptions, CfOptionsExt, Engines, FlowControlFactorsExt, KvEngine, MiscExt, RaftEngine,
+    TabletFactory, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use file_system::{
@@ -238,7 +238,6 @@ struct TikvServer<ER: RaftEngine> {
     background_worker: Worker,
     sst_worker: Option<Box<LazyWorker<String>>>,
     seqno_worker: Option<LazyWorker<SeqnoRelationTask<RocksSnapshot>>>,
-    seqno_progress: Option<Arc<SequenceNumberProgress>>,
     quota_limiter: Arc<QuotaLimiter>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_factory: Option<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
@@ -391,7 +390,6 @@ where
             flow_info_receiver: None,
             sst_worker: None,
             seqno_worker: None,
-            seqno_progress: None,
             quota_limiter,
             causal_ts_provider,
             tablet_factory: None,
@@ -1059,7 +1057,6 @@ where
             collector_reg_handle,
             self.causal_ts_provider.clone(),
             self.seqno_worker.take(),
-            self.seqno_progress.take(),
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
@@ -1743,10 +1740,8 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
             .sst_recovery_sender(self.init_sst_recovery_sender())
             .flow_listener(flow_listener);
         if let Some(scheduler) = self.init_seqno_relation_sender() {
-            let seqno_progress = Arc::new(SequenceNumberProgress::default());
             let notifier = ApplyResNotifier::new(self.router.clone(), Some(scheduler));
-            builder = builder.flush_listener(FlushListener::new(notifier, seqno_progress.clone()));
-            self.seqno_progress = Some(seqno_progress);
+            builder = builder.flush_listener(FlushListener::new(notifier));
         }
         if let Some(cache) = block_cache {
             builder = builder.block_cache(cache);
