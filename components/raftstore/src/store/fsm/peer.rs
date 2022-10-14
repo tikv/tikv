@@ -5225,16 +5225,20 @@ where
 
         let (mut replicated_idx, mut alive_cache_idx) = (last_idx, last_idx);
         let mut witness_replicated_idx = None;
-        let witness_peer = self.region().get_peers().iter().find(|p| p.is_witness);
+        let mut witness_peers = self.region().get_peers().iter().filter(|p| p.is_witness);
 
         for (peer_id, p) in self.fsm.peer.raft_group.raft.prs().iter() {
             if replicated_idx > p.matched {
                 replicated_idx = p.matched;
             }
-            if let Some(witness) = witness_peer {
-                if witness.get_id() == *peer_id {
+            if witness_peers.find(|p| p.id == *peer_id).is_some() {
+                if let Some(idx) = witness_replicated_idx {
+                    if idx > p.matched {
+                        witness_replicated_idx = Some(p.matched);
+                    }
+                } else {
                     witness_replicated_idx = Some(p.matched);
-                }
+                } 
             }
             if let Some(last_heartbeat) = self.fsm.peer.peer_heartbeats.get(peer_id) {
                 if *last_heartbeat > cache_alive_limit {
