@@ -179,10 +179,10 @@ yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [dev-dependencies]
 api_version = { workspace = true, features = ["testexport"] }
+example_coprocessor_plugin = { workspace = true } # should be a binary dependency
 hyper-openssl = "0.9"
 panic_hook = { workspace = true }
 reqwest = { version = "0.11", features = ["blocking"] }
-example_coprocessor_plugin = { workspace = true } # should be a binary dependency
 test_sst_importer = { workspace = true }
 test_util = { workspace = true }
 tokio = { version = "1.17", features = ["macros", "rt-multi-thread", "time"] }
