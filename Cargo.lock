@@ -4121,6 +4121,7 @@ dependencies = [
 name = "raftstore"
 version = "0.0.1"
 dependencies = [
+ "api_version",
  "batch-system",
  "bitflags",
  "byteorder",
