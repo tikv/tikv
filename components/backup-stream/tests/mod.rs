@@ -4,6 +4,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    mem::{self, MaybeUninit},
     path::Path,
     sync::Arc,
     time::Duration,
@@ -100,6 +101,7 @@ pub struct SuiteBuilder {
     name: String,
     nodes: usize,
     metastore_error: Box<dyn Fn(&str) -> Result<()> + Send + Sync>,
+    cfg: Box<FnOnce(&mut BackupStreamConfig)>,
 }
 
 impl SuiteBuilder {
@@ -108,6 +110,9 @@ impl SuiteBuilder {
             name: s.to_owned(),
             nodes: 4,
             metastore_error: Box::new(|_| Ok(())),
+            cfg: Box::new(|cfg| {
+                cfg.enable = true;
+            }),
         }
     }
 
@@ -124,11 +129,21 @@ impl SuiteBuilder {
         self
     }
 
+    pub fn cfg(mut self, f: impl FnOnce(&mut BackupStreamConfig) + 'static) -> Self {
+        let old_f = self.cfg;
+        self.cfg = Box::new(move |cfg| {
+            old_f(cfg);
+            f(cfg);
+        });
+        self
+    }
+
     pub fn build(self) -> Suite {
         let Self {
             name: case,
             nodes: n,
             metastore_error,
+            cfg: cfg_f,
         } = self;
 
         info!("start test"; "case" => %case, "nodes" => %n);
@@ -154,8 +169,10 @@ impl SuiteBuilder {
             suite.endpoints.insert(id, worker);
         }
         suite.cluster.run();
+        let mut cfg = BackupStreamConfig::default();
+        cfg_f(&mut cfg);
         for id in 1..=(n as u64) {
-            suite.start_endpoint(id);
+            suite.start_endpoint(id, cfg.clone());
         }
         // We must wait until the endpoints get ready to watching the metastore, or some
         // modifies may be lost. Either make Endpoint::with_client wait until watch did
@@ -247,17 +264,16 @@ impl Suite {
         worker
     }
 
-    fn start_endpoint(&mut self, id: u64) {
+    fn start_endpoint(&mut self, id: u64, mut cfg: BackupStreamConfig) {
         let cluster = &mut self.cluster;
         let worker = self.endpoints.get_mut(&id).unwrap();
         let sim = cluster.sim.wl();
         let raft_router = sim.get_server_router(id);
         let cm = sim.get_concurrency_manager(id);
         let regions = sim.region_info_accessors.get(&id).unwrap().clone();
-        let mut cfg = BackupStreamConfig::default();
+        let ob = self.obs.get(&id).unwrap().clone();
         cfg.enable = true;
         cfg.temp_path = format!("/{}/{}", self.temp_files.path().display(), id);
-        let ob = self.obs.get(&id).unwrap().clone();
         let endpoint = Endpoint::new(
             id,
             self.meta_store.clone(),
@@ -840,7 +856,9 @@ mod test {
     #[test]
     fn frequent_initial_scan() {
         test_util::init_log_for_test();
-        let mut suite = super::SuiteBuilder::new_named("frequent_initial_scan").build();
+        let mut suite = super::SuiteBuilder::new_named("frequent_initial_scan")
+            .cfg(|c| c.num_threads = 1)
+            .build();
         let keys = (1..1024).map(|i| make_record_key(1, i)).collect::<Vec<_>>();
         let start_ts = suite.tso();
         suite.must_kv_prewrite(
@@ -852,16 +870,21 @@ mod test {
             make_record_key(1, 886),
             start_ts,
         );
-        fail::cfg("execute_scan_command", "pause").unwrap();
+        fail::cfg("scan_after_get_snapshot", "pause").unwrap();
         suite.must_register_task(1, "frequent_initial_scan");
         let commit_ts = suite.tso();
         suite.commit_keys(keys, start_ts, commit_ts);
         suite.run(|| {
-            Task::ModifyObserve(backup_stream::ObserveOp::RefreshResolver {
+            Task::ModifyObserve(backup_stream::ObserveOp::Stop {
                 region: suite.cluster.get_region(&make_record_key(1, 886)),
             })
         });
-        fail::cfg("execute_scan_command", "off");
+        suite.run(|| {
+            Task::ModifyObserve(backup_stream::ObserveOp::Start {
+                region: suite.cluster.get_region(&make_record_key(1, 886)),
+            })
+        });
+        fail::cfg("scan_after_get_snapshot", "off").unwrap();
         suite.force_flush_files("frequent_initial_scan");
         suite.wait_for_flush();
         std::thread::sleep(Duration::from_secs(1));
