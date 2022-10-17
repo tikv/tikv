@@ -4899,14 +4899,23 @@ where
         }
 
         let region_id = self.region_id();
-        // When in the flashback state, we should not allow any other request to be
-        // proposed.
-        if self.fsm.peer.is_in_flashback {
-            self.ctx.raft_metrics.invalid_proposal.flashback.inc();
-            let flags = WriteBatchFlags::from_bits_truncate(msg.get_header().get_flags());
-            if !flags.contains(WriteBatchFlags::FLASHBACK) {
-                return Err(Error::FlashbackInProgress(self.region_id()));
+        if let Err(e) = util::check_flashback_state(self.fsm.peer.is_in_flashback, msg, region_id) {
+            match e {
+                Error::FlashbackInProgress(_) => self
+                    .ctx
+                    .raft_metrics
+                    .invalid_proposal
+                    .flashback_in_progress
+                    .inc(),
+                Error::FlashbackNotPrepared(_) => self
+                    .ctx
+                    .raft_metrics
+                    .invalid_proposal
+                    .flashback_not_prepared
+                    .inc(),
+                _ => unreachable!(),
             }
+            return Err(e);
         }
 
         // Check whether the store has the right peer to handle the request.
