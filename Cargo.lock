@@ -2672,7 +2672,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/joccau/kvproto?branch=enhance-restore-kvfile#6e25d0faaacb56f5eeb2909ec745b507d2373b0c"
+source = "git+https://github.com/joccau/kvproto?branch=enhance-restore-kvfile#8bfffe2c94400ba5e7c8ec09795d83843ec0a9b5"
 dependencies = [
  "futures 0.3.15",
  "grpcio",

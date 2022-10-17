@@ -436,6 +436,7 @@ where
         let router = self.router.clone();
         let limiter = self.limiter.clone();
         let start = Instant::now();
+        let mut start_apply = Instant::now();
         let raft_size = self.raft_entry_max_size;
 
         let handle_task = async move {
@@ -447,38 +448,56 @@ where
             let mut futs = vec![];
             let mut apply_resp = ApplyResponse::default();
             let context = req.take_context();
-            let meta = req.get_meta();
 
             let result = (|| -> Result<()> {
-                let temp_file =
-                    importer.do_download_kv_file(meta, req.get_storage_backend(), &limiter)?;
-                let mut reqs = RequestCollector::from_cf(meta.get_cf());
                 let mut cmd_reqs = vec![];
-                let mut req_size = 0_u64;
+                let mut reqs_default = RequestCollector::from_cf(CF_DEFAULT);
+                let mut reqs_write = RequestCollector::from_cf(CF_WRITE);
+                let mut req_default_size = 0_u64;
+                let mut req_write_size = 0_u64;
+                let rules = req.take_rewrite_rules();
 
-                let mut build_req_fn = build_apply_request(
-                    &mut req_size,
-                    raft_size.0,
-                    &mut reqs,
-                    cmd_reqs.as_mut(),
-                    meta.get_is_delete(),
-                    meta.get_cf(),
-                    context.clone(),
-                );
-                let range = importer.do_apply_kv_file(
-                    meta.get_start_key(),
-                    meta.get_end_key(),
-                    meta.get_restore_ts(),
-                    temp_file,
-                    req.get_rewrite_rule(),
-                    &mut build_req_fn,
-                )?;
-                drop(build_req_fn);
-                if !reqs.is_empty() {
-                    let cmd = make_request(&mut reqs, context);
-                    cmd_reqs.push(cmd);
-                    info!("apply req"; "size" => req_size);
+                for (i, meta) in req.get_metas().iter().enumerate() {
+                    let (reqs, req_size) = if meta.get_cf() == CF_DEFAULT {
+                        (&mut reqs_default, &mut req_default_size)
+                    } else {
+                        (&mut reqs_write, &mut req_write_size)
+                    };
+
+                    let file_buff =
+                        importer.do_download_kv_file2(meta, req.get_storage_backend(), &limiter)?;
+                    let mut build_req_fn = build_apply_request(
+                        req_size,
+                        raft_size.0,
+                        reqs,
+                        cmd_reqs.as_mut(),
+                        meta.get_is_delete(),
+                        meta.get_cf(),
+                        context.clone(),
+                    );
+
+                    let _range = importer.do_apply_kv_file(
+                        meta.get_start_key(),
+                        meta.get_end_key(),
+                        meta.get_restore_ts(),
+                        file_buff,
+                        &rules[i],
+                        &mut build_req_fn,
+                    )?;
                 }
+
+                if !reqs_default.is_empty() {
+                    let cmd = make_request(&mut reqs_default, context.clone());
+                    cmd_reqs.push(cmd);
+                    IMPORTER_APPLY_BYTES.observe(req_default_size as _);
+                }
+                if !reqs_write.is_empty() {
+                    let cmd = make_request(&mut reqs_write, context);
+                    cmd_reqs.push(cmd);
+                    IMPORTER_APPLY_BYTES.observe(req_write_size as _);
+                }
+
+                start_apply = Instant::now();
                 for cmd in cmd_reqs {
                     let (cb, future) = paired_future_callback();
                     match router.send_command(cmd, Callback::write(cb), RaftCmdExtraOpts::default())
@@ -491,9 +510,9 @@ where
                         }
                     }
                 }
-                if let Some(r) = range {
-                    apply_resp.set_range(r);
-                }
+                // if let Some(r) = range {
+                //     apply_resp.set_range(r);
+                // }
                 Ok(())
             })();
             if let Err(e) = result {
@@ -511,12 +530,10 @@ where
                         if r.response.get_header().has_error() {
                             let mut import_err = kvproto::import_sstpb::Error::default();
                             let err = r.response.get_header().get_error();
-                            import_err
-                                .set_message("failed to complete raft command".to_string());
+                            import_err.set_message("failed to complete raft command".to_string());
                             // FIXME: if there are many errors, we may lose some of them here.
-                            import_err
-                                .set_store_error(err.clone());
-                            warn!("failed to apply the file to the store"; "error" => ?err, "file" => %meta.get_name());
+                            import_err.set_store_error(err.clone());
+                            warn!("failed to apply the file to the store"; "error" => ?err);
                             resp.set_error(import_err);
                         }
                     }
@@ -524,6 +541,9 @@ where
                 resp
             }));
             // Records how long the apply task waits to be scheduled.
+            sst_importer::metrics::IMPORTER_APPLY_DURATION
+                .with_label_values(&["apply"])
+                .observe(start_apply.saturating_elapsed().as_secs_f64());
             sst_importer::metrics::IMPORTER_APPLY_DURATION
                 .with_label_values(&["finish"])
                 .observe(start.saturating_elapsed().as_secs_f64());
@@ -997,7 +1017,7 @@ where
         // When the request size get grow to max request size,
         // build the request and add it to a batch.
         if *req_size + req.compute_size() as u64 > raft_size {
-            info!("apply req"; "size" => *req_size);
+            IMPORTER_APPLY_BYTES.observe(*req_size as _);
             *req_size = 0;
             let cmd = make_request(reqs, context.clone());
             cmd_reqs.push(cmd);
@@ -1090,8 +1110,17 @@ mod test {
         fn run_case(c: &Case) {
             let mut v = vec![];
             let mut coll = RequestCollector::from_cf(c.cf);
-            let mut builder =
-                build_apply_request(1024, &mut coll, &mut v, false, c.cf, Context::new());
+            let mut req_size = 0_u64;
+
+            let mut builder = build_apply_request(
+                &mut req_size,
+                1024,
+                &mut coll,
+                &mut v,
+                false,
+                c.cf,
+                Context::new(),
+            );
 
             for (k, v) in c.mutations.clone() {
                 builder(k, v);

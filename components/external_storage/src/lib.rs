@@ -296,3 +296,57 @@ pub async fn read_external_storage_into_file(
 
     Ok(())
 }
+
+pub async fn read_external_storage_info_buff(
+    reader: &mut (dyn AsyncRead + Unpin),
+    speed_limit: &Limiter,
+    expected_length: u64,
+    expected_sha256: Option<Vec<u8>>,
+) -> io::Result<Vec<u8>> {
+    let mut output = Vec::new();
+    let mut hasher = Hasher::new(MessageDigest::sha256()).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::Other,
+            format!("openssl hasher failed to init: {}", err),
+        )
+    })?;
+
+    let len = reader.read_to_end(&mut output).await?;
+    // check lenght of file
+    if len != 0 && len != expected_length as usize {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("downloaded size {}, expected {}", len, expected_length),
+        ));
+    }
+    // check sha256 of file
+    if let Some(sha256) = expected_sha256 {
+        hasher.update(&output).map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                format!("openssl hasher udpate failed: {}", err),
+            )
+        })?;
+
+        let cal_sha256 = hasher.finish().map_or_else(
+            |err| {
+                Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("openssl hasher finish failed: {}", err),
+                ))
+            },
+            |bytes| Ok(bytes.to_vec()),
+        )?;
+        if !sha256.eq(&cal_sha256) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "sha256 not match, expect: {:?}, calculate: {:?}",
+                    sha256, cal_sha256,
+                ),
+            ));
+        }
+    }
+
+    Ok(output)
+}

@@ -7,6 +7,7 @@ use std::{
     io::{self, prelude::*, BufReader},
     ops::Bound,
     path::{Path, PathBuf},
+    rc::Rc,
     sync::Arc,
 };
 
@@ -18,8 +19,9 @@ use engine_traits::{
     IterOptions, Iterator, KvEngine, RefIterable, SstCompressionType, SstExt, SstMetaInfo,
     SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
+use external_storage_export::compression_reader_dispatcher;
 use file_system::{get_io_rate_limiter, OpenOptions};
-use futures::executor::ThreadPool;
+use futures::{executor::ThreadPool, AsyncRead, AsyncReadExt};
 use kvproto::{
     brpb::{CipherInfo, StorageBackend},
     import_sstpb::*,
@@ -27,9 +29,10 @@ use kvproto::{
 };
 use tikv_util::{
     codec::stream_event::{EventIterator, Iterator as EIterator},
+    stream::block_on_external_io,
     time::{Instant, Limiter},
 };
-use txn_types::{Key, TimeStamp, WriteRef};
+use txn_types::{Key, Lock, TimeStamp, WriteRef};
 
 use crate::{
     import_file::{ImportDir, ImportFile},
@@ -47,7 +50,7 @@ pub struct SstImporter {
     // TODO: lift api_version as a type parameter.
     api_version: ApiVersion,
     compression_types: HashMap<CfName, SstCompressionType>,
-    file_locks: Arc<DashMap<String, ()>>,
+    file_locks: Arc<DashMap<String, Arc<Vec<u8>>>>,
 }
 
 impl SstImporter {
@@ -292,6 +295,56 @@ impl SstImporter {
         Ok(())
     }
 
+    pub fn do_download_kv_file2(
+        &self,
+        meta: &KvMeta,
+        backend: &StorageBackend,
+        speed_limiter: &Limiter,
+    ) -> Result<Vec<u8>> {
+        let start = Instant::now();
+        let sha256 = meta.get_sha256().to_vec();
+        let expected_sha256 = if !sha256.is_empty() {
+            Some(sha256)
+        } else {
+            None
+        };
+
+        let length = meta.get_length();
+        let range_length = meta.get_range_length();
+        let ext_storage = external_storage_export::create_storage(backend, Default::default())?;
+        let mut reader = {
+            let inner = if range_length > 0 {
+                ext_storage.read_part(meta.get_name(), meta.get_range_offset(), range_length)
+            } else {
+                ext_storage.read(meta.get_name())
+            };
+
+            let compression_type = Some(meta.compression_type);
+            compression_reader_dispatcher(compression_type, inner)?
+        };
+
+        let r = block_on_external_io(external_storage_export::read_external_storage_info_buff(
+            &mut reader,
+            speed_limiter,
+            length,
+            expected_sha256,
+        ));
+        let url = ext_storage.url()?.to_string();
+        let buff = r.map_err(|e| Error::CannotReadExternalStorage {
+            url: url.to_string(),
+            name: meta.get_name().to_owned(),
+            err: e,
+            local_path: PathBuf::default(),
+        })?;
+
+        IMPORTER_DOWNLOAD_BYTES.observe(length as _);
+        IMPORTER_APPLY_DURATION
+            .with_label_values(&["download"])
+            .observe(start.saturating_elapsed().as_secs_f64());
+
+        Ok(buff)
+    }
+
     pub fn do_download_kv_file(
         &self,
         meta: &KvMeta,
@@ -370,22 +423,16 @@ impl SstImporter {
         Ok(path.save)
     }
 
-    pub fn do_apply_kv_file<P: AsRef<Path>>(
+    pub fn do_apply_kv_file(
         &self,
         start_key: &[u8],
         end_key: &[u8],
         restore_ts: u64,
-        file_path: P,
+        file_buff: Vec<u8>,
         rewrite_rule: &RewriteRule,
         build_fn: &mut dyn FnMut(Vec<u8>, Vec<u8>),
     ) -> Result<Option<Range>> {
-        // iterator file and performs rewrites and apply.
-        let file = File::open(&file_path)?;
-        let mut reader = BufReader::new(file);
-        let mut buffer = Vec::new();
-        reader.read_to_end(&mut buffer)?;
-
-        let mut event_iter = EventIterator::new(buffer);
+        let mut event_iter = EventIterator::new(file_buff);
 
         let old_prefix = rewrite_rule.get_old_key_prefix();
         let new_prefix = rewrite_rule.get_new_key_prefix();
@@ -467,8 +514,7 @@ impl SstImporter {
         }
         info!("build download request file done"; "total keys" => %total_key,
             "ts filtered keys" => %ts_not_expected,
-            "range filtered keys" => %not_in_range,
-            "file" => %file_path.as_ref().display());
+            "range filtered keys" => %not_in_range);
 
         let label = if perform_rewrite { "rewrite" } else { "normal" };
         IMPORTER_APPLY_DURATION
