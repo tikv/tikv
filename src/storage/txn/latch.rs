@@ -8,7 +8,6 @@ use std::{
     },
     hash::{Hash, Hasher},
     num::NonZeroU64,
-    sync::atomic::Ordering,
     usize,
 };
 

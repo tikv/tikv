@@ -10,7 +10,7 @@ use crate::storage::{
     txn::{
         commands::{
             Command, CommandExt, FlashbackToVersionReadPhase, ReaderWithStats, ReleasedLocks,
-            ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
+            ResponsePolicy, WriteCommand, WriteContext, WriteResult,
         },
         flashback_to_version, latch, Result,
     },

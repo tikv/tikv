@@ -10,7 +10,7 @@ use txn_types::{Key, Value};
 use crate::storage::{
     lock_manager::WaitTimeout,
     mvcc::{Lock, LockType, TimeStamp, Write, WriteType},
-    txn::{commands::WriteResultLockInfo, ProcessResult},
+    txn::ProcessResult,
     Callback, Error, Result,
 };
 

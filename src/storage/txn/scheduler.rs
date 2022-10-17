@@ -29,7 +29,6 @@ use std::{
     mem,
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-        mpsc::channel,
         Arc,
     },
     time::Duration,
@@ -65,8 +64,8 @@ use crate::{
         errors::SharedError,
         get_causal_ts, get_priority_tag, get_raw_key_guard,
         kv::{
-            self, with_tls_engine, Engine, Error as EngineError, ExtCallback, FlowStatsReporter,
-            Result as EngineResult, SnapContext, Statistics,
+            self, with_tls_engine, Engine, ExtCallback, FlowStatsReporter, Result as EngineResult,
+            SnapContext, Statistics,
         },
         lock_manager::{
             self,

@@ -1,23 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::{
-    collections::hash_map::DefaultHasher,
-    fmt::Formatter,
-    hash::{Hash, Hasher},
-    sync::Arc,
-};
+use std::{fmt::Formatter, sync::Arc};
 
 use kvproto::kvrpcpb::{Context, ExtraOp};
-use tikv_kv::SnapshotExt;
 use txn_types::{Key, OldValues, TimeStamp, TxnExtra};
 
 use crate::storage::{
     kv::WriteData,
-    lock_manager::{
-        lock_wait_context::LockWaitContextSharedState, lock_waiting_queue::LockWaitEntry,
-        LockManager, WaitTimeout,
-    },
+    lock_manager::{lock_waiting_queue::LockWaitEntry, LockManager, WaitTimeout},
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader},
     txn::{
         acquire_pessimistic_lock,
@@ -28,8 +19,7 @@ use crate::storage::{
         Error, ErrorInner, Result,
     },
     types::{PessimisticLockKeyResult, PessimisticLockParameters, PessimisticLockResults},
-    Error as StorageError, ErrorInner as StorageErrorInner, ProcessResult, Result as StorageResult,
-    Snapshot,
+    ProcessResult, Result as StorageResult, Snapshot,
 };
 
 pub struct PessimisticLockKeyContext {

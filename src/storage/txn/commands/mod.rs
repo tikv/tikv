@@ -28,10 +28,7 @@ use std::{
     fmt::{self, Debug, Display, Formatter},
     iter,
     marker::PhantomData,
-    num::NonZeroU64,
     ops::{Deref, DerefMut},
-    sync::Arc,
-    time::Instant,
 };
 
 pub use acquire_pessimistic_lock::AcquirePessimisticLock;
@@ -62,17 +59,15 @@ use txn_types::{Key, TimeStamp, Value, Write};
 use crate::storage::{
     kv::WriteData,
     lock_manager,
-    lock_manager::{
-        lock_wait_context::LockWaitContextSharedState, LockManager, LockWaitToken, WaitTimeout,
-    },
+    lock_manager::{LockManager, LockWaitToken, WaitTimeout},
     metrics,
     mvcc::{Lock as MvccLock, MvccReader, ReleasedLock, SnapshotReader},
     txn::{latch, ProcessResult, Result},
     types::{
-        MvccInfo, PessimisticLockKeyResult, PessimisticLockParameters, PessimisticLockResults,
-        PrewriteResult, SecondaryLocksStatus, StorageCallbackType, TxnStatus,
+        MvccInfo, PessimisticLockParameters, PessimisticLockResults, PrewriteResult,
+        SecondaryLocksStatus, StorageCallbackType, TxnStatus,
     },
-    Error as StorageError, Result as StorageResult, Snapshot, Statistics,
+    Result as StorageResult, Snapshot, Statistics,
 };
 
 /// Store Transaction scheduler commands.
