@@ -500,7 +500,7 @@ where
     /// `finish_for`.
     pub fn commit(&mut self, delegate: &mut ApplyDelegate<EK>) {
         if delegate.last_flush_applied_index < delegate.apply_state.get_applied_index() {
-            delegate.write_apply_state(self.kv_wb_mut(), &self.host);
+            delegate.write_apply_state(self);
         }
         self.commit_opt(delegate, true);
     }
@@ -621,7 +621,7 @@ where
     ) {
         if self.host.pre_persist(&delegate.region, true, None) {
             if !delegate.pending_remove {
-                delegate.write_apply_state(self.kv_wb_mut(), &self.host);
+                delegate.write_apply_state(self);
             }
             self.commit_opt(delegate, false);
         } else {
@@ -1101,9 +1101,10 @@ where
         });
     }
 
-    fn write_apply_state(&self, wb: &mut EK::WriteBatch, host: &CoprocessorHost<EK>) {
-        if host.pre_write_apply_state(&self.region) {
-            self.force_write_apply_state(wb);
+    fn write_apply_state(&self, apply_ctx: &mut ApplyContext<EK>) {
+        let can_write = apply_ctx.host.pre_write_apply_state(&self.region);
+        if can_write {
+            self.force_write_apply_state(apply_ctx.kv_wb_mut());
         }
     }
 
@@ -3744,8 +3745,7 @@ where
             if apply_ctx.timer.is_none() {
                 apply_ctx.timer = Some(Instant::now_coarse());
             }
-            self.delegate
-                .write_apply_state(apply_ctx.kv_wb_mut(), &apply_ctx.host);
+            self.delegate.write_apply_state(apply_ctx);
             fail_point!(
                 "apply_on_handle_snapshot_1_1",
                 self.delegate.id == 1 && self.delegate.region_id() == 1,
