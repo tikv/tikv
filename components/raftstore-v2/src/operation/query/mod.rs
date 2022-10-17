@@ -388,8 +388,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ctx: &mut StoreContext<EK, ER, T>,
         apply_res: ApplyRes,
         progress_to_be_updated: bool,
-    ) -> bool {
-        let mut has_ready = false;
+    ) {
         // TODO: add is_handling_snapshot check
         // it could update has_ready
 
@@ -415,6 +414,5 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let reader = meta.readers.get_mut(&self.region_id()).unwrap();
             self.maybe_update_read_progress(reader, progress);
         }
-        has_ready
     }
 }

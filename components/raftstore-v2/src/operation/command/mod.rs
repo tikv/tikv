@@ -244,10 +244,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if !is_leader {
             entry_storage.compact_entry_cache(apply_res.applied_index + 1);
         }
-
-        if self.handle_read_on_apply(ctx, apply_res, progress_to_be_updated) {
-            self.set_has_ready();
-        }
+        self.handle_read_on_apply(ctx, apply_res, progress_to_be_updated);
     }
 }
 
