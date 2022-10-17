@@ -1293,7 +1293,7 @@ where
         if should_write {
             // An observer shall prevent a force write_apply_state here by not return true
             // when `post_exec`.
-            delegate.force_write_apply_state(apply_ctx.kv_wb_mut(), &apply_ctx.host);
+            self.force_write_apply_state(apply_ctx.kv_wb_mut(), &apply_ctx.host);
             apply_ctx.commit(self);
         }
         exec_result
