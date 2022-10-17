@@ -5246,7 +5246,7 @@ where
                     }
                 } else {
                     witness_replicated_idx = Some(p.matched);
-                } 
+                }
             }
             if let Some(last_heartbeat) = self.fsm.peer.peer_heartbeats.get(peer_id) {
                 if *last_heartbeat > cache_alive_limit {
