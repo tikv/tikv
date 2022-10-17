@@ -122,11 +122,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
         };
 
         let mut released_locks = ReleasedLocks::new();
-        // The lock is released here only when the `check_txn_status` returns
-        // `TtlExpire`.
-        if let TxnStatus::TtlExpire = txn_status {
-            released_locks.push(released);
-        }
+        released_locks.push(released);
 
         let pr = ProcessResult::TxnStatus { txn_status };
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
@@ -154,7 +150,7 @@ pub mod tests {
     use super::{TxnStatus::*, *};
     use crate::storage::{
         kv::Engine,
-        lock_manager::DummyLockManager,
+        lock_manager::MockLockManager,
         mvcc::tests::*,
         txn::{
             commands::{pessimistic_rollback, WriteCommand, WriteContext},
@@ -196,7 +192,7 @@ pub mod tests {
             .process_write(
                 snapshot,
                 WriteContext {
-                    lock_mgr: &DummyLockManager::new(),
+                    lock_mgr: &MockLockManager::new(),
                     concurrency_manager: cm,
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
@@ -244,7 +240,7 @@ pub mod tests {
                 .process_write(
                     snapshot,
                     WriteContext {
-                        lock_mgr: &DummyLockManager::new(),
+                        lock_mgr: &MockLockManager::new(),
                         concurrency_manager: cm,
                         extra_op: Default::default(),
                         statistics: &mut Default::default(),

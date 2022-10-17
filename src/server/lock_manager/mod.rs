@@ -32,11 +32,13 @@ use self::{
     waiter_manager::{Waiter, WaiterManager},
 };
 use crate::{
-    server::{resolve::StoreAddrResolver, Error, Result},
+    server::{
+        lock_manager::deadlock::RoleChangeNotifier, resolve::StoreAddrResolver, Error, Result,
+    },
     storage::{
         lock_manager::{
-            DiagnosticContext, KeyLockWaitInfo, KeyWakeUpEvent, LockManager as LockManagerTrait,
-            LockWaitToken, UpdateWaitForEvent, WaitTimeout,
+            DiagnosticContext, KeyLockWaitInfo, LockManager as LockManagerTrait, LockWaitToken,
+            UpdateWaitForEvent, WaitTimeout,
         },
         DynamicConfigs as StorageDynamicConfigs, Error as StorageError,
     },
@@ -199,8 +201,7 @@ impl LockManager {
         &self,
         host: &mut CoprocessorHost<impl KvEngine>,
     ) {
-        let role_change_notifier =
-            deadlock::RoleChangeNotifier::new(self.detector_scheduler.clone());
+        let role_change_notifier = RoleChangeNotifier::new(self.detector_scheduler.clone());
         role_change_notifier.register(host);
     }
 
@@ -285,11 +286,7 @@ impl LockManagerTrait for LockManager {
         self.waiter_mgr_scheduler.update_wait_for(updated_items);
     }
 
-    fn on_keys_wakeup(&self, _wake_up_events: Vec<KeyWakeUpEvent>) {}
-
     fn remove_lock_wait(&self, token: LockWaitToken) {
-        // If `hashes` is some, there may be some waiters waiting for these locks.
-        // Try to wake up them.
         if self.has_waiter() {
             self.waiter_mgr_scheduler.remove_lock_wait(token);
         }

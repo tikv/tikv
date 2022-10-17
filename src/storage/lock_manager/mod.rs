@@ -109,15 +109,6 @@ impl LockWaitToken {
 }
 
 #[derive(Debug)]
-pub struct KeyWakeUpEvent {
-    pub key: Key,
-    pub released_start_ts: TimeStamp,
-    pub released_commit_ts: TimeStamp,
-    pub awakened_start_ts: TimeStamp,
-    pub awakened_allow_resuming: bool,
-}
-
-#[derive(Debug)]
 pub struct UpdateWaitForEvent {
     pub token: LockWaitToken,
     pub start_ts: TimeStamp,
@@ -129,7 +120,7 @@ pub struct UpdateWaitForEvent {
 /// `LockManager` manages transactions waiting for locks held by other
 /// transactions. It has responsibility to handle deadlocks between
 /// transactions.
-pub trait LockManager: Clone + Send + 'static {
+pub trait LockManager: Clone + Send + Sync + 'static {
     /// Allocates a token for identifying a specific lock-waiting relationship.
     /// Use this to allocate a token before invoking `wait_for`.
     ///
@@ -162,10 +153,7 @@ pub trait LockManager: Clone + Send + 'static {
 
     fn update_wait_for(&self, updated_items: Vec<UpdateWaitForEvent>);
 
-    fn on_keys_wakeup(&self, wake_up_events: Vec<KeyWakeUpEvent>);
-
-    /// The locks with `lock_ts` and `hashes` are released, tries to wake up
-    /// transactions.
+    /// Remove a waiter specified by token.
     fn remove_lock_wait(&self, token: LockWaitToken);
 
     /// Returns true if there are waiters in the `LockManager`.
@@ -180,13 +168,13 @@ pub trait LockManager: Clone + Send + 'static {
 
 // For test
 #[derive(Clone)]
-pub struct DummyLockManager {
+pub struct MockLockManager {
     allocated_token: Arc<AtomicU64>,
     waiters:
         Arc<Mutex<HashMap<LockWaitToken, (KeyLockWaitInfo, Box<dyn FnOnce(StorageError) + Send>)>>>,
 }
 
-impl DummyLockManager {
+impl MockLockManager {
     pub fn new() -> Self {
         Self {
             allocated_token: Arc::new(AtomicU64::new(1)),
@@ -196,13 +184,13 @@ impl DummyLockManager {
 }
 
 // Make the linter happy.
-impl Default for DummyLockManager {
+impl Default for MockLockManager {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl LockManager for DummyLockManager {
+impl LockManager for MockLockManager {
     fn allocate_token(&self) -> LockWaitToken {
         LockWaitToken(Some(self.allocated_token.fetch_add(1, Ordering::SeqCst)))
     }
@@ -227,8 +215,6 @@ impl LockManager for DummyLockManager {
 
     fn update_wait_for(&self, _updated_items: Vec<UpdateWaitForEvent>) {}
 
-    fn on_keys_wakeup(&self, _wake_up_events: Vec<KeyWakeUpEvent>) {}
-
     fn remove_lock_wait(&self, _token: LockWaitToken) {}
 
     fn dump_wait_for_entries(&self, cb: Callback) {
@@ -236,7 +222,7 @@ impl LockManager for DummyLockManager {
     }
 }
 
-impl DummyLockManager {
+impl MockLockManager {
     pub fn simulate_timeout_all(&self) {
         let mut map = self.waiters.lock();
         for (_, (wait_info, cancel_callback)) in map.drain() {

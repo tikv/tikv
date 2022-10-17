@@ -1721,7 +1721,7 @@ mod tests {
         server::gc_worker::{MockSafePointProvider, PrefixedEngine},
         storage::{
             kv::{metrics::GcKeyMode, Modify, TestEngineBuilder, WriteData},
-            lock_manager::DummyLockManager,
+            lock_manager::MockLockManager,
             mvcc::{
                 tests::{must_get_none, must_get_none_on_region, must_get_on_region},
                 MAX_TXN_WRITE_SIZE,
@@ -1799,7 +1799,7 @@ mod tests {
     /// Assert the data in `storage` is the same as `expected_data`. Keys in
     /// `expected_data` should be encoded form without ts.
     fn check_data<E: Engine, F: KvFormat>(
-        storage: &Storage<E, DummyLockManager, F>,
+        storage: &Storage<E, MockLockManager, F>,
         expected_data: &BTreeMap<Vec<u8>, Vec<u8>>,
     ) {
         let scan_res = block_on(storage.scan(
@@ -1836,7 +1836,7 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(
             engine.clone(),
-            DummyLockManager::new(),
+            MockLockManager::new(),
         )
         .build()
         .unwrap();
@@ -2023,7 +2023,7 @@ mod tests {
         let prefixed_engine = PrefixedEngine(engine);
         let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(
             prefixed_engine.clone(),
-            DummyLockManager::new(),
+            MockLockManager::new(),
         )
         .build()
         .unwrap();

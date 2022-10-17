@@ -496,17 +496,14 @@ impl Scheduler {
     }
 }
 
-/// WaiterManager handles waiting and wake-up of pessimistic lock
+/// WaiterManager handles lock waiting, cancels waiters when needed (due to
+/// timeout or deadlock detected), and provide lock waiting information for
+/// diagnosing.
 pub struct WaiterManager {
     wait_table: Rc<RefCell<WaitTable>>,
     detector_scheduler: DetectorScheduler,
     /// It is the default and maximum timeout of waiter.
     default_wait_for_lock_timeout: ReadableDuration,
-    // /// If more than one waiters are waiting for the same lock, only the
-    // /// oldest one will be waked up immediately when the lock is released.
-    // /// Others will be waked up after `wake_up_delay_duration` to reduce
-    // /// contention and make the oldest one more likely acquires the lock.
-    // wake_up_delay_duration: ReadableDuration,
 }
 
 unsafe impl Send for WaiterManager {}
@@ -554,8 +551,6 @@ impl WaiterManager {
         if wait_table.is_empty() {
             return;
         }
-        // let duration: Duration = self.wake_up_delay_duration.into();
-        // let _new_timeout = Instant::now() + duration;
         let waiter = if let Some(w) = wait_table.take_waiter(token) {
             w
         } else {
@@ -651,7 +646,6 @@ impl FutureRunnable<Task> for WaiterManager {
                 self.handle_wait_for(token, waiter);
                 TASK_COUNTER_METRICS.wait_for.inc();
             }
-
             Task::RemoveLockWait { token } => {
                 self.handle_remove_lock_wait(token);
                 TASK_COUNTER_METRICS.wake_up.inc();

@@ -107,7 +107,7 @@ pub mod tests {
     use super::*;
     use crate::storage::{
         kv::TestEngineBuilder,
-        lock_manager::DummyLockManager,
+        lock_manager::MockLockManager,
         mvcc::tests::*,
         txn::{commands::WriteCommand, scheduler::DEFAULT_EXECUTION_DURATION_LIMIT, tests::*},
         Engine,
@@ -135,7 +135,7 @@ pub mod tests {
             .process_write(
                 snapshot,
                 WriteContext {
-                    lock_mgr: &DummyLockManager::new(),
+                    lock_mgr: &MockLockManager::new(),
                     concurrency_manager: cm,
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
@@ -177,7 +177,7 @@ pub mod tests {
                 .process_write(
                     snapshot,
                     WriteContext {
-                        lock_mgr: &DummyLockManager::new(),
+                        lock_mgr: &MockLockManager::new(),
                         concurrency_manager: cm,
                         extra_op: Default::default(),
                         statistics: &mut Default::default(),

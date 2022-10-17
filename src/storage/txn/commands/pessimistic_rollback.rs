@@ -73,7 +73,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
                     && lock.ts == self.start_ts
                     && lock.for_update_ts <= self.for_update_ts
                 {
-                    Ok(txn.unlock_key(key, true, None))
+                    Ok(txn.unlock_key(key, true, TimeStamp::zero()))
                 } else {
                     Ok(None)
                 }
@@ -108,7 +108,7 @@ pub mod tests {
     use super::*;
     use crate::storage::{
         kv::Engine,
-        lock_manager::DummyLockManager,
+        lock_manager::MockLockManager,
         mvcc::tests::*,
         txn::{
             commands::{WriteCommand, WriteContext},
@@ -136,7 +136,7 @@ pub mod tests {
             for_update_ts,
             deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
         };
-        let lock_mgr = DummyLockManager::new();
+        let lock_mgr = MockLockManager::new();
         let write_context = WriteContext {
             lock_mgr: &lock_mgr,
             concurrency_manager: cm,

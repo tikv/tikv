@@ -797,7 +797,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .pessimistic_lock_wake_up_delay_duration_ms
             .load(Ordering::Relaxed);
 
-        released_locks.0.into_iter().for_each(|released_lock| {
+        released_locks.into_iter().for_each(|released_lock| {
             let (lock_wait_entry, delay_wake_up_future) =
                 match self.inner.lock_wait_queues.pop_for_waking_up(
                     &released_lock.key,
@@ -1476,7 +1476,7 @@ mod tests {
     use super::*;
     use crate::storage::{
         kv::{Error as KvError, ErrorInner as KvErrorInner},
-        lock_manager::{DummyLockManager, WaitTimeout},
+        lock_manager::{MockLockManager, WaitTimeout},
         mvcc::{self, Mutation},
         test_util::latest_feature_gate,
         txn::{
@@ -1497,7 +1497,7 @@ mod tests {
     }
 
     // TODO(cosven): use this in the following test cases to reduce duplicate code.
-    fn new_test_scheduler() -> (Scheduler<RocksEngine, DummyLockManager>, RocksEngine) {
+    fn new_test_scheduler() -> (Scheduler<RocksEngine, MockLockManager>, RocksEngine) {
         let engine = TestEngineBuilder::new().build().unwrap();
         let config = Config {
             scheduler_concurrency: 1024,
@@ -1509,7 +1509,7 @@ mod tests {
         (
             Scheduler::new(
                 engine.clone(),
-                DummyLockManager::new(),
+                MockLockManager::new(),
                 ConcurrencyManager::new(1.into()),
                 &config,
                 DynamicConfigs {
@@ -1657,7 +1657,7 @@ mod tests {
         };
         let scheduler = Scheduler::new(
             engine,
-            DummyLockManager::new(),
+            MockLockManager::new(),
             ConcurrencyManager::new(1.into()),
             &config,
             DynamicConfigs {
@@ -1763,7 +1763,7 @@ mod tests {
         };
         let scheduler = Scheduler::new(
             engine,
-            DummyLockManager::new(),
+            MockLockManager::new(),
             ConcurrencyManager::new(1.into()),
             &config,
             DynamicConfigs {
@@ -1823,7 +1823,7 @@ mod tests {
         };
         let scheduler = Scheduler::new(
             engine,
-            DummyLockManager::new(),
+            MockLockManager::new(),
             ConcurrencyManager::new(1.into()),
             &config,
             DynamicConfigs {
@@ -1891,7 +1891,7 @@ mod tests {
         };
         let scheduler = Scheduler::new(
             engine,
-            DummyLockManager::new(),
+            MockLockManager::new(),
             ConcurrencyManager::new(1.into()),
             &config,
             DynamicConfigs {
@@ -1954,7 +1954,7 @@ mod tests {
 
         let scheduler = Scheduler::new(
             engine,
-            DummyLockManager::new(),
+            MockLockManager::new(),
             ConcurrencyManager::new(1.into()),
             &config,
             DynamicConfigs {

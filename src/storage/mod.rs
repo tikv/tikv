@@ -116,7 +116,7 @@ use crate::{
     storage::{
         config::Config,
         kv::{with_tls_engine, Modify, WriteData},
-        lock_manager::{DummyLockManager, LockManager},
+        lock_manager::{LockManager, MockLockManager},
         metrics::{CommandKind, *},
         mvcc::{MvccReader, PointGetterBuilder},
         txn::{
@@ -2934,9 +2934,9 @@ pub struct TestStorageBuilder<E: Engine, L: LockManager, F: KvFormat> {
 /// To be convenience for test cases unrelated to RawKV.
 pub type TestStorageBuilderApiV1<E, L> = TestStorageBuilder<E, L, ApiV1>;
 
-impl<F: KvFormat> TestStorageBuilder<RocksEngine, DummyLockManager, F> {
+impl<F: KvFormat> TestStorageBuilder<RocksEngine, MockLockManager, F> {
     /// Build `Storage<RocksEngine>`.
-    pub fn new(lock_mgr: DummyLockManager) -> Self {
+    pub fn new(lock_mgr: MockLockManager) -> Self {
         let engine = TestEngineBuilder::new()
             .api_version(F::TAG)
             .build()
@@ -3057,7 +3057,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             config,
             pipelined_pessimistic_lock: Arc::new(AtomicBool::new(false)),
             in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
-            wake_up_delay_duration_ms: Arc::new(AtomicU64::new(0)),
+            // Make it very large to avoid tests being affected by the delayed-waking-up behavior.
+            wake_up_delay_duration_ms: Arc::new(AtomicU64::new(100000)),
             lock_mgr,
             resource_tag_factory: ResourceTagFactory::new_for_test(),
             _phantom: PhantomData,
@@ -3414,6 +3415,7 @@ mod tests {
         kvrpcpb::{Assertion, AssertionLevel, CommandPri, Op, PrewriteRequestPessimisticAction::*},
         metapb::RegionEpoch,
     };
+    use parking_lot::Mutex;
     use tikv_util::config::ReadableSize;
     use tracker::INVALID_TRACKER_TOKEN;
     use txn_types::{Mutation, PessimisticLock, WriteType, SHORT_VALUE_MAX_LEN};
@@ -3433,8 +3435,8 @@ mod tests {
                 Error as KvError, ErrorInner as EngineErrorInner, ExpectedWrite, MockEngineBuilder,
             },
             lock_manager::{
-                DiagnosticContext, KeyLockWaitInfo, KeyWakeUpEvent, LockDigest, LockWaitToken,
-                UpdateWaitForEvent, WaitTimeout,
+                DiagnosticContext, KeyLockWaitInfo, LockDigest, LockWaitToken, UpdateWaitForEvent,
+                WaitTimeout,
             },
             mvcc::LockType,
             txn::{
@@ -3449,7 +3451,7 @@ mod tests {
     #[test]
     fn test_prewrite_blocks_read() {
         use kvproto::kvrpcpb::ExtraOp;
-        let mut storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
+        let mut storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .build()
             .unwrap();
 
@@ -3465,7 +3467,7 @@ mod tests {
             .process_write(
                 snapshot,
                 commands::WriteContext {
-                    lock_mgr: &DummyLockManager::new(),
+                    lock_mgr: &MockLockManager::new(),
                     concurrency_manager: storage.concurrency_manager.clone(),
                     extra_op: ExtraOp::Noop,
                     statistics: &mut Statistics::default(),
@@ -3487,7 +3489,7 @@ mod tests {
 
     #[test]
     fn test_get_put() {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -3549,7 +3551,7 @@ mod tests {
             .build()
             .unwrap();
         let storage =
-            TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager::new())
+            TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
                 .build()
                 .unwrap();
         let (tx, rx) = channel();
@@ -3638,7 +3640,7 @@ mod tests {
 
     #[test]
     fn test_scan() {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -3977,7 +3979,7 @@ mod tests {
         }
         .unwrap();
         let storage =
-            TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager::new())
+            TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
                 .build()
                 .unwrap();
         let (tx, rx) = channel();
@@ -4206,7 +4208,7 @@ mod tests {
 
     #[test]
     fn test_batch_get() {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -4281,7 +4283,7 @@ mod tests {
 
     #[test]
     fn test_batch_get_command() {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -4369,7 +4371,7 @@ mod tests {
 
     #[test]
     fn test_txn() {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -4455,7 +4457,7 @@ mod tests {
             scheduler_pending_write_threshold: ReadableSize(1),
             ..Default::default()
         };
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .config(config)
             .build()
             .unwrap();
@@ -4498,7 +4500,7 @@ mod tests {
 
     #[test]
     fn test_cleanup() {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .build()
             .unwrap();
         let cm = storage.concurrency_manager.clone();
@@ -4536,7 +4538,7 @@ mod tests {
 
     #[test]
     fn test_cleanup_check_ttl() {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -4594,7 +4596,7 @@ mod tests {
 
     #[test]
     fn test_flashback_to_version() {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .build()
             .unwrap();
         let mut ts = TimeStamp::zero();
@@ -4725,7 +4727,7 @@ mod tests {
 
     #[test]
     fn test_flashback_to_version_lock() {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -4829,7 +4831,7 @@ mod tests {
 
     #[test]
     fn test_flashback_to_version_in_multi_batch() {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -4926,7 +4928,7 @@ mod tests {
 
     #[test]
     fn test_high_priority_get_put() {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -4983,7 +4985,7 @@ mod tests {
             scheduler_worker_pool_size: 1,
             ..Default::default()
         };
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .config(config)
             .build()
             .unwrap();
@@ -5037,7 +5039,7 @@ mod tests {
 
     #[test]
     fn test_delete_range() {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -5143,7 +5145,7 @@ mod tests {
     }
 
     fn test_raw_get_put_impl<F: KvFormat>() {
-        let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager::new())
+        let storage = TestStorageBuilder::<_, _, F>::new(MockLockManager::new())
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -5197,7 +5199,7 @@ mod tests {
     }
 
     fn test_raw_checksum_impl<F: KvFormat>() {
-        let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager::new())
+        let storage = TestStorageBuilder::<_, _, F>::new(MockLockManager::new())
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -5258,7 +5260,7 @@ mod tests {
         let test_data = vec![Some(b"v1"), Some(b"v2"), None, Some(b"v3")];
         let k = b"r\0k".to_vec();
 
-        let storage = TestStorageBuilder::<_, _, ApiV2>::new(DummyLockManager::new())
+        let storage = TestStorageBuilder::<_, _, ApiV2>::new(MockLockManager::new())
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -5324,7 +5326,7 @@ mod tests {
     }
 
     fn test_raw_delete_impl<F: KvFormat>() {
-        let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager::new())
+        let storage = TestStorageBuilder::<_, _, F>::new(MockLockManager::new())
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -5418,7 +5420,7 @@ mod tests {
     }
 
     fn test_raw_delete_range_impl<F: KvFormat>() {
-        let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager::new())
+        let storage = TestStorageBuilder::<_, _, F>::new(MockLockManager::new())
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -5531,7 +5533,7 @@ mod tests {
 
     fn run_raw_batch_put<F: KvFormat>(
         for_cas: bool,
-        storage: &Storage<RocksEngine, DummyLockManager, F>,
+        storage: &Storage<RocksEngine, MockLockManager, F>,
         ctx: Context,
         kvpairs: Vec<KvPair>,
         ttls: Vec<u64>,
@@ -5545,7 +5547,7 @@ mod tests {
     }
 
     fn test_raw_batch_put_impl<F: KvFormat>(for_cas: bool) {
-        let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager::new())
+        let storage = TestStorageBuilder::<_, _, F>::new(MockLockManager::new())
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -5628,7 +5630,7 @@ mod tests {
     }
 
     fn test_raw_batch_get_impl<F: KvFormat>() {
-        let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager::new())
+        let storage = TestStorageBuilder::<_, _, F>::new(MockLockManager::new())
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -5675,7 +5677,7 @@ mod tests {
     }
 
     fn test_raw_batch_get_command_impl<F: KvFormat>() {
-        let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager::new())
+        let storage = TestStorageBuilder::<_, _, F>::new(MockLockManager::new())
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -5739,7 +5741,7 @@ mod tests {
 
     fn run_raw_batch_delete<F: KvFormat>(
         for_cas: bool,
-        storage: &Storage<RocksEngine, DummyLockManager, F>,
+        storage: &Storage<RocksEngine, MockLockManager, F>,
         ctx: Context,
         keys: Vec<Vec<u8>>,
         cb: Callback<()>,
@@ -5752,7 +5754,7 @@ mod tests {
     }
 
     fn test_raw_batch_delete_impl<F: KvFormat>(for_cas: bool) {
-        let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager::new())
+        let storage = TestStorageBuilder::<_, _, F>::new(MockLockManager::new())
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -5866,7 +5868,7 @@ mod tests {
             (None, None)
         };
 
-        let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager::new())
+        let storage = TestStorageBuilder::<_, _, F>::new(MockLockManager::new())
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -6168,7 +6170,7 @@ mod tests {
         ]);
         // TODO: refactor to use `Api` parameter.
         assert_eq!(
-            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false,),
+            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false,),
             true
         );
 
@@ -6178,7 +6180,7 @@ mod tests {
             (b"c".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false,),
+            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false,),
             true
         );
 
@@ -6188,7 +6190,7 @@ mod tests {
             (b"c3".to_vec(), b"c".to_vec()),
         ]);
         assert_eq!(
-            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false,),
+            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false,),
             false
         );
 
@@ -6200,7 +6202,7 @@ mod tests {
             (b"a".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false,),
+            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false,),
             false
         );
 
@@ -6210,7 +6212,7 @@ mod tests {
             (b"c3".to_vec(), b"c".to_vec()),
         ]);
         assert_eq!(
-            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true,),
+            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true,),
             true
         );
 
@@ -6220,7 +6222,7 @@ mod tests {
             (b"a3".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true,),
+            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true,),
             true
         );
 
@@ -6230,7 +6232,7 @@ mod tests {
             (b"c".to_vec(), b"c3".to_vec()),
         ]);
         assert_eq!(
-            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true,),
+            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true,),
             false
         );
 
@@ -6240,7 +6242,7 @@ mod tests {
             (b"c3".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <StorageApiV1<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true,),
+            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true,),
             false
         );
     }
@@ -6265,7 +6267,7 @@ mod tests {
                 .collect()
         };
 
-        let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager::new())
+        let storage = TestStorageBuilder::<_, _, F>::new(MockLockManager::new())
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -6506,7 +6508,7 @@ mod tests {
     }
 
     fn test_raw_get_key_ttl_impl<F: KvFormat>() {
-        let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager::new())
+        let storage = TestStorageBuilder::<_, _, F>::new(MockLockManager::new())
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -6565,7 +6567,7 @@ mod tests {
     }
 
     fn test_raw_compare_and_swap_impl<F: KvFormat>() {
-        let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager::new())
+        let storage = TestStorageBuilder::<_, _, F>::new(MockLockManager::new())
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -6751,7 +6753,7 @@ mod tests {
 
     #[test]
     fn test_scan_lock() {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -7052,7 +7054,7 @@ mod tests {
     fn test_resolve_lock_impl<F: KvFormat>() {
         use crate::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
 
-        let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager::new())
+        let storage = TestStorageBuilder::<_, _, F>::new(MockLockManager::new())
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -7163,7 +7165,7 @@ mod tests {
 
     #[test]
     fn test_resolve_lock_lite() {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -7271,7 +7273,7 @@ mod tests {
 
     #[test]
     fn test_txn_heart_beat() {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -7358,7 +7360,7 @@ mod tests {
 
     #[test]
     fn test_check_txn_status() {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .build()
             .unwrap();
         let cm = storage.concurrency_manager.clone();
@@ -7565,7 +7567,7 @@ mod tests {
 
     #[test]
     fn test_check_secondary_locks() {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .build()
             .unwrap();
         let cm = storage.concurrency_manager.clone();
@@ -7683,7 +7685,7 @@ mod tests {
     }
 
     fn test_pessimistic_lock_impl(pipelined_pessimistic_lock: bool) {
-        let lock_mgr = DummyLockManager::new();
+        let lock_mgr = MockLockManager::new();
         let storage = TestStorageBuilderApiV1::new(lock_mgr.clone())
             .pipelined_pessimistic_lock(pipelined_pessimistic_lock)
             .build()
@@ -7916,30 +7918,23 @@ mod tests {
         RemoveLockWait {
             token: LockWaitToken,
         },
-        OnKeysWakeUp {
-            events: Vec<KeyWakeUpEvent>,
-        },
     }
 
     // `ProxyLockMgr` sends all msgs it received to `Sender`.
     // It's used to check whether we send right messages to lock manager.
     #[derive(Clone)]
     pub struct ProxyLockMgr {
-        tx: Sender<Msg>,
+        tx: Arc<Mutex<Sender<Msg>>>,
         has_waiter: Arc<AtomicBool>,
     }
 
     impl ProxyLockMgr {
         pub fn new(tx: Sender<Msg>) -> Self {
             Self {
-                tx,
+                tx: Arc::new(Mutex::new(tx)),
                 has_waiter: Arc::new(AtomicBool::new(false)),
             }
         }
-
-        // pub fn set_has_waiter(&mut self, has_waiter: bool) {
-        //     self.has_waiter.store(has_waiter, Ordering::Relaxed);
-        // }
     }
 
     impl LockManager for ProxyLockMgr {
@@ -7961,6 +7956,7 @@ mod tests {
             diag_ctx: DiagnosticContext,
         ) {
             self.tx
+                .lock()
                 .send(Msg::WaitFor {
                     token,
                     region_id,
@@ -7978,16 +7974,8 @@ mod tests {
 
         fn update_wait_for(&self, _updated_items: Vec<UpdateWaitForEvent>) {}
 
-        fn on_keys_wakeup(&self, wake_up_events: Vec<KeyWakeUpEvent>) {
-            self.tx
-                .send(Msg::OnKeysWakeUp {
-                    events: wake_up_events,
-                })
-                .unwrap();
-        }
-
         fn remove_lock_wait(&self, token: LockWaitToken) {
-            self.tx.send(Msg::RemoveLockWait { token }).unwrap();
+            self.tx.lock().send(Msg::RemoveLockWait { token }).unwrap();
         }
 
         fn has_waiter(&self) -> bool {
@@ -8109,7 +8097,7 @@ mod tests {
 
         let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(
             TestEngineBuilder::new().build().unwrap(),
-            DummyLockManager::new(),
+            MockLockManager::new(),
         )
         .build()
         .unwrap();
@@ -8407,7 +8395,7 @@ mod tests {
 
     #[test]
     fn test_check_memory_locks() {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .build()
             .unwrap();
         let cm = storage.get_concurrency_manager();
@@ -8507,7 +8495,7 @@ mod tests {
 
     #[test]
     fn test_read_access_locks() {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .build()
             .unwrap();
 
@@ -8592,7 +8580,7 @@ mod tests {
 
     #[test]
     fn test_async_commit_prewrite() {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .build()
             .unwrap();
         let cm = storage.concurrency_manager.clone();
@@ -8690,7 +8678,7 @@ mod tests {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(
             engine.clone(),
-            DummyLockManager::new(),
+            MockLockManager::new(),
         )
         .build()
         .unwrap();
@@ -8869,7 +8857,7 @@ mod tests {
                 let engine = builder.build();
                 let mut builder = TestStorageBuilderApiV1::from_engine_and_lock_mgr(
                     engine,
-                    DummyLockManager::new(),
+                    MockLockManager::new(),
                 );
                 builder.config.enable_async_apply_prewrite = true;
                 if self.pipelined_pessimistic_lock {
@@ -9012,7 +9000,7 @@ mod tests {
 
     #[test]
     fn test_resolve_commit_pessimistic_locks() {
-        let mut storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
+        let mut storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .build()
             .unwrap();
         let (tx, rx) = channel();
@@ -9349,7 +9337,7 @@ mod tests {
             test_data.into_iter().enumerate()
         {
             // TODO: refactor to use `Api` parameter.
-            let res = StorageApiV1::<RocksEngine, DummyLockManager>::check_api_version(
+            let res = StorageApiV1::<RocksEngine, MockLockManager>::check_api_version(
                 storage_api_version,
                 req_api_version,
                 cmd,
@@ -9405,7 +9393,7 @@ mod tests {
                          range: &[(Option<&[u8]>, Option<&[u8]>)],
                          err| {
             // TODO: refactor to use `Api` parameter.
-            let res = StorageApiV1::<RocksEngine, DummyLockManager>::check_api_version_ranges(
+            let res = StorageApiV1::<RocksEngine, MockLockManager>::check_api_version_ranges(
                 storage_api_version,
                 req_api_version,
                 cmd,
@@ -9570,7 +9558,7 @@ mod tests {
     #[test]
     fn test_write_in_memory_pessimistic_locks() {
         let txn_ext = Arc::new(TxnExt::default());
-        let lock_mgr = DummyLockManager::new();
+        let lock_mgr = MockLockManager::new();
         let storage = TestStorageBuilderApiV1::new(lock_mgr.clone())
             .pipelined_pessimistic_lock(true)
             .in_memory_pessimistic_lock(true)
@@ -9670,7 +9658,7 @@ mod tests {
     #[test]
     fn test_disable_in_memory_pessimistic_locks() {
         let txn_ext = Arc::new(TxnExt::default());
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .pipelined_pessimistic_lock(true)
             .in_memory_pessimistic_lock(false)
             .build_for_txn(txn_ext.clone())

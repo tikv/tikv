@@ -133,7 +133,7 @@ mod tests {
 
     use super::*;
     use crate::storage::{
-        lock_manager::DummyLockManager, txn::scheduler::get_raw_ext, Engine, Statistics,
+        lock_manager::MockLockManager, txn::scheduler::get_raw_ext, Engine, Statistics,
         TestEngineBuilder,
     };
 
@@ -208,7 +208,7 @@ mod tests {
 
         let raw_ext = block_on(get_raw_ext(ts_provider, cm.clone(), true, &cmd.cmd)).unwrap();
         let context = WriteContext {
-            lock_mgr: &DummyLockManager::new(),
+            lock_mgr: &MockLockManager::new(),
             concurrency_manager: cm,
             extra_op: ExtraOp::Noop,
             statistics: &mut statistic,
@@ -262,7 +262,7 @@ mod tests {
         let snap = engine.snapshot(Default::default()).unwrap();
         let raw_ext = block_on(get_raw_ext(ts_provider, cm.clone(), true, &cmd.cmd)).unwrap();
         let context = WriteContext {
-            lock_mgr: &DummyLockManager::new(),
+            lock_mgr: &MockLockManager::new(),
             concurrency_manager: cm,
             extra_op: kvproto::kvrpcpb::ExtraOp::Noop,
             statistics: &mut statistic,
