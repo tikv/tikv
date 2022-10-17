@@ -339,5 +339,3 @@ fn test_witness_replica_read() {
         }
     );
 }
-
-// TODO: test with cdc
