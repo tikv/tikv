@@ -184,9 +184,8 @@ fn test_flashback_for_local_read() {
     // Avoid triggering the log compaction in this test case.
     cluster.cfg.raft_store.raft_log_gc_threshold = 100;
 
-    let node_id = 3u64;
-    let store_id = 3u64;
-    let peer = new_peer(store_id, node_id);
+    let store_id = 3;
+    let peer = new_peer(store_id, 3);
     cluster.run();
 
     cluster.must_put(b"k1", b"v1");
@@ -333,7 +332,7 @@ fn test_flashback_for_apply_snapshot() {
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
-    // Make node3 isolated
+    // Make store 5 isolated.
     cluster.add_send_filter(IsolationFilterFactory::new(5));
 
     let local_state = cluster.region_local_state(1, 1);
@@ -358,7 +357,7 @@ fn test_flashback_for_apply_snapshot() {
     let local_state = cluster.region_local_state(1, 5);
     assert!(!local_state.get_region().get_is_in_flashback());
 
-    // Add node 3 back.
+    // Add store 3 back.
     cluster.clear_send_filters();
     // Wait for snapshot
     sleep_ms(500);
