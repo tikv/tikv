@@ -10,7 +10,8 @@ use std::{
     time::Duration,
 };
 
-use api_version::KvFormat;
+use api_version::{ApiV1, ApiV2, KvFormat};
+use causal_ts::CausalTsProvider;
 use collections::HashMap;
 use engine_traits::DummyFactory;
 use errors::{extract_key_error, extract_region_error};
@@ -18,8 +19,8 @@ use futures::executor::block_on;
 use grpcio::*;
 use kvproto::{
     kvrpcpb::{
-        self, AssertionLevel, BatchRollbackRequest, CommandPri, CommitRequest, Context, GetRequest,
-        Op, PrewriteRequest, PrewriteRequestPessimisticAction::*, RawPutRequest,
+        self, ApiVersion, AssertionLevel, BatchRollbackRequest, CommandPri, CommitRequest, Context,
+        GetRequest, Op, PrewriteRequest, PrewriteRequestPessimisticAction::*, RawPutRequest,
     },
     tikvpb::TikvClient,
 };
@@ -255,7 +256,7 @@ fn test_scale_scheduler_pool() {
             .unwrap();
 
     let cfg = new_tikv_config(1);
-    let kv_engine = storage.get_engine().kv_engine();
+    let kv_engine = storage.get_engine().kv_engine().unwrap();
     let (_tx, rx) = std::sync::mpsc::channel();
     let flow_controller = Arc::new(FlowController::Singleton(EngineFlowController::new(
         &cfg.storage.flow_control,
@@ -515,10 +516,15 @@ fn test_pipelined_pessimistic_lock() {
 
 #[test]
 fn test_async_commit_prewrite_with_stale_max_ts() {
-    let mut cluster = new_server_cluster(0, 2);
+    test_async_commit_prewrite_with_stale_max_ts_impl::<ApiV1>();
+    test_async_commit_prewrite_with_stale_max_ts_impl::<ApiV2>();
+}
+
+fn test_async_commit_prewrite_with_stale_max_ts_impl<F: KvFormat>() {
+    let mut cluster = new_server_cluster_with_api_ver(0, 2, F::TAG);
     cluster.run();
 
-    let engine = cluster
+    let mut engine = cluster
         .sim
         .read()
         .unwrap()
@@ -526,10 +532,12 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage =
-        TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine.clone(), DummyLockManager::new())
-            .build()
-            .unwrap();
+    let storage = TestStorageBuilder::<_, _, F>::from_engine_and_lock_mgr(
+        engine.clone(),
+        DummyLockManager::new(),
+    )
+    .build()
+    .unwrap();
 
     // Fail to get timestamp from PD at first
     fail::cfg("test_raftstore_get_tso", "pause").unwrap();
@@ -538,6 +546,7 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);
+    ctx.set_api_version(F::TAG);
     ctx.set_region_epoch(cluster.get_region_epoch(1));
     ctx.set_peer(cluster.leader_of_region(1).unwrap());
 
@@ -547,15 +556,15 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
         storage
             .sched_txn_command(
                 commands::Prewrite::new(
-                    vec![Mutation::make_put(Key::from_raw(b"k1"), b"v".to_vec())],
-                    b"k1".to_vec(),
+                    vec![Mutation::make_put(Key::from_raw(b"xk1"), b"v".to_vec())],
+                    b"xk1".to_vec(),
                     10.into(),
                     100,
                     false,
                     2,
                     TimeStamp::default(),
                     TimeStamp::default(),
-                    Some(vec![b"k2".to_vec()]),
+                    Some(vec![b"xk2".to_vec()]),
                     false,
                     AssertionLevel::Off,
                     ctx.clone(),
@@ -580,17 +589,17 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
                     vec![(
-                        Mutation::make_put(Key::from_raw(b"k1"), b"v".to_vec()),
+                        Mutation::make_put(Key::from_raw(b"xk1"), b"v".to_vec()),
                         DoPessimisticCheck,
                     )],
-                    b"k1".to_vec(),
+                    b"xk1".to_vec(),
                     10.into(),
                     100,
                     20.into(),
                     2,
                     TimeStamp::default(),
                     TimeStamp::default(),
-                    Some(vec![b"k2".to_vec()]),
+                    Some(vec![b"xk2".to_vec()]),
                     false,
                     AssertionLevel::Off,
                     ctx.clone(),
@@ -672,6 +681,7 @@ fn test_async_apply_prewrite_impl<E: Engine, F: KvFormat>(
                     None,
                     false,
                     0.into(),
+                    false,
                     false,
                     false,
                     ctx.clone(),
@@ -1014,6 +1024,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine, F: KvFormat>(
                     0.into(),
                     false,
                     false,
+                    false,
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -1187,6 +1198,7 @@ fn test_atomic_cas_lock_by_latch() {
             cb,
         )
         .unwrap();
+    thread::sleep(Duration::from_secs(1));
     assert!(acquire_flag.load(Ordering::Acquire));
     assert!(!acquire_flag_fail.load(Ordering::Acquire));
     acquire_flag.store(false, Ordering::Release);
@@ -1202,6 +1214,7 @@ fn test_atomic_cas_lock_by_latch() {
             cb,
         )
         .unwrap();
+    thread::sleep(Duration::from_secs(1));
     assert!(acquire_flag_fail.load(Ordering::Acquire));
     assert!(!acquire_flag.load(Ordering::Acquire));
     fail::remove(pending_cas_fp);
@@ -1481,4 +1494,50 @@ fn test_raw_put_deadline() {
     let put_resp = client.raw_put(&put_req).unwrap();
     assert!(!put_resp.has_region_error(), "{:?}", put_resp);
     must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
+}
+
+#[test]
+fn test_raw_put_key_guard() {
+    let api_version = ApiVersion::V2;
+    let pause_write_fp = "raftkv_async_write";
+    let mut cluster = new_server_cluster_with_api_ver(0, 1, api_version);
+    cluster.run();
+    let region = cluster.get_region(b"");
+    let leader = region.get_peers()[0].clone();
+    let node_id = leader.get_id();
+    let leader_cm = cluster.sim.rl().get_concurrency_manager(node_id);
+    let ts_provider = cluster.sim.rl().get_causal_ts_provider(node_id).unwrap();
+    let ts = block_on(ts_provider.async_get_ts()).unwrap();
+
+    let env = Arc::new(Environment::new(1));
+    let channel =
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
+    let client = TikvClient::new(channel);
+
+    let mut ctx = Context::default();
+    ctx.set_region_id(region.get_id());
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    ctx.set_peer(leader);
+    ctx.set_api_version(api_version);
+    let mut put_req = RawPutRequest::default();
+    put_req.set_context(ctx);
+    put_req.key = b"rk3".to_vec();
+    put_req.value = b"v3".to_vec();
+
+    fail::cfg(pause_write_fp, "pause").unwrap();
+    let handle = thread::spawn(move || {
+        let _ = client.raw_put(&put_req).unwrap();
+    });
+
+    thread::sleep(Duration::from_millis(100));
+    must_get_none(&cluster.get_engine(1), b"rk3");
+    let min_ts = leader_cm.global_min_lock_ts();
+    assert_eq!(min_ts.unwrap(), ts.next());
+
+    fail::remove(pause_write_fp);
+    handle.join().unwrap();
+    thread::sleep(Duration::from_millis(100));
+    must_get_none(&cluster.get_engine(1), b"rk3");
+    let min_ts = leader_cm.global_min_lock_ts();
+    assert!(min_ts.is_none());
 }

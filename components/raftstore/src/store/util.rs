@@ -14,6 +14,7 @@ use std::{
     u64,
 };
 
+use engine_traits::KvEngine;
 use kvproto::{
     kvrpcpb::{self, KeyRange, LeaderInfo},
     metapb::{self, Peer, PeerRole, Region, RegionEpoch},
@@ -26,57 +27,18 @@ use raft::{
     INVALID_INDEX,
 };
 use raft_proto::ConfChangeI;
-use tikv_util::{box_err, debug, info, time::monotonic_raw_now, Either};
+use tikv_util::{box_err, debug, info, store::region, time::monotonic_raw_now, Either};
 use time::{Duration, Timespec};
+use txn_types::{TimeStamp, WriteBatchFlags};
 
 use super::peer_storage;
-use crate::{Error, Result};
+use crate::{coprocessor::CoprocessorHost, Error, Result};
 
-pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
-    region
-        .get_peers()
-        .iter()
-        .find(|&p| p.get_store_id() == store_id)
-}
-
-pub fn find_peer_mut(region: &mut metapb::Region, store_id: u64) -> Option<&mut metapb::Peer> {
-    region
-        .mut_peers()
-        .iter_mut()
-        .find(|p| p.get_store_id() == store_id)
-}
-
-pub fn remove_peer(region: &mut metapb::Region, store_id: u64) -> Option<metapb::Peer> {
-    region
-        .get_peers()
-        .iter()
-        .position(|x| x.get_store_id() == store_id)
-        .map(|i| region.mut_peers().remove(i))
-}
-
-// a helper function to create peer easily.
-pub fn new_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
-    let mut peer = metapb::Peer::default();
-    peer.set_store_id(store_id);
-    peer.set_id(peer_id);
-    peer.set_role(PeerRole::Voter);
-    peer
-}
-
-// a helper function to create learner peer easily.
-pub fn new_learner_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
-    let mut peer = metapb::Peer::default();
-    peer.set_store_id(store_id);
-    peer.set_id(peer_id);
-    peer.set_role(PeerRole::Learner);
-    peer
-}
+const INVALID_TIMESTAMP: u64 = u64::MAX;
 
 /// Check if key in region range (`start_key`, `end_key`).
 pub fn check_key_in_region_exclusive(key: &[u8], region: &metapb::Region) -> Result<()> {
-    let end_key = region.get_end_key();
-    let start_key = region.get_start_key();
-    if start_key < key && (key < end_key || end_key.is_empty()) {
+    if region::check_key_in_region_exclusive(key, region) {
         Ok(())
     } else {
         Err(Error::KeyNotInRegion(key.to_vec(), region.clone()))
@@ -85,9 +47,7 @@ pub fn check_key_in_region_exclusive(key: &[u8], region: &metapb::Region) -> Res
 
 /// Check if key in region range [`start_key`, `end_key`].
 pub fn check_key_in_region_inclusive(key: &[u8], region: &metapb::Region) -> Result<()> {
-    let end_key = region.get_end_key();
-    let start_key = region.get_start_key();
-    if key >= start_key && (end_key.is_empty() || key <= end_key) {
+    if region::check_key_in_region_inclusive(key, region) {
         Ok(())
     } else {
         Err(Error::KeyNotInRegion(key.to_vec(), region.clone()))
@@ -96,9 +56,7 @@ pub fn check_key_in_region_inclusive(key: &[u8], region: &metapb::Region) -> Res
 
 /// Check if key in region range [`start_key`, `end_key`).
 pub fn check_key_in_region(key: &[u8], region: &metapb::Region) -> Result<()> {
-    let end_key = region.get_end_key();
-    let start_key = region.get_start_key();
-    if key >= start_key && (end_key.is_empty() || key < end_key) {
+    if region::check_key_in_region(key, region) {
         Ok(())
     } else {
         Err(Error::KeyNotInRegion(key.to_vec(), region.clone()))
@@ -234,6 +192,9 @@ pub fn admin_cmd_epoch_lookup(admin_cmp_type: AdminCmdType) -> AdminCmdEpochStat
         AdminCmdType::RollbackMerge => AdminCmdEpochState::new(true, true, true, false),
         // Transfer leader
         AdminCmdType::TransferLeader => AdminCmdEpochState::new(true, true, false, false),
+        AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => {
+            AdminCmdEpochState::new(false, false, false, false)
+        }
     }
 }
 
@@ -319,6 +280,25 @@ pub fn compare_region_epoch(
     Ok(())
 }
 
+pub fn check_flashback_state(req: &RaftCmdRequest, region: &metapb::Region) -> Result<()> {
+    // If admin flashback has not been applied but the region is already in a
+    // flashback state, the request is rejected
+    if region.get_is_in_flashback() {
+        let flags = WriteBatchFlags::from_bits_truncate(req.get_header().get_flags());
+        if flags.contains(WriteBatchFlags::FLASHBACK) {
+            return Ok(());
+        }
+        if req.has_admin_request()
+            && (req.get_admin_request().get_cmd_type() == AdminCmdType::PrepareFlashback
+                || req.get_admin_request().get_cmd_type() == AdminCmdType::FinishFlashback)
+        {
+            return Ok(());
+        }
+        return Err(Error::FlashbackInProgress(region.get_id()));
+    }
+    Ok(())
+}
+
 pub fn is_region_epoch_equal(
     from_epoch: &metapb::RegionEpoch,
     current_epoch: &metapb::RegionEpoch,
@@ -377,21 +357,6 @@ pub fn build_key_range(start_key: &[u8], end_key: &[u8], reverse_scan: bool) -> 
         range.set_end_key(end_key.to_vec());
     }
     range
-}
-
-/// Check if replicas of two regions are on the same stores.
-pub fn region_on_same_stores(lhs: &metapb::Region, rhs: &metapb::Region) -> bool {
-    if lhs.get_peers().len() != rhs.get_peers().len() {
-        return false;
-    }
-
-    // Because every store can only have one replica for the same region,
-    // so just one round check is enough.
-    lhs.get_peers().iter().all(|lp| {
-        rhs.get_peers()
-            .iter()
-            .any(|rp| rp.get_store_id() == lp.get_store_id() && rp.get_role() == lp.get_role())
-    })
 }
 
 #[inline]
@@ -760,10 +725,6 @@ pub fn conf_state_from_region(region: &metapb::Region) -> ConfState {
     conf_state
 }
 
-pub fn is_learner(peer: &metapb::Peer) -> bool {
-    peer.get_role() == PeerRole::Learner
-}
-
 pub struct KeysInfoFormatter<
     'a,
     I: std::iter::DoubleEndedIterator<Item = &'a Vec<u8>>
@@ -927,15 +888,50 @@ impl RegionReadProgressRegistry {
             .map(|rp| rp.safe_ts())
     }
 
+    pub fn get_tracked_index(&self, region_id: &u64) -> Option<u64> {
+        self.registry
+            .lock()
+            .unwrap()
+            .get(region_id)
+            .map(|rp| rp.core.lock().unwrap().applied_index)
+    }
+
+    // NOTICE: this function is an alias of `get_safe_ts` to distinguish the
+    // semantics.
+    pub fn get_resolved_ts(&self, region_id: &u64) -> Option<u64> {
+        self.registry
+            .lock()
+            .unwrap()
+            .get(region_id)
+            .map(|rp| rp.resolved_ts())
+    }
+
+    // Get the minimum `resolved_ts` which could ensure that there will be no more
+    // locks whose `start_ts` is greater than it.
+    pub fn get_min_resolved_ts(&self) -> u64 {
+        self.registry
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, rrp)| rrp.resolved_ts())
+            .filter(|ts| *ts != 0) // ts == 0 means the peer is uninitialized
+            .min()
+            .unwrap_or(0)
+    }
+
     // Update `safe_ts` with the provided `LeaderInfo` and return the regions that
     // have the same `LeaderInfo`
-    pub fn handle_check_leaders(&self, leaders: Vec<LeaderInfo>) -> Vec<u64> {
+    pub fn handle_check_leaders<E: KvEngine>(
+        &self,
+        leaders: Vec<LeaderInfo>,
+        coprocessor: &CoprocessorHost<E>,
+    ) -> Vec<u64> {
         let mut regions = Vec::with_capacity(leaders.len());
         let registry = self.registry.lock().unwrap();
         for leader_info in leaders {
             let region_id = leader_info.get_region_id();
             if let Some(rp) = registry.get(&region_id) {
-                if rp.consume_leader_info(leader_info) {
+                if rp.consume_leader_info(leader_info, coprocessor) {
                     regions.push(region_id);
                 }
             }
@@ -993,7 +989,7 @@ impl Default for RegionReadProgressRegistry {
 /// `apply index` smaller (require less data)
 //
 /// TODO: the name `RegionReadProgress` is conflict with the leader lease's
-/// `ReadProgress`, shoule change it to another more proper name
+/// `ReadProgress`, should change it to another more proper name
 #[derive(Debug)]
 pub struct RegionReadProgress {
     // `core` used to keep track and update `safe_ts`, it should
@@ -1012,11 +1008,17 @@ impl RegionReadProgress {
         }
     }
 
-    pub fn update_applied(&self, applied: u64) {
+    pub fn update_applied<E: KvEngine>(&self, applied: u64, coprocessor: &CoprocessorHost<E>) {
         let mut core = self.core.lock().unwrap();
         if let Some(ts) = core.update_applied(applied) {
             if !core.pause {
                 self.safe_ts.store(ts, AtomicOrdering::Release);
+                // No need to update leader safe ts here.
+                coprocessor.on_update_safe_ts(
+                    core.region_id,
+                    TimeStamp::new(ts).physical(),
+                    INVALID_TIMESTAMP,
+                )
             }
         }
     }
@@ -1036,18 +1038,34 @@ impl RegionReadProgress {
         }
     }
 
-    pub fn merge_safe_ts(&self, source_safe_ts: u64, merge_index: u64) {
+    pub fn merge_safe_ts<E: KvEngine>(
+        &self,
+        source_safe_ts: u64,
+        merge_index: u64,
+        coprocessor: &CoprocessorHost<E>,
+    ) {
         let mut core = self.core.lock().unwrap();
         if let Some(ts) = core.merge_safe_ts(source_safe_ts, merge_index) {
             if !core.pause {
                 self.safe_ts.store(ts, AtomicOrdering::Release);
+                // After region merge, self safe ts may decrease, so leader safe ts should be
+                // reset.
+                coprocessor.on_update_safe_ts(
+                    core.region_id,
+                    TimeStamp::new(ts).physical(),
+                    TimeStamp::new(ts).physical(),
+                )
             }
         }
     }
 
     // Consume the provided `LeaderInfo` to update `safe_ts` and return whether the
     // provided `LeaderInfo` is same as ours
-    pub fn consume_leader_info(&self, mut leader_info: LeaderInfo) -> bool {
+    pub fn consume_leader_info<E: KvEngine>(
+        &self,
+        mut leader_info: LeaderInfo,
+        coprocessor: &CoprocessorHost<E>,
+    ) -> bool {
         let mut core = self.core.lock().unwrap();
         if leader_info.has_read_state() {
             // It is okay to update `safe_ts` without checking the `LeaderInfo`, the
@@ -1061,6 +1079,9 @@ impl RegionReadProgress {
                     }
                 }
             }
+            let self_phy_ts = TimeStamp::new(self.safe_ts()).physical();
+            let leader_phy_ts = TimeStamp::new(rs.get_safe_ts()).physical();
+            coprocessor.on_update_safe_ts(leader_info.region_id, self_phy_ts, leader_phy_ts)
         }
         // whether the provided `LeaderInfo` is same as ours
         core.leader_info.leader_term == leader_info.term
@@ -1125,6 +1146,13 @@ impl RegionReadProgress {
     pub fn safe_ts(&self) -> u64 {
         self.safe_ts.load(AtomicOrdering::Acquire)
     }
+
+    // `safe_ts` is calculated from the `resolved_ts`, they are the same thing
+    // internally. So we can use `resolved_ts` as the alias of `safe_ts` here.
+    #[inline(always)]
+    pub fn resolved_ts(&self) -> u64 {
+        self.safe_ts()
+    }
 }
 
 #[derive(Debug)]
@@ -1132,7 +1160,7 @@ struct RegionReadProgressCore {
     tag: String,
     region_id: u64,
     applied_index: u64,
-    // A wraper of `(apply_index, safe_ts)` item, where the `read_state.ts` is the peer's current
+    // A wrapper of `(apply_index, safe_ts)` item, where the `read_state.ts` is the peer's current
     // `safe_ts` and the `read_state.idx` is the smallest `apply_index` required for that `safe_ts`
     read_state: ReadState,
     // The local peer's acknowledge about the leader
@@ -1150,7 +1178,7 @@ struct RegionReadProgressCore {
     discard: bool,
 }
 
-// A helpful wraper of `(apply_index, safe_ts)` item
+// A helpful wrapper of `(apply_index, safe_ts)` item
 #[derive(Clone, Debug, Default)]
 pub struct ReadState {
     pub idx: u64,
@@ -1357,12 +1385,13 @@ impl LatencyInspector {
 mod tests {
     use std::thread;
 
+    use engine_test::kv::KvTestEngine;
     use kvproto::{
         metapb::{self, RegionEpoch},
         raft_cmdpb::AdminRequest,
     };
     use raft::eraftpb::{ConfChangeType, Entry, Message, MessageType};
-    use tikv_util::time::monotonic_raw_now;
+    use tikv_util::store::new_peer;
     use time::Duration as TimeDuration;
 
     use super::*;
@@ -1497,34 +1526,6 @@ mod tests {
         }
     }
 
-    // Tests the util function `check_key_in_region`.
-    #[test]
-    fn test_check_key_in_region() {
-        let test_cases = vec![
-            ("", "", "", true, true, false),
-            ("", "", "6", true, true, false),
-            ("", "3", "6", false, false, false),
-            ("4", "3", "6", true, true, true),
-            ("4", "3", "", true, true, true),
-            ("3", "3", "", true, true, false),
-            ("2", "3", "6", false, false, false),
-            ("", "3", "6", false, false, false),
-            ("", "3", "", false, false, false),
-            ("6", "3", "6", false, true, false),
-        ];
-        for (key, start_key, end_key, is_in_region, inclusive, exclusive) in test_cases {
-            let mut region = metapb::Region::default();
-            region.set_start_key(start_key.as_bytes().to_vec());
-            region.set_end_key(end_key.as_bytes().to_vec());
-            let mut result = check_key_in_region(key.as_bytes(), &region);
-            assert_eq!(result.is_ok(), is_in_region);
-            result = check_key_in_region_inclusive(key.as_bytes(), &region);
-            assert_eq!(result.is_ok(), inclusive);
-            result = check_key_in_region_exclusive(key.as_bytes(), &region);
-            assert_eq!(result.is_ok(), exclusive);
-        }
-    }
-
     fn gen_region(
         voters: &[u64],
         learners: &[u64],
@@ -1618,21 +1619,6 @@ mod tests {
             (&req).to_confchange(vec![]).get_transition(),
             eraftpb::ConfChangeTransition::Explicit
         );
-    }
-
-    #[test]
-    fn test_peer() {
-        let mut region = metapb::Region::default();
-        region.set_id(1);
-        region.mut_peers().push(new_peer(1, 1));
-        region.mut_peers().push(new_learner_peer(2, 2));
-
-        assert!(!is_learner(find_peer(&region, 1).unwrap()));
-        assert!(is_learner(find_peer(&region, 2).unwrap()));
-
-        assert!(remove_peer(&mut region, 1).is_some());
-        assert!(remove_peer(&mut region, 1).is_none());
-        assert!(find_peer(&region, 1).is_none());
     }
 
     #[test]
@@ -1754,40 +1740,6 @@ mod tests {
             check_epoch.set_version(version);
             check_epoch.set_conf_ver(conf_version);
             assert_eq!(is_epoch_stale(&epoch, &check_epoch), is_stale);
-        }
-    }
-
-    #[test]
-    fn test_on_same_store() {
-        let cases = vec![
-            (vec![2, 3, 4], vec![], vec![1, 2, 3], vec![], false),
-            (vec![2, 3, 1], vec![], vec![1, 2, 3], vec![], true),
-            (vec![2, 3, 4], vec![], vec![1, 2], vec![], false),
-            (vec![1, 2, 3], vec![], vec![1, 2, 3], vec![], true),
-            (vec![1, 3], vec![2, 4], vec![1, 2], vec![3, 4], false),
-            (vec![1, 3], vec![2, 4], vec![1, 3], vec![], false),
-            (vec![1, 3], vec![2, 4], vec![], vec![2, 4], false),
-            (vec![1, 3], vec![2, 4], vec![3, 1], vec![4, 2], true),
-        ];
-
-        for (s1, s2, s3, s4, exp) in cases {
-            let mut r1 = metapb::Region::default();
-            for (store_id, peer_id) in s1.into_iter().zip(0..) {
-                r1.mut_peers().push(new_peer(store_id, peer_id));
-            }
-            for (store_id, peer_id) in s2.into_iter().zip(0..) {
-                r1.mut_peers().push(new_learner_peer(store_id, peer_id));
-            }
-
-            let mut r2 = metapb::Region::default();
-            for (store_id, peer_id) in s3.into_iter().zip(10..) {
-                r2.mut_peers().push(new_peer(store_id, peer_id));
-            }
-            for (store_id, peer_id) in s4.into_iter().zip(10..) {
-                r2.mut_peers().push(new_learner_peer(store_id, peer_id));
-            }
-            let res = super::region_on_same_stores(&r1, &r2);
-            assert_eq!(res, exp, "{:?} vs {:?}", r1, r2);
         }
     }
 
@@ -1978,7 +1930,8 @@ mod tests {
         assert_eq!(rrp.safe_ts(), 10);
         assert_eq!(pending_items_num(&rrp), 10);
 
-        rrp.update_applied(20);
+        let coprocessor_host = CoprocessorHost::<KvTestEngine>::default();
+        rrp.update_applied(20, &coprocessor_host);
         assert_eq!(rrp.safe_ts(), 20);
         assert_eq!(pending_items_num(&rrp), 0);
 
@@ -1990,7 +1943,7 @@ mod tests {
         assert!(pending_items_num(&rrp) <= cap);
 
         // `applied_index` large than all pending items will clear all pending items
-        rrp.update_applied(200);
+        rrp.update_applied(200, &coprocessor_host);
         assert_eq!(rrp.safe_ts(), 199);
         assert_eq!(pending_items_num(&rrp), 0);
 
@@ -2004,9 +1957,9 @@ mod tests {
         rrp.update_safe_ts(301, 600);
         assert_eq!(pending_items_num(&rrp), 2);
         // `safe_ts` will update to 500 instead of 300
-        rrp.update_applied(300);
+        rrp.update_applied(300, &coprocessor_host);
         assert_eq!(rrp.safe_ts(), 500);
-        rrp.update_applied(301);
+        rrp.update_applied(301, &coprocessor_host);
         assert_eq!(rrp.safe_ts(), 600);
         assert_eq!(pending_items_num(&rrp), 0);
 

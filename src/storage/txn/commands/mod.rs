@@ -11,6 +11,8 @@ pub(crate) mod check_txn_status;
 pub(crate) mod cleanup;
 pub(crate) mod commit;
 pub(crate) mod compare_and_swap;
+pub(crate) mod flashback_to_version;
+pub(crate) mod flashback_to_version_read_phase;
 pub(crate) mod mvcc_by_key;
 pub(crate) mod mvcc_by_start_ts;
 pub(crate) mod pause;
@@ -40,6 +42,8 @@ pub use cleanup::Cleanup;
 pub use commit::Commit;
 pub use compare_and_swap::RawCompareAndSwap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
+pub use flashback_to_version::FlashbackToVersion;
+pub use flashback_to_version_read_phase::FlashbackToVersionReadPhase;
 use kvproto::kvrpcpb::*;
 pub use mvcc_by_key::MvccByKey;
 pub use mvcc_by_start_ts::MvccByStartTs;
@@ -98,6 +102,8 @@ pub enum Command {
     MvccByStartTs(MvccByStartTs),
     RawCompareAndSwap(RawCompareAndSwap),
     RawAtomicStore(RawAtomicStore),
+    FlashbackToVersionReadPhase(FlashbackToVersionReadPhase),
+    FlashbackToVersion(FlashbackToVersion),
 }
 
 /// A `Command` with its return type, reified as the generic parameter `T`.
@@ -223,6 +229,7 @@ impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLock
             req.get_return_values(),
             req.get_min_commit_ts().into(),
             req.get_check_existence(),
+            req.get_lock_only_if_exists(),
             allow_lock_with_conflict,
             req.take_context(),
         )
@@ -355,6 +362,20 @@ impl From<MvccGetByStartTsRequest> for TypedCommand<Option<(Key, MvccInfo)>> {
     }
 }
 
+impl From<FlashbackToVersionRequest> for TypedCommand<()> {
+    fn from(mut req: FlashbackToVersionRequest) -> Self {
+        FlashbackToVersionReadPhase::new(
+            req.get_start_ts().into(),
+            req.get_commit_ts().into(),
+            req.get_version().into(),
+            Some(Key::from_raw(req.get_end_key())),
+            Some(Key::from_raw(req.get_start_key())),
+            Some(Key::from_raw(req.get_start_key())),
+            req.take_context(),
+        )
+    }
+}
+
 /// Represents for a scheduler command, when should the response sent to the
 /// client. For most cases, the response should be sent after the result being
 /// successfully applied to the storage (if needed). But in some special cases,
@@ -387,7 +408,7 @@ pub struct WriteResult {
 }
 
 pub struct WriteResultLockInfo {
-    pub lock: lock_manager::LockDigest,
+    pub lock_digest: lock_manager::LockDigest,
     pub key: Key,
     pub should_not_exist: bool,
     pub lock_info_pb: LockInfo,
@@ -412,7 +433,7 @@ impl WriteResultLockInfo {
         };
         let hash_for_latch = latch::Lock::hash(&key);
         Self {
-            lock,
+            lock_digest: lock,
             key,
             should_not_exist,
             lock_info_pb,
@@ -515,12 +536,18 @@ pub trait CommandExt: Display {
     fn gen_lock(&self) -> latch::Lock;
 }
 
+pub struct RawExt {
+    pub ts: TimeStamp,
+    pub key_guard: KeyHandleGuard,
+}
+
 pub struct WriteContext<'a, L: LockManager> {
     pub lock_mgr: &'a L,
     pub concurrency_manager: ConcurrencyManager,
     pub extra_op: ExtraOp,
     pub statistics: &'a mut Statistics,
     pub async_apply_prewrite: bool,
+    pub raw_ext: Option<RawExt>, // use for apiv2
 }
 
 pub struct ReaderWithStats<'a, S: Snapshot> {
@@ -577,6 +604,8 @@ impl Command {
             Command::MvccByStartTs(t) => t,
             Command::RawCompareAndSwap(t) => t,
             Command::RawAtomicStore(t) => t,
+            Command::FlashbackToVersionReadPhase(t) => t,
+            Command::FlashbackToVersion(t) => t,
         }
     }
 
@@ -600,6 +629,8 @@ impl Command {
             Command::MvccByStartTs(t) => t,
             Command::RawCompareAndSwap(t) => t,
             Command::RawAtomicStore(t) => t,
+            Command::FlashbackToVersionReadPhase(t) => t,
+            Command::FlashbackToVersion(t) => t,
         }
     }
 
@@ -612,6 +643,7 @@ impl Command {
             Command::ResolveLockReadPhase(t) => t.process_read(snapshot, statistics),
             Command::MvccByKey(t) => t.process_read(snapshot, statistics),
             Command::MvccByStartTs(t) => t.process_read(snapshot, statistics),
+            Command::FlashbackToVersionReadPhase(t) => t.process_read(snapshot, statistics),
             _ => panic!("unsupported read command"),
         }
     }
@@ -637,6 +669,7 @@ impl Command {
             Command::Pause(t) => t.process_write(snapshot, context),
             Command::RawCompareAndSwap(t) => t.process_write(snapshot, context),
             Command::RawAtomicStore(t) => t.process_write(snapshot, context),
+            Command::FlashbackToVersion(t) => t.process_write(snapshot, context),
             _ => panic!("unsupported write command"),
         }
     }
@@ -727,6 +760,10 @@ pub trait WriteCommand<S: Snapshot, L: LockManager>: CommandExt {
 
 #[cfg(test)]
 pub mod test_util {
+    use std::sync::Arc;
+
+    use causal_ts::CausalTsProviderImpl;
+    use kvproto::kvrpcpb::ApiVersion;
     use txn_types::Mutation;
 
     use super::*;
@@ -739,7 +776,7 @@ pub mod test_util {
     // Some utils for tests that may be used in multiple source code files.
 
     pub fn prewrite_command<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         cm: ConcurrencyManager,
         statistics: &mut Statistics,
         cmd: TypedCommand<PrewriteResult>,
@@ -751,6 +788,7 @@ pub mod test_util {
             extra_op: ExtraOp::Noop,
             statistics,
             async_apply_prewrite: false,
+            raw_ext: None,
         };
         let ret = cmd.cmd.process_write(snap, context)?;
         let res = match ret.pr {
@@ -773,7 +811,7 @@ pub mod test_util {
     }
 
     pub fn prewrite<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         statistics: &mut Statistics,
         mutations: Vec<Mutation>,
         primary: Vec<u8>,
@@ -793,7 +831,7 @@ pub mod test_util {
     }
 
     pub fn prewrite_with_cm<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         cm: ConcurrencyManager,
         statistics: &mut Statistics,
         mutations: Vec<Mutation>,
@@ -815,7 +853,7 @@ pub mod test_util {
     }
 
     pub fn pessimistic_prewrite<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         statistics: &mut Statistics,
         mutations: Vec<(Mutation, PrewriteRequestPessimisticAction)>,
         primary: Vec<u8>,
@@ -837,7 +875,7 @@ pub mod test_util {
     }
 
     pub fn pessimistic_prewrite_with_cm<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         cm: ConcurrencyManager,
         statistics: &mut Statistics,
         mutations: Vec<(Mutation, PrewriteRequestPessimisticAction)>,
@@ -866,7 +904,7 @@ pub mod test_util {
     }
 
     pub fn commit<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         statistics: &mut Statistics,
         keys: Vec<Key>,
         lock_ts: u64,
@@ -888,6 +926,7 @@ pub mod test_util {
             extra_op: ExtraOp::Noop,
             statistics,
             async_apply_prewrite: false,
+            raw_ext: None,
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
@@ -897,7 +936,7 @@ pub mod test_util {
     }
 
     pub fn rollback<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         statistics: &mut Statistics,
         keys: Vec<Key>,
         start_ts: u64,
@@ -912,11 +951,22 @@ pub mod test_util {
             extra_op: ExtraOp::Noop,
             statistics,
             async_apply_prewrite: false,
+            raw_ext: None,
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
         let ctx = Context::default();
         engine.write(&ctx, ret.to_be_write).unwrap();
         Ok(())
+    }
+
+    pub fn gen_ts_provider(api_version: ApiVersion) -> Option<Arc<CausalTsProviderImpl>> {
+        if api_version == ApiVersion::V2 {
+            let test_provider: causal_ts::CausalTsProviderImpl =
+                causal_ts::tests::TestProvider::default().into();
+            Some(Arc::new(test_provider))
+        } else {
+            None
+        }
     }
 }

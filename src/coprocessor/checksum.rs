@@ -7,12 +7,8 @@ use tidb_query_common::storage::{
     scanner::{RangesScanner, RangesScannerOptions},
     Range,
 };
-use tidb_query_executors::runner::MAX_TIME_SLICE;
-use tidb_query_expr::BATCH_MAX_SIZE;
 use tikv_alloc::trace::MemoryTraceGuard;
-use tikv_util::time::Instant;
 use tipb::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse};
-use yatp::task::future::reschedule;
 
 use crate::{
     coprocessor::{dag::TikvStorage, *},
@@ -77,18 +73,7 @@ impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
         let mut prefix_digest = crc64fast::Digest::new();
         prefix_digest.write(&old_prefix);
 
-        let mut row_count = 0;
-        let mut time_slice_start = Instant::now();
-        while let Some((k, v)) = self.scanner.next()? {
-            row_count += 1;
-            if row_count >= BATCH_MAX_SIZE {
-                if time_slice_start.saturating_elapsed() > MAX_TIME_SLICE {
-                    reschedule().await;
-                    time_slice_start = Instant::now();
-                }
-                row_count = 0;
-            }
-
+        while let Some((k, v)) = self.scanner.next().await? {
             if !k.starts_with(&new_prefix) {
                 return Err(box_err!("Wrong prefix expect: {:?}", new_prefix));
             }

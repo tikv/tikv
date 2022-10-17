@@ -107,6 +107,39 @@ impl<'a> Serialize for JsonRef<'a> {
                 }
                 tup.end()
             }
+            JsonType::Opaque => {
+                let bytes = self
+                    .get_opaque_bytes()
+                    .map_err(|_| SerError::custom("invalid opaque value"))?;
+                let typ = self
+                    .get_opaque_type()
+                    .map_err(|_| SerError::custom("invalid opaque type code"))?;
+
+                let str = format!(
+                    "base64:type{}:{}",
+                    typ.to_u8().unwrap(),
+                    base64::encode(bytes)
+                );
+                serializer.serialize_str(&str)
+            }
+            JsonType::Date | JsonType::Datetime | JsonType::Timestamp => {
+                let mut time = self
+                    .get_time()
+                    .map_err(|_| SerError::custom("invalid time data"))?;
+                // Printing json datetime/duration will always keep 6 fsp
+                time.maximize_fsp();
+
+                serializer.serialize_str(&time.to_string())
+            }
+            JsonType::Time => {
+                let duration = self
+                    .get_duration()
+                    .map_err(|_| SerError::custom("invalid duration data"))?;
+                // Printing json datetime/duration will always keep 6 fsp
+                let duration = duration.maximize_fsp();
+
+                serializer.serialize_str(&duration.to_string())
+            }
         }
     }
 }
@@ -216,6 +249,7 @@ impl<'de> Deserialize<'de> for Json {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::FieldTypeTp;
 
     #[test]
     fn test_from_str_for_object() {
@@ -263,6 +297,42 @@ mod tests {
         for json_str in illegal_cases {
             let resp = Json::from_str(json_str);
             resp.unwrap_err();
+        }
+    }
+
+    #[test]
+    fn test_to_str() {
+        let legal_cases = vec![
+            (
+                Json::from_kv_pairs(vec![(
+                    b"key",
+                    Json::from_str_val("value").unwrap().as_ref(),
+                )])
+                .unwrap(),
+                r#"{"key": "value"}"#,
+            ),
+            (
+                Json::from_array(vec![
+                    Json::from_str_val("d1").unwrap(),
+                    Json::from_str_val("d2").unwrap(),
+                ])
+                .unwrap(),
+                r#"["d1", "d2"]"#,
+            ),
+            (Json::from_i64(-3).unwrap(), r#"-3"#),
+            (Json::from_i64(3).unwrap(), r#"3"#),
+            (Json::from_f64(3.0).unwrap(), r#"3.0"#),
+            (Json::none().unwrap(), r#"null"#),
+            (Json::from_bool(true).unwrap(), r#"true"#),
+            (Json::from_bool(false).unwrap(), r#"false"#),
+            (
+                Json::from_opaque(FieldTypeTp::VarString, &[0xAB, 0xCD]).unwrap(),
+                r#""base64:type253:q80=""#,
+            ),
+        ];
+
+        for (json, json_str) in legal_cases {
+            assert_eq!(json.to_string(), json_str);
         }
     }
 }

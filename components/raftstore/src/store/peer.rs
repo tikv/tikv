@@ -8,6 +8,7 @@ use std::{
     fmt, mem,
     sync::{
         atomic::{AtomicUsize, Ordering},
+        mpsc::SyncSender,
         Arc, Mutex,
     },
     time::{Duration, Instant},
@@ -23,7 +24,7 @@ use engine_traits::{
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
-use getset::Getters;
+use getset::{Getters, MutGetters};
 use kvproto::{
     errorpb,
     kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp, LockInfo},
@@ -64,7 +65,8 @@ use tikv_util::{
     worker::Scheduler,
     Either,
 };
-use time::Timespec;
+use time::{Duration as TimeDuration, Timespec};
+use tracker::GLOBAL_TRACKERS;
 use txn_types::WriteBatchFlags;
 use uuid::Uuid;
 
@@ -100,14 +102,15 @@ use crate::{
             HeartbeatTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, ReadExecutor,
             ReadProgress, RegionTask, SplitCheckTask,
         },
-        Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse, TxnExt,
-        WriteCallback, RAFT_INIT_LOG_INDEX,
+        Callback, Config, GlobalReplicationState, PdTask, ReadCallback, ReadIndexContext,
+        ReadResponse, TxnExt, WriteCallback, RAFT_INIT_LOG_INDEX,
     },
     Error, Result,
 };
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
-const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000; // 1s
+const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000;
+// 1s
 const REGION_READ_PROGRESS_CAP: usize = 128;
 #[doc(hidden)]
 pub const MAX_COMMITTED_SIZE_PER_READY: u64 = 16 * 1024 * 1024;
@@ -122,14 +125,16 @@ pub enum StaleState {
 
 #[derive(Debug)]
 pub struct ProposalQueue<C> {
-    tag: String,
+    region_id: u64,
+    peer_id: u64,
     queue: VecDeque<Proposal<C>>,
 }
 
 impl<C: WriteCallback> ProposalQueue<C> {
-    fn new(tag: String) -> ProposalQueue<C> {
+    pub fn new(region_id: u64, peer_id: u64) -> ProposalQueue<C> {
         ProposalQueue {
-            tag,
+            region_id,
+            peer_id,
             queue: VecDeque::new(),
         }
     }
@@ -143,7 +148,7 @@ impl<C: WriteCallback> ProposalQueue<C> {
             .and_then(|i| {
                 self.queue[i]
                     .cb
-                    .trackers()
+                    .write_trackers()
                     .map(|ts| (self.queue[i].term, ts))
             })
     }
@@ -156,7 +161,7 @@ impl<C: WriteCallback> ProposalQueue<C> {
     }
 
     // Find proposal in front or at the given term and index
-    fn pop(&mut self, term: u64, index: u64) -> Option<Proposal<C>> {
+    pub fn pop(&mut self, term: u64, index: u64) -> Option<Proposal<C>> {
         self.queue.pop_front().and_then(|p| {
             // Comparing the term first then the index, because the term is
             // increasing among all log entries and the index is increasing
@@ -171,15 +176,20 @@ impl<C: WriteCallback> ProposalQueue<C> {
 
     /// Find proposal at the given term and index and notify stale proposals
     /// in front that term and index
-    fn find_proposal(&mut self, term: u64, index: u64, current_term: u64) -> Option<Proposal<C>> {
+    pub fn find_proposal(
+        &mut self,
+        term: u64,
+        index: u64,
+        current_term: u64,
+    ) -> Option<Proposal<C>> {
         while let Some(p) = self.pop(term, index) {
             if p.term == term {
                 if p.index == index {
                     return if p.cb.is_none() { None } else { Some(p) };
                 } else {
                     panic!(
-                        "{} unexpected callback at term {}, found index {}, expected {}",
-                        self.tag, term, p.index, index
+                        "[region {}] {} unexpected callback at term {}, found index {}, expected {}",
+                        self.region_id, self.peer_id, term, p.index, index
                     );
                 }
             } else {
@@ -194,7 +204,7 @@ impl<C: WriteCallback> ProposalQueue<C> {
         self.queue.front()
     }
 
-    fn push(&mut self, p: Proposal<C>) {
+    pub fn push(&mut self, p: Proposal<C>) {
         if let Some(f) = self.queue.back() {
             // The term must be increasing among all log entries and the index
             // must be increasing inside a given term
@@ -203,11 +213,11 @@ impl<C: WriteCallback> ProposalQueue<C> {
         self.queue.push_back(p);
     }
 
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.queue.is_empty()
     }
 
-    fn gc(&mut self) {
+    pub fn gc(&mut self) {
         if self.queue.capacity() > SHRINK_CACHE_CAPACITY && self.queue.len() < SHRINK_CACHE_CAPACITY
         {
             self.queue.shrink_to_fit();
@@ -399,7 +409,7 @@ impl<S: Snapshot> CmdEpochChecker<S> {
                         vec![region.to_owned()],
                     ));
                     cmd_resp::bind_term(&mut resp, term);
-                    cb.invoke_with_response(resp);
+                    cb.report_error(resp);
                 }
             } else {
                 break;
@@ -554,6 +564,85 @@ pub fn start_unsafe_recovery_report<EK: KvEngine, ER: RaftEngine>(
     });
 }
 
+// Propose a read index request to the raft group, return the request id and
+// whether this request had dropped silently
+// #[RaftstoreCommon], copied from Peer::propose_read_index
+pub fn propose_read_index<T: raft::Storage>(
+    raft_group: &mut RawNode<T>,
+    request: Option<&raft_cmdpb::ReadIndexRequest>,
+    locked: Option<&LockInfo>,
+) -> (Uuid, bool) {
+    let last_pending_read_count = raft_group.raft.pending_read_count();
+    let last_ready_read_count = raft_group.raft.ready_read_count();
+
+    let id = Uuid::new_v4();
+    raft_group.read_index(ReadIndexContext::fields_to_bytes(id, request, locked));
+
+    let pending_read_count = raft_group.raft.pending_read_count();
+    let ready_read_count = raft_group.raft.ready_read_count();
+    (
+        id,
+        pending_read_count == last_pending_read_count && ready_read_count == last_ready_read_count,
+    )
+}
+
+pub fn should_renew_lease(
+    is_leader: bool,
+    is_splitting: bool,
+    is_merging: bool,
+    has_force_leader: bool,
+) -> bool {
+    // A splitting leader should not renew its lease.
+    // Because we split regions asynchronous, the leader may read stale results
+    // if splitting runs slow on the leader.
+    // A merging leader should not renew its lease.
+    // Because we merge regions asynchronous, the leader may read stale results
+    // if commit merge runs slow on sibling peers.
+    // when it enters force leader mode, should not renew lease.
+    is_leader && !is_splitting && !is_merging && !has_force_leader
+}
+
+// check if the request can be amended to the last pending read?
+// return true if it can.
+pub fn can_amend_read<C>(
+    last_pending_read: Option<&ReadIndexRequest<C>>,
+    req: &RaftCmdRequest,
+    lease_state: LeaseState,
+    max_lease: TimeDuration,
+    now: Timespec,
+) -> bool {
+    match lease_state {
+        // Here, combining the new read request with the previous one even if the lease expired
+        // is ok because in this case, the previous read index must be sent out with a valid
+        // lease instead of a suspect lease. So there must no pending transfer-leader
+        // proposals before or after the previous read index, and the lease can be renewed
+        // when get heartbeat responses.
+        LeaseState::Valid | LeaseState::Expired => {
+            if let Some(read) = last_pending_read {
+                let is_read_index_request = req
+                    .get_requests()
+                    .get(0)
+                    .map(|req| req.has_read_index())
+                    .unwrap_or_default();
+                // A read index request or a read with addition request always needs the
+                // response of checking memory lock for async
+                // commit, so we cannot apply the optimization here
+                if !is_read_index_request
+                    && read.addition_request.is_none()
+                    && read.propose_time + max_lease > now
+                {
+                    return true;
+                }
+            }
+        }
+        // If the current lease is suspect, new read requests can't be appended into
+        // `pending_reads` because if the leader is transferred, the latest read could
+        // be dirty.
+        _ => {}
+    }
+    false
+}
+
 #[derive(Clone, Debug)]
 pub struct UnsafeRecoveryForceLeaderSyncer(Arc<InvokeClosureOnDrop>);
 
@@ -590,6 +679,40 @@ impl UnsafeRecoveryExecutePlanSyncer {
             start_unsafe_recovery_report(&*router_ptr, report_id, true);
         }));
         UnsafeRecoveryExecutePlanSyncer {
+            _closure: Arc::new(closure),
+            abort,
+        }
+    }
+
+    pub fn abort(&self) {
+        *self.abort.lock().unwrap() = true;
+    }
+}
+// Syncer only send to leader in 2nd BR restore
+#[derive(Clone, Debug)]
+pub struct SnapshotRecoveryWaitApplySyncer {
+    _closure: Arc<InvokeClosureOnDrop>,
+    abort: Arc<Mutex<bool>>,
+}
+
+impl SnapshotRecoveryWaitApplySyncer {
+    pub fn new(region_id: u64, sender: SyncSender<u64>) -> Self {
+        let thread_safe_router = Mutex::new(sender);
+        let abort = Arc::new(Mutex::new(false));
+        let abort_clone = abort.clone();
+        let closure = InvokeClosureOnDrop(Box::new(move || {
+            info!("region {} wait apply finished", region_id);
+            if *abort_clone.lock().unwrap() {
+                warn!("wait apply aborted");
+                return;
+            }
+            let router_ptr = thread_safe_router.lock().unwrap();
+
+            _ = router_ptr.send(region_id).map_err(|_| {
+                warn!("reply waitapply states failure.");
+            });
+        }));
+        SnapshotRecoveryWaitApplySyncer {
             _closure: Arc::new(closure),
             abort,
         }
@@ -683,6 +806,18 @@ impl UnsafeRecoveryFillOutReportSyncer {
     }
 }
 
+pub enum SnapshotRecoveryState {
+    // This state is set by the leader peer fsm. Once set, it sync and check leader commit index
+    // and force forward to last index once follower appended and then it also is checked
+    // every time this peer applies a the last index, if the last index is met, this state is
+    // reset / droppeds. The syncer is droped and send the response to the invoker, triggers
+    // the next step of recovery process.
+    WaitLogApplyToLast {
+        target_index: u64,
+        syncer: SnapshotRecoveryWaitApplySyncer,
+    },
+}
+
 pub enum UnsafeRecoveryState {
     // Stores the state that is necessary for the wait apply stage of unsafe recovery process.
     // This state is set by the peer fsm. Once set, it is checked every time this peer applies a
@@ -704,7 +839,7 @@ pub enum UnsafeRecoveryState {
     Destroy(UnsafeRecoveryExecutePlanSyncer),
 }
 
-#[derive(Getters)]
+#[derive(Getters, MutGetters)]
 pub struct Peer<EK, ER>
 where
     EK: KvEngine,
@@ -726,10 +861,12 @@ where
     peer_cache: RefCell<HashMap<u64, metapb::Peer>>,
     /// Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: HashMap<u64, Instant>,
+    /// Record the waiting data status of each follower or learner peer.
+    pub wait_data_peers: Vec<u64>,
 
     proposals: ProposalQueue<Callback<EK::Snapshot>>,
     leader_missing_time: Option<Instant>,
-    #[getset(get = "pub")]
+    #[getset(get = "pub", get_mut = "pub")]
     leader_lease: Lease,
     pending_reads: ReadIndexQueue<Callback<EK::Snapshot>>,
     /// Threshold of long uncommitted proposals.
@@ -748,6 +885,13 @@ where
     ///   target peer.
     /// - all read requests must be rejected.
     pub pending_remove: bool,
+    /// Currently it's used to indicate whether the witness -> non-witess
+    /// convertion operation is complete. The meaning of completion is that
+    /// this peer must contain the applied data, then PD can consider that
+    /// the conversion operation is complete, and can continue to schedule
+    /// other operators to prevent the existence of multiple witnesses in
+    /// the same time period.
+    pub wait_data: bool,
 
     /// Force leader state is only used in online recovery when the majority of
     /// peers are missing. In this state, it forces one peer to become leader
@@ -885,6 +1029,9 @@ where
     /// lead_transferee if the peer is in a leadership transferring.
     pub lead_transferee: u64,
     pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
+    // Used as the memory state for Flashback to reject RW/Schedule before proposing.
+    pub is_in_flashback: bool,
+    pub snapshot_recovery_state: Option<SnapshotRecoveryState>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -901,7 +1048,8 @@ where
         region: &metapb::Region,
         peer: metapb::Peer,
     ) -> Result<Peer<EK, ER>> {
-        if peer.get_id() == raft::INVALID_ID {
+        let peer_id = peer.get_id();
+        if peer_id == raft::INVALID_ID {
             return Err(box_err!("invalid peer id"));
         }
 
@@ -915,7 +1063,6 @@ where
             peer.get_id(),
             tag.clone(),
         )?;
-
         let applied_index = ps.applied_index();
 
         let raft_cfg = raft::Config {
@@ -942,11 +1089,12 @@ where
             region_id: region.get_id(),
             raft_group,
             raft_max_inflight_msgs: cfg.raft_max_inflight_msgs,
-            proposals: ProposalQueue::new(tag.clone()),
-            pending_reads: Default::default(),
+            proposals: ProposalQueue::new(region.get_id(), peer_id),
+            pending_reads: ReadIndexQueue::new(tag.clone()),
             long_uncommitted_threshold: cfg.long_uncommitted_base_threshold.0,
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
+            wait_data_peers: Vec::default(),
             peers_start_pending_time: vec![],
             down_peer_ids: vec![],
             size_diff_hint: 0,
@@ -957,6 +1105,7 @@ where
             compaction_declined_bytes: 0,
             leader_unreachable: false,
             pending_remove: false,
+            wait_data: false,
             should_wake_up: false,
             force_leader: None,
             pending_merge_state: None,
@@ -1016,6 +1165,8 @@ where
             last_region_buckets: None,
             lead_transferee: raft::INVALID_ID,
             unsafe_recovery_state: None,
+            is_in_flashback: region.get_is_in_flashback(),
+            snapshot_recovery_state: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1652,7 +1803,7 @@ where
                 {
                     let proposal = &self.proposals.queue[idx];
                     if term == proposal.term {
-                        for tracker in proposal.cb.trackers().iter().flat_map(|v| v.iter()) {
+                        for tracker in proposal.cb.write_trackers().iter().flat_map(|v| v.iter()) {
                             tracker.observe(std_now, &ctx.raft_metrics.wf_send_proposal, |t| {
                                 &mut t.metrics.wf_send_proposal_nanos
                             });
@@ -1838,6 +1989,7 @@ where
         if !self.is_leader() {
             self.peer_heartbeats.clear();
             self.peers_start_pending_time.clear();
+            self.wait_data_peers.clear();
             return;
         }
 
@@ -2249,8 +2401,8 @@ where
     fn ready_to_handle_unsafe_replica_read(&self, read_index: u64) -> bool {
         // Wait until the follower applies all values before the read. There is still a
         // problem if the leader applies fewer values than the follower, the follower
-        // read could get a newer value, and after that, the leader may read a stale
-        // value, which violates linearizability.
+        // read could get a newer value, and after that, the leader may read a
+        // stale value, which violates linearizability.
         self.get_store().applied_index() >= read_index
             // If it is in pending merge state(i.e. applied PrepareMerge), the data may be stale.
             // TODO: Add a test to cover this case
@@ -2261,12 +2413,12 @@ where
     }
 
     #[inline]
-    fn is_splitting(&self) -> bool {
+    pub fn is_splitting(&self) -> bool {
         self.last_committed_split_idx > self.get_store().applied_index()
     }
 
     #[inline]
-    fn is_merging(&self) -> bool {
+    pub fn is_merging(&self) -> bool {
         self.last_committed_prepare_merge_idx > self.get_store().applied_index()
             || self.pending_merge_state.is_some()
     }
@@ -2377,6 +2529,10 @@ where
                         debug!("unsafe recovery finishes applying a snapshot");
                         self.unsafe_recovery_maybe_finish_wait_apply(/* force= */ false);
                     }
+                    if self.snapshot_recovery_state.is_some() {
+                        debug!("snapshot recovery finishes applying a snapshot");
+                        self.snapshot_recovery_maybe_finish_wait_apply(false);
+                    }
                 }
                 // If `apply_snap_ctx` is none, it means this snapshot does not
                 // come from the ready but comes from the unfinished snapshot task
@@ -2388,7 +2544,9 @@ where
                 // Resume `read_progress`
                 self.read_progress.resume();
                 // Update apply index to `last_applying_idx`
-                self.read_progress.update_applied(self.last_applying_idx);
+                self.read_progress
+                    .update_applied(self.last_applying_idx, &ctx.coprocessor_host);
+                self.notify_leader_the_peer_is_available(ctx);
             }
             CheckApplyingSnapStatus::Idle => {
                 // FIXME: It's possible that the snapshot applying task is canceled.
@@ -2403,6 +2561,29 @@ where
         }
         assert_eq!(self.apply_snap_ctx, None);
         true
+    }
+
+    fn notify_leader_the_peer_is_available<T: Transport>(
+        &mut self,
+        ctx: &mut PollContext<EK, ER, T>,
+    ) {
+        if self.wait_data {
+            self.wait_data = false;
+            fail_point!("ignore notify leader the peer is available", |_| {});
+            let leader_id = self.leader_id();
+            let leader = self.get_peer_from_cache(leader_id);
+            if let Some(leader) = leader {
+                let mut msg = ExtraMessage::default();
+                msg.set_type(ExtraMessageType::MsgAvailabilityResponse);
+                msg.wait_data = false;
+                self.send_extra_message(msg, &mut ctx.trans, &leader);
+                info!(
+                    "notify leader the leader is available";
+                    "region id" => self.region().get_id(),
+                    "peer id" => self.peer.id
+                );
+            }
+        }
     }
 
     pub fn handle_raft_ready_append<T: Transport>(
@@ -2505,7 +2686,7 @@ where
         // Update it after unstable entries pagination is introduced.
         debug_assert!(ready.entries().last().map_or_else(
             || true,
-            |entry| entry.index == self.raft_group.raft.raft_log.last_index()
+            |entry| entry.index == self.raft_group.raft.raft_log.last_index(),
         ));
         if self.memtrace_raft_entries != 0 {
             MEMTRACE_RAFT_ENTRIES.trace(TraceEvent::Sub(self.memtrace_raft_entries));
@@ -3072,7 +3253,14 @@ where
             "peer_id" => self.peer.get_id(),
         );
         RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds().len() as i64);
+        let time = monotonic_raw_now();
         for (req, cb, mut read_index) in read.take_cmds().drain(..) {
+            cb.read_tracker().map(|tracker| {
+                GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
+                    t.metrics.read_index_confirm_wait_nanos =
+                        (time - read.propose_time).to_std().unwrap().as_nanos() as u64;
+                })
+            });
             // leader reports key is locked
             if let Some(locked) = read.locked.take() {
                 let mut response = raft_cmdpb::Response::default();
@@ -3132,7 +3320,7 @@ where
                 info!(
                     "re-propose read index request because the response is lost";
                     "region_id" => self.region_id,
-                    "peer_id" => self.peer.get_id(),
+                    "peer_id" => self.peer_id(),
                 );
                 RAFT_READ_INDEX_PENDING_COUNT.sub(1);
                 self.send_read_command(ctx, read_cmd);
@@ -3203,7 +3391,7 @@ where
             self.pending_reads.advance_replica_reads(states);
             self.post_pending_read_index_on_replica(ctx);
         } else {
-            self.pending_reads.advance_leader_reads(&self.tag, states);
+            self.pending_reads.advance_leader_reads(states);
             propose_time = self.pending_reads.last_ready().map(|r| r.propose_time);
             if self.ready_to_handle_read() {
                 while let Some(mut read) = self.pending_reads.pop_front() {
@@ -3277,7 +3465,8 @@ where
         }
         self.pending_reads.gc();
 
-        self.read_progress.update_applied(applied_index);
+        self.read_progress
+            .update_applied(applied_index, &ctx.coprocessor_host);
 
         // Only leaders need to update applied_term.
         if progress_to_be_updated && self.is_leader() {
@@ -3315,31 +3504,16 @@ where
         progress: Option<ReadProgress>,
     ) {
         // A nonleader peer should never has leader lease.
-        let read_progress = if !self.is_leader() {
+        let read_progress = if !should_renew_lease(
+            self.is_leader(),
+            self.is_splitting(),
+            self.is_merging(),
+            self.force_leader.is_some(),
+        ) {
             None
-        } else if self.is_splitting() {
-            // A splitting leader should not renew its lease.
-            // Because we split regions asynchronous, the leader may read stale results
-            // if splitting runs slow on the leader.
+        } else if self.is_in_flashback {
             debug!(
-                "prevents renew lease while splitting";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-            );
-            None
-        } else if self.is_merging() {
-            // A merging leader should not renew its lease.
-            // Because we merge regions asynchronous, the leader may read stale results
-            // if commit merge runs slow on sibling peers.
-            debug!(
-                "prevents renew lease while merging";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-            );
-            None
-        } else if self.force_leader.is_some() {
-            debug!(
-                "prevents renew lease while in force leader state";
+                "prevents renew lease while in flashback state";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
             );
@@ -3589,9 +3763,9 @@ where
 
             if peer.get_id() == self.peer_id()
                 && (change_type == ConfChangeType::RemoveNode
-                    // In Joint confchange, the leader is allowed to be DemotingVoter
-                    || (kind == ConfChangeKind::Simple
-                        && change_type == ConfChangeType::AddLearnerNode))
+                // In Joint confchange, the leader is allowed to be DemotingVoter
+                || (kind == ConfChangeKind::Simple
+                && change_type == ConfChangeType::AddLearnerNode))
                 && !ctx.cfg.allow_remove_leader()
             {
                 return Err(box_err!(
@@ -3840,48 +4014,27 @@ where
 
         let now = monotonic_raw_now();
         if self.is_leader() {
-            match self.inspect_lease() {
-                // Here combine the new read request with the previous one even if the lease expired
-                // is ok because in this case, the previous read index must be sent out with a valid
-                // lease instead of a suspect lease. So there must no pending transfer-leader
-                // proposals before or after the previous read index, and the lease can be renewed
-                // when get heartbeat responses.
-                LeaseState::Valid | LeaseState::Expired => {
-                    // Must use the commit index of `PeerStorage` instead of the commit index
-                    // in raft-rs which may be greater than the former one.
-                    // For more details, see the annotations above `on_leader_commit_idx_changed`.
-                    let commit_index = self.get_store().commit_index();
-                    if let Some(read) = self.pending_reads.back_mut() {
-                        let max_lease = poll_ctx.cfg.raft_store_max_leader_lease();
-                        let is_read_index_request = req
-                            .get_requests()
-                            .get(0)
-                            .map(|req| req.has_read_index())
-                            .unwrap_or_default();
-                        // A read index request or a read with addition request always needs the
-                        // response of checking memory lock for async commit, so we cannot apply the
-                        // optimization here
-                        if !is_read_index_request
-                            && read.addition_request.is_none()
-                            && read.propose_time + max_lease > now
-                        {
-                            // A read request proposed in the current lease is found; combine the
-                            // new read request to that previous one, so that no proposing needed.
-                            read.push_command(req, cb, commit_index);
-                            return false;
-                        }
-                    }
+            let lease_state = self.inspect_lease();
+            if can_amend_read::<Callback<EK::Snapshot>>(
+                self.pending_reads.back(),
+                &req,
+                lease_state,
+                poll_ctx.cfg.raft_store_max_leader_lease(),
+                now,
+            ) {
+                // Must use the commit index of `PeerStorage` instead of the commit index
+                // in raft-rs which may be greater than the former one.
+                // For more details, see the annotations above `on_leader_commit_idx_changed`.
+                let commit_index = self.get_store().commit_index();
+                if let Some(read) = self.pending_reads.back_mut() {
+                    // A read request proposed in the current lease is found; combine the new
+                    // read request to that previous one, so that no proposing needed.
+                    read.push_command(req, cb, commit_index);
+                    return false;
                 }
-                // If the current lease is suspect, new read requests can't be appended into
-                // `pending_reads` because if the leader is transferred, the latest read could
-                // be dirty.
-                _ => {}
             }
         }
 
-        // When a replica cannot detect any leader, `MsgReadIndex` will be dropped,
-        // which would cause a long time waiting for a read response. Then we
-        // should return an error directly in this situation.
         if !self.is_leader() && self.leader_id() == INVALID_ID {
             poll_ctx
                 .raft_metrics
@@ -3974,20 +4127,7 @@ where
         request: Option<&raft_cmdpb::ReadIndexRequest>,
         locked: Option<&LockInfo>,
     ) -> (Uuid, bool) {
-        let last_pending_read_count = self.raft_group.raft.pending_read_count();
-        let last_ready_read_count = self.raft_group.raft.ready_read_count();
-
-        let id = Uuid::new_v4();
-        self.raft_group
-            .read_index(ReadIndexContext::fields_to_bytes(id, request, locked));
-
-        let pending_read_count = self.raft_group.raft.pending_read_count();
-        let ready_read_count = self.raft_group.raft.ready_read_count();
-        (
-            id,
-            pending_read_count == last_pending_read_count
-                && ready_read_count == last_ready_read_count,
-        )
+        propose_read_index(&mut self.raft_group, request, locked)
     }
 
     /// Returns (minimal matched, minimal committed_index)
@@ -4264,6 +4404,7 @@ where
         // In `pre_propose_raft_command`, it rejects all the requests expect conf-change
         // if in force leader state.
         if self.force_leader.is_some() {
+            poll_ctx.raft_metrics.invalid_proposal.force_leader.inc();
             panic!(
                 "{} propose normal in force leader state {:?}",
                 self.tag, self.force_leader
@@ -4338,7 +4479,7 @@ where
             });
         }
 
-        self.maybe_inject_propose_error(&req)?;
+        fail_point!("raft_propose", |_| Ok(Either::Right(0)));
         let propose_index = self.next_proposal_index();
         self.raft_group.propose(ctx.to_vec(), data)?;
         if self.next_proposal_index() == propose_index {
@@ -4581,9 +4722,9 @@ where
         Ok(propose_index)
     }
 
-    fn handle_read<T>(
+    fn handle_read<E: ReadExecutor<Tablet = EK>>(
         &self,
-        ctx: &mut PollContext<EK, ER, T>,
+        reader: &mut E,
         req: RaftCmdRequest,
         check_epoch: bool,
         read_index: Option<u64>,
@@ -4610,7 +4751,7 @@ where
                     "read rejected by safe timestamp";
                     "safe ts" => safe_ts,
                     "read ts" => read_ts,
-                    "tag" => &self.tag
+                    "tag" => &self.tag,
                 );
                 let mut response = cmd_resp::new_error(Error::DataIsNotReady {
                     region_id: region.get_id(),
@@ -4626,7 +4767,7 @@ where
             }
         }
 
-        let mut resp = ctx.execute(&req, &Arc::new(region), read_index, None, None);
+        let mut resp = reader.execute(&req, &Arc::new(region), read_index, None, None);
         if let Some(snap) = resp.snapshot.as_mut() {
             snap.txn_ext = Some(self.txn_ext.clone());
             snap.bucket_meta = self.region_buckets.as_ref().map(|b| b.meta.clone());
@@ -4917,7 +5058,6 @@ where
             Some(ForceLeaderState::ForceLeader { .. })
         )
     }
-
     pub fn unsafe_recovery_maybe_finish_wait_apply(&mut self, force: bool) {
         if let Some(UnsafeRecoveryState::WaitApply { target_index, .. }) =
             &self.unsafe_recovery_state
@@ -4934,6 +5074,30 @@ where
                     );
                 }
                 self.unsafe_recovery_state = None;
+            }
+        }
+    }
+
+    pub fn snapshot_recovery_maybe_finish_wait_apply(&mut self, force: bool) {
+        if let Some(SnapshotRecoveryState::WaitLogApplyToLast { target_index, .. }) =
+            &self.snapshot_recovery_state
+        {
+            if self.raft_group.raft.term != self.raft_group.raft.raft_log.last_term() {
+                return;
+            }
+
+            if self.raft_group.raft.raft_log.applied >= *target_index
+                || force
+                || self.pending_remove
+            {
+                info!("snapshot recovery wait apply finished";
+                    "region_id" => self.region().get_id(),
+                    "peer_id" => self.peer_id(),
+                    "target_index" => target_index,
+                    "applied" =>  self.raft_group.raft.raft_log.applied,
+                    "force" => force,
+                );
+                self.snapshot_recovery_state = None;
             }
         }
     }
@@ -5053,6 +5217,7 @@ where
             approximate_size: self.approximate_size,
             approximate_keys: self.approximate_keys,
             replication_status: self.region_replication_status(),
+            wait_data_peers: self.wait_data_peers.clone(),
         });
         if let Err(e) = ctx.pd_scheduler.schedule(task) {
             error!(
@@ -5313,41 +5478,6 @@ where
         self.raft_group.raft.r.max_msg_size = ctx.cfg.raft_max_size_per_msg.0;
     }
 
-    #[inline]
-    fn maybe_inject_propose_error(
-        &self,
-        #[allow(unused_variables)] req: &RaftCmdRequest,
-    ) -> Result<()> {
-        // The return value format is {req_type}:{store_id}
-        // Request matching the format will fail to be proposed.
-        // Empty `req_type` means matching all kinds of requests.
-        // ":{store_id}" can be omitted, meaning matching all stores.
-        fail_point!("raft_propose", |r| {
-            r.map_or(Ok(()), |s| {
-                let mut parts = s.splitn(2, ':');
-                let cmd_type = parts.next().unwrap();
-                let store_id = parts.next().map(|s| s.parse::<u64>().unwrap());
-                if let Some(store_id) = store_id {
-                    if store_id != self.peer.get_store_id() {
-                        return Ok(());
-                    }
-                }
-                let admin_type = req.get_admin_request().get_cmd_type();
-                let match_type = cmd_type.is_empty()
-                    || (cmd_type == "prepare_merge" && admin_type == AdminCmdType::PrepareMerge)
-                    || (cmd_type == "transfer_leader"
-                        && admin_type == AdminCmdType::TransferLeader);
-                // More matching rules can be added here.
-                if match_type {
-                    Err(box_err!("injected error"))
-                } else {
-                    Ok(())
-                }
-            })
-        });
-        Ok(())
-    }
-
     /// Update states of the peer which can be changed in the previous raft
     /// tick.
     pub fn post_raft_group_tick(&mut self) {
@@ -5416,6 +5546,10 @@ pub trait RequestInspector {
             return Ok(RequestPolicy::ProposeNormal);
         }
 
+        fail_point!("perform_read_index", |_| Ok(RequestPolicy::ReadIndex));
+
+        fail_point!("perform_read_local", |_| Ok(RequestPolicy::ReadLocal));
+
         let flags = WriteBatchFlags::from_bits_check(req.get_header().get_flags());
         if flags.contains(WriteBatchFlags::STALE_READ) {
             return Ok(RequestPolicy::StaleRead);
@@ -5472,11 +5606,13 @@ where
     }
 }
 
-impl<EK, ER, T> ReadExecutor<EK> for PollContext<EK, ER, T>
+impl<EK, ER, T> ReadExecutor for PollContext<EK, ER, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
 {
+    type Tablet = EK;
+
     fn get_tablet(&mut self) -> &EK {
         &self.engines.kv
     }
@@ -5502,7 +5638,7 @@ fn get_transfer_leader_cmd(msg: &RaftCmdRequest) -> Option<&TransferLeaderReques
     Some(req.get_transfer_leader())
 }
 
-fn get_sync_log_from_request(msg: &RaftCmdRequest) -> bool {
+pub fn get_sync_log_from_request(msg: &RaftCmdRequest) -> bool {
     if msg.has_admin_request() {
         let req = msg.get_admin_request();
         return matches!(
@@ -5514,6 +5650,8 @@ fn get_sync_log_from_request(msg: &RaftCmdRequest) -> bool {
                 | AdminCmdType::PrepareMerge
                 | AdminCmdType::CommitMerge
                 | AdminCmdType::RollbackMerge
+                | AdminCmdType::PrepareFlashback
+                | AdminCmdType::FinishFlashback
         );
     }
 
@@ -5555,17 +5693,6 @@ fn make_transfer_leader_response() -> RaftCmdResponse {
 // The Raft message context for a MsgTransferLeader if it is a reply of a
 // TransferLeader command.
 pub const TRANSFER_LEADER_COMMAND_REPLY_CTX: &[u8] = &[1];
-
-/// A poor version of `Peer` to avoid port generic variables everywhere.
-pub trait AbstractPeer {
-    fn meta_peer(&self) -> &metapb::Peer;
-    fn group_state(&self) -> GroupState;
-    fn region(&self) -> &metapb::Region;
-    fn apply_state(&self) -> &RaftApplyState;
-    fn raft_status(&self) -> raft::Status<'_>;
-    fn raft_commit_index(&self) -> u64;
-    fn pending_merge_state(&self) -> Option<&MergeState>;
-}
 
 mod memtrace {
     use std::mem;
@@ -5810,8 +5937,7 @@ mod tests {
 
     #[test]
     fn test_propose_queue_find_proposal() {
-        let mut pq: ProposalQueue<Callback<engine_panic::PanicSnapshot>> =
-            ProposalQueue::new("tag".to_owned());
+        let mut pq: ProposalQueue<Callback<engine_panic::PanicSnapshot>> = ProposalQueue::new(1, 2);
         let gen_term = |index: u64| (index / 10) + 1;
         let push_proposal = |pq: &mut ProposalQueue<_>, index: u64| {
             pq.push(Proposal {
@@ -5873,8 +5999,7 @@ mod tests {
         fn must_not_call() -> ExtCallback {
             Box::new(move || unreachable!())
         }
-        let mut pq: ProposalQueue<Callback<engine_panic::PanicSnapshot>> =
-            ProposalQueue::new("tag".to_owned());
+        let mut pq: ProposalQueue<Callback<engine_panic::PanicSnapshot>> = ProposalQueue::new(1, 2);
 
         // (1, 4) and (1, 5) is not committed
         let entries = vec![(1, 1), (1, 2), (1, 3), (1, 4), (1, 5), (2, 6), (2, 7)];

@@ -2,6 +2,8 @@
 
 use std::{sync::Arc, time::Duration};
 
+use causal_ts::CausalTsProvider;
+use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     kvrpcpb::*,
@@ -63,6 +65,25 @@ impl TestSuite {
         must_raw_put(&client, ctx, key.to_vec(), value.to_vec())
     }
 
+    pub fn raw_put_err_by_timestamp_not_synced(&mut self, key: &[u8], value: &[u8]) {
+        let region_id = self.cluster.get_region_id(key);
+        let client = self.get_client(region_id);
+        let ctx = self.get_context(region_id);
+
+        let mut put_req = RawPutRequest::default();
+        put_req.set_context(ctx);
+        put_req.key = key.to_vec();
+        put_req.value = value.to_vec();
+
+        let put_resp = client.raw_put(&put_req).unwrap();
+        assert!(put_resp.get_region_error().has_max_timestamp_not_synced());
+        assert!(
+            put_resp.get_error().is_empty(),
+            "{:?}",
+            put_resp.get_error()
+        );
+    }
+
     pub fn must_raw_get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
         let region_id = self.cluster.get_region_id(key);
         let client = self.get_client(region_id);
@@ -71,13 +92,15 @@ impl TestSuite {
     }
 
     pub fn flush_timestamp(&mut self, node_id: u64) {
-        self.cluster
-            .sim
-            .rl()
-            .get_causal_ts_provider(node_id)
-            .unwrap()
-            .flush()
-            .unwrap();
+        block_on(
+            self.cluster
+                .sim
+                .rl()
+                .get_causal_ts_provider(node_id)
+                .unwrap()
+                .async_flush(),
+        )
+        .unwrap();
     }
 
     pub fn must_merge_region_by_key(&mut self, source_key: &[u8], target_key: &[u8]) {
@@ -91,7 +114,7 @@ impl TestSuite {
         let mut merged;
         let timer = Instant::now();
         loop {
-            if timer.saturating_elapsed() > Duration::from_secs(5) {
+            if timer.saturating_elapsed() > Duration::from_secs(10) {
                 panic!("region merge failed");
             }
             merged = self.cluster.get_region(source_key);
@@ -118,7 +141,7 @@ impl TestSuite {
     }
 }
 
-const FP_CAUSAL_OBSERVER_FLUSH_TIMESTAMP: &str = "causal_observer_flush_timestamp";
+const FP_GET_TSO: &str = "test_raftstore_get_tso";
 
 /// Verify correctness on leader transfer.
 // TODO: simulate and test for the scenario of issue #12498.
@@ -127,9 +150,6 @@ fn test_leader_transfer() {
     let mut suite = TestSuite::new(3, ApiVersion::V2);
     let key1 = b"rk1";
     let region = suite.cluster.get_region(key1);
-
-    // Disable CausalObserver::flush_timestamp to produce causality issue.
-    fail::cfg(FP_CAUSAL_OBSERVER_FLUSH_TIMESTAMP, "return").unwrap();
 
     // Transfer leader and write to store 1.
     {
@@ -144,23 +164,26 @@ fn test_leader_transfer() {
         assert_eq!(suite.must_raw_get(key1), Some(b"v4".to_vec()));
     }
 
+    // Make causal_ts_provider.async_flush() & handle_update_max_timestamp fail.
+    fail::cfg(FP_GET_TSO, "return(50)").unwrap();
+
     // Transfer leader and write to store 2.
     {
         suite.must_transfer_leader(&region, 2);
         suite.must_leader_on_store(key1, 2);
 
         // Store 2 has a TSO batch smaller than store 1.
-        suite.must_raw_put(key1, b"v5");
+        suite.raw_put_err_by_timestamp_not_synced(key1, b"v5");
         assert_eq!(suite.must_raw_get(key1), Some(b"v4".to_vec()));
-        suite.must_raw_put(key1, b"v6");
+        suite.raw_put_err_by_timestamp_not_synced(key1, b"v6");
         assert_eq!(suite.must_raw_get(key1), Some(b"v4".to_vec()));
     }
 
     // Transfer leader back.
     suite.must_transfer_leader(&region, 1);
     suite.must_leader_on_store(key1, 1);
-    // Enable CausalObserver::flush_timestamp.
-    fail::cfg(FP_CAUSAL_OBSERVER_FLUSH_TIMESTAMP, "off").unwrap();
+    // Make handle_update_max_timestamp succeed.
+    fail::cfg(FP_GET_TSO, "off").unwrap();
     // Transfer leader and write to store 2 again.
     {
         suite.must_transfer_leader(&region, 2);
@@ -172,7 +195,7 @@ fn test_leader_transfer() {
         assert_eq!(suite.must_raw_get(key1), Some(b"v8".to_vec()));
     }
 
-    fail::remove(FP_CAUSAL_OBSERVER_FLUSH_TIMESTAMP);
+    fail::remove(FP_GET_TSO);
     suite.stop();
 }
 
@@ -198,9 +221,6 @@ fn test_region_merge() {
     assert_eq!(region1.get_end_key(), region3.get_start_key());
     assert_eq!(region3.get_end_key(), region5.get_start_key());
 
-    // Disable CausalObserver::flush_timestamp to produce causality issue.
-    fail::cfg(FP_CAUSAL_OBSERVER_FLUSH_TIMESTAMP, "return").unwrap();
-
     // Transfer leaders: region 1 -> store 1, region 3 -> store 2, region 5 -> store
     // 3.
     suite.must_transfer_leader(&region1, 1);
@@ -218,20 +238,23 @@ fn test_region_merge() {
         assert_eq!(suite.must_raw_get(keys[1]), Some(b"v4".to_vec()));
     }
 
+    // Make causal_ts_provider.async_flush() & handle_update_max_timestamp fail.
+    fail::cfg(FP_GET_TSO, "return(50)").unwrap();
+
     // Merge region 1 to 3.
     {
         suite.must_merge_region_by_key(keys[1], keys[3]);
         suite.must_leader_on_store(keys[1], 2);
 
         // Write to store 2. Store 2 has a TSO batch smaller than store 1.
-        suite.must_raw_put(keys[1], b"v5");
+        suite.raw_put_err_by_timestamp_not_synced(keys[1], b"v5");
         assert_eq!(suite.must_raw_get(keys[1]), Some(b"v4".to_vec()));
-        suite.must_raw_put(keys[1], b"v6");
+        suite.raw_put_err_by_timestamp_not_synced(keys[1], b"v6");
         assert_eq!(suite.must_raw_get(keys[1]), Some(b"v4".to_vec()));
     }
 
-    // Enable CausalObserver::flush_timestamp.
-    fail::cfg(FP_CAUSAL_OBSERVER_FLUSH_TIMESTAMP, "off").unwrap();
+    // Make handle_update_max_timestamp succeed.
+    fail::cfg(FP_GET_TSO, "off").unwrap();
 
     // Merge region 3 to 5.
     {
@@ -245,6 +268,6 @@ fn test_region_merge() {
         assert_eq!(suite.must_raw_get(keys[1]), Some(b"v8".to_vec()));
     }
 
-    fail::remove(FP_CAUSAL_OBSERVER_FLUSH_TIMESTAMP);
+    fail::remove(FP_GET_TSO);
     suite.stop();
 }

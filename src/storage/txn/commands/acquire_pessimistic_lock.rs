@@ -60,7 +60,7 @@ impl std::fmt::Display for PessimisticLockCmdInner {
             PessimisticLockCmdInner::SingleRequest { params, keys } => {
                 write!(
                     f,
-                    "keys({}) @ {} {} {} {:?} {} {} | {:?}{}",
+                    "keys({}) @ {} {} {} {:?} {} {} {} | {:?}{}",
                     keys.len(),
                     params.start_ts,
                     params.lock_ttl,
@@ -68,6 +68,7 @@ impl std::fmt::Display for PessimisticLockCmdInner {
                     params.wait_timeout,
                     params.min_commit_ts,
                     params.check_existence,
+                    params.lock_only_if_exists,
                     params.pb_ctx,
                     if !params.allow_lock_with_conflict {
                         " (legacy mode)"
@@ -237,6 +238,7 @@ impl AcquirePessimisticLock {
                 params.check_existence,
                 params.min_commit_ts,
                 need_old_value,
+                params.lock_only_if_exists,
                 params.allow_lock_with_conflict,
             ) {
                 Ok((key_res, old_value)) => {
@@ -279,6 +281,7 @@ impl AcquirePessimisticLock {
                 old_values,
                 // One pc status is unknown in AcquirePessimisticLock stage.
                 one_pc: false,
+                for_flashback: false,
             };
             WriteData::new(modifies, extra)
         } else {
@@ -368,6 +371,7 @@ impl AcquirePessimisticLock {
                 params.check_existence,
                 params.min_commit_ts,
                 need_old_value,
+                params.lock_only_if_exists,
                 true,
             ) {
                 Ok((key_res, old_value)) => {
@@ -410,6 +414,7 @@ impl AcquirePessimisticLock {
                 old_values,
                 // One pc status is unknown in AcquirePessimisticLock stage.
                 one_pc: false,
+                for_flashback: false,
             };
             WriteData::new(modifies, extra)
         } else {
@@ -442,6 +447,7 @@ impl AcquirePessimisticLock {
         return_values: bool,
         min_commit_ts: TimeStamp,
         check_existence: bool,
+        lock_only_if_exists: bool,
         allow_lock_with_conflict: bool,
         ctx: kvproto::kvrpcpb::Context,
     ) -> TypedCommand<StorageResult<PessimisticLockResults>> {
@@ -456,6 +462,7 @@ impl AcquirePessimisticLock {
             min_commit_ts,
             check_existence,
             is_first_lock,
+            lock_only_if_exists,
             allow_lock_with_conflict,
         };
         let inner = PessimisticLockCmdInner::SingleRequest { params, keys };
@@ -474,6 +481,7 @@ impl AcquirePessimisticLock {
         min_commit_ts: TimeStamp,
         _old_values: OldValues, // TODO: Remove it
         check_existence: bool,
+        lock_only_if_exists: bool,
         ctx: kvproto::kvrpcpb::Context,
     ) -> TypedCommand<StorageResult<PessimisticLockResults>> {
         let params = PessimisticLockParameters {
@@ -487,6 +495,7 @@ impl AcquirePessimisticLock {
             min_commit_ts,
             check_existence,
             is_first_lock,
+            lock_only_if_exists,
             allow_lock_with_conflict: false,
         };
         let inner = PessimisticLockCmdInner::SingleRequest { params, keys };

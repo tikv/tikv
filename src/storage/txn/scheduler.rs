@@ -36,6 +36,7 @@ use std::{
     u64,
 };
 
+use causal_ts::CausalTsProviderImpl;
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use crossbeam::utils::CachePadded;
@@ -61,7 +62,8 @@ use crate::{
     server::lock_manager::waiter_manager,
     storage::{
         config::Config,
-        get_priority_tag,
+        errors::SharedError,
+        get_causal_ts, get_priority_tag, get_raw_key_guard,
         kv::{
             self, with_tls_engine, Engine, Error as EngineError, ExtCallback, FlowStatsReporter,
             Result as EngineResult, SnapContext, Statistics,
@@ -71,7 +73,7 @@ use crate::{
             lock_wait_context::LockWaitContext,
             lock_waiting_queue::{
                 CallbackWithSharedError, DelayedNotifyAllFuture, LockWaitEntry, LockWaitQueues,
-                PessimisticLockKeyCallback, SharedError,
+                PessimisticLockKeyCallback,
             },
             DiagnosticContext, LockDigest, LockManager, LockWaitToken,
         },
@@ -79,13 +81,13 @@ use crate::{
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, ReleasedLock},
         txn::{
             commands::{
-                self, Command, ReleasedLocks, ResponsePolicy, WriteContext, WriteResult,
+                self, Command, RawExt, ReleasedLocks, ResponsePolicy, WriteContext, WriteResult,
                 WriteResultLockInfo,
             },
             flow_controller::FlowController,
             latch::{Latches, Lock, LockWaitQueueMap},
             sched_pool::{tls_collect_query, tls_collect_scan_details, SchedPool},
-            Error, ProcessResult,
+            Error, ErrorInner, ProcessResult,
         },
         types::{PessimisticLockKeyResult, PessimisticLockResults, StorageCallback},
         DynamicConfigs, Error as StorageError, ErrorInner as StorageErrorInner,
@@ -258,6 +260,9 @@ struct SchedulerInner<L: LockManager> {
 
     flow_controller: Arc<FlowController>,
 
+    // used for apiv2
+    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
+
     control_mutex: Arc<tokio::sync::Mutex<bool>>,
 
     lock_mgr: L,
@@ -420,6 +425,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         config: &Config,
         dynamic_configs: DynamicConfigs,
         flow_controller: Arc<FlowController>,
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
         reporter: R,
         resource_tag_factory: ResourceTagFactory,
         quota_limiter: Arc<QuotaLimiter>,
@@ -459,6 +465,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             enable_async_apply_prewrite: config.enable_async_apply_prewrite,
             pessimistic_lock_wake_up_delay_duration_ms: dynamic_configs.wake_up_delay_duration_ms,
             flow_controller,
+            causal_ts_provider,
             resource_tag_factory,
             lock_wait_queues,
             quota_limiter,
@@ -568,7 +575,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .pool
             .spawn(async move {
                 match unsafe {
-                    with_tls_engine(|engine: &E| engine.precheck_write_with_ctx(&cmd_ctx))
+                    with_tls_engine(|engine: &mut E| engine.precheck_write_with_ctx(&cmd_ctx))
                 } {
                     // Precheck failed, try to return err early.
                     Err(e) => {
@@ -693,13 +700,21 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 let tag = task.cmd.tag();
                 SCHED_STAGE_COUNTER_VEC.get(tag).snapshot.inc();
 
-                let snap_ctx = SnapContext {
+                let mut snap_ctx = SnapContext {
                     pb_ctx: task.cmd.ctx(),
                     ..Default::default()
                 };
+                if matches!(
+                    task.cmd,
+                    Command::FlashbackToVersionReadPhase { .. }
+                        | Command::FlashbackToVersion { .. }
+                ) {
+                    snap_ctx.for_flashback = true;
+                }
                 // The program is currently in scheduler worker threads.
                 // Safety: `self.inner.worker_pool` should ensure that a TLS engine exists.
-                match unsafe { with_tls_engine(|engine: &E| kv::snapshot(engine, snap_ctx)) }.await
+                match unsafe { with_tls_engine(|engine: &mut E| kv::snapshot(engine, snap_ctx)) }
+                    .await
                 {
                     Ok(snapshot) => {
                         SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
@@ -844,32 +859,54 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// Event handler for the request of waiting for lock
     fn on_wait_for_lock(
         &self,
-        context: &Context,
-        token: LockWaitToken,
-        lock_wait_entry: &LockWaitEntry,
-        lock_info_pb: &kvrpcpb::LockInfo,
-        cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
-        diag_ctx: DiagnosticContext,
+        ctx: &Context,
+        cid: u64,
+        lock_info: WriteResultLockInfo,
+        tracker: TrackerToken,
     ) {
-        // debug!("command waits for lock released"; "cid" => cid);
+        let key = lock_info.key.clone();
+        let lock_digest = lock_info.lock_digest;
+        let start_ts = lock_info.parameters.start_ts;
+        let is_first_lock = lock_info.parameters.is_first_lock;
+        let wait_timeout = lock_info.parameters.wait_timeout;
+
+        let diag_ctx = DiagnosticContext {
+            key: lock_info.key.to_raw().unwrap(),
+            resource_group_tag: ctx.get_resource_group_tag().into(),
+            tracker,
+        };
+        let wait_token = self.inner.lock_mgr.allocate_token();
+
+        let (lock_req_ctx, lock_wait_entry, lock_info_pb) =
+            self.make_lock_waiting(cid, wait_token, lock_info);
+
+        // The entry must be pushed to the lock waiting queue before sending to
+        // `lock_mgr`. When the request is canceled in anywhere outside the lock
+        // waiting queue (including `lock_mgr`), it first tries to remove the
+        // entry from the lock waiting queue. If the entry doesn't exist
+        // in the queue, it will be regarded as already popped out from the queue and
+        // therefore will woken up, thus the canceling operation will be
+        // skipped. So pushing the entry to the queue must be done before any
+        // possible cancellation.
+        self.inner
+            .lock_wait_queues
+            .push_lock_wait(lock_wait_entry, lock_info_pb.clone());
+
         let wait_info = lock_manager::KeyLockWaitInfo {
-            key: lock_wait_entry.key.clone(),
-            lock_digest: LockDigest {
-                ts: lock_info_pb.get_lock_version().into(),
-                hash: lock_wait_entry.lock_hash,
-            },
-            lock_info: lock_info_pb.clone(),
+            key,
+            lock_digest,
+            lock_info: lock_info_pb,
         };
         self.inner.lock_mgr.wait_for(
-            token,
-            context.get_region_id(),
-            context.get_region_epoch().clone(),
-            context.get_term(),
-            lock_wait_entry.parameters.start_ts,
+            wait_token,
+            ctx.get_region_id(),
+            ctx.get_region_epoch().clone(),
+            ctx.get_term(),
+            start_ts,
             wait_info,
-            lock_wait_entry.parameters.is_first_lock,
-            lock_wait_entry.parameters.wait_timeout,
-            cancel_callback,
+            is_first_lock,
+            wait_timeout,
+            Box::new(lock_req_ctx.get_callback_for_cancellation()),
             diag_ctx,
         );
     }
@@ -1000,6 +1037,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                             conflict_commit_ts: released_lock.commit_ts,
                             key: released_lock.key.into_raw().unwrap(),
                             primary: lock_info.parameters.primary,
+                            reason: kvrpcpb::WriteConflictReason::PessimisticRetry,
                         },
                     )));
                     cb(Err(e.into()));
@@ -1127,6 +1165,23 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let pipelined =
             task.cmd.can_be_pipelined() && pessimistic_lock_mode == PessimisticLockMode::Pipelined;
         let txn_ext = snapshot.ext().get_txn_ext().cloned();
+        let max_ts_synced = snapshot.ext().is_max_ts_synced();
+        let causal_ts_provider = self.inner.causal_ts_provider.clone();
+        let concurrency_manager = self.inner.concurrency_manager.clone();
+
+        let raw_ext = get_raw_ext(
+            causal_ts_provider,
+            concurrency_manager.clone(),
+            max_ts_synced,
+            &task.cmd,
+        )
+        .await;
+        if let Err(err) = raw_ext {
+            info!("get_raw_ext failed"; "cid" => cid, "err" => ?err);
+            scheduler.finish_with_err(cid, err);
+            return;
+        }
+        let raw_ext = raw_ext.unwrap();
 
         // Keep some information to use after the command being consumed.
         let pessimistic_lock_single_request_meta =
@@ -1141,10 +1196,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             let _guard = sample.observe_cpu();
             let context = WriteContext {
                 lock_mgr: &self.inner.lock_mgr,
-                concurrency_manager: self.inner.concurrency_manager.clone(),
+                concurrency_manager,
                 extra_op: task.extra_op,
                 statistics,
                 async_apply_prewrite: self.inner.enable_async_apply_prewrite,
+                raw_ext,
             };
             let begin_instant = Instant::now();
             let res = unsafe {
@@ -1317,39 +1373,13 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 assert_eq!(lock_info.len(), 1);
                 let lock_info = lock_info.into_iter().next().unwrap();
 
-                assert_eq!(to_be_write.size(), 0);
-                // let cmd_meta = pessimistic_lock_single_request_meta.unwrap();
-                let diag_ctx = DiagnosticContext {
-                    key: lock_info.key.to_raw().unwrap(),
-                    resource_group_tag: ctx.get_resource_group_tag().into(),
-                    tracker,
-                };
-                let wait_token = scheduler.inner.lock_mgr.allocate_token();
+                if lock_info.parameters.wait_timeout.is_some() {
+                    assert_eq!(to_be_write.size(), 0);
+                    pr = Some(ProcessResult::Res);
+                    // allow_lock_with_conflict is not supported yet in this version.
+                    assert!(!lock_info.parameters.allow_lock_with_conflict);
 
-                // allow_lock_with_conflict is not supported yet in this version.
-                assert!(!lock_info.parameters.allow_lock_with_conflict);
-
-                let (lock_req_ctx, lock_wait_entry, lock_info_pb) = scheduler.make_lock_waiting(
-                    cid,
-                    wait_token,
-                    lock_info,
-                    mem::replace(&mut pr, Some(ProcessResult::Res)).unwrap(),
-                );
-
-                scheduler.on_wait_for_lock(
-                    &ctx,
-                    wait_token,
-                    &lock_wait_entry,
-                    &lock_info_pb,
-                    Box::new(lock_req_ctx.get_callback_for_cancellation()),
-                    diag_ctx,
-                );
-                // It's possible that the request is cancelled immediately due to no timeout
-                // (non-blocking locking).
-                if !lock_req_ctx.get_shared_states().is_finished() {
-                    self.inner
-                        .lock_wait_queues
-                        .push_lock_wait(lock_wait_entry, lock_info_pb);
+                    scheduler.on_wait_for_lock(&ctx, cid, lock_info, tracker);
                 }
             } else if tag == CommandKind::acquire_pessimistic_lock_resumed {
                 // Some requests meets lock again after waiting and resuming.
@@ -1391,7 +1421,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         {
             // Safety: `self.sched_pool` ensures a TLS engine exists.
             unsafe {
-                with_tls_engine(|engine: &E| {
+                with_tls_engine(|engine: &mut E| {
                     // We skip writing the raftstore, but to improve CDC old value hit rate,
                     // we should send the old values to the CDC scheduler.
                     engine.schedule_txn_extra(to_be_write.extra);
@@ -1612,7 +1642,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         // Safety: `self.sched_pool` ensures a TLS engine exists.
         unsafe {
-            with_tls_engine(|engine: &E| {
+            with_tls_engine(|engine: &mut E| {
                 if let Err(e) =
                     engine.async_write_ext(&ctx, to_be_write, engine_cb, proposed_cb, committed_cb)
                 {
@@ -1701,18 +1731,15 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         cid: u64,
         lock_wait_token: LockWaitToken,
         lock_info: WriteResultLockInfo,
-        first_batch_pr: ProcessResult,
     ) -> (LockWaitContext<L>, Box<LockWaitEntry>, kvrpcpb::LockInfo) {
         let mut slot = self.inner.get_task_slot(cid);
         let task_ctx = slot.get_mut(&cid).unwrap();
         let cb = task_ctx.cb.take().unwrap();
 
         let ctx = LockWaitContext::new(
-            self.inner.lock_mgr.clone(),
+            lock_info.key.clone(),
+            self.inner.lock_wait_queues.clone(),
             lock_wait_token,
-            lock_info.parameters.start_ts,
-            lock_info.parameters.for_update_ts,
-            first_batch_pr,
             cb.unwrap_normal_request_callback(),
             lock_info.parameters.allow_lock_with_conflict,
         );
@@ -1722,11 +1749,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         let lock_wait_entry = Box::new(LockWaitEntry {
             key: lock_info.key,
-            lock_hash: lock_info.lock.hash,
+            lock_hash: lock_info.lock_digest.hash,
             parameters: lock_info.parameters,
             should_not_exist: lock_info.should_not_exist,
             lock_wait_token,
-            current_legacy_wake_up_cnt: None,
+            legacy_wake_up_index: None,
             key_cb: Some(ctx.get_callback_for_blocked_key().into()),
         });
 
@@ -1740,11 +1767,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     ) -> Box<LockWaitEntry> {
         Box::new(LockWaitEntry {
             key: lock_info.key,
-            lock_hash: lock_info.lock.hash,
+            lock_hash: lock_info.lock_digest.hash,
             parameters: lock_info.parameters,
             should_not_exist: lock_info.should_not_exist,
             lock_wait_token: lock_info.lock_wait_token,
-            current_legacy_wake_up_cnt: None,
+            legacy_wake_up_index: None,
             key_cb: Some(cb.into()),
         })
     }
@@ -1819,6 +1846,44 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     }
 }
 
+pub async fn get_raw_ext(
+    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
+    concurrency_manager: ConcurrencyManager,
+    max_ts_synced: bool,
+    cmd: &Command,
+) -> Result<Option<RawExt>, Error> {
+    if causal_ts_provider.is_some() {
+        match cmd {
+            Command::RawCompareAndSwap(_) | Command::RawAtomicStore(_) => {
+                if !max_ts_synced {
+                    return Err(ErrorInner::MaxTimestampNotSynced {
+                        region_id: cmd.ctx().get_region_id(),
+                        start_ts: TimeStamp::zero(),
+                    }
+                    .into());
+                }
+                let key_guard = get_raw_key_guard(&causal_ts_provider, concurrency_manager)
+                    .await
+                    .map_err(|err: StorageError| {
+                        ErrorInner::Other(box_err!("failed to key guard: {:?}", err))
+                    })?;
+                let ts =
+                    get_causal_ts(&causal_ts_provider)
+                        .await
+                        .map_err(|err: StorageError| {
+                            ErrorInner::Other(box_err!("failed to get casual ts: {:?}", err))
+                        })?;
+                return Ok(Some(RawExt {
+                    ts: ts.unwrap(),
+                    key_guard: key_guard.unwrap(),
+                }));
+            }
+            _ => {}
+        }
+    }
+    Ok(None)
+}
+
 #[derive(Debug, PartialEq)]
 enum PessimisticLockMode {
     // Return success only if the pessimistic lock is persisted.
@@ -1883,6 +1948,7 @@ mod tests {
                     wake_up_delay_duration_ms: Arc::new(AtomicU64::new(0)),
                 },
                 Arc::new(FlowController::Singleton(EngineFlowController::empty())),
+                None,
                 DummyReporter,
                 ResourceTagFactory::new_for_test(),
                 Arc::new(QuotaLimiter::default()),
@@ -1918,6 +1984,7 @@ mod tests {
                 Some(WaitTimeout::Default),
                 false,
                 TimeStamp::default(),
+                false,
                 false,
                 false,
                 Context::default(),
@@ -2029,6 +2096,7 @@ mod tests {
                 wake_up_delay_duration_ms: Arc::new(AtomicU64::new(0)),
             },
             Arc::new(FlowController::Singleton(EngineFlowController::empty())),
+            None,
             DummyReporter,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
@@ -2134,6 +2202,7 @@ mod tests {
                 wake_up_delay_duration_ms: Arc::new(AtomicU64::new(0)),
             },
             Arc::new(FlowController::Singleton(EngineFlowController::empty())),
+            None,
             DummyReporter,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
@@ -2193,6 +2262,7 @@ mod tests {
                 wake_up_delay_duration_ms: Arc::new(AtomicU64::new(0)),
             },
             Arc::new(FlowController::Singleton(EngineFlowController::empty())),
+            None,
             DummyReporter,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
@@ -2260,6 +2330,7 @@ mod tests {
                 wake_up_delay_duration_ms: Arc::new(AtomicU64::new(0)),
             },
             Arc::new(FlowController::Singleton(EngineFlowController::empty())),
+            None,
             DummyReporter,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
@@ -2322,6 +2393,7 @@ mod tests {
                 wake_up_delay_duration_ms: Arc::new(AtomicU64::new(0)),
             },
             Arc::new(FlowController::Singleton(EngineFlowController::empty())),
+            None,
             DummyReporter,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),

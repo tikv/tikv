@@ -144,18 +144,27 @@ impl KeyValueCodec {
         true
     }
 
-    // only the non-deleted, non-expired 'raw' key/value is valid.
-    pub fn is_valid_raw_value(&self, key: &[u8], value: &[u8], current_ts: u64) -> Result<bool> {
+    // only the non-deleted, non-expired 'raw' key/value is valid, return (is_valid,
+    // is_ttl_expired)
+    pub fn is_valid_raw_value(
+        &self,
+        key: &[u8],
+        value: &[u8],
+        current_ts: u64,
+    ) -> Result<(bool, bool)> {
         if !self.is_raw_kv {
-            return Ok(false);
+            return Ok((false, false));
         }
         dispatch_api_version!(self.cur_api_ver, {
             let key_mode = API::parse_key_mode(key);
             if key_mode != KeyMode::Raw && key_mode != KeyMode::Unknown {
-                return Ok(false);
+                return Ok((false, false));
             }
             let raw_value = API::decode_raw_value(value)?;
-            return Ok(raw_value.is_valid(current_ts));
+            return Ok((
+                raw_value.is_valid(current_ts),
+                raw_value.is_ttl_expired(current_ts),
+            ));
         })
     }
 
@@ -532,6 +541,7 @@ pub mod tests {
                     !codec
                         .is_valid_raw_value(src_key, &deleted_encoded_value, 0)
                         .unwrap()
+                        .0
                 );
             }
             for raw_value in &raw_values {
@@ -554,6 +564,94 @@ pub mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn test_is_valid_raw_value() {
+        // api_version, key, value, expire_ts, is_delete, expect_valid,
+        // expect_ttl_expired
+        let test_cases = vec![
+            (
+                ApiVersion::V1,
+                b"m".to_vec(),
+                b"a".to_vec(),
+                10_u64,
+                false,
+                true,
+                false,
+            ),
+            (
+                ApiVersion::V2,
+                b"m".to_vec(),
+                b"a".to_vec(),
+                10,
+                false,
+                false,
+                false,
+            ),
+            (
+                ApiVersion::V1,
+                b"ra".to_vec(),
+                b"a".to_vec(),
+                100,
+                true,
+                true,
+                false,
+            ),
+            (
+                ApiVersion::V1ttl,
+                b"rz".to_vec(),
+                b"a".to_vec(),
+                10,
+                true,
+                false,
+                true,
+            ),
+            (
+                ApiVersion::V2,
+                b"ra".to_vec(),
+                b"a".to_vec(),
+                10,
+                false,
+                false,
+                true,
+            ),
+            (
+                ApiVersion::V2,
+                b"rz".to_vec(),
+                b"a".to_vec(),
+                100,
+                true,
+                false,
+                false,
+            ),
+            (
+                ApiVersion::V2,
+                b"rb".to_vec(),
+                b"a".to_vec(),
+                100,
+                false,
+                true,
+                false,
+            ),
+        ];
+
+        for (idx, (api_ver, key, value, expire_ts, is_delete, expect_valid, expect_ttl_expire)) in
+            test_cases.into_iter().enumerate()
+        {
+            let codec = KeyValueCodec::new(true, api_ver, api_ver);
+            let raw_value = RawValue {
+                user_value: value.clone(),
+                expire_ts: Some(expire_ts),
+                is_delete,
+            };
+            let encoded_value =
+                dispatch_api_version!(api_ver, API::encode_raw_value_owned(raw_value));
+            let (is_valid, ttl_expired) =
+                codec.is_valid_raw_value(&key, &encoded_value, 20).unwrap();
+            assert_eq!(is_valid, expect_valid, "case {}", idx);
+            assert_eq!(ttl_expired, expect_ttl_expire, "case {}", idx);
         }
     }
 }

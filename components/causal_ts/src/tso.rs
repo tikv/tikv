@@ -30,6 +30,8 @@ use std::{
     },
 };
 
+use async_trait::async_trait;
+#[cfg(test)]
 use futures::executor::block_on;
 use parking_lot::RwLock;
 use pd_client::PdClient;
@@ -140,7 +142,7 @@ impl TsoBatch {
 /// the scenario of leader transfer). Other regions without the requirement can
 /// still use older TSO cache.
 #[derive(Default, Debug)]
-struct TsoBatchList {
+pub struct TsoBatchList {
     inner: RwLock<TsoBatchListInner>,
 
     /// Number of remaining (available) TSO.
@@ -191,7 +193,6 @@ impl TsoBatchList {
         usage
     }
 
-    // TODO: make it async
     fn remove_batch(&self, key: u64) {
         if let Some(batch) = self.inner.write().remove(&key) {
             self.tso_remain
@@ -218,7 +219,9 @@ impl TsoBatchList {
                 self.tso_usage.fetch_add(1, Ordering::Relaxed);
                 self.tso_remain.fetch_sub(1, Ordering::Relaxed);
                 if is_used_up {
-                    // TODO: make it async
+                    // Note: do NOT try to make it async.
+                    // According to benchmark, `remove_batch` can be done in ~50ns, while async
+                    // implemented by `Worker` costs ~1us.
                     self.remove_batch(key);
                 }
                 return Some(ts);
@@ -253,8 +256,10 @@ impl TsoBatchList {
                 .fetch_add(batch_size as i32, Ordering::Relaxed);
         }
 
-        // remove items out of capacity limitation.
-        // TODO: make it async
+        // Remove items out of capacity limitation.
+        // Note: do NOT try to make it async.
+        // According to benchmark, `write().pop_first()` can be done in ~50ns, while
+        // async implemented by `Worker` costs ~1us.
         if self.inner.read().len() > self.capacity as usize {
             if let Some((_, batch)) = self.inner.write().pop_first() {
                 self.tso_remain
@@ -557,13 +562,24 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
     pub fn tso_usage(&self) -> u32 {
         self.batch_list.usage()
     }
+
+    #[cfg(test)]
+    pub fn get_ts(&self) -> Result<TimeStamp> {
+        block_on(self.async_get_ts())
+    }
+
+    #[cfg(test)]
+    pub fn flush(&self) -> Result<TimeStamp> {
+        block_on(self.async_flush())
+    }
 }
 
 const GET_TS_MAX_RETRY: u32 = 3;
 
+#[async_trait]
 impl<C: PdClient + 'static> CausalTsProvider for BatchTsoProvider<C> {
     // TODO: support `after_ts` argument.
-    fn get_ts(&self) -> Result<TimeStamp> {
+    async fn async_get_ts(&self) -> Result<TimeStamp> {
         let start = Instant::now();
         let mut retries = 0;
         let mut last_batch_size: u32;
@@ -587,7 +603,10 @@ impl<C: PdClient + 'static> CausalTsProvider for BatchTsoProvider<C> {
             if retries >= GET_TS_MAX_RETRY {
                 break;
             }
-            if let Err(err) = block_on(self.renew_tso_batch(false, TsoBatchRenewReason::used_up)) {
+            if let Err(err) = self
+                .renew_tso_batch(false, TsoBatchRenewReason::used_up)
+                .await
+            {
                 // `renew_tso_batch` failure is likely to be caused by TSO timeout, which would
                 // mean that PD is quite busy. So do not retry any more.
                 error!("BatchTsoProvider::get_ts, renew_tso_batch fail on batch used-up"; "err" => ?err);
@@ -602,9 +621,11 @@ impl<C: PdClient + 'static> CausalTsProvider for BatchTsoProvider<C> {
         Err(Error::TsoBatchUsedUp(last_batch_size))
     }
 
-    // TODO: provide asynchronous method
-    fn flush(&self) -> Result<()> {
-        block_on(self.renew_tso_batch(true, TsoBatchRenewReason::flush))
+    async fn async_flush(&self) -> Result<TimeStamp> {
+        self.renew_tso_batch(true, TsoBatchRenewReason::flush)
+            .await?;
+        // TODO: Return the first tso by renew_tso_batch instead of async_get_ts
+        self.async_get_ts().await
     }
 }
 
@@ -620,17 +641,23 @@ impl SimpleTsoProvider {
     }
 }
 
+#[async_trait]
 impl CausalTsProvider for SimpleTsoProvider {
-    fn get_ts(&self) -> Result<TimeStamp> {
-        let ts = block_on(self.pd_client.get_tso())?;
+    async fn async_get_ts(&self) -> Result<TimeStamp> {
+        let ts = self.pd_client.get_tso().await?;
         debug!("SimpleTsoProvider::get_ts"; "ts" => ?ts);
         Ok(ts)
+    }
+
+    async fn async_flush(&self) -> Result<TimeStamp> {
+        self.async_get_ts().await
     }
 }
 
 #[cfg(test)]
 pub mod tests {
-    use test_raftstore::TestPdClient;
+    use futures::executor::block_on;
+    use test_pd_client::TestPdClient;
 
     use super::*;
 
@@ -846,7 +873,7 @@ pub mod tests {
         let provider = SimpleTsoProvider::new(pd_cli.clone());
 
         pd_cli.set_tso(100.into());
-        let ts = provider.get_ts().unwrap();
+        let ts = block_on(provider.async_get_ts()).unwrap();
         assert_eq!(ts, 101.into(), "ts: {:?}", ts);
     }
 
@@ -874,12 +901,12 @@ pub mod tests {
         assert_eq!(provider.tso_remain(), 90);
         assert_eq!(provider.tso_usage(), 10);
 
-        provider.flush().unwrap(); // allocated: [1101, 1200]
-        assert_eq!(provider.tso_remain(), 100);
-        assert_eq!(provider.tso_usage(), 0);
+        assert_eq!(provider.flush().unwrap(), TimeStamp::from(1101)); // allocated: [1101, 1200]
+        assert_eq!(provider.tso_remain(), 99);
+        assert_eq!(provider.tso_usage(), 1);
         // used up
         pd_cli.trigger_tso_failure(); // make renew fail to verify used-up
-        for ts in 1101..=1200u64 {
+        for ts in 1102..=1200u64 {
             assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
         }
         assert_eq!(provider.tso_remain(), 0);
@@ -888,8 +915,8 @@ pub mod tests {
         assert_eq!(provider.tso_remain(), 0);
         assert_eq!(provider.tso_usage(), 100);
 
-        provider.flush().unwrap(); // allocated: [1201, 2200]
-        for ts in 1201..=1260u64 {
+        assert_eq!(provider.flush().unwrap(), TimeStamp::from(1201)); // allocated: [1201, 2200]
+        for ts in 1202..=1260u64 {
             assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
         }
         assert_eq!(provider.tso_remain(), 940);
@@ -967,9 +994,9 @@ pub mod tests {
         pd_cli.trigger_tso_failure();
         provider.flush().unwrap_err();
 
-        provider.flush().unwrap(); // allocated: [1301, 3300]
+        assert_eq!(provider.flush().unwrap(), TimeStamp::from(1301)); // allocated: [1301, 3300]
         pd_cli.trigger_tso_failure(); // make renew fail to verify used-up
-        for ts in 1301..=3300u64 {
+        for ts in 1302..=3300u64 {
             assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
         }
         provider.get_ts().unwrap_err();

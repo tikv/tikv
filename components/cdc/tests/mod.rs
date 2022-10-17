@@ -2,10 +2,12 @@
 
 use std::{sync::*, time::Duration};
 
+use causal_ts::CausalTsProvider;
 use cdc::{recv_timeout, CdcObserver, FeatureGate, MemoryQuota, Task};
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
+use futures::executor::block_on;
 use grpcio::{
     ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, ClientUnaryReceiver, Environment,
 };
@@ -156,7 +158,7 @@ impl TestSuiteBuilder {
                 Arc::new(cdc::CdcTxnExtraScheduler::new(worker.scheduler().clone())),
             );
             let scheduler = worker.scheduler();
-            let cdc_ob = cdc::CdcObserver::new(scheduler.clone(), ApiVersion::V1);
+            let cdc_ob = cdc::CdcObserver::new(scheduler.clone());
             obs.insert(id, cdc_ob.clone());
             sim.coprocessor_hooks.entry(id).or_default().push(Box::new(
                 move |host: &mut CoprocessorHost<RocksEngine>| {
@@ -188,7 +190,7 @@ impl TestSuiteBuilder {
                 env,
                 sim.security_mgr.clone(),
                 MemoryQuota::new(usize::MAX),
-                None,
+                sim.get_causal_ts_provider(*id),
             );
             let mut updated_cfg = cfg.clone();
             updated_cfg.min_ts_interval = ReadableDuration::millis(100);
@@ -511,12 +513,14 @@ impl TestSuite {
 
     pub fn flush_causal_timestamp_for_region(&mut self, region_id: u64) {
         let leader = self.cluster.leader_of_region(region_id).unwrap();
-        self.cluster
-            .sim
-            .rl()
-            .get_causal_ts_provider(leader.get_store_id())
-            .unwrap()
-            .flush()
-            .unwrap();
+        block_on(
+            self.cluster
+                .sim
+                .rl()
+                .get_causal_ts_provider(leader.get_store_id())
+                .unwrap()
+                .async_flush(),
+        )
+        .unwrap();
     }
 }

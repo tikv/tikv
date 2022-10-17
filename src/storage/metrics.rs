@@ -141,6 +141,7 @@ make_auto_flush_static_metric! {
         pause,
         key_mvcc,
         start_ts_mvcc,
+        flashback_to_version,
         raw_get,
         raw_batch_get,
         raw_scan,
@@ -364,8 +365,8 @@ where
     tls_cell.with(|c| {
         let mut c = c.borrow_mut();
         let perf_context = c.get_or_insert_with(|| {
-            with_tls_engine(|engine: &E| {
-                Box::new(engine.kv_engine().get_perf_context(
+            with_tls_engine(|engine: &mut E| {
+                Box::new(engine.kv_engine().unwrap().get_perf_context(
                     PerfLevel::Uninitialized,
                     PerfContextKind::Storage(cmd.get_str()),
                 ))
@@ -376,6 +377,15 @@ where
         perf_context.report_metrics(&[get_tls_tracker_token()]);
         res
     })
+}
+
+make_static_metric! {
+    pub struct LockWaitQueueEntriesGauge: IntGauge {
+        "type" => {
+            waiters,
+            keys,
+        },
+    }
 }
 
 lazy_static! {
@@ -592,6 +602,21 @@ lazy_static! {
     .unwrap();
     pub static ref IN_MEMORY_PESSIMISTIC_LOCKING_COUNTER_STATIC: InMemoryPessimisticLockingCounter =
         auto_flush_from!(IN_MEMORY_PESSIMISTIC_LOCKING_COUNTER, InMemoryPessimisticLockingCounter);
+
+    pub static ref LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC: LockWaitQueueEntriesGauge = register_static_int_gauge_vec!(
+        LockWaitQueueEntriesGauge,
+        "tikv_lock_wait_queue_entries_gauge_vec",
+        "Statistics of the lock wait queue's state",
+        &["type"]
+    )
+    .unwrap();
+
+    pub static ref LOCK_WAIT_QUEUE_LENGTH_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_lock_wait_queue_length",
+        "Statistics of length of queues counted when enqueueing",
+        exponential_buckets(1.0, 2.0, 16).unwrap()
+    )
+    .unwrap();
 
     pub static ref STORAGE_RELEASE_LATCH_DURATION_HISTOGRAM: HistogramVec = register_histogram_vec!(
         "tikv_storage_release_latch_duration",

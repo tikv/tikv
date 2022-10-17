@@ -19,7 +19,7 @@ use engine_traits::{
     WriteBatchExt, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IoRateLimiter;
-use futures::executor::block_on;
+use futures::{self, channel::oneshot, executor::block_on};
 use kvproto::{
     errorpb::Error as PbError,
     kvrpcpb::{ApiVersion, Context},
@@ -34,6 +34,7 @@ use kvproto::{
 use pd_client::{BucketStat, PdClient};
 use raft::eraftpb::ConfChangeType;
 use raftstore::{
+    router::RaftStoreRouter,
     store::{
         fsm::{
             create_raft_batch_system,
@@ -46,6 +47,7 @@ use raftstore::{
     Error, Result,
 };
 use tempfile::TempDir;
+use test_pd_client::TestPdClient;
 use tikv::server::Result as ServerResult;
 use tikv_util::{
     thread_group::GroupProperties,
@@ -53,6 +55,7 @@ use tikv_util::{
     worker::LazyWorker,
     HandyRwLock,
 };
+use txn_types::WriteBatchFlags;
 
 use super::*;
 use crate::Config;
@@ -110,7 +113,7 @@ pub trait Simulator {
     }
 
     fn read(
-        &self,
+        &mut self,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
         timeout: Duration,
@@ -123,7 +126,7 @@ pub trait Simulator {
     }
 
     fn async_read(
-        &self,
+        &mut self,
         node_id: u64,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
@@ -414,7 +417,7 @@ impl<T: Simulator> Cluster<T> {
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
-        match self.sim.rl().read(batch_id, request.clone(), timeout) {
+        match self.sim.wl().read(batch_id, request.clone(), timeout) {
             Err(e) => {
                 warn!("failed to read {:?}: {:?}", request, e);
                 Err(e)
@@ -438,7 +441,7 @@ impl<T: Simulator> Cluster<T> {
             }
         }
         let ret = if is_read {
-            self.sim.rl().read(None, request.clone(), timeout)
+            self.sim.wl().read(None, request.clone(), timeout)
         } else {
             self.sim.rl().call_command(request.clone(), timeout)
         };
@@ -1334,6 +1337,13 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn try_transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) -> RaftCmdResponse {
+        let epoch = self.get_region_epoch(region_id);
+        let transfer_leader = new_admin_request(region_id, &epoch, new_transfer_leader_cmd(leader));
+        self.call_command_on_leader(transfer_leader, Duration::from_secs(5))
+            .unwrap()
+    }
+
     pub fn get_snap_dir(&self, node_id: u64) -> String {
         self.sim.rl().get_snap_dir(node_id)
     }
@@ -1409,6 +1419,51 @@ impl<T: Simulator> Cluster<T> {
         router
             .significant_send(region_id, SignificantMsg::ExitForceLeaderState)
             .unwrap();
+    }
+
+    pub async fn send_flashback_msg(
+        &mut self,
+        region_id: u64,
+        store_id: u64,
+        cmd_type: AdminCmdType,
+        epoch: metapb::RegionEpoch,
+        peer: metapb::Peer,
+    ) {
+        let (result_tx, result_rx) = oneshot::channel();
+        let cb = Callback::write(Box::new(move |resp| {
+            if resp.response.get_header().has_error() {
+                result_tx.send(false).unwrap();
+                error!("send flashback msg failed"; "region_id" => region_id);
+                return;
+            }
+            result_tx.send(true).unwrap();
+        }));
+
+        let mut admin = AdminRequest::default();
+        admin.set_cmd_type(cmd_type);
+        let mut req = RaftCmdRequest::default();
+        req.mut_header().set_region_id(region_id);
+        req.mut_header().set_region_epoch(epoch);
+        req.mut_header().set_peer(peer);
+        req.set_admin_request(admin);
+        req.mut_header()
+            .set_flags(WriteBatchFlags::FLASHBACK.bits());
+
+        let router = self.sim.rl().get_router(store_id).unwrap();
+        if let Err(e) = router.send_command(
+            req,
+            cb,
+            RaftCmdExtraOpts {
+                deadline: None,
+                disk_full_opt: kvproto::kvrpcpb::DiskFullOpt::AllowedOnAlmostFull,
+            },
+        ) {
+            panic!("router send failed, error{}", e);
+        }
+
+        if !result_rx.await.unwrap() {
+            panic!("Flashback call msg failed");
+        }
     }
 
     pub fn must_split(&mut self, region: &metapb::Region, split_key: &[u8]) {

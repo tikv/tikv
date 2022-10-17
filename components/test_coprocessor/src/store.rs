@@ -132,7 +132,7 @@ impl Default for Store<RocksEngine> {
 impl<E: Engine> Store<E> {
     pub fn from_storage(storage: StorageApiV1<E, DummyLockManager>) -> Self {
         Self {
-            store: SyncTestStorageApiV1::from_storage(storage, GcConfig::default()).unwrap(),
+            store: SyncTestStorageApiV1::from_storage(0, storage, GcConfig::default()).unwrap(),
             current_ts: 1.into(),
             last_committed_ts: TimeStamp::zero(),
             handles: vec![],

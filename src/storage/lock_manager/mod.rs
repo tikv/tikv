@@ -9,7 +9,9 @@ use std::{
     time::Duration,
 };
 
+use collections::HashMap;
 use kvproto::{kvrpcpb::LockInfo, metapb::RegionEpoch};
+use parking_lot::Mutex;
 use tracker::TrackerToken;
 use txn_types::{Key, TimeStamp};
 
@@ -178,11 +180,18 @@ pub trait LockManager: Clone + Send + 'static {
 
 // For test
 #[derive(Clone)]
-pub struct DummyLockManager(Arc<AtomicU64>);
+pub struct DummyLockManager {
+    allocated_token: Arc<AtomicU64>,
+    waiters:
+        Arc<Mutex<HashMap<LockWaitToken, (KeyLockWaitInfo, Box<dyn FnOnce(StorageError) + Send>)>>>,
+}
 
 impl DummyLockManager {
     pub fn new() -> Self {
-        Self(Arc::new(AtomicU64::new(1)))
+        Self {
+            allocated_token: Arc::new(AtomicU64::new(1)),
+            waiters: Arc::new(Mutex::new(HashMap::default())),
+        }
     }
 }
 
@@ -195,26 +204,25 @@ impl Default for DummyLockManager {
 
 impl LockManager for DummyLockManager {
     fn allocate_token(&self) -> LockWaitToken {
-        LockWaitToken(Some(self.0.fetch_add(1, Ordering::SeqCst)))
+        LockWaitToken(Some(self.allocated_token.fetch_add(1, Ordering::SeqCst)))
     }
 
     fn wait_for(
         &self,
-        _token: LockWaitToken,
+        token: LockWaitToken,
         _region_id: u64,
         _region_epoch: RegionEpoch,
         _term: u64,
         _start_ts: TimeStamp,
         wait_info: KeyLockWaitInfo,
         _is_first_lock: bool,
-        timeout: Option<WaitTimeout>,
+        _timeout: Option<WaitTimeout>,
         cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
         _diag_ctx: DiagnosticContext,
     ) {
-        if timeout.is_none() {
-            let error = MvccError::from(MvccErrorInner::KeyIsLocked(wait_info.lock_info));
-            cancel_callback(StorageError::from(TxnError::from(error)));
-        }
+        self.waiters
+            .lock()
+            .insert(token, (wait_info, cancel_callback));
     }
 
     fn update_wait_for(&self, _updated_items: Vec<UpdateWaitForEvent>) {}
@@ -225,5 +233,15 @@ impl LockManager for DummyLockManager {
 
     fn dump_wait_for_entries(&self, cb: Callback) {
         cb(vec![])
+    }
+}
+
+impl DummyLockManager {
+    pub fn simulate_timeout_all(&self) {
+        let mut map = self.waiters.lock();
+        for (_, (wait_info, cancel_callback)) in map.drain() {
+            let error = MvccError::from(MvccErrorInner::KeyIsLocked(wait_info.lock_info));
+            cancel_callback(StorageError::from(TxnError::from(error)));
+        }
     }
 }

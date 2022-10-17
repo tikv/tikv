@@ -9,13 +9,12 @@
 //! - Related type aliases
 //! - [`LockWaitEntry`]: which is used to represent lock-waiting requests in the
 //!   queue
-//! - [`LockWaitEntryComparableWrapper`]: The comparable wrapper of
-//!   [`LockWaitEntry`] which defines the priority ordering among lock-waiting
-//!   requests
+//! - [`Box<LockWaitEntry>`]: The comparable wrapper of [`LockWaitEntry`] which
+//!   defines the priority ordering among lock-waiting requests
 //!
 //! Each key may have its own lock-waiting queue, which is a priority queue that
 //! orders the entries with the order defined by
-//! [`LockWaitEntryComparableWrapper`].
+//! [`Box<LockWaitEntry>`].
 //!
 //! There are be two kinds of `AcquirePessimisticLock` requests:
 //!
@@ -56,8 +55,6 @@
 //! for executing the future in a suitable place.
 
 use std::{
-    collections::BinaryHeap,
-    convert::TryFrom,
     future::Future,
     pin::Pin,
     result::Result,
@@ -70,49 +67,22 @@ use std::{
 
 use dashmap;
 use futures_util::compat::Future01CompatExt;
+use keyed_priority_queue::KeyedPriorityQueue;
 use kvproto::kvrpcpb;
 use smallvec::SmallVec;
 use sync_wrapper::SyncWrapper;
-use thiserror::Error;
 use tikv_util::{time::InstantExt, timer::GLOBAL_TIMER_HANDLE};
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
-    lock_manager::{lock_wait_context::LockWaitContextSharedState, LockManager, LockWaitToken},
+    errors::SharedError,
+    lock_manager::{LockManager, LockWaitToken},
+    metrics::*,
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
     txn::Error as TxnError,
     types::{PessimisticLockKeyResult, PessimisticLockParameters},
-    Error as StorageError, ErrorInner as StorageErrorInner,
+    Error as StorageError,
 };
-
-/// The shared version of [`crate::storage::Error`]. It's necessary to pass a
-/// single error to more than one requests, since the inner error doesn't
-/// support cloning.
-#[derive(Debug, Error, Clone)]
-#[error(transparent)]
-pub struct SharedError(Arc<StorageErrorInner>);
-
-impl From<StorageErrorInner> for SharedError {
-    fn from(e: StorageErrorInner) -> Self {
-        Self(Arc::new(e))
-    }
-}
-
-impl From<StorageError> for SharedError {
-    fn from(e: StorageError) -> Self {
-        Self(Arc::from(e.0))
-    }
-}
-
-/// Tries to convert the shared error to owned one. It can success only when
-/// it's the only reference to the error.
-impl TryFrom<SharedError> for StorageError {
-    type Error = ();
-
-    fn try_from(e: SharedError) -> Result<Self, Self::Error> {
-        Arc::try_unwrap(e.0).map(Into::into).map_err(|_| ())
-    }
-}
 
 pub type CallbackWithSharedError<T> = Box<dyn FnOnce(Result<T, SharedError>) + Send + 'static>;
 pub type PessimisticLockKeyCallback = CallbackWithSharedError<PessimisticLockKeyResult>;
@@ -122,60 +92,39 @@ pub type PessimisticLockKeyCallback = CallbackWithSharedError<PessimisticLockKey
 pub struct LockWaitEntry {
     pub key: Key,
     pub lock_hash: u64,
-    // TODO: Use term to filter out stale entries in the queue.
-    // pub term: Option<NonZeroU64>,
     pub parameters: PessimisticLockParameters,
     // `parameters` provides parameter for a request, but `should_not_exist` is specified key-wise.
     // Put it in a separated
     pub should_not_exist: bool,
     pub lock_wait_token: LockWaitToken,
-    pub current_legacy_wake_up_cnt: Option<usize>,
+    pub legacy_wake_up_index: Option<usize>,
     pub key_cb: Option<SyncWrapper<PessimisticLockKeyCallback>>,
 }
 
-/// A wrapper to [`LockWaitEntry`] to define its ordering.
-/// A [`LockWaitEntry`] takes precedence over another if it has smaller
-/// `start_ts`.
-#[repr(transparent)]
-struct LockWaitEntryComparableWrapper(pub Box<LockWaitEntry>);
-
-impl From<Box<LockWaitEntry>> for LockWaitEntryComparableWrapper {
-    fn from(x: Box<LockWaitEntry>) -> Self {
-        LockWaitEntryComparableWrapper(x)
-    }
-}
-
-impl LockWaitEntryComparableWrapper {
-    pub fn unwrap(self) -> Box<LockWaitEntry> {
-        self.0
-    }
-}
-
-impl PartialEq<Self> for LockWaitEntryComparableWrapper {
+impl PartialEq<Self> for LockWaitEntry {
     fn eq(&self, other: &Self) -> bool {
-        self.0.parameters.start_ts == other.0.parameters.start_ts
+        self.parameters.start_ts == other.parameters.start_ts
     }
 }
 
-impl Eq for LockWaitEntryComparableWrapper {}
+impl Eq for LockWaitEntry {}
 
-impl PartialOrd<Self> for LockWaitEntryComparableWrapper {
+impl PartialOrd<Self> for LockWaitEntry {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        // Reverse it since the std BinaryHeap is max heap and we want to pop the
+        // Reverse it since the priority queue is a max heap and we want to pop the
         // minimal.
         other
-            .0
             .parameters
             .start_ts
-            .partial_cmp(&self.0.parameters.start_ts)
+            .partial_cmp(&self.parameters.start_ts)
     }
 }
 
-impl Ord for LockWaitEntryComparableWrapper {
+impl Ord for LockWaitEntry {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Reverse it since the std BinaryHeap is max heap and we want to pop the
+        // Reverse it since the priority queue is a max heap and we want to pop the
         // minimal.
-        other.0.parameters.start_ts.cmp(&self.0.parameters.start_ts)
+        other.parameters.start_ts.cmp(&self.parameters.start_ts)
     }
 }
 
@@ -186,17 +135,19 @@ pub struct KeyLockWaitState {
     /// The counter of wake up events of legacy pessimistic lock requests
     /// (`allow_lock_with_conflict == false`). When an lock wait entry is
     /// pushed to the queue, it records the current counter. The purpose
-    /// is to mark the entries that needs to be woken up after delaying. An
-    /// example:
+    /// is to mark the entries that needs to be woken up after delaying.
+    ///
+    /// Here is an example showing how it works (note that requests in
+    /// the example are all in legacy mode):
     ///
     /// Let's denote a lock-wait entry by `(start_ts,
-    /// current_legacy_wake_up_cnt)`. Consider there are three requests with
+    /// legacy_wake_up_index)`. Consider there are three requests with
     /// start_ts 20, 30, 40 respectively, and they are pushed to the
-    /// queue when the `KeyLockWaitState::legacy_wake_up_cnt` is 0. Then the
+    /// queue when the `KeyLockWaitState::legacy_wake_up_index` is 0. Then the
     /// `KeyLockWaitState` is:
     ///
     /// ```text
-    /// legacy_wake_up_cnt: 0, queue: [(20, 0), (30, 0), (40, 0)]
+    /// legacy_wake_up_index: 0, queue: [(20, 0), (30, 0), (40, 0)]
     /// ```
     ///
     /// Then the lock on the key is released. We pops the first entry in the
@@ -205,7 +156,7 @@ pub struct KeyLockWaitState {
     /// `wake_up_delay_duration`. The current state becomes:
     ///
     /// ```text
-    /// legacy_wake_up_cnt: 1, queue: [(30, 0), (40, 0)]
+    /// legacy_wake_up_index: 1, queue: [(30, 0), (40, 0)]
     /// ````
     ///
     /// Here, if some other request arrives, one of them may successfully
@@ -213,7 +164,7 @@ pub struct KeyLockWaitState {
     /// becomes:
     ///
     /// ```text
-    /// legacy_wake_up_cnt: 1, queue: [(30, 0), (40, 0), (50, 1), (60, 1)]
+    /// legacy_wake_up_index: 1, queue: [(30, 0), (40, 0), (50, 1), (60, 1)]
     /// ```
     ///
     /// Then `wake_up_delay_duration` is elapsed since the previous waking up.
@@ -222,12 +173,23 @@ pub struct KeyLockWaitState {
     /// don't want to wake up later-arrived entries (50 and 60) since it
     /// introduces useless pessimistic retries to transaction 50 and 60 when
     /// they don't need to. The solution is, only wake up the entries that
-    /// has `entry.current_legacy_wake_up_cnt <
-    /// key_lock_wait_state.legacy_wake_up_cnt`. Therefore, we only wakes up
-    /// entries 30 and 40 who has `current_legacy_wake_up_cnt < 1`, while 50 and
-    /// 60 will be left untouched.
-    legacy_wake_up_cnt: usize,
-    queue: BinaryHeap<LockWaitEntryComparableWrapper>,
+    /// has `entry.legacy_wake_up_index <
+    /// key_lock_wait_state.legacy_wake_up_index`. Therefore, we only wakes up
+    /// entries 30 and 40 who has `legacy_wake_up_index < 1`, while 50
+    /// and 60 will be left untouched.
+    ///
+    /// When waking up resumable requests, the mechanism above won't take
+    /// effect. If a legacy request is woken up and triggered the mechanism,
+    /// and there is a resumable request in the queue, `delayed_notify_all`
+    /// will stop at the first resumable request it meets, pop it out, and
+    /// return it from a [`DelayedNotifyAllFuture`]. See
+    /// [`LockWaitQueues::pop_for_waking_up`].
+    legacy_wake_up_index: usize,
+    queue: KeyedPriorityQueue<
+        LockWaitToken,
+        Box<LockWaitEntry>,
+        std::hash::BuildHasherDefault<fxhash::FxHasher>,
+    >,
 
     /// The start_ts of the most recent waking up event.
     last_conflict_start_ts: TimeStamp,
@@ -242,8 +204,8 @@ impl KeyLockWaitState {
     fn new() -> Self {
         Self {
             current_lock: kvrpcpb::LockInfo::default(),
-            legacy_wake_up_cnt: 0,
-            queue: BinaryHeap::new(),
+            legacy_wake_up_index: 0,
+            queue: KeyedPriorityQueue::default(),
             last_conflict_start_ts: TimeStamp::zero(),
             last_conflict_commit_ts: TimeStamp::zero(),
             delayed_notify_all_state: None,
@@ -261,7 +223,6 @@ pub struct LockWaitQueueInner {
 #[derive(Clone)]
 pub struct LockWaitQueues<L: LockManager> {
     inner: Arc<LockWaitQueueInner>,
-    #[allow(dead_code)]
     lock_mgr: L,
 }
 
@@ -277,24 +238,39 @@ impl<L: LockManager> LockWaitQueues<L> {
     }
 
     /// Enqueues a lock wait entry. The key is indicated by the `key` field of
-    /// the `lock_wait_entry`. The caller also need to provide the
+    /// the `lock_wait_entry`. The caller also needs to provide the
     /// information of the current-holding lock.
     pub fn push_lock_wait(
         &self,
         mut lock_wait_entry: Box<LockWaitEntry>,
         current_lock: kvrpcpb::LockInfo,
     ) {
-        let mut entry = self
+        let mut new_key = false;
+        let mut key_state = self
             .inner
             .queue_map
             .entry(lock_wait_entry.key.clone())
-            .or_insert_with(|| KeyLockWaitState::new());
-        entry.current_lock = current_lock;
+            .or_insert_with(|| {
+                new_key = true;
+                KeyLockWaitState::new()
+            });
+        key_state.current_lock = current_lock;
 
-        if lock_wait_entry.current_legacy_wake_up_cnt.is_none() {
-            lock_wait_entry.current_legacy_wake_up_cnt = Some(entry.value().legacy_wake_up_cnt);
+        if lock_wait_entry.legacy_wake_up_index.is_none() {
+            lock_wait_entry.legacy_wake_up_index = Some(key_state.value().legacy_wake_up_index);
         }
-        entry.value_mut().queue.push(lock_wait_entry.into());
+        key_state
+            .value_mut()
+            .queue
+            .push(lock_wait_entry.lock_wait_token, lock_wait_entry);
+
+        let len = key_state.value_mut().queue.len();
+        drop(key_state);
+        LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.waiters.inc();
+        LOCK_WAIT_QUEUE_LENGTH_HISTOGRAM.observe(len as f64);
+        if new_key {
+            LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.keys.inc()
+        }
     }
 
     /// Dequeues the head of the lock waiting queue of the specified key,
@@ -331,23 +307,24 @@ impl<L: LockManager> LockWaitQueues<L> {
         wake_up_delay_duration_ms: Option<u64>,
     ) -> Option<(Box<LockWaitEntry>, Option<DelayedNotifyAllFuture>)> {
         let mut result = None;
+        // For statistics.
+        let mut removed_waiters = 0;
 
-        // We don't want other thread insert insert any more entries between finding the
+        // We don't want other threads insert any more entries between finding the
         // queue is empty and removing the queue from the map. Wrap the logic
         // within a call to `remove_if_mut` to avoid releasing lock during the
         // procedure.
-        self.inner.queue_map.remove_if_mut(key, |_, v| {
+        let removed_key = self.inner.queue_map.remove_if_mut(key, |_, v| {
             v.last_conflict_start_ts = conflicting_start_ts;
             v.last_conflict_commit_ts = conflicting_commit_ts;
 
-            if let Some(front) = v.queue.pop() {
-                // Remove the comparator wrapper.
-                let lock_wait_entry = front.unwrap();
+            if let Some((_, lock_wait_entry)) = v.queue.pop() {
+                removed_waiters += 1;
 
                 if !lock_wait_entry.parameters.allow_lock_with_conflict {
                     // If a pessimistic lock request in legacy mode is woken up, increase the
                     // counter.
-                    v.legacy_wake_up_cnt += 1;
+                    v.legacy_wake_up_index += 1;
                     let notify_all_future = match wake_up_delay_duration_ms {
                         Some(delay) if !v.queue.is_empty() => {
                             self.handle_delayed_wake_up(v, key, delay)
@@ -363,6 +340,15 @@ impl<L: LockManager> LockWaitQueues<L> {
             // Remove the queue if it's emptied.
             v.queue.is_empty()
         });
+
+        if removed_waiters != 0 {
+            LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC
+                .waiters
+                .sub(removed_waiters);
+        }
+        if removed_key.is_some() {
+            LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.keys.dec();
+        }
 
         result
     }
@@ -418,7 +404,6 @@ impl<L: LockManager> LockWaitQueues<L> {
         delay_ms: Arc<AtomicU64>,
         notify_id: u64,
     ) -> Option<Box<LockWaitEntry>> {
-        // tokio::task::yield_now().await;
         let mut prev_delay_ms = 0;
         // The delay duration may be extended by later waking-up events, by updating the
         // value of `delay_ms`. So we loop until we find that the elapsed
@@ -454,11 +439,13 @@ impl<L: LockManager> LockWaitQueues<L> {
         let mut conflicting_start_ts = TimeStamp::zero();
         let mut conflicting_commit_ts = TimeStamp::zero();
 
-        // We don't want other thread insert insert any more entries between finding the
+        let mut removed_waiters = 0;
+
+        // We don't want other threads insert any more entries between finding the
         // queue is empty and removing the queue from the map. Wrap the logic
         // within a call to `remove_if_mut` to avoid releasing lock during the
         // procedure.
-        self.inner.queue_map.remove_if_mut(key, |_, v| {
+        let removed_key = self.inner.queue_map.remove_if_mut(key, |_, v| {
             // The KeyLockWaitState of the key might have been removed from the map and then
             // recreated. Skip.
             if v.delayed_notify_all_state
@@ -475,19 +462,19 @@ impl<L: LockManager> LockWaitQueues<L> {
             conflicting_start_ts = v.last_conflict_start_ts;
             conflicting_commit_ts = v.last_conflict_commit_ts;
 
-            let legacy_wake_up_index = v.legacy_wake_up_cnt;
+            let legacy_wake_up_index = v.legacy_wake_up_index;
 
-            while let Some(front) = v.queue.peek() {
+            while let Some((_, front)) = v.queue.peek() {
                 if front
-                    .0
-                    .current_legacy_wake_up_cnt
-                    .map_or(false, |cnt| cnt >= legacy_wake_up_index)
+                    .legacy_wake_up_index
+                    .map_or(false, |idx| idx >= legacy_wake_up_index)
                 {
                     // This entry is added after the legacy-wakeup that issued the current
                     // delayed_notify_all operation. Keep it and other remaining items in the queue.
                     break;
                 }
-                let lock_wait_entry = v.queue.pop().unwrap().unwrap();
+                let (_, lock_wait_entry) = v.queue.pop().unwrap();
+                removed_waiters += 1;
                 if lock_wait_entry.parameters.allow_lock_with_conflict {
                     woken_up_resumable_entry = Some(lock_wait_entry);
                     break;
@@ -498,6 +485,15 @@ impl<L: LockManager> LockWaitQueues<L> {
             // If the queue is empty, remove it from the map.
             v.queue.is_empty()
         });
+
+        if removed_waiters != 0 {
+            LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC
+                .waiters
+                .sub(removed_waiters);
+        }
+        if removed_key.is_some() {
+            LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.keys.dec();
+        }
 
         // Call callbacks to cancel these entries here.
         // TODO: Perhaps we'd better make it concurrent with scheduling the new command
@@ -512,6 +508,7 @@ impl<L: LockManager> LockWaitQueues<L> {
                     conflict_commit_ts: conflicting_commit_ts,
                     key: lock_wait_entry.key.into_raw().unwrap(),
                     primary: lock_wait_entry.parameters.primary,
+                    reason: kvrpcpb::WriteConflictReason::PessimisticRetry,
                 },
             )));
             cb(Err(e.into()));
@@ -519,6 +516,63 @@ impl<L: LockManager> LockWaitQueues<L> {
 
         // Return the item to be woken up in resumable way.
         woken_up_resumable_entry
+    }
+
+    /// Finds a specific LockWaitEntry by key and token, and removes it from the
+    /// queue. No extra operation will be performed on the removed entry.
+    /// The caller is responsible for finishing or cancelling the request to
+    /// let it return the response to the client.
+    pub fn remove_by_token(
+        &self,
+        key: &Key,
+        lock_wait_token: LockWaitToken,
+    ) -> Option<Box<LockWaitEntry>> {
+        let mut result = None;
+
+        // We don't want other threads insert any more entries between finding the
+        // queue is empty and removing the queue from the map. Wrap the logic
+        // within a call to `remove_if_mut` to avoid releasing lock during the
+        // procedure.
+        let removed_key = self.inner.queue_map.remove_if_mut(key, |_, v| {
+            if let Some(res) = v.queue.remove(&lock_wait_token) {
+                LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.waiters.dec();
+                result = Some(res);
+            }
+            v.queue.is_empty()
+        });
+
+        if removed_key.is_some() {
+            LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.keys.dec();
+        }
+
+        result
+    }
+
+    #[allow(dead_code)]
+    pub(super) fn get_lock_mgr(&self) -> &L {
+        &self.lock_mgr
+    }
+
+    #[cfg(test)]
+    pub fn must_not_contain_key(&self, key: &[u8]) {
+        assert!(self.inner.queue_map.get(&Key::from_raw(key)).is_none());
+    }
+
+    #[cfg(test)]
+    pub fn must_have_next_entry(&self, key: &[u8], start_ts: impl Into<TimeStamp>) {
+        assert_eq!(
+            self.inner
+                .queue_map
+                .get(&Key::from_raw(key))
+                .unwrap()
+                .queue
+                .peek()
+                .unwrap()
+                .1
+                .parameters
+                .start_ts,
+            start_ts.into()
+        );
     }
 }
 
@@ -533,10 +587,11 @@ mod tests {
     use crate::storage::{
         lock_manager::{lock_wait_context::LockWaitContext, DummyLockManager, WaitTimeout},
         txn::ErrorInner as TxnErrorInner,
-        ProcessResult, StorageCallback,
+        ErrorInner as StorageErrorInner, StorageCallback,
     };
 
     struct TestLockWaitEntryHandle {
+        token: LockWaitToken,
         wake_up_rx: Receiver<Result<PessimisticLockKeyResult, SharedError>>,
         cancel_cb: Box<dyn FnOnce()>,
     }
@@ -570,7 +625,7 @@ mod tests {
     // Additionally add some helper functions to the LockWaitQueues for simplifying
     // test code.
     impl<L: LockManager> LockWaitQueues<L> {
-        fn make_lock_info_pb(&self, key: &[u8], ts: impl Into<TimeStamp>) -> kvrpcpb::LockInfo {
+        pub fn make_lock_info_pb(&self, key: &[u8], ts: impl Into<TimeStamp>) -> kvrpcpb::LockInfo {
             let ts = ts.into();
             let mut lock_info = kvrpcpb::LockInfo::default();
             lock_info.set_lock_version(ts.into_inner());
@@ -590,11 +645,9 @@ mod tests {
             let token = self.lock_mgr.allocate_token();
             let dummy_request_cb = StorageCallback::PessimisticLock(Box::new(|_| ()));
             let dummy_ctx = LockWaitContext::new(
-                self.lock_mgr.clone(),
+                Key::from_raw(key),
+                self.clone(),
                 token,
-                start_ts,
-                start_ts,
-                ProcessResult::Res,
                 dummy_request_cb,
                 false,
             );
@@ -610,6 +663,7 @@ mod tests {
                 min_commit_ts: 0.into(),
                 check_existence: false,
                 is_first_lock: false,
+                lock_only_if_exists: false,
                 allow_lock_with_conflict: false,
             };
 
@@ -622,7 +676,7 @@ mod tests {
                 parameters,
                 should_not_exist: false,
                 lock_wait_token: token,
-                current_legacy_wake_up_cnt: None,
+                legacy_wake_up_index: None,
                 key_cb: Some(SyncWrapper::new(Box::new(move |res| tx.send(res).unwrap()))),
             });
 
@@ -636,6 +690,7 @@ mod tests {
             (
                 lock_wait_entry,
                 TestLockWaitEntryHandle {
+                    token,
                     wake_up_rx: rx,
                     cancel_cb: Box::new(cancel),
                 },
@@ -728,26 +783,6 @@ mod tests {
             res
         }
 
-        fn must_not_contains_key(&self, key: &[u8]) {
-            assert!(self.inner.queue_map.get(&Key::from_raw(key)).is_none());
-        }
-
-        fn must_have_next_entry(&self, key: &[u8], start_ts: impl Into<TimeStamp>) {
-            assert_eq!(
-                self.inner
-                    .queue_map
-                    .get(&Key::from_raw(key))
-                    .unwrap()
-                    .queue
-                    .peek()
-                    .unwrap()
-                    .0
-                    .parameters
-                    .start_ts,
-                start_ts.into()
-            );
-        }
-
         fn get_delayed_notify_id(&self, key: &[u8]) -> Option<u64> {
             self.inner
                 .queue_map
@@ -756,6 +791,13 @@ mod tests {
                 .delayed_notify_all_state
                 .as_ref()
                 .map(|(id, ..)| *id)
+        }
+
+        fn get_queue_length_of_key(&self, key: &[u8]) -> usize {
+            self.inner
+                .queue_map
+                .get(&Key::from_raw(key))
+                .map_or(0, |v| v.queue.len())
         }
     }
 
@@ -803,14 +845,14 @@ mod tests {
             .check_key(b"k1")
             .check_start_ts(10);
         queues.must_pop_none(b"k1", 5, 6);
-        queues.must_not_contains_key(b"k1");
+        queues.must_not_contain_key(b"k1");
 
         queues
             .must_pop(b"k2", 5, 6)
             .check_key(b"k2")
             .check_start_ts(11);
         queues.must_pop_none(b"k2", 5, 6);
-        queues.must_not_contains_key(b"k2");
+        queues.must_not_contain_key(b"k2");
     }
 
     #[test]
@@ -832,7 +874,48 @@ mod tests {
                 .check_start_ts(expected_start_ts);
         }
 
-        queues.must_not_contains_key(b"k1");
+        queues.must_not_contain_key(b"k1");
+    }
+
+    #[test]
+    fn test_removing_by_token() {
+        let queues = LockWaitQueues::new(DummyLockManager::new());
+
+        queues.mock_lock_wait(b"k1", 10, 5, false);
+        let token11 = queues.mock_lock_wait(b"k1", 11, 5, false).token;
+        queues.mock_lock_wait(b"k1", 12, 5, false);
+        let token13 = queues.mock_lock_wait(b"k1", 13, 5, false).token;
+        queues.mock_lock_wait(b"k1", 14, 5, false);
+        assert_eq!(queues.get_queue_length_of_key(b"k1"), 5);
+
+        queues
+            .remove_by_token(&Key::from_raw(b"k1"), token11)
+            .unwrap()
+            .check_key(b"k1")
+            .check_start_ts(11);
+        queues
+            .remove_by_token(&Key::from_raw(b"k1"), token13)
+            .unwrap()
+            .check_key(b"k1")
+            .check_start_ts(13);
+        assert_eq!(queues.get_queue_length_of_key(b"k1"), 3);
+
+        // Removing not-existing entry takes no effect.
+        assert!(
+            queues
+                .remove_by_token(&Key::from_raw(b"k1"), token11)
+                .is_none()
+        );
+        assert!(
+            queues
+                .remove_by_token(&Key::from_raw(b"k2"), token11)
+                .is_none()
+        );
+        assert_eq!(queues.get_queue_length_of_key(b"k1"), 3);
+
+        queues.must_pop(b"k1", 5, 6).check_start_ts(10);
+        queues.must_pop(b"k1", 5, 6).check_start_ts(12);
+        queues.must_pop(b"k1", 5, 6).check_start_ts(14);
     }
 
     #[test]
@@ -845,16 +928,20 @@ mod tests {
         let h13 = queues.mock_lock_wait(b"k1", 13, 5, false);
         queues.mock_lock_wait(b"k1", 14, 5, false);
 
+        assert_eq!(queues.get_queue_length_of_key(b"k1"), 5);
+
         h10.cancel();
         h11.cancel();
         h13.cancel();
+
+        assert_eq!(queues.get_queue_length_of_key(b"k1"), 2);
 
         for &expected_start_ts in &[12u64, 14] {
             queues
                 .must_pop(b"k1", 5, 6)
                 .check_start_ts(expected_start_ts);
         }
-        queues.must_not_contains_key(b"k1");
+        queues.must_not_contain_key(b"k1");
     }
 
     #[tokio::test]
@@ -869,14 +956,22 @@ mod tests {
             queues.mock_lock_wait(b"k1", 13, 5, false),
         ];
 
+        // Current queue: [8, 11, 12, 13]
+
         let (entry, delay_wake_up_future) = queues.must_pop_with_delayed_notify(b"k1", 5, 6);
         entry.check_key(b"k1").check_start_ts(8);
+
+        // Current queue: [11*, 12*, 13*] (Items marked with * means it has
+        // legacy_wake_up_index less than that in KeyLockWaitState, so it might
+        // be woken up when calling delayed_notify_all).
 
         let handles2 = vec![
             queues.mock_lock_wait(b"k1", 14, 5, false),
             queues.mock_lock_wait(b"k1", 15, 5, true),
             queues.mock_lock_wait(b"k1", 16, 5, false),
         ];
+
+        // Current queue: [11*, 12*, 13*, 14, 15, 16]
 
         assert!(
             handles1[0]
@@ -897,18 +992,31 @@ mod tests {
                 .is_none()
         );
 
+        // Current queue: [14, 15, 16]
+
         queues.mock_lock_wait(b"k1", 9, 5, false);
-        // 9 will be woken up and 14 to 16 will be scheduled for delayed wake up.
+        // Current queue: [9, 14, 15, 16]
+
+        // 9 will be woken up and delayed wake up should be scheduled. After delaying,
+        // 14 to 16 should be all woken up later if they are all not resumable.
+        // However since 15 is resumable, it will only wake up 14 and return 15
+        // through the result of the `delay_wake_up_future`.
         let (entry, delay_wake_up_future) = queues.must_pop_with_delayed_notify(b"k1", 7, 8);
         entry.check_key(b"k1").check_start_ts(9);
 
+        // Current queue: [14*, 15*, 16*]
+
         queues.mock_lock_wait(b"k1", 17, 5, false);
         let handle18 = queues.mock_lock_wait(b"k1", 18, 5, false);
+
+        // Current queue: [14*, 15*, 16*, 17, 18]
 
         // Wakes up 14, and stops at 15 which is resumable. Then, 15 should be returned
         // and the caller should be responsible for waking it up.
         let entry15 = delay_wake_up_future.await.unwrap();
         entry15.check_key(b"k1").check_start_ts(15);
+
+        // Current queue: [16*, 17, 18]
 
         let mut it = handles2.into_iter();
         // Receive 14.
@@ -946,7 +1054,7 @@ mod tests {
                 .is_none()
         );
 
-        // Remove remaining entries of the key.
+        // Current queue: [16*, 17, 18]
 
         let (entry, delayed_wake_up_future) = queues.must_pop_with_delayed_notify(b"k1", 7, 8);
         entry.check_key(b"k1").check_start_ts(16);
@@ -960,21 +1068,27 @@ mod tests {
         );
         queues.must_have_next_entry(b"k1", 17);
 
+        // Current queue: [17*, 18*]
+
         // Don't need to create new future if there already exists one for the key.
         let entry = queues.must_pop_with_no_delayed_notify(b"k1", 9, 10);
         entry.check_key(b"k1").check_start_ts(17);
         queues.must_have_next_entry(b"k1", 18);
 
+        // Current queue: [18*]
+
         queues.mock_lock_wait(b"k1", 19, 5, false);
+        // Current queue: [18*, 19]
         assert!(delayed_wake_up_future.await.is_none());
         // 18 will be cancelled with ts of the latest wake-up event.
         expect_write_conflict(&handle18.wait_for_result().unwrap_err().0, 9, 10);
+        // Current queue: [19]
 
         // Don't need to create new future if the queue is cleared.
         let entry = queues.must_pop_with_no_delayed_notify(b"k1", 9, 10);
         entry.check_key(b"k1").check_start_ts(19);
-
-        queues.must_not_contains_key(b"k1");
+        // Current queue: empty
+        queues.must_not_contain_key(b"k1");
 
         // Calls delayed_notify_all on keys that not exists (maybe deleted due to
         // completely waking up). Nothing would happen.
@@ -983,6 +1097,6 @@ mod tests {
                 .delayed_notify_all(&Key::from_raw(b"k1"), 1)
                 .is_none()
         );
-        queues.must_not_contains_key(b"k1");
+        queues.must_not_contain_key(b"k1");
     }
 }

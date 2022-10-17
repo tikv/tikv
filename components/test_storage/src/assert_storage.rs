@@ -1,7 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use api_version::{ApiV1, KvFormat};
-use kvproto::kvrpcpb::{Context, KeyRange, LockInfo};
+use kvproto::{
+    kvrpcpb::{Context, KeyRange, LockInfo},
+    metapb,
+};
 use test_raftstore::{Cluster, ServerCluster, SimulateEngine};
 use tikv::storage::{
     self,
@@ -27,7 +30,7 @@ impl Default for AssertionStorage<RocksEngine, ApiV1> {
     fn default() -> Self {
         AssertionStorage {
             ctx: Context::default(),
-            store: SyncTestStorageBuilder::default().build().unwrap(),
+            store: SyncTestStorageBuilder::default().build(0).unwrap(),
         }
     }
 }
@@ -36,7 +39,7 @@ impl<F: KvFormat> AssertionStorage<RocksEngine, F> {
     pub fn new() -> Self {
         AssertionStorage {
             ctx: Context::default(),
-            store: SyncTestStorageBuilder::new().build().unwrap(),
+            store: SyncTestStorageBuilder::new().build(0).unwrap(),
         }
     }
 }
@@ -51,19 +54,27 @@ impl<F: KvFormat> AssertionStorage<SimulateEngine, F> {
         (cluster, storage)
     }
 
-    pub fn update_with_key_byte(&mut self, cluster: &mut Cluster<ServerCluster>, key: &[u8]) {
+    pub fn update_with_key_byte(
+        &mut self,
+        cluster: &mut Cluster<ServerCluster>,
+        key: &[u8],
+    ) -> metapb::Region {
         // ensure the leader of range which contains current key has been elected
         cluster.must_get(key);
         let region = cluster.get_region(key);
         let leader = cluster.leader_of_region(region.get_id()).unwrap();
         if leader.get_store_id() == self.ctx.get_peer().get_store_id() {
-            return;
+            return region;
         }
+        let store_id = leader.store_id;
         let engine = cluster.sim.rl().storages[&leader.get_id()].clone();
         self.ctx.set_region_id(region.get_id());
         self.ctx.set_region_epoch(region.get_region_epoch().clone());
         self.ctx.set_peer(leader);
-        self.store = SyncTestStorageBuilder::from_engine(engine).build().unwrap();
+        self.store = SyncTestStorageBuilder::from_engine(engine)
+            .build(store_id)
+            .unwrap();
+        region
     }
 
     pub fn delete_ok_for_cluster(
@@ -173,7 +184,7 @@ impl<F: KvFormat> AssertionStorage<SimulateEngine, F> {
                 break;
             }
             self.expect_not_leader_or_stale_command(res.unwrap_err());
-            self.update_with_key_byte(cluster, key)
+            self.update_with_key_byte(cluster, key);
         }
         assert!(success);
 
@@ -188,7 +199,7 @@ impl<F: KvFormat> AssertionStorage<SimulateEngine, F> {
                 break;
             }
             self.expect_not_leader_or_stale_command(res.unwrap_err());
-            self.update_with_key_byte(cluster, key)
+            self.update_with_key_byte(cluster, key);
         }
         assert!(success);
     }
@@ -197,16 +208,17 @@ impl<F: KvFormat> AssertionStorage<SimulateEngine, F> {
         &mut self,
         cluster: &mut Cluster<ServerCluster>,
         region_key: &[u8],
+        mut region: metapb::Region,
         safe_point: impl Into<TimeStamp>,
     ) {
         let safe_point = safe_point.into();
         for _ in 0..3 {
-            let ret = self.store.gc(self.ctx.clone(), safe_point);
+            let ret = self.store.gc(region, self.ctx.clone(), safe_point);
             if ret.is_ok() {
                 return;
             }
             self.expect_not_leader_or_stale_command(ret.unwrap_err());
-            self.update_with_key_byte(cluster, region_key);
+            region = self.update_with_key_byte(cluster, region_key);
         }
         panic!("failed with 3 retry!");
     }
@@ -224,7 +236,9 @@ impl<F: KvFormat> AssertionStorage<SimulateEngine, F> {
 
         self.delete_ok_for_cluster(cluster, &key, 1000, 1050);
         self.get_none_from_cluster(cluster, &key, 2000);
-        self.gc_ok_for_cluster(cluster, &key, 2000);
+
+        let region = cluster.get_region(&key);
+        self.gc_ok_for_cluster(cluster, &key, region, 2000);
         self.get_none_from_cluster(cluster, &key, 3000);
     }
 }
@@ -793,8 +807,10 @@ impl<E: Engine, F: KvFormat> AssertionStorage<E, F> {
         self.expect_invalid_tso_err(resp, start_ts, commit_ts.unwrap())
     }
 
-    pub fn gc_ok(&self, safe_point: impl Into<TimeStamp>) {
-        self.store.gc(self.ctx.clone(), safe_point.into()).unwrap();
+    pub fn gc_ok(&self, region: metapb::Region, safe_point: impl Into<TimeStamp>) {
+        self.store
+            .gc(region, self.ctx.clone(), safe_point.into())
+            .unwrap();
     }
 
     pub fn delete_range_ok(&self, start_key: &[u8], end_key: &[u8]) {
@@ -1069,11 +1085,11 @@ impl<E: Engine, F: KvFormat> AssertionStorage<E, F> {
             .unwrap_err();
     }
 
-    pub fn test_txn_store_gc(&self, key: &str) {
+    pub fn test_txn_store_gc(&self, key: &str, region: metapb::Region) {
         let key_bytes = key.as_bytes();
         self.put_ok(key_bytes, b"v1", 5, 10);
         self.put_ok(key_bytes, b"v2", 15, 20);
-        self.gc_ok(30);
+        self.gc_ok(region, 30);
         self.get_none(key_bytes, 15);
         self.get_ok(key_bytes, 25, b"v2");
     }
@@ -1086,7 +1102,7 @@ impl<E: Engine, F: KvFormat> AssertionStorage<E, F> {
         }
         self.delete_ok(&key, 1000, 1050);
         self.get_none(&key, 2000);
-        self.gc_ok(2000);
+        self.gc_ok(metapb::Region::default(), 2000);
         self.get_none(&key, 3000);
     }
 }

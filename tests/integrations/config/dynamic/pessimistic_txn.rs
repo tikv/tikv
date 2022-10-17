@@ -6,7 +6,7 @@ use std::{
 };
 
 use security::SecurityManager;
-use test_raftstore::TestPdClient;
+use test_pd_client::TestPdClient;
 use tikv::{
     config::*,
     server::{
@@ -69,7 +69,7 @@ fn setup(
 
 fn validate_waiter<F>(router: &WaiterMgrScheduler, f: F)
 where
-    F: FnOnce(ReadableDuration, ReadableDuration) + Send + 'static,
+    F: FnOnce(ReadableDuration) + Send + 'static,
 {
     let (tx, rx) = mpsc::channel();
     router.validate(Box::new(move |v1| {
@@ -118,12 +118,9 @@ fn test_lock_manager_cfg_update() {
     cfg_controller
         .update_config("pessimistic-txn.wait-for-lock-timeout", "4000ms")
         .unwrap();
-    validate_waiter(
-        &waiter,
-        move |timeout: ReadableDuration, delay: ReadableDuration| {
-            assert_eq!(timeout.as_millis(), 4000);
-        },
-    );
+    validate_waiter(&waiter, move |timeout: ReadableDuration| {
+        assert_eq!(timeout.as_millis(), 4000);
+    });
     validate_dead_lock(&deadlock, move |ttl: u64| {
         assert_eq!(ttl, 4000);
     });
