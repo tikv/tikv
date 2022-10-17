@@ -29,7 +29,7 @@ crossbeam = "0.8"
 engine_traits = { workspace = true }
 fail = "0.5"
 futures = "0.3"
-grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored"] }
+grpcio = { workspace = true }
 hex = "0.4"
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 lazy_static = "1.3"

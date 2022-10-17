@@ -6,16 +6,16 @@ use std::{
     path::Path,
 };
 
-use external_storage_export::{
-    create_storage, make_cloud_backend, make_hdfs_backend,
-    make_local_backend, make_noop_backend, ExternalStorage, UnpinReader,
-};
-#[cfg(feature = "cloud-aws")]
-use external_storage_export::make_s3_backend;
 #[cfg(feature = "cloud-azure")]
 use external_storage_export::make_azblob_backend;
 #[cfg(feature = "cloud-gcp")]
 use external_storage_export::make_gcs_backend;
+#[cfg(feature = "cloud-aws")]
+use external_storage_export::make_s3_backend;
+use external_storage_export::{
+    create_storage, make_cloud_backend, make_hdfs_backend, make_local_backend, make_noop_backend,
+    ExternalStorage, UnpinReader,
+};
 use futures_util::io::{copy, AllowStdIo};
 use ini::ini::Ini;
 use kvproto::brpb::{AzureBlobStorage, Bucket, CloudDynamic, Gcs, StorageBackend, S3};

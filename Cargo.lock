@@ -1673,6 +1673,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f7531096570974c3a9dcf9e4b8e1cede1ec26cf5046219fb3b9d897503b9be59"
 
 [[package]]
+name = "example_coprocessor_plugin"
+version = "0.1.0"
+dependencies = [
+ "coprocessor_plugin_api",
+]
+
+[[package]]
 name = "external_storage"
 version = "0.0.1"
 dependencies = [
@@ -5738,13 +5745,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "test_coprocessor_plugin"
-version = "0.1.0"
-dependencies = [
- "coprocessor_plugin_api",
-]
-
-[[package]]
 name = "test_pd"
 version = "0.0.1"
 dependencies = [
@@ -6181,6 +6181,7 @@ dependencies = [
  "engine_traits",
  "engine_traits_tests",
  "error_code",
+ "example_coprocessor_plugin",
  "fail",
  "file_system",
  "flate2",
@@ -6252,7 +6253,6 @@ dependencies = [
  "sync_wrapper",
  "sysinfo",
  "tempfile",
- "test_coprocessor_plugin",
  "test_sst_importer",
  "test_util",
  "thiserror",

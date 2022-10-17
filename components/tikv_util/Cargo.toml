@@ -24,7 +24,7 @@ error_code = { workspace = true }
 fail = "0.5"
 futures = { version = "0.3", features = ["compat", "thread-pool"] }
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
-grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+grpcio = { workspace = true }
 http = "0.2.0"
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 lazy_static = "1.3"
