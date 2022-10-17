@@ -313,7 +313,10 @@ impl Suite {
 
         rx.into_iter()
             .map(|r| match r {
-                GetCheckpointResult::Ok { checkpoint, .. } => checkpoint.into_inner(),
+                GetCheckpointResult::Ok { checkpoint, region } => {
+                    info!("getting checkpoint"; "checkpoint" => %checkpoint, "region" => ?region);
+                    checkpoint.into_inner()
+                }
                 GetCheckpointResult::NotFound { .. }
                 | GetCheckpointResult::EpochNotMatch { .. } => {
                     unreachable!()
@@ -832,6 +835,38 @@ mod test {
                 .await;
         });
         suite.cluster.shutdown();
+    }
+
+    #[test]
+    fn frequent_initial_scan() {
+        test_util::init_log_for_test();
+        let mut suite = super::SuiteBuilder::new_named("frequent_initial_scan").build();
+        let keys = (1..1024).map(|i| make_record_key(1, i)).collect::<Vec<_>>();
+        let start_ts = suite.tso();
+        suite.must_kv_prewrite(
+            1,
+            keys.clone()
+                .into_iter()
+                .map(|k| mutation(k, b"hello, world".to_vec()))
+                .collect(),
+            make_record_key(1, 886),
+            start_ts,
+        );
+        fail::cfg("execute_scan_command", "pause").unwrap();
+        suite.must_register_task(1, "frequent_initial_scan");
+        let commit_ts = suite.tso();
+        suite.commit_keys(keys, start_ts, commit_ts);
+        suite.run(|| {
+            Task::ModifyObserve(backup_stream::ObserveOp::RefreshResolver {
+                region: suite.cluster.get_region(&make_record_key(1, 886)),
+            })
+        });
+        fail::cfg("execute_scan_command", "off");
+        suite.force_flush_files("frequent_initial_scan");
+        suite.wait_for_flush();
+        std::thread::sleep(Duration::from_secs(1));
+        let c = suite.global_checkpoint();
+        assert!(c > commit_ts.into_inner(), "{} vs {}", c, commit_ts);
     }
 
     #[test]
