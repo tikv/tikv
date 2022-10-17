@@ -44,7 +44,18 @@ ENABLE_FEATURES ?=
 # Note that enabling frame-pointer means that the Rust standard library will
 # be recompiled.
 ifndef PROXY_FRAME_POINTER
+ARCH=$(shell uname -m)
 export PROXY_FRAME_POINTER=1
+# Disable when x86, See https://github.com/pingcap/tiflash/issues/6091
+ifeq ($(ARCH),i386)
+export PROXY_FRAME_POINTER=0
+endif
+ifeq ($(ARCH),i686)
+export PROXY_FRAME_POINTER=0
+endif
+ifeq ($(ARCH),x86_64)
+export PROXY_FRAME_POINTER=0
+endif
 endif
 
 ifeq ($(PROXY_FRAME_POINTER),1)
@@ -171,8 +182,6 @@ dev: format clippy
 
 ifeq ($(PROXY_FRAME_POINTER),1)
 build: ENABLE_FEATURES += pprof-fp
-else
-build: ENABLE_FEATURES += pprof-dwarf
 endif
 build:
 	PROXY_ENABLE_FEATURES="${ENABLE_FEATURES}" ./build.sh
