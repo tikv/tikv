@@ -3133,9 +3133,7 @@ pub mod test_util {
                         conflict_ts: ts2,
                     },
                 ) if value1 == value2 && ts1 == ts2 => true,
-                (PessimisticLockKeyResult::Waiting(_), PessimisticLockKeyResult::Waiting(_)) => {
-                    true
-                }
+                (PessimisticLockKeyResult::Waiting, PessimisticLockKeyResult::Waiting) => true,
                 (PessimisticLockKeyResult::Failed(_), PessimisticLockKeyResult::Failed(_)) => true,
                 _ => false,
             }
@@ -3177,15 +3175,11 @@ pub mod test_util {
     impl PessimisticLockCommand {
         pub fn allow_lock_with_conflict(mut self, v: bool) -> Self {
             if let Command::AcquirePessimisticLock(commands::AcquirePessimisticLock {
-                inner:
-                    PessimisticLockCmdInner::SingleRequest {
-                        allow_lock_with_conflict,
-                        ..
-                    },
+                inner: PessimisticLockCmdInner::SingleRequest { params, .. },
                 ..
             }) = &mut self.cmd
             {
-                *allow_lock_with_conflict = v;
+                params.allow_lock_with_conflict = v;
             } else {
                 panic!("failed to set parameter to resumed AcquirePessimisticLock cmd");
             }
@@ -3368,7 +3362,7 @@ mod tests {
     };
     use tikv_util::config::ReadableSize;
     use tracker::INVALID_TRACKER_TOKEN;
-    use txn_types::{Mutation, PessimisticLock, WriteType};
+    use txn_types::{Mutation, OldValues, PessimisticLock, WriteType};
 
     use super::{
         mvcc::tests::{must_unlocked, must_written},
@@ -8249,7 +8243,7 @@ mod tests {
             for k in keys {
                 storage
                     .sched_txn_command(
-                        commands::AcquirePessimisticLock::new(
+                        commands::AcquirePessimisticLock::new_normal(
                             vec![(k.clone(), false)],
                             k.to_raw().unwrap(),
                             lock_ts.into(),
@@ -8259,7 +8253,7 @@ mod tests {
                             Some(WaitTimeout::Millis(5000)),
                             false,
                             (lock_ts + 1).into(),
-                            OldValues::default(),
+                            false,
                             false,
                             Context::default(),
                         ),

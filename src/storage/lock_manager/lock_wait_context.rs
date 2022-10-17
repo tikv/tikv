@@ -28,7 +28,7 @@ use crate::storage::{
         lock_waiting_queue::{PessimisticLockKeyCallback, SharedError},
         LockManager, LockWaitToken,
     },
-    Error as StorageError, PessimisticLockRes, ProcessResult, StorageCallback,
+    Error as StorageError, PessimisticLockKeyResult, ProcessResult, StorageCallback,
 };
 
 pub struct LockWaitContextInner {
@@ -126,7 +126,7 @@ impl<L: LockManager> LockWaitContext<L> {
         }
     }
 
-    fn finish_request(&self, result: Result<PessimisticLockRes, SharedError>) {
+    fn finish_request(&self, result: Result<PessimisticLockKeyResult, SharedError>) {
         let ctx_inner = if let Some(inner) = self.shared_states.ctx_inner.lock().take() {
             inner
         } else {
@@ -167,12 +167,12 @@ mod tests {
         lock_manager::DummyLockManager,
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{Error as TxnError, ErrorInner as TxnErrorInner},
-        ErrorInner as StorageErrorInner, Result as StorageResult,
+        ErrorInner as StorageErrorInner, PessimisticLockResults, Result as StorageResult,
     };
 
     fn create_storage_cb() -> (
         StorageCallback,
-        Receiver<StorageResult<StorageResult<PessimisticLockRes>>>,
+        Receiver<StorageResult<StorageResult<PessimisticLockResults>>>,
     ) {
         let (tx, rx) = channel();
         let cb = StorageCallback::PessimisticLock(Box::new(move |r| tx.send(r).unwrap()));
@@ -181,7 +181,7 @@ mod tests {
 
     fn create_test_lock_wait_ctx() -> (
         LockWaitContext<impl LockManager>,
-        Receiver<StorageResult<StorageResult<PessimisticLockRes>>>,
+        Receiver<StorageResult<StorageResult<PessimisticLockResults>>>,
     ) {
         // TODO: Use `ProxyLockMgr` to check the correctness of the `remove_lock_wait`
         // invocation.

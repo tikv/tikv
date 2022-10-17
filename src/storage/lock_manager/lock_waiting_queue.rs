@@ -81,14 +81,14 @@ use crate::storage::{
     lock_manager::{lock_wait_context::LockWaitContextSharedState, LockManager, LockWaitToken},
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
     txn::Error as TxnError,
-    types::{PessimisticLockParameters, PessimisticLockRes},
+    types::{PessimisticLockKeyResult, PessimisticLockParameters},
     Error as StorageError, ErrorInner as StorageErrorInner,
 };
 
 /// The shared version of [`crate::storage::Error`]. It's necessary to pass a
 /// single error to more than one requests, since the inner error doesn't
 /// support cloning.
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone)]
 #[error(transparent)]
 pub struct SharedError(Arc<StorageErrorInner>);
 
@@ -115,7 +115,7 @@ impl TryFrom<SharedError> for StorageError {
 }
 
 pub type CallbackWithSharedError<T> = Box<dyn FnOnce(Result<T, SharedError>) + Send + 'static>;
-pub type PessimisticLockKeyCallback = CallbackWithSharedError<PessimisticLockRes>;
+pub type PessimisticLockKeyCallback = CallbackWithSharedError<PessimisticLockKeyResult>;
 
 /// Represents an `AcquirePessimisticLock` request that's waiting for a lock,
 /// and contains the request's parameters.
@@ -125,8 +125,10 @@ pub struct LockWaitEntry {
     // TODO: Use term to filter out stale entries in the queue.
     // pub term: Option<NonZeroU64>,
     pub parameters: PessimisticLockParameters,
+    // `parameters` provides parameter for a request, but `should_not_exist` is specified key-wise.
+    // Put it in a separated
+    pub should_not_exist: bool,
     pub lock_wait_token: LockWaitToken,
-    pub req_states: Option<Arc<LockWaitContextSharedState>>,
     pub current_legacy_wake_up_cnt: Option<usize>,
     pub key_cb: Option<SyncWrapper<PessimisticLockKeyCallback>>,
 }
@@ -338,14 +340,9 @@ impl<L: LockManager> LockWaitQueues<L> {
             v.last_conflict_start_ts = conflicting_start_ts;
             v.last_conflict_commit_ts = conflicting_commit_ts;
 
-            while let Some(front) = v.queue.pop() {
+            if let Some(front) = v.queue.pop() {
                 // Remove the comparator wrapper.
                 let lock_wait_entry = front.unwrap();
-
-                if lock_wait_entry.req_states.as_ref().unwrap().is_finished() {
-                    // Skip already cancelled entries.
-                    continue;
-                }
 
                 if !lock_wait_entry.parameters.allow_lock_with_conflict {
                     // If a pessimistic lock request in legacy mode is woken up, increase the
@@ -361,7 +358,6 @@ impl<L: LockManager> LockWaitQueues<L> {
                 } else {
                     result = Some((lock_wait_entry, None));
                 }
-                break;
             }
 
             // Remove the queue if it's emptied.
@@ -482,11 +478,6 @@ impl<L: LockManager> LockWaitQueues<L> {
             let legacy_wake_up_index = v.legacy_wake_up_cnt;
 
             while let Some(front) = v.queue.peek() {
-                if front.0.req_states.as_ref().unwrap().is_finished() {
-                    // Skip already cancelled entries.
-                    v.queue.pop();
-                    continue;
-                }
                 if front
                     .0
                     .current_legacy_wake_up_cnt
@@ -546,7 +537,7 @@ mod tests {
     };
 
     struct TestLockWaitEntryHandle {
-        wake_up_rx: Receiver<Result<PessimisticLockRes, SharedError>>,
+        wake_up_rx: Receiver<Result<PessimisticLockKeyResult, SharedError>>,
         cancel_cb: Box<dyn FnOnce()>,
     }
 
@@ -554,7 +545,7 @@ mod tests {
         fn wait_for_result_timeout(
             &self,
             timeout: Duration,
-        ) -> Option<Result<PessimisticLockRes, SharedError>> {
+        ) -> Option<Result<PessimisticLockKeyResult, SharedError>> {
             match self.wake_up_rx.recv_timeout(timeout) {
                 Ok(res) => Some(res),
                 Err(RecvTimeoutError::Timeout) => None,
@@ -565,7 +556,7 @@ mod tests {
             }
         }
 
-        fn wait_for_result(self) -> Result<PessimisticLockRes, SharedError> {
+        fn wait_for_result(self) -> Result<PessimisticLockKeyResult, SharedError> {
             self.wake_up_rx
                 .recv_timeout(Duration::from_secs(10))
                 .unwrap()
@@ -629,8 +620,8 @@ mod tests {
                 key,
                 lock_hash,
                 parameters,
+                should_not_exist: false,
                 lock_wait_token: token,
-                req_states: Some(dummy_ctx.get_shared_states().clone()),
                 current_legacy_wake_up_cnt: None,
                 key_cb: Some(SyncWrapper::new(Box::new(move |res| tx.send(res).unwrap()))),
             });

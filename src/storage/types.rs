@@ -138,7 +138,7 @@ pub struct PessimisticLockParameters {
     pub allow_lock_with_conflict: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 /// Represents the result of pessimistic lock on a single key.
 pub enum PessimisticLockKeyResult {
     Empty,
@@ -148,30 +148,8 @@ pub enum PessimisticLockKeyResult {
         value: Option<Value>,
         conflict_ts: TimeStamp,
     },
-    Waiting(Option<WriteResultLockInfo>),
-    // PrimaryWaiting(usize),
+    Waiting,
     Failed(Arc<Error>),
-}
-
-impl Clone for PessimisticLockKeyResult {
-    fn clone(&self) -> Self {
-        match self {
-            PessimisticLockKeyResult::Empty => PessimisticLockKeyResult::Empty,
-            PessimisticLockKeyResult::Value(v) => PessimisticLockKeyResult::Value(v.clone()),
-            PessimisticLockKeyResult::Existence(e) => PessimisticLockKeyResult::Existence(*e),
-            PessimisticLockKeyResult::LockedWithConflict { value, conflict_ts } => {
-                PessimisticLockKeyResult::LockedWithConflict {
-                    value: value.clone(),
-                    conflict_ts: *conflict_ts,
-                }
-            }
-            PessimisticLockKeyResult::Waiting(lock_info) => {
-                assert!(lock_info.is_none());
-                PessimisticLockKeyResult::Waiting(None)
-            }
-            PessimisticLockKeyResult::Failed(e) => PessimisticLockKeyResult::Failed(e.clone()),
-        }
-    }
 }
 
 impl PessimisticLockKeyResult {
@@ -258,7 +236,7 @@ impl PessimisticLockKeyResult {
 
     #[cfg(test)]
     pub fn assert_waiting(&self) {
-        assert!(matches!(self, Self::Waiting(_)));
+        assert!(matches!(self, Self::Waiting));
     }
 
     #[cfg(test)]
@@ -315,7 +293,7 @@ impl PessimisticLockResults {
                         res_pb.set_value(value.unwrap_or_default());
                         res_pb.set_locked_with_conflict_ts(conflict_ts.into_inner());
                     }
-                    PessimisticLockKeyResult::Waiting(_) => unreachable!(),
+                    PessimisticLockKeyResult::Waiting => unreachable!(),
                     PessimisticLockKeyResult::Failed(e) => {
                         if error.is_none() {
                             error = Some(e)

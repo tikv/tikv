@@ -340,7 +340,7 @@ impl Latches {
                 assert_eq!(next_lock.hash_for_latch, key_hash);
                 // TODO: Pass term here
                 if let Some(lock_wait) = Self::pop_lock_waiting(&mut queues, &next_lock.key, None) {
-                    if lock_wait.allow_lock_with_conflict {
+                    if lock_wait.parameters.allow_lock_with_conflict {
                         has_awakened_lock_needs_derive_latch = true;
                     }
                     txn_lock_wakeup_list.push(lock_wait);
@@ -405,21 +405,8 @@ impl Latches {
     ) -> Option<WriteResultLockInfo> {
         let queue = queues.as_mut()?.get_mut(key)?;
         let mut result = None;
-        while let Some(lock_info) = queue.pop() {
-            // TODO: Early cancel entries with mismatching term.
-            if lock_info
-                .0
-                .req_states
-                .as_ref()
-                .unwrap()
-                .finished
-                .load(Ordering::Acquire)
-            {
-                // Drop already-finished entry, which might have been canceled by error.
-                continue;
-            }
+        if let Some(lock_info) = queue.pop() {
             result = Some(lock_info);
-            break;
         }
 
         if queue.is_empty() {

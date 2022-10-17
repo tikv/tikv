@@ -14,26 +14,26 @@ use txn_types::{Key, OldValues, TimeStamp, TxnExtra};
 
 use crate::storage::{
     kv::WriteData,
-    lock_manager::{LockManager, WaitTimeout},
+    lock_manager::{
+        lock_wait_context::LockWaitContextSharedState, lock_waiting_queue::LockWaitEntry,
+        LockManager, WaitTimeout,
+    },
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader},
     txn::{
         acquire_pessimistic_lock,
         commands::{
-            CommandExt, PessimisticLockParameters, ReaderWithStats, ReleasedLocks, ResponsePolicy,
-            TypedCommand, WriteCommand, WriteContext, WriteResult, WriteResultLockInfo,
+            CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand,
+            WriteContext, WriteResult, WriteResultLockInfo,
         },
-        scheduler::PartialPessimisticLockRequestSharedState,
         Error, ErrorInner, Result,
     },
-    types::{PessimisticLockKeyResult, PessimisticLockParameters},
-    Error as StorageError, ErrorInner as StorageErrorInner, PessimisticLockRes, ProcessResult,
-    Result as StorageResult, Snapshot,
+    types::{PessimisticLockKeyResult, PessimisticLockParameters, PessimisticLockResults},
+    Error as StorageError, ErrorInner as StorageErrorInner, ProcessResult, Result as StorageResult,
+    Snapshot,
 };
 
 pub struct PessimisticLockKeyContext {
-    pub index_in_request: usize,
     pub lock_hash: u64,
-    pub hash_for_latch: u64,
 }
 
 pub struct ResumedPessimisticLockItem {
@@ -41,7 +41,6 @@ pub struct ResumedPessimisticLockItem {
     pub should_not_exist: bool,
     pub params: PessimisticLockParameters,
     pub lock_key_ctx: PessimisticLockKeyContext,
-    pub req_states: Arc<PartialPessimisticLockRequestSharedState>,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -49,7 +48,6 @@ pub enum PessimisticLockCmdInner {
     SingleRequest {
         params: PessimisticLockParameters,
         keys: Vec<(Key, bool)>,
-        allow_lock_with_conflict: bool,
     },
     BatchResumedRequests {
         items: Vec<ResumedPessimisticLockItem>,
@@ -59,11 +57,7 @@ pub enum PessimisticLockCmdInner {
 impl std::fmt::Display for PessimisticLockCmdInner {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            PessimisticLockCmdInner::SingleRequest {
-                params,
-                keys,
-                allow_lock_with_conflict,
-            } => {
+            PessimisticLockCmdInner::SingleRequest { params, keys } => {
                 write!(
                     f,
                     "keys({}) @ {} {} {} {:?} {} {} | {:?}{}",
@@ -75,7 +69,7 @@ impl std::fmt::Display for PessimisticLockCmdInner {
                     params.min_commit_ts,
                     params.check_existence,
                     params.pb_ctx,
-                    if !allow_lock_with_conflict {
+                    if !params.allow_lock_with_conflict {
                         " (legacy mode)"
                     } else {
                         ""
@@ -104,13 +98,12 @@ command! {
 impl PessimisticLockKeyContext {
     fn from_key(index: usize, key: &Key) -> Self {
         let hash_for_lock = key.gen_hash();
-        let mut hasher = DefaultHasher::new();
-        key.hash(&mut hasher);
-        let hash_for_latch = hasher.finish();
+        // let mut hasher = DefaultHasher::new();
+        // key.hash(&mut hasher);
+        // let hash_for_latch = hasher.finish();
         Self {
-            index_in_request: index,
             lock_hash: hash_for_lock,
-            hash_for_latch,
+            // hash_for_latch,
         }
     }
 }
@@ -174,18 +167,9 @@ impl CommandExt for AcquirePessimisticLock {
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         match self.inner {
-            PessimisticLockCmdInner::SingleRequest {
-                params,
-                keys,
-                allow_lock_with_conflict,
-            } => Self::process_write_for_single_request(
-                snapshot,
-                context,
-                self.ctx,
-                params,
-                keys,
-                allow_lock_with_conflict,
-            ),
+            PessimisticLockCmdInner::SingleRequest { params, keys } => {
+                Self::process_write_for_single_request(snapshot, context, self.ctx, params, keys)
+            }
             PessimisticLockCmdInner::BatchResumedRequests { items, .. } => {
                 Self::process_write_for_resumed(snapshot, context, self.ctx, items)
             }
@@ -214,21 +198,18 @@ impl AcquirePessimisticLock {
         pb_ctx: Context,
         params: PessimisticLockParameters,
         keys: Vec<(Key, bool)>,
-        allow_lock_with_conflict: bool,
     ) -> Result<WriteResult>
     where
         S: Snapshot,
         L: LockManager,
     {
-        if allow_lock_with_conflict && keys.len() > 1 {
+        if params.allow_lock_with_conflict && keys.len() > 1 {
             return Err(Error::from(ErrorInner::Other(Box::new(
                 InvalidPessimisticLockRequestError {
-                    desc: "multiple keys in a single lock-first request is not allowed".into(),
+                    desc: "multiple keys in a single request with allowed_lock_with_conflict set is not allowed".into(),
                 },
             ))));
         }
-
-        let term = snapshot.ext().get_term();
 
         let mut txn = MvccTxn::new(params.start_ts, context.concurrency_manager);
         let mut reader = ReaderWithStats::new(
@@ -239,11 +220,11 @@ impl AcquirePessimisticLock {
         let mut written_rows = 0;
         let total_keys = keys.len();
         let mut res = PessimisticLockResults::with_capacity(total_keys);
+        let mut encountered_locks = vec![];
         let need_old_value = context.extra_op == ExtraOp::ReadOldValue;
         let mut old_values = OldValues::default();
         let mut new_locked_keys = Vec::with_capacity(keys.len());
-        for (index, (key, should_not_exist)) in keys.iter().enumerate() {
-            let lock_key_ctx = PessimisticLockKeyContext::from_key(index, key);
+        for (key, should_not_exist) in keys.iter() {
             match acquire_pessimistic_lock(
                 &mut txn,
                 &mut reader,
@@ -256,7 +237,7 @@ impl AcquirePessimisticLock {
                 params.check_existence,
                 params.min_commit_ts,
                 need_old_value,
-                allow_lock_with_conflict,
+                params.allow_lock_with_conflict,
             ) {
                 Ok((key_res, old_value)) => {
                     res.push(key_res);
@@ -271,29 +252,20 @@ impl AcquirePessimisticLock {
                 }
                 Err(MvccError(box MvccErrorInner::KeyIsLocked(lock_info))) => {
                     let lock_info = WriteResultLockInfo::new(
-                        lock_key_ctx.index_in_request,
+                        lock_info,
+                        params.clone(),
                         key.clone(),
                         *should_not_exist,
-                        allow_lock_with_conflict,
-                        lock_info,
-                        term,
-                        params.clone(),
-                        lock_key_ctx.lock_hash,
-                        lock_key_ctx.hash_for_latch,
-                        None,
                     );
-                    if !allow_lock_with_conflict {
-                        // The request is in legacy behavior. Do not lock previously succeeded keys.
-                        // For multiple keys, is_first_lock should be unset if some of the keys
-                        // can be successfully locked.
-                        txn.clear();
-                        res.0.clear();
-                        new_locked_keys.clear();
-                        res.push(PessimisticLockKeyResult::Waiting(Some(lock_info)));
-                        break;
-                    } else {
-                        res.push(PessimisticLockKeyResult::Waiting(Some(lock_info)));
-                    }
+                    encountered_locks.push(lock_info);
+                    // Do not lock previously succeeded keys.
+                    // For multiple keys, is_first_lock should be unset if some of the keys
+                    // can be successfully locked.
+                    txn.clear();
+                    res.0.clear();
+                    new_locked_keys.clear();
+                    res.push(PessimisticLockKeyResult::Waiting);
+                    break;
                 }
                 Err(e) => return Err(Error::from(e)),
             }
@@ -318,6 +290,7 @@ impl AcquirePessimisticLock {
             to_be_write,
             rows: written_rows,
             pr,
+            lock_info: encountered_locks,
             released_locks: ReleasedLocks::new(),
             new_acquired_locks: new_locked_keys,
             lock_guards: vec![],
@@ -341,6 +314,7 @@ impl AcquirePessimisticLock {
 
         let mut written_rows = 0;
         let mut res = PessimisticLockResults::with_capacity(items.len());
+        let mut encountered_locks = vec![];
         let need_old_value = context.extra_op == ExtraOp::ReadOldValue;
         let mut old_values = OldValues::default();
 
@@ -352,7 +326,6 @@ impl AcquirePessimisticLock {
                 should_not_exist,
                 params,
                 lock_key_ctx,
-                req_states,
             } = item;
 
             // TODO: Refine the code for rebuilding txn state.
@@ -409,20 +382,10 @@ impl AcquirePessimisticLock {
                     written_rows += 1;
                 }
                 Err(MvccError(box MvccErrorInner::KeyIsLocked(lock_info))) => {
-                    let mut lock_info = WriteResultLockInfo::new(
-                        lock_key_ctx.index_in_request,
-                        key,
-                        should_not_exist,
-                        true,
-                        lock_info,
-                        snapshot.ext().get_term(),
-                        params,
-                        lock_key_ctx.lock_hash,
-                        lock_key_ctx.hash_for_latch,
-                        None,
-                    );
-                    lock_info.req_states = Some(req_states);
-                    res.push(PessimisticLockKeyResult::Waiting(Some(lock_info)));
+                    let mut lock_info =
+                        WriteResultLockInfo::new(lock_info, params, key, should_not_exist);
+                    res.push(PessimisticLockKeyResult::Waiting);
+                    encountered_locks.push(lock_info);
                 }
                 Err(e) => {
                     res.push(PessimisticLockKeyResult::Failed(Arc::new(
@@ -458,6 +421,7 @@ impl AcquirePessimisticLock {
             to_be_write,
             rows: written_rows,
             pr,
+            lock_info: encountered_locks,
             released_locks: ReleasedLocks::new(),
             new_acquired_locks: new_locked_keys,
             lock_guards: vec![],
@@ -492,12 +456,9 @@ impl AcquirePessimisticLock {
             min_commit_ts,
             check_existence,
             is_first_lock,
-        };
-        let inner = PessimisticLockCmdInner::SingleRequest {
-            params,
-            keys,
             allow_lock_with_conflict,
         };
+        let inner = PessimisticLockCmdInner::SingleRequest { params, keys };
         Self::new(inner, ctx)
     }
 
@@ -526,33 +487,27 @@ impl AcquirePessimisticLock {
             min_commit_ts,
             check_existence,
             is_first_lock,
-        };
-        let inner = PessimisticLockCmdInner::SingleRequest {
-            params,
-            keys,
             allow_lock_with_conflict: false,
         };
+        let inner = PessimisticLockCmdInner::SingleRequest { params, keys };
         Self::new(inner, ctx)
     }
 
-    pub fn new_resumed_from_lock_info(
-        lock_info: Vec<WriteResultLockInfo>,
+    pub fn new_resumed_from_lock_wait_entries(
+        lock_wait_entries: Vec<Box<LockWaitEntry>>,
     ) -> TypedCommand<StorageResult<PessimisticLockResults>> {
-        let items: Vec<_> = lock_info
+        let items: Vec<_> = lock_wait_entries
             .into_iter()
             .map(|item| {
                 assert!(item.key_cb.is_none());
                 let lock_key_ctx = PessimisticLockKeyContext {
-                    index_in_request: item.index_in_request,
                     lock_hash: item.lock_hash,
-                    hash_for_latch: item.hash_for_latch,
                 };
                 ResumedPessimisticLockItem {
                     key: item.key,
                     should_not_exist: item.should_not_exist,
                     params: item.parameters,
                     lock_key_ctx,
-                    req_states: item.req_states.unwrap(),
                 }
             })
             .collect();
@@ -577,17 +532,15 @@ impl AcquirePessimisticLock {
 
     pub fn get_single_request_meta(&self) -> Option<SingleRequestPessimisticLockCommandMeta> {
         match &self.inner {
-            PessimisticLockCmdInner::SingleRequest {
-                params,
-                keys,
-                allow_lock_with_conflict,
-            } => Some(SingleRequestPessimisticLockCommandMeta {
-                start_ts: params.start_ts,
-                for_update_ts: params.for_update_ts,
-                keys_count: keys.len(),
-                is_first_lock: params.is_first_lock,
-                allow_lock_with_conflict: *allow_lock_with_conflict,
-            }),
+            PessimisticLockCmdInner::SingleRequest { params, keys } => {
+                Some(SingleRequestPessimisticLockCommandMeta {
+                    start_ts: params.start_ts,
+                    for_update_ts: params.for_update_ts,
+                    keys_count: keys.len(),
+                    is_first_lock: params.is_first_lock,
+                    allow_lock_with_conflict: params.allow_lock_with_conflict,
+                })
+            }
             PessimisticLockCmdInner::BatchResumedRequests { .. } => None,
         }
     }
@@ -599,37 +552,4 @@ pub struct SingleRequestPessimisticLockCommandMeta {
     pub keys_count: usize,
     pub is_first_lock: bool,
     pub allow_lock_with_conflict: bool,
-}
-
-#[cfg(test)]
-mod tests {
-    // use super::*;
-
-    // #[test]
-    // fn test_gen_lock_info_from_result() {
-    //     let raw_key = b"key".to_vec();
-    //     let key = Key::from_raw(&raw_key);
-    //     let ts = 100;
-    //     let is_first_lock = true;
-    //     let wait_timeout = WaitTimeout::from_encoded(200);
-    //
-    //     let mut info = LockInfo::default();
-    //     info.set_key(raw_key.clone());
-    //     info.set_lock_version(ts);
-    //     info.set_lock_ttl(100);
-    //     let case =
-    // StorageError::from(StorageErrorInner::Txn(Error::from(ErrorInner::Mvcc(
-    //         MvccError::from(MvccErrorInner::KeyIsLocked(info)),
-    //     ))));
-    //     let lock_info = WriteResultLockInfo::new(
-    //         extract_lock_info_from_result::<()>(&Err(case)),
-    //         is_first_lock,
-    //         wait_timeout,
-    //     );
-    //     assert_eq!(lock_info.locks.ts, ts.into());
-    //     assert_eq!(lock_info.locks.hash, key.gen_hash());
-    //     assert_eq!(lock_info.key, raw_key);
-    //     assert_eq!(lock_info.is_first_lock, is_first_lock);
-    //     assert_eq!(lock_info.wait_timeout, wait_timeout);
-    // }
 }

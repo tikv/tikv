@@ -70,7 +70,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockLite {
             to_be_write: write_data,
             rows,
             pr: ProcessResult::Res,
-            lock_info: None,
+            lock_info: vec![],
             released_locks,
             new_acquired_locks: vec![],
             lock_guards: vec![],

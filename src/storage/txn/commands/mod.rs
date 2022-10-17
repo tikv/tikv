@@ -21,7 +21,6 @@ pub(crate) mod resolve_lock_lite;
 pub(crate) mod resolve_lock_readphase;
 pub(crate) mod rollback;
 pub(crate) mod txn_heart_beat;
-pub(crate) mod wake_up_legacy_pessimistic_lock_waits;
 
 use std::{
     fmt::{self, Debug, Display, Formatter},
@@ -59,15 +58,14 @@ use txn_types::{Key, TimeStamp, Value, Write};
 use crate::storage::{
     kv::WriteData,
     lock_manager,
-    lock_manager::{LockManager, LockWaitToken, WaitTimeout},
+    lock_manager::{
+        lock_wait_context::LockWaitContextSharedState, LockManager, LockWaitToken, WaitTimeout,
+    },
     metrics,
     mvcc::{Lock as MvccLock, MvccReader, ReleasedLock, SnapshotReader},
-    txn::{
-        commands::wake_up_legacy_pessimistic_lock_waits::WakeUpLegacyPessimisticLockWaits, latch,
-        scheduler::PartialPessimisticLockRequestSharedState, ProcessResult, Result,
-    },
+    txn::{latch, ProcessResult, Result},
     types::{
-        MvccInfo, PessimisticLockKeyResult, PessimisticLockParameters, PessimisticLockRes,
+        MvccInfo, PessimisticLockKeyResult, PessimisticLockParameters, PessimisticLockResults,
         PrewriteResult, SecondaryLocksStatus, StorageCallbackType, TxnStatus,
     },
     Error as StorageError, Result as StorageResult, Snapshot, Statistics,
@@ -100,7 +98,6 @@ pub enum Command {
     MvccByStartTs(MvccByStartTs),
     RawCompareAndSwap(RawCompareAndSwap),
     RawAtomicStore(RawAtomicStore),
-    WakeUpLegacyPessimisticLockWaits(WakeUpLegacyPessimisticLockWaits),
 }
 
 /// A `Command` with its return type, reified as the generic parameter `T`.
@@ -382,7 +379,7 @@ pub struct WriteResult {
     pub to_be_write: WriteData,
     pub rows: usize,
     pub pr: ProcessResult,
-    pub lock_info: Option<WriteResultLockInfo>,
+    pub lock_info: Vec<WriteResultLockInfo>,
     pub released_locks: ReleasedLocks,
     pub new_acquired_locks: Vec<(TimeStamp, Key)>,
     pub lock_guards: Vec<KeyHandleGuard>,
@@ -392,27 +389,37 @@ pub struct WriteResult {
 pub struct WriteResultLockInfo {
     pub lock: lock_manager::LockDigest,
     pub key: Key,
+    pub should_not_exist: bool,
     pub lock_info_pb: LockInfo,
     pub parameters: PessimisticLockParameters,
+    pub hash_for_latch: u64,
+    /// If a request is woken up after waiting for some lock, and it encounters
+    /// another lock again after resuming, this field will carry the token
+    /// that was already allocated before.
+    pub lock_wait_token: LockWaitToken,
 }
 
 impl WriteResultLockInfo {
-    pub fn new(lock_info_pb: LockInfo, parameters: PessimisticLockParameters) -> Self {
+    pub fn new(
+        lock_info_pb: LockInfo,
+        parameters: PessimisticLockParameters,
+        key: Key,
+        should_not_exist: bool,
+    ) -> Self {
         let lock = lock_manager::LockDigest {
             ts: lock_info_pb.get_lock_version().into(),
-            hash: Key::from_raw(lock_info_pb.get_key()).gen_hash(),
+            hash: key.gen_hash(),
         };
-        let key = Key::from_raw(lock_info_pb.get_key());
+        let hash_for_latch = latch::Lock::hash(&key);
         Self {
             lock,
             key,
+            should_not_exist,
             lock_info_pb,
             parameters,
+            hash_for_latch,
+            lock_wait_token: LockWaitToken(None),
         }
-    }
-
-    pub fn can_lock_on_wake_up(&self) -> bool {
-        self.allow_lock_with_conflict
     }
 }
 
@@ -570,7 +577,6 @@ impl Command {
             Command::MvccByStartTs(t) => t,
             Command::RawCompareAndSwap(t) => t,
             Command::RawAtomicStore(t) => t,
-            Command::WakeUpLegacyPessimisticLockWaits(t) => t,
         }
     }
 
@@ -594,7 +600,6 @@ impl Command {
             Command::MvccByStartTs(t) => t,
             Command::RawCompareAndSwap(t) => t,
             Command::RawAtomicStore(t) => t,
-            Command::WakeUpLegacyPessimisticLockWaits(t) => t,
         }
     }
 
@@ -633,17 +638,6 @@ impl Command {
             Command::RawCompareAndSwap(t) => t.process_write(snapshot, context),
             Command::RawAtomicStore(t) => t.process_write(snapshot, context),
             _ => panic!("unsupported write command"),
-        }
-    }
-
-    #[must_use]
-    pub(crate) fn process_sync(
-        self,
-        sync_cmd_ctx: SyncCommandContext<'_>,
-    ) -> Option<ReleasedLocks> {
-        match self {
-            Command::WakeUpLegacyPessimisticLockWaits(t) => t.process_sync(sync_cmd_ctx),
-            _ => panic!("unsupported sync command"),
         }
     }
 
@@ -729,17 +723,6 @@ pub trait ReadCommand<S: Snapshot>: CommandExt {
 /// this trait.
 pub trait WriteCommand<S: Snapshot, L: LockManager>: CommandExt {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult>;
-}
-
-pub struct SyncCommandContext<'a> {
-    pub latch: &'a mut latch::Lock,
-    pub on_finished: &'a mut Option<Box<dyn FnOnce() + Send>>,
-}
-
-/// System commands that's executed synchronously in scheduler pool.
-pub trait SyncCommand: CommandExt {
-    #[must_use]
-    fn process_sync(self, sync_cmd_ctx: SyncCommandContext<'_>) -> Option<ReleasedLocks>;
 }
 
 #[cfg(test)]
