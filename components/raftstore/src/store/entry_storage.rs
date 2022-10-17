@@ -29,7 +29,7 @@ use super::{
     metrics::*, peer_storage::storage_error, WriteTask, MEMTRACE_ENTRY_CACHE, RAFT_INIT_LOG_INDEX,
     RAFT_INIT_LOG_TERM,
 };
-use crate::{bytes_capacity, store::worker::StorageTask, Result};
+use crate::{bytes_capacity, store::async_io::read::ReadTask, Result};
 
 const MAX_ASYNC_FETCH_TRY_CNT: usize = 3;
 const SHRINK_CACHE_CAPACITY: usize = 64;
@@ -540,7 +540,7 @@ pub struct EntryStorage<ER> {
     apply_state: RaftApplyState,
     last_term: u64,
     applied_term: u64,
-    raftlog_fetch_scheduler: Scheduler<StorageTask>,
+    raftlog_fetch_scheduler: Scheduler<ReadTask>,
     raftlog_fetch_stats: AsyncFetchStats,
     async_fetch_results: RefCell<HashMap<u64, RaftlogFetchState>>,
 }
@@ -552,7 +552,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
         mut raft_state: RaftLocalState,
         apply_state: RaftApplyState,
         region: &metapb::Region,
-        raftlog_fetch_scheduler: Scheduler<StorageTask>,
+        raftlog_fetch_scheduler: Scheduler<ReadTask>,
     ) -> Result<Self> {
         if let Err(e) = validate_states(region.id, &raft_engine, &mut raft_state, &apply_state) {
             return Err(box_err!(
@@ -770,7 +770,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
             .borrow_mut()
             .insert(low, RaftlogFetchState::Fetching(Instant::now_coarse()));
         self.raftlog_fetch_scheduler
-            .schedule(StorageTask::PeerStorage {
+            .schedule(ReadTask::PeerStorage {
                 region_id,
                 context,
                 low,
@@ -1029,7 +1029,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
         self.cache = EntryCache::default();
     }
 
-    pub fn scheduler(&self) -> Scheduler<StorageTask> {
+    pub fn scheduler(&self) -> Scheduler<ReadTask> {
         self.raftlog_fetch_scheduler.clone()
     }
 }

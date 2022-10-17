@@ -13,7 +13,7 @@ use tikv_util::worker::Runnable;
 
 use crate::store::{RaftlogFetchResult, MAX_INIT_ENTRY_COUNT};
 
-pub enum Task {
+pub enum ReadTask {
     PeerStorage {
         region_id: u64,
         context: GetEntriesContext,
@@ -37,10 +37,10 @@ pub enum Task {
     },
 }
 
-impl fmt::Display for Task {
+impl fmt::Display for ReadTask {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Task::PeerStorage {
+            ReadTask::PeerStorage {
                 region_id,
                 context,
                 low,
@@ -53,7 +53,7 @@ impl fmt::Display for Task {
                 "Fetch Raft Logs [region: {}, low: {}, high: {}, max_size: {}] for sending with context {:?}, tried: {}, term: {}",
                 region_id, low, high, max_size, context, tried_cnt, term,
             ),
-            Task::GenTabletSnapshot { region_id, .. } => {
+            ReadTask::GenTabletSnapshot { region_id, .. } => {
                 write!(f, "Snapshot gen for {}", region_id)
             }
         }
@@ -71,7 +71,7 @@ pub trait LogFetchedNotifier: Send {
     fn notify(&self, region_id: u64, fetched: FetchedLogs);
 }
 
-pub struct Runner<ER, N>
+pub struct ReadRunner<ER, N>
 where
     ER: RaftEngine,
     N: LogFetchedNotifier,
@@ -80,25 +80,25 @@ where
     raft_engine: ER,
 }
 
-impl<ER: RaftEngine, N: LogFetchedNotifier> Runner<ER, N> {
-    pub fn new(notifier: N, raft_engine: ER) -> Runner<ER, N> {
-        Runner {
+impl<ER: RaftEngine, N: LogFetchedNotifier> ReadRunner<ER, N> {
+    pub fn new(notifier: N, raft_engine: ER) -> ReadRunner<ER, N> {
+        ReadRunner {
             notifier,
             raft_engine,
         }
     }
 }
 
-impl<ER, N> Runnable for Runner<ER, N>
+impl<ER, N> Runnable for ReadRunner<ER, N>
 where
     ER: RaftEngine,
     N: LogFetchedNotifier,
 {
-    type Task = Task;
+    type Task = ReadTask;
 
-    fn run(&mut self, task: Task) {
+    fn run(&mut self, task: ReadTask) {
         match task {
-            Task::PeerStorage {
+            ReadTask::PeerStorage {
                 region_id,
                 low,
                 high,
@@ -137,7 +137,7 @@ where
                     },
                 );
             }
-            Task::GenTabletSnapshot { .. } => unimplemented!(),
+            ReadTask::GenTabletSnapshot { .. } => unimplemented!(),
         }
     }
 }

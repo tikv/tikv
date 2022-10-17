@@ -15,7 +15,7 @@ pub mod transport;
 #[macro_use]
 pub mod util;
 
-mod async_io;
+pub mod async_io;
 mod bootstrap;
 mod compaction_guard;
 mod hibernate_state;
@@ -30,6 +30,7 @@ mod worker;
 pub use self::msg::PeerInternalStat;
 pub use self::{
     async_io::{
+        read::{FetchedLogs, LogFetchedNotifier},
         write::{
             ExtraStates, PersistedNotifier, StoreWriters, Worker as WriteWorker, WriteMsg,
             WriteTask,
@@ -76,10 +77,10 @@ pub use self::{
     util::{RegionReadProgress, RegionReadProgressRegistry},
     worker::{
         AutoSplitController, Bucket, BucketRange, CachedReadDelegate, CheckLeaderRunner,
-        CheckLeaderTask, FetchedLogs, FlowStatistics, FlowStatsReporter, KeyEntry,
-        LocalReadContext, LocalReader, LocalReaderCore, LogFetchedNotifier, PdTask, ReadDelegate,
-        ReadExecutor, ReadExecutorProvider, ReadProgress, ReadStats, RefreshConfigTask, RegionTask,
-        SplitCheckRunner, SplitCheckTask, SplitConfig, SplitConfigManager, StorageRunner,
-        StorageTask, StoreMetaDelegate, TrackVer, WriteStats, TLS_LOCAL_READ_METRICS,
+        CheckLeaderTask, FlowStatistics, FlowStatsReporter, KeyEntry, LocalReadContext,
+        LocalReader, LocalReaderCore, PdTask, ReadDelegate, ReadExecutor, ReadExecutorProvider,
+        ReadProgress, ReadStats, RefreshConfigTask, RegionTask, SplitCheckRunner, SplitCheckTask,
+        SplitConfig, SplitConfigManager, StoreMetaDelegate, TrackVer, WriteStats,
+        TLS_LOCAL_READ_METRICS,
     },
 };

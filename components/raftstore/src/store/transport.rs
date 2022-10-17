@@ -8,7 +8,7 @@ use engine_traits::{KvEngine, RaftEngine, Snapshot};
 use kvproto::raft_serverpb::RaftMessage;
 use tikv_util::{error, warn};
 
-use super::worker::{FetchedLogs, LogFetchedNotifier};
+use super::{FetchedLogs, LogFetchedNotifier};
 use crate::{
     store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg, StoreMsg},
     DiscardReason, Error, Result,

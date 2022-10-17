@@ -87,7 +87,7 @@ use crate::{
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason, RoleChange},
     errors::RAFTSTORE_IS_BUSY,
     store::{
-        async_io::{write::WriteMsg, write_router::WriteRouter},
+        async_io::{read::ReadTask, write::WriteMsg, write_router::WriteRouter},
         fsm::{
             apply::{self, CatchUpLogs},
             store::{PollContext, RaftRouter},
@@ -100,7 +100,7 @@ use crate::{
         util::{admin_cmd_epoch_lookup, RegionReadProgress},
         worker::{
             HeartbeatTask, RaftlogGcTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask,
-            SplitCheckTask, StorageTask,
+            SplitCheckTask,
         },
         Callback, Config, GlobalReplicationState, PdTask, ReadCallback, ReadIndexContext,
         ReadResponse, TxnExt, WriteCallback, RAFT_INIT_LOG_INDEX,
@@ -1043,7 +1043,7 @@ where
         store_id: u64,
         cfg: &Config,
         region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
-        raftlog_fetch_scheduler: Scheduler<StorageTask>,
+        raftlog_fetch_scheduler: Scheduler<ReadTask>,
         engines: Engines<EK, ER>,
         region: &metapb::Region,
         peer: metapb::Peer,

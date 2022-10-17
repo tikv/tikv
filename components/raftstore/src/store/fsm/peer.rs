@@ -69,6 +69,7 @@ use crate::store::PeerInternalStat;
 use crate::{
     coprocessor::{RegionChangeEvent, RegionChangeReason},
     store::{
+        async_io::read::ReadTask,
         cmd_resp::{bind_term, new_error},
         fsm::{
             apply,
@@ -94,7 +95,6 @@ use crate::{
         worker::{
             new_change_peer_v2_request, Bucket, BucketRange, CleanupTask, ConsistencyCheckTask,
             GcSnapshotTask, RaftlogGcTask, ReadDelegate, ReadProgress, RegionTask, SplitCheckTask,
-            StorageTask,
         },
         CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg, PeerTick,
         ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, ReadCallback,
@@ -244,7 +244,7 @@ where
         store_id: u64,
         cfg: &Config,
         region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
-        raftlog_fetch_scheduler: Scheduler<StorageTask>,
+        raftlog_fetch_scheduler: Scheduler<ReadTask>,
         engines: Engines<EK, ER>,
         region: &metapb::Region,
     ) -> Result<SenderFsmPair<EK, ER>> {
@@ -303,7 +303,7 @@ where
         store_id: u64,
         cfg: &Config,
         region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
-        raftlog_fetch_scheduler: Scheduler<StorageTask>,
+        raftlog_fetch_scheduler: Scheduler<ReadTask>,
         engines: Engines<EK, ER>,
         region_id: u64,
         peer: metapb::Peer,

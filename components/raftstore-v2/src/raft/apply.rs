@@ -2,7 +2,7 @@
 
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
-use raftstore::store::{fsm::apply::DEFAULT_APPLY_WB_SIZE, StorageTask};
+use raftstore::store::{async_io::read::ReadTask, fsm::apply::DEFAULT_APPLY_WB_SIZE};
 use slog::Logger;
 use tikv_util::worker::Scheduler;
 
@@ -28,7 +28,7 @@ pub struct Apply<EK: KvEngine, R> {
     state_changed: bool,
 
     res_reporter: R,
-    storage_scheduler: Scheduler<StorageTask>,
+    read_scheduler: Scheduler<ReadTask>,
     pub(crate) logger: Logger,
 }
 
@@ -38,7 +38,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         region_state: RegionLocalState,
         res_reporter: R,
         mut remote_tablet: CachedTablet<EK>,
-        storage_scheduler: Scheduler<StorageTask>,
+        read_scheduler: Scheduler<ReadTask>,
         logger: Logger,
     ) -> Self {
         Apply {
@@ -50,7 +50,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             applied_term: 0,
             region_state,
             state_changed: false,
-            storage_scheduler,
+            read_scheduler,
             res_reporter,
             logger,
         }
@@ -91,8 +91,8 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     }
 
     #[inline]
-    pub fn storage_scheduler(&self) -> &Scheduler<StorageTask> {
-        &self.storage_scheduler
+    pub fn read_scheduler(&self) -> &Scheduler<ReadTask> {
+        &self.read_scheduler
     }
 
     #[inline]

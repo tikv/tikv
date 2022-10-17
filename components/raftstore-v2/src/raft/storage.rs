@@ -23,7 +23,8 @@ use raft::{
     GetEntriesContext, RaftState, INVALID_ID,
 };
 use raftstore::store::{
-    metrics::*, util, EntryStorage, SnapState, StorageTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+    async_io::read::ReadTask, metrics::*, util, EntryStorage, SnapState, RAFT_INIT_LOG_INDEX,
+    RAFT_INIT_LOG_TERM,
 };
 use slog::{error, info, o, warn, Logger};
 use tikv_util::{box_err, store::find_peer, worker::Scheduler};
@@ -126,7 +127,7 @@ impl<ER: RaftEngine> Storage<ER> {
         store_id: u64,
         region: Region,
         engine: ER,
-        storage_scheduler: Scheduler<StorageTask>,
+        read_scheduler: Scheduler<ReadTask>,
         logger: &Logger,
     ) -> Result<Self> {
         let mut region_state = RegionLocalState::default();
@@ -137,7 +138,7 @@ impl<ER: RaftEngine> Storage<ER> {
             RaftLocalState::default(),
             RaftApplyState::default(),
             engine,
-            storage_scheduler,
+            read_scheduler,
             false,
             logger,
         )
@@ -151,7 +152,7 @@ impl<ER: RaftEngine> Storage<ER> {
         region_id: u64,
         store_id: u64,
         engine: ER,
-        storage_scheduler: Scheduler<StorageTask>,
+        read_scheduler: Scheduler<ReadTask>,
         logger: &Logger,
     ) -> Result<Option<Storage<ER>>> {
         let region_state = match engine.get_region_state(region_id) {
@@ -189,7 +190,7 @@ impl<ER: RaftEngine> Storage<ER> {
             raft_state,
             apply_state,
             engine,
-            storage_scheduler,
+            read_scheduler,
             true,
             logger,
         )
@@ -202,7 +203,7 @@ impl<ER: RaftEngine> Storage<ER> {
         raft_state: RaftLocalState,
         apply_state: RaftApplyState,
         engine: ER,
-        storage_scheduler: Scheduler<StorageTask>,
+        read_scheduler: Scheduler<ReadTask>,
         persisted: bool,
         logger: &Logger,
     ) -> Result<Self> {
@@ -221,7 +222,7 @@ impl<ER: RaftEngine> Storage<ER> {
             raft_state,
             apply_state,
             region,
-            storage_scheduler,
+            read_scheduler,
         )?;
 
         Ok(Storage {
@@ -241,7 +242,7 @@ impl<ER: RaftEngine> Storage<ER> {
     }
 
     #[inline]
-    pub fn scheduler(&self) -> Scheduler<StorageTask> {
+    pub fn read_scheduler(&self) -> Scheduler<ReadTask> {
         self.entry_storage.scheduler()
     }
 
@@ -482,7 +483,7 @@ mod tests {
         raft_serverpb::PeerState,
     };
     use raft::{eraftpb::Snapshot as RaftSnapshot, Error as RaftError, StorageError};
-    use raftstore::store::{StorageTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
+    use raftstore::store::{async_io::read::ReadTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
     use slog::o;
     use tempfile::TempDir;
     use tikv_util::worker::{dummy_scheduler, Runnable, Worker};
@@ -491,10 +492,10 @@ mod tests {
 
     struct MockRegionRunner {}
     impl Runnable for MockRegionRunner {
-        type Task = StorageTask;
-        fn run(&mut self, task: StorageTask) {
+        type Task = ReadTask;
+        fn run(&mut self, task: ReadTask) {
             match task {
-                StorageTask::GenTabletSnapshot {
+                ReadTask::GenTabletSnapshot {
                     notifier, canceled, ..
                 } => {
                     if canceled.load(Ordering::SeqCst) {

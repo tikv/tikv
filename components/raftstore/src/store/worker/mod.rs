@@ -15,7 +15,6 @@ mod region;
 mod split_check;
 mod split_config;
 mod split_controller;
-mod storage_task;
 
 #[cfg(test)]
 pub use self::region::tests::make_raftstore_cfg as make_region_worker_raftstore_cfg;
@@ -47,5 +46,4 @@ pub use self::{
     },
     split_config::{SplitConfig, SplitConfigManager},
     split_controller::{AutoSplitController, ReadStats, SplitConfigChange, WriteStats},
-    storage_task::{FetchedLogs, LogFetchedNotifier, Runner as StorageRunner, Task as StorageTask},
 };

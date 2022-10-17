@@ -99,9 +99,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let mailbox = store_ctx.router.mailbox(self.region_id()).unwrap();
         let tablet = self.tablet().clone();
         let logger = self.logger.clone();
-        let storage_scheduler = self.storage().scheduler();
+        let read_scheduler = self.storage().read_scheduler();
         let (apply_scheduler, mut apply_fsm) =
-            ApplyFsm::new(region_state, mailbox, tablet, storage_scheduler, logger);
+            ApplyFsm::new(region_state, mailbox, tablet, read_scheduler, logger);
         store_ctx
             .apply_pool
             .spawn(async move { apply_fsm.handle_all_tasks().await })
@@ -356,7 +356,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             self.region_state().clone(),
             last_applied_index,
             last_applied_term,
-            self.storage_scheduler(),
+            self.read_scheduler(),
         ) {
             error!(
                 self.logger,
