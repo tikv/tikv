@@ -940,7 +940,7 @@ mod tests {
             true
         }
 
-        fn pre_write_apply_state(&self, region: &Region) -> bool {
+        fn pre_write_apply_state(&self, ctx: &mut ObserverContext<'_>,) -> bool {
             self.called
                 .fetch_add(ObserverIndex::PreWriteApplyState as usize, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
