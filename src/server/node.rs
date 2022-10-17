@@ -222,6 +222,7 @@ where
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -258,6 +259,7 @@ where
             auto_split_controller,
             concurrency_manager,
             collector_reg_handle,
+            causal_ts_provider,
         )?;
 
         Ok(())
@@ -504,6 +506,7 @@ where
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -536,6 +539,7 @@ where
             concurrency_manager,
             collector_reg_handle,
             self.health_service.clone(),
+            causal_ts_provider,
         )?;
         Ok(())
     }

@@ -19,6 +19,7 @@ use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Config as BatchSystemConfig, Fsm, HandleResult,
     HandlerBuilder, PollHandler, Priority,
 };
+use causal_ts::CausalTsProviderImpl;
 use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{unbounded, TryRecvError, TrySendError};
@@ -557,6 +558,8 @@ where
             self.cfg.report_region_buckets_tick_interval.0;
         self.tick_batch[PeerTick::CheckLongUncommitted as usize].wait_duration =
             self.cfg.check_long_uncommitted_interval.0;
+        self.tick_batch[PeerTick::CheckPeersAvailability as usize].wait_duration =
+            self.cfg.check_peers_availability_interval.0;
     }
 }
 
@@ -1461,6 +1464,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         health_service: Option<HealthService>,
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1599,6 +1603,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             collector_reg_handle,
             region_read_progress,
             health_service,
+            causal_ts_provider,
         )?;
         Ok(())
     }
@@ -1615,6 +1620,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         collector_reg_handle: CollectorRegHandle,
         region_read_progress: RegionReadProgressRegistry,
         health_service: Option<HealthService>,
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
@@ -1696,6 +1702,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             region_read_progress,
             health_service,
             coprocessor_host,
+            causal_ts_provider,
         );
         assert!(workers.pd_worker.start_with_timer(pd_runner));
 

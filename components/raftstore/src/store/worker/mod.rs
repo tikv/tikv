@@ -26,6 +26,7 @@ pub use self::{
     cleanup_sst::{Runner as CleanupSstRunner, Task as CleanupSstTask},
     compact::{Runner as CompactRunner, Task as CompactTask},
     consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask},
+    metrics::TLS_LOCAL_READ_METRICS,
     pd::{
         new_change_peer_v2_request, FlowStatistics, FlowStatsReporter, HeartbeatTask,
         Runner as PdRunner, Task as PdTask,
@@ -35,8 +36,9 @@ pub use self::{
     },
     raftlog_gc::{Runner as RaftlogGcRunner, Task as RaftlogGcTask},
     read::{
-        CachedReadDelegate, LocalReadContext, LocalReader, Progress as ReadProgress, ReadDelegate,
-        ReadExecutor, ReadExecutorProvider, StoreMetaDelegate, TrackVer,
+        CachedReadDelegate, LocalReadContext, LocalReader, LocalReaderCore,
+        Progress as ReadProgress, ReadDelegate, ReadExecutor, ReadExecutorProvider,
+        StoreMetaDelegate, TrackVer,
     },
     refresh_config::{
         BatchComponent as RaftStoreBatchComponent, Runner as RefreshConfigRunner,
