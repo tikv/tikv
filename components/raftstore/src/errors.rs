@@ -61,6 +61,9 @@ pub enum Error {
     #[error("region {0} is in the flashback progress")]
     FlashbackInProgress(u64),
 
+    #[error("region {0} not prepared the flashback")]
+    FlashbackNotPrepared(u64),
+
     #[error(
         "key {} is not in region key range [{}, {}) for region {}",
         log_wrappers::Value::key(.0),
@@ -255,6 +258,11 @@ impl From<Error> for errorpb::Error {
                 e.set_region_id(region_id);
                 errorpb.set_flashback_in_progress(e);
             }
+            Error::FlashbackNotPrepared(region_id) => {
+                let mut e = errorpb::FlashbackNotPrepared::default();
+                e.set_region_id(region_id);
+                errorpb.set_flashback_not_prepared(e);
+            }
             _ => {}
         };
 
@@ -290,6 +298,7 @@ impl ErrorCodeExt for Error {
             Error::DiskFull(..) => error_code::raftstore::DISK_FULL,
             Error::RecoveryInProgress(..) => error_code::raftstore::RECOVERY_IN_PROGRESS,
             Error::FlashbackInProgress(..) => error_code::raftstore::FLASHBACK_IN_PROGRESS,
+            Error::FlashbackNotPrepared(..) => error_code::raftstore::FLASHBACK_NOT_PREPARED,
             Error::StaleCommand => error_code::raftstore::STALE_COMMAND,
             Error::RegionNotInitialized(_) => error_code::raftstore::REGION_NOT_INITIALIZED,
             Error::KeyNotInRegion(..) => error_code::raftstore::KEY_NOT_IN_REGION,
