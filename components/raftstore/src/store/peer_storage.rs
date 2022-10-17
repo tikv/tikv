@@ -115,9 +115,9 @@ pub enum HandleReadyResult {
     SendIoTask,
     Snapshot {
         msgs: Vec<eraftpb::Message>,
-        snap_region: metapb::Region,
+        snap_region: Arc<metapb::Region>,
         /// The regions whose range are overlapped with this region
-        destroy_regions: Vec<Region>,
+        destroy_regions: Vec<Arc<metapb::Region>>,
         /// The first index before applying the snapshot.
         last_first_index: u64,
     },
@@ -211,7 +211,7 @@ where
     pub engines: Engines<EK, ER>,
 
     peer_id: u64,
-    region: metapb::Region,
+    region: Arc<metapb::Region>,
 
     snap_state: RefCell<SnapState>,
     gen_snap_task: RefCell<Option<GenSnapTask>>,
@@ -284,7 +284,7 @@ where
 {
     pub fn new(
         engines: Engines<EK, ER>,
-        region: &metapb::Region,
+        region: Arc<metapb::Region>,
         region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
         raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         peer_id: u64,
@@ -296,22 +296,22 @@ where
             "peer_id" => peer_id,
             "path" => ?engines.kv.path(),
         );
-        let raft_state = init_raft_state(&engines, region)?;
-        let apply_state = init_apply_state(&engines, region)?;
+        let raft_state = init_raft_state(&engines, &region)?;
+        let apply_state = init_apply_state(&engines, &region)?;
 
         let entry_storage = EntryStorage::new(
             peer_id,
             engines.raft.clone(),
             raft_state,
             apply_state,
-            region,
+            &region,
             raftlog_fetch_scheduler,
         )?;
 
         Ok(PeerStorage {
             engines,
             peer_id,
-            region: region.clone(),
+            region,
             snap_state: RefCell::new(SnapState::Relax),
             gen_snap_task: RefCell::new(None),
             region_scheduler,
@@ -345,12 +345,12 @@ where
     }
 
     #[inline]
-    pub fn region(&self) -> &metapb::Region {
+    pub fn region(&self) -> &Arc<metapb::Region> {
         &self.region
     }
 
     #[inline]
-    pub fn set_region(&mut self, region: metapb::Region) {
+    pub fn set_region(&mut self, region: Arc<metapb::Region>) {
         self.region = region;
     }
 
@@ -547,8 +547,8 @@ where
         &mut self,
         snap: &Snapshot,
         task: &mut WriteTask<EK, ER>,
-        destroy_regions: &[metapb::Region],
-    ) -> Result<metapb::Region> {
+        destroy_regions: &[Arc<metapb::Region>],
+    ) -> Result<Arc<metapb::Region>> {
         info!(
             "begin to apply snapshot";
             "region_id" => self.region.get_id(),
@@ -560,7 +560,7 @@ where
 
         let region_id = self.get_region_id();
 
-        let region = snap_data.take_region();
+        let region = Arc::new(snap_data.take_region());
         if region.get_id() != region_id {
             return Err(box_err!(
                 "mismatch region id {} != {}",
@@ -846,7 +846,7 @@ where
     pub fn handle_raft_ready(
         &mut self,
         ready: &mut Ready,
-        destroy_regions: Vec<metapb::Region>,
+        destroy_regions: Vec<Arc<metapb::Region>>,
     ) -> Result<(HandleReadyResult, WriteTask<EK, ER>)> {
         let region_id = self.get_region_id();
         let prev_raft_state = self.raft_state().clone();
@@ -1172,7 +1172,7 @@ pub mod tests {
         }
         PeerStorage::new(
             engines,
-            &region,
+            Arc::new(region),
             region_scheduler,
             raftlog_fetch_scheduler,
             1,
@@ -1797,7 +1797,7 @@ pub mod tests {
         let snap_region = s2.apply_snapshot(&snap1, &mut write_task, &[]).unwrap();
         let mut snap_data = RaftSnapshotData::default();
         snap_data.merge_from_bytes(snap1.get_data()).unwrap();
-        assert_eq!(snap_region, snap_data.take_region(),);
+        assert_eq!(*snap_region, snap_data.take_region(),);
         assert_eq!(s2.last_term(), snap1.get_metadata().get_term());
         assert_eq!(s2.apply_state().get_applied_index(), 6);
         assert_eq!(s2.raft_state().get_last_index(), 6);
@@ -1814,7 +1814,7 @@ pub mod tests {
         let snap_region = s3.apply_snapshot(&snap1, &mut write_task, &[]).unwrap();
         let mut snap_data = RaftSnapshotData::default();
         snap_data.merge_from_bytes(snap1.get_data()).unwrap();
-        assert_eq!(snap_region, snap_data.take_region(),);
+        assert_eq!(*snap_region, snap_data.take_region(),);
         assert_eq!(s3.last_term(), snap1.get_metadata().get_term());
         assert_eq!(s3.apply_state().get_applied_index(), 6);
         assert_eq!(s3.raft_state().get_last_index(), 6);
@@ -1933,12 +1933,12 @@ pub mod tests {
         let engines = Engines::new(kv_db, raft_db);
         bootstrap_store(&engines, 1, 1).unwrap();
 
-        let region = initial_region(1, 1, 1);
+        let region = Arc::new(initial_region(1, 1, 1));
         prepare_bootstrap_cluster(&engines, &region).unwrap();
         let build_storage = || -> Result<PeerStorage<KvTestEngine, RaftTestEngine>> {
             PeerStorage::new(
                 engines.clone(),
-                &region,
+                region.clone(),
                 region_sched.clone(),
                 raftlog_fetch_sched.clone(),
                 0,

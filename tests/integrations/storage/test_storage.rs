@@ -686,7 +686,7 @@ fn test_txn_store_gc() {
     let store = AssertionStorage::default();
     let (cluster, raft_store) = AssertionStorageApiV1::new_raft_storage_with_store_count(3, key);
 
-    let region = cluster.get_region(key.as_bytes());
+    let region = Arc::new(cluster.get_region(key.as_bytes()));
     store.test_txn_store_gc(key, region.clone());
     raft_store.test_txn_store_gc(key, region);
 }
@@ -708,7 +708,7 @@ pub fn test_txn_store_gc_multiple_keys_single_storage(n: usize, prefix: String) 
     let store_id = 1;
     let mut region = metapb::Region::default();
     region.mut_peers().push(new_peer(store_id, 0));
-    store.gc_ok(region, 30);
+    store.gc_ok(Arc::new(region), 30);
     for k in &keys {
         store.get_none(k.as_bytes(), 15);
     }
@@ -723,11 +723,11 @@ pub fn test_txn_store_gc_multiple_keys_cluster_storage(n: usize, prefix: String)
         store.batch_put_ok_for_cluster(&mut cluster, &keys, repeat(b"v2" as &[u8]), 15, 20);
     }
 
-    let mut last_region = cluster.get_region(b"");
+    let mut last_region = Arc::new(cluster.get_region(b""));
     store.gc_ok_for_cluster(&mut cluster, b"", last_region.clone(), 30);
     for k in &keys {
         // clear data whose commit_ts < 30
-        let region = cluster.get_region(k.as_bytes());
+        let region = Arc::new(cluster.get_region(k.as_bytes()));
         if last_region != region {
             store.gc_ok_for_cluster(&mut cluster, k.as_bytes(), region.clone(), 30);
             last_region = region;

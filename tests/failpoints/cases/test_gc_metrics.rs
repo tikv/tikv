@@ -157,6 +157,7 @@ fn test_txn_gc_keys_handled() {
     r1.set_end_key(b"".to_vec());
     r1.mut_peers().push(Peer::default());
     r1.mut_peers()[0].set_store_id(store_id);
+    let r1 = Arc::new(r1);
 
     let sp_provider = MockSafePointProvider(200);
     let mut host = CoprocessorHost::<RocksEngine>::default();
@@ -301,6 +302,7 @@ fn test_raw_gc_keys_handled() {
     r1.set_end_key(b"".to_vec());
     r1.mut_peers().push(Peer::default());
     r1.mut_peers()[0].set_store_id(store_id);
+    let r1 = Arc::new(r1);
 
     let sp_provider = MockSafePointProvider(200);
     let mut host = CoprocessorHost::<RocksEngine>::default();

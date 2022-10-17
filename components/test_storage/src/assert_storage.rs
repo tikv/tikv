@@ -1,5 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
+
 use api_version::{ApiV1, KvFormat};
 use kvproto::{
     kvrpcpb::{Context, KeyRange, LockInfo},
@@ -208,7 +210,7 @@ impl<F: KvFormat> AssertionStorage<SimulateEngine, F> {
         &mut self,
         cluster: &mut Cluster<ServerCluster>,
         region_key: &[u8],
-        mut region: metapb::Region,
+        mut region: Arc<metapb::Region>,
         safe_point: impl Into<TimeStamp>,
     ) {
         let safe_point = safe_point.into();
@@ -218,7 +220,7 @@ impl<F: KvFormat> AssertionStorage<SimulateEngine, F> {
                 return;
             }
             self.expect_not_leader_or_stale_command(ret.unwrap_err());
-            region = self.update_with_key_byte(cluster, region_key);
+            region = Arc::new(self.update_with_key_byte(cluster, region_key));
         }
         panic!("failed with 3 retry!");
     }
@@ -237,7 +239,7 @@ impl<F: KvFormat> AssertionStorage<SimulateEngine, F> {
         self.delete_ok_for_cluster(cluster, &key, 1000, 1050);
         self.get_none_from_cluster(cluster, &key, 2000);
 
-        let region = cluster.get_region(&key);
+        let region = Arc::new(cluster.get_region(&key));
         self.gc_ok_for_cluster(cluster, &key, region, 2000);
         self.get_none_from_cluster(cluster, &key, 3000);
     }
@@ -807,7 +809,7 @@ impl<E: Engine, F: KvFormat> AssertionStorage<E, F> {
         self.expect_invalid_tso_err(resp, start_ts, commit_ts.unwrap())
     }
 
-    pub fn gc_ok(&self, region: metapb::Region, safe_point: impl Into<TimeStamp>) {
+    pub fn gc_ok(&self, region: Arc<metapb::Region>, safe_point: impl Into<TimeStamp>) {
         self.store
             .gc(region, self.ctx.clone(), safe_point.into())
             .unwrap();
@@ -1085,7 +1087,7 @@ impl<E: Engine, F: KvFormat> AssertionStorage<E, F> {
             .unwrap_err();
     }
 
-    pub fn test_txn_store_gc(&self, key: &str, region: metapb::Region) {
+    pub fn test_txn_store_gc(&self, key: &str, region: Arc<metapb::Region>) {
         let key_bytes = key.as_bytes();
         self.put_ok(key_bytes, b"v1", 5, 10);
         self.put_ok(key_bytes, b"v2", 15, 20);
@@ -1102,7 +1104,7 @@ impl<E: Engine, F: KvFormat> AssertionStorage<E, F> {
         }
         self.delete_ok(&key, 1000, 1050);
         self.get_none(&key, 2000);
-        self.gc_ok(metapb::Region::default(), 2000);
+        self.gc_ok(Arc::default(), 2000);
         self.get_none(&key, 3000);
     }
 }

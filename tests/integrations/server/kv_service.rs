@@ -552,7 +552,7 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
     ts += 1;
     let gc_safe_ponit = TimeStamp::from(ts);
     let gc_scheduler = cluster.sim.rl().get_gc_worker(1).scheduler();
-    let region = cluster.get_region(&k);
+    let region = Arc::new(cluster.get_region(&k));
     sync_gc(&gc_scheduler, region, gc_safe_ponit).unwrap();
 
     // the `k` at the old ts should be none.

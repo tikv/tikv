@@ -462,6 +462,7 @@ pub mod tests {
         region.mut_peers().push(Peer::default());
         region.mut_region_epoch().set_version(2);
         region.mut_region_epoch().set_conf_ver(5);
+        let region = Arc::new(region);
 
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
@@ -592,6 +593,7 @@ pub mod tests {
         region.mut_peers().push(Peer::default());
         region.mut_region_epoch().set_version(2);
         region.mut_region_epoch().set_conf_ver(5);
+        let region = Arc::new(region);
 
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
@@ -744,6 +746,7 @@ pub mod tests {
         region.mut_peers().push(Peer::default());
         region.mut_region_epoch().set_version(2);
         region.mut_region_epoch().set_conf_ver(5);
+        let region = Arc::new(region);
         for i in 0..20 {
             let s = keys::data_key(format!("{:04}00", i).as_bytes());
             engine.put_cf(CF_WRITE, &s, &s).unwrap();
@@ -787,6 +790,7 @@ pub mod tests {
         region.mut_peers().push(Peer::default());
         region.mut_region_epoch().set_version(2);
         region.mut_region_epoch().set_conf_ver(5);
+        let region = Arc::new(region);
 
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
@@ -862,7 +866,7 @@ pub mod tests {
     #[test]
     fn test_checker_with_same_max_and_split_size() {
         let mut checker = Checker::new(24, 24, 1, CheckPolicy::Scan);
-        let region = Region::default();
+        let region = Arc::default();
         let mut ctx = ObserverContext::new(&region);
         loop {
             let data = KeyEntry::new(b"zxxxx".to_vec(), 0, 4, CF_WRITE);
@@ -877,7 +881,7 @@ pub mod tests {
     #[test]
     fn test_checker_with_max_twice_bigger_than_split_size() {
         let mut checker = Checker::new(20, 10, 1, CheckPolicy::Scan);
-        let region = Region::default();
+        let region = Arc::default();
         let mut ctx = ObserverContext::new(&region);
         for _ in 0..2 {
             let data = KeyEntry::new(b"zxxxx".to_vec(), 0, 5, CF_WRITE);

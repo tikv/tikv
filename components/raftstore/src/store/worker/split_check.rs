@@ -5,6 +5,7 @@ use std::{
     collections::BinaryHeap,
     fmt::{self, Display, Formatter},
     mem,
+    sync::Arc,
 };
 
 use engine_traits::{CfName, IterOptions, Iterable, Iterator, KvEngine, CF_WRITE, LARGE_CFS};
@@ -145,14 +146,14 @@ pub struct Bucket {
 
 pub enum Task {
     SplitCheckTask {
-        region: Region,
+        region: Arc<Region>,
         start_key: Option<Vec<u8>>,
         end_key: Option<Vec<u8>>,
         auto_split: bool,
         policy: CheckPolicy,
         bucket_ranges: Option<Vec<BucketRange>>,
     },
-    ApproximateBuckets(Region),
+    ApproximateBuckets(Arc<Region>),
     ChangeConfig(ConfigChange),
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&Config) + Send>),
@@ -160,7 +161,7 @@ pub enum Task {
 
 impl Task {
     pub fn split_check(
-        region: Region,
+        region: Arc<Region>,
         auto_split: bool,
         policy: CheckPolicy,
         bucket_ranges: Option<Vec<BucketRange>>,
@@ -176,7 +177,7 @@ impl Task {
     }
 
     pub fn split_check_key_range(
-        region: Region,
+        region: Arc<Region>,
         start_key: Option<Vec<u8>>,
         end_key: Option<Vec<u8>>,
         auto_split: bool,
@@ -243,7 +244,7 @@ where
 
     fn approximate_check_bucket(
         &self,
-        region: &Region,
+        region: &Arc<Region>,
         host: &mut SplitCheckerHost<'_, E>,
         bucket_ranges: Option<Vec<BucketRange>>,
     ) -> Result<()> {
@@ -255,7 +256,7 @@ where
         });
         let mut buckets = vec![];
         for range in &ranges {
-            let mut bucket = region.clone();
+            let mut bucket = (**region).clone();
             bucket.set_start_key(range.0.clone());
             bucket.set_end_key(range.1.clone());
             let bucket_entry = host.approximate_bucket_keys(&bucket, &self.engine)?;
@@ -275,13 +276,14 @@ where
     fn on_buckets_created(
         &self,
         buckets: &mut [Bucket],
-        region: &Region,
+        region: &Arc<Region>,
         bucket_ranges: &Vec<BucketRange>,
     ) {
         for (mut bucket, bucket_range) in &mut buckets.iter_mut().zip(bucket_ranges) {
-            let mut bucket_region = region.clone();
+            let mut bucket_region = (**region).clone();
             bucket_region.set_start_key(bucket_range.0.clone());
             bucket_region.set_end_key(bucket_range.1.clone());
+            let bucket_region = Arc::new(bucket_region);
             let adjusted_keys = std::mem::take(&mut bucket.keys)
                 .into_iter()
                 .enumerate()
@@ -325,7 +327,7 @@ where
     fn refresh_region_buckets(
         &self,
         buckets: Vec<Bucket>,
-        region: &Region,
+        region: &Arc<Region>,
         bucket_ranges: Option<Vec<BucketRange>>,
     ) {
         let _ = self.router.send(
@@ -343,7 +345,7 @@ where
     /// buckets keys and generates split admin command.
     fn check_split_and_bucket(
         &mut self,
-        region: &Region,
+        region: &Arc<Region>,
         start_key: Option<Vec<u8>>,
         end_key: Option<Vec<u8>>,
         auto_split: bool,
@@ -485,7 +487,7 @@ where
     fn scan_split_keys(
         &self,
         host: &mut SplitCheckerHost<'_, E>,
-        region: &Region,
+        region: &Arc<Region>,
         is_key_range: bool,
         start_key: &[u8],
         end_key: &[u8],

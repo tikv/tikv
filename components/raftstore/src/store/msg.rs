@@ -584,7 +584,7 @@ pub enum CasualMessage<EK: KvEngine> {
 
     /// Region info from PD
     QueryRegionLeaderResp {
-        region: metapb::Region,
+        region: Arc<metapb::Region>,
         leader: metapb::Peer,
     },
 
@@ -843,7 +843,7 @@ where
     UnsafeRecoveryReport(pdpb::StoreReport),
     UnsafeRecoveryCreatePeer {
         syncer: UnsafeRecoveryExecutePlanSyncer,
-        create: metapb::Region,
+        create: Arc<metapb::Region>,
     },
 
     GcSnapshotFinish,

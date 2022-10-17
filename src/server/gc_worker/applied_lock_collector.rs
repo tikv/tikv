@@ -173,7 +173,7 @@ impl LockObserver {
 impl Coprocessor for LockObserver {}
 
 impl QueryObserver for LockObserver {
-    fn post_apply_query(&self, _: &mut ObserverContext<'_>, cmd: &Cmd) {
+    fn post_apply_query(&self, cmd: &Cmd) {
         fail_point!("notify_lock_observer_query");
         let max_ts = self.state.load_max_ts();
         if max_ts.is_zero() {
@@ -496,7 +496,6 @@ mod tests {
     use futures::executor::block_on;
     use kvproto::{
         kvrpcpb::Op,
-        metapb::Region,
         raft_cmdpb::{PutRequest, RaftCmdRequest, RaftCmdResponse, Request as RaftRequest},
     };
     use txn_types::LockType;
@@ -700,7 +699,7 @@ mod tests {
             make_apply_request(b"1".to_vec(), b"1".to_vec(), CF_DEFAULT, CmdType::Put),
             make_apply_request(b"2".to_vec(), b"2".to_vec(), CF_LOCK, CmdType::Delete),
         ];
-        coprocessor_host.post_apply(&Region::default(), &make_raft_cmd(req));
+        coprocessor_host.post_apply(&make_raft_cmd(req));
         expected_result.push(locks[0].clone());
         assert_eq!(
             get_collected_locks(&c, 100).unwrap(),
@@ -726,7 +725,7 @@ mod tests {
                 .filter(|l| l.get_lock_version() <= 100)
                 .cloned(),
         );
-        coprocessor_host.post_apply(&Region::default(), &make_raft_cmd(req.clone()));
+        coprocessor_host.post_apply(&make_raft_cmd(req.clone()));
         assert_eq!(
             get_collected_locks(&c, 100).unwrap(),
             (expected_result, true)
@@ -736,7 +735,7 @@ mod tests {
         // results are dropped.
         start_collecting(&c, 110).unwrap();
         assert_eq!(get_collected_locks(&c, 110).unwrap(), (vec![], true));
-        coprocessor_host.post_apply(&Region::default(), &make_raft_cmd(req));
+        coprocessor_host.post_apply(&make_raft_cmd(req));
         assert_eq!(get_collected_locks(&c, 110).unwrap(), (locks, true));
     }
 
@@ -770,11 +769,7 @@ mod tests {
         start_collecting(&c, 100).unwrap();
 
         // Apply plain file to other CFs. Nothing happens.
-        coprocessor_host.post_apply_plain_kvs_from_snapshot(
-            &Region::default(),
-            CF_DEFAULT,
-            &lock_kvs,
-        );
+        coprocessor_host.post_apply_plain_kvs_from_snapshot(&Arc::default(), CF_DEFAULT, &lock_kvs);
         assert_eq!(get_collected_locks(&c, 100).unwrap(), (vec![], true));
 
         // Apply plain file to lock cf. Locks with ts before 100 will be collected.
@@ -783,7 +778,7 @@ mod tests {
             .filter(|l| l.get_lock_version() <= 100)
             .cloned()
             .collect();
-        coprocessor_host.post_apply_plain_kvs_from_snapshot(&Region::default(), CF_LOCK, &lock_kvs);
+        coprocessor_host.post_apply_plain_kvs_from_snapshot(&Arc::default(), CF_LOCK, &lock_kvs);
         assert_eq!(
             get_collected_locks(&c, 100).unwrap(),
             (expected_locks.clone(), true)
@@ -811,16 +806,16 @@ mod tests {
         // results are dropped.
         start_collecting(&c, 110).unwrap();
         assert_eq!(get_collected_locks(&c, 110).unwrap(), (vec![], true));
-        coprocessor_host.post_apply_plain_kvs_from_snapshot(&Region::default(), CF_LOCK, &lock_kvs);
+        coprocessor_host.post_apply_plain_kvs_from_snapshot(&Arc::default(), CF_LOCK, &lock_kvs);
         assert_eq!(get_collected_locks(&c, 110).unwrap(), (locks.clone(), true));
 
         // Apply SST file to other cfs. Nothing happens.
-        coprocessor_host.post_apply_sst_from_snapshot(&Region::default(), CF_DEFAULT, "");
+        coprocessor_host.post_apply_sst_from_snapshot(&Arc::default(), CF_DEFAULT, "");
         assert_eq!(get_collected_locks(&c, 110).unwrap(), (locks.clone(), true));
 
         // Apply SST file to lock cf is not supported. This will cause error and
         // therefore `is_clean` will be set to false.
-        coprocessor_host.post_apply_sst_from_snapshot(&Region::default(), CF_LOCK, "");
+        coprocessor_host.post_apply_sst_from_snapshot(&Arc::default(), CF_LOCK, "");
         assert_eq!(get_collected_locks(&c, 110).unwrap(), (locks, false));
     }
 
@@ -832,14 +827,14 @@ mod tests {
         // The value is not a valid lock.
         let (k, v) = (Key::from_raw(b"k1").into_encoded(), b"v1".to_vec());
         let req = make_apply_request(k.clone(), v.clone(), CF_LOCK, CmdType::Put);
-        coprocessor_host.post_apply(&Region::default(), &make_raft_cmd(vec![req]));
+        coprocessor_host.post_apply(&make_raft_cmd(vec![req]));
         assert_eq!(get_collected_locks(&c, 1).unwrap(), (vec![], false));
 
         // `is_clean` should be reset after invoking `start_collecting`.
         start_collecting(&c, 2).unwrap();
         assert_eq!(get_collected_locks(&c, 2).unwrap(), (vec![], true));
         coprocessor_host.post_apply_plain_kvs_from_snapshot(
-            &Region::default(),
+            &Arc::default(),
             CF_LOCK,
             &[(keys::data_key(&k), v)],
         );
@@ -859,7 +854,7 @@ mod tests {
             let (k, v) = lock_info_to_kv(lock.clone());
             let req = make_apply_request(k, v, CF_LOCK, CmdType::Put);
             let raft_cmd = make_raft_cmd(vec![req; count]);
-            coprocessor_host.post_apply(&Region::default(), &raft_cmd);
+            coprocessor_host.post_apply(&raft_cmd);
         };
 
         batch_generate_locks(MAX_COLLECT_SIZE - 1);

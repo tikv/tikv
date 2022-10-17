@@ -301,6 +301,7 @@ mod tests {
         region.mut_peers().push(Peer::default());
         region.mut_region_epoch().set_version(2);
         region.mut_region_epoch().set_conf_ver(5);
+        let region = Arc::new(region);
 
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
@@ -405,6 +406,7 @@ mod tests {
         region.mut_peers().push(Peer::default());
         region.mut_region_epoch().set_version(2);
         region.mut_region_epoch().set_conf_ver(5);
+        let region = Arc::new(region);
 
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
@@ -571,6 +573,7 @@ mod tests {
         region.mut_peers().push(Peer::default());
         region.mut_region_epoch().set_version(2);
         region.mut_region_epoch().set_conf_ver(5);
+        let region = Arc::new(region);
 
         let (tx, rx) = mpsc::sync_channel(100);
         let mut cfg = Config {

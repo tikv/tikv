@@ -123,7 +123,10 @@ pub fn get_region_approximate_middle(
 
 #[cfg(test)]
 mod tests {
-    use std::{iter, sync::mpsc};
+    use std::{
+        iter,
+        sync::{mpsc, Arc},
+    };
 
     use engine_test::ctor::{CfOptions, DbOptions};
     use engine_traits::{MiscExt, SyncMutable, ALL_CFS, CF_DEFAULT, LARGE_CFS};
@@ -155,6 +158,7 @@ mod tests {
         region.mut_peers().push(Peer::default());
         region.mut_region_epoch().set_version(2);
         region.mut_region_epoch().set_conf_ver(5);
+        let region = Arc::new(region);
 
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
@@ -200,6 +204,7 @@ mod tests {
         region.mut_peers().push(Peer::default());
         region.mut_region_epoch().set_version(2);
         region.mut_region_epoch().set_conf_ver(5);
+        let region = Arc::new(region);
 
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
@@ -264,6 +269,7 @@ mod tests {
         region.mut_peers().push(Peer::default());
         region.mut_region_epoch().set_version(2);
         region.mut_region_epoch().set_conf_ver(5);
+        let region = Arc::new(region);
 
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
@@ -388,6 +394,7 @@ mod tests {
         region.mut_peers().push(Peer::default());
         region.mut_region_epoch().set_version(2);
         region.mut_region_epoch().set_conf_ver(5);
+        let region = Arc::new(region);
 
         let (tx, rx) = mpsc::sync_channel(100);
         let cfg = Config {
@@ -444,7 +451,7 @@ mod tests {
         }
 
         runnable.run(SplitCheckTask::split_check(
-            region.clone(),
+            region,
             false,
             CheckPolicy::Scan,
             Some(bucket_range_list),

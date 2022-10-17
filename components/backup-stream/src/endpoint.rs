@@ -1018,23 +1018,23 @@ type ResolveRegionsCallback = Box<dyn FnOnce(ResolvedRegions) + 'static + Send>;
 
 pub enum ObserveOp {
     Start {
-        region: Region,
+        region: Arc<Region>,
     },
     Stop {
-        region: Region,
+        region: Arc<Region>,
     },
     /// Destroy the region subscription.
     /// Unlike `Stop`, this will assume the region would never go back.
     /// For now, the effect of "never go back" is that we won't try to hint
     /// other store the checkpoint ts of this region.
     Destroy {
-        region: Region,
+        region: Arc<Region>,
     },
     RefreshResolver {
-        region: Region,
+        region: Arc<Region>,
     },
     NotifyFailToStartObserve {
-        region: Region,
+        region: Arc<Region>,
         handle: ObserveHandle,
         err: Box<Error>,
     },

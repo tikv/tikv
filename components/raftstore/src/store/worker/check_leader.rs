@@ -161,7 +161,7 @@ mod tests {
             rrp.update_safe_ts(1, safe_ts);
             assert_eq!(rrp.safe_ts(), safe_ts);
             meta.region_ranges.insert(enc_end_key(&region), id);
-            meta.regions.insert(id, region);
+            meta.regions.insert(id, Arc::new(region));
             meta.region_read_progress.insert(id, Arc::new(rrp));
         }
 

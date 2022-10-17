@@ -111,7 +111,7 @@ where
 
 pub struct HeartbeatTask {
     pub term: u64,
-    pub region: metapb::Region,
+    pub region: Arc<metapb::Region>,
     pub peer: metapb::Peer,
     pub down_peers: Vec<pdpb::PeerStats>,
     pub pending_peers: Vec<metapb::Peer>,
@@ -130,7 +130,7 @@ where
     ER: RaftEngine,
 {
     AskSplit {
-        region: metapb::Region,
+        region: Arc<metapb::Region>,
         split_key: Vec<u8>,
         peer: metapb::Peer,
         // If true, right Region derives origin region_id.
@@ -138,7 +138,7 @@ where
         callback: Callback<EK::Snapshot>,
     },
     AskBatchSplit {
-        region: metapb::Region,
+        region: Arc<metapb::Region>,
         split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         // If true, right Region derives origin region_id.
@@ -159,7 +159,7 @@ where
         regions: Vec<metapb::Region>,
     },
     ValidatePeer {
-        region: metapb::Region,
+        region: Arc<metapb::Region>,
         peer: metapb::Peer,
     },
     ReadStats {
@@ -976,7 +976,7 @@ where
     // Deprecate
     fn handle_ask_split(
         &self,
-        mut region: metapb::Region,
+        region: Arc<metapb::Region>,
         split_key: Vec<u8>,
         peer: metapb::Peer,
         right_derive: bool,
@@ -984,7 +984,7 @@ where
         task: String,
     ) {
         let router = self.router.clone();
-        let resp = self.pd_client.ask_split(region.clone());
+        let resp = self.pd_client.ask_split((*region).clone());
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
@@ -1003,7 +1003,7 @@ where
                         right_derive,
                     );
                     let region_id = region.get_id();
-                    let epoch = region.take_region_epoch();
+                    let epoch = region.get_region_epoch().clone();
                     send_admin_request(
                         &router,
                         region_id,
@@ -1046,7 +1046,7 @@ where
         router: RaftRouter<EK, ER>,
         scheduler: Scheduler<Task<EK, ER>>,
         pd_client: Arc<T>,
-        mut region: metapb::Region,
+        region: Arc<metapb::Region>,
         mut split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
@@ -1059,7 +1059,7 @@ where
                 "region_id" => region.get_id());
             return;
         }
-        let resp = pd_client.ask_batch_split(region.clone(), split_keys.len());
+        let resp = pd_client.ask_batch_split((*region).clone(), split_keys.len());
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
@@ -1077,7 +1077,7 @@ where
                         right_derive,
                     );
                     let region_id = region.get_id();
-                    let epoch = region.take_region_epoch();
+                    let epoch = region.get_region_epoch().clone();
                     send_admin_request(
                         &router,
                         region_id,
@@ -1136,7 +1136,7 @@ where
     fn handle_heartbeat(
         &self,
         term: u64,
-        region: metapb::Region,
+        region: Arc<metapb::Region>,
         peer: metapb::Peer,
         region_stat: RegionStat,
         replication_status: Option<RegionReplicationStatus>,
@@ -1156,7 +1156,7 @@ where
 
         let resp = self.pd_client.region_heartbeat(
             term,
-            region.clone(),
+            (*region).clone(),
             peer,
             region_stat,
             replication_status,
@@ -1311,7 +1311,7 @@ where
                                 if let Err(e) =
                                     router.send_control(StoreMsg::UnsafeRecoveryCreatePeer {
                                         syncer: syncer.clone(),
-                                        create,
+                                        create: Arc::new(create),
                                     })
                                 {
                                     error!("fail to send create peer message for recovery"; "err" => ?e);
@@ -1357,7 +1357,7 @@ where
         self.remote.spawn(f);
     }
 
-    fn handle_validate_peer(&self, local_region: metapb::Region, peer: metapb::Peer) {
+    fn handle_validate_peer(&self, local_region: Arc<metapb::Region>, peer: metapb::Peer) {
         let router = self.router.clone();
         let resp = self.pd_client.get_region_by_id(local_region.get_id());
         let f = async move {
@@ -1402,7 +1402,7 @@ where
                         PD_VALIDATE_PEER_COUNTER_VEC
                             .with_label_values(&["peer stale"])
                             .inc();
-                        send_destroy_peer_message(&router, local_region, peer, pd_region);
+                        send_destroy_peer_message(&router, &local_region, peer, &pd_region);
                     } else {
                         info!(
                             "peer is still a valid member of region";
@@ -1688,7 +1688,10 @@ where
             match resp.await {
                 Ok(Some((region, leader))) => {
                     if leader.get_store_id() != 0 {
-                        let msg = CasualMessage::QueryRegionLeaderResp { region, leader };
+                        let msg = CasualMessage::QueryRegionLeaderResp {
+                            region: Arc::new(region),
+                            leader,
+                        };
                         if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
                             error!("send region info message failed"; "region_id" => region_id, "err" => ?e);
                         }
@@ -1869,7 +1872,7 @@ where
                                     router.clone(),
                                     scheduler.clone(),
                                     pd_client.clone(),
-                                    region,
+                                    Arc::new(region),
                                     vec![split_key],
                                     split_info.peer,
                                     true,
@@ -2229,9 +2232,9 @@ fn send_admin_request<EK, ER>(
 /// Sends a raft message to destroy the specified stale Peer
 fn send_destroy_peer_message<EK, ER>(
     router: &RaftRouter<EK, ER>,
-    local_region: metapb::Region,
+    local_region: &metapb::Region,
     peer: metapb::Peer,
-    pd_region: metapb::Region,
+    pd_region: &metapb::Region,
 ) where
     EK: KvEngine,
     ER: RaftEngine,

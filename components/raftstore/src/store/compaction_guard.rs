@@ -195,7 +195,7 @@ impl<P: RegionInfoProvider> SstPartitioner for CompactionGuardGenerator<P> {
 
 #[cfg(test)]
 mod tests {
-    use std::str;
+    use std::{str, sync::Arc};
 
     use engine_rocks::{
         raw::{BlockBasedOptions, DBCompressionType},
@@ -415,24 +415,24 @@ mod tests {
     #[test]
     fn test_compaction_guard_with_rocks() {
         let provider = MockRegionInfoProvider::new(vec![
-            Region {
+            Arc::new(Region {
                 id: 1,
                 start_key: b"a".to_vec(),
                 end_key: b"b".to_vec(),
                 ..Default::default()
-            },
-            Region {
+            }),
+            Arc::new(Region {
                 id: 2,
                 start_key: b"b".to_vec(),
                 end_key: b"c".to_vec(),
                 ..Default::default()
-            },
-            Region {
+            }),
+            Arc::new(Region {
                 id: 3,
                 start_key: b"c".to_vec(),
                 end_key: b"d".to_vec(),
                 ..Default::default()
-            },
+            }),
         ]);
         let (db, dir) = new_test_db(provider);
 

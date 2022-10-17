@@ -68,7 +68,7 @@ impl BackupStreamObserver {
     /// The internal way to register a region.
     /// It delegate the initial scanning and modify of the subs to the endpoint.
     #[cfg(test)]
-    fn register_region(&self, region: &Region) {
+    fn register_region(&self, region: &Arc<Region>) {
         if let Err(err) = self
             .scheduler
             .schedule(Task::ModifyObserve(ObserveOp::Start {
@@ -132,7 +132,7 @@ impl<E: KvEngine> CmdObserver<E> for BackupStreamObserver {
         try_send!(self.scheduler, Task::BatchEvent(cmd_batches));
     }
 
-    fn on_applied_current_term(&self, role: StateRole, region: &Region) {
+    fn on_applied_current_term(&self, role: StateRole, region: &Arc<Region>) {
         if role == StateRole::Leader && self.should_register_region(region) {
             let success = try_send!(
                 self.scheduler,
@@ -200,7 +200,7 @@ impl RegionChangeObserver for BackupStreamObserver {
 #[cfg(test)]
 
 mod tests {
-    use std::{assert_matches::assert_matches, time::Duration};
+    use std::{assert_matches::assert_matches, sync::Arc, time::Duration};
 
     use engine_panic::PanicEngine;
     use kvproto::metapb::Region;
@@ -217,12 +217,12 @@ mod tests {
         subscription_track::SubscriptionTracer,
     };
 
-    fn fake_region(id: u64, start: &[u8], end: &[u8]) -> Region {
+    fn fake_region(id: u64, start: &[u8], end: &[u8]) -> Arc<Region> {
         let mut r = Region::new();
         r.set_id(id);
         r.set_start_key(start.to_vec());
         r.set_end_key(end.to_vec());
-        r
+        Arc::new(r)
     }
 
     #[test]

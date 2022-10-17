@@ -200,7 +200,7 @@ pub struct ChangePeer {
     // or (legacy) ConfChange, for ConfChange, it only contains
     // one element
     pub changes: Vec<ChangePeerRequest>,
-    pub region: Region,
+    pub region: Arc<Region>,
 }
 
 pub struct Range {
@@ -240,24 +240,24 @@ pub enum ExecResult<S> {
     },
     SplitRegion {
         regions: Vec<Region>,
-        derived: Region,
+        derived: Arc<Region>,
         new_split_regions: HashMap<u64, NewSplitPeer>,
     },
     PrepareMerge {
-        region: Region,
+        region: Arc<Region>,
         state: MergeState,
     },
     CommitMerge {
         index: u64,
-        region: Region,
-        source: Region,
+        region: Arc<Region>,
+        source: Arc<Region>,
     },
     RollbackMerge {
-        region: Region,
+        region: Arc<Region>,
         commit: u64,
     },
     ComputeHash {
-        region: Region,
+        region: Arc<Region>,
         index: u64,
         context: Vec<u8>,
         snap: S,
@@ -277,7 +277,7 @@ pub enum ExecResult<S> {
         term: u64,
     },
     SetFlashbackState {
-        region: Region,
+        region: Arc<Region>,
     },
 }
 
@@ -898,7 +898,7 @@ where
     /// The term of the Region.
     term: u64,
     /// The Region information of the peer.
-    region: Region,
+    region: Arc<Region>,
     /// Peer_tag, "[region region_id] peer_id".
     tag: String,
 
@@ -1898,7 +1898,7 @@ where
         let peer = request.get_peer();
         let store_id = peer.get_store_id();
         let change_type = request.get_change_type();
-        let mut region = self.region.clone();
+        let mut region = (*self.region).clone();
 
         fail_point!(
             "apply_on_conf_change_1_3_1",
@@ -2083,7 +2083,7 @@ where
                 index: ctx.exec_log_index,
                 conf_change: Default::default(),
                 changes: vec![request.clone()],
-                region,
+                region: Arc::new(region),
             })),
         ))
     }
@@ -2127,7 +2127,7 @@ where
                 index: ctx.exec_log_index,
                 conf_change: Default::default(),
                 changes,
-                region,
+                region: Arc::new(region),
             })),
         ))
     }
@@ -2137,7 +2137,7 @@ where
         kind: ConfChangeKind,
         changes: &[ChangePeerRequest],
     ) -> Result<Region> {
-        let mut region = self.region.clone();
+        let mut region = (*self.region).clone();
         for cp in changes.iter() {
             let (change_type, peer) = (cp.get_change_type(), cp.get_peer());
             let store_id = peer.get_store_id();
@@ -2288,7 +2288,7 @@ where
     }
 
     fn apply_leave_joint(&self) -> Result<Region> {
-        let mut region = self.region.clone();
+        let mut region = (*self.region).clone();
         let mut change_num = 0;
         for peer in region.mut_peers().iter_mut() {
             match peer.get_role() {
@@ -2356,7 +2356,7 @@ where
         if split_reqs.get_requests().is_empty() {
             return Err(box_err!("missing split requests"));
         }
-        let mut derived = self.region.clone();
+        let mut derived = (*self.region).clone();
         let new_region_cnt = split_reqs.get_requests().len();
         let mut regions = Vec::with_capacity(new_region_cnt + 1);
         let mut keys: VecDeque<Vec<u8>> = VecDeque::with_capacity(new_region_cnt + 1);
@@ -2545,7 +2545,7 @@ where
             resp,
             ApplyResult::Res(ExecResult::SplitRegion {
                 regions,
-                derived,
+                derived: Arc::new(derived),
                 new_split_regions,
             }),
         ))
@@ -2575,7 +2575,7 @@ where
                 self.tag, first_index, index
             );
         }
-        let mut region = self.region.clone();
+        let mut region = (*self.region).clone();
         let region_version = region.get_region_epoch().get_version() + 1;
         region.mut_region_epoch().set_version(region_version);
         // In theory conf version should not be increased when executing prepare_merge.
@@ -2608,7 +2608,7 @@ where
         Ok((
             AdminResponse::default(),
             ApplyResult::Res(ExecResult::PrepareMerge {
-                region,
+                region: Arc::new(region),
                 state: merging_state,
             }),
         ))
@@ -2720,7 +2720,7 @@ where
                 self.tag, source_region, exist_region
             );
         }
-        let mut region = self.region.clone();
+        let mut region = (*self.region).clone();
         // Use a max value so that pd can ensure overlapped region has a priority.
         let version = cmp::max(
             source_region.get_region_epoch().get_version(),
@@ -2737,7 +2737,7 @@ where
             .and_then(|_| {
                 // TODO: maybe all information needs to be filled?
                 let mut merging_state = MergeState::default();
-                merging_state.set_target(self.region.clone());
+                merging_state.set_target((*self.region).clone());
                 write_peer_state(
                     kv_wb_mut,
                     source_region,
@@ -2759,8 +2759,8 @@ where
             resp,
             ApplyResult::Res(ExecResult::CommitMerge {
                 index: ctx.exec_log_index,
-                region,
-                source: source_region.to_owned(),
+                region: Arc::new(region),
+                source: Arc::new(source_region.to_owned()),
             }),
         ))
     }
@@ -2786,7 +2786,7 @@ where
             "{}",
             self.tag
         );
-        let mut region = self.region.clone();
+        let mut region = (*self.region).clone();
         let version = region.get_region_epoch().get_version();
         // Update version to avoid duplicated rollback requests.
         region.mut_region_epoch().set_version(version + 1);
@@ -2802,7 +2802,7 @@ where
         Ok((
             resp,
             ApplyResult::Res(ExecResult::RollbackMerge {
-                region,
+                region: Arc::new(region),
                 commit: rollback.get_commit(),
             }),
         ))
@@ -2826,7 +2826,7 @@ where
         };
         let is_in_flashback = req.get_cmd_type() == AdminCmdType::PrepareFlashback;
         old_state.mut_region().set_is_in_flashback(is_in_flashback);
-        let mut region = self.region.clone();
+        let mut region = (*self.region).clone();
         region.set_is_in_flashback(is_in_flashback);
         ctx.kv_wb_mut()
             .put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &old_state)
@@ -2839,7 +2839,9 @@ where
 
         Ok((
             AdminResponse::default(),
-            ApplyResult::Res(ExecResult::SetFlashbackState { region }),
+            ApplyResult::Res(ExecResult::SetFlashbackState {
+                region: Arc::new(region),
+            }),
         ))
     }
 
@@ -2996,7 +2998,7 @@ pub fn is_conf_change_cmd(msg: &RaftCmdRequest) -> bool {
 /// This function is used to check whether an sst is valid for ingestion.
 ///
 /// The `sst` must have epoch and range matched with `region`.
-pub fn check_sst_for_ingestion(sst: &SstMeta, region: &Region) -> Result<()> {
+pub fn check_sst_for_ingestion(sst: &SstMeta, region: &Arc<Region>) -> Result<()> {
     let uuid = sst.get_uuid();
     if let Err(e) = UuidBuilder::from_slice(uuid) {
         return Err(box_err!("invalid uuid {:?}: {:?}", uuid, e));
@@ -3018,7 +3020,7 @@ pub fn check_sst_for_ingestion(sst: &SstMeta, region: &Region) -> Result<()> {
         || epoch.get_version() != region_epoch.get_version()
     {
         let error = format!("{:?} != {:?}", epoch, region_epoch);
-        return Err(Error::EpochNotMatch(error, vec![region.clone()]));
+        return Err(Error::EpochNotMatch(error, vec![(**region).clone()]));
     }
 
     let range = sst.get_range();
@@ -3147,7 +3149,7 @@ pub struct Registration {
     pub term: u64,
     pub apply_state: RaftApplyState,
     pub applied_term: u64,
-    pub region: Region,
+    pub region: Arc<Region>,
     pub pending_request_snapshot_count: Arc<AtomicUsize>,
     pub is_merging: bool,
     raft_engine: Box<dyn RaftEngineReadOnly>,
@@ -3820,7 +3822,7 @@ where
                     response: Default::default(),
                     snapshot: Some(RegionSnapshot::from_snapshot(
                         Arc::new(apply_ctx.engine.snapshot()),
-                        Arc::new(self.delegate.region.clone()),
+                        self.delegate.region.clone(),
                     )),
                     txn_extra_op: TxnExtraOp::Noop,
                 }
@@ -4792,13 +4794,15 @@ mod tests {
         };
         system.spawn("test-basic".to_owned(), builder);
 
+        let mut region = Region::default();
+        region.set_id(2);
         let mut reg = Registration {
             id: 1,
             term: 4,
             applied_term: 5,
+            region: Arc::new(region),
             ..Default::default()
         };
-        reg.region.set_id(2);
         reg.apply_state.set_applied_index(3);
         router.schedule_task(2, Msg::Registration(reg.dup()));
         validate(&router, 2, move |delegate| {
@@ -5101,7 +5105,7 @@ mod tests {
             self.pre_query_count.fetch_add(1, Ordering::SeqCst);
         }
 
-        fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &Cmd) {
+        fn post_apply_query(&self, _: &Cmd) {
             self.post_query_count.fetch_add(1, Ordering::SeqCst);
         }
 
@@ -5209,7 +5213,7 @@ mod tests {
             }
         }
 
-        fn on_applied_current_term(&self, _: raft::StateRole, _: &Region) {}
+        fn on_applied_current_term(&self, _: raft::StateRole, _: &Arc<Region>) {}
     }
 
     impl RegionChangeObserver for ApplyObserver {
@@ -5253,15 +5257,17 @@ mod tests {
         system.spawn("test-handle-raft".to_owned(), builder);
 
         let peer_id = 3;
-        let mut reg = Registration {
+        let mut region = Region::default();
+        region.set_id(1);
+        region.mut_peers().push(new_peer(2, 3));
+        region.set_end_key(b"k5".to_vec());
+        region.mut_region_epoch().set_conf_ver(1);
+        region.mut_region_epoch().set_version(3);
+        let reg = Registration {
             id: peer_id,
+            region: Arc::new(region),
             ..Default::default()
         };
-        reg.region.set_id(1);
-        reg.region.mut_peers().push(new_peer(2, 3));
-        reg.region.set_end_key(b"k5".to_vec());
-        reg.region.mut_region_epoch().set_conf_ver(1);
-        reg.region.mut_region_epoch().set_version(3);
         router.schedule_task(1, Msg::Registration(reg));
 
         let (capture_tx, capture_rx) = mpsc::channel();
@@ -5596,16 +5602,18 @@ mod tests {
         };
         system.spawn("test-ingest".to_owned(), builder);
 
-        let mut reg = Registration {
+        let mut region = Region::default();
+        region.set_id(1);
+        region.mut_peers().push(new_peer(1, 1));
+        region.set_start_key(b"k1".to_vec());
+        region.set_end_key(b"k2".to_vec());
+        region.mut_region_epoch().set_conf_ver(1);
+        region.mut_region_epoch().set_version(3);
+        let reg = Registration {
             id: 1,
+            region: Arc::new(region),
             ..Default::default()
         };
-        reg.region.set_id(1);
-        reg.region.mut_peers().push(new_peer(1, 1));
-        reg.region.set_start_key(b"k1".to_vec());
-        reg.region.set_end_key(b"k2".to_vec());
-        reg.region.mut_region_epoch().set_conf_ver(1);
-        reg.region.mut_region_epoch().set_version(3);
         router.schedule_task(1, Msg::Registration(reg));
 
         // Test whether put commands and ingest commands are applied to engine in a
@@ -5776,16 +5784,18 @@ mod tests {
         };
         system.spawn("test-bucket".to_owned(), builder);
 
-        let mut reg = Registration {
+        let mut region = Region::default();
+        region.set_id(1);
+        region.mut_peers().push(new_peer(1, 1));
+        region.set_start_key(b"k1".to_vec());
+        region.set_end_key(b"k2".to_vec());
+        region.mut_region_epoch().set_conf_ver(1);
+        region.mut_region_epoch().set_version(3);
+        let reg = Registration {
             id: 1,
+            region: Arc::new(region),
             ..Default::default()
         };
-        reg.region.set_id(1);
-        reg.region.mut_peers().push(new_peer(1, 1));
-        reg.region.set_start_key(b"k1".to_vec());
-        reg.region.set_end_key(b"k2".to_vec());
-        reg.region.mut_region_epoch().set_conf_ver(1);
-        reg.region.mut_region_epoch().set_version(3);
         router.schedule_task(1, Msg::Registration(reg));
 
         let entry1 = {
@@ -5870,15 +5880,17 @@ mod tests {
         system.spawn("test-exec-observer".to_owned(), builder);
 
         let peer_id = 3;
-        let mut reg = Registration {
+        let mut region = Region::default();
+        region.set_id(1);
+        region.mut_peers().push(new_peer(1, peer_id));
+        region.set_end_key(b"k5".to_vec());
+        region.mut_region_epoch().set_conf_ver(1);
+        region.mut_region_epoch().set_version(3);
+        let reg = Registration {
             id: peer_id,
+            region: Arc::new(region),
             ..Default::default()
         };
-        reg.region.set_id(1);
-        reg.region.mut_peers().push(new_peer(1, peer_id));
-        reg.region.set_end_key(b"k5".to_vec());
-        reg.region.mut_region_epoch().set_conf_ver(1);
-        reg.region.mut_region_epoch().set_version(3);
         router.schedule_task(1, Msg::Registration(reg));
 
         obs.skip_persist_when_pre_commit
@@ -6094,15 +6106,17 @@ mod tests {
         system.spawn("test-handle-raft".to_owned(), builder);
 
         let peer_id = 3;
-        let mut reg = Registration {
+        let mut region = Region::default();
+        region.set_id(1);
+        region.mut_peers().push(new_peer(2, 3));
+        region.set_end_key(b"k5".to_vec());
+        region.mut_region_epoch().set_conf_ver(1);
+        region.mut_region_epoch().set_version(3);
+        let reg = Registration {
             id: peer_id,
+            region: Arc::new(region),
             ..Default::default()
         };
-        reg.region.set_id(1);
-        reg.region.mut_peers().push(new_peer(2, 3));
-        reg.region.set_end_key(b"k5".to_vec());
-        reg.region.mut_region_epoch().set_conf_ver(1);
-        reg.region.mut_region_epoch().set_version(3);
         let region_epoch = reg.region.get_region_epoch().clone();
         router.schedule_task(1, Msg::Registration(reg));
 
@@ -6226,7 +6240,7 @@ mod tests {
     #[test]
     fn test_check_sst_for_ingestion() {
         let mut sst = SstMeta::default();
-        let mut region = Region::default();
+        let region = Arc::new(Region::default());
 
         // Check uuid and cf name
         check_sst_for_ingestion(&sst, &region).unwrap_err();
@@ -6239,25 +6253,33 @@ mod tests {
         check_sst_for_ingestion(&sst, &region).unwrap();
 
         // Check region id
+        let mut region = (*region).clone();
         region.set_id(1);
+        let region = Arc::new(region);
         sst.set_region_id(2);
         check_sst_for_ingestion(&sst, &region).unwrap_err();
         sst.set_region_id(1);
         check_sst_for_ingestion(&sst, &region).unwrap();
 
         // Check region epoch
+        let mut region = (*region).clone();
         region.mut_region_epoch().set_conf_ver(1);
+        let region = Arc::new(region);
         check_sst_for_ingestion(&sst, &region).unwrap_err();
         sst.mut_region_epoch().set_conf_ver(1);
         check_sst_for_ingestion(&sst, &region).unwrap();
+        let mut region = (*region).clone();
         region.mut_region_epoch().set_version(1);
+        let region = Arc::new(region);
         check_sst_for_ingestion(&sst, &region).unwrap_err();
         sst.mut_region_epoch().set_version(1);
         check_sst_for_ingestion(&sst, &region).unwrap();
 
         // Check region range
+        let mut region = (*region).clone();
         region.set_start_key(vec![2]);
         region.set_end_key(vec![8]);
+        let region = Arc::new(region);
         sst.mut_range().set_start(vec![1]);
         sst.mut_range().set_end(vec![8]);
         check_sst_for_ingestion(&sst, &region).unwrap_err();
@@ -6336,17 +6358,19 @@ mod tests {
         let (_path, engine) = create_tmp_engine("test-delegate");
         let (_import_dir, importer) = create_tmp_importer("test-delegate");
         let peer_id = 3;
-        let mut reg = Registration {
+        let mut region = Region::default();
+        region.set_id(1);
+        region.set_end_key(b"k5".to_vec());
+        region.mut_region_epoch().set_version(3);
+        region.set_peers(vec![new_peer(2, 3), new_peer(4, 5), new_learner_peer(6, 7)].into());
+        let reg = Registration {
             id: peer_id,
             term: 1,
+            region: Arc::new(region),
             ..Default::default()
         };
-        reg.region.set_id(1);
-        reg.region.set_end_key(b"k5".to_vec());
-        reg.region.mut_region_epoch().set_version(3);
+        let peers = reg.region.get_peers().to_vec();
         let region_epoch = reg.region.get_region_epoch().clone();
-        let peers = vec![new_peer(2, 3), new_peer(4, 5), new_learner_peer(6, 7)];
-        reg.region.set_peers(peers.clone().into());
         let (tx, _rx) = mpsc::channel();
         let sender = Box::new(TestNotifier { tx });
         let mut host = CoprocessorHost::<KvTestEngine>::default();
@@ -6599,15 +6623,17 @@ mod tests {
         system.spawn("flashback_need_to_be_applied".to_owned(), builder);
 
         let peer_id = 3;
-        let mut reg = Registration {
+        let mut region = Region::default();
+        region.set_id(1);
+        region.mut_peers().push(new_peer(2, 3));
+        region.mut_region_epoch().set_conf_ver(1);
+        region.mut_region_epoch().set_version(3);
+        region.set_is_in_flashback(true);
+        let reg = Registration {
             id: peer_id,
+            region: Arc::new(region),
             ..Default::default()
         };
-        reg.region.set_id(1);
-        reg.region.mut_peers().push(new_peer(2, 3));
-        reg.region.mut_region_epoch().set_conf_ver(1);
-        reg.region.mut_region_epoch().set_version(3);
-        reg.region.set_is_in_flashback(true);
         router.schedule_task(1, Msg::Registration(reg));
 
         let (capture_tx, capture_rx) = mpsc::channel();

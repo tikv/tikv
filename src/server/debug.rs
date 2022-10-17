@@ -5,6 +5,7 @@ use std::{
     iter::FromIterator,
     path::Path,
     result,
+    sync::Arc,
     thread::{Builder as ThreadBuilder, JoinHandle},
 };
 
@@ -502,10 +503,10 @@ impl<ER: RaftEngine> Debugger<ER> {
                 _ => {}
             }
 
-            let region = local_state.get_region();
+            let region = Arc::new(local_state.get_region().clone());
             let store_id = self.get_store_ident()?.get_store_id();
 
-            let peer_id = find_peer(region, store_id)
+            let peer_id = find_peer(&region, store_id)
                 .map(|peer| peer.get_id())
                 .ok_or_else(|| {
                     Error::Other("RegionLocalState doesn't contains peer itself".into())

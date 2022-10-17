@@ -15,7 +15,7 @@ use tikv_util::{
     HandyRwLock,
 };
 
-fn dump(c: &RegionInfoAccessor) -> Vec<(Region, StateRole)> {
+fn dump(c: &RegionInfoAccessor) -> Vec<(Arc<Region>, StateRole)> {
     let (regions, region_ranges) = c.debug_dump();
 
     assert_eq!(regions.len(), region_ranges.len());
@@ -36,7 +36,7 @@ fn dump(c: &RegionInfoAccessor) -> Vec<(Region, StateRole)> {
     res
 }
 
-fn check_region_ranges(regions: &[(Region, StateRole)], ranges: &[(&[u8], &[u8])]) {
+fn check_region_ranges(regions: &[(Arc<Region>, StateRole)], ranges: &[(&[u8], &[u8])]) {
     assert_eq!(regions.len(), ranges.len());
     regions
         .iter()
@@ -58,7 +58,7 @@ fn test_region_info_accessor_impl(cluster: &mut Cluster<NodeCluster>, c: &Region
 
     let init_regions = dump(c);
     check_region_ranges(&init_regions, &[(&b""[..], &b""[..])]);
-    assert_eq!(init_regions[0].0, cluster.get_region(b"k1"));
+    assert_eq!(*init_regions[0].0, cluster.get_region(b"k1"));
 
     // Split
     {
@@ -132,7 +132,7 @@ fn test_region_info_accessor_impl(cluster: &mut Cluster<NodeCluster>, c: &Region
         find_peer(&region2, 2).unwrap().clone(),
         vec![],
     );
-    let mut region3 = Region::default();
+    let mut region3 = Arc::default();
     let mut role3 = StateRole::default();
     // Wait for transfer leader finish
     for _ in 0..100 {

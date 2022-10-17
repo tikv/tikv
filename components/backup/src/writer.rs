@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fmt::Display, io::Read};
+use std::{fmt::Display, io::Read, sync::Arc};
 
 use encryption::{EncrypterReader, Iv};
 use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
@@ -166,7 +166,7 @@ impl Writer {
 pub struct BackupWriterBuilder {
     store_id: u64,
     limiter: Limiter,
-    region: Region,
+    region: Arc<Region>,
     db: RocksEngine,
     compression_type: Option<SstCompressionType>,
     compression_level: i32,
@@ -178,7 +178,7 @@ impl BackupWriterBuilder {
     pub fn new(
         store_id: u64,
         limiter: Limiter,
-        region: Region,
+        region: Arc<Region>,
         db: RocksEngine,
         compression_type: Option<SstCompressionType>,
         compression_level: i32,

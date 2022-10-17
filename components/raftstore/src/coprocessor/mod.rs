@@ -57,20 +57,20 @@ pub trait Coprocessor: Send {
 
 /// Context of observer.
 pub struct ObserverContext<'a> {
-    region: &'a Region,
+    region: &'a Arc<Region>,
     /// Whether to bypass following observer hook.
     pub bypass: bool,
 }
 
 impl<'a> ObserverContext<'a> {
-    pub fn new(region: &Region) -> ObserverContext<'_> {
+    pub fn new(region: &'a Arc<Region>) -> ObserverContext<'a> {
         ObserverContext {
             region,
             bypass: false,
         }
     }
 
-    pub fn region(&self) -> &Region {
+    pub fn region(&self) -> &Arc<Region> {
         self.region
     }
 }
@@ -80,7 +80,7 @@ impl<'a> ObserverContext<'a> {
 pub struct RegionState {
     pub peer_id: u64,
     pub pending_remove: bool,
-    pub modified_region: Option<Region>,
+    pub modified_region: Option<Arc<Region>>,
 }
 
 /// Context for exec observers of mutation to be applied to ApplyContext.
@@ -101,7 +101,7 @@ pub trait AdminObserver: Coprocessor {
 
     /// Hook to call after applying admin request.
     /// For now, the `region` in `ObserverContext` is an empty region.
-    fn post_apply_admin(&self, _: &mut ObserverContext<'_>, _: &AdminResponse) {}
+    fn post_apply_admin(&self, _: &AdminResponse) {}
 
     /// Hook before exec admin request, returns whether we should skip this
     /// admin.
@@ -146,8 +146,7 @@ pub trait QueryObserver: Coprocessor {
     fn pre_apply_query(&self, _: &mut ObserverContext<'_>, _: &[Request]) {}
 
     /// Hook to call after applying write request.
-    /// For now, the `region` in `ObserverContext` is an empty region.
-    fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &Cmd) {}
+    fn post_apply_query(&self, _: &Cmd) {}
 
     /// Hook before exec write request, returns whether we should skip this
     /// write.
@@ -534,7 +533,7 @@ pub trait CmdObserver<E>: Coprocessor {
     // TODO: maybe should move `on_applied_current_term` to a separated
     // `Coprocessor`
     /// Hook to call at the first time the leader applied on its term
-    fn on_applied_current_term(&self, role: StateRole, region: &Region);
+    fn on_applied_current_term(&self, role: StateRole, region: &Arc<Region>);
 }
 
 pub trait ReadIndexObserver: Coprocessor {

@@ -431,7 +431,7 @@ fn init_compaction_filter(cluster: &Cluster<ServerCluster>, store_id: u64) {
             &self,
             _start_key: &[u8],
             _end_key: &[u8],
-        ) -> CopResult<Vec<Region>> {
+        ) -> CopResult<Vec<Arc<Region>>> {
             Ok(vec![])
         }
     }

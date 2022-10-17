@@ -51,7 +51,7 @@ where
     where
         EK: KvEngine,
     {
-        RegionSnapshot::from_snapshot(Arc::new(ps.raw_snapshot()), Arc::new(ps.region().clone()))
+        RegionSnapshot::from_snapshot(Arc::new(ps.raw_snapshot()), ps.region().clone())
     }
 
     pub fn from_raw<EK>(db: EK, region: Region) -> RegionSnapshot<EK::Snapshot>
@@ -386,7 +386,7 @@ mod tests {
         let (raftlog_fetch_sched, _) = worker::dummy_scheduler();
         PeerStorage::new(
             engines,
-            r,
+            Arc::new(r.clone()),
             region_sched,
             raftlog_fetch_sched,
             0,

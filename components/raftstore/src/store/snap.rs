@@ -177,7 +177,7 @@ where
     EK: KvEngine,
 {
     pub db: EK,
-    pub region: Region,
+    pub region: Arc<Region>,
     pub abort: Arc<AtomicUsize>,
     pub write_batch_size: usize,
     pub coprocessor_host: CoprocessorHost<EK>,
@@ -2209,7 +2209,7 @@ pub mod tests {
 
     fn test_snap_file(get_db: DbBuilder<KvTestEngine>, max_file_size: u64) {
         let region_id = 1;
-        let region = gen_test_region(region_id, 1, 1);
+        let region = Arc::new(gen_test_region(region_id, 1, 1));
         let src_db_dir = Builder::new()
             .prefix("test-snap-file-db-src")
             .tempdir()
@@ -2463,7 +2463,7 @@ pub mod tests {
     #[test]
     fn test_snap_corruption_on_size_or_checksum() {
         let region_id = 1;
-        let region = gen_test_region(region_id, 1, 1);
+        let region = Arc::new(gen_test_region(region_id, 1, 1));
         let db_dir = Builder::new()
             .prefix("test-snap-corruption-db")
             .tempdir()

@@ -136,7 +136,7 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
         }
     }
 
-    fn on_applied_current_term(&self, _: StateRole, _: &Region) {}
+    fn on_applied_current_term(&self, _: StateRole, _: &Arc<Region>) {}
 }
 
 impl RoleObserver for CdcObserver {
@@ -255,6 +255,7 @@ mod tests {
         region.set_id(1);
         region.mut_peers().push(new_peer(2, 2));
         region.mut_peers().push(new_peer(3, 3));
+        let region = Arc::new(region);
 
         let mut ctx = ObserverContext::new(&region);
         observer.on_role_change(&mut ctx, &RoleChange::new(StateRole::Follower));
@@ -332,7 +333,9 @@ mod tests {
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
 
         // No event if it is unsubscribed.
+        let mut region = (*region).clone();
         region.set_id(999);
+        let region = Arc::new(region);
         let mut ctx = ObserverContext::new(&region);
         observer.on_role_change(&mut ctx, &RoleChange::new(StateRole::Follower));
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();

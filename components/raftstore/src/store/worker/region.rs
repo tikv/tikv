@@ -443,7 +443,7 @@ where
         check_abort(&abort)?;
 
         let mut region_state = self.region_state(region_id)?;
-        let region = region_state.get_region().clone();
+        let region = Arc::new(region_state.get_region().clone());
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
@@ -718,22 +718,15 @@ where
         let idx = apply_state.get_truncated_state().get_index();
         let snap_key = SnapKey::new(*region_id, term, idx);
         let s = box_try!(self.mgr.get_snapshot_for_applying(&snap_key));
+        let region = Arc::new(region_state.get_region().clone());
         if !s.exists() {
-            self.coprocessor_host.pre_apply_snapshot(
-                region_state.get_region(),
-                *peer_id,
-                &snap_key,
-                None,
-            );
+            self.coprocessor_host
+                .pre_apply_snapshot(&region, *peer_id, &snap_key, None);
             return Err(box_err!("missing snapshot file {}", s.path()));
         }
         check_abort(&abort)?;
-        self.coprocessor_host.pre_apply_snapshot(
-            region_state.get_region(),
-            *peer_id,
-            &snap_key,
-            Some(&s),
-        );
+        self.coprocessor_host
+            .pre_apply_snapshot(&region, *peer_id, &snap_key, Some(&s));
         Ok(())
     }
 

@@ -572,7 +572,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
     /// the first is the next region can be sent to GC worker;
     /// the second is the next key which can be passed into this method later.
     #[allow(clippy::type_complexity)]
-    fn get_next_gc_context(&mut self, key: Key) -> (Option<Region>, Option<Key>) {
+    fn get_next_gc_context(&mut self, key: Key) -> (Option<Arc<Region>>, Option<Key>) {
         let (tx, rx) = mpsc::channel();
         let store_id = self.cfg.self_store_id;
 
@@ -781,7 +781,7 @@ mod tests {
                 r.set_start_key(start_key.clone());
                 r.set_end_key(end_key);
                 r.mut_peers().push(new_peer(1, 1));
-                let info = RegionInfo::new(r, StateRole::Leader);
+                let info = RegionInfo::new(Arc::new(r), StateRole::Leader);
                 (start_key, info)
             })
             .collect();

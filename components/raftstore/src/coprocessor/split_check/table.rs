@@ -226,7 +226,10 @@ fn is_same_table(left_key: &[u8], right_key: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::{io::Write, sync::mpsc};
+    use std::{
+        io::Write,
+        sync::{mpsc, Arc},
+    };
 
     use engine_test::kv::new_engine;
     use engine_traits::{SyncMutable, ALL_CFS};
@@ -317,6 +320,7 @@ mod tests {
         region.mut_peers().push(Peer::default());
         region.mut_region_epoch().set_version(2);
         region.mut_region_epoch().set_conf_ver(5);
+        let region = Arc::new(region);
 
         let (tx, rx) = mpsc::sync_channel(100);
         let (stx, _rx) = mpsc::sync_channel(100);
@@ -340,8 +344,10 @@ mod tests {
         type Case = (Option<Vec<u8>>, Option<Vec<u8>>, Option<i64>);
         let mut check_cases = |cases: Vec<Case>| {
             for (encoded_start_key, encoded_end_key, table_id) in cases {
+                let mut region = (*region).clone();
                 region.set_start_key(encoded_start_key.unwrap_or_default());
                 region.set_end_key(encoded_end_key.unwrap_or_default());
+                let region = Arc::new(region);
                 runnable.run(SplitCheckTask::split_check(
                     region.clone(),
                     true,

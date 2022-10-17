@@ -1,5 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
+
 use engine_traits::KvEngine;
 use kvproto::metapb::Region;
 use raft::StateRole;
@@ -70,7 +72,7 @@ impl<E: KvEngine> CmdObserver<E> for Observer<E> {
         }
     }
 
-    fn on_applied_current_term(&self, role: StateRole, region: &Region) {
+    fn on_applied_current_term(&self, role: StateRole, region: &Arc<Region>) {
         // Start to advance resolved ts after peer becomes leader and apply on its term
         if role == StateRole::Leader {
             if let Err(e) = self.scheduler.schedule(Task::RegisterRegion {
