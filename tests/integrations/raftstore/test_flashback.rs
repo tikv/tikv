@@ -33,7 +33,7 @@ fn test_flashback_unprepared() {
     req.mut_header().set_peer(new_leader.unwrap());
     req.mut_header()
         .set_flags(WriteBatchFlags::FLASHBACK.bits());
-    let resp = cluster.call_command(req, Duration::from_secs(5)).unwrap();
+    let resp = cluster.call_command(req, Duration::from_secs(3)).unwrap();
     assert!(resp.get_header().get_error().has_flashback_not_prepared());
 }
 
@@ -202,7 +202,7 @@ fn test_flashback_for_local_read() {
     let state = cluster.raft_local_state(region.get_id(), store_id);
     let last_index = state.get_last_index();
     // Make sure the leader transfer procedure timeouts.
-    std::thread::sleep(election_timeout * 2);
+    sleep(election_timeout * 2);
     must_read_on_peer(&mut cluster, peer, region.clone(), b"k1", b"v1");
 
     // Check the leader does a local read.
@@ -261,6 +261,9 @@ fn test_flashback_for_apply_snapshot() {
 
     must_check_flashback_state(&mut cluster, 1, 1, false);
     must_check_flashback_state(&mut cluster, 1, 3, false);
+
+    // Make store 3 isolated.
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
 
     // Write some data to trigger snapshot.
     for i in 100..110 {
@@ -334,7 +337,7 @@ fn must_do_cmd_with_flashback_flag<T: Simulator>(
     req.mut_header().set_peer(new_leader.unwrap());
     req.mut_header()
         .set_flags(WriteBatchFlags::FLASHBACK.bits());
-    let resp = cluster.call_command(req, Duration::from_secs(5)).unwrap();
+    let resp = cluster.call_command(req, Duration::from_secs(3)).unwrap();
     assert!(!resp.get_header().has_error());
 }
 
