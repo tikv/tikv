@@ -281,21 +281,31 @@ pub fn compare_region_epoch(
     Ok(())
 }
 
-pub fn check_flashback_state(req: &RaftCmdRequest, region: &metapb::Region) -> Result<()> {
-    // If admin flashback has not been applied but the region is already in a
-    // flashback state, the request is rejected
-    if region.get_is_in_flashback() {
-        let flags = WriteBatchFlags::from_bits_truncate(req.get_header().get_flags());
-        if flags.contains(WriteBatchFlags::FLASHBACK) {
-            return Ok(());
-        }
-        if req.has_admin_request()
-            && (req.get_admin_request().get_cmd_type() == AdminCmdType::PrepareFlashback
-                || req.get_admin_request().get_cmd_type() == AdminCmdType::FinishFlashback)
-        {
-            return Ok(());
-        }
-        return Err(Error::FlashbackInProgress(region.get_id()));
+// Check if the request could be proposed/applied under the current state of the
+// flashback.
+pub fn check_flashback_state(
+    is_in_flashback: bool,
+    req: &RaftCmdRequest,
+    region_id: u64,
+) -> Result<()> {
+    // The admin flashback cmd could be proposed/applied under any state.
+    if req.has_admin_request()
+        && (req.get_admin_request().get_cmd_type() == AdminCmdType::PrepareFlashback
+            || req.get_admin_request().get_cmd_type() == AdminCmdType::FinishFlashback)
+    {
+        return Ok(());
+    }
+    let is_flashback_request = WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
+        .contains(WriteBatchFlags::FLASHBACK);
+    // If the region is in the flashback state, the only allowed request is the
+    // flashback request itself.
+    if is_in_flashback && !is_flashback_request {
+        return Err(Error::FlashbackInProgress(region_id));
+    }
+    // If the region is not in the flashback state, the flashback request itself
+    // should be rejected.
+    if !is_in_flashback && is_flashback_request {
+        return Err(Error::FlashbackNotPrepared(region_id));
     }
     Ok(())
 }
