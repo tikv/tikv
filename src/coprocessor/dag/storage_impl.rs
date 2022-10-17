@@ -72,13 +72,8 @@ impl<S: Store> Storage for TikvStorage<S> {
         // `scan_next`.
         let kv = self.scanner.as_mut().unwrap().next().map_err(Error::from)?;
         Ok(kv.map(|(k, v)| {
-            let key = k.clone().into_raw();
-            if key.is_err() {
-                error!("key is not valid"; "key" => log_wrappers::Value::key(k.as_encoded()));
-                unimplemented!("key is not valid");
-            } else {
-                (key.unwrap(), v)
-            }
+            let key = k.into_raw();
+            (key.unwrap(), v)
         }))
     }
 

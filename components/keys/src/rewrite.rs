@@ -120,7 +120,7 @@ mod tests {
             rewrite_prefix(b"t234", b"t567", b"t567890"),
             Err(WrongPrefix),
         );
-        assert_eq!(rewrite_prefix(b"t123", b"t567", b"t124"), Err(WrongPrefix), );
+        assert_eq!(rewrite_prefix(b"t123", b"t567", b"t124"), Err(WrongPrefix),);
     }
 
     #[test]

@@ -175,6 +175,14 @@ impl Key {
         Ok(&key[..key.len() - number::U64_SIZE])
     }
 
+    pub fn decode_raw_ts_from(key: &[u8]) -> Result<&[u8], codec::Error> {
+        let len = key.len();
+        if len < number::U64_SIZE {
+            return Err(codec::Error::KeyLength);
+        }
+        Ok(&key[key.len() - number::U64_SIZE..])
+    }
+
     /// Decode the timestamp from a ts encoded key.
     #[inline]
     pub fn decode_ts_from(key: &[u8]) -> Result<TimeStamp, codec::Error> {
