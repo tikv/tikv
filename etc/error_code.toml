@@ -438,6 +438,11 @@ error = '''
 KV:Raftstore:FlashbackInProgress
 '''
 
+["KV:Raftstore:FlashbackNotPrepared"]
+error = '''
+KV:Raftstore:FlashbackNotPrepared
+'''
+
 ["KV:Raftstore:SnapAbort"]
 error = '''
 KV:Raftstore:SnapAbort

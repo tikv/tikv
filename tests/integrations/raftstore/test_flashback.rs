@@ -1,6 +1,9 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::{Duration, Instant};
+use std::{
+    thread::sleep,
+    time::{Duration, Instant},
+};
 
 use kvproto::{
     metapb,
@@ -72,7 +75,8 @@ fn test_flashback_for_schedule() {
 
     // Verify the schedule can be executed if add flashback flag in request's
     // header.
-    must_transfer_leader(&mut cluster, region.get_id(), new_peer(2, 2));
+    must_transfer_leader_during_flashback(&mut cluster, region.get_id(), new_peer(2, 2));
+
     cluster.block_send_flashback_msg(
         region.get_id(),
         2,
@@ -108,7 +112,7 @@ fn test_flashback_for_write() {
     let value = vec![1_u8; 8096];
     must_get_error_flashback_in_progress(&mut cluster, &region, new_put_cmd(b"k1", &value));
 
-    must_cmd_add_flashback_flag(
+    must_do_cmd_with_flashback_flag(
         &mut cluster,
         &mut region.clone(),
         new_put_cmd(b"k1", &value),
@@ -152,7 +156,7 @@ fn test_flashback_for_read() {
 
     // Verify the read can be executed if add flashback flag in request's
     // header.
-    must_cmd_add_flashback_flag(
+    must_do_cmd_with_flashback_flag(
         &mut cluster,
         &mut region.clone(),
         new_get_cf_cmd("write", b"k1"),
@@ -193,7 +197,7 @@ fn test_flashback_for_local_read() {
     let state = cluster.raft_local_state(region.get_id(), store_id);
     let last_index = state.get_last_index();
     // Make sure the leader transfer procedure timeouts.
-    std::thread::sleep(election_timeout * 2);
+    sleep(election_timeout * 2);
     must_read_on_peer(&mut cluster, peer.clone(), region.clone(), b"k1", b"v1");
     // Check the leader does a local read.
     let state = cluster.raft_local_state(region.get_id(), store_id);
@@ -224,7 +228,7 @@ fn test_flashback_for_local_read() {
 
     // Wait for the leader's lease to expire to ensure that a renew lease interval
     // has elapsed.
-    std::thread::sleep(election_timeout * 2);
+    sleep(election_timeout * 2);
     must_error_read_on_peer(
         &mut cluster,
         peer.clone(),
@@ -359,7 +363,7 @@ fn test_flashback_for_apply_snapshot() {
     // Wait for snapshot
     sleep_ms(500);
 
-    must_transfer_leader(&mut cluster, 1, new_peer(5, 5));
+    must_transfer_leader_during_flashback(&mut cluster, 1, new_peer(5, 5));
     let local_state = cluster.region_local_state(1, 5);
     assert!(local_state.get_region().get_is_in_flashback());
 
@@ -380,7 +384,11 @@ fn test_flashback_for_apply_snapshot() {
     assert!(!local_state.get_region().get_is_in_flashback());
 }
 
-fn transfer_leader<T: Simulator>(cluster: &mut Cluster<T>, region_id: u64, leader: metapb::Peer) {
+fn transfer_leader_with_flashback_flag<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    region_id: u64,
+    leader: metapb::Peer,
+) {
     let epoch = cluster.get_region_epoch(region_id);
     let admin_req = new_transfer_leader_cmd(leader);
     let mut transfer_leader = new_admin_request(region_id, &epoch, admin_req);
@@ -393,7 +401,10 @@ fn transfer_leader<T: Simulator>(cluster: &mut Cluster<T>, region_id: u64, leade
     assert!(!resp.get_header().has_error());
 }
 
-fn must_transfer_leader<T: Simulator>(
+// This is only for the test purpose. There is no possibility that a
+// TransferLeader admin request could be executed during the flashback progress
+// in the real world.
+fn must_transfer_leader_during_flashback<T: Simulator>(
     cluster: &mut Cluster<T>,
     region_id: u64,
     leader: metapb::Peer,
@@ -415,7 +426,7 @@ fn must_transfer_leader<T: Simulator>(
                 region_id, leader, cur_leader
             );
         }
-        transfer_leader(cluster, region_id, leader.clone());
+        transfer_leader_with_flashback_flag(cluster, region_id, leader.clone());
     }
 }
 
@@ -429,7 +440,7 @@ fn multi_do_cmd<T: Simulator>(cluster: &mut Cluster<T>, cmd: kvproto::raft_cmdpb
     }
 }
 
-fn must_cmd_add_flashback_flag<T: Simulator>(
+fn must_do_cmd_with_flashback_flag<T: Simulator>(
     cluster: &mut Cluster<T>,
     region: &mut metapb::Region,
     cmd: kvproto::raft_cmdpb::Request,
