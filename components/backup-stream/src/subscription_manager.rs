@@ -133,6 +133,8 @@ where
         let snap = self.observe_over_with_retry(region, move || {
             ChangeObserver::from_pitr(region_id, handle.clone())
         })?;
+        #[cfg(feature = "failpoints")]
+        fail::fail_point!("scan_after_get_snapshot");
         let stat = self.do_initial_scan(region, start_ts, snap)?;
         Ok(stat)
     }
