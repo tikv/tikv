@@ -454,7 +454,10 @@ where
                     importer.do_download_kv_file(meta, req.get_storage_backend(), &limiter)?;
                 let mut reqs = RequestCollector::from_cf(meta.get_cf());
                 let mut cmd_reqs = vec![];
+                let mut req_size = 0_u64;
+
                 let mut build_req_fn = build_apply_request(
+                    &mut req_size,
                     raft_size.0,
                     &mut reqs,
                     cmd_reqs.as_mut(),
@@ -474,6 +477,7 @@ where
                 if !reqs.is_empty() {
                     let cmd = make_request(&mut reqs, context);
                     cmd_reqs.push(cmd);
+                    info!("apply req"; "size" => req_size);
                 }
                 for cmd in cmd_reqs {
                     let (cb, future) = paired_future_callback();
@@ -956,6 +960,7 @@ fn make_request(reqs: &mut RequestCollector, context: Context) -> RaftCmdRequest
 // in https://github.com/tikv/tikv/blob/a401f78bc86f7e6ea6a55ad9f453ae31be835b55/components/resolved_ts/src/cmd.rs#L204
 // will panic if found duplicated entry during Vec<PutRequest>.
 fn build_apply_request<'a, 'b>(
+    req_size: &'a mut u64,
     raft_size: u64,
     reqs: &'a mut RequestCollector,
     cmd_reqs: &'a mut Vec<RaftCmdRequest>,
@@ -966,51 +971,41 @@ fn build_apply_request<'a, 'b>(
 where
     'a: 'b,
 {
-    let mut req_size = 0_u64;
-
     // use callback to collect kv data.
-    if is_delete {
-        Box::new(move |k: Vec<u8>, _v: Vec<u8>| {
-            let mut req = Request::default();
-            let mut del = DeleteRequest::default();
+    Box::new(move |k: Vec<u8>, v: Vec<u8>| {
+        let mut req = Request::default();
 
+        if is_delete {
+            let mut del = DeleteRequest::default();
             del.set_key(k);
             del.set_cf(cf.to_string());
             req.set_cmd_type(CmdType::Delete);
             req.set_delete(del);
-            req_size += req.compute_size() as u64;
-            reqs.accept(req);
-            // When the request size get grow to half of the max request size,
-            // build the request and add it to a batch.
-            if req_size > raft_size / 2 {
-                req_size = 0;
-                let cmd = make_request(reqs, context.clone());
-                cmd_reqs.push(cmd);
-            }
-        })
-    } else {
-        Box::new(move |k: Vec<u8>, v: Vec<u8>| {
+        } else {
             if cf == CF_WRITE && !write_needs_restore(&v) {
                 return;
             }
 
-            let mut req = Request::default();
             let mut put = PutRequest::default();
-
             put.set_key(k);
             put.set_value(v);
             put.set_cf(cf.to_string());
             req.set_cmd_type(CmdType::Put);
             req.set_put(put);
-            req_size += req.compute_size() as u64;
-            reqs.accept(req);
-            if req_size > raft_size / 2 {
-                req_size = 0;
-                let cmd = make_request(reqs, context.clone());
-                cmd_reqs.push(cmd);
-            }
-        })
-    }
+        }
+
+        // When the request size get grow to max request size,
+        // build the request and add it to a batch.
+        if *req_size + req.compute_size() as u64 > raft_size {
+            info!("apply req"; "size" => *req_size);
+            *req_size = 0;
+            let cmd = make_request(reqs, context.clone());
+            cmd_reqs.push(cmd);
+        }
+
+        *req_size += req.compute_size() as u64;
+        reqs.accept(req);
+    })
 }
 
 fn write_needs_restore(write: &[u8]) -> bool {
