@@ -20,8 +20,8 @@ use engine_test::{
 use engine_traits::{OpenOptions, TabletFactory, ALL_CFS};
 use futures::executor::block_on;
 use kvproto::{
-    metapb::Store,
-    raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
+    metapb::{self, Store},
+    raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, StatusCmdType},
     raft_serverpb::RaftMessage,
 };
 use pd_client::RpcClient;
@@ -103,6 +103,17 @@ impl TestRouter {
             "region {} is not applied to current term, {:?}",
             region_id, res
         );
+    }
+
+    pub fn query_region_detail(&self, region_id: u64, peer: metapb::Peer) -> metapb::Region {
+        let mut req = RaftCmdRequest::default();
+        req.mut_header().set_peer(peer);
+        req.mut_status_request()
+            .set_cmd_type(StatusCmdType::RegionDetail);
+        let res = self.query(region_id, req.clone()).unwrap();
+        let status_resp = res.response().unwrap().get_status_response();
+        let detail = status_resp.get_region_detail();
+        detail.get_region().clone()
     }
 }
 

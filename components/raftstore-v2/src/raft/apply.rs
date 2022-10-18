@@ -119,6 +119,11 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
     }
 
     #[inline]
+    pub fn region_state_mut(&mut self) -> &mut RegionLocalState {
+        &mut self.region_state
+    }
+
+    #[inline]
     pub fn set_region_state(&mut self, region_state: RegionLocalState) {
         self.region_state = region_state;
     }

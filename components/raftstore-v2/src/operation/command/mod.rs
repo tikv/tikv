@@ -39,7 +39,8 @@ use raftstore::{
         local_metrics::RaftMetrics,
         metrics::*,
         msg::ErrorCallback,
-        util, WriteCallback,
+        util::{self, admin_cmd_epoch_lookup},
+        WriteCallback,
     },
     Error, Result,
 };
@@ -419,6 +420,7 @@ impl<EK: KvEngine, ER: RaftEngine, R: ApplyResReporter> Apply<EK, ER, R> {
         req: &RaftCmdRequest,
         entry: &Entry,
     ) -> Result<(RaftCmdResponse, ExecResult)> {
+        let origin_epoch = self.region_state().get_region().get_region_epoch().clone();
         let request = req.get_admin_request();
         let cmd_type = request.get_cmd_type();
         if cmd_type != AdminCmdType::CompactLog && cmd_type != AdminCmdType::CommitMerge {
@@ -438,6 +440,34 @@ impl<EK: KvEngine, ER: RaftEngine, R: ApplyResReporter> Apply<EK, ER, R> {
             AdminCmdType::BatchSplit => self.exec_batch_split(request, entry.index),
             _ => unimplemented!(),
         }?;
+
+        match exec_result {
+            ExecResult::SplitRegion { ref derived, .. } => {
+                self.region_state_mut().set_region(derived.clone());
+                // self.metrics.size_diff_hint = 0;
+                // self.metrics.delete_keys_hint = 0;
+            }
+        }
+
+        // Check if the region epoch changes as expected
+        let cmd_type = req.get_admin_request().get_cmd_type();
+        let epoch_state = admin_cmd_epoch_lookup(cmd_type);
+        let cur_epoch = self.region_state().get_region().get_region_epoch();
+        // The change-epoch behavior **MUST BE** equal to the settings in
+        // `admin_cmd_epoch_lookup`
+        if (epoch_state.change_ver && origin_epoch.get_version() == cur_epoch.get_version())
+            || (epoch_state.change_conf_ver
+                && origin_epoch.get_conf_ver() == cur_epoch.get_conf_ver())
+        {
+            panic!(
+                "{:?} apply admin cmd {:?} but epoch change is not expected, epoch state {:?}, before {:?}, after {:?}",
+                self.logger.list(),
+                req,
+                epoch_state,
+                epoch_state,
+                cur_epoch,
+            );
+        }
 
         response.set_cmd_type(cmd_type);
 

@@ -1,19 +1,19 @@
-use std::time::Duration;
+use std::{thread, time::Duration};
 
-use engine_traits::{KvEngine, MiscExt, OpenOptions, Peekable, SyncMutable, TabletFactory};
+use engine_traits::Peekable;
 use futures::executor::block_on;
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 use kvproto::{
-    pdpb,
-    raft_cmdpb::{
-        AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, Request, SplitRequest, StatusCmdType,
-    },
+    metapb, pdpb,
+    raft_cmdpb::{AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, Request, SplitRequest},
 };
-use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
 use raftstore_v2::router::PeerMsg;
 use tikv_util::store::new_peer;
 
-use crate::{cluster::Cluster, util::new_snap_request};
+use crate::{
+    cluster::{Cluster, TestRouter},
+    util::new_snap_request,
+};
 
 fn new_batch_split_region_request(
     split_keys: Vec<Vec<u8>>,
@@ -35,103 +35,127 @@ fn new_batch_split_region_request(
     req
 }
 
-#[test]
-fn test_split() {
-    let store_id = 1;
-    let cluster = Cluster::default();
-    let mut router = cluster.router(0);
-    let factory = cluster.node(0).tablet_factory();
-
-    let region_id2 = 2;
-    let peer3 = new_peer(store_id, 3);
+// Split the region according to the parameters
+// return the updated original region
+fn split_region(
+    router: &mut TestRouter,
+    region: metapb::Region,
+    peer: metapb::Peer,
+    split_region_id: u64,
+    split_peer: metapb::Peer,
+    left_key: &[u8],
+    right_key: &[u8],
+    split_key: &[u8],
+    right_derive: bool,
+) -> metapb::Region {
+    let region_id = region.id;
     let mut req = RaftCmdRequest::default();
-    req.mut_header().set_region_id(region_id2);
-    let epoch = req.mut_header().mut_region_epoch();
-    epoch.set_version(INIT_EPOCH_VER);
-    epoch.set_conf_ver(INIT_EPOCH_CONF_VER);
-    req.mut_header().set_peer(peer3.clone());
+    req.mut_header().set_region_id(region_id);
+    req.mut_header()
+        .set_region_epoch(region.get_region_epoch().clone());
+    req.mut_header().set_peer(peer.clone());
 
     let mut put_req = Request::default();
     put_req.set_cmd_type(CmdType::Put);
-    put_req.mut_put().set_key(b"zk11".to_vec());
+    put_req.mut_put().set_key(left_key.to_vec());
     put_req.mut_put().set_value(b"v1".to_vec());
     req.mut_requests().push(put_req);
 
     let mut put_req = Request::default();
     put_req.set_cmd_type(CmdType::Put);
-    put_req.mut_put().set_key(b"zk33".to_vec());
+    put_req.mut_put().set_key(right_key.to_vec());
     put_req.mut_put().set_value(b"v3".to_vec());
     req.mut_requests().push(put_req);
 
-    router.wait_applied_to_current_term(2, Duration::from_secs(3));
-
-    let tablet = factory
-        .open_tablet(
-            region_id2,
-            None,
-            OpenOptions::default().set_cache_only(true),
-        )
-        .unwrap();
-    tablet.put(b"zk11", b"v1").unwrap();
-    tablet.flush_cfs(true).unwrap();
-    tablet.put(b"zk33", b"v3").unwrap();
-    tablet.flush_cfs(true).unwrap();
-
-    // let (msg, mut sub) = PeerMsg::raft_command(req.clone());
-    // router.send(2, msg).unwrap();
-    // assert!(block_on(sub.wait_proposed()));
-    // assert!(block_on(sub.wait_committed()));
-    // let resp = block_on(sub.result()).unwrap();
-    // assert!(!resp.get_header().has_error(), "{:?}", resp);
+    let (msg, mut sub) = PeerMsg::raft_command(req.clone());
+    router.send(2, msg).unwrap();
+    assert!(block_on(sub.wait_proposed()));
+    assert!(block_on(sub.wait_committed()));
+    let resp = block_on(sub.result()).unwrap();
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
 
     let mut split_id = pdpb::SplitId::new();
-    let region_id1000 = 1000;
-    let peer10 = new_peer(store_id, 10);
-    let split_key = b"k22".to_vec();
-    split_id.new_region_id = region_id1000;
-    split_id.new_peer_ids = vec![peer10.id];
-    let admin_req = new_batch_split_region_request(vec![split_key.clone()], vec![split_id], false);
+    split_id.new_region_id = split_region_id;
+    split_id.new_peer_ids = vec![split_peer.id];
+    let admin_req =
+        new_batch_split_region_request(vec![split_key.to_vec()], vec![split_id], right_derive);
     req.mut_requests().clear();
     req.set_admin_request(admin_req);
     let (msg, sub) = PeerMsg::raft_command(req.clone());
-    router.send(2, msg).unwrap();
+    router.send(region_id, msg).unwrap();
     block_on(sub.result()).unwrap();
 
-    let mut req = RaftCmdRequest::default();
-    req.mut_header().set_peer(peer3);
-    req.mut_status_request()
-        .set_cmd_type(StatusCmdType::RegionDetail);
-    let res = router.query(region_id2, req.clone()).unwrap();
-    let status_resp = res.response().unwrap().get_status_response();
-    let detail = status_resp.get_region_detail();
-    let region = detail.get_region().clone();
-    assert_eq!(region.get_end_key(), &split_key);
-    let snap_req = new_snap_request(store_id, 3, 6, region);
-    let snap = block_on(async { router.get_snapshot(snap_req).await.unwrap() });
-    assert_eq!(snap.get_value(b"k11").unwrap().unwrap(), b"v1");
-    snap.get_value(b"k33").unwrap_err();
+    // Wait for apply exect result
+    thread::sleep(Duration::from_secs(1));
 
-    let mut req = RaftCmdRequest::default();
-    req.mut_header().set_peer(peer10);
-    req.mut_status_request()
-        .set_cmd_type(StatusCmdType::RegionDetail);
-    let res = router.query(region_id1000, req.clone()).unwrap();
-    let status_resp = res.response().unwrap().get_status_response();
-    let detail = status_resp.get_region_detail();
-    let region = detail.get_region().clone();
-    assert_eq!(region.get_start_key(), &split_key);
-    let snap_req = new_snap_request(store_id, 10, 6, region);
-    let snap = block_on(async { router.get_snapshot(snap_req).await.unwrap() });
-    assert_eq!(snap.get_value(b"k33").unwrap().unwrap(), b"v3");
-    snap.get_value(b"k11").unwrap_err();
-
-    let tablet = factory
-        .open_tablet(
-            region_id2,
-            None,
-            OpenOptions::default().set_cache_only(true),
+    let (left, right, left_peer, right_peer) = if !right_derive {
+        (
+            router.query_region_detail(region_id, peer.clone()),
+            router.query_region_detail(split_region_id, split_peer.clone()),
+            peer,
+            split_peer,
         )
-        .unwrap();
-    println!("{:?}", tablet.get_value(b"zk11"));
-    println!("{:?}", tablet.get_value(b"zk33"));
+    } else {
+        (
+            router.query_region_detail(split_region_id, split_peer.clone()),
+            router.query_region_detail(region_id, peer.clone()),
+            split_peer,
+            peer,
+        )
+    };
+
+    let snap_req = new_snap_request(left_peer, 6, left.clone());
+    let snap = block_on(async { router.get_snapshot(snap_req).await.unwrap() });
+    assert_eq!(snap.get_value(left_key).unwrap().unwrap(), b"v1");
+    snap.get_value(right_key).unwrap_err();
+
+    let snap_req = new_snap_request(right_peer, 6, right.clone());
+    let snap = block_on(async { router.get_snapshot(snap_req).await.unwrap() });
+    assert_eq!(snap.get_value(right_key).unwrap().unwrap(), b"v3");
+    snap.get_value(left_key).unwrap_err();
+
+    assert_eq!(left.get_end_key(), split_key);
+    assert_eq!(right.get_start_key(), split_key);
+    assert_eq!(region.get_start_key(), left.get_start_key());
+    assert_eq!(region.get_end_key(), right.get_end_key());
+
+    if !right_derive { left } else { right }
+}
+
+#[test]
+fn test_split() {
+    let store_id = 1;
+    let cluster = Cluster::default();
+    let mut router = cluster.router(0);
+    // let factory = cluster.node(0).tablet_factory();
+
+    let region_id = 2;
+    let peer = new_peer(store_id, 3);
+    let region = router.query_region_detail(region_id, peer.clone());
+
+    router.wait_applied_to_current_term(2, Duration::from_secs(3));
+
+    let region = split_region(
+        &mut router,
+        region.clone(),
+        peer.clone(),
+        1000,
+        new_peer(store_id, 10),
+        b"k11",
+        b"k33",
+        b"k22",
+        false,
+    );
+
+    let region = split_region(
+        &mut router,
+        region.clone(),
+        peer.clone(),
+        1001,
+        new_peer(store_id, 11),
+        b"k00",
+        b"k11",
+        b"k11",
+        false,
+    );
 }
