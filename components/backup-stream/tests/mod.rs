@@ -4,7 +4,6 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    mem::{self, MaybeUninit},
     path::Path,
     sync::Arc,
     time::Duration,
@@ -101,7 +100,7 @@ pub struct SuiteBuilder {
     name: String,
     nodes: usize,
     metastore_error: Box<dyn Fn(&str) -> Result<()> + Send + Sync>,
-    cfg: Box<FnOnce(&mut BackupStreamConfig)>,
+    cfg: Box<dyn FnOnce(&mut BackupStreamConfig)>,
 }
 
 impl SuiteBuilder {
