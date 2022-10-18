@@ -1421,15 +1421,11 @@ impl<T: Simulator> Cluster<T> {
             .unwrap();
     }
 
-    pub fn block_send_flashback_msg(
-        &mut self,
-        region_id: u64,
-        store_id: u64,
-        cmd_type: AdminCmdType,
-        epoch: metapb::RegionEpoch,
-        peer: metapb::Peer,
-    ) {
+    pub fn must_send_flashback_msg(&mut self, region_id: u64, cmd_type: AdminCmdType) {
         self.wait_applied_to_current_term(region_id, Duration::from_secs(3));
+        let leader = self.leader_of_region(region_id).unwrap();
+        let store_id = leader.get_store_id();
+        let region_epoch = self.get_region_epoch(region_id);
         block_on(async move {
             let (result_tx, result_rx) = oneshot::channel();
             let cb = Callback::write(Box::new(move |resp| {
@@ -1446,8 +1442,8 @@ impl<T: Simulator> Cluster<T> {
             admin.set_cmd_type(cmd_type);
             let mut req = RaftCmdRequest::default();
             req.mut_header().set_region_id(region_id);
-            req.mut_header().set_region_epoch(epoch);
-            req.mut_header().set_peer(peer);
+            req.mut_header().set_region_epoch(region_epoch);
+            req.mut_header().set_peer(leader);
             req.set_admin_request(admin);
             req.mut_header()
                 .set_flags(WriteBatchFlags::FLASHBACK.bits());
