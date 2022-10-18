@@ -695,9 +695,7 @@ mod tests {
         // Case: Read quorum.
         let mut cmd_read_quorum = cmd.clone();
         cmd_read_quorum.mut_header().set_read_quorum(true);
-        mix_tx
-            .send((Box::new(move || {}), rx, ch_tx.clone()))
-            .unwrap();
+        mix_tx.send((Box::new(move || {}), rx, ch_tx)).unwrap();
         let _ = block_on(reader.snapshot(cmd_read_quorum.clone())).unwrap();
         ch_rx.recv().unwrap();
 
