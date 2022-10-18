@@ -192,7 +192,7 @@ impl Default for MockLockManager {
 
 impl LockManager for MockLockManager {
     fn allocate_token(&self) -> LockWaitToken {
-        LockWaitToken(Some(self.allocated_token.fetch_add(1, Ordering::SeqCst)))
+        LockWaitToken(Some(self.allocated_token.fetch_add(1, Ordering::Relaxed)))
     }
 
     fn wait_for(

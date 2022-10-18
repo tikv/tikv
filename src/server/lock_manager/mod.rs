@@ -235,7 +235,7 @@ impl LockManager {
 
 impl LockManagerTrait for LockManager {
     fn allocate_token(&self) -> LockWaitToken {
-        LockWaitToken(Some(self.token_allocator.fetch_add(1, Ordering::SeqCst)))
+        LockWaitToken(Some(self.token_allocator.fetch_add(1, Ordering::Relaxed)))
     }
 
     fn wait_for(
