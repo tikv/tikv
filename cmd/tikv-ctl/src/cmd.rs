@@ -278,7 +278,7 @@ pub enum Cmd {
         #[structopt(
             short = "c",
             default_value = CF_DEFAULT,
-            possible_values = &["default", "lock", "write"],
+            possible_values = &["default", "lock", "write", "mark"],
         )]
         /// The column family name.
         cf: String,
@@ -454,10 +454,10 @@ pub enum Cmd {
             require_delimiter = true,
             value_delimiter = ",",
             default_value = CF_DEFAULT,
-            possible_values = &["default", "lock", "write"],
+            possible_values = &["default", "lock", "write", "mark"],
         )]
-        /// Column family names, for kv db, combine from default/lock/write; for
-        /// raft db, can only be default
+        /// Column family names, for kv db, combine from
+        /// default/lock/write/mark; for raft db, can only be default
         cf: Vec<String>,
 
         #[structopt(

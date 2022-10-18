@@ -3053,7 +3053,7 @@ mod tests {
         let store_id = 1;
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let mut prefixed_engine = PrefixedEngine(engine.clone());
+        let mut prefixed_engine = PrefixedEngine(engine);
 
         let (tx, _rx) = mpsc::channel();
         let mut cfg = GcConfig::default();

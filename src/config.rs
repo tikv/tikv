@@ -73,7 +73,10 @@ use crate::{
     coprocessor_v2::Config as CoprocessorV2Config,
     import::Config as ImportConfig,
     server::{
-        gc_worker::{GcConfig, RawCompactionFilterFactory, WriteCompactionFilterFactory},
+        gc_worker::{
+            compaction_filter::MarkCompactionFilterFactory, GcConfig, RawCompactionFilterFactory,
+            WriteCompactionFilterFactory,
+        },
         lock_manager::Config as PessimisticTxnConfig,
         ttl::TtlCompactionFilterFactory,
         Config as ServerConfig, CONFIG_ROCKSDB_GAUGE,
@@ -991,6 +994,12 @@ impl MarkCfConfig {
         };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_titan_cf_options(&self.titan.build_opts());
+        cf_opts
+            .set_compaction_filter_factory(
+                "mark_compaction_filter_factory",
+                MarkCompactionFilterFactory,
+            )
+            .unwrap();
         cf_opts
     }
 }

@@ -31,7 +31,7 @@ use tikv_util::{
     time::Instant,
     worker::{ScheduleError, Scheduler},
 };
-use txn_types::{Key, TimeStamp, WriteRef, WriteType};
+use txn_types::{Key, Mark, TimeStamp, WriteRef, WriteType};
 
 use crate::{
     server::gc_worker::{GcConfig, GcTask, GcWorkerConfigManager, STAT_TXN_KEYMODE},
@@ -643,6 +643,120 @@ impl CompactionFilter for WriteCompactionFilter {
                 self.encountered_errors = true;
                 CompactionFilterDecision::Keep
             }
+        }
+    }
+}
+
+pub struct MarkCompactionFilterFactory;
+
+impl CompactionFilterFactory for MarkCompactionFilterFactory {
+    fn create_compaction_filter(
+        &self,
+        context: &CompactionFilterContext,
+    ) -> *mut DBCompactionFilter {
+        let gc_context_option = GC_CONTEXT.lock().unwrap();
+        let gc_context = match *gc_context_option {
+            Some(ref ctx) => ctx,
+            None => return std::ptr::null_mut(),
+        };
+
+        let safe_point = gc_context.safe_point.load(Ordering::Relaxed);
+        if safe_point == 0 {
+            // Safe point has not been initialized yet.
+            debug!("skip gc in compaction filter because of no safe point");
+            return std::ptr::null_mut();
+        }
+
+        let (enable, skip_vcheck, ratio_threshold) = {
+            let value = &*gc_context.cfg_tracker.value();
+            (
+                value.enable_compaction_filter,
+                value.compaction_filter_skip_version_check,
+                value.ratio_threshold,
+            )
+        };
+
+        debug!(
+            "creating compaction filter"; "feature_enable" => enable,
+            "skip_version_check" => skip_vcheck,
+            "ratio_threshold" => ratio_threshold,
+        );
+
+        if gc_context.db.is_stalled_or_stopped() {
+            debug!("skip gc in compaction filter because the DB is stalled");
+            return std::ptr::null_mut();
+        }
+
+        if !do_check_allowed(enable, skip_vcheck, &gc_context.feature_gate) {
+            debug!("skip gc in compaction filter because it's not allowed");
+            return std::ptr::null_mut();
+        }
+        drop(gc_context_option);
+        GC_COMPACTION_FILTER_PERFORM
+            .with_label_values(&[STAT_TXN_KEYMODE])
+            .inc();
+
+        debug!(
+            "mark CF gc in compaction filter"; "safe_point" => safe_point,
+            "files" => ?context.file_numbers(),
+            "bottommost" => context.is_bottommost_level(),
+            "manual" => context.is_manual_compaction(),
+        );
+
+        let filter = MarkCompactionFilter::new(safe_point.into());
+        let name = CString::new("mark_compaction_filter").unwrap();
+        unsafe { new_compaction_filter_raw(name, filter) }
+    }
+}
+
+pub struct MarkCompactionFilter {
+    safe_point: TimeStamp,
+    encountered_errors: bool,
+}
+
+impl MarkCompactionFilter {
+    pub fn new(safe_point: TimeStamp) -> Self {
+        MarkCompactionFilter {
+            safe_point,
+            encountered_errors: false,
+        }
+    }
+}
+
+impl CompactionFilter for MarkCompactionFilter {
+    fn featured_filter(
+        &mut self,
+        _level: usize,
+        key: &[u8],
+        _seqno: u64,
+        value: &[u8],
+        value_type: CompactionFilterValueType,
+    ) -> CompactionFilterDecision {
+        if self.encountered_errors {
+            // If there are already some errors, do nothing.
+            return CompactionFilterDecision::Keep;
+        }
+
+        match value_type {
+            CompactionFilterValueType::Value => {
+                let mark = match Mark::parse(value) {
+                    Ok(mark) => mark,
+                    Err(_) => {
+                        error!("bad mark cf record";
+                            "key" => log_wrappers::hex_encode_upper(key),
+                            "value" => log_wrappers::hex_encode_upper(value));
+                        self.encountered_errors = true;
+                        return CompactionFilterDecision::Keep;
+                    }
+                };
+                if mark.commit_ts <= self.safe_point {
+                    CompactionFilterDecision::Remove
+                } else {
+                    CompactionFilterDecision::Keep
+                }
+            }
+            // Currently `MergeOperand` and `BlobIndex` will always be kept.
+            _ => CompactionFilterDecision::Keep,
         }
     }
 }

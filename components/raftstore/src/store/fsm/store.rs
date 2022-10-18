@@ -25,7 +25,7 @@ use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{unbounded, TryRecvError, TrySendError};
 use engine_traits::{
     CompactedEvent, DeleteStrategy, Engines, KvEngine, Mutable, PerfContextKind, RaftEngine,
-    RaftLogBatch, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    RaftLogBatch, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_MARK, CF_RAFT, CF_WRITE,
 };
 use fail::fail_point;
 use futures::{compat::Future01CompatExt, FutureExt};
@@ -2347,7 +2347,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
 
         // Schedule the task.
-        let cf_names = vec![CF_DEFAULT.to_owned(), CF_WRITE.to_owned()];
+        let cf_names = vec![
+            CF_DEFAULT.to_owned(),
+            CF_WRITE.to_owned(),
+            CF_MARK.to_owned(),
+        ];
         if let Err(e) = self.ctx.cleanup_scheduler.schedule(CleanupTask::Compact(
             CompactTask::CheckAndCompact {
                 cf_names,

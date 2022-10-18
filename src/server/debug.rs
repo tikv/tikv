@@ -17,7 +17,7 @@ use engine_rocks::{
 use engine_traits::{
     Engines, IterOptions, Iterable, Iterator as EngineIterator, Mutable, MvccProperties, Peekable,
     RaftEngine, Range, RangePropertiesExt, SyncMutable, WriteBatch, WriteBatchExt, WriteOptions,
-    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    CF_DEFAULT, CF_LOCK, CF_MARK, CF_RAFT, CF_WRITE,
 };
 use kvproto::{
     debugpb::{self, Db as DbType},
@@ -1311,6 +1311,7 @@ fn validate_db_and_cf(db: DbType, cf: &str) -> Result<()> {
         (DbType::Kv, CF_DEFAULT)
         | (DbType::Kv, CF_WRITE)
         | (DbType::Kv, CF_LOCK)
+        | (DbType::Kv, CF_MARK)
         | (DbType::Kv, CF_RAFT)
         | (DbType::Raft, CF_DEFAULT) => Ok(()),
         _ => Err(Error::InvalidArgument(format!(
