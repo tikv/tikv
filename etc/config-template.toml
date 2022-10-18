@@ -413,6 +413,11 @@
 ## old log files to recycle disk space ASAP.
 # raft-engine-purge-interval = "10s"
 
+## The percentage of used raft engine capacity to trigger the disk usage stat to almost full.
+## It should be set between 1 and 100. If availble capactiy of raftdb is less than
+## (100 - `raft_engine_almost_full_percent`)/2, the disk usage stat will be marked as already full.
+# raft-engine-almost-full-percent = 90
+
 ## How long the peer will be considered down and reported to PD when it hasn't been active for this
 ## time.
 # max-peer-down-duration = "10m"
