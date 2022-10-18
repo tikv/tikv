@@ -62,8 +62,9 @@ test_util = { path = "../test_util" }
 [[test]]
 name = "raftstore-v2-failpoints"
 path = "tests/failpoints/mod.rs"
-required-features = ["failpoints"]
+required-features = ["failpoints", "testexport"]
 
 [[test]]
 name = "raftstore-v2-integrations"
 path = "tests/integrations/mod.rs"
+required-features = ["testexport"]

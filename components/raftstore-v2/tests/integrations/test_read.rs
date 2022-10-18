@@ -13,25 +13,10 @@ fn test_read_index() {
     let router = cluster.router(0);
     std::thread::sleep(std::time::Duration::from_millis(200));
     let region_id = 2;
-    let mut req = RaftCmdRequest::default();
-    req.mut_header().set_peer(new_peer(1, 3));
-    req.mut_status_request()
-        .set_cmd_type(StatusCmdType::RegionDetail);
-    let res = router.query(region_id, req.clone()).unwrap();
-    let status_resp = res.response().unwrap().get_status_response();
-    let detail = status_resp.get_region_detail();
-    let mut region = detail.get_region().clone();
-
-    let read_index_req = ReadIndexRequest::default();
-    let mut req = RaftCmdRequest::default();
-    req.mut_header().set_peer(new_peer(1, 3));
-    req.mut_header().set_term(7);
-    req.mut_header().set_region_id(region_id);
-    req.mut_header()
-        .set_region_epoch(region.take_region_epoch());
+    let mut req = router.new_request_for(region_id);
     let mut request_inner = Request::default();
     request_inner.set_cmd_type(CmdType::Snap);
-    request_inner.set_read_index(read_index_req);
+    request_inner.mut_read_index();
     req.mut_requests().push(request_inner);
     let res = router.query(region_id, req.clone()).unwrap();
     let resp = res.read().unwrap();
@@ -46,21 +31,7 @@ fn test_snap_without_read_index() {
     let router = cluster.router(0);
     std::thread::sleep(std::time::Duration::from_millis(200));
     let region_id = 2;
-    let mut req = RaftCmdRequest::default();
-    req.mut_header().set_peer(new_peer(1, 3));
-    req.mut_status_request()
-        .set_cmd_type(StatusCmdType::RegionDetail);
-    let res = router.query(region_id, req.clone()).unwrap();
-    let status_resp = res.response().unwrap().get_status_response();
-    let detail = status_resp.get_region_detail();
-    let mut region = detail.get_region().clone();
-
-    let mut req = RaftCmdRequest::default();
-    req.mut_header().set_peer(new_peer(1, 3));
-    req.mut_header().set_term(6);
-    req.mut_header().set_region_id(region_id);
-    req.mut_header()
-        .set_region_epoch(region.take_region_epoch());
+    let mut req = router.new_request_for(region_id);
     let mut request_inner = Request::default();
     request_inner.set_cmd_type(CmdType::Snap);
     req.mut_requests().push(request_inner);
@@ -92,21 +63,7 @@ fn test_query_with_write_cmd() {
     let router = cluster.router(0);
     std::thread::sleep(std::time::Duration::from_millis(200));
     let region_id = 2;
-    let mut req = RaftCmdRequest::default();
-    req.mut_header().set_peer(new_peer(1, 3));
-    req.mut_status_request()
-        .set_cmd_type(StatusCmdType::RegionDetail);
-    let res = router.query(region_id, req.clone()).unwrap();
-    let status_resp = res.response().unwrap().get_status_response();
-    let detail = status_resp.get_region_detail();
-    let mut region = detail.get_region().clone();
-
-    let mut req = RaftCmdRequest::default();
-    req.mut_header().set_peer(new_peer(1, 3));
-    req.mut_header().set_term(6);
-    req.mut_header().set_region_id(region_id);
-    req.mut_header()
-        .set_region_epoch(region.take_region_epoch());
+    let mut req = router.new_request_for(2);
 
     for write_cmd in [
         CmdType::Prewrite,
@@ -123,6 +80,7 @@ fn test_query_with_write_cmd() {
         assert!(resp.is_none());
         let error_resp = res.response().unwrap();
         assert!(error_resp.get_header().has_error());
+        req.clear_requests();
     }
 }
 
@@ -132,21 +90,7 @@ fn test_snap_with_invalid_parameter() {
     let router = cluster.router(0);
     std::thread::sleep(std::time::Duration::from_millis(200));
     let region_id = 2;
-    let mut req = RaftCmdRequest::default();
-    req.mut_header().set_peer(new_peer(1, 3));
-    req.mut_status_request()
-        .set_cmd_type(StatusCmdType::RegionDetail);
-    let res = router.query(region_id, req.clone()).unwrap();
-    let status_resp = res.response().unwrap().get_status_response();
-    let detail = status_resp.get_region_detail();
-    let mut region = detail.get_region().clone();
-    let mut region_epoch = region.take_region_epoch();
-
-    let mut req = RaftCmdRequest::default();
-    req.mut_header().set_peer(new_peer(1, 3));
-    req.mut_header().set_term(6);
-    req.mut_header().set_region_id(region_id);
-    req.mut_header().set_region_epoch(region_epoch.clone());
+    let mut req = router.new_request_for(region_id);
     let mut request_inner = Request::default();
     request_inner.set_cmd_type(CmdType::Snap);
     req.mut_requests().push(request_inner);
@@ -198,21 +142,7 @@ fn test_local_read() {
     let mut router = cluster.router(0);
     std::thread::sleep(std::time::Duration::from_millis(200));
     let region_id = 2;
-    let mut req = RaftCmdRequest::default();
-    req.mut_header().set_peer(new_peer(1, 3));
-    req.mut_status_request()
-        .set_cmd_type(StatusCmdType::RegionDetail);
-    let res = router.query(region_id, req.clone()).unwrap();
-    let status_resp = res.response().unwrap().get_status_response();
-    let detail = status_resp.get_region_detail();
-    let mut region = detail.get_region().clone();
-
-    let mut req = RaftCmdRequest::default();
-    req.mut_header().set_peer(new_peer(1, 3));
-    req.mut_header().set_term(6);
-    req.mut_header().set_region_id(region_id);
-    req.mut_header()
-        .set_region_epoch(region.take_region_epoch());
+    let mut req = router.new_request_for(region_id);
     let mut request_inner = Request::default();
     request_inner.set_cmd_type(CmdType::Snap);
     req.mut_requests().push(request_inner);
