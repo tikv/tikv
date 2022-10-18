@@ -6,12 +6,12 @@ use batch_system::BasicMailbox;
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::internal::SelectHandle;
 use engine_traits::{
-    CfOptions, KvEngine, MiscExt, OpenOptions, RaftEngine, RaftEngineReadOnly, TabletFactory,
-    DATA_CFS,
+    CfOptions, DeleteStrategy, KvEngine, MiscExt, OpenOptions, RaftEngine, RaftEngineReadOnly,
+    Range, TabletFactory, DATA_CFS,
 };
 use keys::enc_end_key;
 use kvproto::{
-    metapb::Region,
+    metapb::{self, Region},
     raft_cmdpb::{AdminRequest, AdminResponse},
 };
 use raftstore::{
@@ -181,6 +181,18 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
     }
 }
 
+fn get_range_not_in_region(region: &metapb::Region) -> Vec<Range> {
+    let mut ranges = Vec::new();
+    if !region.get_start_key().is_empty() {
+        ranges.push(Range::new(b"", region.get_start_key()));
+    }
+    if !region.get_end_key().is_empty() {
+        ranges.push(Range::new(region.get_end_key(), b""));
+    }
+    println!("Region {:?}; Ranges {:?}", region, ranges);
+    ranges
+}
+
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_ready_split_region<T>(
         &mut self,
@@ -230,20 +242,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             //     "split_count" => regions.len(),
             // );
 
-            // // Now pd only uses ReportBatchSplit for history operation show,
-            // // so we send it independently here.
-            // let task = PdTask::ReportBatchSplit {
-            //     regions: regions.to_vec(),
-            // };
-            // if let Err(e) = store_ctx.pd_scheduler.schedule(task) {
-            //     error!(
-            //         self.logger,
-            //         "failed to notify pd";
-            //         "region_id" => self.region_id(),
-            //         "peer_id" => self.peer_id(),
-            //         "err" => %e,
-            //     );
-            // }
+            // todo: report to PD
         }
 
         let last_key = enc_end_key(regions.last().unwrap());
@@ -269,6 +268,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     let mut cf_option = tablet.get_options_cf(cf).unwrap();
                     cf_option.set_disable_auto_compactions(false);
                 }
+
+                let ranges_to_delete = get_range_not_in_region(&new_region);
+                tablet
+                    .delete_ranges_cfs(DeleteStrategy::DeleteFiles, &ranges_to_delete)
+                    .unwrap_or_else(|e| {
+                        error!(self.logger,"failed to delete files in range"; "err" => %e);
+                    });
 
                 continue;
             }
@@ -403,6 +409,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 let mut cf_option = tablet.get_options_cf(cf).unwrap();
                 cf_option.set_disable_auto_compactions(false);
             }
+
+            let ranges_to_delete = get_range_not_in_region(&new_region);
+            tablet
+                .delete_ranges_cfs(DeleteStrategy::DeleteFiles, &ranges_to_delete)
+                .unwrap_or_else(|e| {
+                    error!(self.logger,"failed to delete files in range"; "err" => %e);
+                });
 
             let mailbox = BasicMailbox::new(sender, new_peer, store_ctx.router.state_cnt().clone());
             store_ctx.router.register(new_region_id, mailbox);

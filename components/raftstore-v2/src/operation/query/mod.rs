@@ -25,7 +25,7 @@ use raftstore::{
     store::{
         cmd_resp, local_metrics::RaftMetrics, metrics::RAFT_READ_INDEX_PENDING_COUNT,
         msg::ErrorCallback, region_meta::RegionMeta, util, util::LeaseState, GroupState,
-        ReadIndexContext, RequestPolicy, Transport,
+        ReadIndexContext, ReadProgress, RequestPolicy, Transport,
     },
     Error, Result,
 };
@@ -38,7 +38,8 @@ use crate::{
     fsm::PeerFsmDelegate,
     raft::Peer,
     router::{
-        message::RaftRequest, DebugInfoChannel, PeerMsg, QueryResChannel, QueryResult, ReadResponse,
+        message::RaftRequest, ApplyRes, DebugInfoChannel, PeerMsg, QueryResChannel, QueryResult,
+        ReadResponse,
     },
 };
 
@@ -376,5 +377,23 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .term(meta.raft_apply.commit_index)
             .unwrap();
         ch.set_result(meta);
+    }
+
+    // todo(SpadeA): tmp use
+    pub fn handle_read_on_apply<T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        apply_res: ApplyRes,
+        progress_to_be_updated: bool,
+    ) -> bool {
+        // Only leaders need to update applied_term.
+        if progress_to_be_updated && self.is_leader() {
+            // TODO: add coprocessor_host hook
+            let progress = ReadProgress::applied_term(apply_res.applied_term);
+            let mut meta = ctx.store_meta.lock().unwrap();
+            let reader = meta.readers.get_mut(&self.region_id()).unwrap();
+            self.maybe_update_read_progress(reader, progress);
+        }
+        false
     }
 }

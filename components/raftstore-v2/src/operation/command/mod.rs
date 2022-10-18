@@ -273,6 +273,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.raft_group_mut()
             .advance_apply_to(apply_res.applied_index);
         let is_leader = self.is_leader();
+        let progress_to_be_updated = self.entry_storage().applied_term() != apply_res.applied_term;
         let entry_storage = self.entry_storage_mut();
         entry_storage
             .apply_state_mut()
@@ -280,9 +281,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         entry_storage.set_applied_term(apply_res.applied_term);
         if !is_leader {
             entry_storage.compact_entry_cache(apply_res.applied_index + 1);
-            // TODO: handle read.
-        } else {
-            // TODO: handle read.
+        }
+
+        if self.handle_read_on_apply(store_ctx, apply_res, progress_to_be_updated) {
+            self.set_has_ready();
         }
     }
 

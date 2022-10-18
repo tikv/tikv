@@ -217,15 +217,7 @@ fn test_local_read() {
     request_inner.set_cmd_type(CmdType::Snap);
     req.mut_requests().push(request_inner);
 
-    // FIXME: Get snapshot from local reader, but it will fail as the leader has not
-    // applied in the current term (due to unimplementation of ApplyRes).
-    let resp = block_on(async { router.get_snapshot(req.clone()).await.unwrap_err() });
-    assert!(
-        resp.get_header()
-            .get_error()
-            .get_message()
-            .contains("Fail to get snapshot ")
-    );
+    block_on(async { router.get_snapshot(req.clone()).await.unwrap() });
 
     let res = router.query(region_id, req.clone()).unwrap();
     let resp = res.read().unwrap();

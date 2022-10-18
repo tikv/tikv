@@ -296,6 +296,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
+    pub fn read_progress_mut(&mut self) -> &mut Arc<RegionReadProgress> {
+        &mut self.read_progress
+    }
+
+    #[inline]
     pub fn leader_lease(&self) -> &Lease {
         &self.leader_lease
     }
