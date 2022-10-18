@@ -99,6 +99,7 @@ use crate::{
         hibernate_state::GroupState,
         memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES},
         msg::{CasualMessage, ErrorCallback, PeerMsg, RaftCommand, SignificantMsg, StoreMsg},
+        peer_storage::HandleSnapshotResult,
         txn_ext::LocksStatus,
         util::{admin_cmd_epoch_lookup, RegionReadProgress},
         worker::{
@@ -2908,13 +2909,13 @@ where
             }
         }
 
-        if let HandleReadyResult::Snapshot {
+        if let HandleReadyResult::Snapshot(box HandleSnapshotResult {
             msgs,
             snap_region,
             destroy_regions,
             last_first_index,
             for_witness,
-        } = res
+        }) = res
         {
             if for_witness {
                 // inform next round to check apply status

@@ -112,17 +112,20 @@ impl From<Error> for RaftError {
 }
 
 #[derive(PartialEq, Debug)]
+pub struct HandleSnapshotResult {
+    pub msgs: Vec<eraftpb::Message>,
+    pub snap_region: metapb::Region,
+    /// The regions whose range are overlapped with this region
+    pub destroy_regions: Vec<Region>,
+    /// The first index before applying the snapshot.
+    pub last_first_index: u64,
+    pub for_witness: bool,
+}
+
+#[derive(PartialEq, Debug)]
 pub enum HandleReadyResult {
     SendIoTask,
-    Snapshot {
-        msgs: Vec<eraftpb::Message>,
-        snap_region: metapb::Region,
-        /// The regions whose range are overlapped with this region
-        destroy_regions: Vec<Region>,
-        /// The first index before applying the snapshot.
-        last_first_index: u64,
-        for_witness: bool,
-    },
+    Snapshot(Box<HandleSnapshotResult>), // use boxing to reduce total size of the enum
     NoIoTask,
 }
 
@@ -667,13 +670,15 @@ where
             "state" => ?self.apply_state(),
         );
 
-        Ok(HandleReadyResult::Snapshot {
-            msgs: persisted_messages,
-            snap_region: region,
-            destroy_regions,
-            last_first_index,
-            for_witness,
-        })
+        Ok(HandleReadyResult::Snapshot(Box::new(
+            HandleSnapshotResult {
+                msgs: persisted_messages,
+                snap_region: region,
+                destroy_regions,
+                last_first_index,
+                for_witness,
+            },
+        )))
     }
 
     /// Delete all meta belong to the region. Results are stored in `wb`.
@@ -1912,7 +1917,7 @@ pub mod tests {
         let mut s2 = new_storage(sched.clone(), dummy_scheduler.clone(), &td2);
         assert_eq!(s2.first_index(), Ok(s2.applied_index() + 1));
         let mut write_task = WriteTask::new(s2.get_region_id(), s2.peer_id, 1);
-        if let HandleReadyResult::Snapshot { snap_region, .. } = s2
+        if let HandleReadyResult::Snapshot(box HandleSnapshotResult { snap_region, .. }) = s2
             .apply_snapshot(&snap1, &mut write_task, vec![], vec![])
             .unwrap()
         {
@@ -1933,7 +1938,7 @@ pub mod tests {
         let mut s3 = new_storage_from_ents(sched, dummy_scheduler, &td3, ents);
         validate_cache(&s3, &ents[1..]);
         let mut write_task = WriteTask::new(s3.get_region_id(), s3.peer_id, 1);
-        if let HandleReadyResult::Snapshot { snap_region, .. } = s3
+        if let HandleReadyResult::Snapshot(box HandleSnapshotResult { snap_region, .. }) = s3
             .apply_snapshot(&snap1, &mut write_task, vec![], vec![])
             .unwrap()
         {

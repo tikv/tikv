@@ -5248,7 +5248,7 @@ where
             if replicated_idx > p.matched {
                 replicated_idx = p.matched;
             }
-            if witness_peers.find(|p| p.id == *peer_id).is_some() {
+            if witness_peers.any(|p| p.id == *peer_id) {
                 if let Some(idx) = witness_replicated_idx {
                     if idx > p.matched {
                         witness_replicated_idx = Some(p.matched);
