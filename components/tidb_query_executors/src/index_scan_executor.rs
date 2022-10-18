@@ -7,6 +7,7 @@ use codec::{number::NumberCodec, prelude::NumberDecoder};
 use itertools::izip;
 use kvproto::coprocessor::KeyRange;
 use tidb_query_common::{
+    metrics::*,
     storage::{IntervalRange, Storage},
     Result,
 };
@@ -139,6 +140,7 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
             pid_column_cnt,
             physical_table_id_column_cnt,
             index_version: -1,
+            n_bytes: 0,
         };
         let wrapper = ScanExecutor::new(ScanExecutorOptions {
             imp,
@@ -186,6 +188,11 @@ impl<S: Storage> BatchExecutor for BatchIndexScanExecutor<S> {
     fn can_be_cached(&self) -> bool {
         self.0.can_be_cached()
     }
+
+    #[inline]
+    fn alloc_trace(&mut self, len: usize) {
+        self.0.alloc_trace(len);
+    }
 }
 
 #[derive(PartialEq, Debug)]
@@ -221,6 +228,28 @@ struct IndexScanExecutorImpl {
     physical_table_id_column_cnt: usize,
 
     index_version: i64,
+
+    /// Track memory usage
+    n_bytes: usize,
+}
+
+impl Drop for IndexScanExecutorImpl {
+    fn drop(&mut self) {
+        MEMTRACE_QUERY_EXECUTOR.index_scan.sub(self.n_bytes as i64);
+    }
+}
+
+impl MemoryTrace for IndexScanExecutorImpl {
+    #[inline]
+    fn alloc_trace(&mut self, len: usize) {
+        self.n_bytes += len;
+        MEMTRACE_QUERY_EXECUTOR.index_scan.add(len as i64);
+    }
+    #[inline]
+    fn free_trace(&mut self, len: usize) {
+        self.n_bytes -= len;
+        MEMTRACE_QUERY_EXECUTOR.index_scan.sub(len as i64);
+    }
 }
 
 impl ScanExecutorImpl for IndexScanExecutorImpl {
@@ -2051,6 +2080,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
             index_version: -1,
+            n_bytes: 0,
         };
         let mut columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2101,6 +2131,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
             index_version: -1,
+            n_bytes: 0,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2151,6 +2182,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
             index_version: -1,
+            n_bytes: 0,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2209,6 +2241,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
             index_version: -1,
+            n_bytes: 0,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2289,6 +2322,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
             index_version: -1,
+            n_bytes: 0,
         };
         let mut columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2339,6 +2373,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
             index_version: -1,
+            n_bytes: 0,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2394,6 +2429,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
             index_version: -1,
+            n_bytes: 0,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2454,6 +2490,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
             index_version: -1,
+            n_bytes: 0,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2577,6 +2614,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
             index_version: -1,
+            n_bytes: 0,
         };
         let mut columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2693,6 +2731,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
             index_version: -1,
+            n_bytes: 0,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2809,6 +2848,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
             index_version: -1,
+            n_bytes: 0,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -2925,6 +2965,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
             index_version: -1,
+            n_bytes: 0,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -3041,6 +3082,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
             index_version: -1,
+            n_bytes: 0,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -3170,6 +3212,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
             index_version: -1,
+            n_bytes: 0,
         };
         columns = idx_exe.build_column_vec(10);
         idx_exe
@@ -3314,6 +3357,7 @@ mod tests {
             pid_column_cnt: 0,
             physical_table_id_column_cnt: 0,
             index_version: -1,
+            n_bytes: 0,
         };
         let mut columns = idx_exe.build_column_vec(1);
         idx_exe

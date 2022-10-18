@@ -175,6 +175,7 @@ impl LazyBatchColumn {
         let eval_type = box_try!(EvalType::try_from(field_type.as_accessor().tp()));
         let raw_vec = self.raw();
         let raw_vec_len = raw_vec.len();
+        let n_bytes = raw_vec.total_len();
 
         let mut decoded_column = VectorValue::with_capacity(raw_vec_len, eval_type);
 
@@ -207,6 +208,9 @@ impl LazyBatchColumn {
                 }
             }
         }
+
+        assert!(raw_vec.total_len() >= n_bytes);
+        ctx.n_bytes += raw_vec.total_len() - n_bytes;
 
         *self = LazyBatchColumn::Decoded(decoded_column);
 

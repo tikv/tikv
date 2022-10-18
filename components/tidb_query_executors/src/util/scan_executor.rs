@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 use kvproto::coprocessor::KeyRange;
 use tidb_query_common::{
+    metrics::*,
     storage::{
         scanner::{RangesScanner, RangesScannerOptions},
         IntervalRange, Range, Storage,
@@ -162,7 +163,7 @@ pub fn check_columns_info_supported(columns_info: &[ColumnInfo]) -> Result<()> {
 }
 
 #[async_trait]
-impl<S: Storage, I: ScanExecutorImpl> BatchExecutor for ScanExecutor<S, I> {
+impl<S: Storage, I: ScanExecutorImpl + MemoryTrace> BatchExecutor for ScanExecutor<S, I> {
     type StorageStats = S::Statistics;
 
     #[inline]
@@ -220,5 +221,10 @@ impl<S: Storage, I: ScanExecutorImpl> BatchExecutor for ScanExecutor<S, I> {
     #[inline]
     fn can_be_cached(&self) -> bool {
         self.scanner.can_be_cached()
+    }
+
+    #[inline]
+    fn alloc_trace(&mut self, len: usize) {
+        self.imp.alloc_trace(len);
     }
 }

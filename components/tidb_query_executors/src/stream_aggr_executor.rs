@@ -1,10 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp::Ordering, convert::TryFrom, sync::Arc};
+use std::{cmp::Ordering, convert::TryFrom, mem::size_of, sync::Arc};
 
 use async_trait::async_trait;
 use tidb_query_aggr::*;
-use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_common::{metrics::*, storage::IntervalRange, Result};
 use tidb_query_datatype::{
     codec::{
         batch::{LazyBatchColumn, LazyBatchColumnVec},
@@ -58,6 +58,11 @@ impl<Src: BatchExecutor> BatchExecutor for BatchStreamAggregationExecutor<Src> {
     fn can_be_cached(&self) -> bool {
         self.0.can_be_cached()
     }
+
+    #[inline]
+    fn alloc_trace(&mut self, len: usize) {
+        self.0.alloc_trace(len);
+    }
 }
 
 // We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we
@@ -107,6 +112,28 @@ pub struct BatchStreamAggregationImpl {
     /// 'static. The elements are only valid in the same batch where they
     /// are added.
     aggr_expr_results_unsafe: Vec<RpnStackNode<'static>>,
+
+    /// Memory used by the query executor.
+    n_bytes: usize,
+}
+
+impl Drop for BatchStreamAggregationImpl {
+    fn drop(&mut self) {
+        MEMTRACE_QUERY_EXECUTOR.aggr_stream.sub(self.n_bytes as i64);
+    }
+}
+
+impl MemoryTrace for BatchStreamAggregationImpl {
+    #[inline]
+    fn alloc_trace(&mut self, len: usize) {
+        self.n_bytes += len;
+        MEMTRACE_QUERY_EXECUTOR.aggr_stream.add(len as i64);
+    }
+    #[inline]
+    fn free_trace(&mut self, len: usize) {
+        self.n_bytes -= len;
+        MEMTRACE_QUERY_EXECUTOR.aggr_stream.sub(len as i64);
+    }
 }
 
 impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
@@ -193,6 +220,7 @@ impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
             states: Vec::new(),
             group_by_results_unsafe: Vec::with_capacity(group_by_len),
             aggr_expr_results_unsafe: Vec::with_capacity(aggr_defs.len()),
+            n_bytes: 0,
         };
 
         Ok(Self(AggregationExecutor::new(
@@ -226,12 +254,17 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
         let context = &mut entities.context;
         let src_schema = entities.src.schema();
 
-        let logical_rows_len = input_logical_rows.len();
+        let rows_len = input_logical_rows.len();
         let group_by_len = self.group_by_exps.len();
         let aggr_fn_len = entities.each_aggr_fn.len();
 
+        if rows_len > 0 && self.n_bytes == 0 {
+            self.alloc_trace(rows_len * size_of::<usize>());
+        }
+
         // Decode columns with mutable input first, so subsequent access to input can be
         // immutable (and the borrow checker will be happy)
+
         ensure_columns_decoded(
             context,
             &self.group_by_exps,
@@ -239,6 +272,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
             &mut input_physical_columns,
             input_logical_rows,
         )?;
+
         ensure_columns_decoded(
             context,
             &entities.each_aggr_exprs,
@@ -246,6 +280,10 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
             &mut input_physical_columns,
             input_logical_rows,
         )?;
+
+        self.alloc_trace(context.n_bytes);
+        context.n_bytes = 0;
+
         assert!(self.group_by_results_unsafe.is_empty());
         assert!(self.aggr_expr_results_unsafe.is_empty());
         unsafe {
@@ -270,7 +308,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
         // Stores input references, clone them when needed
         let mut group_key_ref = Vec::with_capacity(group_by_len);
         let mut group_start_logical_row = 0;
-        for logical_row_idx in 0..logical_rows_len {
+        for logical_row_idx in 0..rows_len {
             for group_by_result in &self.group_by_results_unsafe {
                 group_key_ref.push(group_by_result.get_logical_scalar_ref(logical_row_idx));
             }
@@ -325,8 +363,11 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
             aggr_fn_len,
             &self.aggr_expr_results_unsafe,
             group_start_logical_row,
-            logical_rows_len,
+            rows_len,
         )?;
+
+        self.alloc_trace(context.n_bytes);
+        context.n_bytes = 0;
 
         // Remember to remove expression results of the current batch. They are invalid
         // in the next batch.

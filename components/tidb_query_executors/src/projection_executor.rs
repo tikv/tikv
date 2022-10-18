@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_common::{metrics::*, storage::IntervalRange, Result};
 use tidb_query_datatype::{
     codec::{batch::LazyBatchColumnVec, data_type::*},
     expr::{EvalConfig, EvalContext},
@@ -17,8 +17,9 @@ pub struct BatchProjectionExecutor<Src: BatchExecutor> {
     context: EvalContext,
     src: Src,
     schema: Vec<FieldType>,
-
     exprs: Vec<RpnExpression>,
+    /// Track executor memory usage.
+    n_bytes: usize,
 }
 
 // We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we
@@ -52,6 +53,7 @@ impl<Src: BatchExecutor> BatchProjectionExecutor<Src> {
             src,
             schema,
             exprs,
+            n_bytes: 0,
         }
     }
 
@@ -72,7 +74,15 @@ impl<Src: BatchExecutor> BatchProjectionExecutor<Src> {
             src,
             schema,
             exprs,
+            n_bytes: 0,
         })
+    }
+}
+
+#[async_trait]
+impl<Src: BatchExecutor> Drop for BatchProjectionExecutor<Src> {
+    fn drop(&mut self) {
+        MEMTRACE_QUERY_EXECUTOR.projection.sub(self.n_bytes as i64);
     }
 }
 
@@ -129,6 +139,9 @@ impl<Src: BatchExecutor> BatchExecutor for BatchProjectionExecutor<Src> {
             }
         }
 
+        self.alloc_trace(self.context.n_bytes);
+        self.context.n_bytes = 0;
+
         warnings.merge(&mut self.context.warnings);
         BatchExecuteResult {
             physical_columns: LazyBatchColumnVec::from(eval_result),
@@ -156,6 +169,12 @@ impl<Src: BatchExecutor> BatchExecutor for BatchProjectionExecutor<Src> {
     #[inline]
     fn can_be_cached(&self) -> bool {
         self.src.can_be_cached()
+    }
+
+    #[inline]
+    fn alloc_trace(&mut self, len: usize) {
+        self.n_bytes += len;
+        MEMTRACE_QUERY_EXECUTOR.projection.add(len as i64);
     }
 }
 

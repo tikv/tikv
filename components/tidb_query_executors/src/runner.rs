@@ -458,7 +458,13 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                     ))
                     .await;
                 sample.add_cpu_time(cpu_time);
-                res?
+                match res {
+                    Ok((drained, record_len)) => (drained, record_len),
+                    Err(e) => {
+                        MEMTRACE_QUERY_EXECUTOR.chunk.sub(record_all as i64);
+                        return Err(e);
+                    }
+                }
             };
             if chunk.has_rows_data() {
                 sample.add_read_bytes(chunk.get_rows_data().len());
@@ -474,6 +480,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             if record_len > 0 {
                 chunks.push(chunk);
                 record_all += record_len;
+                MEMTRACE_QUERY_EXECUTOR.chunk.add(record_len as i64);
             }
 
             if drained || self.paging_size.map_or(false, |p| record_all >= p as usize) {
@@ -515,6 +522,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
                 sel_resp.set_warnings(warnings.warnings.into());
                 sel_resp.set_warning_count(warnings.warning_cnt as i64);
+                MEMTRACE_QUERY_EXECUTOR.chunk.sub(record_all as i64);
                 return Ok((sel_resp, range));
             }
 
@@ -585,56 +593,56 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         warnings: &mut EvalWarnings,
         ctx: &mut EvalContext,
     ) -> Result<(bool, usize)> {
-        let mut record_len = 0;
-
         self.deadline.check()?;
 
         let mut result = self.out_most_executor.next_batch(batch_size).await;
 
         let is_drained = result.is_drained?;
 
+        let data_len: usize;
+
         if !result.logical_rows.is_empty() {
             assert_eq!(
                 result.physical_columns.columns_len(),
                 self.out_most_executor.schema().len()
             );
-            {
-                let data = chunk.mut_rows_data();
-                // Although `schema()` can be deeply nested, it is ok since we process data in
-                // batch.
-                if is_streaming || self.encode_type == EncodeType::TypeDefault {
-                    data.reserve(
-                        result
-                            .physical_columns
-                            .maximum_encoded_size(&result.logical_rows, &self.output_offsets),
-                    );
-                    result.physical_columns.encode(
-                        &result.logical_rows,
-                        &self.output_offsets,
-                        self.out_most_executor.schema(),
-                        data,
-                        ctx,
-                    )?;
-                } else {
-                    data.reserve(
-                        result
-                            .physical_columns
-                            .maximum_encoded_size_chunk(&result.logical_rows, &self.output_offsets),
-                    );
-                    result.physical_columns.encode_chunk(
-                        &result.logical_rows,
-                        &self.output_offsets,
-                        self.out_most_executor.schema(),
-                        data,
-                        ctx,
-                    )?;
-                }
+            let data = chunk.mut_rows_data();
+
+            // Although `schema()` can be deeply nested, it is ok since we process data in
+            // batch.
+            if is_streaming || self.encode_type == EncodeType::TypeDefault {
+                data_len = result
+                    .physical_columns
+                    .maximum_encoded_size(&result.logical_rows, &self.output_offsets);
+
+                data.reserve(data_len);
+
+                result.physical_columns.encode(
+                    &result.logical_rows,
+                    &self.output_offsets,
+                    self.out_most_executor.schema(),
+                    data,
+                    ctx,
+                )?;
+            } else {
+                data_len = result
+                    .physical_columns
+                    .maximum_encoded_size_chunk(&result.logical_rows, &self.output_offsets);
+
+                data.reserve(data_len);
+
+                result.physical_columns.encode_chunk(
+                    &result.logical_rows,
+                    &self.output_offsets,
+                    self.out_most_executor.schema(),
+                    data,
+                    ctx,
+                )?;
             }
-            record_len += result.logical_rows.len();
         }
 
         warnings.merge(&mut result.warnings);
-        Ok((is_drained, record_len))
+        Ok((is_drained, result.logical_rows.len()))
     }
 
     fn make_stream_response(

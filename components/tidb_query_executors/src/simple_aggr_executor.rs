@@ -3,11 +3,11 @@
 //! Simple aggregation is an aggregation that do not have `GROUP BY`s. It is
 //! more even more simpler than stream aggregation.
 
-use std::sync::Arc;
+use std::{mem::size_of, sync::Arc};
 
 use async_trait::async_trait;
 use tidb_query_aggr::*;
-use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_common::{metrics::*, storage::IntervalRange, Result};
 use tidb_query_datatype::{
     codec::{
         batch::{LazyBatchColumn, LazyBatchColumnVec},
@@ -57,6 +57,11 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSimpleAggregationExecutor<Src> {
     #[inline]
     fn can_be_cached(&self) -> bool {
         self.0.can_be_cached()
+    }
+
+    #[inline]
+    fn alloc_trace(&mut self, len: usize) {
+        self.0.alloc_trace(len);
     }
 }
 
@@ -111,6 +116,7 @@ impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<Src> {
         let aggr_impl = SimpleAggregationImpl {
             states: Vec::new(),
             has_input_rows: false,
+            n_bytes: 0,
         };
 
         Ok(Self(AggregationExecutor::new(
@@ -132,6 +138,28 @@ pub struct SimpleAggregationImpl {
     // todo should add variable like agg_stage, and if there is no input rows,
     //  only return 1 row if the aggregation is in the final stage
     has_input_rows: bool,
+
+    // Track query executor memory usage.
+    n_bytes: usize,
+}
+
+impl Drop for SimpleAggregationImpl {
+    fn drop(&mut self) {
+        MEMTRACE_QUERY_EXECUTOR.aggr_simple.sub(self.n_bytes as i64);
+    }
+}
+
+impl MemoryTrace for SimpleAggregationImpl {
+    #[inline]
+    fn alloc_trace(&mut self, len: usize) {
+        self.n_bytes += len;
+        MEMTRACE_QUERY_EXECUTOR.aggr_simple.add(len as i64);
+    }
+    #[inline]
+    fn free_trace(&mut self, len: usize) {
+        self.n_bytes -= len;
+        MEMTRACE_QUERY_EXECUTOR.aggr_simple.sub(len as i64);
+    }
 }
 
 impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl {
@@ -154,6 +182,10 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
     ) -> Result<()> {
         let rows_len = input_logical_rows.len();
         self.has_input_rows |= rows_len > 0;
+
+        if rows_len > 0 && self.n_bytes == 0 {
+            self.alloc_trace(rows_len * size_of::<usize>());
+        }
 
         assert_eq!(self.states.len(), entities.each_aggr_exprs.len());
 

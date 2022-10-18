@@ -1,11 +1,16 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{convert::TryFrom, hash::Hash, sync::Arc};
+use std::{
+    convert::TryFrom,
+    hash::Hash,
+    mem::{size_of, size_of_val},
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 use collections::HashMap;
 use tidb_query_aggr::*;
-use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_common::{metrics::*, storage::IntervalRange, Result};
 use tidb_query_datatype::{
     codec::{
         batch::{LazyBatchColumn, LazyBatchColumnVec},
@@ -71,6 +76,11 @@ impl<Src: BatchExecutor> BatchExecutor for BatchFastHashAggregationExecutor<Src>
     #[inline]
     fn can_be_cached(&self) -> bool {
         self.0.can_be_cached()
+    }
+
+    #[inline]
+    fn alloc_trace(&mut self, len: usize) {
+        self.0.alloc_trace(len);
     }
 }
 
@@ -185,6 +195,7 @@ impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<Src> {
             group_by_exp,
             group_by_field_type,
             states_offset_each_logical_row: Vec::with_capacity(crate::runner::BATCH_MAX_SIZE),
+            n_bytes: 0,
         };
 
         Ok(Self(AggregationExecutor::new(
@@ -239,6 +250,29 @@ pub struct FastHashAggregationImpl {
     group_by_exp: RpnExpression,
     group_by_field_type: FieldType,
     states_offset_each_logical_row: Vec<usize>,
+    /// Number of bytes allocated by the executor.
+    n_bytes: usize,
+}
+
+impl Drop for FastHashAggregationImpl {
+    fn drop(&mut self) {
+        MEMTRACE_QUERY_EXECUTOR
+            .aggr_fast_hash
+            .sub(self.n_bytes as i64);
+    }
+}
+
+impl MemoryTrace for FastHashAggregationImpl {
+    #[inline]
+    fn alloc_trace(&mut self, len: usize) {
+        self.n_bytes += len;
+        MEMTRACE_QUERY_EXECUTOR.aggr_fast_hash.add(len as i64);
+    }
+    #[inline]
+    fn free_trace(&mut self, len: usize) {
+        self.n_bytes -= len;
+        MEMTRACE_QUERY_EXECUTOR.aggr_fast_hash.sub(len as i64);
+    }
 }
 
 impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImpl {
@@ -254,15 +288,25 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
         mut input_physical_columns: LazyBatchColumnVec,
         input_logical_rows: &[usize],
     ) -> Result<()> {
+        self.free_trace(self.states_offset_each_logical_row.len() * size_of::<usize>());
         // 1. Calculate which group each src row belongs to.
         self.states_offset_each_logical_row.clear();
+
+        let rows_len = input_logical_rows.len();
+
+        if rows_len > 0 && self.n_bytes == 0 {
+            self.alloc_trace(rows_len * size_of::<usize>());
+        }
+
         let group_by_result = self.group_by_exp.eval(
             &mut entities.context,
             entities.src.schema(),
             &mut input_physical_columns,
             input_logical_rows,
-            input_logical_rows.len(),
+            rows_len,
         )?;
+
+        let mut n_bytes = 0;
 
         match group_by_result {
             RpnStackNode::Scalar { value, .. } => {
@@ -271,7 +315,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
                     match value {
                         ScalarValue::TT(v) => {
                             if let Groups::TT(group) = &mut self.groups {
-                                handle_scalar_group_each_row(
+                                n_bytes += handle_scalar_group_each_row(
                                     v,
                                     &entities.each_aggr_fn,
                                     group,
@@ -296,7 +340,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
                     match group_by_physical_vec {
                         VectorValue::TT(v) => {
                             if let Groups::TT(group) = &mut self.groups {
-                                calc_groups_each_row(
+                                n_bytes += calc_groups_each_row(
                                     v,
                                     group_by_logical_rows,
                                     &entities.each_aggr_fn,
@@ -318,7 +362,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
                                             #[allow(clippy::transmute_ptr_to_ptr)]
                                             let group: &mut HashMap<Option<SortKey<Bytes, TT>>, usize> =
                                                 unsafe { std::mem::transmute(group) };
-                                            calc_groups_each_row(
+                                            n_bytes += calc_groups_each_row(
                                                 v,
                                                 group_by_logical_rows,
                                                 &entities.each_aggr_fn,
@@ -339,6 +383,13 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
                 }
             }
         };
+
+        n_bytes += self.states_offset_each_logical_row.len() * size_of::<usize>()
+            + entities.context.n_bytes;
+
+        entities.context.n_bytes = 0;
+
+        self.alloc_trace(n_bytes);
 
         // 2. Update states according to the group.
         HashAggregationHelper::update_each_row_states_by_offset(
@@ -406,11 +457,13 @@ fn calc_groups_each_row<'a, TT: EvaluableRef<'a>, T: 'a + ChunkRef<'a, TT>, S, F
     states: &mut Vec<Box<dyn AggrFunctionState>>,
     states_offset_each_logical_row: &mut Vec<usize>,
     map_to_sort_key: F,
-) -> Result<()>
+) -> Result<usize>
 where
     S: Hash + Eq + Clone,
     F: Fn(Option<TT>) -> Result<Option<S>>,
 {
+    let mut n_bytes = 0;
+
     for physical_idx in logical_rows {
         let val = map_to_sort_key(physical_column.get_option_ref(physical_idx))?;
 
@@ -419,20 +472,25 @@ where
             Some(offset) => {
                 // Group exists, use the offset of existing group.
                 states_offset_each_logical_row.push(*offset);
+                // Track sizeof(*offset)
+                n_bytes += size_of::<usize>();
             }
             None => {
                 // Group does not exist, prepare groups.
                 let offset = states.len();
                 states_offset_each_logical_row.push(offset);
                 group.insert(val, offset);
+                n_bytes += size_of::<Result<Option<S>>>() + size_of::<usize>();
                 for aggr_fn in aggr_fns {
-                    states.push(aggr_fn.create_state());
+                    let state = aggr_fn.create_state();
+                    n_bytes += size_of::<Box<dyn AggrFunctionState>>() + size_of_val(&*state);
+                    states.push(state);
                 }
             }
         }
     }
 
-    Ok(())
+    Ok(n_bytes)
 }
 
 fn handle_scalar_group_each_row<T>(
@@ -442,14 +500,17 @@ fn handle_scalar_group_each_row<T>(
     states: &mut Vec<Box<dyn AggrFunctionState>>,
     logical_row_len: usize,
     states_offset_each_logical_row: &mut Vec<usize>,
-) -> Result<()>
+) -> Result<usize>
 where
     T: Hash + Eq + Clone,
 {
+    let mut n_bytes = 0;
+
     if group.is_empty() {
         group.insert(scalar_value.clone(), 0);
         for aggr_fn in aggr_fns {
             states.push(aggr_fn.create_state());
+            n_bytes += size_of::<Box<dyn AggrFunctionState>>();
         }
     } else if !group.contains_key(scalar_value) {
         // As a constant group-by expression, all scalar results it produce
@@ -459,9 +520,10 @@ where
 
     for _ in 0..logical_row_len {
         states_offset_each_logical_row.push(0);
+        n_bytes += size_of::<usize>();
     }
 
-    Ok(())
+    Ok(n_bytes)
 }
 
 #[cfg(test)]

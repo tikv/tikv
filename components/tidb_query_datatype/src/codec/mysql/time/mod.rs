@@ -2417,6 +2417,7 @@ mod tests {
             EvalContext {
                 cfg: Arc::new(cfg),
                 warnings,
+                n_bytes: 0,
             }
         };
         struct Case {

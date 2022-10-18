@@ -3,6 +3,7 @@
 use std::{
     convert::TryFrom,
     hash::{Hash, Hasher},
+    mem::size_of,
     ptr::NonNull,
     sync::Arc,
 };
@@ -10,7 +11,7 @@ use std::{
 use async_trait::async_trait;
 use collections::{HashMap, HashMapEntry};
 use tidb_query_aggr::*;
-use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_common::{metrics::*, storage::IntervalRange, Result};
 use tidb_query_datatype::{
     codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
     expr::{EvalConfig, EvalContext},
@@ -65,6 +66,11 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSlowHashAggregationExecutor<Src>
     #[inline]
     fn can_be_cached(&self) -> bool {
         self.0.can_be_cached()
+    }
+
+    #[inline]
+    fn alloc_trace(&mut self, len: usize) {
+        self.0.alloc_trace(len);
     }
 }
 
@@ -182,6 +188,7 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
             states_offset_each_logical_row: Vec::with_capacity(crate::runner::BATCH_MAX_SIZE),
             group_by_results_unsafe: Vec::with_capacity(group_by_col_len),
             cached_encoded_result: vec![None; group_by_col_len],
+            n_bytes: 0,
         };
 
         Ok(Self(AggregationExecutor::new(
@@ -243,6 +250,30 @@ pub struct SlowHashAggregationImpl {
 
     /// Cached encoded results for calculated Scalar results
     cached_encoded_result: Vec<Option<Vec<u8>>>,
+
+    /// Memory in bytes used by this query executor.
+    n_bytes: usize,
+}
+
+impl Drop for SlowHashAggregationImpl {
+    fn drop(&mut self) {
+        MEMTRACE_QUERY_EXECUTOR
+            .aggr_slow_hash
+            .sub(self.n_bytes as i64);
+    }
+}
+
+impl MemoryTrace for SlowHashAggregationImpl {
+    #[inline]
+    fn alloc_trace(&mut self, len: usize) {
+        self.n_bytes += len;
+        MEMTRACE_QUERY_EXECUTOR.aggr_slow_hash.add(len as i64);
+    }
+    #[inline]
+    fn free_trace(&mut self, len: usize) {
+        self.n_bytes -= len;
+        MEMTRACE_QUERY_EXECUTOR.aggr_slow_hash.sub(len as i64);
+    }
 }
 
 unsafe impl Send for SlowHashAggregationImpl {}
@@ -265,16 +296,23 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
         mut input_physical_columns: LazyBatchColumnVec,
         input_logical_rows: &[usize],
     ) -> Result<()> {
+        self.free_trace(self.states_offset_each_logical_row.len() * size_of::<usize>());
+
         // 1. Calculate which group each src row belongs to.
         self.states_offset_each_logical_row.clear();
 
         let context = &mut entities.context;
         let src_schema = entities.src.schema();
-        let logical_rows_len = input_logical_rows.len();
+        let rows_len = input_logical_rows.len();
         let aggr_fn_len = entities.each_aggr_fn.len();
+
+        if rows_len > 0 && self.n_bytes == 0 {
+            self.alloc_trace(rows_len * size_of::<usize>());
+        }
 
         // Decode columns with mutable input first, so subsequent access to input can be
         // immutable (and the borrow checker will be happy)
+
         ensure_columns_decoded(
             context,
             &self.group_by_exps,
@@ -282,6 +320,10 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
             &mut input_physical_columns,
             input_logical_rows,
         )?;
+
+        self.alloc_trace(context.n_bytes);
+        context.n_bytes = 0;
+
         assert!(self.group_by_results_unsafe.is_empty());
         unsafe {
             eval_exprs_decoded_no_lifetime(
@@ -294,7 +336,11 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
             )?;
         }
 
-        for logical_row_idx in 0..logical_rows_len {
+        let group_key_buffer_len = self.group_key_buffer.len();
+        let group_key_offsets_len = self.group_key_offsets.len();
+        let mut n_bytes = 0;
+
+        for logical_row_idx in 0..rows_len {
             let offset_begin = self.group_key_buffer.len();
 
             // Always encode group keys to the buffer first
@@ -327,7 +373,6 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                                 self.cached_encoded_result[i] = Some(cache_result);
                             }
                         }
-
                         self.group_key_offsets.push(self.group_key_buffer.len());
                     }
                 }
@@ -377,6 +422,9 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                 }
             }
 
+            n_bytes += self.group_key_buffer.len() - group_key_buffer_len;
+            n_bytes += (self.group_key_offsets.len() - group_key_offsets_len) * size_of::<usize>();
+
             let buffer_ptr = self.group_key_buffer.as_ref().into();
             // Extra column is not included in `GroupKeyRefUnsafe` to avoid being aggr on.
             let group_key_ref_unsafe = GroupKeyRefUnsafe {
@@ -419,9 +467,14 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
             &self.states_offset_each_logical_row,
         )?;
 
+        n_bytes += self.states_offset_each_logical_row.len() * size_of::<usize>()
+            + entities.context.n_bytes;
+        entities.context.n_bytes = 0;
+
         // Remember to remove expression results of the current batch. They are invalid
         // in the next batch.
         self.group_by_results_unsafe.clear();
+        self.alloc_trace(n_bytes);
 
         Ok(())
     }

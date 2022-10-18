@@ -1,5 +1,6 @@
 version = "Two"
 unstable_features = true
+edition = "2018"
 
 comment_width = 80
 wrap_comments = true
