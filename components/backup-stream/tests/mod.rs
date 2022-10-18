@@ -855,7 +855,6 @@ mod test {
 
     #[test]
     fn frequent_initial_scan() {
-        test_util::init_log_for_test();
         let mut suite = super::SuiteBuilder::new_named("frequent_initial_scan")
             .cfg(|c| c.num_threads = 1)
             .build();
