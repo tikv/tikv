@@ -2,11 +2,38 @@
 
 use std::time::{Duration, Instant};
 
-use futures::executor::block_on;
-use kvproto::metapb;
+use kvproto::{
+    metapb,
+    raft_cmdpb::{CmdType, Request},
+};
 use test_raftstore::*;
 use tikv_util::time::InstantExt;
 use txn_types::WriteBatchFlags;
+
+#[test]
+fn test_flashback_unprepared() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.run();
+
+    cluster.must_transfer_leader(1, new_peer(2, 2));
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    let mut region = cluster.get_region(b"k1");
+    let mut cmd = Request::default();
+    cmd.set_cmd_type(CmdType::Put);
+    let mut req = new_request(
+        region.get_id(),
+        region.take_region_epoch(),
+        vec![cmd],
+        false,
+    );
+    let new_leader = cluster.query_leader(1, region.get_id(), Duration::from_secs(1));
+    req.mut_header().set_peer(new_leader.unwrap());
+    req.mut_header()
+        .set_flags(WriteBatchFlags::FLASHBACK.bits());
+    let resp = cluster.call_command(req, Duration::from_secs(5)).unwrap();
+    assert!(resp.get_header().get_error().has_flashback_not_prepared());
+}
 
 #[test]
 fn test_flashback_for_schedule() {
@@ -18,15 +45,15 @@ fn test_flashback_for_schedule() {
 
     // Prepare for flashback
     let region = cluster.get_region(b"k1");
-    block_on(cluster.send_flashback_msg(
+    cluster.block_send_flashback_msg(
         region.get_id(),
         1,
         kvproto::raft_cmdpb::AdminCmdType::PrepareFlashback,
         cluster.get_region_epoch(1),
         new_peer(1, 1),
-    ));
+    );
 
-    // Verify the schedule is unabled.
+    // Verify the schedule is disabled.
     let mut region = cluster.get_region(b"k3");
     let admin_req = new_transfer_leader_cmd(new_peer(2, 2));
     let transfer_leader =
@@ -46,13 +73,13 @@ fn test_flashback_for_schedule() {
     // Verify the schedule can be executed if add flashback flag in request's
     // header.
     must_transfer_leader(&mut cluster, region.get_id(), new_peer(2, 2));
-    block_on(cluster.send_flashback_msg(
+    cluster.block_send_flashback_msg(
         region.get_id(),
         2,
         kvproto::raft_cmdpb::AdminCmdType::FinishFlashback,
         cluster.get_region_epoch(1),
         new_peer(2, 2),
-    ));
+    );
     // Transfer leader to (1, 1)
     cluster.must_transfer_leader(1, new_peer(1, 1));
 }
@@ -69,13 +96,13 @@ fn test_flashback_for_write() {
 
     // Prepare for flashback
     let region = cluster.get_region(b"k1");
-    block_on(cluster.send_flashback_msg(
+    cluster.block_send_flashback_msg(
         region.get_id(),
         1,
         kvproto::raft_cmdpb::AdminCmdType::PrepareFlashback,
         cluster.get_region_epoch(1),
         new_peer(1, 1),
-    ));
+    );
 
     // Write will be blocked
     let value = vec![1_u8; 8096];
@@ -87,13 +114,13 @@ fn test_flashback_for_write() {
         new_put_cmd(b"k1", &value),
     );
 
-    block_on(cluster.send_flashback_msg(
+    cluster.block_send_flashback_msg(
         region.get_id(),
         1,
         kvproto::raft_cmdpb::AdminCmdType::FinishFlashback,
         cluster.get_region_epoch(1),
         new_peer(1, 1),
-    ));
+    );
 
     multi_do_cmd(&mut cluster, new_put_cf_cmd("write", b"k1", &value));
 }
@@ -112,13 +139,13 @@ fn test_flashback_for_read() {
 
     // Prepare for flashback
     let region = cluster.get_region(b"k1");
-    block_on(cluster.send_flashback_msg(
+    cluster.block_send_flashback_msg(
         region.get_id(),
         1,
         kvproto::raft_cmdpb::AdminCmdType::PrepareFlashback,
         cluster.get_region_epoch(1),
         new_peer(1, 1),
-    ));
+    );
 
     // read will be blocked
     must_get_error_flashback_in_progress(&mut cluster, &region, new_get_cf_cmd("write", b"k1"));
@@ -131,13 +158,13 @@ fn test_flashback_for_read() {
         new_get_cf_cmd("write", b"k1"),
     );
 
-    block_on(cluster.send_flashback_msg(
+    cluster.block_send_flashback_msg(
         region.get_id(),
         1,
         kvproto::raft_cmdpb::AdminCmdType::FinishFlashback,
         cluster.get_region_epoch(1),
         new_peer(1, 1),
-    ));
+    );
 
     multi_do_cmd(&mut cluster, new_get_cf_cmd("write", b"k1"));
 }
@@ -173,13 +200,13 @@ fn test_flashback_for_local_read() {
     assert_eq!(state.get_last_index(), last_index);
 
     // Prepare for flashback
-    block_on(cluster.send_flashback_msg(
+    cluster.block_send_flashback_msg(
         region.get_id(),
         store_id,
         kvproto::raft_cmdpb::AdminCmdType::PrepareFlashback,
         cluster.get_region_epoch(1),
         new_peer(store_id, store_id),
-    ));
+    );
 
     // Check the leader does a local read.
     let state = cluster.raft_local_state(region.get_id(), store_id);
@@ -210,13 +237,13 @@ fn test_flashback_for_local_read() {
     let state = cluster.raft_local_state(region.get_id(), store_id);
     assert_eq!(state.get_last_index(), last_index + 1);
 
-    block_on(cluster.send_flashback_msg(
+    cluster.block_send_flashback_msg(
         region.get_id(),
         store_id,
         kvproto::raft_cmdpb::AdminCmdType::FinishFlashback,
         cluster.get_region_epoch(1),
         new_peer(store_id, store_id),
-    ));
+    );
 
     let state = cluster.raft_local_state(region.get_id(), store_id);
     assert_eq!(state.get_last_index(), last_index + 2);
@@ -240,13 +267,13 @@ fn test_flashback_for_status_cmd_as_region_detail() {
 
     let leader = cluster.leader_of_region(1).unwrap();
     let region = cluster.get_region(b"k1");
-    block_on(cluster.send_flashback_msg(
+    cluster.block_send_flashback_msg(
         region.get_id(),
         leader.get_store_id(),
         kvproto::raft_cmdpb::AdminCmdType::PrepareFlashback,
         cluster.get_region_epoch(1),
         new_peer(leader.get_store_id(), leader.get_store_id()),
-    ));
+    );
 
     let region_detail = cluster.region_detail(region.get_id(), leader.get_store_id());
     assert!(region_detail.has_region());
@@ -275,23 +302,23 @@ fn test_flashback_for_check_is_in_persist() {
     assert!(!local_state.get_region().get_is_in_flashback());
 
     // Prepare for flashback
-    block_on(cluster.send_flashback_msg(
+    cluster.block_send_flashback_msg(
         1,
         2,
         kvproto::raft_cmdpb::AdminCmdType::PrepareFlashback,
         cluster.get_region_epoch(1),
         leader_peer.clone(),
-    ));
+    );
     let local_state = cluster.region_local_state(1, 2);
     assert!(local_state.get_region().get_is_in_flashback());
 
-    block_on(cluster.send_flashback_msg(
+    cluster.block_send_flashback_msg(
         1,
         2,
         kvproto::raft_cmdpb::AdminCmdType::FinishFlashback,
         cluster.get_region_epoch(1),
         leader_peer,
-    ));
+    );
     let local_state = cluster.region_local_state(1, 2);
     assert!(!local_state.get_region().get_is_in_flashback());
 }
@@ -302,10 +329,12 @@ fn test_flashback_for_apply_snapshot() {
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
-    // Make node3 isolationed
+    // Make node3 isolated
     cluster.add_send_filter(IsolationFilterFactory::new(5));
 
     let local_state = cluster.region_local_state(1, 1);
+    assert!(!local_state.get_region().get_is_in_flashback());
+    let local_state = cluster.region_local_state(1, 5);
     assert!(!local_state.get_region().get_is_in_flashback());
 
     // Write for cluster
@@ -313,15 +342,17 @@ fn test_flashback_for_apply_snapshot() {
     multi_do_cmd(&mut cluster, new_put_cf_cmd("write", b"k1", &value));
 
     // Prepare for flashback
-    block_on(cluster.send_flashback_msg(
+    cluster.block_send_flashback_msg(
         1,
         1,
         kvproto::raft_cmdpb::AdminCmdType::PrepareFlashback,
         cluster.get_region_epoch(1),
         new_peer(1, 1),
-    ));
+    );
     let local_state = cluster.region_local_state(1, 1);
     assert!(local_state.get_region().get_is_in_flashback());
+    let local_state = cluster.region_local_state(1, 5);
+    assert!(!local_state.get_region().get_is_in_flashback());
 
     // Add node 3 back.
     cluster.clear_send_filters();
@@ -332,13 +363,21 @@ fn test_flashback_for_apply_snapshot() {
     let local_state = cluster.region_local_state(1, 5);
     assert!(local_state.get_region().get_is_in_flashback());
 
-    block_on(cluster.send_flashback_msg(
+    cluster.block_send_flashback_msg(
         1,
         5,
         kvproto::raft_cmdpb::AdminCmdType::FinishFlashback,
         cluster.get_region_epoch(1),
         new_peer(5, 5),
-    ));
+    );
+
+    // Wait for applying
+    sleep_ms(500);
+
+    let local_state = cluster.region_local_state(1, 5);
+    assert!(!local_state.get_region().get_is_in_flashback());
+    let local_state = cluster.region_local_state(1, 1);
+    assert!(!local_state.get_region().get_is_in_flashback());
 }
 
 fn transfer_leader<T: Simulator>(cluster: &mut Cluster<T>, region_id: u64, leader: metapb::Peer) {
