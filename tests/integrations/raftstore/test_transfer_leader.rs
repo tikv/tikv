@@ -22,7 +22,7 @@ fn test_basic_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
             + cluster
                 .cfg
                 .raft_store
-                .max_raft_entry_cache_warmup_time
+                .max_entry_cache_warmup_duration
                 .as_millis(),
     );
     cluster.run();

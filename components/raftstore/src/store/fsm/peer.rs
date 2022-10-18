@@ -3240,7 +3240,7 @@ where
             .maybe_reject_transfer_leader_msg(self.ctx, msg, peer_disk_usage)
         {
             // If max warmup time is 0, then skip the warmup process and ack directly.
-            if self.ctx.cfg.max_raft_entry_cache_warmup_time.0 == Duration::from_secs(0)
+            if self.ctx.cfg.max_entry_cache_warmup_duration.0 == Duration::from_secs(0)
                 || self.fsm.peer.pre_ack_transfer_leader_msg(self.ctx, msg)
             {
                 self.fsm.peer.ack_transfer_leader_msg(false);

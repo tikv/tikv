@@ -4593,7 +4593,7 @@ where
         if let Some(state) = self.mut_store().entry_cache_warmup_state_mut() {
             // If it is timeout, this peer should ack the message so that
             // the leadership transfer process can continue.
-            let is_task_timeout = state.elapsed() >= ctx.cfg.max_raft_entry_cache_warmup_time.0;
+            let is_task_timeout = state.elapsed() >= ctx.cfg.max_entry_cache_warmup_duration.0;
             if is_task_timeout {
                 state.mark_task_timeout();
             }

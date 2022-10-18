@@ -385,7 +385,7 @@ fn prevent_from_gc_raft_log(cluster: &mut Cluster<NodeCluster>) {
 
 fn run_cluster_and_warm_up_cache_for_store2() -> Cluster<NodeCluster> {
     let mut cluster = new_node_cluster(0, 3);
-    cluster.cfg.raft_store.max_raft_entry_cache_warmup_time = ReadableDuration::secs(1000);
+    cluster.cfg.raft_store.max_entry_cache_warmup_duration = ReadableDuration::secs(1000);
     prevent_from_gc_raft_log(&mut cluster);
     run_cluster_for_test_warmup_entry_cache(&mut cluster);
 
@@ -487,7 +487,7 @@ fn test_when_warmup_range_start_is_compacted() {
     // GC raft log aggressively.
     cluster.cfg.raft_store.merge_max_log_gap = 1;
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(5);
-    cluster.cfg.raft_store.max_raft_entry_cache_warmup_time = ReadableDuration::secs(1000);
+    cluster.cfg.raft_store.max_entry_cache_warmup_duration = ReadableDuration::secs(1000);
     run_cluster_for_test_warmup_entry_cache(&mut cluster);
     cluster.pd_client.disable_default_operator();
 
@@ -513,7 +513,7 @@ fn test_turnoff_warmup_entry_cache() {
     let mut cluster = new_node_cluster(0, 3);
     prevent_from_gc_raft_log(&mut cluster);
     run_cluster_for_test_warmup_entry_cache(&mut cluster);
-    cluster.cfg.raft_store.max_raft_entry_cache_warmup_time = ReadableDuration::secs(0);
+    cluster.cfg.raft_store.max_entry_cache_warmup_duration = ReadableDuration::secs(0);
     fail::cfg("worker_async_fetch_raft_log", "pause").unwrap();
     cluster.must_transfer_leader(1, new_peer(2, 2));
 }
@@ -523,14 +523,14 @@ fn test_turnoff_warmup_entry_cache() {
 #[test]
 fn test_when_warmup_fail_and_its_timeout_is_too_long() {
     let mut cluster = new_node_cluster(0, 3);
-    cluster.cfg.raft_store.max_raft_entry_cache_warmup_time = ReadableDuration::secs(1000);
+    cluster.cfg.raft_store.max_entry_cache_warmup_duration = ReadableDuration::secs(1000);
     prevent_from_gc_raft_log(&mut cluster);
     run_cluster_for_test_warmup_entry_cache(&mut cluster);
 
     fail::cfg("worker_async_fetch_raft_log", "pause").unwrap();
     cluster.transfer_leader(1, new_peer(2, 2));
     // Theoretically, the leader transfer can't succeed unless it sleeps
-    // max_raft_entry_cache_warmup_time.
+    // max_entry_cache_warmup_duration.
     sleep_ms(50);
     let leader = cluster.leader_of_region(1).unwrap();
     assert_eq!(leader.get_id(), 1);
@@ -541,7 +541,7 @@ fn test_when_warmup_fail_and_its_timeout_is_too_long() {
 #[test]
 fn test_when_warmup_fail_and_its_timeout_is_short() {
     let mut cluster = new_node_cluster(0, 3);
-    cluster.cfg.raft_store.max_raft_entry_cache_warmup_time = ReadableDuration::millis(10);
+    cluster.cfg.raft_store.max_entry_cache_warmup_duration = ReadableDuration::millis(10);
     prevent_from_gc_raft_log(&mut cluster);
     run_cluster_for_test_warmup_entry_cache(&mut cluster);
 
