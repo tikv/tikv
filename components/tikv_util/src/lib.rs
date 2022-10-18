@@ -542,6 +542,8 @@ pub fn check_environment_variables() {
         warn!("environment variable `TZ` is missing, using `/etc/localtime`");
     }
 
+    env::set_var("GRPC_POLL_STRATEGY", "epoll1");
+
     if let Ok(var) = env::var("GRPC_POLL_STRATEGY") {
         info!(
             "environment variable is present";
