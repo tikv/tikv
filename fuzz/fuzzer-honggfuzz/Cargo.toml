@@ -7,4 +7,4 @@ publish = false
 fuzz-targets = { path = "../targets", default-features = false }
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
-honggfuzz = "0.5.47"
+honggfuzz = "0.5"
