@@ -33,7 +33,7 @@ const GET_SNAPSHOT_RETRY_TIME: u32 = 3;
 const GET_SNAPSHOT_RETRY_BACKOFF_STEP: Duration = Duration::from_millis(25);
 
 pub type BeforeStartCallback = Box<dyn Fn() + Send>;
-pub type OnErrorCallback = Box<dyn Fn(ObserveId, Region, Error) + Send>;
+pub type OnErrorCallback = Box<dyn Fn(ObserveId, Arc<Region>, Error) + Send>;
 pub type OnEntriesCallback = Box<dyn Fn(Vec<ScanEntry>, u64) + Send>;
 pub type IsCancelledCallback = Box<dyn Fn() -> bool + Send>;
 
@@ -47,7 +47,7 @@ pub struct ScanTask {
     pub handle: ObserveHandle,
     pub tag: String,
     pub mode: ScanMode,
-    pub region: Region,
+    pub region: Arc<Region>,
     pub checkpoint_ts: TimeStamp,
     pub is_cancelled: IsCancelledCallback,
     pub send_entries: OnEntriesCallback,

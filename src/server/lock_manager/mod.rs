@@ -353,7 +353,7 @@ mod tests {
         leader_region.set_end_key(b"foo".to_vec());
         leader_region.set_peers(vec![Peer::default()].into());
         coprocessor_host.on_region_changed(
-            &leader_region,
+            &Arc::new(leader_region),
             RegionChangeEvent::Create,
             StateRole::Leader,
         );

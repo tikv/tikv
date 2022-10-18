@@ -174,6 +174,7 @@ impl RocksEngine {
 
         let mut region = metapb::Region::default();
         region.set_id(1);
+        let region = Arc::new(region);
         self.coprocessor
             .pre_propose(&region, &mut cmd_req)
             .map_err(|err| Error::from(ErrorInner::Other(box_err!(err))))?;

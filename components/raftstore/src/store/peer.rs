@@ -465,9 +465,9 @@ pub struct ApplySnapshotContext {
 #[derive(PartialEq, Debug)]
 pub struct PersistSnapshotResult {
     /// prev_region is the region before snapshot applied.
-    pub prev_region: metapb::Region,
-    pub region: metapb::Region,
-    pub destroy_regions: Vec<metapb::Region>,
+    pub prev_region: Arc<metapb::Region>,
+    pub region: Arc<metapb::Region>,
+    pub destroy_regions: Vec<Arc<metapb::Region>>,
 }
 
 #[derive(Debug)]
@@ -1045,7 +1045,7 @@ where
         region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
         raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         engines: Engines<EK, ER>,
-        region: &metapb::Region,
+        region: &Arc<metapb::Region>,
         peer: metapb::Peer,
     ) -> Result<Peer<EK, ER>> {
         let peer_id = peer.get_id();
@@ -1057,7 +1057,7 @@ where
 
         let ps = PeerStorage::new(
             engines,
-            region,
+            region.clone(),
             region_scheduler,
             raftlog_fetch_scheduler,
             peer.get_id(),
@@ -1399,7 +1399,7 @@ where
         fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
         let t = TiInstant::now();
 
-        let mut region = self.region().clone();
+        let mut region = (**self.region()).clone();
         info!(
             "begin to destroy";
             "region_id" => self.region_id,
@@ -1524,7 +1524,7 @@ where
     }
 
     #[inline]
-    pub fn region(&self) -> &metapb::Region {
+    pub fn region(&self) -> &Arc<metapb::Region> {
         self.get_store().region()
     }
 
@@ -1638,7 +1638,7 @@ where
         &mut self,
         host: &CoprocessorHost<impl KvEngine>,
         reader: &mut ReadDelegate,
-        region: metapb::Region,
+        region: Arc<metapb::Region>,
         reason: RegionChangeReason,
     ) {
         if self.region().get_region_epoch().get_version() < region.get_region_epoch().get_version()
@@ -4766,7 +4766,7 @@ where
             }
         }
 
-        let mut resp = reader.execute(&req, &Arc::new(region), read_index, None);
+        let mut resp = reader.execute(&req, &region, read_index, None);
         if let Some(snap) = resp.snapshot.as_mut() {
             snap.txn_ext = Some(self.txn_ext.clone());
             snap.bucket_meta = self.region_buckets.as_ref().map(|b| b.meta.clone());

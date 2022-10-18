@@ -1,6 +1,10 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::mpsc::channel, thread, time::Duration};
+use std::{
+    sync::{mpsc::channel, Arc},
+    thread,
+    time::Duration,
+};
 
 use collections::HashMap;
 use kvproto::metapb::Region;
@@ -8,7 +12,7 @@ use raftstore::coprocessor::{RegionInfoAccessor, RegionInfoProvider};
 use test_raftstore::*;
 use tikv_util::HandyRwLock;
 
-fn prepare_cluster<T: Simulator>(cluster: &mut Cluster<T>) -> Vec<Region> {
+fn prepare_cluster<T: Simulator>(cluster: &mut Cluster<T>) -> Vec<Arc<Region>> {
     for i in 0..15 {
         let i = i + b'0';
         let key = vec![b'k', i];
@@ -42,9 +46,9 @@ fn prepare_cluster<T: Simulator>(cluster: &mut Cluster<T>) -> Vec<Region> {
 
         key[1] -= 1;
         let region = cluster.get_region(&key);
-        regions.push(region);
+        regions.push(Arc::new(region));
     }
-    regions.push(cluster.get_region(b"k9"));
+    regions.push(Arc::new(cluster.get_region(b"k9")));
 
     assert_eq!(regions.len(), end_keys.len());
     assert_eq!(regions.len(), start_keys.len());

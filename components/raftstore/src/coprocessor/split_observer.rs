@@ -1,5 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
+
 use itertools::Itertools;
 use kvproto::{
     metapb::Region,
@@ -24,7 +26,7 @@ pub fn strip_timestamp_if_exists(mut key: Vec<u8>) -> Vec<u8> {
     key
 }
 
-pub fn is_valid_split_key(key: &[u8], index: usize, region: &Region) -> bool {
+pub fn is_valid_split_key(key: &[u8], index: usize, region: &Arc<Region>) -> bool {
     if key.is_empty() {
         warn!(
             "skip invalid split key: key is empty";
@@ -66,7 +68,7 @@ impl SplitObserver {
             .filter_map(|(i, mut split)| {
                 let key = split.take_split_key();
                 let key = strip_timestamp_if_exists(key);
-                if is_valid_split_key(&key, i, ctx.region) {
+                if is_valid_split_key(&key, i, ctx.region()) {
                     split.split_key = key;
                     Some(split)
                 } else {
@@ -80,7 +82,7 @@ impl SplitObserver {
                 } else {
                     warn!(
                         "skip invalid split key: key should not be larger than the previous.";
-                        "region_id" => ctx.region.id,
+                        "region_id" => ctx.region().id,
                         "key" => log_wrappers::Value::key(&curr.split_key),
                         "previous" => log_wrappers::Value::key(&prev.split_key),
                     );
@@ -156,6 +158,8 @@ impl AdminObserver for SplitObserver {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use byteorder::{BigEndian, WriteBytesExt};
     use kvproto::{
         metapb::Region,
@@ -215,6 +219,7 @@ mod tests {
         let mut r = Region::default();
         r.set_id(10);
         r.set_start_key(region_start_key);
+        let r = Arc::new(r);
 
         let mut ctx = ObserverContext::new(&r);
         let observer = SplitObserver;
@@ -235,6 +240,7 @@ mod tests {
         let mut region = Region::default();
         let start_key = new_row_key(1, 1, 1);
         region.set_start_key(start_key.clone());
+        let region = Arc::new(region);
         let mut ctx = ObserverContext::new(&region);
         let mut req = AdminRequest::default();
 

@@ -66,7 +66,7 @@ enum PendingLock {
 // observe_id is used for avoiding ABA problems in incremental scan task,
 // advance resolved ts task, and command observing.
 struct ObserveRegion {
-    meta: Region,
+    meta: Arc<Region>,
     handle: ObserveHandle,
     // TODO: Get lease from raftstore.
     // lease: Option<RemoteLease>,
@@ -75,7 +75,7 @@ struct ObserveRegion {
 }
 
 impl ObserveRegion {
-    fn new(meta: Region, rrp: Arc<RegionReadProgress>) -> Self {
+    fn new(meta: Arc<Region>, rrp: Arc<RegionReadProgress>) -> Self {
         ObserveRegion {
             resolver: Resolver::with_read_progress(meta.id, Some(rrp)),
             meta,
@@ -322,7 +322,7 @@ where
         ep
     }
 
-    fn register_region(&mut self, region: Region) {
+    fn register_region(&mut self, region: Arc<Region>) {
         let region_id = region.get_id();
         assert!(self.regions.get(&region_id).is_none());
         let observe_region = {
@@ -354,7 +354,7 @@ where
 
     fn build_scan_task(
         &self,
-        region: Region,
+        region: Arc<Region>,
         observe_handle: ObserveHandle,
         cancelled: Arc<AtomicBool>,
     ) -> ScanTask {
@@ -418,7 +418,7 @@ where
         }
     }
 
-    fn region_updated(&mut self, incoming_region: Region) {
+    fn region_updated(&mut self, incoming_region: Arc<Region>) {
         let region_id = incoming_region.get_id();
         if let Some(obs_region) = self.regions.get_mut(&region_id) {
             if obs_region.meta.get_region_epoch().get_version()
@@ -440,7 +440,7 @@ where
     // This function is corresponding to RegionDestroyed event that can be only
     // scheduled by observer. To prevent destroying region for wrong peer, it
     // should check the region epoch at first.
-    fn region_destroyed(&mut self, region: Region) {
+    fn region_destroyed(&mut self, region: Arc<Region>) {
         if let Some(observe_region) = self.regions.get(&region.id) {
             if util::compare_region_epoch(
                 observe_region.meta.get_region_epoch(),
@@ -618,10 +618,10 @@ where
 }
 
 pub enum Task<S: Snapshot> {
-    RegionUpdated(Region),
-    RegionDestroyed(Region),
+    RegionUpdated(Arc<Region>),
+    RegionDestroyed(Arc<Region>),
     RegisterRegion {
-        region: Region,
+        region: Arc<Region>,
     },
     DeRegisterRegion {
         region_id: u64,

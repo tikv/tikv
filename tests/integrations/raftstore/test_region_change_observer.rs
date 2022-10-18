@@ -23,7 +23,7 @@ use tikv_util::{
 
 #[derive(Clone)]
 struct TestObserver {
-    sender: SyncSender<(Region, RegionChangeEvent)>,
+    sender: SyncSender<(Arc<Region>, RegionChangeEvent)>,
 }
 
 impl Coprocessor for TestObserver {}
@@ -43,7 +43,7 @@ fn test_region_change_observer_impl(mut cluster: Cluster<NodeCluster>) {
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
-    let receiver: Receiver<(Region, RegionChangeEvent)>;
+    let receiver: Receiver<(Arc<Region>, RegionChangeEvent)>;
     let r1;
     {
         let (tx, rx) = channel();

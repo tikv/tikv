@@ -348,7 +348,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
 
     pub fn gc(
         &self,
-        region: metapb::Region,
+        region: Arc<metapb::Region>,
         _: Context,
         safe_point: impl Into<TimeStamp>,
     ) -> Result<()> {

@@ -1,5 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-use std::{thread, time::Duration};
+use std::{sync::Arc, thread, time::Duration};
 
 use api_version::{test_kv_format_impl, KvFormat};
 use futures::{executor::block_on, sink::SinkExt};
@@ -90,7 +90,7 @@ fn test_region_ready_after_deregister_impl<F: KvFormat>() {
     sleep_ms(200);
 
     // Simulate a role change event
-    let region = suite.cluster.get_region(&[]);
+    let region = Arc::new(suite.cluster.get_region(&[]));
     let leader = suite.cluster.leader_of_region(region.get_id()).unwrap();
     let mut context = ObserverContext::new(&region);
     suite

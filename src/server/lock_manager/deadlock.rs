@@ -1449,7 +1449,7 @@ pub mod tests {
     }
 
     // Region with non-empty peers is valid.
-    fn new_region(id: u64, start_key: &[u8], end_key: &[u8], valid: bool) -> Region {
+    fn new_region(id: u64, start_key: &[u8], end_key: &[u8], valid: bool) -> Arc<Region> {
         let mut region = Region::default();
         region.set_id(id);
         region.set_start_key(start_key.to_vec());
@@ -1457,7 +1457,7 @@ pub mod tests {
         if valid {
             region.set_peers(vec![kvproto::metapb::Peer::default()].into());
         }
-        region
+        Arc::new(region)
     }
 
     #[test]
@@ -1465,7 +1465,7 @@ pub mod tests {
         let mut host = CoprocessorHost::default();
         let (mut worker, scheduler) = start_deadlock_detector(&mut host);
 
-        let mut region = new_region(1, b"", b"", true);
+        let region = new_region(1, b"", b"", true);
         let invalid = new_region(2, b"", b"", false);
         let other = new_region(3, b"0", b"", true);
         let follower_roles = [
@@ -1510,14 +1510,18 @@ pub mod tests {
         host.on_region_changed(&region, RegionChangeEvent::Destroy, StateRole::Leader);
         check_role(Role::Follower);
         // Leader region id is changed.
+        let mut region = (*region).clone();
         region.set_id(2);
+        let region = Arc::new(region);
         host.on_region_changed(
             &region,
             RegionChangeEvent::Update(RegionChangeReason::ChangePeer),
             StateRole::Leader,
         );
         // Destroy the previous leader region.
+        let mut region = (*region).clone();
         region.set_id(1);
+        let region = Arc::new(region);
         host.on_region_changed(&region, RegionChangeEvent::Destroy, StateRole::Leader);
         check_role(Role::Leader);
 

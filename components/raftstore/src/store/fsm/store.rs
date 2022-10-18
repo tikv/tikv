@@ -122,7 +122,7 @@ pub struct StoreMeta {
     /// region_end_key -> region_id
     pub region_ranges: BTreeMap<Vec<u8>, u64>,
     /// region_id -> region
-    pub regions: HashMap<u64, Region>,
+    pub regions: HashMap<u64, Arc<Region>>,
     /// region_id -> reader
     pub readers: HashMap<u64, ReadDelegate>,
     /// `MsgRequestPreVote`, `MsgRequestVote` or `MsgAppend` messages from newly
@@ -178,7 +178,7 @@ impl StoreMeta {
     pub fn set_region<EK: KvEngine, ER: RaftEngine>(
         &mut self,
         host: &CoprocessorHost<EK>,
-        region: Region,
+        region: Arc<Region>,
         peer: &mut crate::store::Peer<EK, ER>,
         reason: RegionChangeReason,
     ) {
@@ -1131,7 +1131,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
             let mut local_state = RegionLocalState::default();
             local_state.merge_from_bytes(value)?;
 
-            let region = local_state.get_region();
+            let region = Arc::new(local_state.get_region().clone());
             if local_state.get_state() == PeerState::Tombstone {
                 tombstone_count += 1;
                 debug!("region is tombstone"; "region" => ?region, "store_id" => store_id);
@@ -1147,7 +1147,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                     region_id
                 ));
                 applying_count += 1;
-                applying_regions.push(region.clone());
+                applying_regions.push(region);
                 return Ok(true);
             }
 
@@ -1157,7 +1157,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 self.region_scheduler.clone(),
                 self.raftlog_fetch_scheduler.clone(),
                 self.engines.clone(),
-                region,
+                &region,
             ));
             peer.peer.init_replication_mode(&mut replication_state);
             if local_state.get_state() == PeerState::Merging {
@@ -1165,7 +1165,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 merging_count += 1;
                 peer.set_pending_merge_state(local_state.get_merge_state().to_owned());
             }
-            meta.region_ranges.insert(enc_end_key(region), region_id);
+            meta.region_ranges.insert(enc_end_key(&region), region_id);
             meta.regions.insert(region_id, region.clone());
             meta.region_read_progress
                 .insert(region_id, peer.peer.read_progress.clone());
@@ -1173,7 +1173,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
             // in DB.
             region_peers.push((tx, peer));
             self.coprocessor_host.on_region_changed(
-                region,
+                &region,
                 RegionChangeEvent::Create,
                 StateRole::Follower,
             );
@@ -2792,7 +2792,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         self.ctx.router.report_status_update()
     }
 
-    fn on_unsafe_recovery_create_peer(&self, region: Region) {
+    fn on_unsafe_recovery_create_peer(&self, region: Arc<Region>) {
         info!("Unsafe recovery, creating a peer"; "peer" => ?region);
         let mut meta = self.ctx.store_meta.lock().unwrap();
         if let Some((_, id)) = meta

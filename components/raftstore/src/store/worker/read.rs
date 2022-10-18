@@ -60,7 +60,7 @@ pub trait ReadExecutor {
     fn get_value(
         &mut self,
         req: &Request,
-        region: &metapb::Region,
+        region: &Arc<metapb::Region>,
         read_context: &Option<LocalReadContext<'_, Self::Tablet>>,
     ) -> Result<Response> {
         let key = req.get_get().get_key();
@@ -118,7 +118,7 @@ pub trait ReadExecutor {
         for req in requests {
             let cmd_type = req.get_cmd_type();
             let mut resp = match cmd_type {
-                CmdType::Get => match self.get_value(req, region.as_ref(), &local_read_ctx) {
+                CmdType::Get => match self.get_value(req, region, &local_read_ctx) {
                     Ok(resp) => resp,
                     Err(e) => {
                         error!(?e;
@@ -429,7 +429,7 @@ impl ReadDelegate {
         let region_id = region.get_id();
         let peer_id = peer.peer.get_id();
         ReadDelegate {
-            region: Arc::new(region),
+            region,
             peer_id,
             term: peer.term(),
             applied_term: peer.get_store().applied_term(),
@@ -448,7 +448,7 @@ impl ReadDelegate {
     pub fn new(
         peer_id: u64,
         term: u64,
-        region: Region,
+        region: Arc<Region>,
         applied_term: u64,
         txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
         txn_ext: Arc<TxnExt>,
@@ -457,7 +457,7 @@ impl ReadDelegate {
     ) -> Self {
         let region_id = region.id;
         ReadDelegate {
-            region: Arc::new(region),
+            region,
             peer_id,
             term,
             applied_term,
@@ -487,7 +487,7 @@ impl ReadDelegate {
         self.track_ver.inc();
         match progress {
             Progress::Region(region) => {
-                self.region = Arc::new(region);
+                self.region = region;
             }
             Progress::Term(term) => {
                 self.term = term;
@@ -618,7 +618,7 @@ impl Display for ReadDelegate {
 /// #[RaftstoreCommon]
 #[derive(Debug)]
 pub enum Progress {
-    Region(metapb::Region),
+    Region(Arc<metapb::Region>),
     Term(u64),
     AppliedTerm(u64),
     LeaderLease(RemoteLease),
@@ -626,7 +626,7 @@ pub enum Progress {
 }
 
 impl Progress {
-    pub fn region(region: metapb::Region) -> Progress {
+    pub fn region(region: Arc<metapb::Region>) -> Progress {
         Progress::Region(region)
     }
 
@@ -1581,7 +1581,7 @@ mod tests {
         }
 
         let d = reader.local_reader.get_delegate(1).unwrap();
-        assert_eq!(&*d.region, &region);
+        assert_eq!(*d.region, region);
         assert_eq!(d.term, 1);
         assert_eq!(d.applied_term, 1);
         assert!(d.leader_lease.is_none());
@@ -1593,7 +1593,7 @@ mod tests {
             meta.readers
                 .get_mut(&1)
                 .unwrap()
-                .update(Progress::region(region.clone()));
+                .update(Progress::region(Arc::new(region.clone())));
         }
         assert_eq!(
             &*reader.local_reader.get_delegate(1).unwrap().region,

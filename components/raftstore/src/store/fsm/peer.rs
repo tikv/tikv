@@ -246,7 +246,7 @@ where
         region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
         raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         engines: Engines<EK, ER>,
-        region: &metapb::Region,
+        region: &Arc<metapb::Region>,
     ) -> Result<SenderFsmPair<EK, ER>> {
         let meta_peer = match find_peer(region, store_id) {
             None => {
@@ -329,7 +329,7 @@ where
                     region_scheduler,
                     raftlog_fetch_scheduler,
                     engines,
-                    &region,
+                    &Arc::new(region),
                     peer,
                 )?,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
@@ -963,7 +963,7 @@ where
         let mut self_report = pdpb::PeerReport::default();
         self_report.set_raft_state(self.fsm.peer.get_store().raft_state().clone());
         let mut region_local_state = RegionLocalState::default();
-        region_local_state.set_region(self.region().clone());
+        region_local_state.set_region((**self.region()).clone());
         self_report.set_region_state(region_local_state);
         self_report.set_is_force_leader(self.fsm.peer.force_leader.is_some());
         match self.fsm.peer.get_store().entries(
@@ -1005,7 +1005,7 @@ where
         );
         let region = self.fsm.peer.region();
         let mut resp = CheckAdminResponse::default();
-        resp.set_region(region.clone());
+        resp.set_region((**region).clone());
         let pending_admin = self.fsm.peer.raft_group.raft.has_pending_conf()
             || self.fsm.peer.is_merging()
             || self.fsm.peer.is_splitting();
@@ -1102,7 +1102,7 @@ where
                 let peer = &self.fsm.peer;
                 let store = peer.get_store();
                 let mut local_state = RegionLocalState::default();
-                local_state.set_region(store.region().clone());
+                local_state.set_region((**store.region()).clone());
                 if let Some(s) = &peer.pending_merge_state {
                     local_state.set_merge_state(s.clone());
                 }
@@ -1964,7 +1964,7 @@ where
     }
 
     #[inline]
-    fn region(&self) -> &Region {
+    fn region(&self) -> &Arc<Region> {
         self.fsm.peer.region()
     }
 
@@ -3579,7 +3579,7 @@ where
     }
 
     // Update some region infos
-    fn update_region(&mut self, mut region: metapb::Region) {
+    fn update_region(&mut self, region: Arc<metapb::Region>) {
         {
             let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.set_region(
@@ -3589,11 +3589,11 @@ where
                 RegionChangeReason::ChangePeer,
             );
         }
-        for peer in region.take_peers().into_iter() {
+        for peer in region.get_peers() {
             if self.fsm.peer.peer_id() == peer.get_id() {
                 self.fsm.peer.peer = peer.clone();
             }
-            self.fsm.peer.insert_peer_cache(peer);
+            self.fsm.peer.insert_peer_cache(peer.clone());
         }
     }
 
@@ -3770,7 +3770,7 @@ where
 
     fn on_ready_split_region(
         &mut self,
-        derived: metapb::Region,
+        derived: Arc<metapb::Region>,
         regions: Vec<metapb::Region>,
         new_split_regions: HashMap<u64, apply::NewSplitPeer>,
     ) {
@@ -3841,6 +3841,7 @@ where
         }
         let last_region_id = regions.last().unwrap().get_id();
         for (new_region, locks) in regions.into_iter().zip(region_locks) {
+            let new_region = Arc::new(new_region);
             let new_region_id = new_region.get_id();
 
             if new_region_id == region_id {
@@ -4188,7 +4189,7 @@ where
             admin.set_cmd_type(AdminCmdType::CommitMerge);
             admin
                 .mut_commit_merge()
-                .set_source(self.fsm.peer.region().clone());
+                .set_source((**self.fsm.peer.region()).clone());
             admin.mut_commit_merge().set_commit(state.get_commit());
             admin.mut_commit_merge().set_entries(entries.into());
             request.set_admin_request(admin);
@@ -4290,7 +4291,7 @@ where
         }
     }
 
-    fn on_ready_prepare_merge(&mut self, region: metapb::Region, state: MergeState) {
+    fn on_ready_prepare_merge(&mut self, region: Arc<metapb::Region>, state: MergeState) {
         {
             let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.set_region(
@@ -4386,8 +4387,8 @@ where
     fn on_ready_commit_merge(
         &mut self,
         merge_index: u64,
-        region: metapb::Region,
-        source: metapb::Region,
+        region: Arc<metapb::Region>,
+        source: Arc<metapb::Region>,
     ) {
         self.register_split_region_check_tick();
         let mut meta = self.ctx.store_meta.lock().unwrap();
@@ -4474,7 +4475,7 @@ where
     /// If commit is 0, it means that Merge is rollbacked by a snapshot;
     /// otherwise it's rollbacked by a proposal, and its value should be
     /// equal to the commit index of previous PrepareMerge.
-    fn on_ready_rollback_merge(&mut self, commit: u64, region: Option<metapb::Region>) {
+    fn on_ready_rollback_merge(&mut self, commit: u64, region: Option<Arc<metapb::Region>>) {
         let pending_commit = self
             .fsm
             .peer
@@ -4828,7 +4829,7 @@ where
                 let meta = self.ctx.store_meta.lock().unwrap();
                 match meta.regions.get(&target_region.get_id()) {
                     Some(r) => {
-                        if r != target_region {
+                        if **r != *target_region {
                             return Err(box_err!(
                                 "target region not matched, skip proposing: {:?} != {:?}",
                                 r,
@@ -5138,7 +5139,7 @@ where
                     collect_cnt += r.get_region_epoch().version - max_version;
                     max_version = r.get_region_epoch().version;
                 }
-                regions.push(r.to_owned());
+                regions.push((**r).clone());
                 if collect_cnt == 0 {
                     return;
                 }
@@ -5522,7 +5523,7 @@ where
                     "{} epoch changed {:?} != {:?}, retry later",
                     self.fsm.peer.tag, latest_epoch, epoch
                 ),
-                vec![region.to_owned()],
+                vec![(**region).clone()],
             ));
         }
         Ok(())
@@ -6086,7 +6087,7 @@ where
 {
     fn on_ready_compute_hash(
         &mut self,
-        region: metapb::Region,
+        region: Arc<metapb::Region>,
         index: u64,
         context: Vec<u8>,
         snap: EK::Snapshot,
@@ -6445,7 +6446,7 @@ where
         }
         let mut resp = StatusResponse::default();
         resp.mut_region_detail()
-            .set_region(self.fsm.peer.region().clone());
+            .set_region((**self.fsm.peer.region()).clone());
         if let Some(leader) = self.fsm.peer.get_peer_from_cache(self.fsm.peer.leader_id()) {
             resp.mut_region_detail().set_leader(leader);
         }

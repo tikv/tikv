@@ -49,7 +49,7 @@ const INITIAL_SCAN_FAILURE_MAX_RETRY_TIME: usize = 10;
 
 /// a request for doing initial scanning.
 struct ScanCmd {
-    region: Region,
+    region: Arc<Region>,
     handle: ObserveHandle,
     last_checkpoint: TimeStamp,
     _work: Work,
@@ -464,7 +464,7 @@ where
         }
     }
 
-    async fn refresh_resolver(&self, region: &Region) {
+    async fn refresh_resolver(&self, region: &Arc<Region>) {
         let need_refresh_all = !self.subs.try_update_region(region);
 
         if need_refresh_all {
@@ -504,7 +504,7 @@ where
         }
     }
 
-    async fn try_start_observe(&self, region: &Region, handle: ObserveHandle) -> Result<()> {
+    async fn try_start_observe(&self, region: &Arc<Region>, handle: ObserveHandle) -> Result<()> {
         match self.find_task_by_region(region) {
             None => {
                 warn!(
@@ -527,7 +527,7 @@ where
         Ok(())
     }
 
-    async fn start_observe(&self, region: Region) {
+    async fn start_observe(&self, region: Arc<Region>) {
         let handle = ObserveHandle::new();
         if let Err(err) = self.try_start_observe(&region, handle.clone()).await {
             warn!("failed to start observe, retrying"; "err" => %err);
@@ -542,7 +542,7 @@ where
         }
     }
 
-    async fn retry_observe(&self, region: Region, handle: ObserveHandle) -> Result<()> {
+    async fn retry_observe(&self, region: Arc<Region>, handle: ObserveHandle) -> Result<()> {
         let (tx, rx) = crossbeam::channel::bounded(1);
         self.regions
             .find_region_by_id(
@@ -633,7 +633,7 @@ where
 
     fn observe_over_with_initial_data_from_checkpoint(
         &self,
-        region: &Region,
+        region: &Arc<Region>,
         last_checkpoint: TimeStamp,
         handle: ObserveHandle,
     ) {

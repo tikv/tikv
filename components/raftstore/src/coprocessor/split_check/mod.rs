@@ -5,6 +5,8 @@ mod keys;
 mod size;
 mod table;
 
+use std::sync::Arc;
+
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use tikv_util::box_try;
 
@@ -53,7 +55,7 @@ impl<'a, E> Host<'a, E> {
     /// Hook to call for every check during split.
     ///
     /// Return true means abort early.
-    pub fn on_kv(&mut self, region: &Region, entry: &KeyEntry) -> bool {
+    pub fn on_kv(&mut self, region: &Arc<Region>, entry: &KeyEntry) -> bool {
         let mut ob_ctx = ObserverContext::new(region);
         for checker in &mut self.checkers {
             if checker.on_kv(&mut ob_ctx, entry) {

@@ -1,6 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::{self, Display, Formatter};
+use std::{
+    fmt::{self, Display, Formatter},
+    sync::Arc,
+};
 
 use byteorder::{BigEndian, WriteBytesExt};
 use engine_traits::{KvEngine, Snapshot};
@@ -18,13 +21,13 @@ pub enum Task<S> {
     ComputeHash {
         index: u64,
         context: Vec<u8>,
-        region: Region,
+        region: Arc<Region>,
         snap: S,
     },
 }
 
 impl<S: Snapshot> Task<S> {
-    pub fn compute_hash(region: Region, index: u64, context: Vec<u8>, snap: S) -> Task<S> {
+    pub fn compute_hash(region: Arc<Region>, index: u64, context: Vec<u8>, snap: S) -> Task<S> {
         Task::ComputeHash {
             index,
             context,
@@ -58,7 +61,13 @@ impl<EK: KvEngine, C: CasualRouter<EK>> Runner<EK, C> {
     }
 
     /// Computes the hash of the Region.
-    fn compute_hash(&mut self, region: Region, index: u64, context: Vec<u8>, snap: EK::Snapshot) {
+    fn compute_hash(
+        &mut self,
+        region: Arc<Region>,
+        index: u64,
+        context: Vec<u8>,
+        snap: EK::Snapshot,
+    ) {
         if context.is_empty() {
             // For backward compatibility.
             warn!("skip compute hash without context"; "region_id" => region.get_id());
@@ -145,6 +154,7 @@ mod tests {
 
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());
+        let region = Arc::new(region);
 
         let (tx, rx) = mpsc::sync_channel(100);
         let mut host =

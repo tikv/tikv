@@ -9,7 +9,6 @@ use kvproto::{
     pdpb::CheckPolicy,
     raft_cmdpb::{ComputeHashRequest, RaftCmdRequest},
 };
-use protobuf::Message;
 use raft::eraftpb;
 use tikv_util::box_try;
 
@@ -360,7 +359,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
         CoprocessorHost { registry, cfg }
     }
 
-    pub fn on_empty_cmd(&self, region: &Region, index: u64, term: u64) {
+    pub fn on_empty_cmd(&self, region: &Arc<Region>, index: u64, term: u64) {
         loop_ob!(
             region,
             &self.registry.query_observers,
@@ -371,7 +370,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
     }
 
     /// Call all propose hooks until bypass is set to true.
-    pub fn pre_propose(&self, region: &Region, req: &mut RaftCmdRequest) -> Result<()> {
+    pub fn pre_propose(&self, region: &Arc<Region>, req: &mut RaftCmdRequest) -> Result<()> {
         if !req.has_admin_request() {
             let query = req.mut_requests();
             let mut vec_query = mem::take(query).into();
@@ -395,7 +394,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
     }
 
     /// Call all pre apply hook until bypass is set to true.
-    pub fn pre_apply(&self, region: &Region, req: &RaftCmdRequest) {
+    pub fn pre_apply(&self, region: &Arc<Region>, req: &RaftCmdRequest) {
         if !req.has_admin_request() {
             let query = req.get_requests();
             loop_ob!(
@@ -415,27 +414,27 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
     }
 
-    pub fn post_apply(&self, region: &Region, cmd: &Cmd) {
+    pub fn post_apply(&self, cmd: &Cmd) {
         if !cmd.response.has_admin_response() {
-            loop_ob!(
-                region,
-                &self.registry.query_observers,
-                post_apply_query,
-                cmd,
-            );
+            for e in &self.registry.query_observers {
+                e.observer.inner().post_apply_query(cmd);
+            }
         } else {
             let admin = cmd.response.get_admin_response();
-            loop_ob!(
-                region,
-                &self.registry.admin_observers,
-                post_apply_admin,
-                admin
-            );
+            for e in &self.registry.admin_observers {
+                e.observer.inner().post_apply_admin(admin);
+            }
         }
     }
 
     // (index, term) is for the applying entry.
-    pub fn pre_exec(&self, region: &Region, cmd: &RaftCmdRequest, index: u64, term: u64) -> bool {
+    pub fn pre_exec(
+        &self,
+        region: &Arc<Region>,
+        cmd: &RaftCmdRequest,
+        index: u64,
+        term: u64,
+    ) -> bool {
         let mut ctx = ObserverContext::new(region);
         if !cmd.has_admin_request() {
             let query = cmd.get_requests();
@@ -465,7 +464,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
     /// persistence is necessary.
     pub fn post_exec(
         &self,
-        region: &Region,
+        region: &Arc<Region>,
         cmd: &Cmd,
         apply_state: &RaftApplyState,
         region_state: &RegionState,
@@ -493,7 +492,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
 
     pub fn post_apply_plain_kvs_from_snapshot(
         &self,
-        region: &Region,
+        region: &Arc<Region>,
         cf: CfName,
         kv_pairs: &[(Vec<u8>, Vec<u8>)],
     ) {
@@ -506,7 +505,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
         );
     }
 
-    pub fn post_apply_sst_from_snapshot(&self, region: &Region, cf: CfName, path: &str) {
+    pub fn post_apply_sst_from_snapshot(&self, region: &Arc<Region>, cf: CfName, path: &str) {
         loop_ob!(
             region,
             &self.registry.apply_snapshot_observers,
@@ -528,7 +527,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
 
     pub fn pre_apply_snapshot(
         &self,
-        region: &Region,
+        region: &Arc<Region>,
         peer_id: u64,
         snap_key: &crate::store::SnapKey,
         snap: Option<&crate::store::Snapshot>,
@@ -545,7 +544,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
 
     pub fn post_apply_snapshot(
         &self,
-        region: &Region,
+        region: &Arc<Region>,
         peer_id: u64,
         snap_key: &crate::store::SnapKey,
         snap: Option<&crate::store::Snapshot>,
@@ -559,7 +558,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
 
     pub fn new_split_checker_host<'a>(
         &'a self,
-        region: &Region,
+        region: &Arc<Region>,
         engine: &E,
         auto_split: bool,
         policy: CheckPolicy,
@@ -587,7 +586,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
 
     pub fn on_compute_hash(
         &self,
-        region: &Region,
+        region: &Arc<Region>,
         context: &[u8],
         snap: E::Snapshot,
     ) -> Result<Vec<(Vec<u8>, u32)>> {
@@ -616,7 +615,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
         store_size
     }
 
-    pub fn on_role_change(&self, region: &Region, role_change: RoleChange) {
+    pub fn on_role_change(&self, region: &Arc<Region>, role_change: RoleChange) {
         loop_ob!(
             region,
             &self.registry.role_observers,
@@ -625,7 +624,12 @@ impl<E: KvEngine> CoprocessorHost<E> {
         );
     }
 
-    pub fn on_region_changed(&self, region: &Region, event: RegionChangeEvent, role: StateRole) {
+    pub fn on_region_changed(
+        &self,
+        region: &Arc<Region>,
+        event: RegionChangeEvent,
+        role: StateRole,
+    ) {
         loop_ob!(
             region,
             &self.registry.region_change_observers,
@@ -641,7 +645,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
     /// By returning false, we reject this persistence.
     pub fn pre_persist(
         &self,
-        region: &Region,
+        region: &Arc<Region>,
         is_finished: bool,
         cmd: Option<&RaftCmdRequest>,
     ) -> bool {
@@ -667,7 +671,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
         for batch in &cmd_batches {
             for cmd in &batch.cmds {
-                self.post_apply(Region::default_instance(), cmd);
+                self.post_apply(cmd);
             }
         }
         for observer in &self.registry.cmd_observers {
@@ -676,7 +680,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
     }
 
-    pub fn on_applied_current_term(&self, role: StateRole, region: &Region) {
+    pub fn on_applied_current_term(&self, role: StateRole, region: &Arc<Region>) {
         if self.registry.cmd_observers.is_empty() {
             return;
         }
@@ -788,10 +792,9 @@ mod tests {
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
-        fn post_apply_admin(&self, ctx: &mut ObserverContext<'_>, _: &AdminResponse) {
+        fn post_apply_admin(&self, _: &AdminResponse) {
             self.called
                 .fetch_add(ObserverIndex::PostApplyAdmin as usize, Ordering::SeqCst);
-            ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
         fn pre_exec_admin(
@@ -843,10 +846,9 @@ mod tests {
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
-        fn post_apply_query(&self, ctx: &mut ObserverContext<'_>, _: &Cmd) {
+        fn post_apply_query(&self, _: &Cmd) {
             self.called
                 .fetch_add(ObserverIndex::PostApplyQuery as usize, Ordering::SeqCst);
-            ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
         fn pre_exec_query(
@@ -976,7 +978,7 @@ mod tests {
                 Ordering::SeqCst,
             );
         }
-        fn on_applied_current_term(&self, _: StateRole, _: &Region) {}
+        fn on_applied_current_term(&self, _: StateRole, _: &Arc<Region>) {}
     }
 
     impl UpdateSafeTsObserver for TestCoprocessor {
@@ -988,9 +990,8 @@ mod tests {
 
     macro_rules! assert_all {
         ($target:expr, $expect:expr) => {{
-            for (c, e) in ($target).iter().zip($expect) {
-                assert_eq!(c.load(Ordering::SeqCst), *e);
-            }
+            let res: Vec<_> = ($target).iter().map(|c| c.load(Ordering::SeqCst)).collect();
+            assert_eq!(res.as_slice(), $expect);
         }};
     }
 
@@ -1024,7 +1025,7 @@ mod tests {
             .register_update_safe_ts_observer(1, BoxUpdateSafeTsObserver::new(ob.clone()));
 
         let mut index: usize = 0;
-        let region = Region::default();
+        let region = Arc::default();
         let mut admin_req = RaftCmdRequest::default();
         admin_req.set_admin_request(AdminRequest::default());
         host.pre_propose(&region, &mut admin_req).unwrap();
@@ -1035,7 +1036,7 @@ mod tests {
         assert_all!([&ob.called], &[index]);
         let mut admin_resp = RaftCmdResponse::default();
         admin_resp.set_admin_response(AdminResponse::default());
-        host.post_apply(&region, &Cmd::new(0, 0, admin_req, admin_resp));
+        host.post_apply(&Cmd::new(0, 0, admin_req, admin_resp));
         index += ObserverIndex::PostApplyAdmin as usize;
         assert_all!([&ob.called], &[index]);
 
@@ -1048,7 +1049,7 @@ mod tests {
         host.pre_apply(&region, &query_req);
         assert_all!([&ob.called], &[index]);
         let query_resp = RaftCmdResponse::default();
-        host.post_apply(&region, &Cmd::new(0, 0, query_req, query_resp));
+        host.post_apply(&Cmd::new(0, 0, query_req, query_resp));
         index += ObserverIndex::PostApplyQuery as usize;
         assert_all!([&ob.called], &[index]);
 
@@ -1149,7 +1150,7 @@ mod tests {
         host.registry
             .register_query_observer(2, BoxQueryObserver::new(ob2.clone()));
 
-        let region = Region::default();
+        let region = Arc::default();
         let mut admin_req = RaftCmdRequest::default();
         admin_req.set_admin_request(AdminRequest::default());
         let mut admin_resp = RaftCmdResponse::default();
@@ -1172,11 +1173,14 @@ mod tests {
             host.pre_apply(&region, &req);
             assert_all!([&ob1.called, &ob2.called], &[0, base_score * 2 + 3]);
 
-            host.post_apply(&region, &Cmd::new(0, 0, req.clone(), resp.clone()));
-            assert_all!([&ob1.called, &ob2.called], &[0, base_score * 3 + 6]);
+            host.post_apply(&Cmd::new(0, 0, req.clone(), resp.clone()));
+            assert_all!(
+                [&ob1.called, &ob2.called],
+                &[base_score + 3, base_score * 3 + 6]
+            );
 
             set_all!(&[&ob2.bypass], false);
-            set_all!(&[&ob2.called], 0);
+            set_all!(&[&ob1.called, &ob2.called], 0);
 
             host.pre_propose(&region, &mut req).unwrap();
 

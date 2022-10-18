@@ -94,7 +94,7 @@ where
     E: KvEngine,
 {
     Gc {
-        region: Region,
+        region: Arc<Region>,
         safe_point: TimeStamp,
         callback: Callback<()>,
     },
@@ -247,7 +247,7 @@ fn get_regions_for_range_of_keys(
     store_id: u64,
     keys: &[Key],
     region_provider: Arc<dyn RegionInfoProvider>,
-) -> Result<Vec<Region>> {
+) -> Result<Vec<Arc<Region>>> {
     assert!(!keys.is_empty());
 
     if keys.len() >= 2 {
@@ -392,7 +392,7 @@ where
         Ok(())
     }
 
-    fn gc(&mut self, region: Region, safe_point: TimeStamp) -> Result<()> {
+    fn gc(&mut self, region: Arc<Region>, safe_point: TimeStamp) -> Result<()> {
         if !self.need_gc(region.get_start_key(), region.get_end_key(), safe_point) {
             GC_SKIPPED_COUNTER.inc();
             return Ok(());
@@ -433,7 +433,7 @@ where
         &mut self,
         keys: Vec<Key>,
         safe_point: TimeStamp,
-        region_or_provider: Either<Region, Arc<dyn RegionInfoProvider>>,
+        region_or_provider: Either<Arc<Region>, Arc<dyn RegionInfoProvider>>,
     ) -> Result<(usize, usize)> {
         let store_id = self.store_id;
         let count = keys.len();
@@ -1136,7 +1136,7 @@ fn handle_gc_task_schedule_error(e: ScheduleError<GcTask<impl KvEngine>>) -> Res
 /// Schedules a `GcTask` to the `GcRunner`.
 fn schedule_gc(
     scheduler: &Scheduler<GcTask<impl KvEngine>>,
-    region: Region,
+    region: Arc<Region>,
     safe_point: TimeStamp,
     callback: Callback<()>,
 ) -> Result<()> {
@@ -1152,7 +1152,7 @@ fn schedule_gc(
 /// Does GC synchronously.
 pub fn sync_gc(
     scheduler: &Scheduler<GcTask<impl KvEngine>>,
-    region: Region,
+    region: Arc<Region>,
     safe_point: TimeStamp,
 ) -> Result<()> {
     wait_op!(|callback| schedule_gc(scheduler, region, safe_point, callback)).unwrap_or_else(|| {
@@ -1343,7 +1343,12 @@ where
     }
 
     /// Only for tests.
-    pub fn gc(&self, region: Region, safe_point: TimeStamp, callback: Callback<()>) -> Result<()> {
+    pub fn gc(
+        &self,
+        region: Arc<Region>,
+        safe_point: TimeStamp,
+        callback: Callback<()>,
+    ) -> Result<()> {
         self.worker_scheduler
             .schedule(GcTask::Gc {
                 region,
@@ -1575,7 +1580,7 @@ pub mod test_gc_worker {
         // Factory is not a normal way to fetch tablet and is just used in test to ease the test.
         // Note: at most one tablet is allowed to exist for each region in the cache of factory
         pub factory: Arc<TestTabletFactoryV2>,
-        pub region_info: HashMap<u64, Region>,
+        pub region_info: HashMap<u64, Arc<Region>>,
     }
 
     impl Engine for MultiRocksEngine {
@@ -1671,7 +1676,7 @@ pub mod test_gc_worker {
                 .unwrap();
             callback(Ok(RegionSnapshot::from_snapshot(
                 Arc::new(tablet.snapshot()),
-                Arc::new(self.region_info.get(&region_id).unwrap().clone()),
+                self.region_info.get(&region_id).unwrap().clone(),
             )));
             Ok(())
         }
@@ -1743,7 +1748,7 @@ mod tests {
         end_key: &[u8],
         region_id: u64,
         store_id: Option<u64>,
-    ) -> Region {
+    ) -> Arc<Region> {
         let start_key = Key::from_encoded(start_key.to_vec());
         let end_key = Key::from_encoded(end_key.to_vec());
         let mut region = Region::default();
@@ -1754,7 +1759,7 @@ mod tests {
             region.mut_peers().push(Peer::default());
             region.mut_peers()[0].set_store_id(store_id);
         }
-        region
+        Arc::new(region)
     }
 
     #[test]
@@ -1846,10 +1851,12 @@ mod tests {
         let mut region1 = Region::default();
         region1.mut_peers().push(new_peer(store_id, 1));
         region1.set_end_key(split_key.to_vec());
+        let region1 = Arc::new(region1);
 
         let mut region2 = Region::default();
         region2.mut_peers().push(new_peer(store_id, 2));
         region2.set_start_key(split_key.to_vec());
+        let region2 = Arc::new(region2);
 
         let mut gc_worker = GcWorker::new(
             engine,
@@ -2028,6 +2035,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel();
         let mut region = Region::default();
         region.mut_peers().push(new_peer(store_id, 0));
+        let region = Arc::new(region);
         let mut gc_worker = GcWorker::new(
             prefixed_engine,
             RaftStoreBlackHole,
@@ -2125,6 +2133,7 @@ mod tests {
         r1.mut_region_epoch().set_version(1);
         r1.set_start_key(b"".to_vec());
         r1.set_end_key(format!("k{:02}", 10).into_bytes());
+        let r1 = Arc::new(r1);
 
         let mut r2 = Region::default();
         r2.set_id(2);
@@ -2133,6 +2142,7 @@ mod tests {
         r2.set_end_key(format!("k{:02}", 30).into_bytes());
         r2.mut_peers().push(Peer::default());
         r2.mut_peers()[0].set_store_id(store_id);
+        let r2 = Arc::new(r2);
 
         let mut r3 = Region::default();
         r3.set_id(3);
@@ -2141,6 +2151,7 @@ mod tests {
         r3.set_end_key(b"".to_vec());
         r3.mut_peers().push(Peer::default());
         r3.mut_peers()[0].set_store_id(store_id);
+        let r3 = Arc::new(r3);
 
         let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, 1);
         let safe_point = Arc::new(AtomicU64::new(0));
@@ -2219,6 +2230,7 @@ mod tests {
         r1.set_end_key(b"".to_vec());
         r1.mut_peers().push(Peer::default());
         r1.mut_peers()[0].set_store_id(store_id);
+        let r1 = Arc::new(r1);
 
         let mut host = CoprocessorHost::<RocksEngine>::default();
         let ri_provider = RegionInfoAccessor::new(&mut host);
@@ -2282,6 +2294,7 @@ mod tests {
         r1.set_end_key(b"".to_vec());
         r1.mut_peers().push(Peer::default());
         r1.mut_peers()[0].set_store_id(store_id);
+        let r1 = Arc::new(r1);
 
         let mut host = CoprocessorHost::<RocksEngine>::default();
         let ri_provider = Arc::new(RegionInfoAccessor::new(&mut host));
@@ -2384,6 +2397,7 @@ mod tests {
         r1.set_end_key(b"".to_vec());
         r1.mut_peers().push(Peer::default());
         r1.mut_peers()[0].set_store_id(1);
+        let r1 = Arc::new(r1);
 
         let mut host = CoprocessorHost::<RocksEngine>::default();
         let ri_provider = Arc::new(RegionInfoAccessor::new(&mut host));
@@ -2495,6 +2509,7 @@ mod tests {
 
         let mut region = Region::default();
         region.mut_peers().push(new_peer(store_id, 1));
+        let region = Arc::new(region.clone());
 
         let mut gc_worker = GcWorker::new(
             engine.clone(),
@@ -2520,7 +2535,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         gc_worker
             .gc(
-                Region::default(),
+                Arc::default(),
                 TimeStamp::from(1),
                 Box::new(move |res| {
                     tx.send(res).unwrap();
@@ -2629,7 +2644,7 @@ mod tests {
         MultiRocksEngine,
         Arc<MockRegionInfoProvider>,
         GcRunner<MultiRocksEngine, RaftStoreBlackHole>,
-        Vec<Region>,
+        Vec<Arc<Region>>,
         mpsc::Receiver<FlowInfo>,
     ) {
         // Building a tablet factory

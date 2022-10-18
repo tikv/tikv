@@ -150,7 +150,7 @@ impl Task {
 pub struct BackupRange {
     start_key: Option<Key>,
     end_key: Option<Key>,
-    region: Region,
+    region: Arc<Region>,
     leader: Peer,
     codec: KeyValueCodec,
     cf: CfName,
@@ -195,7 +195,7 @@ struct InMemBackupFiles {
     end_key: Vec<u8>,
     start_version: TimeStamp,
     end_version: TimeStamp,
-    region: Region,
+    region: Arc<Region>,
 }
 
 async fn save_backup_file_worker(
@@ -1246,7 +1246,7 @@ pub mod tests {
                 r.set_start_key(start_key.clone());
                 r.set_end_key(end_key);
                 r.mut_peers().push(new_peer(1, 1));
-                map.create_region(r, StateRole::Leader);
+                map.create_region(Arc::new(r), StateRole::Leader);
             }
         }
         fn canecl_on_seek(&mut self, cancel: Arc<AtomicBool>) {

@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{error::Error as StdError, io, net, result};
+use std::{error::Error as StdError, io, net, result, sync::Arc};
 
 use crossbeam::channel::TrySendError;
 use error_code::{self, ErrorCode, ErrorCodeExt};
@@ -71,7 +71,7 @@ pub enum Error {
         log_wrappers::Value::key(.1.get_end_key()),
         .1.get_id()
     )]
-    KeyNotInRegion(Vec<u8>, metapb::Region),
+    KeyNotInRegion(Vec<u8>, Arc<metapb::Region>),
 
     #[error("peer {} is not ready, safe_ts {}, region {}", .peer_id, .safe_ts, .region_id)]
     DataIsNotReady {

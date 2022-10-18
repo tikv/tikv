@@ -397,7 +397,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ReadDelegate::new(
             peer_id,
             self.term(),
-            self.region().clone(),
+            Arc::new(self.region().clone()),
             self.storage().entry_storage().applied_term(),
             self.txn_extra_op.clone(),
             self.txn_ext.clone(),

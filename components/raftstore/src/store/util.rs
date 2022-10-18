@@ -36,9 +36,41 @@ use crate::{coprocessor::CoprocessorHost, Error, Result};
 
 const INVALID_TIMESTAMP: u64 = u64::MAX;
 
+/// A helper trait to unified `Arc<Region>` and `Region`.
+///
+/// V2 will only use `Region`.
+pub trait RegionRef {
+    fn as_ref(&self) -> &Region;
+    fn clone(&self) -> Arc<Region>;
+}
+
+impl RegionRef for Arc<Region> {
+    #[inline]
+    fn as_ref(&self) -> &Region {
+        self
+    }
+
+    #[inline]
+    fn clone(&self) -> Arc<Region> {
+        Clone::clone(self)
+    }
+}
+
+impl RegionRef for Region {
+    #[inline]
+    fn as_ref(&self) -> &Region {
+        self
+    }
+
+    #[inline]
+    fn clone(&self) -> Arc<Region> {
+        Arc::new(Clone::clone(self))
+    }
+}
+
 /// Check if key in region range (`start_key`, `end_key`).
-pub fn check_key_in_region_exclusive(key: &[u8], region: &metapb::Region) -> Result<()> {
-    if region::check_key_in_region_exclusive(key, region) {
+pub fn check_key_in_region_exclusive(key: &[u8], region: &impl RegionRef) -> Result<()> {
+    if region::check_key_in_region_exclusive(key, region.as_ref()) {
         Ok(())
     } else {
         Err(Error::KeyNotInRegion(key.to_vec(), region.clone()))
@@ -46,8 +78,8 @@ pub fn check_key_in_region_exclusive(key: &[u8], region: &metapb::Region) -> Res
 }
 
 /// Check if key in region range [`start_key`, `end_key`].
-pub fn check_key_in_region_inclusive(key: &[u8], region: &metapb::Region) -> Result<()> {
-    if region::check_key_in_region_inclusive(key, region) {
+pub fn check_key_in_region_inclusive(key: &[u8], region: &impl RegionRef) -> Result<()> {
+    if region::check_key_in_region_inclusive(key, region.as_ref()) {
         Ok(())
     } else {
         Err(Error::KeyNotInRegion(key.to_vec(), region.clone()))
@@ -55,8 +87,8 @@ pub fn check_key_in_region_inclusive(key: &[u8], region: &metapb::Region) -> Res
 }
 
 /// Check if key in region range [`start_key`, `end_key`).
-pub fn check_key_in_region(key: &[u8], region: &metapb::Region) -> Result<()> {
-    if region::check_key_in_region(key, region) {
+pub fn check_key_in_region(key: &[u8], region: &impl RegionRef) -> Result<()> {
+    if region::check_key_in_region(key, region.as_ref()) {
         Ok(())
     } else {
         Err(Error::KeyNotInRegion(key.to_vec(), region.clone()))
@@ -1754,7 +1786,7 @@ mod tests {
     }
 
     fn split(mut r: metapb::Region, key: &[u8]) -> (metapb::Region, metapb::Region) {
-        let mut r2 = r.clone();
+        let mut r2 = Clone::clone(&r);
         r.set_end_key(key.to_owned());
         r2.set_id(r.get_id() + 1);
         r2.set_start_key(key.to_owned());
