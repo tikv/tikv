@@ -3238,13 +3238,10 @@ where
             .fsm
             .peer
             .maybe_reject_transfer_leader_msg(self.ctx, msg, peer_disk_usage)
+            && (!self.ctx.cfg.warmup_entry_cache_enabled()
+                || self.fsm.peer.pre_ack_transfer_leader_msg(self.ctx, msg))
         {
-            // If max warmup time is 0, then skip the warmup process and ack directly.
-            if self.ctx.cfg.max_entry_cache_warmup_duration.0 == Duration::from_secs(0)
-                || self.fsm.peer.pre_ack_transfer_leader_msg(self.ctx, msg)
-            {
-                self.fsm.peer.ack_transfer_leader_msg(false);
-            }
+            self.fsm.peer.ack_transfer_leader_msg(false);
         }
     }
 

@@ -2267,7 +2267,7 @@ where
                     // Init the in-memory pessimistic lock table when the peer becomes leader.
                     self.activate_in_memory_pessimistic_locks();
                     // Exit entry cache warmup state when the peer becomes leader.
-                    self.mut_store().exit_entry_cache_warmup_state();
+                    self.mut_store().clear_entry_cache_warmup_state();
 
                     if !ctx.store_disk_usages.is_empty() {
                         self.refill_disk_full_peers(ctx);
@@ -4555,25 +4555,24 @@ where
         ctx: &mut PollContext<EK, ER, T>,
         msg: &eraftpb::Message,
     ) -> bool {
-        // The start index of warmup range is leader's entry_cache_start_index,
-        // and it is equal to the lowest matched index in general.
-        let warmup_range_start = msg.get_index();
+        // The start index of warmup range. It is leader's entry_cache_first_index,
+        // which in general is equal to the lowest matched index.
+        let mut low = msg.get_index();
         let last_index = self.get_store().last_index();
         let mut should_ack_now = false;
-        let mut low = warmup_range_start;
 
         // Need not to warm up when the index is 0.
         // There are two cases where index can be 0:
         // 1. During rolling upgrade, old instances may not support warmup.
         // 2. The leader's entry cache is empty.
-        if warmup_range_start == 0 || warmup_range_start > last_index {
+        if low == 0 || low > last_index {
             // There is little possibility that the warmup_range_start
             // is larger than the last index. Check the test case
             // `test_when_warmup_range_start_is_larger_than_last_index`
             // for details.
             should_ack_now = true;
         } else {
-            if warmup_range_start < self.last_compacted_idx {
+            if low < self.last_compacted_idx {
                 low = self.last_compacted_idx
             };
             // Check if the entry cache is already warmed up.
@@ -4593,11 +4592,7 @@ where
         if let Some(state) = self.mut_store().entry_cache_warmup_state_mut() {
             // If it is timeout, this peer should ack the message so that
             // the leadership transfer process can continue.
-            let is_task_timeout = state.elapsed() >= ctx.cfg.max_entry_cache_warmup_duration.0;
-            if is_task_timeout {
-                state.mark_task_timeout();
-            }
-            is_task_timeout
+            state.check_task_timeout(ctx.cfg.max_entry_cache_warmup_duration.0)
         } else {
             self.mut_store().async_warm_up_entry_cache(low).is_none()
         }

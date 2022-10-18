@@ -449,6 +449,11 @@ impl Config {
         self.raft_log_gc_size_limit.unwrap()
     }
 
+    #[inline]
+    pub fn warmup_entry_cache_enabled(&self) -> bool {
+        self.max_entry_cache_warmup_duration.0 == Duration::from_secs(0)
+    }
+
     pub fn region_split_check_diff(&self) -> ReadableSize {
         self.region_split_check_diff.unwrap()
     }

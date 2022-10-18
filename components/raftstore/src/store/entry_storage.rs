@@ -155,7 +155,7 @@ impl EntryCache {
     /// should be equal to `cache first index - 1`. When cache is
     /// empty, it should be equal to the store's last index. Otherwise,
     /// append new entries may fail due to unexpected hole.
-    fn push_front(&mut self, entries: &[Entry]) {
+    fn prepend(&mut self, entries: &[Entry]) {
         let mut mem_size_change = 0;
         let old_capacity = self.cache.capacity();
         for e in entries.iter().rev() {
@@ -583,14 +583,18 @@ impl CacheWarmupState {
         self.started_at.saturating_elapsed()
     }
 
-    /// Whenther the warmup task is timeout.
+    /// Whether the warmup task is already timeout.
     pub fn is_task_timeout(&self) -> bool {
         self.is_task_timeout
     }
 
-    pub fn mark_task_timeout(&mut self) {
-        WARM_UP_ENTRY_CACHE_COUNTER.timeout.inc();
-        self.is_task_timeout = true;
+    /// Check if the task is timeout.
+    pub fn check_task_timeout(&mut self, duration: Duration) -> bool {
+        if self.elapsed() > duration {
+            WARM_UP_ENTRY_CACHE_COUNTER.timeout.inc();
+            self.is_task_timeout = true;
+        }
+        self.is_task_timeout
     }
 
     /// Whether the state is stale.
@@ -1068,7 +1072,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
         &mut self.cache_warmup_state
     }
 
-    pub fn exit_entry_cache_warmup_state(&mut self) {
+    pub fn clear_entry_cache_warmup_state(&mut self) {
         self.cache_warmup_state = None;
     }
 
@@ -1127,8 +1131,8 @@ impl<ER: RaftEngine> EntryStorage<ER> {
             return false;
         }
 
-        match &res.ents {
-            Ok(entries) => {
+        match res.ents {
+            Ok(mut entries) => {
                 let last_entry_index = entries.last().map(|e| e.index);
                 if let Some(index) = last_entry_index {
                     // Generally speaking, when the res.low is the same as the warmup
@@ -1136,14 +1140,15 @@ impl<ER: RaftEngine> EntryStorage<ER> {
                     // As the low index of each async_fetch task is different.
                     // There should exist only one exception. A async fetch task
                     // with same low index is triggered before the warmup task.
-                    if index + 1 == range.1 {
+                    if index + 1 >= range.1 {
                         let is_valid = if let Some(first_index) = self.entry_cache_first_index() {
                             range.1 == first_index
                         } else {
                             range.1 == self.last_index() + 1
                         };
                         assert!(is_valid, "the warmup range should still be valid");
-                        self.cache.push_front(entries);
+                        entries.truncate((range.1 - range.0) as usize);
+                        self.cache.prepend(&entries);
                         WARM_UP_ENTRY_CACHE_COUNTER.finished.inc();
                         fail_point!("on_entry_cache_warmed_up");
                         return !is_task_timeout;
@@ -1173,7 +1178,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
         let mut can_compact = true;
         if let Some(state) = self.entry_cache_warmup_state() {
             if state.is_stale() {
-                self.exit_entry_cache_warmup_state();
+                self.clear_entry_cache_warmup_state();
             } else {
                 can_compact = false;
             }
@@ -1290,7 +1295,7 @@ pub mod tests {
         );
         assert_eq!(rx.try_recv().unwrap(), 3);
 
-        cache.push_front(&[new_padded_entry(100, 1, 1)]);
+        cache.prepend(&[new_padded_entry(100, 1, 1)]);
         assert_eq!(rx.try_recv().unwrap(), 1);
         cache.persisted = 100;
         cache.compact_to(101);
@@ -1727,7 +1732,7 @@ pub mod tests {
         entries = vec![new_entry(6, 6), new_entry(7, 6)];
         append_ents(&mut store, &entries);
         validate_cache(&store, &entries);
-        store.cache.push_front(&[new_entry(6, 5)]);
+        store.cache.prepend(&[new_entry(6, 5)]);
 
         // rewrite old entry
         entries = vec![new_entry(5, 6), new_entry(6, 6)];
@@ -1808,7 +1813,7 @@ pub mod tests {
         store.cache_warmup_state = Some(CacheWarmupState::new_with_range(5, 6));
 
         let res = RaftlogFetchResult {
-            ents: Ok(ents[1..2].to_vec()),
+            ents: Ok(ents[1..3].to_vec()),
             low: 5,
             max_size: u64::MAX,
             hit_size_limit: false,
