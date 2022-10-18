@@ -4898,17 +4898,6 @@ where
             return Ok(Some(resp));
         }
 
-        let region_id = self.region_id();
-        // When in the flashback state, we should not allow any other request to be
-        // proposed.
-        if self.fsm.peer.is_in_flashback {
-            self.ctx.raft_metrics.invalid_proposal.flashback.inc();
-            let flags = WriteBatchFlags::from_bits_truncate(msg.get_header().get_flags());
-            if !flags.contains(WriteBatchFlags::FLASHBACK) {
-                return Err(Error::FlashbackInProgress(self.region_id()));
-            }
-        }
-
         // Check whether the store has the right peer to handle the request.
         let leader_id = self.fsm.peer.leader_id();
         let request = msg.get_requests();
@@ -4935,6 +4924,7 @@ where
                 _ => read_only = false,
             }
         }
+        let region_id = self.region_id();
         let allow_replica_read = read_only && msg.get_header().get_replica_read();
         let flags = WriteBatchFlags::from_bits_check(msg.get_header().get_flags());
         let allow_stale_read = read_only && flags.contains(WriteBatchFlags::STALE_READ);
@@ -4996,11 +4986,33 @@ where
                 let requested_version = msg.get_header().get_region_epoch().version;
                 self.collect_sibling_region(requested_version, &mut new_regions);
                 self.ctx.raft_metrics.invalid_proposal.epoch_not_match.inc();
-                Err(Error::EpochNotMatch(m, new_regions))
+                return Err(Error::EpochNotMatch(m, new_regions));
             }
-            Err(e) => Err(e),
-            Ok(()) => Ok(None),
+            Err(e) => return Err(e),
+            _ => {}
+        };
+        // Check whether the region is in the flashback state and the request could be
+        // proposed.
+        if let Err(e) = util::check_flashback_state(self.fsm.peer.is_in_flashback, msg, region_id) {
+            match e {
+                Error::FlashbackInProgress(_) => self
+                    .ctx
+                    .raft_metrics
+                    .invalid_proposal
+                    .flashback_in_progress
+                    .inc(),
+                Error::FlashbackNotPrepared(_) => self
+                    .ctx
+                    .raft_metrics
+                    .invalid_proposal
+                    .flashback_not_prepared
+                    .inc(),
+                _ => unreachable!(),
+            }
+            return Err(e);
         }
+
+        Ok(None)
     }
 
     /// Proposes pending batch raft commands (if any), then proposes the
