@@ -188,7 +188,16 @@ impl ObserveRegion {
                                     .resolver
                                     .untrack_lock(&key.to_raw().unwrap(), Some(*index)),
                                 // One pc command do not contains any lock, so just skip it
+<<<<<<< HEAD
                                 ChangeRow::OnePc { .. } => {}
+=======
+                                ChangeRow::OnePc { .. } => {
+                                    self.resolver.update_tracked_index(*index);
+                                }
+                                ChangeRow::IngestSsT => {
+                                    self.resolver.update_tracked_index(*index);
+                                }
+>>>>>>> ed64ed21cf (resolved_ts: track 1PC (#13579))
                             });
                         }
                     }
