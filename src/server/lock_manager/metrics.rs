@@ -61,13 +61,6 @@ lazy_static! {
         exponential_buckets(0.0001, 2.0, 20).unwrap() // 0.1ms ~ 104s
     )
     .unwrap();
-    pub static ref WAIT_TABLE_STATUS_GAUGE: WaitTableStatusGauge = register_static_int_gauge_vec!(
-        WaitTableStatusGauge,
-        "tikv_lock_manager_wait_table_status",
-        "Status of the wait table",
-        &["type"]
-    )
-    .unwrap();
     pub static ref DETECTOR_LEADER_GAUGE: IntGauge = register_int_gauge!(
         "tikv_lock_manager_detector_leader_heartbeat",
         "Heartbeat of the leader of the deadlock detector"

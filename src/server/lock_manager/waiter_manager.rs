@@ -356,7 +356,6 @@ impl WaitTable {
         self.waiter_count.fetch_sub(1, Ordering::SeqCst);
         self.wait_table
             .remove(&(waiter.wait_info.lock_digest.hash, waiter.start_ts));
-        // WAIT_TABLE_STATUS_GAUGE.txns.dec();
         Some(waiter)
     }
 
