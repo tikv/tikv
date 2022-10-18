@@ -903,7 +903,7 @@ impl RegionReadProgressRegistry {
             .lock()
             .unwrap()
             .get(region_id)
-            .map(|rp| rp.core.lock().unwrap().applied_index)
+            .map(|rp| rp.core.lock().unwrap().read_state.idx)
     }
 
     // NOTICE: this function is an alias of `get_safe_ts` to distinguish the
