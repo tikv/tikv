@@ -35,8 +35,8 @@ use crate::{bytes_capacity, store::worker::RaftlogFetchTask, Result};
 const MAX_ASYNC_FETCH_TRY_CNT: usize = 3;
 const SHRINK_CACHE_CAPACITY: usize = 64;
 const ENTRY_MEM_SIZE: usize = mem::size_of::<Entry>();
-const MAX_WARMED_UP_CACHE_KEEP_TIME: Duration = Duration::from_secs(10);
 
+pub const MAX_WARMED_UP_CACHE_KEEP_TIME: Duration = Duration::from_secs(10);
 pub const MAX_INIT_ENTRY_COUNT: usize = 1024;
 
 #[inline]
@@ -558,6 +558,7 @@ pub fn init_applied_term<ER: RaftEngine>(
 pub struct CacheWarmupState {
     range: (u64, u64),
     is_task_timeout: bool,
+    is_stale: bool,
     started_at: Instant,
 }
 
@@ -570,6 +571,7 @@ impl CacheWarmupState {
         CacheWarmupState {
             range: (low, high),
             is_task_timeout: false,
+            is_stale: false,
             started_at: Instant::now(),
         }
     }
@@ -588,8 +590,11 @@ impl CacheWarmupState {
         self.is_task_timeout
     }
 
-    /// Check if the task is timeout.
+    /// Check whether the task is timeout.
     pub fn check_task_timeout(&mut self, duration: Duration) -> bool {
+        if self.is_task_timeout {
+            return true;
+        }
         if self.elapsed() > duration {
             WARM_UP_ENTRY_CACHE_COUNTER.timeout.inc();
             self.is_task_timeout = true;
@@ -597,12 +602,16 @@ impl CacheWarmupState {
         self.is_task_timeout
     }
 
-    /// Whether the state is stale.
-    ///
-    /// Exit the state when the state is stale.
-    pub fn is_stale(&self) -> bool {
+    /// Check whether this state is stale.
+    pub fn check_stale(&mut self, duration: Duration) -> bool {
         fail_point!("entry_cache_warmed_up_state_is_stale", |_| true);
-        self.elapsed() >= MAX_WARMED_UP_CACHE_KEEP_TIME
+        if self.is_stale {
+            return true;
+        }
+        if self.elapsed() > duration {
+            self.is_stale = true;
+        }
+        self.is_stale
     }
 }
 
@@ -1176,8 +1185,8 @@ impl<ER: RaftEngine> EntryStorage<ER> {
 
     pub fn compact_entry_cache(&mut self, idx: u64) {
         let mut can_compact = true;
-        if let Some(state) = self.entry_cache_warmup_state() {
-            if state.is_stale() {
+        if let Some(state) = self.entry_cache_warmup_state_mut() {
+            if state.check_stale(MAX_WARMED_UP_CACHE_KEEP_TIME) {
                 self.clear_entry_cache_warmup_state();
             } else {
                 can_compact = false;
