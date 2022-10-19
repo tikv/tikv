@@ -91,7 +91,8 @@ pub mod kv {
         RocksSnapshot as KvTestSnapshot, RocksWriteBatchVec as KvTestWriteBatch,
     };
     use engine_traits::{
-        CfOptions, CfOptionsExt, OpenOptions, Result, TabletAccessor, TabletFactory, CF_DEFAULT,
+        CfOptions, CfOptionsExt, MiscExt, OpenOptions, Result, TabletAccessor, TabletFactory,
+        CF_DEFAULT,
     };
     use tikv_util::box_err;
 
@@ -160,10 +161,7 @@ pub mod kv {
         ) -> Result<KvTestEngine> {
             if let Some(db) = self.root_db.lock().unwrap().as_ref() {
                 if options.create_new() {
-                    return Err(box_err!(
-                        "root tablet {} already exists",
-                        db.as_inner().path()
-                    ));
+                    return Err(box_err!("root tablet {} already exists", db.path()));
                 }
                 return Ok(db.clone());
             }
@@ -273,11 +271,7 @@ pub mod kv {
                     // Target tablet exist in the cache
 
                     if options.create_new() {
-                        return Err(box_err!(
-                            "region {} {} already exists",
-                            id,
-                            tablet.as_inner().path()
-                        ));
+                        return Err(box_err!("region {} {} already exists", id, tablet.path()));
                     }
                     return Ok(tablet.clone());
                 } else if !options.cache_only() {
@@ -382,11 +376,7 @@ pub mod kv {
             {
                 let reg = self.registry.lock().unwrap();
                 if let Some(db) = reg.get(&(id, suffix)) {
-                    return Err(box_err!(
-                        "region {} {} already exists",
-                        id,
-                        db.as_inner().path()
-                    ));
+                    return Err(box_err!("region {} {} already exists", id, db.path()));
                 }
             }
 
