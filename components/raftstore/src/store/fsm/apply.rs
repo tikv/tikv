@@ -36,7 +36,7 @@ use fail::fail_point;
 use kvproto::{
     import_sstpb::SstMeta,
     kvrpcpb::ExtraOp as TxnExtraOp,
-    metapb::{PeerRole, Region, RegionEpoch},
+    metapb::{self, PeerRole, Region, RegionEpoch},
     raft_cmdpb::{
         AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
         RaftCmdRequest, RaftCmdResponse, Request,
@@ -899,6 +899,8 @@ where
     term: u64,
     /// The Region information of the peer.
     region: Region,
+    /// The Peer information.
+    peer: metapb::Peer,
     /// Peer_tag, "[region region_id] peer_id".
     tag: String,
 
@@ -973,6 +975,7 @@ where
         ApplyDelegate {
             id: reg.id,
             tag: format!("[region {}] {}", reg.region.get_id(), reg.id),
+            peer: find_peer_by_id(&reg.region, reg.id).unwrap().clone(),
             region: reg.region,
             pending_remove: false,
             last_flush_applied_index: reg.apply_state.get_applied_index(),
@@ -1029,9 +1032,8 @@ where
                 break;
             }
 
-            let peer = find_peer_by_id(&self.region, self.id).unwrap();
             // the applied index of witness is not continuous, skip index check
-            if !peer.is_witness {
+            if !self.peer.is_witness {
                 let expect_index = self.apply_state.get_applied_index() + 1;
                 if expect_index != entry.get_index() {
                     panic!(
@@ -1427,6 +1429,9 @@ where
             match *exec_result {
                 ExecResult::ChangePeer(ref cp) => {
                     self.region = cp.region.clone();
+                    if let Some(p) = find_peer_by_id(&self.region, self.id) {
+                        self.peer = p.clone();
+                    }
                 }
                 ExecResult::ComputeHash { .. }
                 | ExecResult::VerifyHash { .. }
@@ -3764,8 +3769,7 @@ where
         if self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
-        let peer = find_peer_by_id(&self.delegate.region, self.delegate.id).unwrap();
-        if peer.is_witness {
+        if self.delegate.peer.is_witness {
             // witness shouldn't generate snapshot.
             return;
         }

@@ -6,17 +6,10 @@ use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory};
 use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb};
 use pd_client::BucketStat;
-use protobuf::Message;
-use raft::{RawNode, StateRole, INVALID_ID};
-use raftstore::{
-    store::{
-        fsm::Proposal,
-        metrics::PEER_PROPOSE_LOG_SIZE_HISTOGRAM,
-        util::{Lease, RegionReadProgress},
-        Config, EntryStorage, ProposalQueue, RaftlogFetchTask, ReadDelegate, ReadIndexQueue,
-        ReadIndexRequest, TrackVer, Transport, TxnExt, WriteRouter,
-    },
-    Error,
+use raft::{RawNode, StateRole};
+use raftstore::store::{
+    util::{Lease, RegionReadProgress},
+    Config, EntryStorage, ProposalQueue, ReadDelegate, ReadIndexQueue, TrackVer, TxnExt,
 };
 use slog::Logger;
 use tikv_util::{box_err, config::ReadableSize};
