@@ -116,7 +116,10 @@ use tikv_util::{
     math::MovingAvgU32,
     metrics::INSTANCE_BACKEND_CPU_QUOTA,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
-    sys::{cpu_time::ProcessStat, disk, register_memory_usage_high_water, SysQuota},
+    sys::{
+        cpu_time::ProcessStat, disk, path_in_diff_mount_point, register_memory_usage_high_water,
+        SysQuota,
+    },
     thread_group::GroupProperties,
     time::{Instant, Monitor},
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
@@ -1443,6 +1446,10 @@ where
             info!("disk space checker not enabled");
             return;
         }
+        let raft_path = engines.raft.get_engine_path().to_string();
+        let separate_raft_path = path_in_diff_mount_point(raft_path.as_str(), engines.kv.path());
+        let raft_engine_almost_full_percent =
+            self.config.raft_store.raft_engine_almost_full_percent;
 
         let almost_full_threshold = reserve_space;
         let already_full_threshold = reserve_space / 2;
@@ -1472,6 +1479,35 @@ where
                     .get_engine_size()
                     .expect("get raft engine size");
 
+                let mut raft_disk_status = disk::DiskUsage::Normal;
+                if separate_raft_path {
+                    let raft_disk_stats = match fs2::statvfs(&raft_path) {
+                        Err(e) => {
+                            error!(
+                                "get disk stat for raft engine failed";
+                                "raft engine path" => raft_path.clone(),
+                                "err" => ?e
+                            );
+                            return;
+                        }
+                        Ok(stats) => stats,
+                    };
+                    let raft_disk_cap = raft_disk_stats.total_space();
+                    let mut raft_disk_available =
+                        raft_disk_cap.checked_sub(raft_size).unwrap_or_default();
+                    raft_disk_available = cmp::min(raft_disk_available, raft_disk_stats.available_space());
+                    raft_disk_status = if raft_disk_available * 100
+                        <= raft_disk_cap * ((100 - raft_engine_almost_full_percent) / 2)
+                    {
+                        disk::DiskUsage::AlreadyFull
+                    } else if raft_disk_available * 100
+                        <= raft_disk_cap * (100 - raft_engine_almost_full_percent)
+                    {
+                        disk::DiskUsage::AlmostFull
+                    } else {
+                        disk::DiskUsage::Normal
+                    };
+                }
                 let placeholer_file_path = PathBuf::from_str(&data_dir)
                     .unwrap()
                     .join(Path::new(file_system::SPACE_PLACEHOLDER_FILE));
@@ -1479,7 +1515,11 @@ where
                 let placeholder_size: u64 =
                     file_system::get_file_size(&placeholer_file_path).unwrap_or(0);
 
-                let used_size = snap_size + kv_size + raft_size + placeholder_size;
+                let used_size = if !separate_raft_path {
+                    snap_size + kv_size + raft_size + placeholder_size
+                } else {
+                    snap_size + kv_size + placeholder_size
+                };
                 let capacity = if config_disk_capacity == 0 || disk_cap < config_disk_capacity {
                     disk_cap
                 } else {
@@ -1490,18 +1530,28 @@ where
                 available = cmp::min(available, disk_stats.available_space());
 
                 let prev_disk_status = disk::get_disk_status(0); //0 no need care about failpoint.
-                let cur_disk_status = if available <= already_full_threshold {
+                let cur_kv_disk_status = if available <= already_full_threshold {
                     disk::DiskUsage::AlreadyFull
                 } else if available <= almost_full_threshold {
                     disk::DiskUsage::AlmostFull
                 } else {
                     disk::DiskUsage::Normal
                 };
+                let cur_disk_status = match (raft_disk_status, cur_kv_disk_status) {
+                    (disk::DiskUsage::AlreadyFull, _) => disk::DiskUsage::AlreadyFull,
+                    (_, disk::DiskUsage::AlreadyFull) => disk::DiskUsage::AlreadyFull,
+                    (disk::DiskUsage::AlmostFull, _) => disk::DiskUsage::AlmostFull,
+                    (_, disk::DiskUsage::AlmostFull) => disk::DiskUsage::AlmostFull,
+                    (disk::DiskUsage::Normal, disk::DiskUsage::Normal) => disk::DiskUsage::Normal,
+                };
                 if prev_disk_status != cur_disk_status {
                     warn!(
-                        "disk usage {:?}->{:?}, available={},snap={},kv={},raft={},capacity={}",
+                        "disk usage {:?}->{:?} (raftdb usage: {:?}, kvdb usage: {:?}), seperate raftdb={}, kv available={},snap={},kv={},raft={},capacity={}",
                         prev_disk_status,
                         cur_disk_status,
+                        raft_disk_status,
+                        cur_kv_disk_status,
+                        separate_raft_path,
                         available,
                         snap_size,
                         kv_size,
