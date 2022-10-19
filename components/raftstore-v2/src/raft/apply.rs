@@ -6,7 +6,7 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_traits::{KvEngine, RaftEngine, TabletFactory};
+use engine_traits::{KvEngine, RaftEngine, TabletFactory, WriteBatch};
 use kvproto::{raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
 use raftstore::store::fsm::apply::DEFAULT_APPLY_WB_SIZE;
 use slog::Logger;
@@ -87,6 +87,13 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
     #[inline]
     pub fn callbacks_mut(&mut self) -> &mut Vec<(Vec<CmdResChannel>, RaftCmdResponse)> {
         &mut self.callbacks
+    }
+
+    #[inline]
+    pub fn clear_write_batch(&mut self) {
+        if let Some(wb) = self.write_batch.take() {
+            assert!(wb.is_empty());
+        };
     }
 
     #[inline]

@@ -149,6 +149,8 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
             .load_tablet(current_tablet_path, region_id, log_index)
             .unwrap();
         self.publish_tablet(tablet);
+        // Clear the write batch belonging to the old tablet
+        self.clear_write_batch();
 
         write_peer_state(&mut wb, derived.clone(), log_index).unwrap_or_else(|e| {
             panic!(

@@ -246,7 +246,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if self.region().get_region_epoch().get_version() < region.get_region_epoch().get_version()
         {
             // Epoch version changed, disable read on the local reader for this region.
-            self.leader_lease.expire_remote_lease();
+            // The difference of `expire` and `expire_remote_lease` is that `expire` expires
+            // lease both in local reader and raftstore while
+            // `expire_remote_lease` only expires the lease in local reader.
+            // V1 calls `expire_remote_lease` while here v2 calls `expire`. This
+            // difference is due to v2 only performs read in local reader and
+            // raftstore is a place to renew the lease. If the lease in raftstore is not
+            // expired, it may not renew lease.
+            self.leader_lease.expire();
         }
         self.storage_mut().set_region(region.clone());
         let progress = ReadProgress::region(region);

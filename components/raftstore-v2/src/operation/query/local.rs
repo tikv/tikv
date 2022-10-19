@@ -175,6 +175,7 @@ where
         if let Some(query_res) = self.try_to_renew_lease(region_id, &req).await? {
             // If query successful, try again.
             if query_res.read().is_some() {
+                println!("{:?}", query_res.read());
                 req.mut_header().set_read_quorum(false);
                 if let Some(snap) = self.try_get_snapshot(req)? {
                     return Ok(snap);

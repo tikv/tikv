@@ -47,7 +47,7 @@ fn split_region(
     right_key: &[u8],
     split_key: &[u8],
     right_derive: bool,
-) -> metapb::Region {
+) -> (metapb::Region, metapb::Region) {
     let region_id = region.id;
     let mut req = RaftCmdRequest::default();
     req.mut_header().set_region_id(region_id);
@@ -68,7 +68,7 @@ fn split_region(
     req.mut_requests().push(put_req);
 
     let (msg, mut sub) = PeerMsg::raft_command(req.clone());
-    router.send(2, msg).unwrap();
+    router.send(region_id, msg).unwrap();
     assert!(block_on(sub.wait_proposed()));
     assert!(block_on(sub.wait_committed()));
     let resp = block_on(sub.result()).unwrap();
@@ -119,7 +119,7 @@ fn split_region(
     assert_eq!(region.get_start_key(), left.get_start_key());
     assert_eq!(region.get_end_key(), right.get_end_key());
 
-    if !right_derive { left } else { right }
+    (left, right)
 }
 
 #[test]
@@ -135,7 +135,10 @@ fn test_split() {
 
     router.wait_applied_to_current_term(2, Duration::from_secs(3));
 
-    let region = split_region(
+    // Region 2 ["", ""] peer(1, 3)
+    //   -> Region 2    ["", "k22"] peer(1, 3)
+    //      Region 1000 ["k22", ""] peer(1, 10)
+    let (left, right) = split_region(
         &mut router,
         region.clone(),
         peer.clone(),
@@ -147,15 +150,33 @@ fn test_split() {
         false,
     );
 
-    let region = split_region(
+    // Region 2 ["", "k22"] peer(1, 3)
+    //   -> Region 2    ["", "k11"]    peer(1, 3)
+    //      Region 1001 ["k11", "k22"] peer(1, 11)
+    let _ = split_region(
         &mut router,
-        region.clone(),
-        peer.clone(),
+        left,
+        peer,
         1001,
         new_peer(store_id, 11),
         b"k00",
         b"k11",
         b"k11",
+        false,
+    );
+
+    // Region 1000 ["k22", ""] peer(1, 10)
+    //   -> Region 1000 ["k22", "k33"] peer(1, 10)
+    //      Region 1002 ["k33", ""]    peer(1, 12)
+    let _ = split_region(
+        &mut router,
+        right,
+        new_peer(store_id, 10),
+        1002,
+        new_peer(store_id, 12),
+        b"k22",
+        b"k33",
+        b"k33",
         false,
     );
 }

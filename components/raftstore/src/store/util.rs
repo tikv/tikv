@@ -560,6 +560,11 @@ impl RemoteLease {
         if ts.unwrap_or_else(monotonic_raw_now) < u64_to_timespec(expired_time) {
             LeaseState::Valid
         } else {
+            println!(
+                "Inspect fails: expire time {:?}, ts {:?}",
+                u64_to_timespec(expired_time),
+                ts.unwrap_or_else(monotonic_raw_now)
+            );
             LeaseState::Expired
         }
     }
