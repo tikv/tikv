@@ -1638,40 +1638,9 @@ mod tests {
     };
 
     use api_version::{ApiV2, KvFormat, RawValue};
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
     use engine_rocks::{util::get_cf_handle, RocksEngine};
-<<<<<<< HEAD
+    use engine_test::{ctor::DbOptions, kv::TestTabletFactory};
     use engine_traits::Peekable as _;
-=======
-=======
-    use engine_rocks::{util::get_cf_handle, RocksDbOptions, RocksEngine};
->>>>>>> 6ade98003 (*: fix case dependancy issue)
-=======
-    use engine_rocks::{util::get_cf_handle, RocksDbOptions, RocksEngine, RocksCfOptions};
->>>>>>> 73b9ea379 (*: work-around a warning)
-=======
-    use engine_rocks::{util::get_cf_handle, RocksCfOptions, RocksDbOptions, RocksEngine};
->>>>>>> b973bd92d (*: code format)
-    use engine_test::{
-        ctor::DbOptions,
-        kv::{TestTabletFactory, TestTabletFactoryV2},
-    };
-<<<<<<< HEAD
-    use engine_traits::{OpenOptions, TabletFactory, ALL_CFS};
-<<<<<<< HEAD
-=======
-        kv::TestTabletFactory,
-    };
-    use engine_traits::ALL_CFS;
->>>>>>> 4869d8714 (*: remove unnecessary db field of GC_Context)
->>>>>>> 99ee97858 (*: remove unnecessary db field of GC_Context)
-=======
->>>>>>> b140f0f4b (*: rebase)
-=======
-    use engine_traits::{OpenOptions, TabletFactory, ALL_CFS, CF_RAFT};
->>>>>>> b973bd92d (*: code format)
     use futures::executor::block_on;
     use kvproto::{
         kvrpcpb::{ApiVersion, Op},
@@ -1685,7 +1654,7 @@ mod tests {
         },
         router::RaftStoreBlackHole,
     };
-    use tempfile::{Builder, TempDir};
+    use tempfile::Builder;
     use tikv_kv::Snapshot;
     use tikv_util::{
         codec::number::NumberEncoder, future::paired_future_callback, store::new_peer,
@@ -1695,12 +1664,8 @@ mod tests {
     use super::{test_gc_worker::MultiRocksEngine, *};
     use crate::{
         config::DbConfig,
-        server::gc_worker::{
-            compaction_filter::get_rocksdb_from_factory, MockSafePointProvider, PrefixedEngine,
-            TestGcRunner, WriteCompactionFilterFactory,
-        },
+        server::gc_worker::{MockSafePointProvider, PrefixedEngine},
         storage::{
-            config::BlockCacheConfig,
             kv::{metrics::GcKeyMode, Modify, TestEngineBuilder, WriteData},
             lock_manager::DummyLockManager,
             mvcc::{
@@ -2619,7 +2584,6 @@ mod tests {
         put_start_ts: u64,
         delete_start_ts: u64,
         need_deletion: bool,
-        path: &TempDir,
     ) -> (
         MultiRocksEngine,
         Arc<MockRegionInfoProvider>,
@@ -2627,14 +2591,7 @@ mod tests {
         Vec<Region>,
         mpsc::Receiver<FlowInfo>,
     ) {
-<<<<<<< HEAD
         let mut engine = MultiRocksEngine::default();
-=======
-        // Building a tablet factory
-        let ops = DbOptions::default();
-
-        let factory = Arc::new(TestTabletFactoryV2::new(path.path(), ops));
->>>>>>> f84f42812 (*: refactor TestTabletFactory)
 
         // Note: as the tablet split is not supported yet, we artificially divide the
         // region to: 1 ["", "k10"], 2 ["k10", "k20"], 3["k20", "30"]
@@ -2661,7 +2618,6 @@ mod tests {
             ),
         );
         let r3 = init_region(b"k20", b"", 3, Some(store_id));
-<<<<<<< HEAD
         engine.region_info.insert(3, r3.clone());
         engine.engines.lock().unwrap().insert(
             3,
@@ -2672,57 +2628,6 @@ mod tests {
                     .unwrap(),
             ),
         );
-=======
-
-        for region_id in 1..=3 {
-            let cfg_rocksdb = DbConfig::default();
-            let cfs = ALL_CFS.to_vec();
-            let cache_opt = BlockCacheConfig::default();
-            let cache = cache_opt.build_shared_cache();
-            let cf_opts = cfs
-                .iter()
-                .map(|cf| match *cf {
-                    CF_DEFAULT => (
-                        CF_DEFAULT,
-                        cfg_rocksdb
-                            .defaultcf
-                            .build_opt(&cache, None, ApiVersion::V1),
-                    ),
-                    CF_LOCK => (CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
-                    CF_WRITE => (CF_WRITE, {
-                        let mut write_cf_opts = cfg_rocksdb.writecf.build_opt(&cache, None);
-                        write_cf_opts
-                            .set_compaction_filter_factory(
-                                "write_compaction_filter_factory",
-                                WriteCompactionFilterFactory::new(region_id, 10),
-                            )
-                            .unwrap();
-                        write_cf_opts
-                    }),
-                    CF_RAFT => (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
-                    _ => (*cf, RocksCfOptions::default()),
-                })
-                .collect();
-            let tablet_path = factory.tablet_path(region_id, 10);
-
-            let tablet = engine_rocks::util::new_engine_opt(
-                tablet_path.to_str().unwrap(),
-                RocksDbOptions::default(),
-                cf_opts,
-            )
-            .unwrap();
-
-            factory.register_tablet(region_id, 10, tablet);
-        }
-        let mut region_info = HashMap::default();
-        region_info.insert(1, r1.clone());
-        region_info.insert(2, r2.clone());
-        region_info.insert(3, r3.clone());
-        let mut engine = MultiRocksEngine {
-            factory: factory.clone(),
-            region_info,
-        };
->>>>>>> 6ade98003 (*: fix case dependancy issue)
 
         let (tx, rx) = mpsc::channel();
         let feature_gate = FeatureGate::default();
@@ -2734,45 +2639,17 @@ mod tests {
             r3.clone(),
         ]));
 
-        let mut cfg = GcConfig::default();
-        // let ratio_threshold less than 1
-        cfg.ratio_threshold = 0.5;
-        cfg.enable_compaction_filter = true;
-        let cfg_tracker = { GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone()))) };
-
+        let cfg = GcConfig::default();
         let gc_runner = GcRunner::new(
             store_id,
             engine.clone(),
             RaftStoreBlackHole,
-            tx.clone(),
+            tx,
             GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
                 .0
-                .tracker("gc-worker".to_owned()),
-            cfg.clone(),
-        );
-
-        let gc_worker = GcWorker::new(
-            engine.clone(),
-            RaftStoreBlackHole,
-            tx,
+                .tracker("gc-woker".to_owned()),
             cfg,
-            feature_gate.clone(),
-            ri_provider.clone(),
         );
-
-        // use the first tablet to build the GC_context
-        factory
-            .open_tablet(1, Some(10), OpenOptions::default().set_cache_only(true))
-            .unwrap()
-            .init_compaction_filter(
-                store_id,
-                Arc::new(AtomicU64::new(0)),
-                cfg_tracker,
-                feature_gate,
-                gc_worker.scheduler(),
-                ri_provider.clone(),
-                factory.clone(),
-            );
 
         let mut region_id = 0;
         for i in 0..30 {
@@ -2808,17 +2685,8 @@ mod tests {
 
         let put_start_ts = 100;
         let delete_start_ts = 150;
-<<<<<<< HEAD
         let (mut engine, _ri_provider, mut gc_runner, regions, _) =
             multi_gc_engine_setup(dir.path(), store_id, put_start_ts, delete_start_ts, true);
-=======
-        let path = Builder::new()
-            .prefix("test_gc_for_multi_rocksdb")
-            .tempdir()
-            .unwrap();
-        let (factory, mut engine, _ri_provider, mut gc_runner, regions, _) =
-            multi_gc_engine_setup(store_id, put_start_ts, delete_start_ts, true, &path);
->>>>>>> 30cace667 (*: fix multi_gc_engine_setup())
 
         gc_runner.gc(regions[0].clone(), 200.into()).unwrap();
         gc_runner.gc(regions[1].clone(), 200.into()).unwrap();
@@ -2830,7 +2698,7 @@ mod tests {
             for i in 10 * (region_id - 1)..10 * region_id {
                 let k = format!("k{:02}", i).into_bytes();
 
-                // Stale MVCC-PUTs will be cleaned.
+                // Stale MVCC-PUTs will be cleaned in write CF's compaction filter.
                 must_get_none_on_region(&mut engine, region_id, &k, delete_start_ts - 1);
 
                 // MVCC-DELETIONs is cleaned
@@ -2859,17 +2727,8 @@ mod tests {
 
         let put_start_ts = 100;
         let delete_start_ts = 150;
-<<<<<<< HEAD
         let (mut engine, ri_provider, mut gc_runner, ..) =
             multi_gc_engine_setup(dir.path(), store_id, put_start_ts, delete_start_ts, true);
-=======
-        let path = Builder::new()
-            .prefix("test_gc_keys_for_multi_rocksdb")
-            .tempdir()
-            .unwrap();
-        let (factory, mut engine, ri_provider, mut gc_runner, ..) =
-            multi_gc_engine_setup(store_id, put_start_ts, delete_start_ts, true, &path);
->>>>>>> 30cace667 (*: fix multi_gc_engine_setup())
 
         let mut keys = Vec::new();
         for i in 0..30 {
@@ -2923,7 +2782,6 @@ mod tests {
 
     #[test]
     fn test_raw_gc_keys_for_multi_rocksdb() {
-<<<<<<< HEAD
         let dir = Builder::new()
             .prefix("test_raw_gc_keys_for_multi_rocksdb")
             .tempdir()
@@ -2931,16 +2789,6 @@ mod tests {
         let store_id = 1;
 
         let mut engine = MultiRocksEngine::default();
-=======
-        let store_id = 1;
-        // Building a tablet factory
-        let ops = DbOptions::default();
-        let path = Builder::new()
-            .prefix("multi-rocks-raw-gc")
-            .tempdir()
-            .unwrap();
-        let factory = Arc::new(TestTabletFactoryV2::new(path.path(), ops));
->>>>>>> f84f42812 (*: refactor TestTabletFactory)
 
         // Note: as the tablet split is not supported yet, we artificially divide the
         // region to: 1 ["", "k10"], 2 ["k10", ""]
@@ -3088,17 +2936,8 @@ mod tests {
             .unwrap();
         let store_id = 1;
         let put_start_ts = 100;
-<<<<<<< HEAD
         let (mut engine, ri_provider, gc_runner, _, _rx) =
             multi_gc_engine_setup(dir.path(), store_id, put_start_ts, 0, false);
-=======
-        let path = Builder::new()
-            .prefix("test_destroy_range_for_multi_rocksdb_impl")
-            .tempdir()
-            .unwrap();
-        let (factory, mut engine, ri_provider, gc_runner, _, _rx) =
-            multi_gc_engine_setup(store_id, put_start_ts, 0, false, &path);
->>>>>>> 30cace667 (*: fix multi_gc_engine_setup())
 
         let start_key = Key::from_raw(start_key);
         let end_key = Key::from_raw(end_key);
@@ -3172,36 +3011,5 @@ mod tests {
         // Cover two regions
         test_destroy_range_for_multi_rocksdb_impl(b"k05", b"k195", vec![1, 2]);
         test_destroy_range_for_multi_rocksdb_impl(b"k099", b"k25", vec![2, 3]);
-    }
-
-    #[test]
-    fn test_compaction_filter_for_multi_rocksdb() {
-        let store_id = 1;
-
-        let put_start_ts = 100;
-        let delete_start_ts = 150;
-        let path = Builder::new()
-            .prefix("test_compaction_filter_for_multi_rocksdb")
-            .tempdir()
-            .unwrap();
-        let (_, mut engine, ..) =
-            multi_gc_engine_setup(store_id, put_start_ts, delete_start_ts, true, &path);
-        for region_id in 1..=3 {
-            let raw_engine = match get_rocksdb_from_factory(region_id, 10) {
-                Ok(rocksdb) => rocksdb,
-                Err(_) => panic!("rocksdb retrieval fails!"),
-            };
-
-            // let db = raw_engine.as_inner();
-            let mut gc_runner = TestGcRunner::new(0);
-            gc_runner.safe_point(200).gc(&raw_engine, true);
-            // let cf = get_cf_handle(db, CF_WRITE).unwrap();
-            for i in 10 * (region_id - 1)..10 * region_id {
-                let k = format!("k{:02}", i).into_bytes();
-
-                // Stale MVCC-PUTs will be cleaned in write CF's compaction filter.
-                must_get_none_on_region(&mut engine, region_id, &k, delete_start_ts - 1);
-            }
-        }
     }
 }

@@ -75,17 +75,11 @@ cdc = { workspace = true }
 collections = { workspace = true }
 crc64fast = "0.1"
 crossbeam = "0.8"
-<<<<<<< HEAD
 encryption = { workspace = true }
 engine_rocks_helper = { workspace = true }
+engine_test = { workspace = true }
+engine_traits = { workspace = true }
 error_code = { workspace = true }
-=======
-encryption = { path = "../components/encryption", default-features = false }
-engine_rocks_helper = { path = "../components/engine_rocks_helper" }
-engine_test = { path = "../components/engine_test", default-features = false }
-engine_traits = { path = "../components/engine_traits", default-features = false }
-error_code = { path = "../components/error_code", default-features = false }
->>>>>>> 99ee97858 (*: remove unnecessary db field of GC_Context)
 fail = "0.5"
 file_system = { workspace = true }
 futures = "0.3"

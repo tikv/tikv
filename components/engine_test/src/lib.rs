@@ -91,12 +91,8 @@ pub mod kv {
         RocksSnapshot as KvTestSnapshot, RocksWriteBatchVec as KvTestWriteBatch,
     };
     use engine_traits::{
-<<<<<<< HEAD
         CfOptions, CfOptionsExt, MiscExt, OpenOptions, Result, TabletAccessor, TabletFactory,
-=======
-        CfOptions, CfOptionsExt, OpenOptions, Result, TabletAccessor, TabletFactory, ALL_CFS,
->>>>>>> f84f42812 (*: refactor TestTabletFactory)
-        CF_DEFAULT,
+        ALL_CFS, CF_DEFAULT,
     };
     use tikv_util::box_err;
 
