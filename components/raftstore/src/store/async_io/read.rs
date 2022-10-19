@@ -2,10 +2,11 @@
 
 use std::{
     fmt,
+    marker::PhantomData,
     sync::{atomic::AtomicBool, mpsc::SyncSender, Arc},
 };
 
-use engine_traits::RaftEngine;
+use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
 use kvproto::raft_serverpb::RegionLocalState;
 use raft::{eraftpb::Snapshot as RaftSnapshot, GetEntriesContext};
@@ -13,7 +14,7 @@ use tikv_util::worker::Runnable;
 
 use crate::store::{RaftlogFetchResult, MAX_INIT_ENTRY_COUNT};
 
-pub enum ReadTask {
+pub enum ReadTask<EK> {
     PeerStorage {
         region_id: u64,
         context: GetEntriesContext,
@@ -27,7 +28,7 @@ pub enum ReadTask {
     // GenTabletSnapshot is used to generate tablet snapshot.
     GenTabletSnapshot {
         region_id: u64,
-        tablet_index: u64,
+        tablet: EK,
         region_state: RegionLocalState,
         last_applied_term: u64,
         last_applied_index: u64,
@@ -37,7 +38,7 @@ pub enum ReadTask {
     },
 }
 
-impl fmt::Display for ReadTask {
+impl<EK> fmt::Display for ReadTask<EK> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ReadTask::PeerStorage {
@@ -71,32 +72,35 @@ pub trait LogFetchedNotifier: Send {
     fn notify(&self, region_id: u64, fetched: FetchedLogs);
 }
 
-pub struct ReadRunner<ER, N>
+pub struct ReadRunner<EK, ER, N>
 where
+    EK: KvEngine,
     ER: RaftEngine,
     N: LogFetchedNotifier,
 {
     notifier: N,
     raft_engine: ER,
+    phantom: PhantomData<EK>,
 }
 
-impl<ER: RaftEngine, N: LogFetchedNotifier> ReadRunner<ER, N> {
-    pub fn new(notifier: N, raft_engine: ER) -> ReadRunner<ER, N> {
+impl<EK: KvEngine, ER: RaftEngine, N: LogFetchedNotifier> ReadRunner<EK, ER, N> {
+    pub fn new(notifier: N, raft_engine: ER) -> ReadRunner<EK, ER, N> {
         ReadRunner {
             notifier,
             raft_engine,
+            phantom: PhantomData,
         }
     }
 }
 
-impl<ER, N> Runnable for ReadRunner<ER, N>
+impl<EK, ER, N> Runnable for ReadRunner<EK, ER, N>
 where
+    EK: KvEngine,
     ER: RaftEngine,
     N: LogFetchedNotifier,
 {
-    type Task = ReadTask;
-
-    fn run(&mut self, task: ReadTask) {
+    type Task = ReadTask<EK>;
+    fn run(&mut self, task: ReadTask<EK>) {
         match task {
             ReadTask::PeerStorage {
                 region_id,

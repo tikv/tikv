@@ -14,7 +14,7 @@ use crossbeam::channel::TryRecvError;
 use engine_traits::KvEngine;
 use futures::{Future, StreamExt};
 use kvproto::raft_serverpb::RegionLocalState;
-use raftstore::store::async_io::read::ReadTask;
+use raftstore::store::ReadTask;
 use slog::Logger;
 use tikv_util::{
     mpsc::future::{self, Receiver, Sender, WakePolicy},
@@ -64,7 +64,7 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
         region_state: RegionLocalState,
         res_reporter: R,
         remote_tablet: CachedTablet<EK>,
-        read_scheduler: Scheduler<ReadTask>,
+        read_scheduler: Scheduler<ReadTask<EK>>,
         logger: Logger,
     ) -> (ApplyScheduler, Self) {
         let (tx, rx) = future::unbounded(WakePolicy::Immediately);

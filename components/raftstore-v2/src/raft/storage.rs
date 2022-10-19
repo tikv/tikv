@@ -10,7 +10,7 @@ use std::{
     },
 };
 
-use engine_traits::{RaftEngine, RaftLogBatch};
+use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
 use kvproto::{
     metapb::{self, Region},
     raft_serverpb::{
@@ -23,8 +23,7 @@ use raft::{
     GetEntriesContext, RaftState, INVALID_ID,
 };
 use raftstore::store::{
-    async_io::read::ReadTask, metrics::*, util, EntryStorage, SnapState, RAFT_INIT_LOG_INDEX,
-    RAFT_INIT_LOG_TERM,
+    metrics::*, util, EntryStorage, ReadTask, SnapState, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
 };
 use slog::{error, info, o, warn, Logger};
 use tikv_util::{box_err, store::find_peer, worker::Scheduler};
@@ -61,8 +60,8 @@ pub fn write_initial_states(wb: &mut impl RaftLogBatch, region: Region) -> Resul
 /// A storage for raft.
 ///
 /// It's similar to `PeerStorage` in v1.
-pub struct Storage<ER> {
-    entry_storage: EntryStorage<ER>,
+pub struct Storage<EK: KvEngine, ER> {
+    entry_storage: EntryStorage<EK, ER>,
     peer: metapb::Peer,
     region_state: RegionLocalState,
     /// Whether states has been persisted before. If a peer is just created by
@@ -76,7 +75,7 @@ pub struct Storage<ER> {
     gen_snap_task: RefCell<Option<GenSnapTask>>,
 }
 
-impl<ER> Debug for Storage<ER> {
+impl<EK: KvEngine, ER> Debug for Storage<EK, ER> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -87,14 +86,14 @@ impl<ER> Debug for Storage<ER> {
     }
 }
 
-impl<ER> Storage<ER> {
+impl<EK: KvEngine, ER> Storage<EK, ER> {
     #[inline]
-    pub fn entry_storage(&self) -> &EntryStorage<ER> {
+    pub fn entry_storage(&self) -> &EntryStorage<EK, ER> {
         &self.entry_storage
     }
 
     #[inline]
-    pub fn entry_storage_mut(&mut self) -> &mut EntryStorage<ER> {
+    pub fn entry_storage_mut(&mut self) -> &mut EntryStorage<EK, ER> {
         &mut self.entry_storage
     }
 
@@ -119,7 +118,7 @@ impl<ER> Storage<ER> {
     }
 }
 
-impl<ER: RaftEngine> Storage<ER> {
+impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     /// Creates a new storage with uninit states.
     ///
     /// This should only be used for creating new peer from raft message.
@@ -127,7 +126,7 @@ impl<ER: RaftEngine> Storage<ER> {
         store_id: u64,
         region: Region,
         engine: ER,
-        read_scheduler: Scheduler<ReadTask>,
+        read_scheduler: Scheduler<ReadTask<EK>>,
         logger: &Logger,
     ) -> Result<Self> {
         let mut region_state = RegionLocalState::default();
@@ -152,9 +151,9 @@ impl<ER: RaftEngine> Storage<ER> {
         region_id: u64,
         store_id: u64,
         engine: ER,
-        read_scheduler: Scheduler<ReadTask>,
+        read_scheduler: Scheduler<ReadTask<EK>>,
         logger: &Logger,
-    ) -> Result<Option<Storage<ER>>> {
+    ) -> Result<Option<Storage<EK, ER>>> {
         let region_state = match engine.get_region_state(region_id) {
             Ok(Some(s)) => s,
             res => {
@@ -203,7 +202,7 @@ impl<ER: RaftEngine> Storage<ER> {
         raft_state: RaftLocalState,
         apply_state: RaftApplyState,
         engine: ER,
-        read_scheduler: Scheduler<ReadTask>,
+        read_scheduler: Scheduler<ReadTask<EK>>,
         persisted: bool,
         logger: &Logger,
     ) -> Result<Self> {
@@ -242,8 +241,8 @@ impl<ER: RaftEngine> Storage<ER> {
     }
 
     #[inline]
-    pub fn read_scheduler(&self) -> Scheduler<ReadTask> {
-        self.entry_storage.scheduler()
+    pub fn read_scheduler(&self) -> Scheduler<ReadTask<EK>> {
+        self.entry_storage.read_scheduler()
     }
 
     #[inline]
@@ -399,13 +398,7 @@ impl<ER: RaftEngine> Storage<ER> {
             receiver,
         };
 
-        let task = GenSnapTask::new(
-            self.region().get_id(),
-            self.get_tablet_index(),
-            index,
-            canceled,
-            sender,
-        );
+        let task = GenSnapTask::new(self.region().get_id(), index, canceled, sender);
 
         let mut gen_snap_task = self.gen_snap_task.borrow_mut();
         assert!(gen_snap_task.is_none());
@@ -416,7 +409,7 @@ impl<ER: RaftEngine> Storage<ER> {
     }
 }
 
-impl<ER: RaftEngine> raft::Storage for Storage<ER> {
+impl<EK: KvEngine, ER: RaftEngine> raft::Storage for Storage<EK, ER> {
     fn initial_state(&self) -> raft::Result<RaftState> {
         let hard_state = self.raft_state().get_hard_state().clone();
         // We will persist hard state no matter if it's initialized or not in
@@ -475,15 +468,21 @@ impl<ER: RaftEngine> raft::Storage for Storage<ER> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{marker::PhantomData, time::Duration};
 
-    use engine_traits::{RaftEngine, RaftEngineReadOnly, RaftLogBatch};
+    use engine_test::{
+        ctor::{CfOptions, DbOptions},
+        kv::{KvTestEngine, TestTabletFactoryV2},
+    };
+    use engine_traits::{
+        KvEngine, OpenOptions, RaftEngine, RaftEngineReadOnly, RaftLogBatch, TabletFactory, ALL_CFS,
+    };
     use kvproto::{
         metapb::{Peer, Region},
         raft_serverpb::PeerState,
     };
     use raft::{eraftpb::Snapshot as RaftSnapshot, Error as RaftError, StorageError};
-    use raftstore::store::{async_io::read::ReadTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
+    use raftstore::store::{ReadTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
     use slog::o;
     use tempfile::TempDir;
     use tikv_util::worker::{dummy_scheduler, Runnable, Worker};
@@ -492,8 +491,8 @@ mod tests {
 
     struct MockRegionRunner {}
     impl Runnable for MockRegionRunner {
-        type Task = ReadTask;
-        fn run(&mut self, task: ReadTask) {
+        type Task = ReadTask<KvTestEngine>;
+        fn run(&mut self, task: ReadTask<KvTestEngine>) {
             match task {
                 ReadTask::GenTabletSnapshot {
                     notifier, canceled, ..
@@ -561,8 +560,19 @@ mod tests {
         write_initial_states(&mut wb, region.clone()).unwrap();
         assert!(!wb.is_empty());
         raft_engine.consume(&mut wb, true).unwrap();
-
-        let (dummy_scheduler, _) = dummy_scheduler();
+        // building a tablet factory
+        let ops = DbOptions::default();
+        let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
+        let factory = Arc::new(TestTabletFactoryV2::new(
+            path.path().join("tablet").as_path(),
+            ops,
+            cf_opts,
+        ));
+        // create tablet with region_id 1
+        let tablet = factory
+            .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
+            .unwrap();
+        let (dummy_scheduler, _) = dummy_scheduler::<raftstore::store::ReadTask<KvTestEngine>>();
         let mut s = Storage::uninit(
             6,
             region,
@@ -578,7 +588,13 @@ mod tests {
         let sched = worker.scheduler();
         worker.start(MockRegionRunner {});
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
-        gen_task.generate_and_schedule_snapshot(RegionLocalState::default(), 0, 0, &sched);
+        gen_task.generate_and_schedule_snapshot(
+            tablet.clone(),
+            RegionLocalState::default(),
+            0,
+            0,
+            &sched,
+        );
         let snap = match *s.snap_state.borrow() {
             SnapState::Generating { ref receiver, .. } => {
                 receiver.recv_timeout(Duration::from_secs(3)).unwrap()
@@ -594,7 +610,7 @@ mod tests {
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
-        gen_task.generate_and_schedule_snapshot(RegionLocalState::default(), 0, 0, &sched);
+        gen_task.generate_and_schedule_snapshot(tablet, RegionLocalState::default(), 0, 0, &sched);
         s.cancel_generating_snap(None);
         assert_eq!(*s.snap_state.borrow(), SnapState::Relax);
     }

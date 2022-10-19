@@ -2,7 +2,7 @@
 
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
-use raftstore::store::{async_io::read::ReadTask, fsm::apply::DEFAULT_APPLY_WB_SIZE};
+use raftstore::store::{fsm::apply::DEFAULT_APPLY_WB_SIZE, ReadTask};
 use slog::Logger;
 use tikv_util::worker::Scheduler;
 
@@ -28,7 +28,7 @@ pub struct Apply<EK: KvEngine, R> {
     state_changed: bool,
 
     res_reporter: R,
-    read_scheduler: Scheduler<ReadTask>,
+    read_scheduler: Scheduler<ReadTask<EK>>,
     pub(crate) logger: Logger,
 }
 
@@ -38,7 +38,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         region_state: RegionLocalState,
         res_reporter: R,
         mut remote_tablet: CachedTablet<EK>,
-        read_scheduler: Scheduler<ReadTask>,
+        read_scheduler: Scheduler<ReadTask<EK>>,
         logger: Logger,
     ) -> Self {
         Apply {
@@ -91,7 +91,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     }
 
     #[inline]
-    pub fn read_scheduler(&self) -> &Scheduler<ReadTask> {
+    pub fn read_scheduler(&self) -> &Scheduler<ReadTask<EK>> {
         &self.read_scheduler
     }
 
@@ -113,5 +113,10 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     pub fn publish_tablet(&mut self, tablet: EK) {
         self.remote_tablet.set(tablet.clone());
         self.tablet = tablet;
+    }
+
+    #[inline]
+    pub fn tablet(&self) -> &EK {
+        &self.tablet
     }
 }

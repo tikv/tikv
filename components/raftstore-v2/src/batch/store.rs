@@ -20,10 +20,8 @@ use kvproto::{
 };
 use raft::INVALID_ID;
 use raftstore::store::{
-    async_io::read::{ReadRunner, ReadTask},
-    fsm::store::PeerTickBatch,
-    local_metrics::RaftMetrics,
-    Config, StoreWriters, Transport, WriteSenders,
+    fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, ReadRunner, ReadTask,
+    StoreWriters, Transport, WriteSenders,
 };
 use slog::Logger;
 use tikv_util::{
@@ -70,7 +68,7 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub engine: ER,
     pub tablet_factory: Arc<dyn TabletFactory<EK>>,
     pub apply_pool: FuturePool,
-    pub read_scheduler: Scheduler<ReadTask>,
+    pub read_scheduler: Scheduler<ReadTask<EK>>,
 }
 
 /// A [`PollHandler`] that handles updates of [`StoreFsm`]s and [`PeerFsm`]s.
@@ -217,7 +215,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     tablet_factory: Arc<dyn TabletFactory<EK>>,
     trans: T,
     router: StoreRouter<EK, ER>,
-    read_scheduler: Scheduler<ReadTask>,
+    read_scheduler: Scheduler<ReadTask<EK>>,
     write_senders: WriteSenders<EK, ER>,
     apply_pool: FuturePool,
     logger: Logger,
@@ -232,7 +230,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         tablet_factory: Arc<dyn TabletFactory<EK>>,
         trans: T,
         router: StoreRouter<EK, ER>,
-        read_scheduler: Scheduler<ReadTask>,
+        read_scheduler: Scheduler<ReadTask<EK>>,
         store_writers: &mut StoreWriters<EK, ER>,
         logger: Logger,
         store_meta: Arc<Mutex<StoreMeta<EK>>>,

@@ -221,13 +221,13 @@ where
     region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     snap_tried_cnt: RefCell<usize>,
 
-    entry_storage: EntryStorage<ER>,
+    entry_storage: EntryStorage<EK, ER>,
 
     pub tag: String,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Deref for PeerStorage<EK, ER> {
-    type Target = EntryStorage<ER>;
+    type Target = EntryStorage<EK, ER>;
 
     #[inline]
     fn deref(&self) -> &Self::Target {
@@ -289,7 +289,7 @@ where
         engines: Engines<EK, ER>,
         region: &metapb::Region,
         region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
-        raftlog_fetch_scheduler: Scheduler<ReadTask>,
+        raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
         peer_id: u64,
         tag: String,
     ) -> Result<PeerStorage<EK, ER>> {
@@ -1151,7 +1151,7 @@ pub mod tests {
 
     fn new_storage(
         region_scheduler: Scheduler<RegionTask<KvTestSnapshot>>,
-        raftlog_fetch_scheduler: Scheduler<ReadTask>,
+        raftlog_fetch_scheduler: Scheduler<ReadTask<KvTestEngine>>,
         path: &TempDir,
     ) -> PeerStorage<KvTestEngine, RaftTestEngine> {
         let kv_db = engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
@@ -1184,7 +1184,7 @@ pub mod tests {
 
     pub fn new_storage_from_ents(
         region_scheduler: Scheduler<RegionTask<KvTestSnapshot>>,
-        raftlog_fetch_scheduler: Scheduler<ReadTask>,
+        raftlog_fetch_scheduler: Scheduler<ReadTask<KvTestEngine>>,
         path: &TempDir,
         ents: &[Entry],
     ) -> PeerStorage<KvTestEngine, RaftTestEngine> {

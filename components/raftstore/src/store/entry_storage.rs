@@ -29,7 +29,7 @@ use super::{
     metrics::*, peer_storage::storage_error, WriteTask, MEMTRACE_ENTRY_CACHE, RAFT_INIT_LOG_INDEX,
     RAFT_INIT_LOG_TERM,
 };
-use crate::{bytes_capacity, store::async_io::read::ReadTask, Result};
+use crate::{bytes_capacity, store::ReadTask, Result};
 
 const MAX_ASYNC_FETCH_TRY_CNT: usize = 3;
 const SHRINK_CACHE_CAPACITY: usize = 64;
@@ -531,7 +531,7 @@ pub fn init_applied_term<ER: RaftEngine>(
 }
 
 /// A subset of `PeerStorage` that focus on accessing log entries.
-pub struct EntryStorage<ER> {
+pub struct EntryStorage<EK: KvEngine, ER> {
     region_id: u64,
     peer_id: u64,
     raft_engine: ER,
@@ -540,19 +540,19 @@ pub struct EntryStorage<ER> {
     apply_state: RaftApplyState,
     last_term: u64,
     applied_term: u64,
-    raftlog_fetch_scheduler: Scheduler<ReadTask>,
+    read_scheduler: Scheduler<ReadTask<EK>>,
     raftlog_fetch_stats: AsyncFetchStats,
     async_fetch_results: RefCell<HashMap<u64, RaftlogFetchState>>,
 }
 
-impl<ER: RaftEngine> EntryStorage<ER> {
+impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
     pub fn new(
         peer_id: u64,
         raft_engine: ER,
         mut raft_state: RaftLocalState,
         apply_state: RaftApplyState,
         region: &metapb::Region,
-        raftlog_fetch_scheduler: Scheduler<ReadTask>,
+        read_scheduler: Scheduler<ReadTask<EK>>,
     ) -> Result<Self> {
         if let Err(e) = validate_states(region.id, &raft_engine, &mut raft_state, &apply_state) {
             return Err(box_err!(
@@ -573,7 +573,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
             apply_state,
             last_term,
             applied_term,
-            raftlog_fetch_scheduler,
+            read_scheduler,
             raftlog_fetch_stats: AsyncFetchStats::default(),
             async_fetch_results: RefCell::new(HashMap::default()),
         })
@@ -769,7 +769,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
         self.async_fetch_results
             .borrow_mut()
             .insert(low, RaftlogFetchState::Fetching(Instant::now_coarse()));
-        self.raftlog_fetch_scheduler
+        self.read_scheduler
             .schedule(ReadTask::PeerStorage {
                 region_id,
                 context,
@@ -953,7 +953,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
 
     // Append the given entries to the raft log using previous last index or
     // self.last_index.
-    pub fn append<EK: KvEngine>(&mut self, entries: Vec<Entry>, task: &mut WriteTask<EK, ER>) {
+    pub fn append(&mut self, entries: Vec<Entry>, task: &mut WriteTask<EK, ER>) {
         if entries.is_empty() {
             return;
         }
@@ -1029,8 +1029,8 @@ impl<ER: RaftEngine> EntryStorage<ER> {
         self.cache = EntryCache::default();
     }
 
-    pub fn scheduler(&self) -> Scheduler<ReadTask> {
-        self.raftlog_fetch_scheduler.clone()
+    pub fn read_scheduler(&self) -> Scheduler<ReadTask<EK>> {
+        self.read_scheduler.clone()
     }
 }
 
@@ -1038,7 +1038,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
 pub mod tests {
     use std::sync::mpsc;
 
-    use engine_test::raft::RaftTestEngine;
+    use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
     use engine_traits::RaftEngineReadOnly;
     use protobuf::Message;
     use raft::{GetEntriesContext, StorageError};
@@ -1063,7 +1063,7 @@ pub mod tests {
         }
     }
 
-    pub fn validate_cache(store: &EntryStorage<RaftTestEngine>, exp_ents: &[Entry]) {
+    pub fn validate_cache(store: &EntryStorage<KvTestEngine, RaftTestEngine>, exp_ents: &[Entry]) {
         assert_eq!(store.cache.cache, exp_ents);
         for e in exp_ents {
             let entry = store

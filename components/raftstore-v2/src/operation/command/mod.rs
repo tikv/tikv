@@ -350,9 +350,9 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         self.flush();
 
         // Send generate snapshot task to region worker.
-        let (region_id, tablet_index) = (snap_task.region_id, snap_task.tablet_index);
         let (last_applied_index, last_applied_term) = self.apply_progress();
         if let Err(e) = snap_task.generate_and_schedule_snapshot(
+            self.tablet().clone(),
             self.region_state().clone(),
             last_applied_index,
             last_applied_term,
@@ -362,7 +362,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 self.logger,
                 "schedule snapshot failed";
                 "error" => ?e,
-                "tablet_index" => tablet_index,
             );
         }
     }

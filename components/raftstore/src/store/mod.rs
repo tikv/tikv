@@ -15,7 +15,7 @@ pub mod transport;
 #[macro_use]
 pub mod util;
 
-pub mod async_io;
+mod async_io;
 mod bootstrap;
 mod compaction_guard;
 mod hibernate_state;
@@ -30,7 +30,7 @@ mod worker;
 pub use self::msg::PeerInternalStat;
 pub use self::{
     async_io::{
-        read::{FetchedLogs, LogFetchedNotifier},
+        read::{FetchedLogs, LogFetchedNotifier, ReadRunner, ReadTask},
         write::{
             ExtraStates, PersistedNotifier, StoreWriters, Worker as WriteWorker, WriteMsg,
             WriteTask,
