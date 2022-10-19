@@ -14,21 +14,17 @@
 //! Note: The corresponding implementation in `WaiterManager` is not yet
 //! implemented, and this mod is currently not used yet.
 
-use std::{
-    convert::TryInto,
-    result::Result,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-};
+use std::{convert::TryInto, result::Result, sync::Arc};
 
 use parking_lot::Mutex;
-use txn_types::TimeStamp;
+use txn_types::Key;
 
 use crate::storage::{
     errors::SharedError,
-    lock_manager::{lock_waiting_queue::PessimisticLockKeyCallback, LockManager, LockWaitToken},
+    lock_manager::{
+        lock_waiting_queue::{LockWaitQueues, PessimisticLockKeyCallback},
+        LockManager, LockWaitToken,
+    },
     Error as StorageError, PessimisticLockRes, ProcessResult, StorageCallback,
 };
 
@@ -37,10 +33,6 @@ pub struct LockWaitContextInner {
     /// Usually, requests are accepted from RPC, and in this case calling
     /// the callback means returning the response to the client via RPC.
     cb: StorageCallback,
-
-    /// The token of the corresponding waiter in `LockManager`.
-    #[allow(dead_code)]
-    lock_wait_token: LockWaitToken,
 }
 
 /// The content of the `LockWaitContext` that needs to be shared among all
@@ -54,53 +46,41 @@ pub struct LockWaitContextInner {
 ///   and the request is going to be finished, they need to take the
 ///   [`LockWaitContextInner`] to call the callback.
 /// * The [`LockWaitEntry`](crate::storage::lock_manager::lock_waiting_queue::LockWaitEntry), for
-///   checking whether the request is already finished (cancelled).
+///   providing information
 pub struct LockWaitContextSharedState {
     ctx_inner: Mutex<Option<LockWaitContextInner>>,
-    pub finished: AtomicBool,
-}
 
-impl LockWaitContextSharedState {
-    /// Checks whether the lock-waiting request is already finished.
-    pub fn is_finished(&self) -> bool {
-        self.finished.load(Ordering::Acquire)
-    }
+    /// The token to identify the waiter.
+    lock_wait_token: LockWaitToken,
+
+    /// The key on which lock waiting occurs.
+    key: Key,
 }
 
 #[derive(Clone)]
 pub struct LockWaitContext<L: LockManager> {
     shared_states: Arc<LockWaitContextSharedState>,
-    #[allow(dead_code)]
-    lock_manager: L,
+    lock_wait_queues: LockWaitQueues<L>,
     allow_lock_with_conflict: bool,
-
-    // Fields for logging:
-    start_ts: TimeStamp,
-    for_update_ts: TimeStamp,
 }
 
 impl<L: LockManager> LockWaitContext<L> {
     pub fn new(
-        lock_manager: L,
+        key: Key,
+        lock_wait_queues: LockWaitQueues<L>,
         lock_wait_token: LockWaitToken,
-        start_ts: TimeStamp,
-        for_update_ts: TimeStamp,
         cb: StorageCallback,
         allow_lock_with_conflict: bool,
     ) -> Self {
-        let inner = LockWaitContextInner {
-            cb,
-            lock_wait_token,
-        };
+        let inner = LockWaitContextInner { cb };
         Self {
             shared_states: Arc::new(LockWaitContextSharedState {
                 ctx_inner: Mutex::new(Some(inner)),
-                finished: AtomicBool::new(false),
+                key,
+                lock_wait_token,
             }),
-            lock_manager,
+            lock_wait_queues,
             allow_lock_with_conflict,
-            start_ts,
-            for_update_ts,
         }
     }
 
@@ -128,7 +108,7 @@ impl<L: LockManager> LockWaitContext<L> {
     pub fn get_callback_for_blocked_key(&self) -> PessimisticLockKeyCallback {
         let ctx = self.clone();
         Box::new(move |res| {
-            ctx.finish_request(res);
+            ctx.finish_request(res, false);
         })
     }
 
@@ -136,29 +116,38 @@ impl<L: LockManager> LockWaitContext<L> {
     /// called by
     /// [`WaiterManager`](crate::server::lock_manager::WaiterManager) due to
     /// timeout.
+    ///
+    /// This function is assumed to be called when the lock-waiting request is
+    /// queueing but canceled outside, so it includes an operation to actively
+    /// remove the entry from the lock waiting queue.
     pub fn get_callback_for_cancellation(&self) -> impl FnOnce(StorageError) {
         let ctx = self.clone();
         move |e| {
-            ctx.finish_request(Err(e.into()));
+            ctx.finish_request(Err(e.into()), true);
         }
     }
 
-    fn finish_request(&self, result: Result<PessimisticLockRes, SharedError>) {
-        let ctx_inner = if let Some(inner) = self.shared_states.ctx_inner.lock().take() {
-            inner
+    fn finish_request(&self, result: Result<PessimisticLockRes, SharedError>, is_canceling: bool) {
+        if is_canceling {
+            let entry = self
+                .lock_wait_queues
+                .remove_by_token(&self.shared_states.key, self.shared_states.lock_wait_token);
+            if entry.is_none() {
+                // Already popped out from the queue so that it will be woken up normally. Do
+                // nothing.
+                return;
+            }
         } else {
-            debug!("double invoking of finish_request of LockWaitContext";
-                "start_ts" => self.start_ts,
-                "for_update_ts" => self.for_update_ts
-            );
-            return;
-        };
+            // TODO: Uncomment this after the corresponding change of
+            // `LockManager` is done. self.lock_wait_queues.
+            // get_lock_mgr()     .remove_lock_wait(ctx_inner.
+            // lock_wait_token);
+        }
 
-        self.shared_states.finished.store(true, Ordering::Release);
-
-        // TODO: Uncomment this after the corresponding change of `LockManager` is done.
-        // self.lock_manager
-        //     .remove_lock_wait(ctx_inner.lock_wait_token);
+        // When this is executed, the waiter is either woken up from the queue or
+        // canceled and removed from the queue. There should be no chance to try
+        // to take the `ctx_inner` more than once.
+        let ctx_inner = self.shared_states.ctx_inner.lock().take().unwrap();
 
         if !self.allow_lock_with_conflict {
             // The result must be an owned error.
@@ -176,15 +165,17 @@ impl<L: LockManager> LockWaitContext<L> {
 #[cfg(test)]
 mod tests {
     use std::{
+        default::Default,
         sync::mpsc::{channel, Receiver},
         time::Duration,
     };
 
     use super::*;
     use crate::storage::{
-        lock_manager::DummyLockManager,
+        lock_manager::{lock_waiting_queue::LockWaitEntry, DummyLockManager},
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{Error as TxnError, ErrorInner as TxnErrorInner},
+        types::PessimisticLockParameters,
         ErrorInner as StorageErrorInner, Result as StorageResult,
     };
 
@@ -197,23 +188,18 @@ mod tests {
         (cb, rx)
     }
 
-    fn create_test_lock_wait_ctx() -> (
+    fn create_test_lock_wait_ctx(
+        key: &Key,
+        lock_wait_queues: &LockWaitQueues<impl LockManager>,
+    ) -> (
+        LockWaitToken,
         LockWaitContext<impl LockManager>,
         Receiver<StorageResult<StorageResult<PessimisticLockRes>>>,
     ) {
-        // TODO: Use `ProxyLockMgr` to check the correctness of the `remove_lock_wait`
-        // invocation.
-        let lock_mgr = DummyLockManager {};
         let (cb, rx) = create_storage_cb();
-        let ctx = LockWaitContext::new(
-            lock_mgr,
-            super::super::LockWaitToken(Some(1)),
-            1.into(),
-            1.into(),
-            cb,
-            false,
-        );
-        (ctx, rx)
+        let token = LockWaitToken(Some(1));
+        let ctx = LockWaitContext::new(key.clone(), lock_wait_queues.clone(), token, cb, false);
+        (token, ctx, rx)
     }
 
     #[test]
@@ -236,7 +222,13 @@ mod tests {
             ))))
         };
 
-        let (ctx, rx) = create_test_lock_wait_ctx();
+        let key = Key::from_raw(b"k");
+
+        // TODO: Use `ProxyLockMgr` to check the correctness of the `remove_lock_wait`
+        // invocation.
+        let lock_wait_queues = LockWaitQueues::new(DummyLockManager {});
+
+        let (_, ctx, rx) = create_test_lock_wait_ctx(&key, &lock_wait_queues);
         // Nothing happens currently.
         (ctx.get_callback_for_first_write_batch()).execute(ProcessResult::Res);
         rx.recv_timeout(Duration::from_millis(20)).unwrap_err();
@@ -253,8 +245,27 @@ mod tests {
         // Nothing happens if the callback is double-called.
         (ctx.get_callback_for_cancellation())(StorageError::from(key_is_locked()));
 
-        let (ctx, rx) = create_test_lock_wait_ctx();
+        let (token, ctx, rx) = create_test_lock_wait_ctx(&key, &lock_wait_queues);
+        // Add a corresponding entry to the lock waiting queue to test actively removing
+        // the entry from the queue.
+        lock_wait_queues.push_lock_wait(
+            Box::new(LockWaitEntry {
+                key: key.clone(),
+                lock_hash: key.gen_hash(),
+                parameters: PessimisticLockParameters {
+                    start_ts: 1.into(),
+                    for_update_ts: 1.into(),
+                    ..Default::default()
+                },
+                lock_wait_token: token,
+                legacy_wake_up_index: None,
+                key_cb: None,
+            }),
+            kvproto::kvrpcpb::LockInfo::default(),
+        );
+        lock_wait_queues.must_have_next_entry(b"k", 1);
         (ctx.get_callback_for_cancellation())(StorageError::from(key_is_locked()));
+        lock_wait_queues.must_not_contain_key(b"k");
         let res = rx.recv().unwrap().unwrap_err();
         assert!(matches!(
             &res,
@@ -262,8 +273,10 @@ mod tests {
                 box TxnErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(_)))
             )))
         ));
-        // Nothing happens if the callback is double-called.
-        (ctx.get_callback_for_blocked_key())(Err(SharedError::from(write_conflict())));
+        // Since the cancellation callback can fully execute only when it's successfully
+        // removed from the lock waiting queues, it's impossible that `finish_request`
+        // is called again after that.
+
         // The tx should be dropped.
         rx.recv().unwrap_err();
     }

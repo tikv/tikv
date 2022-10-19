@@ -11,7 +11,6 @@ use raftstore::{
     },
     Result,
 };
-use tikv_util::Either;
 
 use crate::{
     batch::StoreContext,

@@ -488,6 +488,10 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                 | ExecResult::VerifyHash { .. }
                 | ExecResult::CompactLog { .. }
                 | ExecResult::ComputeHash { .. } => (),
+                ExecResult::SetFlashbackState { .. } => {
+                    // TODO: need to handle this res?
+                    todo!()
+                }
             }
         }
         results

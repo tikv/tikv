@@ -10,7 +10,6 @@ use crate::storage::{
 
 pub const FLASHBACK_BATCH_SIZE: usize = 256 + 1 /* To store the next key for multiple batches */;
 
-// TODO: we should resolve all locks before starting a flashback.
 pub fn flashback_to_version_read_lock<S: Snapshot>(
     reader: &mut MvccReader<S>,
     next_lock_key: &Option<Key>,
@@ -64,11 +63,18 @@ pub fn flashback_to_version_read_write<S: Snapshot>(
     // Check the latest commit ts to make sure there is no commit change during the
     // flashback, otherwise, we need to abort the flashback.
     for (key, commit_ts, old_write) in key_ts_old_writes {
-        if commit_ts >= flashback_commit_ts {
+        if commit_ts > flashback_commit_ts {
             return Err(Error::from(ErrorInner::InvalidTxnTso {
                 start_ts: flashback_start_ts,
                 commit_ts: flashback_commit_ts,
             }));
+        }
+        // Since the first flashback preparation phase make sure there will be no writes
+        // other than flashback after it, so we need to check if there is already a
+        // successful flashback result, and if so, just finish the flashback ASAP.
+        if commit_ts == flashback_commit_ts {
+            key_old_writes.clear();
+            return Ok((key_old_writes, false));
         }
         key_old_writes.push((key, old_write));
     }
@@ -298,7 +304,7 @@ pub mod tests {
         // Since the key has been deleted, flashback to version 1 should not do
         // anything.
         assert_eq!(
-            must_flashback_to_version(&mut engine, k, ts, *ts.incr(), *ts.incr()),
+            must_flashback_to_version(&mut engine, k, 1, *ts.incr(), *ts.incr()),
             0
         );
         must_get_none(&mut engine, k, ts);
@@ -330,5 +336,28 @@ pub mod tests {
         // Rollback.
         must_pessimistic_prewrite_put_err(&mut engine, k, v3, k, 30, 30, DoPessimisticCheck);
         must_get(&mut engine, k, 45, v1);
+    }
+
+    #[test]
+    fn test_duplicated_flashback_to_version() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut ts = TimeStamp::zero();
+        let (k, v) = (b"k", b"v");
+        must_prewrite_put(&mut engine, k, v, k, *ts.incr());
+        must_commit(&mut engine, k, ts, *ts.incr());
+        must_get(&mut engine, k, ts, v);
+        let start_ts = *ts.incr();
+        let commit_ts = *ts.incr();
+        assert_eq!(
+            must_flashback_to_version(&mut engine, k, 1, start_ts, commit_ts),
+            1
+        );
+        must_get_none(&mut engine, k, ts);
+        // Flashback again with the same `start_ts` and `commit_ts` should not do
+        // anything.
+        assert_eq!(
+            must_flashback_to_version(&mut engine, k, 1, start_ts, commit_ts),
+            0
+        );
     }
 }

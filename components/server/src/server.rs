@@ -352,7 +352,7 @@ where
             let tso = block_on(causal_ts::BatchTsoProvider::new_opt(
                 pd_client.clone(),
                 config.causal_ts.renew_interval.0,
-                config.causal_ts.available_interval.0,
+                config.causal_ts.alloc_ahead_buffer.0,
                 config.causal_ts.renew_batch_min_size,
                 config.causal_ts.renew_batch_max_size,
             ));
@@ -1613,10 +1613,23 @@ pub trait ConfiguredRaftEngine: RaftEngine {
         _: &Option<Arc<DataKeyManager>>,
         _: &Option<Cache>,
     ) -> Self;
-    fn as_rocks_engine(&self) -> Option<&RocksEngine> {
+    fn as_rocks_engine(&self) -> Option<&RocksEngine>;
+    fn register_config(&self, _cfg_controller: &mut ConfigController, _share_cache: bool);
+}
+
+impl<T: RaftEngine> ConfiguredRaftEngine for T {
+    default fn build(
+        _: &TikvConfig,
+        _: &Arc<Env>,
+        _: &Option<Arc<DataKeyManager>>,
+        _: &Option<Cache>,
+    ) -> Self {
+        unimplemented!()
+    }
+    default fn as_rocks_engine(&self) -> Option<&RocksEngine> {
         None
     }
-    fn register_config(&self, _cfg_controller: &mut ConfigController, _share_cache: bool) {}
+    default fn register_config(&self, _cfg_controller: &mut ConfigController, _share_cache: bool) {}
 }
 
 impl ConfiguredRaftEngine for RocksEngine {

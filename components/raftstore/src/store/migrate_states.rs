@@ -58,6 +58,9 @@ where
             PeerState::Tombstone => {
                 tombstone_count += 1;
             }
+            PeerState::Unavailable => {
+                // TODO: need to handle this state?
+            }
         }
         raft_wb.put_region_state(region_id, &region_state).unwrap();
 
@@ -149,14 +152,14 @@ where
         kv_engine.flush_cf(CF_RAFT, true).unwrap();
     }
     if !raft_wb.is_empty() {
-        raft_engine.consume(&mut raft_wb, true);
+        raft_engine.consume(&mut raft_wb, true).unwrap();
     }
     info!("migrating states from kvdb to raftdb done");
 
     Ok(())
 }
 
-pub fn clear_states_in_raftdb<E: RaftEngine>(engine: E) -> Result<()> {
+pub fn clear_states_in_raftdb<E: RaftEngine>(engine: &E) -> Result<()> {
     let mut raft_wb = engine.log_batch(0);
     engine
         .for_each_raft_group(&mut |region_id| {
@@ -168,7 +171,7 @@ pub fn clear_states_in_raftdb<E: RaftEngine>(engine: E) -> Result<()> {
         })
         .unwrap();
     if !raft_wb.is_empty() {
-        raft_engine.consume(&mut raft_wb, true);
+        engine.consume(&mut raft_wb, true).unwrap();
     }
     Ok(())
 }

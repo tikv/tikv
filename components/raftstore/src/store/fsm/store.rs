@@ -685,6 +685,8 @@ where
             self.cfg.report_region_buckets_tick_interval.0;
         self.tick_batch[PeerTick::CheckLongUncommitted as usize].wait_duration =
             self.cfg.check_long_uncommitted_interval.0;
+        self.tick_batch[PeerTick::CheckPeersAvailability as usize].wait_duration =
+            self.cfg.check_peers_availability_interval.0;
     }
 }
 
@@ -1917,7 +1919,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             raft_builder.engines.kv.flush_cfs(true).unwrap();
             // KV WAL enabled, need to cleanup all states in raftdb
             // TODO: migrate raft states from raftdb to kvdb after removing raft CF.
-            clear_states_in_raftdb(&self.engines.raft)?;
+            clear_states_in_raftdb(&raft_builder.engines.raft)?;
         }
 
         for addr in address {

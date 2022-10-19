@@ -7,7 +7,7 @@ use std::{borrow::Cow, fmt};
 
 use collections::HashSet;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
-use futures::channel::{mpsc::UnboundedSender, oneshot::Sender};
+use futures::channel::mpsc::UnboundedSender;
 use kvproto::{
     brpb::CheckAdminResponse,
     import_sstpb::SstMeta,
@@ -380,6 +380,7 @@ pub enum PeerTick {
     ReactivateMemoryLock = 8,
     ReportBuckets = 9,
     CheckLongUncommitted = 10,
+    CheckPeersAvailability = 11,
 }
 
 impl PeerTick {
@@ -399,6 +400,7 @@ impl PeerTick {
             PeerTick::ReactivateMemoryLock => "reactivate_memory_lock",
             PeerTick::ReportBuckets => "report_buckets",
             PeerTick::CheckLongUncommitted => "check_long_uncommitted",
+            PeerTick::CheckPeersAvailability => "check_peers_availability",
         }
     }
 
@@ -415,6 +417,7 @@ impl PeerTick {
             PeerTick::ReactivateMemoryLock,
             PeerTick::ReportBuckets,
             PeerTick::CheckLongUncommitted,
+            PeerTick::CheckPeersAvailability,
         ];
         TICKS
     }
@@ -517,8 +520,6 @@ where
     UnsafeRecoveryWaitApply(UnsafeRecoveryWaitApplySyncer),
     UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSyncer),
     SnapshotRecoveryWaitApply(SnapshotRecoveryWaitApplySyncer),
-    PrepareFlashback(Sender<bool>),
-    FinishFlashback,
     CheckPendingAdmin(UnboundedSender<CheckAdminResponse>),
     RecoverStatus {
         status: RecoverStatus,

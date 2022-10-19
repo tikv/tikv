@@ -36,7 +36,7 @@ use engine_rocks::{
     DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{
-    CfOptions as _, CfOptionsExt, DbOptions as _, DbOptionsExt, TabletAccessor,
+    CfOptions as _, CfOptionsExt, DbOptions as _, DbOptionsExt, MiscExt, TabletAccessor,
     TabletErrorCollector, TitanCfOptions as _, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use file_system::IoRateLimiter;
@@ -2496,9 +2496,6 @@ pub struct BackupStreamConfig {
     pub initial_scan_pending_memory_quota: ReadableSize,
     #[online_config(skip)]
     pub initial_scan_rate_limit: ReadableSize,
-    #[serde(skip)]
-    #[online_config(skip)]
-    pub use_checkpoint_v3: bool,
 }
 
 impl BackupStreamConfig {
@@ -2531,7 +2528,6 @@ impl Default for BackupStreamConfig {
             file_size_limit: ReadableSize::mb(256),
             initial_scan_pending_memory_quota: ReadableSize(quota_size as _),
             initial_scan_rate_limit: ReadableSize::mb(60),
-            use_checkpoint_v3: true,
         }
     }
 }

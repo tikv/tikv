@@ -145,6 +145,10 @@ impl<EK: KvEngine, ER: RaftEngine> Recovery<EK, ER> {
                         panic!("region {} unexpected Applying state for region state in raftdb, region state {:?}", region_id, region_state);
                     }
                     PeerState::Tombstone => (),
+                    PeerState::Unavailable => {
+                        // TODO: need to handle this state?
+                        todo!()
+                    }
                 }
                 EngineTraitsResult::Ok(())
             })

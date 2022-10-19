@@ -79,10 +79,10 @@ pub use self::{
     worker::{
         AutoSplitController, Bucket, BucketRange, CachedReadDelegate, CheckLeaderRunner,
         CheckLeaderTask, FetchedLogs, FlowStatistics, FlowStatsReporter, KeyEntry,
-        LocalReadContext, LocalReader, LogFetchedNotifier, PdTask, RaftlogFetchRunner,
-        RaftlogFetchTask, ReadDelegate, ReadExecutor, ReadExecutorProvider, ReadProgress,
-        ReadStats, RefreshConfigTask, RegionTask, SeqnoRelationRunner, SeqnoRelationTask,
-        SplitCheckRunner, SplitCheckTask, SplitConfig, SplitConfigManager, StoreMetaDelegate,
-        TrackVer, WriteStats,
+        LocalReadContext, LocalReader, LocalReaderCore, LogFetchedNotifier, PdTask,
+        RaftlogFetchRunner, RaftlogFetchTask, ReadDelegate, ReadExecutor, ReadExecutorProvider,
+        ReadProgress, ReadStats, RefreshConfigTask, RegionTask, SeqnoRelationRunner,
+        SeqnoRelationTask, SplitCheckRunner, SplitCheckTask, SplitConfig, SplitConfigManager,
+        StoreMetaDelegate, TrackVer, WriteStats, TLS_LOCAL_READ_METRICS,
     },
 };
