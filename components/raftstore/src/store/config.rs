@@ -451,7 +451,7 @@ impl Config {
 
     #[inline]
     pub fn warmup_entry_cache_enabled(&self) -> bool {
-        self.max_entry_cache_warmup_duration.0 == Duration::from_secs(0)
+        self.max_entry_cache_warmup_duration.0 != Duration::from_secs(0)
     }
 
     pub fn region_split_check_diff(&self) -> ReadableSize {
