@@ -3556,7 +3556,7 @@ where
         }
 
         if let Some((idx, term)) = apply.last_applied_state.take() {
-            // override the applied index for witness, see more the comment of `Apply`
+            // override the applied index for witness, see more in the comment of `Apply`
             self.delegate.apply_state.set_applied_index(idx);
             self.delegate.applied_term = term;
         }

@@ -94,7 +94,7 @@ use crate::{
         fsm::{
             apply::{self, CatchUpLogs},
             store::{PollContext, RaftRouter},
-            Apply, ApplyMetrics, ApplyTask, Proposal,
+            Apply, ApplyMetrics, ApplyRes, ApplyTask, ApplyTaskRes, Proposal,
         },
         hibernate_state::GroupState,
         memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES},
@@ -3048,7 +3048,33 @@ where
             if self.is_witness() {
                 committed_entries.retain(|e| !can_witness_skip(e));
                 if committed_entries.is_empty() {
+                    // send a fake apply result to update apply state
+                    let mut apply_state = self.get_store().apply_state().clone();
+                    apply_state.set_applied_index(self.last_applying_idx);
+                    ctx.router
+                        .force_send(
+                            self.region_id,
+                            PeerMsg::ApplyRes {
+                                res: ApplyTaskRes::Apply(ApplyRes {
+                                    region_id: self.region_id,
+                                    apply_state,
+                                    applied_term: self.last_applying_term,
+                                    exec_res: Default::default(),
+                                    metrics: Default::default(),
+                                    bucket_stat: None,
+                                    write_seqno: vec![],
+                                }),
+                            },
+                        )
+                        .unwrap();
                     return;
+                } else if committed_entries.last().unwrap().get_index() != self.last_applying_idx {
+                    // append a fake entry to update the apply index if the last entry is skipped
+                    let mut e = Entry::default();
+                    e.set_index(self.last_applying_idx);
+                    e.set_term(self.last_applying_term);
+                    e.set_entry_type(EntryType::EntryNormal);
+                    committed_entries.push(e);
                 }
             }
 

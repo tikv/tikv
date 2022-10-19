@@ -2227,10 +2227,6 @@ where
                 if self.fsm.stopped {
                     return;
                 }
-                if res.apply_state.applied_index < self.fsm.peer.get_store().applied_index() {
-                    res.apply_state.applied_index = self.fsm.peer.get_store().applied_index();
-                    res.applied_term = self.fsm.peer.get_store().applied_term();
-                }
                 let applied_index = res.apply_state.applied_index;
                 let buckets = self.fsm.peer.region_buckets.as_mut();
                 if let (Some(delta), Some(buckets)) = (res.bucket_stat, buckets) {
