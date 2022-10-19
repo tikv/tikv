@@ -2531,6 +2531,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     fn on_wake_up_regions(&self, to_all: bool, _region_ids: Vec<u64>) {
         info!("try to wake up all hibernated regions in this store";
             "to_all" => to_all);
+        // TODO: Just awaken hibernated regions existing on abnormal nodes.
         {
             let meta = self.ctx.store_meta.lock().unwrap();
             for region_id in meta.regions.keys() {
@@ -2550,6 +2551,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                     message.set_region_epoch(region_epoch.clone());
                     let mut msg = ExtraMessage::default();
                     msg.set_type(ExtraMessageType::MsgRegionWakeUp);
+                    msg.wait_data = true; // Forcely make GroupState into Chaos.
                     message.set_extra_msg(msg);
                     if let Err(e) = self.ctx.router.send_raft_message(message) {
                         error!(
