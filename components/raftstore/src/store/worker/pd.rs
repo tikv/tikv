@@ -1353,8 +1353,8 @@ where
                     if let Some(awaken_regions) = resp.awaken_regions.take() {
                         info!("forcely awaken hibernated regions in this store");
                         let _ = router.send_store_msg(StoreMsg::AwakenRegions {
-                            to_all: awaken_regions.get_to_all_regions(),
-                            region_ids: awaken_regions.get_region_ids().to_vec(),
+                            abnormal_stores: awaken_regions.get_abnormal_stores().to_vec(),
+                            abnormal_regions: awaken_regions.get_abnormal_regions().to_vec(),
                         });
                     }
                 }

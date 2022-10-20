@@ -53,7 +53,7 @@ use tikv_util::{
     info, is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver},
     slow_log,
-    store::find_peer,
+    store::{find_peer, region_on_stores},
     sys as sys_util,
     sys::disk::{get_disk_status, DiskUsage},
     time::{duration_to_sec, Instant as TiInstant},
@@ -754,8 +754,11 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     drop(syncer);
                 }
                 StoreMsg::GcSnapshotFinish => self.register_snap_mgr_gc_tick(),
-                StoreMsg::AwakenRegions { to_all, region_ids } => {
-                    self.on_wake_up_regions(to_all, region_ids);
+                StoreMsg::AwakenRegions {
+                    abnormal_stores,
+                    abnormal_regions,
+                } => {
+                    self.on_wake_up_regions(abnormal_stores, abnormal_regions);
                 }
             }
         }
@@ -2528,20 +2531,24 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         self.register_compact_lock_cf_tick();
     }
 
-    fn on_wake_up_regions(&self, to_all: bool, _region_ids: Vec<u64>) {
+    fn on_wake_up_regions(&self, abnormal_stores: Vec<u64>, _region_ids: Vec<u64>) {
         info!("try to wake up all hibernated regions in this store";
-            "to_all" => to_all);
-        // TODO: Just awaken hibernated regions existing on abnormal nodes.
+            "to_all" => abnormal_stores.is_empty());
+        // TODO: asyncrhonize it.
         {
             let meta = self.ctx.store_meta.lock().unwrap();
             for region_id in meta.regions.keys() {
+                let region = &meta.regions[region_id];
+                if !region_on_stores(region, &abnormal_stores) {
+                    // Current region is not found on abnormal stores.
+                    continue;
+                }
                 let peer = {
-                    match find_peer(&meta.regions[&region_id], self.ctx.store_id()) {
+                    match find_peer(region, self.ctx.store_id()) {
                         None => continue,
                         Some(p) => p.clone(),
                     }
                 };
-                let region = &meta.regions[region_id];
                 let region_epoch = region.get_region_epoch();
                 {
                     let mut message = RaftMessage::default();
@@ -2551,7 +2558,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                     message.set_region_epoch(region_epoch.clone());
                     let mut msg = ExtraMessage::default();
                     msg.set_type(ExtraMessageType::MsgRegionWakeUp);
-                    msg.wait_data = true; // Forcely make GroupState into Chaos.
+                    msg.forcely_awake = true; // Forcely make GroupState into Chaos.
                     message.set_extra_msg(msg);
                     if let Err(e) = self.ctx.router.send_raft_message(message) {
                         error!(

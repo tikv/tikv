@@ -849,8 +849,8 @@ where
     GcSnapshotFinish,
 
     AwakenRegions {
-        to_all: bool,
-        region_ids: Vec<u64>,
+        abnormal_stores: Vec<u64>,
+        abnormal_regions: Vec<u64>,
     },
 }
 

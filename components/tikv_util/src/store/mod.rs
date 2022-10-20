@@ -9,6 +9,6 @@ pub use self::{
     query_stats::{is_read_query, QueryStats},
     region::{
         check_key_in_region, check_key_in_region_exclusive, check_key_in_region_inclusive,
-        region_on_same_stores,
+        region_on_same_stores, region_on_stores,
     },
 };

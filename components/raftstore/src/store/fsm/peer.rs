@@ -2628,7 +2628,7 @@ where
         match msg.get_extra_msg().get_type() {
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
                 if self.fsm.hibernate_state.group_state() == GroupState::Idle {
-                    if !msg.get_extra_msg().wait_data {
+                    if !msg.get_extra_msg().forcely_awake {
                         self.reset_raft_tick(GroupState::Ordered);
                     } else {
                         self.reset_raft_tick(if !self.fsm.peer.is_leader() {
