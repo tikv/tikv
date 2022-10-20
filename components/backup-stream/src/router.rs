@@ -42,7 +42,7 @@ use tikv_util::{
 };
 use tokio::{
     fs::{remove_file, File},
-    io::AsyncWriteExt,
+    io::{AsyncWriteExt, BufReader},
     sync::{Mutex, RwLock},
 };
 use tokio_util::compat::TokioAsyncReadCompatExt;
@@ -1029,7 +1029,7 @@ impl StreamTaskInfo {
                 let compress_length = file.metadata().await?.len();
                 stat_length += compress_length;
                 file_info_clone.set_range_length(compress_length);
-                file
+                BufReader::new(file)
             });
             data_file_infos.push(file_info_clone);
 

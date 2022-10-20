@@ -601,18 +601,21 @@ pub fn is_overlapping(range: (&[u8], &[u8]), range2: (&[u8], &[u8])) -> bool {
 }
 
 /// read files asynchronously in sequence
-pub struct FilesReader {
-    files: Vec<File>,
+pub struct FilesReader<R> {
+    files: Vec<R>,
     index: usize,
 }
 
-impl FilesReader {
-    pub fn new(files: Vec<File>) -> Self {
+impl<R> FilesReader<R> {
+    pub fn new(files: Vec<R>) -> Self {
         FilesReader { files, index: 0 }
     }
 }
 
-impl AsyncRead for FilesReader {
+impl<R> AsyncRead for FilesReader<R>
+where
+    R: AsyncRead + Unpin,
+{
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
