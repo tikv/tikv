@@ -1,12 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::HashSet,
-    fmt,
-    marker::PhantomData,
-    path::PathBuf,
-    sync::{atomic::Ordering, Arc},
-    time::Duration,
+    collections::HashSet, fmt, marker::PhantomData, path::PathBuf, sync::Arc, time::Duration,
 };
 
 use concurrency_manager::ConcurrencyManager;
@@ -46,8 +41,8 @@ use super::metrics::HANDLE_EVENT_DURATION_HISTOGRAM;
 use crate::{
     annotate,
     checkpoint_manager::{
-        BasicFlushObserver, CheckpointManager, CheckpointV2FlushObserver,
-        CheckpointV3FlushObserver, FlushObserver, GetCheckpointResult, RegionIdWithVersion,
+        BasicFlushObserver, CheckpointManager, CheckpointV3FlushObserver, FlushObserver,
+        GetCheckpointResult, RegionIdWithVersion,
     },
     errors::{Error, Result},
     event_loader::{InitialDataLoader, PendingMemoryQuota},
@@ -92,6 +87,9 @@ pub struct Endpoint<S, R, E, RT, PDC> {
     initial_scan_throughput_quota: Limiter,
     region_operator: RegionSubscriptionManager<S, R, PDC>,
     failover_time: Option<Instant>,
+    // We holds the config before, even it is useless for now,
+    // however probably it would be useful in the future.
+    #[allow(dead_code)]
     config: BackupStreamConfig,
     checkpoint_mgr: CheckpointManager,
 }
@@ -226,7 +224,7 @@ where
                     let safepoint = meta_cli.global_progress_of_task(&task).await?;
                     pdc.update_service_safe_point(
                         safepoint_name,
-                        TimeStamp::new(safepoint - 1),
+                        TimeStamp::new(safepoint.saturating_sub(1)),
                         safepoint_ttl,
                     )
                     .await?;
@@ -402,23 +400,9 @@ where
         }
     }
 
-    fn flush_observer(&self) -> Box<dyn FlushObserver> {
+    fn flush_observer(&self) -> impl FlushObserver {
         let basic = BasicFlushObserver::new(self.pd_client.clone(), self.store_id);
-        if self.config.use_checkpoint_v3 {
-            Box::new(CheckpointV3FlushObserver::new(
-                self.scheduler.clone(),
-                self.meta_client.clone(),
-                self.subs.clone(),
-                basic,
-            ))
-        } else {
-            Box::new(CheckpointV2FlushObserver::new(
-                self.meta_client.clone(),
-                self.make_flush_guard(),
-                self.subs.clone(),
-                basic,
-            ))
-        }
+        CheckpointV3FlushObserver::new(self.scheduler.clone(), self.meta_client.clone(), basic)
     }
 
     /// Convert a batch of events to the cmd batch, and update the resolver
@@ -574,7 +558,6 @@ where
         let cli = self.meta_client.clone();
         let init = self.make_initial_loader();
         let range_router = self.range_router.clone();
-        let use_v3 = self.config.use_checkpoint_v3;
 
         info!(
             "register backup stream task";
@@ -598,9 +581,7 @@ where
             let task_clone = task.clone();
             let run = async move {
                 let task_name = task.info.get_name();
-                if !use_v3 {
-                    cli.init_task(&task.info).await?;
-                }
+                cli.init_task(&task.info).await?;
                 let ranges = cli.ranges_of_task(task_name).await?;
                 info!(
                     "register backup stream ranges";
@@ -702,29 +683,6 @@ where
         self.observer.ranges.wl().clear();
         self.subs.clear();
         self.pool.block_on(router.unregister_task(task))
-    }
-
-    /// Make a guard for checking whether we can flush the checkpoint ts.
-    fn make_flush_guard(&self) -> impl FnOnce() -> bool + Send {
-        let failover = self.failover_time;
-        let flush_duration = self.config.max_flush_interval;
-        move || {
-            if failover
-                .as_ref()
-                .map(|failover_t| failover_t.saturating_elapsed() < flush_duration.0 * 2)
-                .unwrap_or(false)
-            {
-                warn!("during failover, skipping advancing resolved ts"; 
-                    "failover_time_ago" => ?failover.map(|failover_t| failover_t.saturating_elapsed()));
-                return false;
-            }
-            let in_flight = crate::observer::IN_FLIGHT_START_OBSERVE_MESSAGE.load(Ordering::SeqCst);
-            if in_flight > 0 {
-                warn!("inflight leader detected, skipping advancing resolved ts"; "in_flight" => %in_flight);
-                return false;
-            }
-            true
-        }
     }
 
     fn prepare_min_ts(&self) -> future![TimeStamp] {

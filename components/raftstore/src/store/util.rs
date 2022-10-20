@@ -29,7 +29,7 @@ use raft::{
 use raft_proto::ConfChangeI;
 use tikv_util::{box_err, debug, info, store::region, time::monotonic_raw_now, Either};
 use time::{Duration, Timespec};
-use txn_types::TimeStamp;
+use txn_types::{TimeStamp, WriteBatchFlags};
 
 use super::peer_storage;
 use crate::{coprocessor::CoprocessorHost, Error, Result};
@@ -192,6 +192,9 @@ pub fn admin_cmd_epoch_lookup(admin_cmp_type: AdminCmdType) -> AdminCmdEpochStat
         AdminCmdType::RollbackMerge => AdminCmdEpochState::new(true, true, true, false),
         // Transfer leader
         AdminCmdType::TransferLeader => AdminCmdEpochState::new(true, true, false, false),
+        AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => {
+            AdminCmdEpochState::new(false, false, false, false)
+        }
     }
 }
 
@@ -274,6 +277,35 @@ pub fn compare_region_epoch(
         ));
     }
 
+    Ok(())
+}
+
+// Check if the request could be proposed/applied under the current state of the
+// flashback.
+pub fn check_flashback_state(
+    is_in_flashback: bool,
+    req: &RaftCmdRequest,
+    region_id: u64,
+) -> Result<()> {
+    // The admin flashback cmd could be proposed/applied under any state.
+    if req.has_admin_request()
+        && (req.get_admin_request().get_cmd_type() == AdminCmdType::PrepareFlashback
+            || req.get_admin_request().get_cmd_type() == AdminCmdType::FinishFlashback)
+    {
+        return Ok(());
+    }
+    let is_flashback_request = WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
+        .contains(WriteBatchFlags::FLASHBACK);
+    // If the region is in the flashback state, the only allowed request is the
+    // flashback request itself.
+    if is_in_flashback && !is_flashback_request {
+        return Err(Error::FlashbackInProgress(region_id));
+    }
+    // If the region is not in the flashback state, the flashback request itself
+    // should be rejected.
+    if !is_in_flashback && is_flashback_request {
+        return Err(Error::FlashbackNotPrepared(region_id));
+    }
     Ok(())
 }
 
@@ -871,7 +903,7 @@ impl RegionReadProgressRegistry {
             .lock()
             .unwrap()
             .get(region_id)
-            .map(|rp| rp.core.lock().unwrap().applied_index)
+            .map(|rp| rp.core.lock().unwrap().read_state.idx)
     }
 
     // NOTICE: this function is an alias of `get_safe_ts` to distinguish the

@@ -250,6 +250,7 @@ fn test_serde_custom_tikv_config() {
         long_uncommitted_base_threshold: ReadableDuration::secs(1),
         max_snapshot_file_raw_size: ReadableSize::gb(10),
         unreachable_backoff: ReadableDuration::secs(111),
+        check_peers_availability_interval: ReadableDuration::secs(30),
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
@@ -797,7 +798,7 @@ fn test_serde_custom_tikv_config() {
         renew_interval: ReadableDuration::millis(100),
         renew_batch_min_size: 100,
         renew_batch_max_size: 8192,
-        available_interval: ReadableDuration::millis(3000),
+        alloc_ahead_buffer: ReadableDuration::millis(3000),
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");
