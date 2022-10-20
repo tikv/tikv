@@ -158,9 +158,9 @@ impl EntryCache {
     fn prepend(&mut self, entries: Vec<Entry>) {
         let mut mem_size_change = 0;
         let old_capacity = self.cache.capacity();
-        for e in entries.iter().rev() {
-            self.cache.push_front(e.to_owned());
+        for e in entries.into_iter().rev() {
             mem_size_change += (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64;
+            self.cache.push_front(e);
         }
         let new_capacity = self.cache.capacity();
         mem_size_change += Self::cache_vec_mem_size_change(new_capacity, old_capacity);

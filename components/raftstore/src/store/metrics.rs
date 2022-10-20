@@ -623,14 +623,6 @@ lazy_static! {
             exponential_buckets(0.0005, 2.0, 21).unwrap()  // 500us ~ 8.7m
         ).unwrap();
 
-    // The duration is almost same as the RAFT_ENTRY_FETCHES_TASK_DURATION.
-    pub static ref WARM_ENTRY_CACHE_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_warm_up_entry_cache_duration_seconds",
-            "Bucketed histogram of prefilling entry cache duration.",
-            exponential_buckets(0.0005, 2.0, 21).unwrap()  // 500us ~ 8.7m
-        ).unwrap();
-
     pub static ref WARM_UP_ENTRY_CACHE_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(
             "tikv_raftstore_prefill_entry_cache_total",
