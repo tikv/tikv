@@ -216,7 +216,7 @@ where
     pub engines: Engines<EK, ER>,
 
     peer_id: u64,
-    peer: metapb::Peer,
+    peer: Option<metapb::Peer>, // when uninitialized the peer info is unknown.
     region: metapb::Region,
 
     snap_state: RefCell<SnapState>,
@@ -317,7 +317,7 @@ where
         Ok(PeerStorage {
             engines,
             peer_id,
-            peer: find_peer_by_id(region, peer_id).unwrap().clone(),
+            peer: find_peer_by_id(region, peer_id).cloned(),
             region: region.clone(),
             snap_state: RefCell::new(SnapState::Relax),
             gen_snap_task: RefCell::new(None),
@@ -358,9 +358,7 @@ where
 
     #[inline]
     pub fn set_region(&mut self, region: metapb::Region) {
-        if let Some(p) = find_peer_by_id(&region, self.peer_id) {
-            self.peer = p.clone();
-        }
+        self.peer = find_peer_by_id(&region, self.peer_id).cloned();
         self.region = region;
     }
 
@@ -446,7 +444,7 @@ where
     /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no
     /// unavailable snapshot.
     pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
-        if self.peer.is_witness {
+        if self.peer.as_ref().unwrap().is_witness {
             // witness could be the leader for a while, do not generate snapshot now
             return Err(raft::Error::Store(
                 raft::StorageError::SnapshotTemporarilyUnavailable,
