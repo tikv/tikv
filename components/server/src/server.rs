@@ -1595,10 +1595,23 @@ pub trait ConfiguredRaftEngine: RaftEngine {
         _: &Option<Arc<DataKeyManager>>,
         _: &Option<Cache>,
     ) -> Self;
-    fn as_rocks_engine(&self) -> Option<&RocksEngine> {
+    fn as_rocks_engine(&self) -> Option<&RocksEngine>;
+    fn register_config(&self, _cfg_controller: &mut ConfigController, _share_cache: bool);
+}
+
+impl<T: RaftEngine> ConfiguredRaftEngine for T {
+    default fn build(
+        _: &TikvConfig,
+        _: &Arc<Env>,
+        _: &Option<Arc<DataKeyManager>>,
+        _: &Option<Cache>,
+    ) -> Self {
+        unimplemented!()
+    }
+    default fn as_rocks_engine(&self) -> Option<&RocksEngine> {
         None
     }
-    fn register_config(&self, _cfg_controller: &mut ConfigController, _share_cache: bool) {}
+    default fn register_config(&self, _cfg_controller: &mut ConfigController, _share_cache: bool) {}
 }
 
 impl ConfiguredRaftEngine for RocksEngine {
