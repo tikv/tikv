@@ -3946,14 +3946,8 @@ where
             return;
         }
         fail_point!("witness_transfer_leader", |_| {});
-        info!(
-            "witness try to transfer leader";
-            "region_id" => self.region_id,
-            "peer_id" => self.peer.get_id(),
-        );
 
         if self.raft_group.raft.lead_transferee.is_some() {
-            info!("witness already transferring leader");
             // already being in transfer leader
             return;
         }

@@ -893,8 +893,6 @@ pub struct ApplyDelegate<EK>
 where
     EK: KvEngine,
 {
-    /// The ID of the peer.
-    id: u64,
     /// The term of the Region.
     term: u64,
     /// The Region information of the peer.
@@ -973,7 +971,6 @@ where
 {
     fn from_registration(reg: Registration) -> ApplyDelegate<EK> {
         ApplyDelegate {
-            id: reg.id,
             tag: format!("[region {}] {}", reg.region.get_id(), reg.id),
             peer: find_peer_by_id(&reg.region, reg.id).unwrap().clone(),
             region: reg.region,
@@ -1007,7 +1004,7 @@ where
     }
 
     pub fn id(&self) -> u64 {
-        self.id
+        self.peer.get_id()
     }
 
     /// Handles all the committed_entries, namely, applies the committed
@@ -1429,7 +1426,7 @@ where
             match *exec_result {
                 ExecResult::ChangePeer(ref cp) => {
                     self.region = cp.region.clone();
-                    if let Some(p) = find_peer_by_id(&self.region, self.id) {
+                    if let Some(p) = find_peer_by_id(&self.region, self.id()) {
                         self.peer = p.clone();
                     }
                 }
@@ -1488,11 +1485,12 @@ where
     fn destroy(&mut self, apply_ctx: &mut ApplyContext<EK>) {
         self.stopped = true;
         apply_ctx.router.close(self.region_id());
+        let id = self.id();
         for cmd in self.pending_cmds.normals.drain(..) {
-            notify_region_removed(self.region.get_id(), self.id, cmd);
+            notify_region_removed(self.region.get_id(), id, cmd);
         }
         if let Some(cmd) = self.pending_cmds.conf_change.take() {
-            notify_region_removed(self.region.get_id(), self.id, cmd);
+            notify_region_removed(self.region.get_id(), id, cmd);
         }
         self.yield_state = None;
 
@@ -1917,12 +1915,12 @@ where
 
         fail_point!(
             "apply_on_conf_change_1_3_1",
-            (self.id == 1 || self.id == 3) && self.region_id() == 1,
+            (self.id() == 1 || self.id() == 3) && self.region_id() == 1,
             |_| panic!("should not use return")
         );
         fail_point!(
             "apply_on_conf_change_3_1",
-            self.id == 3 && self.region_id() == 1,
+            self.id() == 3 && self.region_id() == 1,
             |_| panic!("should not use return")
         );
         fail_point!(
@@ -1947,7 +1945,7 @@ where
                 let add_ndoe_fp = || {
                     fail_point!(
                         "apply_on_add_node_1_2",
-                        self.id == 2 && self.region_id() == 1,
+                        self.id() == 2 && self.region_id() == 1,
                         |_| {}
                     )
                 };
@@ -2014,7 +2012,7 @@ where
                             p
                         ));
                     }
-                    if self.id == peer.get_id() {
+                    if self.id() == peer.get_id() {
                         // Remove ourself, we will destroy all region data later.
                         // So we need not to apply following logs.
                         self.stopped = true;
@@ -2296,7 +2294,7 @@ where
                                     p
                                 ));
                             }
-                            if self.id == peer.get_id() {
+                            if self.id() == peer.get_id() {
                                 // Remove ourself, we will destroy all region data later.
                                 // So we need not to apply following logs.
                                 self.stopped = true;
@@ -2380,7 +2378,7 @@ where
         fail_point!("apply_before_split");
         fail_point!(
             "apply_before_split_1_3",
-            self.id == 3 && self.region_id() == 1,
+            self.id() == 3 && self.region_id() == 1,
             |_| { unreachable!() }
         );
 
@@ -2572,7 +2570,7 @@ where
 
         fail_point!(
             "apply_after_split_1_3",
-            self.id == 3 && self.region_id() == 1,
+            self.id() == 3 && self.region_id() == 1,
             |_| { unreachable!() }
         );
 
@@ -2676,7 +2674,7 @@ where
             let apply_before_commit_merge = || {
                 fail_point!(
                     "apply_before_commit_merge_except_1_4",
-                    self.region_id() == 1 && self.id != 4,
+                    self.region_id() == 1 && self.id() != 4,
                     |_| {}
                 );
             };
@@ -2951,7 +2949,7 @@ where
 
         let peer = req.get_transfer_leader().get_peer();
         // Only execute TransferLeader if the expected new leader is self.
-        if peer.get_id() == self.id {
+        if peer.get_id() == self.id() {
             Ok((resp, ApplyResult::Res(ExecResult::TransferLeader { term })))
         } else {
             Ok((resp, ApplyResult::None))
@@ -3534,7 +3532,7 @@ where
             "peer_id" => self.delegate.id(),
             "term" => reg.term
         );
-        assert_eq!(self.delegate.id, reg.id);
+        assert_eq!(self.delegate.id(), reg.id);
         self.delegate.term = reg.term;
         self.delegate.clear_all_commands_as_stale();
         self.delegate = ApplyDelegate::from_registration(reg);
@@ -3688,7 +3686,7 @@ where
                 PeerMsg::ApplyRes {
                     res: TaskRes::Destroy {
                         region_id: self.delegate.region_id(),
-                        peer_id: self.delegate.id,
+                        peer_id: self.delegate.id(),
                         merge_from_snapshot: d.merge_from_snapshot,
                     },
                 },
@@ -3790,7 +3788,7 @@ where
             self.delegate.write_apply_state(apply_ctx.kv_wb_mut());
             fail_point!(
                 "apply_on_handle_snapshot_1_1",
-                self.delegate.id == 1 && self.delegate.region_id() == 1,
+                self.delegate.id() == 1 && self.delegate.region_id() == 1,
                 |_| unimplemented!()
             );
 
@@ -3816,7 +3814,7 @@ where
             .fetch_sub(1, Ordering::SeqCst);
         fail_point!(
             "apply_on_handle_snapshot_finish_1_1",
-            self.delegate.id == 1 && self.delegate.region_id() == 1,
+            self.delegate.id() == 1 && self.delegate.region_id() == 1,
             |_| unimplemented!()
         );
     }
@@ -4858,7 +4856,7 @@ mod tests {
         reg.apply_state.set_applied_index(3);
         router.schedule_task(2, Msg::Registration(reg.dup()));
         validate(&router, 2, move |delegate| {
-            assert_eq!(delegate.id, 1);
+            assert_eq!(delegate.id(), 1);
             assert_eq!(delegate.peer, peer);
             assert_eq!(delegate.tag, "[region 2] 1");
             assert_eq!(delegate.region, reg.region);
