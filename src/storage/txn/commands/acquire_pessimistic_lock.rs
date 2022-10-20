@@ -493,7 +493,7 @@ impl AcquirePessimisticLock {
     }
 
     pub fn new_resumed_from_lock_wait_entries(
-        lock_wait_entries: Vec<Box<LockWaitEntry>>,
+        lock_wait_entries: impl IntoIterator<Item = Box<LockWaitEntry>>,
     ) -> TypedCommand<StorageResult<PessimisticLockResults>> {
         let items: Vec<_> = lock_wait_entries
             .into_iter()
