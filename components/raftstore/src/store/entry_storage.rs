@@ -155,7 +155,7 @@ impl EntryCache {
     /// should be equal to `cache first index - 1`. When cache is
     /// empty, it should be equal to the store's last index. Otherwise,
     /// append new entries may fail due to unexpected hole.
-    fn prepend(&mut self, entries: &[Entry]) {
+    fn prepend(&mut self, entries: Vec<Entry>) {
         let mut mem_size_change = 0;
         let old_capacity = self.cache.capacity();
         for e in entries.iter().rev() {
@@ -1157,7 +1157,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
                         };
                         assert!(is_valid, "the warmup range should still be valid");
                         entries.truncate((range.1 - range.0) as usize);
-                        self.cache.prepend(&entries);
+                        self.cache.prepend(entries);
                         WARM_UP_ENTRY_CACHE_COUNTER.finished.inc();
                         fail_point!("on_entry_cache_warmed_up");
                         return !is_task_timeout;
@@ -1304,7 +1304,7 @@ pub mod tests {
         );
         assert_eq!(rx.try_recv().unwrap(), 3);
 
-        cache.prepend(&[new_padded_entry(100, 1, 1)]);
+        cache.prepend(vec![new_padded_entry(100, 1, 1)]);
         assert_eq!(rx.try_recv().unwrap(), 1);
         cache.persisted = 100;
         cache.compact_to(101);
@@ -1741,7 +1741,7 @@ pub mod tests {
         entries = vec![new_entry(6, 6), new_entry(7, 6)];
         append_ents(&mut store, &entries);
         validate_cache(&store, &entries);
-        store.cache.prepend(&[new_entry(6, 5)]);
+        store.cache.prepend(vec![new_entry(6, 5)]);
 
         // rewrite old entry
         entries = vec![new_entry(5, 6), new_entry(6, 6)];
