@@ -2,8 +2,9 @@
 use std::{convert::TryInto, fmt::Display, io, sync::Arc};
 
 use async_trait::async_trait;
-use cloud::blob::{
-    none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty,
+use cloud::{
+    blob::{none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty},
+    metrics,
 };
 use futures_util::{
     future::TryFutureExt,
@@ -20,7 +21,12 @@ use tame_gcs::{
     types::{BucketName, ObjectId},
 };
 use tame_oauth::gcp::{ServiceAccountAccess, ServiceAccountInfo, TokenOrRequest};
-use tikv_util::stream::{error_stream, retry, AsyncReadAsSyncStreamOfBytes, RetryError};
+use tikv_util::{
+    stream::{error_stream, AsyncReadAsSyncStreamOfBytes, RetryError},
+    time::Instant,
+};
+
+use crate::utils::retry;
 
 const GOOGLE_APIS: &str = "https://www.googleapis.com";
 const HARDCODED_ENDPOINTS_SUFFIX: &[&str] = &["upload/storage/v1/", "storage/v1/"];
@@ -156,6 +162,7 @@ impl<T, E: Display> ResultExt for Result<T, E> {
     }
 }
 
+#[derive(Debug)]
 enum RequestError {
     Hyper(hyper::Error, String),
     OAuth(tame_oauth::Error, String),
@@ -470,25 +477,36 @@ impl BlobStorage for GcsStorage {
 
         // FIXME: Switch to upload() API so we don't need to read the entire data into
         // memory in order to retry.
+        let begin = Instant::now_coarse();
         let mut data = Vec::with_capacity(content_length as usize);
         reader.read_to_end(&mut data).await?;
-        retry(|| async {
-            let data = Cursor::new(data.clone());
-            let req = Object::insert_multipart(
-                &bucket,
-                data,
-                content_length,
-                &metadata,
-                Some(InsertObjectOptional {
-                    predefined_acl: self.config.predefined_acl,
-                    ..Default::default()
-                }),
-            )
-            .map_err(RequestError::Gcs)?
-            .map(|reader| Body::wrap_stream(AsyncReadAsSyncStreamOfBytes::new(reader)));
-            self.make_request(req, tame_gcs::Scopes::ReadWrite).await
-        })
+        metrics::CLOUD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["gcp", "read_local"])
+            .observe(begin.saturating_elapsed_secs());
+        let begin = Instant::now_coarse();
+        retry(
+            || async {
+                let data = Cursor::new(data.clone());
+                let req = Object::insert_multipart(
+                    &bucket,
+                    data,
+                    content_length,
+                    &metadata,
+                    Some(InsertObjectOptional {
+                        predefined_acl: self.config.predefined_acl,
+                        ..Default::default()
+                    }),
+                )
+                .map_err(RequestError::Gcs)?
+                .map(|reader| Body::wrap_stream(AsyncReadAsSyncStreamOfBytes::new(reader)));
+                self.make_request(req, tame_gcs::Scopes::ReadWrite).await
+            },
+            "insert_multipart",
+        )
         .await?;
+        metrics::CLOUD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["gcp", "insert_multipart"])
+            .observe(begin.saturating_elapsed_secs());
         Ok::<_, io::Error>(())
     }
 
