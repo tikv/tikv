@@ -9,6 +9,7 @@ use std::{
     time::Duration,
 };
 
+use collections::HashMap;
 pub use engine_rocks::RocksSnapshot;
 use engine_rocks::{
     get_env, RocksCfOptions, RocksDbOptions, RocksEngine as BaseRocksEngine, RocksEngineIterator,
@@ -206,15 +207,12 @@ impl Engine for RocksEngine {
     type Snap = Arc<RocksSnapshot>;
     type Local = BaseRocksEngine;
 
-    fn kv_engine(&self) -> BaseRocksEngine {
-        self.engines.kv.clone()
+    fn kv_engine(&self) -> Option<BaseRocksEngine> {
+        Some(self.engines.kv.clone())
     }
 
-    fn snapshot_on_kv_engine(&self, _: &[u8], _: &[u8]) -> Result<Self::Snap> {
-        self.snapshot(Default::default())
-    }
-
-    fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()> {
+    fn modify_on_kv_engine(&self, region_modifies: HashMap<u64, Vec<Modify>>) -> Result<()> {
+        let modifies = region_modifies.into_values().flatten().collect();
         write_modifies(&self.engines.kv, modifies)
     }
 
@@ -255,7 +253,7 @@ impl Engine for RocksEngine {
         Ok(())
     }
 
-    fn async_snapshot(&self, _: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()> {
+    fn async_snapshot(&mut self, _: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()> {
         fail_point!("rockskv_async_snapshot", |_| Err(box_err!(
             "snapshot failed"
         )));

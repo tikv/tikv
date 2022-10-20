@@ -174,6 +174,22 @@ where
             .store(normals.map.len(), Ordering::Relaxed);
     }
 
+    /// Same as send a message and then register the mailbox.
+    ///
+    /// The mailbox will not be registered if the message can't be sent.
+    pub fn send_and_register(
+        &self,
+        addr: u64,
+        mailbox: BasicMailbox<N>,
+        msg: N::Message,
+    ) -> Result<(), (BasicMailbox<N>, N::Message)> {
+        if let Err(SendError(m)) = mailbox.force_send(msg, &self.normal_scheduler) {
+            return Err((mailbox, m));
+        }
+        self.register(addr, mailbox);
+        Ok(())
+    }
+
     pub fn register_all(&self, mailboxes: Vec<(u64, BasicMailbox<N>)>) {
         let mut normals = self.normals.lock().unwrap();
         normals.map.reserve(mailboxes.len());

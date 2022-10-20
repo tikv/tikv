@@ -257,7 +257,7 @@ mod tests {
     fn test_raw_mvcc_snapshot() {
         // Use `Engine` to be independent to `Storage`.
         // Do not set "api version" to use `Engine` as a raw RocksDB.
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         let ctx = Context::default();
 

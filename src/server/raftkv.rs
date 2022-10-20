@@ -12,13 +12,12 @@ use std::{
     time::Duration,
 };
 
-use collections::HashSet;
+use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
 use kvproto::{
     errorpb,
     kvrpcpb::{Context, IsolationLevel},
-    metapb,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response},
 };
 use raft::{
@@ -37,6 +36,7 @@ use raftstore::{
     },
 };
 use thiserror::Error;
+use tikv_kv::write_modifies;
 use tikv_util::{codec::number::NumberEncoder, time::Instant};
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
@@ -44,8 +44,8 @@ use super::metrics::*;
 use crate::storage::{
     self, kv,
     kv::{
-        write_modifies, Callback, Engine, Error as KvError, ErrorInner as KvErrorInner,
-        ExtCallback, Modify, SnapContext, WriteData,
+        Callback, Engine, Error as KvError, ErrorInner as KvErrorInner, ExtCallback, Modify,
+        SnapContext, WriteData,
     },
 };
 
@@ -195,20 +195,26 @@ where
     }
 
     fn exec_snapshot(
-        &self,
+        &mut self,
         ctx: SnapContext<'_>,
         req: Request,
         cb: Callback<CmdRes<E::Snapshot>>,
     ) -> Result<()> {
         let mut header = self.new_request_header(ctx.pb_ctx);
-        if ctx.pb_ctx.get_stale_read() && !ctx.start_ts.is_zero() {
+        let mut flags = 0;
+        if ctx.pb_ctx.get_stale_read() && ctx.start_ts.map_or(true, |ts| !ts.is_zero()) {
             let mut data = [0u8; 8];
             (&mut data[..])
-                .encode_u64(ctx.start_ts.into_inner())
+                .encode_u64(ctx.start_ts.unwrap_or_default().into_inner())
                 .unwrap();
-            header.set_flags(WriteBatchFlags::STALE_READ.bits());
+            flags |= WriteBatchFlags::STALE_READ.bits();
             header.set_flag_data(data.into());
         }
+        if ctx.for_flashback {
+            flags |= WriteBatchFlags::FLASHBACK.bits();
+        }
+        header.set_flags(flags);
+
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.set_requests(vec![req].into());
@@ -216,7 +222,7 @@ where
             .read(
                 ctx.read_id,
                 cmd,
-                StoreCallback::Read(Box::new(move |resp| {
+                StoreCallback::read(Box::new(move |resp| {
                     cb(on_read_result(resp).map_err(Error::into));
                 })),
             )
@@ -252,9 +258,14 @@ where
         let reqs: Vec<Request> = batch.modifies.into_iter().map(Into::into).collect();
         let txn_extra = batch.extra;
         let mut header = self.new_request_header(ctx);
+        let mut flags = 0;
         if txn_extra.one_pc {
-            header.set_flags(WriteBatchFlags::ONE_PC.bits());
+            flags |= WriteBatchFlags::ONE_PC.bits();
         }
+        if txn_extra.for_flashback {
+            flags |= WriteBatchFlags::FLASHBACK.bits();
+        }
+        header.set_flags(flags);
 
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
@@ -314,46 +325,43 @@ where
     type Snap = RegionSnapshot<E::Snapshot>;
     type Local = E;
 
-    fn kv_engine(&self) -> E {
-        self.engine.clone()
+    fn kv_engine(&self) -> Option<E> {
+        Some(self.engine.clone())
     }
 
-    fn snapshot_on_kv_engine(&self, start_key: &[u8], end_key: &[u8]) -> kv::Result<Self::Snap> {
-        let mut region = metapb::Region::default();
-        region.set_start_key(start_key.to_owned());
-        region.set_end_key(end_key.to_owned());
-        // Use a fake peer to avoid panic.
-        region.mut_peers().push(Default::default());
-        Ok(RegionSnapshot::<E::Snapshot>::from_raw(
-            self.engine.clone(),
-            region,
-        ))
-    }
-
-    fn modify_on_kv_engine(&self, mut modifies: Vec<Modify>) -> kv::Result<()> {
-        for modify in &mut modifies {
-            match modify {
-                Modify::Delete(_, ref mut key) => {
-                    let bytes = keys::data_key(key.as_encoded());
-                    *key = Key::from_encoded(bytes);
-                }
-                Modify::Put(_, ref mut key, _) => {
-                    let bytes = keys::data_key(key.as_encoded());
-                    *key = Key::from_encoded(bytes);
-                }
-                Modify::PessimisticLock(ref mut key, _) => {
-                    let bytes = keys::data_key(key.as_encoded());
-                    *key = Key::from_encoded(bytes);
-                }
-                Modify::DeleteRange(_, ref mut key1, ref mut key2, _) => {
-                    let bytes = keys::data_key(key1.as_encoded());
-                    *key1 = Key::from_encoded(bytes);
-                    let bytes = keys::data_end_key(key2.as_encoded());
-                    *key2 = Key::from_encoded(bytes);
+    fn modify_on_kv_engine(
+        &self,
+        mut region_modifies: HashMap<u64, Vec<Modify>>,
+    ) -> kv::Result<()> {
+        for modifies in region_modifies.values_mut() {
+            for modify in modifies.iter_mut() {
+                match modify {
+                    Modify::Delete(_, ref mut key) => {
+                        let bytes = keys::data_key(key.as_encoded());
+                        *key = Key::from_encoded(bytes);
+                    }
+                    Modify::Put(_, ref mut key, _) => {
+                        let bytes = keys::data_key(key.as_encoded());
+                        *key = Key::from_encoded(bytes);
+                    }
+                    Modify::PessimisticLock(ref mut key, _) => {
+                        let bytes = keys::data_key(key.as_encoded());
+                        *key = Key::from_encoded(bytes);
+                    }
+                    Modify::DeleteRange(_, ref mut key1, ref mut key2, _) => {
+                        let bytes = keys::data_key(key1.as_encoded());
+                        *key1 = Key::from_encoded(bytes);
+                        let bytes = keys::data_end_key(key2.as_encoded());
+                        *key2 = Key::from_encoded(bytes);
+                    }
                 }
             }
         }
-        write_modifies(&self.engine, modifies)
+
+        write_modifies(
+            &self.engine,
+            region_modifies.into_values().flatten().collect(),
+        )
     }
 
     fn precheck_write_with_ctx(&self, ctx: &Context) -> kv::Result<()> {
@@ -420,15 +428,20 @@ where
         })
     }
 
-    fn async_snapshot(&self, mut ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> kv::Result<()> {
+    fn async_snapshot(
+        &mut self,
+        mut ctx: SnapContext<'_>,
+        cb: Callback<Self::Snap>,
+    ) -> kv::Result<()> {
         fail_point!("raftkv_async_snapshot_err", |_| Err(box_err!(
             "injected error for async_snapshot"
         )));
 
         let mut req = Request::default();
         req.set_cmd_type(CmdType::Snap);
-        if !ctx.key_ranges.is_empty() && !ctx.start_ts.is_zero() {
-            req.mut_read_index().set_start_ts(ctx.start_ts.into_inner());
+        if !ctx.key_ranges.is_empty() && ctx.start_ts.map_or(false, |ts| !ts.is_zero()) {
+            req.mut_read_index()
+                .set_start_ts(ctx.start_ts.as_ref().unwrap().into_inner());
             req.mut_read_index()
                 .set_key_ranges(mem::take(&mut ctx.key_ranges).into());
         }
@@ -472,7 +485,7 @@ where
         })
     }
 
-    fn release_snapshot(&self) {
+    fn release_snapshot(&mut self) {
         self.router.release_snapshot_cache();
     }
 

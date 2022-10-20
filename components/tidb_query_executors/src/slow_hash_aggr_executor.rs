@@ -7,6 +7,7 @@ use std::{
     sync::Arc,
 };
 
+use async_trait::async_trait;
 use collections::{HashMap, HashMapEntry};
 use tidb_query_aggr::*;
 use tidb_query_common::{storage::IntervalRange, Result};
@@ -32,6 +33,7 @@ pub struct BatchSlowHashAggregationExecutor<Src: BatchExecutor>(
     AggregationExecutor<Src, SlowHashAggregationImpl>,
 );
 
+#[async_trait]
 impl<Src: BatchExecutor> BatchExecutor for BatchSlowHashAggregationExecutor<Src> {
     type StorageStats = Src::StorageStats;
 
@@ -41,8 +43,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSlowHashAggregationExecutor<Src>
     }
 
     #[inline]
-    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        self.0.next_batch(scan_rows)
+    async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        self.0.next_batch(scan_rows).await
     }
 
     #[inline]
@@ -511,6 +513,7 @@ impl Eq for GroupKeyRefUnsafe {}
 
 #[cfg(test)]
 mod tests {
+    use futures::executor::block_on;
     use tidb_query_datatype::{codec::data_type::*, FieldTypeTp};
     use tidb_query_expr::{
         impl_arithmetic::{arithmetic_fn_meta, RealPlus},
@@ -571,17 +574,17 @@ mod tests {
             AllAggrDefinitionParser,
         );
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
-        let mut r = exec.next_batch(1);
+        let mut r = block_on(exec.next_batch(1));
         // col_4 (sort_key),    col_0 + 1 can result in:
         // NULL,                NULL
         // aa,                  NULL

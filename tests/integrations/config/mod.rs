@@ -129,6 +129,7 @@ fn test_serde_custom_tikv_config() {
             max_thread_count: 10,
             stack_size: ReadableSize::mb(20),
             max_tasks_per_worker: 2200,
+            auto_adjust_pool_size: false,
         },
         storage: StorageReadPoolConfig {
             use_unified_pool: Some(true),
@@ -204,6 +205,8 @@ fn test_serde_custom_tikv_config() {
         peer_stale_state_check_interval: ReadableDuration::hours(2),
         leader_transfer_max_log_lag: 123,
         snap_apply_batch_size: ReadableSize::mb(12),
+        region_worker_tick_interval: ReadableDuration::millis(1000),
+        clean_stale_ranges_tick: 10,
         lock_cf_compact_interval: ReadableDuration::minutes(12),
         lock_cf_compact_bytes_threshold: ReadableSize::mb(123),
         consistency_check_interval: ReadableDuration::secs(12),
@@ -247,6 +250,7 @@ fn test_serde_custom_tikv_config() {
         long_uncommitted_base_threshold: ReadableDuration::secs(1),
         max_snapshot_file_raw_size: ReadableSize::gb(10),
         unreachable_backoff: ReadableDuration::secs(111),
+        check_peers_availability_interval: ReadableDuration::secs(30),
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
@@ -650,7 +654,6 @@ fn test_serde_custom_tikv_config() {
     let raft_engine_config = value.raft_engine.mut_config();
     raft_engine_config.dir = "test-dir".to_owned();
     raft_engine_config.batch_compression_threshold.0 = ReadableSize::kb(1).0;
-    raft_engine_config.bytes_per_sync.0 = ReadableSize::kb(64).0;
     raft_engine_config.target_file_size.0 = ReadableSize::mb(1).0;
     raft_engine_config.purge_threshold.0 = ReadableSize::gb(1).0;
     raft_engine_config.recovery_mode = RecoveryMode::TolerateTailCorruption;
@@ -795,7 +798,7 @@ fn test_serde_custom_tikv_config() {
         renew_interval: ReadableDuration::millis(100),
         renew_batch_min_size: 100,
         renew_batch_max_size: 8192,
-        available_interval: ReadableDuration::millis(3000),
+        alloc_ahead_buffer: ReadableDuration::millis(3000),
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");

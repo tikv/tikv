@@ -28,15 +28,12 @@ use protobuf::Message;
 use raft::{self, eraftpb::Entry, RawNode};
 use raftstore::{
     coprocessor::get_region_approximate_middle,
-    store::{
-        util as raftstore_util, write_initial_apply_state, write_initial_raft_state,
-        write_peer_state, PeerStorage,
-    },
+    store::{write_initial_apply_state, write_initial_raft_state, write_peer_state, PeerStorage},
 };
 use thiserror::Error;
 use tikv_util::{
-    config::ReadableSize, keybuilder::KeyBuilder, sys::thread::StdThreadBuildWrapper,
-    worker::Worker,
+    config::ReadableSize, keybuilder::KeyBuilder, store::find_peer,
+    sys::thread::StdThreadBuildWrapper, worker::Worker,
 };
 use txn_types::Key;
 
@@ -508,7 +505,7 @@ impl<ER: RaftEngine> Debugger<ER> {
             let region = local_state.get_region();
             let store_id = self.get_store_ident()?.get_store_id();
 
-            let peer_id = raftstore_util::find_peer(region, store_id)
+            let peer_id = find_peer(region, store_id)
                 .map(|peer| peer.get_id())
                 .ok_or_else(|| {
                     Error::Other("RegionLocalState doesn't contains peer itself".into())

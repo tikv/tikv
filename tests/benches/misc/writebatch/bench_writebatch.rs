@@ -13,7 +13,7 @@ fn writebatch(engine: &RocksEngine, round: usize, batch_keys: usize) {
             let k = format!("key_round{}_key{}", r, i);
             batch.put(k.as_bytes(), v).unwrap();
         }
-        batch.write().unwrap()
+        batch.write().unwrap();
     }
 }
 
