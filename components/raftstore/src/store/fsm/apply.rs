@@ -1360,6 +1360,12 @@ where
                             "peer_id" => self.id(),
                             "err" => ?e
                         ),
+                        Error::FlashbackNotPrepared(..) => debug!(
+                            "flashback is not prepared";
+                            "region_id" => self.region_id(),
+                            "peer_id" => self.id(),
+                            "err" => ?e
+                        ),
                         _ => error!(?e;
                             "execute raft command";
                             "region_id" => self.region_id(),
@@ -1532,7 +1538,7 @@ where
         let include_region =
             req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
         check_region_epoch(req, &self.region, include_region)?;
-        check_flashback_state(req, &self.region)?;
+        check_flashback_state(self.region.get_is_in_flashback(), req, self.region_id())?;
         if req.has_admin_request() {
             self.exec_admin_cmd(ctx, req)
         } else {
