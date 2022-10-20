@@ -170,6 +170,7 @@ make_static_metric! {
     pub label_enum RaftDroppedMessage {
         mismatch_store_id,
         mismatch_region_epoch,
+        mismatch_witness_snapshot,
         stale_msg,
         region_overlap,
         region_no_peer,
