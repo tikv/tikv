@@ -320,6 +320,7 @@ pub mod tests {
         TestEngineBuilder,
     };
 
+    #[cfg(test)]
     pub fn acquire_pessimistic_lock_allow_lock_with_conflict<E: Engine>(
         engine: &mut E,
         key: &[u8],
@@ -361,6 +362,7 @@ pub mod tests {
         res.map(|r| r.0)
     }
 
+    #[cfg(test)]
     pub fn must_succeed_allow_lock_with_conflict<E: Engine>(
         engine: &mut E,
         key: &[u8],
@@ -435,7 +437,7 @@ pub mod tests {
                 }
             }
             PessimisticLockKeyResult::Empty => None,
-            _ => todo!(),
+            res => panic!("unexpected result: {:?}", res),
         }
     }
 

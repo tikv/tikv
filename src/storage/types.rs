@@ -149,8 +149,8 @@ pub struct PessimisticLockParameters {
     pub allow_lock_with_conflict: bool,
 }
 
-#[derive(Debug, Clone)]
 /// Represents the result of pessimistic lock on a single key.
+#[derive(Debug, Clone)]
 pub enum PessimisticLockKeyResult {
     Empty,
     Value(Option<Value>),
@@ -262,7 +262,7 @@ impl PessimisticLockKeyResult {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct PessimisticLockResults(pub Vec<PessimisticLockKeyResult>);
 
 impl PessimisticLockResults {

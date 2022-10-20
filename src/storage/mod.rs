@@ -8313,7 +8313,7 @@ mod tests {
                 storage
                     .sched_txn_command(
                         new_acquire_pessimistic_lock_command(
-                            vec![(Key::from_raw(&k), false)],
+                            vec![(Key::from_raw(k), false)],
                             25,
                             25,
                             return_values,
@@ -8537,7 +8537,7 @@ mod tests {
                 )
                 .allow_lock_with_conflict(true)
                 .lock_wait_timeout(Some(WaitTimeout::Default)),
-                expect_pessimistic_lock_res_callback(tx.clone(), results_empty(1)),
+                expect_pessimistic_lock_res_callback(tx, results_empty(1)),
             )
             .unwrap();
         rx.recv().unwrap();

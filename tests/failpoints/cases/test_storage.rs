@@ -43,7 +43,7 @@ use tikv::{
     },
 };
 use tikv_util::{future::paired_future_callback, worker::dummy_scheduler, HandyRwLock};
-use txn_types::{Key, Mutation, OldValues, TimeStamp};
+use txn_types::{Key, Mutation, TimeStamp};
 
 #[test]
 fn test_scheduler_leader_change_twice() {

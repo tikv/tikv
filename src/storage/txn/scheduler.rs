@@ -949,7 +949,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     fn update_wait_for_lock_after_acquiring(
         &self,
-        new_acquired_locks: Vec<(TimeStamp, txn_types::Key)>,
+        _new_acquired_locks: Vec<(TimeStamp, txn_types::Key)>,
     ) {
         // if new_acquired_locks.is_empty() {
         //     return;
@@ -1200,7 +1200,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// Processes a write command within a worker thread, then posts either a
     /// `WriteFinished` message if successful or a `FinishedWithErr` message
     /// back to the `Scheduler`.
-    async fn process_write(self, snapshot: E::Snap, mut task: Task, statistics: &mut Statistics) {
+    async fn process_write(self, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
         fail_point!("txn_before_process_write");
         let write_bytes = task.cmd.write_bytes();
         let tag = task.cmd.tag();
@@ -1231,14 +1231,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             return;
         }
         let raw_ext = raw_ext.unwrap();
-
-        // Keep some information to use after the command being consumed.
-        let pessimistic_lock_single_request_meta =
-            if let Command::AcquirePessimisticLock(cmd) = &mut task.cmd {
-                cmd.get_single_request_meta()
-            } else {
-                None
-            };
 
         let deadline = task.cmd.deadline();
         let write_result = {
@@ -1312,109 +1304,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
         let mut pr = Some(pr);
-        // let mut lock_info = if tag == CommandKind::acquire_pessimistic_lock
-        //     || tag == CommandKind::acquire_pessimistic_lock_resumed
-        // {
-        //     if let Some(cmd_meta) = pessimistic_lock_single_request_meta {
-        //         let conversion_start = Instant::now();
-        //
-        //         let mut lock_info_list =
-        //
-        // Self::take_lock_info_from_pessimistic_lock_pr(pr.as_mut().unwrap());
-        //         // We currently do not allow multi-waiting in a single request.
-        //         assert!(lock_info_list.is_none() ||
-        // lock_info_list.as_ref().unwrap().len() == 1);         if let Some(l)
-        // = lock_info_list.as_mut() {             // Enter key-wise waiting
-        // state.             let diag_ctx = DiagnosticContext {
-        //                 key: l[0].key.to_raw().unwrap(),
-        //                 resource_group_tag: ctx.get_resource_group_tag().into(),
-        //                 tracker,
-        //             };
-        //             let wait_token = scheduler.inner.lock_mgr.allocate_token();
-        //
-        //             let first_batch_size = cmd_meta.keys_count - l.len();
-        //
-        //             if cmd_meta.allow_lock_with_conflict {
-        //                 // Only single-key requests are allowed in the new mode
-        // currently.                 assert_eq!(first_batch_size, 0);
-        //             }
-        //
-        //             let lock_req_ctx = scheduler.convert_to_keywise_callbacks(
-        //                 cid,
-        //                 wait_token,
-        //                 cmd_meta.start_ts,
-        //                 cmd_meta.for_update_ts,
-        //                 mem::replace(&mut pr, Some(ProcessResult::Res)).unwrap(),
-        //                 cmd_meta.keys_count,
-        //                 first_batch_size,
-        //                 cmd_meta.allow_lock_with_conflict,
-        //             );
-        //
-        //             scheduler.on_wait_for_lock(
-        //                 &ctx,
-        //                 wait_token,
-        //                 cmd_meta.start_ts,
-        //                 cmd_meta.is_first_lock,
-        //                 l,
-        //                 Box::new(lock_req_ctx.get_callback_for_cancellation()),
-        //                 l[0].parameters.wait_timeout,
-        //                 diag_ctx,
-        //             );
-        //             // It's possible that the request is cancelled immediately due to
-        // no timeout             // (non-blocking locking).
-        //             if lock_req_ctx.shared_states.finished.load(Ordering::Acquire) {
-        //                 lock_info_list = None;
-        //             } else {
-        //                 let mut key_callback_count = 0;
-        //                 for lock_info in l {
-        //                     assert!(lock_info.key_cb.is_none());
-        //                     // TODO: Check if there are paths that the cb is never
-        // invoked.                     lock_info.key_cb = Some(
-        //                         lock_req_ctx
-        //
-        // .get_callback_for_blocked_key(lock_info.index_in_request),
-        //                     );
-        //                     lock_info.lock_wait_token = wait_token;
-        //                     lock_info.req_states =
-        // Some(lock_req_ctx.get_shared_states());
-        // key_callback_count += 1;                 }
-        //                 assert_eq!(key_callback_count, 1);
-        //             }
-        //         }
-        //
-        //         STORAGE_KEYWISE_PESSIMISTIC_LOCK_HANDLE_DURATION_HISTOGRAM_STATIC
-        //             .convert_from_normal
-        //             .observe(conversion_start.saturating_elapsed_secs());
-        //         lock_info_list
-        //     } else {
-        //         // It's already in key-wise mode.
-        //         let start_time = Instant::now();
-        //         let lock_info_list =
-        //             scheduler.collect_resumed_pessimistic_lock_result(cid,
-        // pr.as_mut().unwrap());
-        //
-        //         if let Some(l) = lock_info_list.as_ref() {
-        //             scheduler.update_wait_for_lock(l);
-        //         }
-        //         STORAGE_KEYWISE_PESSIMISTIC_LOCK_HANDLE_DURATION_HISTOGRAM_STATIC
-        //             .tidy_up_result
-        //             .observe(start_time.saturating_elapsed_secs());
-        //         lock_info_list
-        //     }
-        // } else {
-        //     None
-        // };
-        //
-        // if let Some(lock_info) = lock_info.as_mut() {
-        //     // Set the start time of lock waiting
-        //     let now = std::time::Instant::now();
-        //     lock_info
-        //         .iter_mut()
-        //         .for_each(|i| i.wait_start_time = Some(now));
-        // }
-        //
-        // if let Some(released_locks) = released_locks.as_mut() {
-        //     scheduler.on_release_locks_pre_persist(cid, released_locks);
 
         // TODO: Lock wait handling here.
         if !lock_info.is_empty() {

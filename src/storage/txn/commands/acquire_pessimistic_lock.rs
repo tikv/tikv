@@ -8,7 +8,7 @@ use txn_types::{Key, OldValues, TimeStamp, TxnExtra};
 
 use crate::storage::{
     kv::WriteData,
-    lock_manager::{lock_waiting_queue::LockWaitEntry, LockManager, WaitTimeout},
+    lock_manager::{lock_waiting_queue::LockWaitEntry, LockManager, LockWaitToken, WaitTimeout},
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader},
     txn::{
         acquire_pessimistic_lock,
@@ -22,15 +22,11 @@ use crate::storage::{
     ProcessResult, Result as StorageResult, Snapshot,
 };
 
-pub struct PessimisticLockKeyContext {
-    pub lock_hash: u64,
-}
-
 pub struct ResumedPessimisticLockItem {
     pub key: Key,
     pub should_not_exist: bool,
     pub params: PessimisticLockParameters,
-    pub lock_key_ctx: PessimisticLockKeyContext,
+    pub lock_wait_token: LockWaitToken,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -84,19 +80,6 @@ command! {
         content => {
             inner: PessimisticLockCmdInner,
         }
-}
-
-impl PessimisticLockKeyContext {
-    fn from_key(index: usize, key: &Key) -> Self {
-        let hash_for_lock = key.gen_hash();
-        // let mut hasher = DefaultHasher::new();
-        // key.hash(&mut hasher);
-        // let hash_for_latch = hasher.finish();
-        Self {
-            lock_hash: hash_for_lock,
-            // hash_for_latch,
-        }
-    }
 }
 
 impl CommandExt for AcquirePessimisticLock {
@@ -318,7 +301,7 @@ impl AcquirePessimisticLock {
                 key,
                 should_not_exist,
                 params,
-                lock_key_ctx,
+                lock_wait_token,
             } = item;
 
             // TODO: Refine the code for rebuilding txn state.
@@ -378,6 +361,7 @@ impl AcquirePessimisticLock {
                 Err(MvccError(box MvccErrorInner::KeyIsLocked(lock_info))) => {
                     let mut lock_info =
                         WriteResultLockInfo::new(lock_info, params, key, should_not_exist);
+                    lock_info.lock_wait_token = lock_wait_token;
                     res.push(PessimisticLockKeyResult::Waiting);
                     encountered_locks.push(lock_info);
                 }
@@ -499,14 +483,11 @@ impl AcquirePessimisticLock {
             .into_iter()
             .map(|item| {
                 assert!(item.key_cb.is_none());
-                let lock_key_ctx = PessimisticLockKeyContext {
-                    lock_hash: item.lock_hash,
-                };
                 ResumedPessimisticLockItem {
                     key: item.key,
                     should_not_exist: item.should_not_exist,
                     params: item.parameters,
-                    lock_key_ctx,
+                    lock_wait_token: item.lock_wait_token,
                 }
             })
             .collect();
@@ -521,34 +502,4 @@ impl AcquirePessimisticLock {
         let inner = PessimisticLockCmdInner::BatchResumedRequests { items };
         Self::new(inner, ctx)
     }
-
-    pub fn is_resumed_after_waiting(&self) -> bool {
-        match &self.inner {
-            PessimisticLockCmdInner::SingleRequest { .. } => false,
-            PessimisticLockCmdInner::BatchResumedRequests { .. } => true,
-        }
-    }
-
-    pub fn get_single_request_meta(&self) -> Option<SingleRequestPessimisticLockCommandMeta> {
-        match &self.inner {
-            PessimisticLockCmdInner::SingleRequest { params, keys } => {
-                Some(SingleRequestPessimisticLockCommandMeta {
-                    start_ts: params.start_ts,
-                    for_update_ts: params.for_update_ts,
-                    keys_count: keys.len(),
-                    is_first_lock: params.is_first_lock,
-                    allow_lock_with_conflict: params.allow_lock_with_conflict,
-                })
-            }
-            PessimisticLockCmdInner::BatchResumedRequests { .. } => None,
-        }
-    }
-}
-
-pub struct SingleRequestPessimisticLockCommandMeta {
-    pub start_ts: TimeStamp,
-    pub for_update_ts: TimeStamp,
-    pub keys_count: usize,
-    pub is_first_lock: bool,
-    pub allow_lock_with_conflict: bool,
 }
