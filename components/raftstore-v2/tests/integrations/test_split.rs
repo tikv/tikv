@@ -140,7 +140,7 @@ fn test_split() {
     //      Region 1000 ["k22", ""] peer(1, 10)
     let (left, right) = split_region(
         &mut router,
-        region.clone(),
+        region,
         peer.clone(),
         1000,
         new_peer(store_id, 10),

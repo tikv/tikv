@@ -54,8 +54,10 @@ use crate::{
     router::{ApplyRes, ApplyTask, CmdResChannel, ExecResult, PeerMsg},
 };
 
+mod admin;
 mod write;
 
+pub use admin::{AdminCmdResult, SplitResult};
 pub use write::{SimpleWriteDecoder, SimpleWriteEncoder};
 
 use self::write::SimpleWrite;
@@ -86,7 +88,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> PeerFsmDelegate<'a, EK, ER, T> {
         } else if req.has_admin_request() {
             self.fsm
                 .peer_mut()
-                .on_admin_request(self.store_ctx, req, ch)
+                .on_admin_command(self.store_ctx, req, ch)
         } else if req.has_status_request() {
             error!(self.fsm.logger(), "status command should be sent by Query");
         }
@@ -241,16 +243,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     fn on_ready_result<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
-        exec_results: &mut VecDeque<ExecResult>,
+        admin_results: &mut VecDeque<AdminCmdResult>,
     ) {
         // handle executing commiited log results
-        while let Some(result) = exec_results.pop_front() {
+        while let Some(result) = admin_results.pop_front() {
             match result {
-                ExecResult::SplitRegion {
+                AdminCmdResult::SplitRegion(SplitResult {
                     regions,
                     derived,
                     new_split_regions,
-                } => self.on_ready_split_region(store_ctx, derived, regions, new_split_regions),
+                }) => self.on_ready_split_region(store_ctx, derived, regions, new_split_regions),
             }
         }
     }
@@ -269,7 +271,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
 
-        self.on_ready_result(store_ctx, &mut apply_res.exec_res);
+        self.on_ready_result(store_ctx, &mut apply_res.admin_result);
 
         self.raft_group_mut()
             .advance_apply_to(apply_res.applied_index);
@@ -287,34 +289,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if self.handle_read_on_apply(store_ctx, apply_res, progress_to_be_updated) {
             self.set_has_ready();
         }
-    }
-
-    fn on_admin_request<T>(
-        &mut self,
-        ctx: &mut StoreContext<EK, ER, T>,
-        req: RaftCmdRequest,
-        ch: CmdResChannel,
-    ) {
-        let res = self.propose_command(ctx, req);
-        self.post_propose_admin(ctx, res, vec![ch]);
-    }
-
-    fn post_propose_admin<T>(
-        &mut self,
-        ctx: &mut StoreContext<EK, ER, T>,
-        res: Result<u64>,
-        ch: Vec<CmdResChannel>,
-    ) {
-        let idx = match res {
-            Ok(i) => i,
-            Err(e) => {
-                ch.report_error(cmd_resp::err_resp(e, self.term()));
-                return;
-            }
-        };
-        let p = Proposal::new(idx, self.term(), ch);
-        self.enqueue_pending_proposal(ctx, p);
-        self.set_has_ready();
     }
 }
 
@@ -382,7 +356,7 @@ impl<EK: KvEngine, ER: RaftEngine, R: ApplyResReporter> Apply<EK, ER, R> {
                 if req.has_admin_request() {
                     // TODO: implement admin request.
                     let (resp, exec_res) = self.exec_admin_cmd(&req, entry)?;
-                    self.push_exec_result(exec_res);
+                    self.push_admin_result(exec_res);
                     Ok(resp)
                 } else {
                     for r in req.get_requests() {
@@ -419,7 +393,7 @@ impl<EK: KvEngine, ER: RaftEngine, R: ApplyResReporter> Apply<EK, ER, R> {
         &mut self,
         req: &RaftCmdRequest,
         entry: &Entry,
-    ) -> Result<(RaftCmdResponse, ExecResult)> {
+    ) -> Result<(RaftCmdResponse, AdminCmdResult)> {
         let origin_epoch = self.region_state().get_region().get_region_epoch().clone();
         let request = req.get_admin_request();
         let cmd_type = request.get_cmd_type();
@@ -435,14 +409,14 @@ impl<EK: KvEngine, ER: RaftEngine, R: ApplyResReporter> Apply<EK, ER, R> {
             // );
         }
 
-        let (mut response, exec_result) = match cmd_type {
+        let (mut response, admin_result) = match cmd_type {
             AdminCmdType::Split => unimplemented!(),
             AdminCmdType::BatchSplit => self.exec_batch_split(request, entry.index),
             _ => unimplemented!(),
         }?;
 
-        match exec_result {
-            ExecResult::SplitRegion { ref derived, .. } => {
+        match admin_result {
+            AdminCmdResult::SplitRegion(SplitResult { ref derived, .. }) => {
                 self.region_state_mut().set_region(derived.clone());
                 // self.metrics.size_diff_hint = 0;
                 // self.metrics.delete_keys_hint = 0;
@@ -477,7 +451,7 @@ impl<EK: KvEngine, ER: RaftEngine, R: ApplyResReporter> Apply<EK, ER, R> {
             resp.mut_header().set_uuid(uuid);
         }
         resp.set_admin_response(response);
-        Ok((resp, exec_result))
+        Ok((resp, admin_result))
     }
 
     #[inline]
@@ -505,10 +479,7 @@ impl<EK: KvEngine, ER: RaftEngine, R: ApplyResReporter> Apply<EK, ER, R> {
         let (index, term) = self.apply_progress();
         apply_res.applied_index = index;
         apply_res.applied_term = term;
-        if self.reset_state_changed() {
-            apply_res.region_state = Some(self.region_state().clone());
-        }
-        apply_res.exec_res = self.take_exec_result();
+        apply_res.admin_result = self.take_admin_result();
         self.res_reporter().report(apply_res);
     }
 }

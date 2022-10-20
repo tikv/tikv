@@ -70,7 +70,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
-    fn post_propose_write<T>(
+    #[inline]
+    pub fn post_propose_write<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
         res: Result<u64>,

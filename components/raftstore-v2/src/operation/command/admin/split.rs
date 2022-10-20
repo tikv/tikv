@@ -34,6 +34,7 @@ use time::Timespec;
 use crate::{
     batch::StoreContext,
     fsm::{PeerFsm, PeerFsmDelegate},
+    operation::AdminCmdResult,
     raft::{write_initial_states, write_peer_state, Apply, Peer, Storage},
     router::{ApplyRes, ExecResult, PeerMsg},
 };
@@ -51,12 +52,19 @@ fn hard_link_tablet(
     Ok(())
 }
 
+#[derive(Debug)]
+pub struct SplitResult {
+    pub regions: Vec<Region>,
+    pub derived: Region,
+    pub new_split_regions: HashMap<u64, NewSplitPeer>,
+}
+
 impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
     pub fn exec_batch_split(
         &mut self,
         req: &AdminRequest,
         log_index: u64,
-    ) -> Result<(AdminResponse, ExecResult)> {
+    ) -> Result<(AdminResponse, AdminCmdResult)> {
         PEER_ADMIN_CMD_COUNTER.batch_split.all.inc();
 
         let split_reqs = req.get_splits();
@@ -174,16 +182,16 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
 
         Ok((
             resp,
-            ExecResult::SplitRegion {
+            AdminCmdResult::SplitRegion(SplitResult {
                 regions,
                 derived,
                 new_split_regions,
-            },
+            }),
         ))
     }
 }
 
-fn get_range_not_in_region(region: &metapb::Region) -> Vec<Range> {
+fn get_range_not_in_region(region: &metapb::Region) -> Vec<Range<'_>> {
     let mut ranges = Vec::new();
     if !region.get_start_key().is_empty() {
         ranges.push(Range::new(b"", region.get_start_key()));

@@ -14,6 +14,7 @@ use slog::Logger;
 use super::Peer;
 use crate::{
     fsm::ApplyResReporter,
+    operation::AdminCmdResult,
     router::{ApplyRes, CmdResChannel, ExecResult},
     tablet::CachedTablet,
 };
@@ -33,6 +34,7 @@ pub struct Apply<EK: KvEngine, ER: RaftEngine, R> {
 
     applied_index: u64,
     applied_term: u64,
+    admin_cmd_result: VecDeque<AdminCmdResult>,
 
     region_state: RegionLocalState,
     state_changed: bool,
@@ -41,8 +43,6 @@ pub struct Apply<EK: KvEngine, ER: RaftEngine, R> {
     /// An uninitialized peer can be replaced to the one from splitting iff they
     /// are exactly the same peer.
     pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
-
-    exec_results: VecDeque<ExecResult>,
 
     res_reporter: R,
     pub(crate) logger: Logger,
@@ -68,12 +68,12 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
             callbacks: vec![],
             applied_index: 0,
             applied_term: 0,
+            admin_cmd_result: VecDeque::new(),
             region_state,
             state_changed: false,
             pending_create_peers,
             raft_engine,
             tablet_factory,
-            exec_results: VecDeque::new(),
             res_reporter,
             logger,
         }
@@ -141,13 +141,13 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
     }
 
     #[inline]
-    pub fn push_exec_result(&mut self, exec_result: ExecResult) {
-        self.exec_results.push_back(exec_result);
+    pub fn push_admin_result(&mut self, admin_result: AdminCmdResult) {
+        self.admin_cmd_result.push_back(admin_result);
     }
 
     #[inline]
-    pub fn take_exec_result(&mut self) -> VecDeque<ExecResult> {
-        std::mem::take(&mut self.exec_results)
+    pub fn take_admin_result(&mut self) -> VecDeque<AdminCmdResult> {
+        std::mem::take(&mut self.admin_cmd_result)
     }
 
     #[inline]

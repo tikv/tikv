@@ -6,7 +6,7 @@ use collections::HashMap;
 use kvproto::{metapb::Region, raft_serverpb::RegionLocalState};
 use raftstore::store::fsm::apply::NewSplitPeer;
 
-use crate::operation::CommittedEntries;
+use crate::operation::{AdminCmdResult, CommittedEntries};
 
 #[derive(Debug)]
 pub enum ApplyTask {
@@ -17,8 +17,7 @@ pub enum ApplyTask {
 pub struct ApplyRes {
     pub applied_index: u64,
     pub applied_term: u64,
-    pub region_state: Option<RegionLocalState>,
-    pub exec_res: VecDeque<ExecResult>,
+    pub admin_result: VecDeque<AdminCmdResult>,
 }
 
 #[derive(Debug)]
