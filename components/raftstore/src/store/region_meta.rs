@@ -127,7 +127,7 @@ impl<'a> From<raft::Status<'a>> for RaftStatus {
     }
 }
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize)]
 pub enum RaftPeerRole {
     Voter,
     Learner,
@@ -143,6 +143,24 @@ impl From<PeerRole> for RaftPeerRole {
             PeerRole::IncomingVoter => RaftPeerRole::IncomingVoter,
             PeerRole::DemotingVoter => RaftPeerRole::DemotingVoter,
         }
+    }
+}
+
+impl From<RaftPeerRole> for PeerRole {
+    fn from(role: RaftPeerRole) -> Self {
+        match role {
+            RaftPeerRole::Voter => PeerRole::Voter,
+            RaftPeerRole::Learner => PeerRole::Learner,
+            RaftPeerRole::IncomingVoter => PeerRole::IncomingVoter,
+            RaftPeerRole::DemotingVoter => PeerRole::DemotingVoter,
+        }
+    }
+}
+
+impl PartialEq<PeerRole> for RaftPeerRole {
+    fn eq(&self, other: &PeerRole) -> bool {
+        let r: RaftPeerRole = (*other).into();
+        *self == r
     }
 }
 

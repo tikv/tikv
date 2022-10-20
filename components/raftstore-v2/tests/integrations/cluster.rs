@@ -14,18 +14,20 @@ use std::{
 use crossbeam::channel::{self, Receiver, Sender};
 use engine_test::{
     ctor::{CfOptions, DbOptions},
-    kv::{KvTestEngine, TestTabletFactoryV2},
+    kv::{KvTestEngine, KvTestSnapshot, TestTabletFactoryV2},
     raft::RaftTestEngine,
 };
 use engine_traits::{OpenOptions, TabletFactory, ALL_CFS};
 use futures::executor::block_on;
 use kvproto::{
     metapb::{self, Store},
-    raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, StatusCmdType},
+    raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, Request, StatusCmdType},
     raft_serverpb::RaftMessage,
 };
 use pd_client::RpcClient;
-use raftstore::store::{region_meta::RegionMeta, Config, Transport, RAFT_INIT_LOG_INDEX};
+use raftstore::store::{
+    region_meta::RegionMeta, Config, RegionSnapshot, Transport, RAFT_INIT_LOG_INDEX,
+};
 use raftstore_v2::{
     create_store_batch_system,
     router::{DebugInfoChannel, PeerMsg, QueryResult, RaftRouter},
@@ -34,7 +36,10 @@ use raftstore_v2::{
 use slog::{o, Logger};
 use tempfile::TempDir;
 use test_pd::mocker::Service;
-use tikv_util::config::{ReadableDuration, VersionTrack};
+use tikv_util::{
+    config::{ReadableDuration, VersionTrack},
+    store::new_peer,
+};
 
 #[derive(Clone)]
 pub struct TestRouter(RaftRouter<KvTestEngine, RaftTestEngine>);
@@ -105,19 +110,54 @@ impl TestRouter {
         );
     }
 
-    pub fn query_region_detail(&self, region_id: u64, peer: metapb::Peer) -> metapb::Region {
+    pub fn new_request_for(&self, region_id: u64) -> RaftCmdRequest {
+        let meta = self
+            .must_query_debug_info(region_id, Duration::from_secs(1))
+            .unwrap();
         let mut req = RaftCmdRequest::default();
+        req.mut_header().set_region_id(region_id);
+        let epoch = req.mut_header().mut_region_epoch();
+        let epoch_meta = &meta.region_state.epoch;
+        epoch.set_version(epoch_meta.version);
+        epoch.set_conf_ver(epoch_meta.conf_ver);
+        let target_peer = meta
+            .region_state
+            .peers
+            .iter()
+            .find(|p| p.id == meta.raft_status.id)
+            .unwrap()
+            .clone();
+        let mut peer = new_peer(target_peer.store_id, target_peer.id);
+        peer.role = target_peer.role.into();
         req.mut_header().set_peer(peer);
+        req.mut_header().set_term(meta.raft_status.hard_state.term);
+        req
+    }
+
+    pub fn region_detail(&self, region_id: u64) -> metapb::Region {
+        let mut req = self.new_request_for(region_id);
         req.mut_status_request()
             .set_cmd_type(StatusCmdType::RegionDetail);
-        let res = self.query(region_id, req.clone()).unwrap();
+        let res = self.query(region_id, req).unwrap();
         let status_resp = res.response().unwrap().get_status_response();
         let detail = status_resp.get_region_detail();
         detail.get_region().clone()
     }
+
+    pub fn snapshot(
+        &mut self,
+        region_id: u64,
+    ) -> std::result::Result<RegionSnapshot<KvTestSnapshot>, RaftCmdResponse> {
+        let mut req = self.new_request_for(region_id);
+        let mut request_inner = Request::default();
+        request_inner.set_cmd_type(CmdType::Snap);
+        req.mut_requests().push(request_inner);
+        block_on(async { self.get_snapshot(req).await })
+    }
 }
 
 pub struct RunningState {
+    store_id: u64,
     pub raft_engine: RaftTestEngine,
     pub factory: Arc<TestTabletFactoryV2>,
     pub system: StoreSystem<KvTestEngine, RaftTestEngine>,
@@ -189,6 +229,7 @@ impl RunningState {
             .unwrap();
 
         let state = Self {
+            store_id,
             raft_engine,
             factory,
             system,
@@ -255,6 +296,10 @@ impl TestNode {
 
     pub fn running_state(&self) -> Option<&RunningState> {
         self.running_state.as_ref()
+    }
+
+    pub fn id(&self) -> u64 {
+        self.running_state().unwrap().store_id
     }
 }
 

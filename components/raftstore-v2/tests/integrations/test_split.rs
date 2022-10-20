@@ -10,10 +10,7 @@ use kvproto::{
 use raftstore_v2::router::PeerMsg;
 use tikv_util::store::new_peer;
 
-use crate::{
-    cluster::{Cluster, TestRouter},
-    util::new_snap_request,
-};
+use crate::cluster::{Cluster, TestRouter};
 
 fn new_batch_split_region_request(
     split_keys: Vec<Vec<u8>>,
@@ -88,29 +85,23 @@ fn split_region(
     // Wait for apply exect result
     thread::sleep(Duration::from_secs(1));
 
-    let (left, right, left_peer, right_peer) = if !right_derive {
+    let (left, right) = if !right_derive {
         (
-            router.query_region_detail(region_id, peer.clone()),
-            router.query_region_detail(split_region_id, split_peer.clone()),
-            peer,
-            split_peer,
+            router.region_detail(region_id),
+            router.region_detail(split_region_id),
         )
     } else {
         (
-            router.query_region_detail(split_region_id, split_peer.clone()),
-            router.query_region_detail(region_id, peer.clone()),
-            split_peer,
-            peer,
+            router.region_detail(split_region_id),
+            router.region_detail(region_id),
         )
     };
 
-    let snap_req = new_snap_request(left_peer, 6, left.clone());
-    let snap = block_on(async { router.get_snapshot(snap_req).await.unwrap() });
+    let snap = router.snapshot(left.id).unwrap();
     assert_eq!(snap.get_value(left_key).unwrap().unwrap(), b"v1");
     snap.get_value(right_key).unwrap_err();
 
-    let snap_req = new_snap_request(right_peer, 6, right.clone());
-    let snap = block_on(async { router.get_snapshot(snap_req).await.unwrap() });
+    let snap = router.snapshot(right.id).unwrap();
     assert_eq!(snap.get_value(right_key).unwrap().unwrap(), b"v3");
     snap.get_value(left_key).unwrap_err();
 
@@ -124,14 +115,14 @@ fn split_region(
 
 #[test]
 fn test_split() {
-    let store_id = 1;
     let cluster = Cluster::default();
+    let store_id = cluster.node(0).id();
     let mut router = cluster.router(0);
     // let factory = cluster.node(0).tablet_factory();
 
     let region_id = 2;
     let peer = new_peer(store_id, 3);
-    let region = router.query_region_detail(region_id, peer.clone());
+    let region = router.region_detail(region_id);
 
     router.wait_applied_to_current_term(2, Duration::from_secs(3));
 
