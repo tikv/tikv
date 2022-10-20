@@ -33,7 +33,7 @@ impl<'a> JsonRef<'a> {
             ));
         }
         for expr in path_expr_list {
-            if expr.contains_any_asterisk() {
+            if expr.contains_any_asterisk() || expr.contains_any_range() {
                 return Err(box_err!(
                     "Invalid path expression: expected no asterisk, found {:?}",
                     expr
