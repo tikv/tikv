@@ -6515,7 +6515,6 @@ mod tests {
             .push(new_split_req(b"k32", 28, vec![29, 30, 31]));
         splits.set_right_derive(false);
         let resp = exec_split(&router, splits);
-        // Right derive should be respected.
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         new_version = epoch.borrow().get_version() + 2;
         epoch.borrow_mut().set_version(new_version);

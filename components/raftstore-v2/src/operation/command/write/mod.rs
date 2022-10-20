@@ -102,10 +102,8 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
     #[inline]
     pub fn apply_put(&mut self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         util::check_key_in_region(key, self.region_state().get_region())?;
-
         // to be removed(SpadeA): tmp use for test
         let key = keys::data_key(key);
-
         let res = if cf.is_empty() || cf == CF_DEFAULT {
             // TODO: use write_vector
             self.write_batch_or_default().put(&key, value)

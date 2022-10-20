@@ -168,6 +168,7 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
                 e
             )
         });
+
         self.raft_engine.consume(&mut wb, true).unwrap_or_else(|e| {
             panic!(
                 "{:?} fails to consume the write: {:?}",
@@ -175,6 +176,10 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
                 e,
             )
         });
+        self.region_state_mut().set_region(derived.clone());
+        self.region_state_mut().tablet_index = log_index;
+        // self.metrics.size_diff_hint = 0;
+        // self.metrics.delete_keys_hint = 0;
 
         let mut resp = AdminResponse::default();
         resp.mut_splits().set_regions(regions.clone().into());
@@ -199,7 +204,6 @@ fn get_range_not_in_region(region: &metapb::Region) -> Vec<Range<'_>> {
     if !region.get_end_key().is_empty() {
         ranges.push(Range::new(region.get_end_key(), b""));
     }
-    println!("Region {:?}; Ranges {:?}", region, ranges);
     ranges
 }
 
@@ -465,10 +469,10 @@ mod test {
     use engine_traits::ALL_CFS;
     use futures::channel::mpsc::unbounded;
     use kvproto::{
-        raft_cmdpb::{BatchSplitRequest, SplitRequest},
+        raft_cmdpb::{BatchSplitRequest, RaftCmdResponse, SplitRequest},
         raft_serverpb::{PeerState, RaftApplyState, RegionLocalState},
     };
-    use raftstore::store::Config;
+    use raftstore::store::{cmd_resp::new_error, Config};
     use slog::o;
     use tempfile::TempDir;
     use tikv_util::{
@@ -499,7 +503,7 @@ mod test {
         split_keys: Vec<Vec<u8>>,
         children_peers: Vec<Vec<u64>>,
         log_index: u64,
-    ) -> (HashMap<u64, Region>, RegionLocalState) {
+    ) -> HashMap<u64, Region> {
         let mut splits = BatchSplitRequest::default();
         splits.set_right_derive(right_derived);
         let mut region_boundries = split_keys.clone();
@@ -549,7 +553,7 @@ mod test {
                     state.get_region().get_peers(),
                     region_to_split.get_peers()
                 }
-
+                assert_eq!(state, *apply.region_state());
                 assert_eq!(state.tablet_index, log_index);
                 // assert we can read the tablet by the new tablet_index
                 let tablet_path = factory.tablet_path(region_to_split.id, log_index);
@@ -580,13 +584,10 @@ mod test {
             }
         }
 
-        (
-            regions
-                .iter()
-                .map(|region| (region.id, region.clone()))
-                .collect(),
-            region_state,
-        )
+        regions
+            .iter()
+            .map(|region| (region.id, region.clone()))
+            .collect()
     }
 
     #[test]
@@ -627,6 +628,7 @@ mod test {
         region_state.set_state(PeerState::Normal);
         region_state.set_region(region.clone());
         region_state.set_tablet_index(5);
+
         let (tx, rx) = channel();
         let mut apply = Apply::new(
             store_id,
@@ -639,6 +641,69 @@ mod test {
             logger.clone(),
         );
 
+        let mut splits = BatchSplitRequest::default();
+        splits.set_right_derive(true);
+        splits.mut_requests().push(new_split_req(b"k1", 1, vec![]));
+        let mut req = AdminRequest::default();
+        req.set_splits(splits.clone());
+        let err = apply.exec_batch_split(&req, 0).unwrap_err();
+        // 3 followers are required.
+        assert!(err.to_string().contains("invalid new peer id count"));
+
+        splits.mut_requests().clear();
+        req.set_splits(splits.clone());
+        let err = apply.exec_batch_split(&req, 0).unwrap_err();
+        // Empty requests should be rejected.
+        assert!(err.to_string().contains("missing split requests"));
+
+        splits
+            .mut_requests()
+            .push(new_split_req(b"k11", 1, vec![11, 12, 13]));
+        req.set_splits(splits.clone());
+        let resp = new_error(apply.exec_batch_split(&req, 0).unwrap_err());
+        // Out of range keys should be rejected.
+        assert!(
+            resp.get_header().get_error().has_key_not_in_region(),
+            "{:?}",
+            resp
+        );
+
+        splits
+            .mut_requests()
+            .push(new_split_req(b"", 1, vec![11, 12, 13]));
+        req.set_splits(splits.clone());
+        let err = apply.exec_batch_split(&req, 0).unwrap_err();
+        // Empty key should be rejected.
+        assert!(err.to_string().contains("missing split key"), "{:?}", err);
+
+        splits.mut_requests().clear();
+        splits
+            .mut_requests()
+            .push(new_split_req(b"k2", 1, vec![11, 12, 13]));
+        splits
+            .mut_requests()
+            .push(new_split_req(b"k1", 1, vec![11, 12, 13]));
+        req.set_splits(splits.clone());
+        let err = apply.exec_batch_split(&req, 0).unwrap_err();
+        // keys should be in ascend order.
+        assert!(
+            err.to_string().contains("invalid split request"),
+            "{:?}",
+            err
+        );
+
+        splits.mut_requests().clear();
+        splits
+            .mut_requests()
+            .push(new_split_req(b"k1", 1, vec![11, 12, 13]));
+        splits
+            .mut_requests()
+            .push(new_split_req(b"k2", 1, vec![11, 12]));
+        req.set_splits(splits.clone());
+        let err = apply.exec_batch_split(&req, 0).unwrap_err();
+        // All requests should be checked.
+        assert!(err.to_string().contains("id count"), "{:?}", err);
+
         let get_region_local_state = |region_id| -> RegionLocalState {
             raft_engine.get_region_state(region_id).unwrap().unwrap()
         };
@@ -648,9 +713,8 @@ mod test {
         };
 
         let mut log_index = 10;
-
-        // After split: region 1 ["", "k09"], region 2 ["k09", "k10"]
-        let (regions, region_state) = assert_split(
+        // After split: region 1 ["", "k09"], region 10 ["k09", "k10"]
+        let regions = assert_split(
             &mut apply,
             &factory,
             &region,
@@ -662,24 +726,52 @@ mod test {
             vec![vec![11, 12, 13]],
             log_index,
         );
-        // update region state in apply manually
-        apply.set_region_state(region_state);
 
         log_index = 20;
-        // After split: region 3 ["", "k01"], region  1 ["k01", "k09"]
-        let (regions, region_state) = assert_split(
+        // After split: region 20 ["", "k01"], region 1 ["k01", "k09"]
+        let regions = assert_split(
             &mut apply,
             &factory,
             regions.get(&1).unwrap(),
             &get_region_local_state,
             &get_raft_apply_state,
             true,
-            vec![3],
+            vec![20],
             vec![b"k01".to_vec()],
             vec![vec![21, 22, 23]],
             log_index,
         );
-        // update region state in apply manually
-        apply.set_region_state(region_state);
+
+        log_index = 30;
+        // After split: region 30 ["k01", "k02"], region 40 ["k02", "k03"],
+        //              region 1 ["k03", "k09"]
+        let regions = assert_split(
+            &mut apply,
+            &factory,
+            regions.get(&1).unwrap(),
+            &get_region_local_state,
+            &get_raft_apply_state,
+            true,
+            vec![30, 40],
+            vec![b"k02".to_vec(), b"k03".to_vec()],
+            vec![vec![31, 32, 33], vec![41, 42, 43]],
+            log_index,
+        );
+
+        // After split: region 50 ["k07", "k08"], region 60 ["k08", "k09"],
+        //              region 1 ["k03", "k07"]
+        log_index = 40;
+        let regions = assert_split(
+            &mut apply,
+            &factory,
+            regions.get(&1).unwrap(),
+            &get_region_local_state,
+            &get_raft_apply_state,
+            false,
+            vec![50, 60],
+            vec![b"k07".to_vec(), b"k08".to_vec()],
+            vec![vec![51, 52, 53], vec![61, 62, 63]],
+            log_index,
+        );
     }
 }

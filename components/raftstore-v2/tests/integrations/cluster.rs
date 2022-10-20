@@ -125,8 +125,7 @@ impl TestRouter {
             .peers
             .iter()
             .find(|p| p.id == meta.raft_status.id)
-            .unwrap()
-            .clone();
+            .unwrap();
         let mut peer = new_peer(target_peer.store_id, target_peer.id);
         peer.role = target_peer.role.into();
         req.mut_header().set_peer(peer);

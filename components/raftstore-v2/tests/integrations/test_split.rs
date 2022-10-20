@@ -50,7 +50,7 @@ fn split_region(
     req.mut_header().set_region_id(region_id);
     req.mut_header()
         .set_region_epoch(region.get_region_epoch().clone());
-    req.mut_header().set_peer(peer.clone());
+    req.mut_header().set_peer(peer);
 
     let mut put_req = Request::default();
     put_req.set_cmd_type(CmdType::Put);
@@ -83,7 +83,7 @@ fn split_region(
     block_on(sub.result()).unwrap();
 
     // Wait for apply exect result
-    thread::sleep(Duration::from_secs(1));
+    thread::sleep(Duration::from_millis(1500));
 
     let (left, right) = if !right_derive {
         (
