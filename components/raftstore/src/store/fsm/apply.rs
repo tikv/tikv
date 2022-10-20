@@ -500,7 +500,7 @@ where
     /// `finish_for`.
     pub fn commit(&mut self, delegate: &mut ApplyDelegate<EK>) {
         if delegate.last_flush_applied_index < delegate.apply_state.get_applied_index() {
-            delegate.write_apply_state(self);
+            delegate.maybe_write_apply_state(self);
         }
         self.commit_opt(delegate, true);
     }
@@ -621,7 +621,7 @@ where
     ) {
         if self.host.pre_persist(&delegate.region, true, None) {
             if !delegate.pending_remove {
-                delegate.write_apply_state(self);
+                delegate.maybe_write_apply_state(self);
             }
             self.commit_opt(delegate, false);
         } else {
@@ -1087,7 +1087,7 @@ where
         self.metrics.written_keys += apply_ctx.delta_keys();
     }
 
-    fn force_write_apply_state(&self, wb: &mut EK::WriteBatch) {
+    fn write_apply_state(&self, wb: &mut EK::WriteBatch) {
         wb.put_msg_cf(
             CF_RAFT,
             &keys::apply_state_key(self.region.get_id()),
@@ -1101,10 +1101,10 @@ where
         });
     }
 
-    fn write_apply_state(&self, apply_ctx: &mut ApplyContext<EK>) {
+    fn maybe_write_apply_state(&self, apply_ctx: &mut ApplyContext<EK>) {
         let can_write = apply_ctx.host.pre_write_apply_state(&self.region);
         if can_write {
-            self.force_write_apply_state(apply_ctx.kv_wb_mut());
+            self.write_apply_state(apply_ctx.kv_wb_mut());
         }
     }
 
@@ -1292,9 +1292,9 @@ where
             .applied_batch
             .push(cmd_cb, cmd, &self.observe_info, self.region_id());
         if should_write {
-            // An observer shall prevent a force write_apply_state here by not return true
+            // An observer shall prevent a write_apply_state here by not return true
             // when `post_exec`.
-            self.force_write_apply_state(apply_ctx.kv_wb_mut());
+            self.write_apply_state(apply_ctx.kv_wb_mut());
             apply_ctx.commit(self);
         }
         exec_result
@@ -3745,7 +3745,7 @@ where
             if apply_ctx.timer.is_none() {
                 apply_ctx.timer = Some(Instant::now_coarse());
             }
-            self.delegate.write_apply_state(apply_ctx);
+            self.delegate.maybe_write_apply_state(apply_ctx);
             fail_point!(
                 "apply_on_handle_snapshot_1_1",
                 self.delegate.id == 1 && self.delegate.region_id() == 1,
