@@ -1615,7 +1615,7 @@ pub mod tests {
             Option::<Arc<TestPdClient>>::None,
         );
         worker.start_with_timer(runner);
-        let snap = s.snapshot(0, 0);
+        let snap = s.snapshot(0, 1);
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
@@ -1639,11 +1639,11 @@ pub mod tests {
         let (tx, rx) = channel();
         s.set_snap_state(gen_snap_for_test(rx));
         // Empty channel should cause snapshot call to wait.
-        assert_eq!(s.snapshot(0, 0).unwrap_err(), unavailable);
+        assert_eq!(s.snapshot(0, 1).unwrap_err(), unavailable);
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
 
         tx.send(snap.clone()).unwrap();
-        assert_eq!(s.snapshot(0, 0), Ok(snap.clone()));
+        assert_eq!(s.snapshot(0, 1), Ok(snap.clone()));
         assert_eq!(*s.snap_tried_cnt.borrow(), 0);
 
         let (tx, rx) = channel();
@@ -1684,7 +1684,7 @@ pub mod tests {
         s.set_snap_state(gen_snap_for_test(rx));
         *s.snap_tried_cnt.borrow_mut() = 1;
         // stale snapshot should be abandoned, snapshot index < truncated index.
-        assert_eq!(s.snapshot(0, 0).unwrap_err(), unavailable);
+        assert_eq!(s.snapshot(0, 1).unwrap_err(), unavailable);
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
 
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
@@ -1701,7 +1701,7 @@ pub mod tests {
             ref s => panic!("unexpected state {:?}", s),
         }
         // Disconnected channel should trigger another try.
-        assert_eq!(s.snapshot(0, 0).unwrap_err(), unavailable);
+        assert_eq!(s.snapshot(0, 1).unwrap_err(), unavailable);
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap_err();
         assert_eq!(*s.snap_tried_cnt.borrow(), 2);
@@ -1716,13 +1716,13 @@ pub mod tests {
             }
 
             // Scheduled job failed should trigger .
-            assert_eq!(s.snapshot(0, 0).unwrap_err(), unavailable);
+            assert_eq!(s.snapshot(0, 1).unwrap_err(), unavailable);
             let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
             generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap_err();
         }
 
         // When retry too many times, it should report a different error.
-        match s.snapshot(0, 0) {
+        match s.snapshot(0, 1) {
             Err(RaftError::Store(StorageError::Other(_))) => {}
             res => panic!("unexpected res: {:?}", res),
         }
@@ -1901,7 +1901,7 @@ pub mod tests {
             Option::<Arc<TestPdClient>>::None,
         );
         worker.start(runner);
-        s1.snapshot(0, 0).unwrap_err();
+        s1.snapshot(0, 1).unwrap_err();
         let gen_task = s1.gen_snap_task.borrow_mut().take().unwrap();
         generate_and_schedule_snapshot(gen_task, &s1.engines, &sched).unwrap();
 

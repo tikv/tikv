@@ -4852,10 +4852,14 @@ mod tests {
             ..Default::default()
         };
         reg.region.set_id(2);
+        let mut peer = metapb::Peer::default();
+        peer.set_id(1);
+        reg.region.mut_peers().push(peer.clone());
         reg.apply_state.set_applied_index(3);
         router.schedule_task(2, Msg::Registration(reg.dup()));
         validate(&router, 2, move |delegate| {
             assert_eq!(delegate.id, 1);
+            assert_eq!(delegate.peer, peer);
             assert_eq!(delegate.tag, "[region 2] 1");
             assert_eq!(delegate.region, reg.region);
             assert!(!delegate.pending_remove);
