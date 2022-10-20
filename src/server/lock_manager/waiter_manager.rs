@@ -341,14 +341,12 @@ impl WaitTable {
         self.waiter_pool.is_empty()
     }
 
-    /// Returns the duplicated `Waiter` if there is.
-    fn add_waiter(&mut self, token: LockWaitToken, waiter: Waiter) -> bool {
+    /// Adds a waiter identified by given token. The caller must guarantee that
+    /// the `token` is unique and doesn't exist in waiter manager currently.
+    fn add_waiter(&mut self, token: LockWaitToken, waiter: Waiter) {
         self.wait_table
             .insert((waiter.wait_info.lock_digest.hash, waiter.start_ts), token);
-
         assert!(self.waiter_pool.insert(token, waiter).is_none());
-
-        true
     }
 
     fn take_waiter(&mut self, token: LockWaitToken) -> Option<Waiter> {
@@ -540,9 +538,8 @@ impl WaiterManager {
                 detector_scheduler.clean_up_wait_for(start_ts, wait_info);
             }
         });
-        if self.wait_table.borrow_mut().add_waiter(token, waiter) {
-            spawn_local(f);
-        }
+        self.wait_table.borrow_mut().add_waiter(token, waiter);
+        spawn_local(f);
     }
 
     fn handle_remove_lock_wait(&mut self, token: LockWaitToken) {
@@ -949,13 +946,11 @@ pub mod tests {
                 ts: rng.gen::<u64>().into(),
                 hash: rng.gen(),
             };
-            // Avoid adding duplicated waiter.
-            if wait_table.add_waiter(
+            wait_table.add_waiter(
                 LockWaitToken(Some(i)),
                 dummy_waiter(waiter_ts, lock.ts, lock.hash),
-            ) {
-                waiter_info.push((waiter_ts, lock));
-            }
+            );
+            waiter_info.push((waiter_ts, lock));
         }
         assert_eq!(wait_table.count(), waiter_info.len());
 
@@ -997,11 +992,6 @@ pub mod tests {
         );
         // Increase waiter_count manually and assert the previous value is zero
         assert_eq!(waiter_count.fetch_add(1, Ordering::SeqCst), 0);
-        // // Adding a duplicated waiter shouldn't increase waiter count.
-        // waiter_count.fetch_add(1, Ordering::SeqCst);
-        // wait_table.add_waiter(dummy_waiter(1.into(), lock.ts, lock.hash));
-        // assert_eq!(waiter_count.load(Ordering::SeqCst), 1);
-        // Remove the waiter.
         wait_table
             .take_waiter_by_lock_digest(lock, 1.into())
             .unwrap();

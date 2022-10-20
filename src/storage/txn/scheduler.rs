@@ -809,6 +809,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     None => return,
                 };
 
+            // TODO: Currently there are only legacy requests. When resumable requests are
+            // supported, do not put them to the `legacy_wake_up_list`.
             legacy_wake_up_list.push((lock_wait_entry, released_lock));
             if let Some(f) = delay_wake_up_future {
                 delay_wake_up_futures.push(f);
