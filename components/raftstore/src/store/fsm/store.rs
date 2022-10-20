@@ -773,6 +773,10 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         self.register_compact_lock_cf_tick();
         self.register_snap_mgr_gc_tick();
         self.register_consistency_check_tick();
+
+        // Send store heartbeat to PD, so that PD knows this store is started.
+        // PD will do some scheduling for this store when it receives this heartbeat.
+        self.store_heartbeat_pd(None);
     }
 }
 
