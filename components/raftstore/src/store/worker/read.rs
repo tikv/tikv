@@ -1654,14 +1654,14 @@ mod tests {
         let mut delegate = delegate.unwrap();
         assert_eq!(1, delegate.region.id);
         let tablet = delegate.get_tablet();
-        assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
+        assert_eq!(kv_engine.path(), tablet.path());
 
         let (len, delegate) = store_meta.get_executor_and_len(2);
         assert_eq!(2, len);
         let mut delegate = delegate.unwrap();
         assert_eq!(2, delegate.region.id);
         let tablet = delegate.get_tablet();
-        assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
+        assert_eq!(kv_engine.path(), tablet.path());
     }
 
     fn prepare_read_delegate(

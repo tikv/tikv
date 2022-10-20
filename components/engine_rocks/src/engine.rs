@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{any::Any, fs, path::Path, sync::Arc};
+use std::{any::Any, sync::Arc};
 
 use engine_traits::{
     IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable, TabletAccessor,
@@ -48,18 +48,6 @@ impl RocksEngine {
 
     pub fn get_sync_db(&self) -> Arc<DB> {
         self.db.clone()
-    }
-
-    pub fn exists(path: &str) -> bool {
-        let path = Path::new(path);
-        if !path.exists() || !path.is_dir() {
-            return false;
-        }
-
-        // If path is not an empty directory, we say db exists. If path is not an empty
-        // directory but db has not been created, `DB::list_column_families` fails and
-        // we can clean up the directory by this indication.
-        fs::read_dir(&path).unwrap().next().is_some()
     }
 
     pub fn set_shared_block_cache(&mut self, enable: bool) {
