@@ -284,6 +284,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
 
                 let ranges_to_delete = get_range_not_in_region(&new_region);
+                // todo: async version
                 tablet
                     .delete_ranges_cfs(DeleteStrategy::DeleteFiles, &ranges_to_delete)
                     .unwrap_or_else(|e| {
@@ -409,10 +410,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if last_region_id == new_region_id {
                 // To prevent from big region, the right region needs run split
                 // check again after split.
-                // new_peer
-                //     .peer_mut()
-                //     .set_size_diff_hint(store_ctx.cfg.
-                // region_split_check_diff().0);
+                new_peer
+                    .peer_mut()
+                    .set_size_diff_hint(store_ctx.cfg.region_split_check_diff().0);
             }
 
             // recover the auto_compaction
@@ -425,6 +425,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
 
             let ranges_to_delete = get_range_not_in_region(&new_region);
+            // todo: async version
             tablet
                 .delete_ranges_cfs(DeleteStrategy::DeleteFiles, &ranges_to_delete)
                 .unwrap_or_else(|e| {
