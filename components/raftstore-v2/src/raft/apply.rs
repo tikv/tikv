@@ -27,6 +27,7 @@ pub struct Apply<EK: KvEngine, ER: RaftEngine, R> {
     tablet: EK,
     write_batch: Option<EK::WriteBatch>,
     log_batch: Option<ER::LogBatch>,
+    new_tablet_index: Option<u64>,
 
     pub(crate) raft_engine: ER,
     pub(crate) tablet_factory: Arc<dyn TabletFactory<EK>>,
@@ -67,6 +68,7 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
             remote_tablet,
             write_batch: None,
             log_batch: None,
+            new_tablet_index: None,
             callbacks: vec![],
             applied_index: 0,
             applied_term: 0,
@@ -154,6 +156,16 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
     #[inline]
     pub fn set_region_state(&mut self, region_state: RegionLocalState) {
         self.region_state = region_state;
+    }
+
+    #[inline]
+    pub fn set_new_tablet_index(&mut self, tablet_index: u64) {
+        self.new_tablet_index = Some(tablet_index);
+    }
+
+    #[inline]
+    pub fn take_new_tablet_index(&mut self) -> Option<u64> {
+        self.new_tablet_index.take()
     }
 
     #[inline]

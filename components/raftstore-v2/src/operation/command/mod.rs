@@ -19,7 +19,7 @@
 use std::{cmp, collections::VecDeque};
 
 use batch_system::{Fsm, FsmScheduler, Mailbox};
-use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, WriteBatch, WriteOptions};
+use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletFactory, WriteBatch, WriteOptions};
 use kvproto::{
     raft_cmdpb::{self, AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader},
     raft_serverpb::RegionLocalState,
@@ -469,6 +469,14 @@ impl<EK: KvEngine, ER: RaftEngine, R: ApplyResReporter> Apply<EK, ER, R> {
                     e,
                 )
             });
+            if let Some(tablet_index) = self.take_new_tablet_index() {
+                let region_state = self.region_state_mut();
+                let prev_tablet_index = region_state.tablet_index;
+                assert!(prev_tablet_index != tablet_index);
+                region_state.tablet_index = tablet_index;
+                let region_id = region_state.get_region().id;
+                self.tablet_factory.destroy_tablet(region_id, prev_tablet_index).unwrap();
+            }
         }
         let callbacks = self.callbacks_mut();
         for (ch, resp) in callbacks.drain(..) {

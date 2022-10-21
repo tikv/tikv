@@ -39,7 +39,7 @@ use crate::{
     router::{ApplyRes, ExecResult, PeerMsg},
 };
 
-fn hard_link_tablet(
+fn create_checkpoint(
     src_tablet_dir: &std::path::Path,
     target_tablet_dir: &std::path::Path,
 ) -> io::Result<()> {
@@ -96,9 +96,9 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
         );
 
         // todo(SpadeA): Here: we use a temporary solution that we disable auto
-        // compaction and flush the memtable manually. Then we can trivially hardlink
-        // the tablet. It may cause large jitter and we will freeze the memtable rather
-        // than flush it in the following PR.
+        // compaction and use checkpoint API to clone new tablets. It may cause large
+        // jitter as checkpoint with log_size_for_flush being 0 will flush the memtable.
+        // We will freeze the memtable rather than flush it in the following PR.
         let region_id = derived.get_id();
         let tablet = self.tablet().unwrap();
         let mut auto_compactions = HashMap::default();
@@ -109,10 +109,9 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
                 .set_options_cf(cf, &[("disable_auto_compactions", "true")])
                 .unwrap();
         }
-        tablet.flush_cfs(true).unwrap();
+        // tablet.flush_cfs(true).unwrap();
         let current_tablet_path = std::path::Path::new(tablet.path());
 
-        let mut wb = self.log_batch_or_default();
         for new_region in &regions {
             let new_region_id = new_region.id;
             if new_region_id == region_id {
@@ -131,20 +130,20 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
                 );
                 continue;
             }
+
             let new_tablet_path = self
                 .tablet_factory
                 .tablet_path(new_region_id, RAFT_INIT_LOG_INDEX);
-
-            // Create the new tablet for the split region by hardlink the tablet being
-            // split.
-            hard_link_tablet(current_tablet_path, &new_tablet_path).unwrap_or_else(|e| {
-                panic!(
-                    "{:?} fails to hard link rocksdb with path {:?}: {:?}",
-                    self.logger.list(),
-                    new_tablet_path,
-                    e
-                )
-            });
+            tablet
+                .create_checkpoint(&new_tablet_path)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{:?} fails to create checkpoint with path {:?}: {:?}",
+                        self.logger.list(),
+                        new_tablet_path,
+                        e
+                    )
+                });
 
             write_initial_states(self.log_batch_or_default(), new_region.clone()).unwrap_or_else(
                 |e| {
@@ -158,10 +157,25 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
             );
         }
 
+        let new_tablet_path = self.tablet_factory.tablet_path(region_id, log_index);
         // Change the tablet path by using the new tablet suffix
+        tablet
+            .create_checkpoint(&new_tablet_path)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{:?} fails to create checkpoint with path {:?}: {:?}",
+                    self.logger.list(),
+                    new_tablet_path,
+                    e
+                )
+            });
         let tablet = self
             .tablet_factory
-            .load_tablet(current_tablet_path, region_id, log_index)
+            .open_tablet(
+                region_id,
+                Some(log_index),
+                OpenOptions::default().set_create(true),
+            )
             .unwrap();
         self.publish_tablet(tablet);
         // Clear the write batch belonging to the old tablet
@@ -182,7 +196,7 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
         });
 
         self.region_state_mut().set_region(derived.clone());
-        self.region_state_mut().tablet_index = log_index;
+        self.set_new_tablet_index(log_index);
         // self.metrics.size_diff_hint = 0;
         // self.metrics.delete_keys_hint = 0;
 
