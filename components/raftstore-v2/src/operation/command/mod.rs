@@ -264,11 +264,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
-    pub fn on_apply_res<T>(
-        &mut self,
-        store_ctx: &mut StoreContext<EK, ER, T>,
-        mut apply_res: ApplyRes,
-    ) {
+    pub fn on_apply_res<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>, mut apply_res: ApplyRes) {
         if !self.serving() {
             return;
         }
@@ -278,7 +274,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
 
-        self.on_ready_result(store_ctx, &mut apply_res.admin_result);
+        self.on_ready_result(ctx, &mut apply_res.admin_result);
 
         self.raft_group_mut()
             .advance_apply_to(apply_res.applied_index);
@@ -293,9 +289,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             entry_storage.compact_entry_cache(apply_res.applied_index + 1);
         }
 
-        if self.handle_read_on_apply(store_ctx, apply_res, progress_to_be_updated) {
-            self.set_has_ready();
-        }
+        self.handle_read_on_apply(ctx, apply_res, progress_to_be_updated);
     }
 }
 

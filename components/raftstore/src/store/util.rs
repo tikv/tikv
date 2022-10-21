@@ -1033,6 +1033,16 @@ impl RegionReadProgress {
         }
     }
 
+    // TODO: remove it when coprocessor hook is implemented in v2.
+    pub fn update_applied_core(&self, applied: u64) {
+        let mut core = self.core.lock().unwrap();
+        if let Some(ts) = core.update_applied(applied) {
+            if !core.pause {
+                self.safe_ts.store(ts, AtomicOrdering::Release);
+            }
+        }
+    }
+
     pub fn update_safe_ts(&self, apply_index: u64, ts: u64) {
         if apply_index == 0 || ts == 0 {
             return;
