@@ -8,15 +8,20 @@ use kvproto::{
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RaftMessage,
 };
-use raftstore::store::{FetchedLogs, LogFetchedNotifier, RegionSnapshot};
+use raft::eraftpb::Snapshot as RaftSnapshot;
+use raftstore::store::{AsyncReadNotifier, FetchedLogs, RegionSnapshot};
 use slog::Logger;
 
 use super::PeerMsg;
 use crate::{batch::StoreRouter, operation::LocalReader, StoreMeta};
 
-impl<EK: KvEngine, ER: RaftEngine> LogFetchedNotifier for StoreRouter<EK, ER> {
-    fn notify(&self, region_id: u64, fetched: FetchedLogs) {
+impl<EK: KvEngine, ER: RaftEngine> AsyncReadNotifier for StoreRouter<EK, ER> {
+    fn notify_fetched_logs(&self, region_id: u64, fetched: FetchedLogs) {
         let _ = self.force_send(region_id, PeerMsg::FetchedLogs(fetched));
+    }
+
+    fn notify_snapshot_generated(&self, region_id: u64, snapshot: Box<RaftSnapshot>) {
+        let _ = self.force_send(region_id, PeerMsg::SnapshotGenerated(snapshot));
     }
 }
 

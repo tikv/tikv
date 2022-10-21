@@ -46,6 +46,7 @@ make_auto_flush_static_metric! {
         stale,
         decode,
         epoch,
+        cancel,
     }
 
     pub label_enum RegionHashType {
@@ -488,12 +489,6 @@ lazy_static! {
         ).unwrap();
     pub static ref STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER: SnapValidVec =
         auto_flush_from!(STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER_VEC, SnapValidVec);
-
-    pub static ref STORE_SNAPSHOT_RETIRES_COUNTER: IntCounter =
-        register_int_counter!(
-            "tikv_raftstore_snapshot_retires_total",
-            "Total number of retries to do snapshott.",
-        ).unwrap();
 
     pub static ref PEER_RAFT_PROCESS_DURATION: HistogramVec =
         register_histogram_vec!(

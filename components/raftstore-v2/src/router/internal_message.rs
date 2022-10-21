@@ -24,23 +24,16 @@ pub struct GenSnapTask {
     pub index: Arc<AtomicU64>,
     // Fetch it to cancel the task if necessary.
     pub canceled: Arc<AtomicBool>,
-    snap_notifier: SyncSender<RaftSnapshot>,
     // indicates whether the snapshot is triggered due to load balance
     for_balance: bool,
 }
 
 impl GenSnapTask {
-    pub fn new(
-        region_id: u64,
-        index: Arc<AtomicU64>,
-        canceled: Arc<AtomicBool>,
-        snap_notifier: SyncSender<RaftSnapshot>,
-    ) -> GenSnapTask {
+    pub fn new(region_id: u64, index: Arc<AtomicU64>, canceled: Arc<AtomicBool>) -> GenSnapTask {
         GenSnapTask {
             region_id,
             index,
             canceled,
-            snap_notifier,
             for_balance: false,
         }
     }
@@ -64,7 +57,6 @@ impl GenSnapTask {
             region_state,
             last_applied_term,
             last_applied_index,
-            notifier: self.snap_notifier,
             for_balance: self.for_balance,
             canceled: self.canceled,
         };

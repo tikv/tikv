@@ -232,6 +232,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 PeerMsg::FetchedLogs(fetched_logs) => {
                     self.fsm.peer_mut().on_fetched_logs(fetched_logs)
                 }
+                PeerMsg::SnapshotGenerated(snap_res) => {
+                    self.fsm.peer_mut().on_snapshot_generated(snap_res)
+                }
                 PeerMsg::QueryDebugInfo(ch) => self.fsm.peer_mut().on_query_debug_info(ch),
             }
         }

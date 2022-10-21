@@ -133,6 +133,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.set_has_ready();
     }
 
+    pub fn on_snapshot_generated(&mut self, snapshot: Box<eraftpb::Snapshot>) {
+        self.storage_mut().on_snapshot_generated(snapshot);
+        self.raft_group_mut().ping();
+        self.set_has_ready();
+    }
+
     /// Partially filled a raft message that will be sent to other peer.
     fn prepare_raft_message(&mut self) -> RaftMessage {
         let mut raft_msg = RaftMessage::new();

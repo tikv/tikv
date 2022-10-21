@@ -30,7 +30,7 @@ mod worker;
 pub use self::msg::PeerInternalStat;
 pub use self::{
     async_io::{
-        read::{FetchedLogs, LogFetchedNotifier, ReadRunner, ReadTask},
+        read::{AsyncReadNotifier, FetchedLogs, ReadRunner, ReadTask},
         write::{
             ExtraStates, PersistedNotifier, StoreWriters, Worker as WriteWorker, WriteMsg,
             WriteTask,

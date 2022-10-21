@@ -3,7 +3,7 @@
 use std::{
     fmt,
     marker::PhantomData,
-    sync::{atomic::AtomicBool, mpsc::SyncSender, Arc},
+    sync::{atomic::AtomicBool, Arc},
 };
 
 use engine_traits::{KvEngine, RaftEngine};
@@ -33,7 +33,6 @@ pub enum ReadTask<EK> {
         last_applied_term: u64,
         last_applied_index: u64,
         canceled: Arc<AtomicBool>,
-        notifier: SyncSender<RaftSnapshot>,
         for_balance: bool,
     },
 }
@@ -68,27 +67,28 @@ pub struct FetchedLogs {
 }
 
 /// A router for receiving fetched result.
-pub trait LogFetchedNotifier: Send {
-    fn notify(&self, region_id: u64, fetched: FetchedLogs);
+pub trait AsyncReadNotifier: Send {
+    fn notify_fetched_logs(&self, region_id: u64, fetched: FetchedLogs);
+    fn notify_snapshot_generated(&self, region_id: u64, snapshot: Box<RaftSnapshot>);
 }
 
 pub struct ReadRunner<EK, ER, N>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    N: LogFetchedNotifier,
+    N: AsyncReadNotifier,
 {
     notifier: N,
     raft_engine: ER,
-    phantom: PhantomData<EK>,
+    _phantom: PhantomData<EK>,
 }
 
-impl<EK: KvEngine, ER: RaftEngine, N: LogFetchedNotifier> ReadRunner<EK, ER, N> {
+impl<EK: KvEngine, ER: RaftEngine, N: AsyncReadNotifier> ReadRunner<EK, ER, N> {
     pub fn new(notifier: N, raft_engine: ER) -> ReadRunner<EK, ER, N> {
         ReadRunner {
             notifier,
             raft_engine,
-            phantom: PhantomData,
+            _phantom: PhantomData,
         }
     }
 }
@@ -97,7 +97,7 @@ impl<EK, ER, N> Runnable for ReadRunner<EK, ER, N>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    N: LogFetchedNotifier,
+    N: AsyncReadNotifier,
 {
     type Task = ReadTask<EK>;
     fn run(&mut self, task: ReadTask<EK>) {
@@ -126,7 +126,7 @@ where
                     .map(|c| (*c as u64) != high - low)
                     .unwrap_or(false);
                 fail_point!("worker_async_fetch_raft_log");
-                self.notifier.notify(
+                self.notifier.notify_fetched_logs(
                     region_id,
                     FetchedLogs {
                         context,
@@ -141,7 +141,11 @@ where
                     },
                 );
             }
-            ReadTask::GenTabletSnapshot { .. } => unimplemented!(),
+            ReadTask::GenTabletSnapshot { region_id, .. } => {
+                // TODO(FIXME): implement generate tablet snapshot for raftstore v2
+                self.notifier
+                    .notify_snapshot_generated(region_id, Box::new(RaftSnapshot::default()));
+            }
         }
     }
 }

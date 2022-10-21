@@ -82,6 +82,7 @@ pub enum SnapState {
         index: Arc<AtomicU64>,
         receiver: Receiver<Snapshot>,
     },
+    Generated(Box<Snapshot>),
     Applying(Arc<AtomicUsize>),
     ApplyAborted,
 }
@@ -1145,7 +1146,7 @@ pub mod tests {
             fsm::apply::compact_raft_log,
             initial_region, prepare_bootstrap_cluster,
             worker::{make_region_worker_raftstore_cfg, RegionRunner, RegionTask},
-            FetchedLogs, LogFetchedNotifier,
+            AsyncReadNotifier, FetchedLogs,
         },
     };
 
@@ -1379,9 +1380,13 @@ pub mod tests {
         }
     }
 
-    impl LogFetchedNotifier for TestRouter {
-        fn notify(&self, _region_id: u64, fetched_logs: FetchedLogs) {
+    impl AsyncReadNotifier for TestRouter {
+        fn notify_fetched_logs(&self, _region_id: u64, fetched_logs: FetchedLogs) {
             self.ch.send(fetched_logs).unwrap();
+        }
+
+        fn notify_snapshot_generated(&self, _region_id: u64, _snapshot: Box<Snapshot>) {
+            unreachable!();
         }
     }
 

@@ -283,21 +283,36 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             ..
         } = *snap_state
         {
-            if !canceled.load(Ordering::SeqCst) {
-                if let Some(idx) = compact_to {
-                    let snap_index = index.load(Ordering::SeqCst);
-                    if snap_index == 0 || idx <= snap_index + 1 {
-                        return;
-                    }
+            if let Some(idx) = compact_to {
+                let snap_index = index.load(Ordering::SeqCst);
+                if snap_index == 0 || idx <= snap_index + 1 {
+                    return;
                 }
-                canceled.store(true, Ordering::SeqCst);
-                *snap_state = SnapState::Relax;
-                info!(
-                    self.logger(),
-                    "snapshot is canceled";
-                    "compact_to" => compact_to,
-                );
             }
+            canceled.store(true, Ordering::SeqCst);
+            *snap_state = SnapState::Relax;
+            info!(
+                self.logger(),
+                "snapshot is canceled";
+                "compact_to" => compact_to,
+            );
+            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.cancel.inc();
+        }
+    }
+
+    pub fn on_snapshot_generated(&mut self, snap: Box<Snapshot>) {
+        let mut snap_state = self.snap_state.borrow_mut();
+        if let SnapState::Generating {
+            ref canceled,
+            ref index,
+            ..
+        } = *snap_state
+        {
+            *snap_state = SnapState::Generated(snap);
+            info!(
+                self.logger(),
+                "snapshot is generated";
+            );
         }
     }
 
@@ -346,31 +361,20 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     /// unavailable snapshot.
     pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
         let mut snap_state = self.snap_state.borrow_mut();
-
-        if let SnapState::Generating { ref receiver, .. } = *snap_state {
-            match receiver.try_recv() {
-                Err(TryRecvError::Empty) => {
-                    return Err(raft::Error::Store(
-                        raft::StorageError::SnapshotTemporarilyUnavailable,
-                    ));
-                }
-                Ok(s) => {
-                    *snap_state = SnapState::Relax;
-                    if self.validate_snap(&s, request_index) {
-                        return Ok(s);
-                    }
-                    STORE_SNAPSHOT_RETIRES_COUNTER.inc();
-                }
-                Err(TryRecvError::Disconnected) => {
-                    *snap_state = SnapState::Relax;
-                    warn!(
-                        self.logger(),
-                        "failed to try generating snapshot";
-                        "request_peer" => to,
-                    );
-                    STORE_SNAPSHOT_RETIRES_COUNTER.inc();
+        match *snap_state {
+            SnapState::Generating { .. } => {
+                return Err(raft::Error::Store(
+                    raft::StorageError::SnapshotTemporarilyUnavailable,
+                ));
+            }
+            SnapState::Generated(ref s) => {
+                let snap = *s.clone();
+                *snap_state = SnapState::Relax;
+                if self.validate_snap(&snap, request_index) {
+                    return Ok(snap);
                 }
             }
+            _ => {}
         }
 
         if SnapState::Relax != *snap_state {
@@ -388,8 +392,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             "request_index" => request_index,
             "request_peer" => to,
         );
-
-        let (sender, receiver) = mpsc::sync_channel(1);
+        let (_, receiver) = mpsc::sync_channel(1);
         let canceled = Arc::new(AtomicBool::new(false));
         let index = Arc::new(AtomicU64::new(0));
         *snap_state = SnapState::Generating {
@@ -398,7 +401,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             receiver,
         };
 
-        let task = GenSnapTask::new(self.region().get_id(), index, canceled, sender);
+        let task = GenSnapTask::new(self.region().get_id(), index, canceled);
 
         let mut gen_snap_task = self.gen_snap_task.borrow_mut();
         assert!(gen_snap_task.is_none());
@@ -468,11 +471,16 @@ impl<EK: KvEngine, ER: RaftEngine> raft::Storage for Storage<EK, ER> {
 
 #[cfg(test)]
 mod tests {
-    use std::{marker::PhantomData, time::Duration};
+    use std::{
+        marker::PhantomData,
+        sync::mpsc::{sync_channel, SyncSender},
+        time::Duration,
+    };
 
     use engine_test::{
         ctor::{CfOptions, DbOptions},
         kv::{KvTestEngine, TestTabletFactoryV2},
+        raft::RaftTestEngine,
     };
     use engine_traits::{
         KvEngine, OpenOptions, RaftEngine, RaftEngineReadOnly, RaftLogBatch, TabletFactory, ALL_CFS,
@@ -482,29 +490,34 @@ mod tests {
         raft_serverpb::PeerState,
     };
     use raft::{eraftpb::Snapshot as RaftSnapshot, Error as RaftError, StorageError};
-    use raftstore::store::{ReadTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
+    use raftstore::store::{
+        AsyncReadNotifier, FetchedLogs, ReadRunner, ReadTask, RAFT_INIT_LOG_INDEX,
+        RAFT_INIT_LOG_TERM,
+    };
     use slog::o;
     use tempfile::TempDir;
     use tikv_util::worker::{dummy_scheduler, Runnable, Worker};
 
     use super::*;
 
-    struct MockRegionRunner {}
-    impl Runnable for MockRegionRunner {
-        type Task = ReadTask<KvTestEngine>;
-        fn run(&mut self, task: ReadTask<KvTestEngine>) {
-            match task {
-                ReadTask::GenTabletSnapshot {
-                    notifier, canceled, ..
-                } => {
-                    if canceled.load(Ordering::SeqCst) {
-                        drop(notifier);
-                        return;
-                    }
-                    notifier.send(RaftSnapshot::default()).unwrap();
-                }
-                _ => unreachable!(),
-            }
+    pub struct TestRouter {
+        ch: SyncSender<Box<Snapshot>>,
+    }
+
+    impl TestRouter {
+        pub fn new() -> (Self, Receiver<Box<Snapshot>>) {
+            let (tx, rx) = sync_channel(1);
+            (Self { ch: tx }, rx)
+        }
+    }
+
+    impl AsyncReadNotifier for TestRouter {
+        fn notify_fetched_logs(&self, _region_id: u64, _fetched_logs: FetchedLogs) {
+            unreachable!();
+        }
+
+        fn notify_snapshot_generated(&self, _region_id: u64, snapshot: Box<Snapshot>) {
+            self.ch.send(snapshot).unwrap();
         }
     }
 
@@ -550,7 +563,7 @@ mod tests {
     }
 
     #[test]
-    fn test_storage_create_snapshot_with_mock_runner() {
+    fn test_storage_create_snapshot() {
         let region = new_region();
         let path = TempDir::new().unwrap();
         let raft_engine =
@@ -576,7 +589,7 @@ mod tests {
         let mut s = Storage::uninit(
             6,
             region,
-            raft_engine,
+            raft_engine.clone(),
             dummy_scheduler,
             &slog_global::borrow_global().new(o!()),
         )
@@ -584,9 +597,10 @@ mod tests {
         let snap = s.snapshot(0, 0);
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);
-        let mut worker = Worker::new("region-worker").lazy_build("region-worker");
+        let mut worker = Worker::new("test-read-worker").lazy_build("test-read-worker");
         let sched = worker.scheduler();
-        worker.start(MockRegionRunner {});
+        let (router, rx) = TestRouter::new();
+        worker.start(ReadRunner::new(router, raft_engine));
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         gen_task.generate_and_schedule_snapshot(
             tablet.clone(),
@@ -595,10 +609,10 @@ mod tests {
             0,
             &sched,
         );
+        let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        s.on_snapshot_generated(res);
         let snap = match *s.snap_state.borrow() {
-            SnapState::Generating { ref receiver, .. } => {
-                receiver.recv_timeout(Duration::from_secs(3)).unwrap()
-            }
+            SnapState::Generated(ref snap) => *snap.clone(),
             ref s => panic!("unexpected state: {:?}", s),
         };
         assert_eq!(snap.get_metadata().get_index(), 0);
@@ -611,6 +625,7 @@ mod tests {
         assert_eq!(snap.unwrap_err(), unavailable);
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         gen_task.generate_and_schedule_snapshot(tablet, RegionLocalState::default(), 0, 0, &sched);
+        let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         s.cancel_generating_snap(None);
         assert_eq!(*s.snap_state.borrow(), SnapState::Relax);
     }
