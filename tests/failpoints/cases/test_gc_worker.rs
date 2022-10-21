@@ -410,7 +410,7 @@ fn test_orphan_versions_from_compaction_filter() {
 // Call `start_auto_gc` like `cmd/src/server.rs` does. It will combine
 // compaction filter and GC worker so that GC worker can help to process orphan
 // versions on default CF.
-#[cfg(feature = "test-engine-raft-rocksdb")]
+#[cfg(not(feature = "test-engines-panic"))]
 fn init_compaction_filter(
     cluster: &Cluster<ServerCluster>,
     store_id: u64,
@@ -472,7 +472,7 @@ fn init_compaction_filter(
         )
         .unwrap();
 }
-#[cfg(not(feature = "test-engine-raft-rocksdb"))]
+#[cfg(feature = "test-engines-panic")]
 fn init_compaction_filter(
     cluster: &Cluster<ServerCluster>,
     store_id: u64,

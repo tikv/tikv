@@ -138,7 +138,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
         })
     }
 
-    #[cfg(feature = "test-engine-raft-rocksdb")]
+    #[cfg(not(feature = "test-engines-panic"))]
     pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider + Clone + 'static>(
         &mut self,
         cfg: AutoGcConfig<S, R>,
@@ -158,7 +158,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
             .unwrap();
     }
 
-    #[cfg(not(feature = "test-engine-raft-rocksdb"))]
+    #[cfg(feature = "test-engines-panic")]
     pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider + Clone + 'static>(
         &mut self,
         cfg: AutoGcConfig<S, R>,

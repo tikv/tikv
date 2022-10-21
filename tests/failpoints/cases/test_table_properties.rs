@@ -28,7 +28,7 @@ pub fn make_key(key: &[u8], ts: u64) -> Vec<u8> {
 }
 
 #[test]
-#[cfg(feature = "test-engine-raft-rocksdb")]
+#[cfg(not(feature = "test-engines-panic"))]
 fn test_check_need_gc() {
     GC_COMPACTION_FILTER_PERFORM.reset();
     GC_COMPACTION_FILTER_SKIP.reset();
@@ -168,7 +168,7 @@ fn do_gc(
 }
 
 #[test]
-#[cfg(feature = "test-engine-raft-rocksdb")]
+#[cfg(not(feature = "test-engines-panic"))]
 fn test_skip_gc_by_check() {
     GC_COMPACTION_FILTER_PERFORM.reset();
     GC_COMPACTION_FILTER_SKIP.reset();
