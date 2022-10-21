@@ -33,54 +33,54 @@ nortcheck = ["engine_rocks/nortcheck"]
 backup-stream-debug = ["backup-stream/backup-stream-debug"]
 
 [dependencies]
-api_version = { path = "../api_version" }
-backup = { path = "../backup", default-features = false }
-backup-stream = { path = "../backup-stream", default-features = false }
-causal_ts = { path = "../causal_ts" }
-cdc = { path = "../cdc", default-features = false }
+api_version = { workspace = true }
+backup = { workspace = true }
+backup-stream = { workspace = true }
+causal_ts = { workspace = true }
+cdc = { workspace = true }
 chrono = "0.4"
 clap = "2.32"
-collections = { path = "../collections" }
-concurrency_manager = { path = "../concurrency_manager", default-features = false }
+collections = { workspace = true }
+concurrency_manager = { workspace = true }
 crossbeam = "0.8"
-encryption = { path = "../encryption", default-features = false }
-encryption_export = { path = "../encryption/export", default-features = false }
-engine_rocks = { path = "../engine_rocks", default-features = false }
-engine_rocks_helper = { path = "../engine_rocks_helper" }
-engine_traits = { path = "../engine_traits", default-features = false }
-error_code = { path = "../error_code", default-features = false }
-file_system = { path = "../file_system", default-features = false }
+encryption = { workspace = true }
+encryption_export = { workspace = true }
+engine_rocks = { workspace = true }
+engine_rocks_helper = { workspace = true }
+engine_traits = { workspace = true }
+error_code = { workspace = true }
+file_system = { workspace = true }
 fs2 = "0.4"
 futures = "0.3"
-grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored"] }
+grpcio = { workspace = true }
 grpcio-health = { version = "0.10", default-features = false, features = ["protobuf-codec"] }
 hex = "0.4"
-keys = { path = "../keys", default-features = false }
+keys = { workspace = true }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
-log_wrappers = { path = "../log_wrappers" }
-pd_client = { path = "../pd_client", default-features = false }
+log_wrappers = { workspace = true }
+pd_client = { workspace = true }
 prometheus = { version = "0.13", features = ["nightly"] }
 protobuf = { version = "2.8", features = ["bytes"] }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
-raft_log_engine = { path = "../raft_log_engine", default-features = false }
-raftstore = { path = "../raftstore", default-features = false, features = ["engine_rocks"] }
+raft_log_engine = { workspace = true }
+raftstore = { workspace = true, features = ["engine_rocks"] }
 rand = "0.8"
-resolved_ts = { path = "../../components/resolved_ts", default-features = false }
-resource_metering = { path = "../resource_metering" }
-security = { path = "../security", default-features = false, features = ["tonic"] }
+resolved_ts = { workspace = true }
+resource_metering = { workspace = true }
+security = { workspace = true, features = ["tonic"] }
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
-snap_recovery = { path = "../snap_recovery", default-features = false }
+snap_recovery = { workspace = true }
 tempfile = "3.0"
-tikv = { path = "../..", default-features = false }
-tikv_alloc = { path = "../tikv_alloc" }
-tikv_util = { path = "../tikv_util", default-features = false }
+tikv = { workspace = true }
+tikv_alloc = { workspace = true }
+tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
 toml = "0.5"
-txn_types = { path = "../txn_types", default-features = false }
+txn_types = { workspace = true }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [target.'cfg(unix)'.dependencies]

@@ -323,12 +323,16 @@ pub struct Cluster {
 
 impl Default for Cluster {
     fn default() -> Cluster {
-        Cluster::with_node_count(1)
+        Cluster::with_node_count(1, None)
     }
 }
 
 impl Cluster {
-    pub fn with_node_count(count: usize) -> Self {
+    pub fn with_config(config: Config) -> Cluster {
+        Cluster::with_node_count(1, Some(config))
+    }
+
+    pub fn with_node_count(count: usize, config: Option<Config>) -> Self {
         let pd_server = test_pd::Server::new(1);
         let mut cluster = Cluster {
             pd_server,
@@ -336,7 +340,11 @@ impl Cluster {
             receivers: vec![],
             routers: vec![],
         };
-        let mut cfg = v2_default_config();
+        let mut cfg = if let Some(config) = config {
+            config
+        } else {
+            v2_default_config()
+        };
         disable_all_auto_ticks(&mut cfg);
         for _ in 1..=count {
             let mut node = TestNode::with_pd(&cluster.pd_server);
