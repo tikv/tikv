@@ -2558,7 +2558,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                     message.set_region_epoch(region_epoch.clone());
                     let mut msg = ExtraMessage::default();
                     msg.set_type(ExtraMessageType::MsgRegionWakeUp);
-                    msg.forcely_awake = true; // Forcely make GroupState into Chaos.
+                    msg.forcely_awaken = true; // Forcely make GroupState into Chaos.
                     message.set_extra_msg(msg);
                     if let Err(e) = self.ctx.router.send_raft_message(message) {
                         error!(

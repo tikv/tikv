@@ -2628,14 +2628,16 @@ where
         match msg.get_extra_msg().get_type() {
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
                 if self.fsm.hibernate_state.group_state() == GroupState::Idle {
-                    if !msg.get_extra_msg().forcely_awake {
-                        self.reset_raft_tick(GroupState::Ordered);
-                    } else {
+                    if msg.get_extra_msg().forcely_awaken {
+                        // Forcely awaken this region by manually setting this GroupState
+                        // into Chaos to trigger a new voting in this RaftGroup.
                         self.reset_raft_tick(if !self.fsm.peer.is_leader() {
                             GroupState::Chaos
                         } else {
                             GroupState::Ordered
                         });
+                    } else {
+                        self.reset_raft_tick(GroupState::Ordered);
                     }
                 }
                 if msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp
