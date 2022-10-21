@@ -379,7 +379,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ch.set_result(meta);
     }
 
-    // todo(SpadeA): tmp use
+    // todo(SpadeA): to be merged
     pub fn handle_read_on_apply<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,

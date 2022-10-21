@@ -395,7 +395,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
             meta.tablet_caches
                 .insert(new_region_id, new_peer.peer().tablet().clone());
-            new_peer.peer().activate(store_ctx);
             meta.regions.insert(new_region_id, new_region.clone());
             let not_exist = meta
                 .region_ranges
@@ -464,7 +463,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
 #[cfg(test)]
 mod test {
-    use std::sync::mpsc::{channel, Sender};
+    use std::sync::mpsc::{channel, Receiver, Sender};
 
     use engine_test::{
         ctor::{CfOptions, DbOptions},
@@ -487,7 +486,28 @@ mod test {
     };
 
     use super::*;
-    use crate::{fsm::ApplyFsm, raft::Apply, tablet::CachedTablet};
+    use crate::{
+        fsm::{ApplyFsm, ApplyResReporter},
+        raft::Apply,
+        tablet::CachedTablet,
+    };
+
+    struct MockReporter {
+        sender: Sender<ApplyRes>,
+    }
+
+    impl MockReporter {
+        fn new() -> (Self, Receiver<ApplyRes>) {
+            let (tx, rx) = channel();
+            (MockReporter { sender: tx }, rx)
+        }
+    }
+
+    impl ApplyResReporter for MockReporter {
+        fn report(&self, apply_res: ApplyRes) {
+            self.sender.send(apply_res).unwrap();
+        }
+    }
 
     fn new_split_req(key: &[u8], id: u64, children: Vec<u64>) -> SplitRequest {
         let mut req = SplitRequest::default();
@@ -498,7 +518,7 @@ mod test {
     }
 
     fn assert_split(
-        apply: &mut Apply<engine_test::kv::KvTestEngine, raft::RaftTestEngine, Sender<u64>>,
+        apply: &mut Apply<engine_test::kv::KvTestEngine, raft::RaftTestEngine, MockReporter>,
         factory: &Arc<TestTabletFactoryV2>,
         region_to_split: &Region,
         get_region_local_state: &dyn Fn(u64) -> RegionLocalState,
@@ -530,6 +550,7 @@ mod test {
 
         // Exec batch split
         let (resp, apply_res) = apply.exec_batch_split(&req, log_index).unwrap();
+        apply.flush();
 
         let regions = resp.get_splits().get_regions();
         assert!(regions.len() == region_boundries.len() - 1);
@@ -634,11 +655,11 @@ mod test {
         region_state.set_region(region.clone());
         region_state.set_tablet_index(5);
 
-        let (tx, rx) = channel();
+        let (reporter, rx) = MockReporter::new();
         let mut apply = Apply::new(
             store_id,
             region_state,
-            tx,
+            reporter,
             CachedTablet::new(Some(tablet)),
             raft_engine.clone(),
             factory.clone(),
@@ -731,6 +752,7 @@ mod test {
             vec![vec![11, 12, 13]],
             log_index,
         );
+        rx.recv().unwrap();
 
         log_index = 20;
         // After split: region 20 ["", "k01"], region 1 ["k01", "k09"]
@@ -746,6 +768,7 @@ mod test {
             vec![vec![21, 22, 23]],
             log_index,
         );
+        rx.recv().unwrap();
 
         log_index = 30;
         // After split: region 30 ["k01", "k02"], region 40 ["k02", "k03"],
@@ -762,6 +785,7 @@ mod test {
             vec![vec![31, 32, 33], vec![41, 42, 43]],
             log_index,
         );
+        rx.recv().unwrap();
 
         // After split: region 50 ["k07", "k08"], region 60 ["k08", "k09"],
         //              region 1 ["k03", "k07"]
@@ -778,5 +802,6 @@ mod test {
             vec![vec![51, 52, 53], vec![61, 62, 63]],
             log_index,
         );
+        rx.recv().unwrap();
     }
 }

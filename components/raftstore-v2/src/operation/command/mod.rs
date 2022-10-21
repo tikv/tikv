@@ -415,14 +415,6 @@ impl<EK: KvEngine, ER: RaftEngine, R: ApplyResReporter> Apply<EK, ER, R> {
             _ => unimplemented!(),
         }?;
 
-        match admin_result {
-            AdminCmdResult::SplitRegion(SplitResult { ref derived, .. }) => {
-                self.region_state_mut().set_region(derived.clone());
-                // self.metrics.size_diff_hint = 0;
-                // self.metrics.delete_keys_hint = 0;
-            }
-        }
-
         // Check if the region epoch changes as expected
         let cmd_type = req.get_admin_request().get_cmd_type();
         let epoch_state = admin_cmd_epoch_lookup(cmd_type);

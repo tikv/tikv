@@ -273,7 +273,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             pessimistic_locks.version = self.region().get_region_epoch().get_version();
         }
 
-        // todo: CoprocessorHost::new needs a CasualRouter where v2 does not
+        // todo: `CoprocessorHost::new` needs a CasualRouter where v2 does not
         // have this now.
         // if !self.pending_remove {
         //     host.on_region_changed(
@@ -542,21 +542,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // to become the leader of new split region.
         let _ = self.raft_group.campaign();
         true
-    }
-
-    /// Register self to apply_scheduler so that the peer is then usable.
-    /// Also trigger `RegionChangeEvent::Create` here.
-    pub fn activate<T>(&self, ctx: &StoreContext<EK, ER, T>) {
-        // self.schedule_apply_fsm(ctx)
-
-        // todo: CoprocessorHost::new needs a CasualRouter where v2 does not
-        // have this now.
-        // ctx.coprocessor_host.on_region_changed(
-        //     self.region(),
-        //     RegionChangeEvent::Create,
-        //     self.get_role(),
-        // );
-        // self.maybe_gen_approximate_buckets(ctx);
     }
 
     pub fn txn_ext(&self) -> &Arc<TxnExt> {
