@@ -27,6 +27,7 @@ use raft::{
     INVALID_INDEX,
 };
 use raft_proto::ConfChangeI;
+use slog_global::error;
 use tikv_util::{box_err, debug, info, store::region, time::monotonic_raw_now, Either};
 use time::{Duration, Timespec};
 use txn_types::{TimeStamp, WriteBatchFlags};
@@ -685,6 +686,7 @@ pub(crate) fn u64_to_timespec(u: u64) -> Timespec {
 pub fn parse_data_at<T: Message + Default>(data: &[u8], index: u64, tag: &str) -> T {
     let mut result = T::default();
     result.merge_from_bytes(data).unwrap_or_else(|e| {
+        error!("meet corrupted raft message: {}", log_wrappers::Value::value(data));
         panic!("{} data is corrupted at {}: {:?}", tag, index, e);
     });
     result
