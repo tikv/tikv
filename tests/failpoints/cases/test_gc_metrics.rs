@@ -130,6 +130,7 @@ fn test_txn_mvcc_filtered() {
 }
 
 #[test]
+#[cfg(feature = "test-engine-raft-rocksdb")]
 fn test_txn_gc_keys_handled() {
     let store_id = 1;
     GC_COMPACTION_FILTER_MVCC_DELETION_MET.reset();
@@ -284,6 +285,7 @@ fn test_raw_mvcc_filtered() {
 }
 
 #[test]
+#[cfg(feature = "test-engine-raft-rocksdb")]
 fn test_raw_gc_keys_handled() {
     let store_id = 1;
     GC_COMPACTION_FILTER_MVCC_DELETION_MET.reset();

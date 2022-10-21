@@ -146,14 +146,6 @@ pub mod kv {
     }
 
     impl TabletFactory<KvTestEngine> for TestTabletFactory {
-        fn create_shared_db(&self) -> Result<KvTestEngine> {
-            let tablet_path = self.tablet_path(0, 0);
-            let tablet = self.create_tablet(&tablet_path)?;
-            let mut root_db = self.root_db.lock().unwrap();
-            root_db.replace(tablet.clone());
-            Ok(tablet)
-        }
-
         /// See the comment above the same name method in KvEngineFactory
         fn open_tablet(
             &self,
@@ -186,6 +178,19 @@ pub mod kv {
             self.create_shared_db()
         }
 
+        fn create_shared_db(&self) -> Result<KvTestEngine> {
+            let tablet_path = self.tablet_path(0, 0);
+            let tablet = self.create_tablet(&tablet_path)?;
+            let mut root_db = self.root_db.lock().unwrap();
+            root_db.replace(tablet.clone());
+            Ok(tablet)
+        }
+
+        #[inline]
+        fn destroy_tablet(&self, _id: u64, _suffix: u64) -> engine_traits::Result<()> {
+            Ok(())
+        }
+
         fn exists_raw(&self, _path: &Path) -> bool {
             false
         }
@@ -198,11 +203,6 @@ pub mod kv {
         #[inline]
         fn tablets_path(&self) -> PathBuf {
             Path::new(&self.root_path).join("tablets")
-        }
-
-        #[inline]
-        fn destroy_tablet(&self, _id: u64, _suffix: u64) -> engine_traits::Result<()> {
-            Ok(())
         }
 
         fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()> {
@@ -336,13 +336,16 @@ pub mod kv {
         }
 
         #[inline]
-        fn exists_raw(&self, path: &Path) -> bool {
-            KvTestEngine::exists(path.to_str().unwrap_or_default())
+        fn destroy_tablet(&self, id: u64, suffix: u64) -> engine_traits::Result<()> {
+            let path = self.tablet_path(id, suffix);
+            self.registry.lock().unwrap().remove(&(id, suffix));
+            let _ = std::fs::remove_dir_all(path);
+            Ok(())
         }
 
         #[inline]
-        fn tablets_path(&self) -> PathBuf {
-            self.inner.root_path.join("tablets")
+        fn exists_raw(&self, path: &Path) -> bool {
+            KvTestEngine::exists(path.to_str().unwrap_or_default())
         }
 
         #[inline]
@@ -353,25 +356,8 @@ pub mod kv {
         }
 
         #[inline]
-        fn mark_tombstone(&self, region_id: u64, suffix: u64) {
-            let path = self.tablet_path(region_id, suffix).join(TOMBSTONE_MARK);
-            std::fs::File::create(&path).unwrap();
-            self.registry.lock().unwrap().remove(&(region_id, suffix));
-        }
-
-        #[inline]
-        fn is_tombstoned(&self, region_id: u64, suffix: u64) -> bool {
-            self.tablet_path(region_id, suffix)
-                .join(TOMBSTONE_MARK)
-                .exists()
-        }
-
-        #[inline]
-        fn destroy_tablet(&self, id: u64, suffix: u64) -> engine_traits::Result<()> {
-            let path = self.tablet_path(id, suffix);
-            self.registry.lock().unwrap().remove(&(id, suffix));
-            let _ = std::fs::remove_dir_all(path);
-            Ok(())
+        fn tablets_path(&self) -> PathBuf {
+            self.inner.root_path.join("tablets")
         }
 
         #[inline]
@@ -392,6 +378,20 @@ pub mod kv {
                 self.registry.lock().unwrap().remove(&(old_id, old_suffix));
             }
             new_engine
+        }
+
+        #[inline]
+        fn mark_tombstone(&self, region_id: u64, suffix: u64) {
+            let path = self.tablet_path(region_id, suffix).join(TOMBSTONE_MARK);
+            std::fs::File::create(&path).unwrap();
+            self.registry.lock().unwrap().remove(&(region_id, suffix));
+        }
+
+        #[inline]
+        fn is_tombstoned(&self, region_id: u64, suffix: u64) -> bool {
+            self.tablet_path(region_id, suffix)
+                .join(TOMBSTONE_MARK)
+                .exists()
         }
 
         fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()> {

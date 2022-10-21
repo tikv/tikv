@@ -2043,6 +2043,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-engine-raft-rocksdb")]
     fn test_gc_keys_with_region_info_provider() {
         let store_id = 1;
         let engine = TestEngineBuilder::new().build().unwrap();
