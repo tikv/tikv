@@ -32,16 +32,11 @@ use raftstore::coprocessor::CmdBatch;
 use slog_global::debug;
 use tidb_query_datatype::codec::table::decode_table_id;
 use tikv_util::{
-    box_err,
-    codec::stream_event::EventEncoder,
-    error, info,
-    time::{Instant, Limiter},
-    warn,
-    worker::Scheduler,
-    Either, HandyRwLock,
+    box_err, codec::stream_event::EventEncoder, error, info, time::Instant, warn,
+    worker::Scheduler, Either, HandyRwLock,
 };
 use tokio::{
-    fs::{remove_file, File},
+    fs::remove_file,
     io::{AsyncWriteExt, BufReader},
     sync::{Mutex, RwLock},
 };
