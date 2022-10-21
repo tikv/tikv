@@ -1889,7 +1889,7 @@ mod confchange_cmd_metric {
     }
 }
 
-// Validate that split keys are sorted and contained by the regions being split.
+// Validate the request and the split keys
 pub fn validate_and_get_split_keys(
     split_reqs: &BatchSplitRequest,
     region_to_split: &Region,
@@ -1985,7 +1985,7 @@ pub fn init_split_regions(
 }
 
 // Some regions in new_split_regions may have already been created due to some
-// sophisticated cases. This methods inject reasons in `NewSplitPeer`
+// sophisticated cases. This methods inject reasons into `NewSplitPeer`
 // for those regions (See PR#8084).
 pub fn amend_new_split_regions(
     _peer_id: u64,

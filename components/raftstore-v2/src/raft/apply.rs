@@ -6,7 +6,7 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_traits::{KvEngine, RaftEngine, TabletFactory, WriteBatch};
+use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletFactory, WriteBatch};
 use kvproto::{raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
 use raftstore::store::fsm::apply::DEFAULT_APPLY_WB_SIZE;
 use slog::Logger;
@@ -26,6 +26,7 @@ pub struct Apply<EK: KvEngine, ER: RaftEngine, R> {
     remote_tablet: CachedTablet<EK>,
     tablet: EK,
     write_batch: Option<EK::WriteBatch>,
+    log_batch: Option<ER::LogBatch>,
 
     pub(crate) raft_engine: ER,
     pub(crate) tablet_factory: Arc<dyn TabletFactory<EK>>,
@@ -65,6 +66,7 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
             tablet: remote_tablet.latest().unwrap().clone(),
             remote_tablet,
             write_batch: None,
+            log_batch: None,
             callbacks: vec![],
             applied_index: 0,
             applied_term: 0,
@@ -97,8 +99,18 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
     }
 
     #[inline]
+    pub fn take_log_batch(&mut self) -> Option<ER::LogBatch> {
+        self.log_batch.take()
+    }
+
+    #[inline]
     pub fn write_batch_mut(&mut self) -> &mut Option<EK::WriteBatch> {
         &mut self.write_batch
+    }
+
+    #[inline]
+    pub fn log_batch_mut(&mut self) -> &mut Option<ER::LogBatch> {
+        &mut self.log_batch
     }
 
     #[inline]
@@ -107,6 +119,15 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
             self.write_batch = Some(self.tablet.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE));
         }
         self.write_batch.as_mut().unwrap()
+    }
+
+    #[inline]
+    pub fn log_batch_or_default(&mut self) -> &mut ER::LogBatch {
+        if self.log_batch.is_none() {
+            // todo: a better capacity ?
+            self.log_batch = Some(self.raft_engine.log_batch(10));
+        }
+        self.log_batch.as_mut().unwrap()
     }
 
     #[inline]

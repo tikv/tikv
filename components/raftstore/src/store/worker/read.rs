@@ -17,7 +17,7 @@ use fail::fail_point;
 use kvproto::{
     errorpb,
     kvrpcpb::ExtraOp as TxnExtraOp,
-    metapb,
+    metapb::{self, Region},
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request, Response},
 };
 use pd_client::BucketMeta;
@@ -448,7 +448,7 @@ impl ReadDelegate {
     pub fn new(
         peer_id: u64,
         term: u64,
-        region: metapb::Region,
+        region: Region,
         applied_term: u64,
         txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
         txn_ext: Arc<TxnExt>,

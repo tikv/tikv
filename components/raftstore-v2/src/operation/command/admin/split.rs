@@ -107,7 +107,7 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
         tablet.flush_cfs(true).unwrap();
         let current_tablet_path = std::path::Path::new(tablet.path());
 
-        let mut wb = self.raft_engine().log_batch(10);
+        let mut wb = self.log_batch_or_default();
         for new_region in &regions {
             let new_region_id = new_region.id;
             if new_region_id == region_id {
@@ -141,14 +141,16 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
                 )
             });
 
-            write_initial_states(&mut wb, new_region.clone()).unwrap_or_else(|e| {
-                panic!(
-                    "{:?} fails to save split region {:?}: {:?}",
-                    self.logger.list(),
-                    new_region,
-                    e
-                )
-            });
+            write_initial_states(self.log_batch_or_default(), new_region.clone()).unwrap_or_else(
+                |e| {
+                    panic!(
+                        "{:?} fails to save split region {:?}: {:?}",
+                        self.logger.list(),
+                        new_region,
+                        e
+                    )
+                },
+            );
         }
 
         // Change the tablet path by using the new tablet suffix
@@ -160,7 +162,12 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
         // Clear the write batch belonging to the old tablet
         self.clear_write_batch();
 
-        write_peer_state(&mut wb, derived.clone(), log_index).unwrap_or_else(|e| {
+        write_peer_state(
+            self.log_batch_mut().as_mut().unwrap(),
+            derived.clone(),
+            log_index,
+        )
+        .unwrap_or_else(|e| {
             panic!(
                 "{:?} fails to update region {:?}: {:?}",
                 self.logger.list(),
@@ -169,13 +176,6 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
             )
         });
 
-        self.raft_engine.consume(&mut wb, true).unwrap_or_else(|e| {
-            panic!(
-                "{:?} fails to consume the write: {:?}",
-                self.logger.list(),
-                e,
-            )
-        });
         self.region_state_mut().set_region(derived.clone());
         self.region_state_mut().tablet_index = log_index;
         // self.metrics.size_diff_hint = 0;
@@ -408,11 +408,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 .insert(new_region_id, new_peer.peer().read_progress().clone());
 
             if last_region_id == new_region_id {
+                // todo: cfg validation should be called to make
+                // region_split_check_diff be Some(x)
+
                 // To prevent from big region, the right region needs run split
                 // check again after split.
-                new_peer
-                    .peer_mut()
-                    .set_size_diff_hint(store_ctx.cfg.region_split_check_diff().0);
+                // new_peer
+                //     .peer_mut()
+                //     .set_size_diff_hint(store_ctx.cfg.
+                // region_split_check_diff().0);
             }
 
             // recover the auto_compaction

@@ -19,7 +19,7 @@
 use std::{cmp, collections::VecDeque};
 
 use batch_system::{Fsm, FsmScheduler, Mailbox};
-use engine_traits::{KvEngine, RaftEngine, WriteBatch, WriteOptions};
+use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, WriteBatch, WriteOptions};
 use kvproto::{
     raft_cmdpb::{self, AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader},
     raft_serverpb::RegionLocalState,
@@ -467,6 +467,15 @@ impl<EK: KvEngine, ER: RaftEngine, R: ApplyResReporter> Apply<EK, ER, R> {
             } else {
                 self.write_batch_mut().take();
             }
+        }
+        if let Some(mut wb) = self.take_log_batch() && !wb.is_empty() {
+            self.raft_engine.consume(&mut wb, true).unwrap_or_else(|e| {
+                panic!(
+                    "{:?} fails to consume the write: {:?}",
+                    self.logger.list(),
+                    e,
+                )
+            });
         }
         let callbacks = self.callbacks_mut();
         for (ch, resp) in callbacks.drain(..) {
