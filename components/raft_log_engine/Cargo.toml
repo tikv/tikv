@@ -5,20 +5,20 @@ publish = false
 edition = "2018"
 
 [dependencies]
-encryption = { path = "../encryption" }
-engine_traits = { path = "../engine_traits", default-features = false }
-file_system = { path = "../file_system" }
+encryption = { workspace = true }
+engine_traits = { workspace = true }
+file_system = { workspace = true }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 lazy_static = "1.4.0"
 num_cpus = "1"
-online_config = { path = "../online_config" }
+online_config = { workspace = true }
 protobuf = "2"
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
-raft-engine = { version = "0.3.0", features = ["swap"] }
+raft-engine = { git = "https://github.com/tikv/raft-engine.git", features = ["swap"] }
 serde = "1.0"
 serde_derive = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
-tikv_util = { path = "../tikv_util", default-features = false }
+tikv_util = { workspace = true }
 time = "0.1"
-tracker = { path = "../tracker" }
+tracker = { workspace = true }

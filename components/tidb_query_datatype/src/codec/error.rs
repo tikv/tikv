@@ -145,6 +145,10 @@ impl Error {
         );
         Error::Eval(msg, ERR_INCORRECT_PARAMETERS)
     }
+
+    pub fn regexp_error(msg: String) -> Error {
+        Error::Eval(msg, ERR_REGEXP)
+    }
 }
 
 impl From<Error> for tipb::Error {

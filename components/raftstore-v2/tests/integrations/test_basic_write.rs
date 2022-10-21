@@ -1,14 +1,18 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{assert_matches::assert_matches, time::Duration};
+
+use engine_traits::{OpenOptions, Peekable, TabletFactory};
 use futures::executor::block_on;
 use kvproto::{
     raft_cmdpb::{CmdType, RaftCmdRequest, Request},
     raft_serverpb::RaftMessage,
 };
-use raftstore::store::{util::new_peer, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
+use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
 use raftstore_v2::router::PeerMsg;
+use tikv_util::store::new_peer;
 
-use crate::Cluster;
+use crate::cluster::Cluster;
 
 /// Test basic write flow.
 #[test]
@@ -27,16 +31,15 @@ fn test_basic_write() {
     put_req.mut_put().set_value(b"value".to_vec());
     req.mut_requests().push(put_req);
 
+    router.wait_applied_to_current_term(2, Duration::from_secs(3));
+
     // Good proposal should be committed.
     let (msg, mut sub) = PeerMsg::raft_command(req.clone());
     router.send(2, msg).unwrap();
-    // TODO: check proposed event is triggered. It won't work for now as there is no
-    // apply yet.
-    // assert!(block_on(sub.wait_proposed()));
-    // Epoch checker is not introduced yet, so committed won't be triggerred.
-    // Instead, it will be cancelled.
-    assert!(!block_on(sub.wait_committed()));
-    // TODO: verify it's applied.
+    assert!(block_on(sub.wait_proposed()));
+    assert!(block_on(sub.wait_committed()));
+    let resp = block_on(sub.result()).unwrap();
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
 
     // Store id should be checked.
     let mut invalid_req = req.clone();
@@ -110,4 +113,49 @@ fn test_basic_write() {
     router.send_raft_message(msg).unwrap();
     let resp = router.command(2, req).unwrap();
     assert!(resp.get_header().get_error().has_not_leader(), "{:?}", resp);
+}
+
+#[test]
+fn test_put_delete() {
+    let cluster = Cluster::default();
+    let router = cluster.router(0);
+    let mut req = RaftCmdRequest::default();
+    req.mut_header().set_region_id(2);
+    let epoch = req.mut_header().mut_region_epoch();
+    epoch.set_version(INIT_EPOCH_VER);
+    epoch.set_conf_ver(INIT_EPOCH_CONF_VER);
+    req.mut_header().set_peer(new_peer(1, 3));
+    let mut put_req = Request::default();
+    put_req.set_cmd_type(CmdType::Put);
+    put_req.mut_put().set_key(b"key".to_vec());
+    put_req.mut_put().set_value(b"value".to_vec());
+    req.mut_requests().push(put_req);
+
+    router.wait_applied_to_current_term(2, Duration::from_secs(3));
+
+    let tablet_factory = cluster.node(0).tablet_factory();
+    let tablet = tablet_factory
+        .open_tablet(2, None, OpenOptions::default().set_cache_only(true))
+        .unwrap();
+    assert!(tablet.get_value(b"key").unwrap().is_none());
+    let (msg, mut sub) = PeerMsg::raft_command(req.clone());
+    router.send(2, msg).unwrap();
+    assert!(block_on(sub.wait_proposed()));
+    assert!(block_on(sub.wait_committed()));
+    let resp = block_on(sub.result()).unwrap();
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
+    assert_eq!(tablet.get_value(b"key").unwrap().unwrap(), b"value");
+
+    let mut delete_req = Request::default();
+    delete_req.set_cmd_type(CmdType::Delete);
+    delete_req.mut_delete().set_key(b"key".to_vec());
+    req.clear_requests();
+    req.mut_requests().push(delete_req);
+    let (msg, mut sub) = PeerMsg::raft_command(req.clone());
+    router.send(2, msg).unwrap();
+    assert!(block_on(sub.wait_proposed()));
+    assert!(block_on(sub.wait_committed()));
+    let resp = block_on(sub.result()).unwrap();
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
+    assert_matches!(tablet.get_value(b"key"), Ok(None));
 }

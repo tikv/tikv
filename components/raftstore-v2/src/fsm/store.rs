@@ -4,7 +4,6 @@ use std::time::SystemTime;
 
 use batch_system::Fsm;
 use collections::HashMap;
-use crossbeam::channel::TryRecvError;
 use engine_traits::{KvEngine, RaftEngine};
 use raftstore::store::{Config, ReadDelegate};
 use slog::{o, Logger};
@@ -40,6 +39,11 @@ where
     }
 }
 
+impl<E: KvEngine> Default for StoreMeta<E> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 pub struct Store {
     id: u64,
     // Unix time when it's started.
