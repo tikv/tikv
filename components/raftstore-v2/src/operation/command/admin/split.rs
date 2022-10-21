@@ -7,7 +7,7 @@ use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::internal::SelectHandle;
 use engine_traits::{
     CfOptions, DeleteStrategy, KvEngine, MiscExt, OpenOptions, RaftEngine, RaftEngineReadOnly,
-    Range, TabletFactory, DATA_CFS,
+    Range, TabletFactory, CF_DEFAULT, DATA_CFS,
 };
 use keys::enc_end_key;
 use kvproto::{
@@ -57,6 +57,7 @@ pub struct SplitResult {
     pub regions: Vec<Region>,
     pub derived: Region,
     pub new_split_regions: HashMap<u64, NewSplitPeer>,
+    pub auto_compactions: HashMap<&'static str, bool>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
@@ -100,9 +101,13 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
         // than flush it in the following PR.
         let region_id = derived.get_id();
         let tablet = self.tablet().unwrap();
+        let mut auto_compactions = HashMap::default();
         for &cf in DATA_CFS {
             let mut cf_option = tablet.get_options_cf(cf).unwrap();
-            cf_option.set_disable_auto_compactions(true);
+            auto_compactions.insert(cf, cf_option.get_disable_auto_compactions());
+            tablet
+                .set_options_cf(cf, &[("disable_auto_compactions", "true")])
+                .unwrap();
         }
         tablet.flush_cfs(true).unwrap();
         let current_tablet_path = std::path::Path::new(tablet.path());
@@ -191,6 +196,7 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
                 regions,
                 derived,
                 new_split_regions,
+                auto_compactions,
             }),
         ))
     }
@@ -214,6 +220,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         derived: Region,
         regions: Vec<Region>,
         new_split_regions: HashMap<u64, apply::NewSplitPeer>,
+        auto_compactions: HashMap<&'static str, bool>,
     ) {
         let region_id = derived.get_id();
 
@@ -248,13 +255,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.set_approximate_keys(estimated_keys);
             self.heartbeat_pd(store_ctx);
 
-            // info!(
-            //     self.logger,
-            //     "notify pd with split";
-            //     "region_id" => self.region_id(),
-            //     "peer_id" => self.peer_id(),
-            //     "split_count" => regions.len(),
-            // );
+            info!(
+                self.logger,
+                "notify pd with split";
+                "region_id" => self.region_id(),
+                "peer_id" => self.peer_id(),
+                "split_count" => regions.len(),
+            );
 
             // todo: report to PD
         }
@@ -275,12 +282,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 assert!(not_exist, "[region {}] should not exist", new_region_id);
 
                 // recover the auto_compaction
-                // todo(SpadeA): is it possible that the previous setting for
-                // disable_auto_compaction is true?
                 let tablet = self.tablet_mut().latest().unwrap().clone();
                 for &cf in DATA_CFS {
-                    let mut cf_option = tablet.get_options_cf(cf).unwrap();
-                    cf_option.set_disable_auto_compactions(false);
+                    let disabled = if *auto_compactions.get(cf).unwrap() {
+                        "true"
+                    } else {
+                        "false"
+                    };
+                    tablet
+                        .set_options_cf(cf, &[("disable_auto_compactions", disabled)])
+                        .unwrap();
                 }
 
                 let ranges_to_delete = get_range_not_in_region(&new_region);
@@ -297,7 +308,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // Check if this new region should be splitted
             let new_split_peer = new_split_regions.get(&new_region.get_id()).unwrap();
             if new_split_peer.result.is_some() {
-                // todo(SpadeA): clear extra split data
+                // todo(SpadeA): clear extra split data (region_scheduler is not ready)
                 continue;
             }
 
@@ -419,12 +430,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
 
             // recover the auto_compaction
-            // todo(SpadeA): is it possible that the previous setting for
-            // disable_auto_compaction is true?
             let tablet = new_peer.peer_mut().tablet_mut().latest().unwrap().clone();
             for &cf in DATA_CFS {
-                let mut cf_option = tablet.get_options_cf(cf).unwrap();
-                cf_option.set_disable_auto_compactions(false);
+                let disabled = if *auto_compactions.get(cf).unwrap() {
+                    "true"
+                } else {
+                    "false"
+                };
+                tablet
+                    .set_options_cf(cf, &[("disable_auto_compactions", disabled)])
+                    .unwrap();
             }
 
             let ranges_to_delete = get_range_not_in_region(&new_region);
@@ -470,7 +485,7 @@ mod test {
         kv::TestTabletFactoryV2,
         raft,
     };
-    use engine_traits::ALL_CFS;
+    use engine_traits::{CfOptionsExt, ALL_CFS};
     use futures::channel::mpsc::unbounded;
     use kvproto::{
         raft_cmdpb::{BatchSplitRequest, RaftCmdResponse, SplitRequest},
@@ -552,6 +567,10 @@ mod test {
         let (resp, apply_res) = apply.exec_batch_split(&req, log_index).unwrap();
         apply.flush();
 
+        // for cf in DATA_CFS {
+        //     let opt = apply.tablet().unwrap().get_options_cf(cf).unwrap();
+        //     assert!(opt.get_disable_auto_compactions());
+        // }
         let regions = resp.get_splits().get_regions();
         assert!(regions.len() == region_boundries.len() - 1);
 

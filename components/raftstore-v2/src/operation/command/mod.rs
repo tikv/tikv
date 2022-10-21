@@ -252,7 +252,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     regions,
                     derived,
                     new_split_regions,
-                }) => self.on_ready_split_region(store_ctx, derived, regions, new_split_regions),
+                    auto_compactions,
+                }) => self.on_ready_split_region(
+                    store_ctx,
+                    derived,
+                    regions,
+                    new_split_regions,
+                    auto_compactions,
+                ),
             }
         }
     }

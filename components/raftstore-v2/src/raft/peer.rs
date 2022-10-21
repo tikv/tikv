@@ -239,6 +239,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// has been preserved in a durable device.
     pub fn set_region(
         &mut self,
+        // host: &CoprocessorHost<impl KvEngine>,
         reader: &mut ReadDelegate,
         region: metapb::Region,
         reason: RegionChangeReason,
