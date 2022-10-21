@@ -949,18 +949,6 @@ impl RegionReadProgressRegistry {
         regions
     }
 
-    // Get the `LeaderInfo` of the requested regions
-    pub fn dump_leader_infos(&self, regions: &[u64]) -> HashMap<u64, (Vec<Peer>, LeaderInfo)> {
-        let registry = self.registry.lock().unwrap();
-        let mut info_map = HashMap::with_capacity(regions.len());
-        for region_id in regions {
-            if let Some(rrp) = registry.get(region_id) {
-                info_map.insert(*region_id, rrp.dump_leader_info());
-            }
-        }
-        info_map
-    }
-
     /// Invoke the provided callback with the registry, an internal lock will
     /// hold while invoking the callback so it is important that *not* try
     /// to acquiring any lock inside the callback to avoid dead lock
