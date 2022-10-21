@@ -193,3 +193,28 @@ pub fn path_in_diff_mount_point(path1: &str, path2: &str) -> bool {
 pub fn path_in_diff_mount_point(path1: &str, path2: &str) -> bool {
     return false;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_path_in_diff_mount_point() {
+        let (empty_path1, path2) = ("", "/");
+        let result = path_in_diff_mount_point(empty_path1, path2);
+        assert_eq!(result, false);
+
+        let (no_mount_point_path, path2) = ("no_mount_point_path_w943nn", "/");
+        let result = path_in_diff_mount_point(no_mount_point_path, path2);
+        assert_eq!(result, false);
+
+        let (not_existed_path, path2) = ("/non_existed_path_eu2yndh", "/");
+        let result = path_in_diff_mount_point(not_existed_path, path2);
+        assert_eq!(result, false);
+
+        let (normal_path1, normal_path2) = ("/", "/");
+        let result = path_in_diff_mount_point(normal_path1, normal_path2);
+        assert_eq!(result, false);
+    }
+}
