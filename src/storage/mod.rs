@@ -918,6 +918,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         mut ctx: Context,
         keys: Vec<Key>,
         start_ts: TimeStamp,
+        batch_size: usize,
     ) -> impl Future<Output = Result<(Vec<Result<KvPair>>, KvGetStatistics)>> {
         let stage_begin_ts = Instant::now();
         const CMD: CommandKind = CommandKind::batch_get;
@@ -994,7 +995,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         );
                         snap_store.set_read_pool(read_pool.clone());
                         snap_store.set_priority(priority);
-                        let snap_store = Arc::new(snap_store);
+                        snap_store.set_batch_size(batch_size);
                         let mut stats = Statistics::default();
                         let result = snap_store
                             .batch_get(&keys, &mut statistics)

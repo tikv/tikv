@@ -1612,7 +1612,12 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
     set_tls_tracker_token(tracker);
     let start = Instant::now();
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
-    let v = storage.batch_get(req.take_context(), keys, req.get_version().into());
+    let v = storage.batch_get(
+        req.take_context(),
+        keys,
+        req.get_version().into(),
+        req.get_batch_size() as usize,
+    );
 
     async move {
         let v = v.await;

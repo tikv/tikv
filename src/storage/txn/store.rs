@@ -280,6 +280,7 @@ pub struct SnapshotStore<S: Snapshot> {
 
     read_pool: Option<ReadPoolHandle>,
     priority: Option<CommandPri>,
+    batch_size: usize,
 }
 
 unsafe impl<S: Snapshot> Sync for SnapshotStore<S> {}
@@ -341,9 +342,13 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         keys: &[Key],
         statistics: &mut Vec<Statistics>,
     ) -> Result<Vec<Result<Option<Value>>>> {
-        const BATCH_SIZE: usize = 16;
-        let mut tasks = Vec::with_capacity(keys.len() / BATCH_SIZE + 1);
-        for chunk in keys.chunks(BATCH_SIZE) {
+        let batch_size = if self.batch_size == 0 {
+            keys.len()
+        } else {
+            self.batch_size
+        };
+        let mut tasks = Vec::with_capacity(keys.len() / batch_size + 1);
+        for chunk in keys.chunks(batch_size) {
             let pool = self.read_pool.clone().unwrap();
             let snap = self.snapshot.clone();
             let start_ts = self.start_ts;
@@ -467,6 +472,7 @@ impl<S: Snapshot> SnapshotStore<S> {
 
             read_pool: None,
             priority: None,
+            batch_size: 0,
         }
     }
 
@@ -476,6 +482,10 @@ impl<S: Snapshot> SnapshotStore<S> {
 
     pub fn set_priority(&mut self, priority: CommandPri) {
         self.priority = Some(priority);
+    }
+
+    pub fn set_batch_size(&mut self, batch_size: usize) {
+        self.batch_size = batch_size;
     }
 
     #[inline]
