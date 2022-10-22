@@ -2,14 +2,17 @@
 
 use futures::executor::block_on;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, ReadIndexRequest, Request, StatusCmdType};
-use tikv_util::store::new_peer;
+use raftstore_v2::router::PeerMsg;
+use tikv_util::{config::ReadableDuration, store::new_peer};
 use txn_types::WriteBatchFlags;
 
-use crate::cluster::Cluster;
+use crate::cluster::{v2_default_config, Cluster};
 
 #[test]
 fn test_read_index() {
-    let cluster = Cluster::default();
+    let mut config = v2_default_config();
+    config.raft_store_max_leader_lease = ReadableDuration::millis(150);
+    let cluster = Cluster::with_config(config);
     let router = cluster.router(0);
     std::thread::sleep(std::time::Duration::from_millis(200));
     let region_id = 2;
@@ -20,7 +23,7 @@ fn test_read_index() {
     let res = router.query(region_id, req.clone()).unwrap();
     let status_resp = res.response().unwrap().get_status_response();
     let detail = status_resp.get_region_detail();
-    let mut region = detail.get_region().clone();
+    let region = detail.get_region().clone();
 
     let read_index_req = ReadIndexRequest::default();
     let mut req = RaftCmdRequest::default();
@@ -28,7 +31,7 @@ fn test_read_index() {
     req.mut_header().set_term(7);
     req.mut_header().set_region_id(region_id);
     req.mut_header()
-        .set_region_epoch(region.take_region_epoch());
+        .set_region_epoch(region.get_region_epoch().clone());
     let mut request_inner = Request::default();
     request_inner.set_cmd_type(CmdType::Snap);
     request_inner.set_read_index(read_index_req);
@@ -37,7 +40,38 @@ fn test_read_index() {
     let resp = res.read().unwrap();
     assert_eq!(resp.read_index, 6); // single node commited index should be 6.
 
-    // TODO: add more test when write is implemented.
+    let res = router.query(region_id, req.clone()).unwrap();
+    let resp = res.read().unwrap();
+    // Since it's still with the lease, read index will be skipped.
+    assert_eq!(resp.read_index, 0);
+
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    // the read lease should be expired
+    let res = router.query(region_id, req.clone()).unwrap();
+    let resp = res.read().unwrap();
+    assert_eq!(resp.read_index, 6);
+
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let read_req = req.clone();
+    // the read lease should be expired and renewed by write
+    let mut req = RaftCmdRequest::default();
+    req.mut_header().set_peer(new_peer(1, 3));
+    req.mut_header().set_region_id(region_id);
+    req.mut_header()
+        .set_region_epoch(region.get_region_epoch().clone());
+    let mut put_req = Request::default();
+    put_req.set_cmd_type(CmdType::Put);
+    put_req.mut_put().set_key(b"key".to_vec());
+    put_req.mut_put().set_value(b"value".to_vec());
+    req.mut_requests().push(put_req);
+
+    let (msg, sub) = PeerMsg::raft_command(req.clone());
+    router.send(region_id, msg).unwrap();
+    block_on(sub.result()).unwrap();
+
+    let res = router.query(region_id, read_req).unwrap();
+    let resp = res.read().unwrap();
+    assert_eq!(resp.read_index, 0);
 }
 
 #[test]
@@ -217,16 +251,7 @@ fn test_local_read() {
     request_inner.set_cmd_type(CmdType::Snap);
     req.mut_requests().push(request_inner);
 
-    // FIXME: Get snapshot from local reader, but it will fail as the leader has not
-    // applied in the current term (due to unimplementation of ApplyRes).
-    let resp = block_on(async { router.get_snapshot(req.clone()).await.unwrap_err() });
-    assert!(
-        resp.get_header()
-            .get_error()
-            .get_message()
-            .contains("Fail to get snapshot ")
-    );
-
+    block_on(async { router.get_snapshot(req.clone()).await.unwrap() });
     let res = router.query(region_id, req.clone()).unwrap();
     let resp = res.read().unwrap();
     // The read index will be 0 as the retry process in the `get_snapshot` will

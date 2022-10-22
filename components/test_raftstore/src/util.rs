@@ -1218,6 +1218,28 @@ pub fn must_raw_get(client: &TikvClient, ctx: Context, key: Vec<u8>) -> Option<V
     }
 }
 
+pub fn must_flashback_to_version(
+    client: &TikvClient,
+    ctx: Context,
+    version: u64,
+    start_ts: u64,
+    commit_ts: u64,
+) -> FlashbackToVersionResponse {
+    let mut prepare_req = PrepareFlashbackToVersionRequest::default();
+    prepare_req.set_context(ctx.clone());
+    client
+        .kv_prepare_flashback_to_version(&prepare_req)
+        .unwrap();
+    let mut req = FlashbackToVersionRequest::default();
+    req.set_context(ctx);
+    req.set_start_ts(start_ts);
+    req.set_commit_ts(commit_ts);
+    req.version = version;
+    req.start_key = b"a".to_vec();
+    req.end_key = b"z".to_vec();
+    client.kv_flashback_to_version(&req).unwrap()
+}
+
 // A helpful wrapper to make the test logic clear
 pub struct PeerClient {
     pub cli: TikvClient,

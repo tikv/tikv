@@ -84,6 +84,55 @@ fn test_stale_read_basic_flow_replicate() {
     follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value2".to_vec(), get_tso(&pd_client));
 }
 
+// Similar to test_stale_read_basic_flow_replicate, but we use 1pc to update.
+#[test]
+fn test_stale_read_1pc_flow_replicate() {
+    let (mut cluster, pd_client, mut leader_client) = prepare_for_stale_read(new_peer(1, 1));
+    let mut follower_client2 = PeerClient::new(&cluster, 1, new_peer(2, 2));
+    // Set the `stale_read` flag
+    leader_client.ctx.set_stale_read(true);
+    follower_client2.ctx.set_stale_read(true);
+
+    let commit_ts1 = leader_client.must_kv_write(
+        &pd_client,
+        vec![new_mutation(Op::Put, &b"key1"[..], &b"value1"[..])],
+        b"key1".to_vec(),
+    );
+
+    // Can read `value1` with the newest ts
+    follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), get_tso(&pd_client));
+
+    // Stop replicate data to follower 2
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(1, 2)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend),
+    ));
+    // Update `key1`
+    leader_client.must_kv_prewrite_one_pc(
+        vec![new_mutation(Op::Put, &b"key1"[..], &b"value2"[..])],
+        b"key1".to_vec(),
+        get_tso(&pd_client),
+    );
+    let read_ts = get_tso(&pd_client);
+    // wait for advance_resolved_ts.
+    sleep_ms(200);
+    // Follower 2 can still read `value1`, but can not read `value2` due
+    // to it don't have enough data
+    follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), commit_ts1);
+    let resp1 = follower_client2.kv_read(b"key1".to_vec(), read_ts);
+    assert!(resp1.get_region_error().has_data_is_not_ready());
+
+    // Leader have up to date data so it can read `value2`
+    leader_client.must_kv_read_equal(b"key1".to_vec(), b"value2".to_vec(), get_tso(&pd_client));
+
+    // clear the `MsgAppend` filter
+    cluster.clear_send_filters();
+
+    // Now we can read `value2` with the newest ts
+    follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value2".to_vec(), get_tso(&pd_client));
+}
+
 // Testing how mvcc locks could effect stale read service
 #[test]
 fn test_stale_read_basic_flow_lock() {
