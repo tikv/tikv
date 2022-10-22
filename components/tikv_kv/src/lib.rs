@@ -356,7 +356,7 @@ pub trait Engine: Send + Clone + 'static {
 /// Note that this is not an MVCC snapshot, that is a higher level abstraction
 /// of a view of TiKV at a specific timestamp. This snapshot is lower-level, a
 /// view of the underlying storage.
-pub trait Snapshot: Sync + Send + Clone {
+pub trait Snapshot: Sync + Send + Clone + 'static {
     type Iter: Iterator;
     type Ext<'a>: SnapshotExt
     where

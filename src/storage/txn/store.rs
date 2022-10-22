@@ -1,18 +1,24 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::kvrpcpb::IsolationLevel;
+use async_trait::async_trait;
+use kvproto::kvrpcpb::{CommandPri, IsolationLevel};
+use rand::{thread_rng, RngCore};
 use txn_types::{Key, KvPair, OldValue, TimeStamp, TsSet, Value, WriteRef};
 
 use super::{Error, ErrorInner, Result};
-use crate::storage::{
-    kv::{Snapshot, Statistics},
-    metrics::*,
-    mvcc::{
-        EntryScanner, Error as MvccError, ErrorInner as MvccErrorInner, NewerTsCheckState,
-        PointGetter, PointGetterBuilder, Scanner as MvccScanner, ScannerBuilder,
+use crate::{
+    read_pool::ReadPoolHandle,
+    storage::{
+        kv::{Snapshot, Statistics},
+        metrics::*,
+        mvcc::{
+            EntryScanner, Error as MvccError, ErrorInner as MvccErrorInner, NewerTsCheckState,
+            PointGetter, PointGetterBuilder, Scanner as MvccScanner, ScannerBuilder,
+        },
     },
 };
 
+#[async_trait]
 pub trait Store: Send {
     /// The scanner type returned by `scanner()`.
     type Scanner: Scanner;
@@ -31,7 +37,7 @@ pub trait Store: Send {
     fn incremental_get_met_newer_ts_data(&self) -> NewerTsCheckState;
 
     /// Fetch the provided set of keys.
-    fn batch_get(
+    async fn batch_get(
         &self,
         keys: &[Key],
         statistics: &mut Vec<Statistics>,
@@ -271,8 +277,14 @@ pub struct SnapshotStore<S: Snapshot> {
     check_has_newer_ts_data: bool,
 
     point_getter_cache: Option<PointGetter<S>>,
+
+    read_pool: Option<ReadPoolHandle>,
+    priority: Option<CommandPri>,
 }
 
+unsafe impl<S: Snapshot> Sync for SnapshotStore<S> {}
+
+#[async_trait]
 impl<S: Snapshot> Store for SnapshotStore<S> {
     type Scanner = MvccScanner<S>;
 
@@ -324,24 +336,53 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         }
     }
 
-    fn batch_get(
+    async fn batch_get(
         &self,
         keys: &[Key],
         statistics: &mut Vec<Statistics>,
     ) -> Result<Vec<Result<Option<Value>>>> {
-        let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
-            .fill_cache(self.fill_cache)
-            .isolation_level(self.isolation_level)
-            .bypass_locks(self.bypass_locks.clone())
-            .access_locks(self.access_locks.clone())
-            .build()?;
+        const BATCH_SIZE: usize = 16;
+        let mut tasks = Vec::with_capacity(keys.len() / BATCH_SIZE + 1);
+        for chunk in keys.chunks(BATCH_SIZE) {
+            let pool = self.read_pool.clone().unwrap();
+            let snap = self.snapshot.clone();
+            let start_ts = self.start_ts;
+            let fill_cache = self.fill_cache;
+            let isolation_level = self.isolation_level;
+            let bypass_locks = self.bypass_locks.clone();
+            let access_locks = self.access_locks.clone();
+            let priority = self.priority.unwrap_or_default();
+            let chunk = chunk.to_owned();
+            let id = thread_rng().next_u64();
+            tasks.push(pool.spawn_handle(
+                async move {
+                    let mut point_getter = PointGetterBuilder::new(snap.clone(), start_ts)
+                        .fill_cache(fill_cache)
+                        .isolation_level(isolation_level)
+                        .bypass_locks(bypass_locks.clone())
+                        .access_locks(access_locks.clone())
+                        .build()?;
+                    let mut results = Vec::with_capacity(chunk.len());
+                    for key in chunk {
+                        let value = point_getter.get(&key).map_err(Error::from);
+                        results.push((value, point_getter.take_statistics()));
+                    }
+                    Ok::<_, Error>(results)
+                },
+                priority,
+                id,
+            ));
+        }
 
         let mut values = Vec::with_capacity(keys.len());
-        for key in keys {
-            let value = point_getter.get(key).map_err(Error::from);
-            values.push(value);
-            statistics.push(point_getter.take_statistics());
+        for task in tasks {
+            let results = task.await.map_err(|e| ErrorInner::Other(Box::new(e)))??;
+            for (value_res, stat) in results {
+                statistics.push(stat);
+                values.push(value_res);
+            }
         }
+
         Ok(values)
     }
 
@@ -423,7 +464,18 @@ impl<S: Snapshot> SnapshotStore<S> {
             check_has_newer_ts_data,
 
             point_getter_cache: None,
+
+            read_pool: None,
+            priority: None,
         }
+    }
+
+    pub fn set_read_pool(&mut self, read_pool: ReadPoolHandle) {
+        self.read_pool = Some(read_pool);
+    }
+
+    pub fn set_priority(&mut self, priority: CommandPri) {
+        self.priority = Some(priority);
     }
 
     #[inline]
@@ -502,6 +554,7 @@ impl FixtureStore {
     }
 }
 
+#[async_trait]
 impl Store for FixtureStore {
     type Scanner = FixtureStoreScanner;
 
@@ -532,7 +585,7 @@ impl Store for FixtureStore {
     }
 
     #[inline]
-    fn batch_get(
+    async fn batch_get(
         &self,
         keys: &[Key],
         statistics: &mut Vec<Statistics>,
