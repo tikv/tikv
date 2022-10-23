@@ -209,28 +209,27 @@ fn quote(bytes: BytesRef) -> Result<Option<Bytes>> {
 fn json_valid(args: &[ScalarValueRef]) -> Result<Option<Int>> {
     assert!(!args.is_empty() && args.len() == 1);
     let received_et = args[0].eval_type();
-    let r = match received_et {
-        EvalType::Json => {
-            let j: Option<JsonRef> = args[0].as_json();
-            match j {
-                Some(_) => Ok(Some(1)),
-                _ => Ok(None),
+    let r = match args[0].to_owned().is_none() {
+        true => None,
+        _ => {
+            match received_et {
+                EvalType::Json => {
+                    args[0].as_json().and(Some(1))
+                }
+                EvalType::Bytes => match args[0].as_bytes() {
+                    Some(p) => {
+                        let tmp_str = std::str::from_utf8(p).unwrap();
+                        let json: serde_json::error::Result<Json> = serde_json::from_str(tmp_str);
+                        Some(json.is_ok() as Int)
+                    }
+                    _ => Some(0)
+                },
+                _ => Some(0)
             }
         }
-        EvalType::Bytes => match args[0].as_bytes() {
-            Some(p) => {
-                let tmp_str = std::str::from_utf8(p).unwrap();
-                let json: serde_json::error::Result<Json> = serde_json::from_str(tmp_str);
-                match json {
-                    Ok(_) => Ok(Some(1)),
-                    _ => Ok(Some(0)),
-                }
-            }
-            _ => Ok(Some(0)),
-        },
-        _ => Ok(Some(0)),
     };
-    r
+
+    Ok(r)
 }
 
 #[rpn_fn]
@@ -874,18 +873,18 @@ mod tests {
             (vec![Some(2).into()], Some(0)),
             (vec![Some(2.5).into()], Some(0)),
             (vec![None::<Json>.into()], None),
-            // (
-            //     vec![
-            //         None::<Bytes>.into(),
-            //     ],
-            //     None,
-            // ),
-            // (
-            //     vec![
-            //         None::<Int>.into(),
-            //     ],
-            //     None,
-            // ),
+            (
+                vec![
+                    None::<Bytes>.into(),
+                ],
+                None,
+            ),
+            (
+                vec![
+                    None::<Int>.into(),
+                ],
+                None,
+            ),
         ];
 
         for (vargs, expected) in cases {
