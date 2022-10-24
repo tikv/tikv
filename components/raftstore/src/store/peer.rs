@@ -138,16 +138,18 @@ impl<S: Snapshot> ProposalQueue<S> {
 
     /// Find the request times of given index.
     /// Caller should check if term is matched before using request times.
-    fn find_request_times(&self, index: u64) -> Option<(u64, &SmallVec<[TiInstant; 4]>)> {
-        self.queue
+    fn find_request_times_mut(
+        &mut self,
+        index: u64,
+    ) -> Option<(u64, &mut SmallVec<[TiInstant; 4]>)> {
+        let i = self
+            .queue
             .binary_search_by_key(&index, |p: &Proposal<_>| p.index)
-            .ok()
-            .and_then(|i| {
-                self.queue[i]
-                    .cb
-                    .get_request_times()
-                    .map(|ts| (self.queue[i].term, ts))
-            })
+            .ok()?;
+
+        let q = self.queue.get_mut(i).unwrap();
+        let term = q.term;
+        q.cb.request_times_mut().map(|ts| (term, ts))
     }
 
     fn find_propose_time(&self, term: u64, index: u64) -> Option<Timespec> {
@@ -1723,15 +1725,17 @@ where
         Ok(())
     }
 
-    fn report_persist_log_duration(&self, pre_persist_index: u64, metrics: &RaftMetrics) {
+    fn report_persist_log_duration(&mut self, pre_persist_index: u64, metrics: &RaftMetrics) {
         if !metrics.waterfall_metrics || self.proposals.is_empty() {
             return;
         }
         let mut now = None;
         for index in pre_persist_index + 1..=self.raft_group.raft.raft_log.persisted {
-            if let Some((term, times)) = self.proposals.find_request_times(index) {
+            if let Some((term, times)) = self.proposals.find_request_times_mut(index) {
                 if self
-                    .get_store()
+                    .raft_group
+                    .raft
+                    .store()
                     .term(index)
                     .map(|t| t == term)
                     .unwrap_or(false)
@@ -1743,21 +1747,24 @@ where
                         metrics
                             .wf_persist_log
                             .observe(duration_to_sec(now.unwrap().saturating_duration_since(*t)));
+                        *t = now.unwrap();
                     }
                 }
             }
         }
     }
 
-    fn report_commit_log_duration(&self, pre_commit_index: u64, metrics: &RaftMetrics) {
+    fn report_commit_log_duration(&mut self, pre_commit_index: u64, metrics: &RaftMetrics) {
         if !metrics.waterfall_metrics || self.proposals.is_empty() {
             return;
         }
         let mut now = None;
         for index in pre_commit_index + 1..=self.raft_group.raft.raft_log.committed {
-            if let Some((term, times)) = self.proposals.find_request_times(index) {
+            if let Some((term, times)) = self.proposals.find_request_times_mut(index) {
                 if self
-                    .get_store()
+                    .raft_group
+                    .raft
+                    .store()
                     .term(index)
                     .map(|t| t == term)
                     .unwrap_or(false)
@@ -1772,6 +1779,7 @@ where
                     };
                     for t in times {
                         hist.observe(duration_to_sec(now.unwrap().saturating_duration_since(*t)));
+                        *t = now.unwrap();
                     }
                 }
             }
@@ -2497,7 +2505,9 @@ where
         if ctx.raft_metrics.waterfall_metrics {
             let mut now = None;
             for entry in ready.entries() {
-                if let Some((term, times)) = self.proposals.find_request_times(entry.get_index()) {
+                if let Some((term, times)) =
+                    self.proposals.find_request_times_mut(entry.get_index())
+                {
                     if entry.term == term {
                         request_times.extend_from_slice(times);
                         if now.is_none() {
@@ -2507,6 +2517,7 @@ where
                             ctx.raft_metrics.wf_send_to_queue.observe(duration_to_sec(
                                 now.unwrap().saturating_duration_since(*t),
                             ));
+                            *t = now.unwrap();
                         }
                     }
                 }

@@ -297,11 +297,12 @@ where
         self.state_size = 0;
         if metrics.waterfall_metrics {
             let now = Instant::now();
-            for task in &self.tasks {
-                for t in &task.request_times {
+            for task in &mut self.tasks {
+                for t in &mut task.request_times {
                     metrics
                         .wf_before_write
                         .observe(duration_to_sec(now.saturating_duration_since(*t)));
+                    *t = now;
                 }
             }
         }
@@ -310,11 +311,12 @@ where
     fn after_write_to_kv_db(&mut self, metrics: &StoreWriteMetrics) {
         if metrics.waterfall_metrics {
             let now = Instant::now();
-            for task in &self.tasks {
-                for t in &task.request_times {
+            for task in &mut self.tasks {
+                for t in &mut task.request_times {
                     metrics
                         .wf_kvdb_end
                         .observe(duration_to_sec(now.saturating_duration_since(*t)));
+                    *t = now;
                 }
             }
         }
@@ -323,11 +325,12 @@ where
     fn after_write_to_raft_db(&mut self, metrics: &StoreWriteMetrics) {
         if metrics.waterfall_metrics {
             let now = Instant::now();
-            for task in &self.tasks {
-                for t in &task.request_times {
+            for task in &mut self.tasks {
+                for t in &mut task.request_times {
                     metrics
                         .wf_write_end
-                        .observe(duration_to_sec(now.saturating_duration_since(*t)))
+                        .observe(duration_to_sec(now.saturating_duration_since(*t)));
+                    *t = now;
                 }
             }
         }

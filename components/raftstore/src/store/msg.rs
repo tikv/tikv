@@ -128,7 +128,7 @@ where
         }
     }
 
-    pub fn get_request_times(&self) -> Option<&SmallVec<[Instant; 4]>> {
+    pub fn request_times_mut(&mut self) -> Option<&mut SmallVec<[Instant; 4]>> {
         match self {
             Callback::Write { request_times, .. } => Some(request_times),
             _ => None,

@@ -4765,7 +4765,7 @@ where
     fn propose_raft_command_internal(
         &mut self,
         mut msg: RaftCmdRequest,
-        cb: Callback<EK::Snapshot>,
+        mut cb: Callback<EK::Snapshot>,
         diskfullopt: DiskFullOpt,
     ) {
         if self.fsm.peer.pending_remove {
@@ -4774,13 +4774,14 @@ where
         }
 
         if self.ctx.raft_metrics.waterfall_metrics {
-            if let Some(request_times) = cb.get_request_times() {
+            if let Some(request_times) = cb.request_times_mut() {
                 let now = TiInstant::now();
                 for t in request_times {
                     self.ctx
                         .raft_metrics
                         .wf_batch_wait
                         .observe(duration_to_sec(now.saturating_duration_since(*t)));
+                    *t = now;
                 }
             }
         }
