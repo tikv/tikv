@@ -259,14 +259,15 @@ fn parse_mountinfos_v2(infos: Vec<MountInfo>) -> HashMap<String, (String, PathBu
     let cg_infos = infos.into_iter().filter(|x| x.fs_type == "cgroup2");
     for info in cg_infos {
         // Should only be one item for cgroup-2.
-        if let Some(&(ref root, ref mount_point)) = ret.get("") {
+        if let Some((root, mount_point)) =
+            ret.insert("".to_string(), (info.root, info.mount_point))
+        {
             warn!(
                 "Found multiple cgroup2 mountinfos, dropping {} {}",
                 root,
                 mount_point.display()
             );
         }
-        ret.insert("".to_string(), (info.root, info.mount_point));
     }
     ret
 }
