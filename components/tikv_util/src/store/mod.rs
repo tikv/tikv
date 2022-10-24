@@ -15,9 +15,9 @@ pub use self::{
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use kvproto::metapb::Region;
+
+    use super::*;
 
     #[test]
     fn test_on_same_store() {

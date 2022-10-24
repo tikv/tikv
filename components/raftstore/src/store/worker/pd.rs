@@ -1349,7 +1349,8 @@ where
                             }
                         }
                     }
-                    // Forcely awaken all hibernated regions if there existed slow stores in this cluster.
+                    // Forcely awaken all hibernated regions if there existed slow stores in this
+                    // cluster.
                     if let Some(awaken_regions) = resp.awaken_regions.take() {
                         info!("forcely awaken hibernated regions in this store");
                         let _ = router.send_store_msg(StoreMsg::AwakenRegions {
