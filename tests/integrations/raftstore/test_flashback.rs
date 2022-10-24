@@ -13,6 +13,35 @@ use test_raftstore::*;
 use txn_types::WriteBatchFlags;
 
 #[test]
+fn test_prepare_flashback_after_split_and_merge() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.run();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    let old_region = cluster.get_region(b"a");
+    cluster.must_split(&old_region, b"b");
+    cluster.must_send_flashback_msg(old_region.get_id(), AdminCmdType::PrepareFlashback);
+
+    let right_region = cluster.get_region(b"b");
+    assert!(right_region.get_id() == old_region.get_id());
+    must_check_flashback_state(&mut cluster, right_region.get_id(), 1, true);
+    let left_region = cluster.get_region(b"a");
+    assert!(left_region.get_id() != old_region.get_id());
+    must_check_flashback_state(&mut cluster, left_region.get_id(), 1, false);
+
+    cluster.must_send_flashback_msg(right_region.get_id(), AdminCmdType::FinishFlashback);
+    must_check_flashback_state(&mut cluster, left_region.get_id(), 1, false);
+    must_check_flashback_state(&mut cluster, right_region.get_id(), 1, false);
+
+    cluster.must_try_merge(left_region.get_id(), right_region.get_id());
+    let merged_region = cluster.get_region(b"a");
+    assert!(merged_region.get_id() != left_region.get_id());
+    assert!(merged_region.get_id() == right_region.get_id());
+    must_check_flashback_state(&mut cluster, merged_region.get_id(), 1, false);
+}
+
+#[test]
 fn test_flashback_unprepared() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.run();
