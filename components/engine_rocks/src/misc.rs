@@ -131,7 +131,8 @@ impl MiscExt for RocksEngine {
         for cf in self.cf_names() {
             handles.push(util::get_cf_handle(self.as_inner(), cf)?);
         }
-        self.as_inner().flush_cfs(&handles, wait).map_err(r2e)
+        self.as_inner().flush_cfs(&handles, wait).map_err(r2e)?;
+        Ok(())
     }
 
     fn flush_cf(&self, cf: &str, wait: bool) -> Result<()> {

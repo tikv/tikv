@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    convert::TryInto,
     fs,
     io::{Read, Result as IoResult, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
@@ -17,7 +18,8 @@ use file_system::{IoOp, IoRateLimiter, IoType};
 use kvproto::{
     metapb::Region,
     raft_serverpb::{
-        RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent, StoreRecoverState,
+        RaftApplyState, RaftLocalState, RegionLocalState, RegionSequenceNumberRelation, StoreIdent,
+        StoreRecoverState,
     },
 };
 use raft::eraftpb::Entry;
@@ -344,6 +346,32 @@ const PREPARE_BOOTSTRAP_REGION_KEY: &[u8] = &[0x02];
 const REGION_STATE_KEY: &[u8] = &[0x03];
 const APPLY_STATE_KEY: &[u8] = &[0x04];
 const RECOVER_STATE_KEY: &[u8] = &[0x05];
+const SEQNO_RELATION_KEY: &[u8] = &[0x06];
+
+fn raft_seqno_relation_key(seqno: u64) -> Vec<u8> {
+    let mut key = Vec::with_capacity(SEQNO_RELATION_KEY.len() + 8);
+    key.extend_from_slice(SEQNO_RELATION_KEY);
+    key.extend_from_slice(&seqno.to_be_bytes());
+    key
+}
+
+fn min_raft_seqno_relation_key() -> Vec<u8> {
+    SEQNO_RELATION_KEY.to_vec()
+}
+
+fn max_raft_seqno_relation_key() -> Vec<u8> {
+    let mut key = Vec::with_capacity(SEQNO_RELATION_KEY.len() + 8);
+    key.extend_from_slice(SEQNO_RELATION_KEY);
+    key.extend_from_slice(&u64::MAX.to_be_bytes());
+    key
+}
+
+fn parse_raft_seqno_relation_key(key: &[u8]) -> Option<u64> {
+    if &key[..1] != SEQNO_RELATION_KEY {
+        return None;
+    }
+    Some(u64::from_be_bytes(key[1..].try_into().unwrap()))
+}
 
 impl RaftLogBatchTrait for RaftLogBatch {
     fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
@@ -407,6 +435,30 @@ impl RaftLogBatchTrait for RaftLogBatch {
         self.0
             .put_message(raft_group_id, APPLY_STATE_KEY.to_vec(), state)
             .map_err(transfer_error)
+    }
+
+    fn put_seqno_relation(
+        &mut self,
+        raft_group_id: u64,
+        relation: &RegionSequenceNumberRelation,
+    ) -> Result<()> {
+        self.0
+            .put_message(
+                raft_group_id,
+                raft_seqno_relation_key(relation.sequence_number),
+                relation,
+            )
+            .map_err(transfer_error)
+    }
+
+    fn delete_seqno_relation(&mut self, raft_group_id: u64, seqno: u64) -> Result<()> {
+        self.0.delete(raft_group_id, raft_seqno_relation_key(seqno));
+        Ok(())
+    }
+
+    fn delete_apply_state(&mut self, raft_group_id: u64) -> Result<()> {
+        self.0.delete(raft_group_id, APPLY_STATE_KEY.to_vec());
+        Ok(())
     }
 }
 
@@ -636,6 +688,36 @@ impl RaftEngine for RaftLogEngine {
             .map_err(transfer_error)?;
         self.0.write(&mut batch.0, true).map_err(transfer_error)?;
         Ok(())
+    }
+
+    fn scan_seqno_relations<F>(
+        &self,
+        raft_group_id: u64,
+        start: Option<u64>,
+        end: Option<u64>,
+        mut f: F,
+    ) -> Result<()>
+    where
+        F: FnMut(u64, &RegionSequenceNumberRelation) -> bool,
+    {
+        let start = start
+            .map(|s| raft_seqno_relation_key(s))
+            .unwrap_or_else(min_raft_seqno_relation_key);
+        let end = end
+            .map(|s| raft_seqno_relation_key(s))
+            .unwrap_or_else(max_raft_seqno_relation_key);
+        self.0
+            .scan_messages(
+                raft_group_id,
+                Some(start.as_slice()),
+                Some(end.as_slice()),
+                false,
+                |key, value| {
+                    let index = parse_raft_seqno_relation_key(key).unwrap();
+                    f(index, &value)
+                },
+            )
+            .map_err(transfer_error)
     }
 }
 

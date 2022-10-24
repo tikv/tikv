@@ -28,9 +28,10 @@ use batch_system::{
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
-    util::SequenceNumber, DeleteStrategy, KvEngine, Mutable, PerfContext, PerfContextKind,
-    RaftEngine, RaftEngineReadOnly, Range as EngineRange, Snapshot, SstMetaInfo, WriteBatch,
-    ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    util::{SequenceNumber, SequenceNumberProgress},
+    DeleteStrategy, KvEngine, Mutable, PerfContext, PerfContextKind, RaftEngine,
+    RaftEngineReadOnly, Range as EngineRange, Snapshot, SstMetaInfo, WriteBatch, ALL_CFS,
+    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use fail::fail_point;
 use kvproto::{
@@ -425,6 +426,8 @@ where
     /// `ApplyRes` uncommitted. Data will finally be written to kvdb in
     /// `flush`.
     uncommitted_res_count: usize,
+
+    seqno_progress: Option<Arc<SequenceNumberProgress>>,
 }
 
 impl<EK> ApplyContext<EK>
@@ -443,6 +446,7 @@ where
         store_id: u64,
         pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
         priority: Priority,
+        seqno_progress: Option<Arc<SequenceNumberProgress>>,
     ) -> ApplyContext<EK> {
         let kv_wb = engine.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
 
@@ -480,6 +484,7 @@ where
             key_buffer: Vec::with_capacity(1024),
             disable_wal: false,
             uncommitted_res_count: 0,
+            seqno_progress,
         }
     }
 
@@ -544,14 +549,14 @@ where
             write_opts.set_sync(need_sync);
             write_opts.set_disable_wal(self.disable_wal);
             if self.disable_wal {
-                let sn = SequenceNumber::pre_write();
+                let sn = self.seqno_progress.as_ref().unwrap().pre_write();
                 seqno = Some(sn);
             }
             let seq = self.kv_wb_mut().write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!("failed to write to engine: {:?}", e);
             });
             if let Some(seqno) = seqno.as_mut() {
-                seqno.post_write(seq)
+                self.seqno_progress.as_ref().unwrap().post_write(seqno, seq);
             }
             let trackers: Vec<_> = self
                 .applied_batch
@@ -4164,6 +4169,7 @@ pub struct Builder<EK: KvEngine> {
     router: ApplyRouter<EK>,
     store_id: u64,
     pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+    seqno_progress: Option<Arc<SequenceNumberProgress>>,
 }
 
 impl<EK: KvEngine> Builder<EK> {
@@ -4171,6 +4177,7 @@ impl<EK: KvEngine> Builder<EK> {
         builder: &RaftPollerBuilder<EK, ER, T>,
         sender: Box<dyn Notifier<EK>>,
         router: ApplyRouter<EK>,
+        seqno_progress: Option<Arc<SequenceNumberProgress>>,
     ) -> Builder<EK> {
         Builder {
             tag: format!("[store {}]", builder.store.get_id()),
@@ -4183,6 +4190,7 @@ impl<EK: KvEngine> Builder<EK> {
             router,
             store_id: builder.store.get_id(),
             pending_create_peers: builder.pending_create_peers.clone(),
+            seqno_progress,
         }
     }
 }
@@ -4209,6 +4217,7 @@ where
                 self.store_id,
                 self.pending_create_peers.clone(),
                 priority,
+                self.seqno_progress.clone(),
             ),
             messages_per_tick: cfg.messages_per_tick,
             cfg_tracker: self.cfg.clone().tracker(self.tag.clone()),
@@ -4233,6 +4242,7 @@ where
             router: self.router.clone(),
             store_id: self.store_id,
             pending_create_peers: self.pending_create_peers.clone(),
+            seqno_progress: self.seqno_progress.clone(),
         }
     }
 }
@@ -4795,6 +4805,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            seqno_progress: None,
         };
         system.spawn("test-basic".to_owned(), builder);
 
@@ -5255,6 +5266,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            seqno_progress: None,
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -5599,6 +5611,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            seqno_progress: None,
         };
         system.spawn("test-ingest".to_owned(), builder);
 
@@ -5779,6 +5792,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            seqno_progress: None,
         };
         system.spawn("test-bucket".to_owned(), builder);
 
@@ -5872,6 +5886,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            seqno_progress: None,
         };
         system.spawn("test-exec-observer".to_owned(), builder);
 
@@ -6096,6 +6111,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            seqno_progress: None,
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -6376,6 +6392,7 @@ mod tests {
             router: router.clone(),
             store_id: 2,
             pending_create_peers,
+            seqno_progress: None,
         };
         system.spawn("test-split".to_owned(), builder);
 
@@ -6601,6 +6618,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            seqno_progress: None,
         };
         system.spawn("flashback_need_to_be_applied".to_owned(), builder);
 

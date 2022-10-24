@@ -7,8 +7,8 @@ use std::{
 
 use engine_rocks::{
     raw::{Cache, Env},
-    CompactedEventSender, CompactionListener, FlowListener, RocksCompactionJobInfo, RocksEngine,
-    RocksEventListener,
+    CompactedEventSender, CompactionListener, FlowListener, FlushListener, RocksCompactionJobInfo,
+    RocksEngine, RocksEventListener,
 };
 use engine_traits::{
     CfOptions, CfOptionsExt, CompactionJobInfo, OpenOptions, Result, TabletAccessor, TabletFactory,
@@ -31,6 +31,7 @@ struct FactoryInner {
     flow_listener: Option<engine_rocks::FlowListener>,
     sst_recovery_sender: Option<Scheduler<String>>,
     root_db: Mutex<Option<RocksEngine>>,
+    flush_listener: Option<FlushListener>,
 }
 
 pub struct KvEngineFactoryBuilder {
@@ -51,6 +52,7 @@ impl KvEngineFactoryBuilder {
                 flow_listener: None,
                 sst_recovery_sender: None,
                 root_db: Mutex::default(),
+                flush_listener: None,
             },
             compact_event_sender: None,
         }
@@ -81,6 +83,11 @@ impl KvEngineFactoryBuilder {
         sender: Arc<dyn CompactedEventSender + Send + Sync>,
     ) -> Self {
         self.compact_event_sender = Some(sender);
+        self
+    }
+
+    pub fn flush_listener(mut self, listener: FlushListener) -> Self {
+        self.inner.flush_listener = Some(listener);
         self
     }
 
@@ -144,6 +151,9 @@ impl KvEngineFactory {
         ));
         if let Some(filter) = self.create_raftstore_compaction_listener() {
             kv_db_opts.add_event_listener(filter);
+        }
+        if let Some(listener) = &self.inner.flush_listener {
+            kv_db_opts.add_event_listener(listener.clone());
         }
         if let Some(listener) = &self.inner.flow_listener {
             kv_db_opts.add_event_listener(listener.clone_with(region_id, suffix));
