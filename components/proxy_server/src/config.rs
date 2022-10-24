@@ -70,6 +70,24 @@ impl Default for ServerConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
+pub struct StorageConfig {
+    #[online_config(skip)]
+    // Reserve disk space to make tikv would have enough space to compact when disk is full.
+    pub reserve_space: ReadableSize,
+}
+
+impl Default for StorageConfig {
+    fn default() -> StorageConfig {
+        let _cpu_num = SysQuota::cpu_cores_quota();
+        StorageConfig {
+            reserve_space: ReadableSize::gb(1), // No longer use DEFAULT_RESERVED_SPACE_GB
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
 pub struct ProxyConfig {
     #[online_config(submodule)]
     pub server: ServerConfig,
@@ -82,6 +100,9 @@ pub struct ProxyConfig {
     pub rocksdb: RocksDbConfig,
     #[online_config(submodule)]
     pub raftdb: RaftDbConfig,
+
+    #[online_config(submodule)]
+    pub storage: StorageConfig,
 }
 
 pub const DEFAULT_ENGINE_ADDR: &str = if cfg!(feature = "failpoints") {
@@ -186,6 +207,7 @@ impl Default for ProxyConfig {
             server: ServerConfig::default(),
             rocksdb: RocksDbConfig::default(),
             raftdb: RaftDbConfig::default(),
+            storage: StorageConfig::default(),
         }
     }
 }
@@ -279,6 +301,8 @@ pub fn address_proxy_config(config: &mut TikvConfig, proxy_config: &ProxyConfig)
     config.rocksdb.defaultcf.block_cache_size = proxy_config.rocksdb.defaultcf.block_cache_size;
     config.rocksdb.writecf.block_cache_size = proxy_config.rocksdb.writecf.block_cache_size;
     config.rocksdb.lockcf.block_cache_size = proxy_config.rocksdb.lockcf.block_cache_size;
+
+    config.storage.reserve_space = proxy_config.storage.reserve_space;
 }
 
 pub fn validate_and_persist_config(config: &mut TikvConfig, persist: bool) {

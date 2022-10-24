@@ -26,7 +26,9 @@ use tikv_util::{
 use tokio::runtime::Handle;
 
 use crate::server::Error;
+
 mod log;
+/// Information about the current hardware and operating system.
 pub mod sys;
 
 lazy_static! {

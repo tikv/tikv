@@ -742,9 +742,11 @@ name = "causal_ts"
 version = "0.0.1"
 dependencies = [
  "api_version",
+ "async-trait",
  "criterion",
  "engine_rocks",
  "engine_traits",
+ "enum_dispatch",
  "error_code",
  "fail",
  "futures 0.3.15",
@@ -756,7 +758,6 @@ dependencies = [
  "prometheus",
  "prometheus-static-metric",
  "raft",
- "raftstore",
  "serde",
  "serde_derive",
  "slog",
@@ -1668,6 +1669,18 @@ dependencies = [
  "panic_hook",
  "tempfile",
  "tikv_alloc",
+]
+
+[[package]]
+name = "enum_dispatch"
+version = "0.3.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0eb359f1476bf611266ac1f5355bc14aeca37b299d0ebccc038ee7058891c9cb"
+dependencies = [
+ "once_cell",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -2731,6 +2744,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "keyed_priority_queue"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d63b6407b66fc81fc539dccf3ddecb669f393c5101b6a2be3976c95099a06e8"
+dependencies = [
+ "indexmap",
+]
+
+[[package]]
 name = "keys"
 version = "0.1.0"
 dependencies = [
@@ -2745,7 +2767,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#f6d05706948aa296cff4db060e0962d3720f32eb"
+source = "git+https://github.com/pingcap/kvproto.git#4c6f1502851ed55b3ed023d180b6b10766446630"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -2874,7 +2896,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#4c859a208355bc15ceb7dc1f05303f68acfb4791"
+source = "git+https://github.com/tikv/rust-rocksdb.git#bd07e9e598db63574cf06edaeea3c4687eadff59"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2893,7 +2915,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#4c859a208355bc15ceb7dc1f05303f68acfb4791"
+source = "git+https://github.com/tikv/rust-rocksdb.git#bd07e9e598db63574cf06edaeea3c4687eadff59"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4406,6 +4428,7 @@ dependencies = [
  "bitflags",
  "byteorder",
  "bytes",
+ "causal_ts",
  "collections",
  "concurrency_manager",
  "crc32fast",
@@ -4485,6 +4508,7 @@ dependencies = [
  "engine_traits",
  "error_code",
  "fail",
+ "file_system",
  "futures 0.3.15",
  "keys",
  "kvproto",
@@ -4867,7 +4891,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#4c859a208355bc15ceb7dc1f05303f68acfb4791"
+source = "git+https://github.com/tikv/rust-rocksdb.git#bd07e9e598db63574cf06edaeea3c4687eadff59"
 dependencies = [
  "libc 0.2.132",
  "librocksdb_sys",
@@ -5365,6 +5389,7 @@ dependencies = [
  "signal-hook",
  "slog",
  "slog-global",
+ "snap_recovery",
  "tempfile",
  "tikv",
  "tikv_alloc",
@@ -5511,6 +5536,36 @@ name = "smallvec"
 version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2dd574626839106c320a323308629dcb1acfc96e32a8cba364ddc61ac23ee83"
+
+[[package]]
+name = "snap_recovery"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "encryption",
+ "encryption_export",
+ "engine_rocks",
+ "engine_traits",
+ "futures 0.3.15",
+ "grpcio",
+ "keys",
+ "kvproto",
+ "log",
+ "pd_client",
+ "protobuf",
+ "raft_log_engine",
+ "raftstore",
+ "slog",
+ "slog-global",
+ "structopt",
+ "tempfile",
+ "thiserror",
+ "tikv",
+ "tikv_alloc",
+ "tikv_util",
+ "toml",
+ "txn_types",
+]
 
 [[package]]
 name = "snappy-sys"
@@ -5736,6 +5791,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "sync_wrapper"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "20518fe4a4c9acf048008599e464deb21beeae3d3578418951a189c235a7a9a8"
+
+[[package]]
 name = "sysinfo"
 version = "0.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5931,7 +5992,6 @@ dependencies = [
  "log_wrappers",
  "pd_client",
  "raft",
- "raftstore",
  "slog",
  "slog-global",
  "tikv_util",
@@ -6313,7 +6373,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "6.3.0"
+version = "6.4.0-alpha"
 dependencies = [
  "anyhow",
  "api_version",
@@ -6332,6 +6392,7 @@ dependencies = [
  "crc32fast",
  "crc64fast",
  "crossbeam",
+ "dashmap",
  "encryption_export",
  "engine_panic",
  "engine_rocks",
@@ -6348,6 +6409,7 @@ dependencies = [
  "futures-executor",
  "futures-timer",
  "futures-util",
+ "fxhash",
  "getset",
  "grpcio",
  "grpcio-health",
@@ -6358,6 +6420,7 @@ dependencies = [
  "hyper-tls",
  "into_other",
  "itertools 0.10.0",
+ "keyed_priority_queue",
  "keys",
  "kvproto",
  "lazy_static",
@@ -6405,8 +6468,10 @@ dependencies = [
  "serde_json",
  "slog",
  "slog-global",
+ "smallvec",
  "sst_importer",
  "strum 0.20.0",
+ "sync_wrapper",
  "sysinfo",
  "tempfile",
  "test_sst_importer",

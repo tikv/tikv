@@ -982,6 +982,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             resource_tag_factory.clone(),
             Arc::clone(&self.quota_limiter),
             self.pd_client.feature_gate().clone(),
+            None, // causal_ts_provider
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
         cfg_controller.register(
@@ -1038,9 +1039,12 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             let (unified_read_pool_scale_notifier, rx) = mpsc::sync_channel(10);
             cfg_controller.register(
                 tikv::config::Module::Readpool,
-                Box::new(ReadPoolConfigManager(
+                Box::new(ReadPoolConfigManager::new(
                     unified_read_pool.as_ref().unwrap().handle(),
                     unified_read_pool_scale_notifier,
+                    &self.background_worker,
+                    self.config.readpool.unified.max_thread_count,
+                    self.config.readpool.unified.auto_adjust_pool_size,
                 )),
             );
             unified_read_pool_scale_receiver = Some(rx);
@@ -1287,6 +1291,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             auto_split_controller,
             self.concurrency_manager.clone(),
             collector_reg_handle,
+            None,
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 

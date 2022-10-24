@@ -113,7 +113,7 @@ fn test_node_merge_rollback() {
 }
 
 /// Test if merge is still working when restart a cluster during merge.
-// #[test]
+#[test]
 fn test_node_merge_restart() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
@@ -804,7 +804,7 @@ fn test_node_merge_cascade_merge_with_apply_yield() {
 
 // Test if the rollback merge proposal is proposed before the majority of peers
 // want to rollback
-// #[test]
+#[test]
 fn test_node_multiple_rollback_merge() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);

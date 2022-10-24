@@ -9,8 +9,10 @@ testexport = []
 
 [dependencies]
 api_version = { path = "../api_version", default-features = false }
+async-trait = { version = "0.1" }
 engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
+enum_dispatch = "0.3.8"
 error_code = { path = "../error_code", default-features = false }
 fail = "0.5"
 futures = { version = "0.3" }
@@ -22,11 +24,11 @@ pd_client = { path = "../pd_client", default-features = false }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
-raftstore = { path = "../raftstore", default-features = false }
 serde = "1.0"
 serde_derive = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+test_pd_client = { path = "../test_pd_client" }
 thiserror = "1.0"
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util", default-features = false }
@@ -35,7 +37,6 @@ txn_types = { path = "../txn_types", default-features = false }
 
 [dev-dependencies]
 criterion = "0.3"
-test_pd_client = { path = "../test_pd_client" }
 
 [[bench]]
 name = "tso"

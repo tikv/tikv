@@ -4,9 +4,12 @@ pub mod cmd_resp;
 pub mod config;
 pub mod entry_storage;
 pub mod fsm;
+pub mod local_metrics;
 pub mod memory;
 pub mod metrics;
 pub mod msg;
+mod peer;
+mod read_queue;
 pub mod region_meta;
 pub mod transport;
 #[macro_use]
@@ -16,10 +19,7 @@ mod async_io;
 mod bootstrap;
 mod compaction_guard;
 mod hibernate_state;
-pub mod local_metrics;
-mod peer;
 mod peer_storage;
-mod read_queue;
 mod region_snapshot;
 mod replication_mode;
 pub mod snap;
@@ -53,7 +53,8 @@ pub use self::{
         StoreMsg, StoreTick, WriteCallback, WriteResponse,
     },
     peer::{
-        Peer, PeerStat, ProposalContext, ProposalQueue, RequestInspector, RequestPolicy,
+        can_amend_read, get_sync_log_from_request, propose_read_index, should_renew_lease, Peer,
+        PeerStat, ProposalContext, ProposalQueue, RequestInspector, RequestPolicy,
         SnapshotRecoveryWaitApplySyncer,
     },
     peer_storage::{
@@ -61,7 +62,7 @@ pub use self::{
         write_peer_state, PeerStorage, SnapState, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
         RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
     },
-    read_queue::ReadIndexContext,
+    read_queue::{ReadIndexContext, ReadIndexQueue, ReadIndexRequest},
     region_snapshot::{RegionIterator, RegionSnapshot},
     replication_mode::{GlobalReplicationState, StoreGroup},
     snap::{
@@ -76,9 +77,10 @@ pub use self::{
     worker::{
         AutoSplitController, Bucket, BucketRange, CachedReadDelegate, CheckLeaderRunner,
         CheckLeaderTask, FetchedLogs, FlowStatistics, FlowStatsReporter, KeyEntry,
-        LocalReadContext, LocalReader, LogFetchedNotifier, PdTask, QueryStats, RaftlogFetchRunner,
-        RaftlogFetchTask, ReadDelegate, ReadExecutor, ReadExecutorProvider, ReadProgress,
-        ReadStats, RefreshConfigTask, RegionTask, SplitCheckRunner, SplitCheckTask, SplitConfig,
-        SplitConfigManager, StoreMetaDelegate, TrackVer, WriteStats,
+        LocalReadContext, LocalReader, LocalReaderCore, LogFetchedNotifier, PdTask,
+        RaftlogFetchRunner, RaftlogFetchTask, ReadDelegate, ReadExecutor, ReadExecutorProvider,
+        ReadProgress, ReadStats, RefreshConfigTask, RegionTask, SplitCheckRunner, SplitCheckTask,
+        SplitConfig, SplitConfigManager, StoreMetaDelegate, TrackVer, WriteStats,
+        TLS_LOCAL_READ_METRICS,
     },
 };

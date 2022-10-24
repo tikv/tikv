@@ -30,11 +30,12 @@ use pd_client::{FeatureGate, PdClient};
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionInfoProvider},
     router::RaftStoreRouter,
-    store::{msg::StoreMsg, util::find_peer},
+    store::msg::StoreMsg,
 };
 use tikv_kv::{CfStatistics, CursorBuilder, Modify, SnapContext};
 use tikv_util::{
     config::{Tracker, VersionTrack},
+    store::find_peer,
     time::{duration_to_sec, Instant, Limiter, SlowTimer},
     worker::{Builder as WorkerBuilder, LazyWorker, Runnable, ScheduleError, Scheduler},
     Either,
@@ -237,8 +238,12 @@ impl MvccRaw {
     }
 }
 
-// Return regions that keys are related to.
-fn get_regions_for_gc(
+// There are two cases:
+// 1. If `keys` has more than two keys, return the regions covered by the range
+// [keys.first(), keys.last()]
+// 2. If there's only one key (we must have at lease one key), return the region
+// this key belongs to.
+fn get_regions_for_range_of_keys(
     store_id: u64,
     keys: &[Key],
     region_provider: Arc<dyn RegionInfoProvider>,
@@ -446,7 +451,9 @@ where
         let (mut handled_keys, mut wasted_keys) = (0, 0);
         let regions = match region_or_provider {
             Either::Left(region) => vec![region],
-            Either::Right(region_provider) => get_regions_for_gc(store_id, &keys, region_provider)?,
+            Either::Right(region_provider) => {
+                get_regions_for_range_of_keys(store_id, &keys, region_provider)?
+            }
         };
 
         // First item is fetched to initialize the reader and kv_engine
@@ -523,7 +530,7 @@ where
     }
 
     fn create_reader(
-        &self,
+        &mut self,
         key_count: usize,
         region: &Region,
         range_start_key: Key,
@@ -562,7 +569,7 @@ where
         };
 
         let (mut handled_keys, mut wasted_keys) = (0, 0);
-        let regions = get_regions_for_gc(self.store_id, &keys, regions_provider)?;
+        let regions = get_regions_for_range_of_keys(self.store_id, &keys, regions_provider)?;
 
         if regions.is_empty() {
             return Ok((handled_keys, wasted_keys));
@@ -728,7 +735,7 @@ where
         ctx: &Context,
         start_key: &Key,
         end_key: &Key,
-        _regions_provider: Arc<dyn RegionInfoProvider>,
+        regions_provider: Arc<dyn RegionInfoProvider>,
     ) -> Result<()> {
         info!(
             "unsafe destroy range started";
@@ -740,20 +747,22 @@ where
         self.flow_info_sender
             .send(FlowInfo::BeforeUnsafeDestroyRange(ctx.region_id))
             .unwrap();
-        let local_storage = self.engine.kv_engine().unwrap();
 
-        // Convert keys to RocksDB layer form
-        // TODO: Logic coupled with raftstore's implementation. Maybe better design is
-        // to do it in somewhere of the same layer with apply_worker.
-        let start_data_key = keys::data_key(start_key.as_encoded());
-        let end_data_key = keys::data_end_key(end_key.as_encoded());
+        // We are in single-rocksdb version if we can get a local_storage, otherwise, we
+        // are in multi-rocksdb version.
+        if let Some(local_storage) = self.engine.kv_engine() {
+            // Convert keys to RocksDB layer form
+            // TODO: Logic coupled with raftstore's implementation. Maybe better design is
+            // to do it in somewhere of the same layer with apply_worker.
+            let start_data_key = keys::data_key(start_key.as_encoded());
+            let end_data_key = keys::data_end_key(end_key.as_encoded());
 
-        let cfs = &[CF_LOCK, CF_DEFAULT, CF_WRITE];
+            let cfs = &[CF_LOCK, CF_DEFAULT, CF_WRITE];
 
-        // First, use DeleteStrategy::DeleteFiles to free as much disk space as possible
-        let delete_files_start_time = Instant::now();
-        for cf in cfs {
-            local_storage
+            // First, use DeleteStrategy::DeleteFiles to free as much disk space as possible
+            let delete_files_start_time = Instant::now();
+            for cf in cfs {
+                local_storage
                 .delete_ranges_cf(
                     cf,
                     DeleteStrategy::DeleteFiles,
@@ -764,30 +773,30 @@ where
                     warn!("unsafe destroy range failed at delete_files_in_range_cf"; "err" => ?e);
                     e
                 })?;
-        }
+            }
 
-        info!(
-            "unsafe destroy range finished deleting files in range";
-            "start_key" => %start_key, "end_key" => %end_key,
-            "cost_time" => ?delete_files_start_time.saturating_elapsed(),
-        );
+            info!(
+                "unsafe destroy range finished deleting files in range";
+                "start_key" => %start_key, "end_key" => %end_key,
+                "cost_time" => ?delete_files_start_time.saturating_elapsed(),
+            );
 
-        // Then, delete all remaining keys in the range.
-        let cleanup_all_start_time = Instant::now();
-        for cf in cfs {
-            // TODO: set use_delete_range with config here.
-            local_storage
-                .delete_ranges_cf(
-                    cf,
-                    DeleteStrategy::DeleteByKey,
-                    &[Range::new(&start_data_key, &end_data_key)],
-                )
-                .map_err(|e| {
-                    let e: Error = box_err!(e);
-                    warn!("unsafe destroy range failed at delete_all_in_range_cf"; "err" => ?e);
-                    e
-                })?;
-            local_storage
+            // Then, delete all remaining keys in the range.
+            let cleanup_all_start_time = Instant::now();
+            for cf in cfs {
+                // TODO: set use_delete_range with config here.
+                local_storage
+                    .delete_ranges_cf(
+                        cf,
+                        DeleteStrategy::DeleteByKey,
+                        &[Range::new(&start_data_key, &end_data_key)],
+                    )
+                    .map_err(|e| {
+                        let e: Error = box_err!(e);
+                        warn!("unsafe destroy range failed at delete_all_in_range_cf"; "err" => ?e);
+                        e
+                    })?;
+                local_storage
                 .delete_ranges_cf(
                     cf,
                     DeleteStrategy::DeleteBlobs,
@@ -798,17 +807,18 @@ where
                     warn!("unsafe destroy range failed at delete_blob_files_in_range"; "err" => ?e);
                     e
                 })?;
-        }
+            }
 
-        info!(
-            "unsafe destroy range finished cleaning up all";
-            "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?cleanup_all_start_time.saturating_elapsed(),
-        );
-        self.flow_info_sender
-            .send(FlowInfo::AfterUnsafeDestroyRange(ctx.region_id))
-            .unwrap();
+            info!(
+                "unsafe destroy range finished cleaning up all";
+                "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?cleanup_all_start_time.saturating_elapsed(),
+            );
 
-        self.raft_store_router
+            self.flow_info_sender
+                .send(FlowInfo::AfterUnsafeDestroyRange(ctx.region_id))
+                .unwrap();
+
+            self.raft_store_router
             .send_store_msg(StoreMsg::ClearRegionSizeInRange {
                 start_key: start_key.as_encoded().to_vec(),
                 end_key: end_key.as_encoded().to_vec(),
@@ -817,21 +827,61 @@ where
                 // Warn and ignore it.
                 warn!("unsafe destroy range: failed sending ClearRegionSizeInRange"; "err" => ?e);
             });
+        } else {
+            let cfs = &[CF_LOCK, CF_DEFAULT, CF_WRITE];
+            let keys = vec![start_key.clone(), end_key.clone()];
+            let regions = get_regions_for_range_of_keys(self.store_id, &keys, regions_provider)?;
+
+            let count = regions.len();
+            let mut region_modifies = HashMap::default();
+            for (i, region) in regions.into_iter().enumerate() {
+                let range_start = if i == 0 {
+                    start_key.clone()
+                } else {
+                    Key::from_raw(region.get_start_key())
+                };
+                let range_end = if i == count - 1 {
+                    end_key.clone()
+                } else {
+                    Key::from_raw(region.get_end_key())
+                };
+
+                let mut modifies = Vec::new();
+                for cf in cfs {
+                    modifies.push(Modify::DeleteRange(
+                        cf,
+                        range_start.clone(),
+                        range_end.clone(),
+                        false,
+                    ));
+                }
+                region_modifies.insert(region.id, modifies);
+            }
+
+            self.engine.modify_on_kv_engine(region_modifies)?;
+
+            // todo(SpadeA): For multi-rocksdb version, sending
+            // `FlowInfo::AfterUnsafeDestroyRange` and
+            // `StoreMsg::ClearRegionSizeInRange` is different to the
+            // single-rocksdb version. Sending these msgs should be implemented
+            // when or after implementing the raftkv of multi-rocksdb version.
+        }
 
         Ok(())
     }
 
     fn handle_physical_scan_lock(
-        &self,
+        &mut self,
         _: &Context,
         max_ts: TimeStamp,
         start_key: &Key,
         limit: usize,
         regions_provider: Arc<dyn RegionInfoProvider>,
     ) -> Result<Vec<LockInfo>> {
+        let store_id = self.store_id;
         let regions = box_try!(regions_provider.get_regions_in_range(start_key.as_encoded(), &[]))
             .into_iter()
-            .filter(move |r| find_peer(r, self.store_id).is_some());
+            .filter(move |r| find_peer(r, store_id).is_some());
 
         let mut first_round = true;
         let mut locks = Vec::new();
@@ -844,7 +894,7 @@ where
                     Key::from_raw(region.get_start_key())
                 }
             };
-            let snap = self.get_snapshot(self.store_id, &region)?;
+            let snap = self.get_snapshot(store_id, &region)?;
             let mut reader = MvccReader::new(snap, Some(ScanMode::Forward), false);
             let (locks_this_region, _) = reader
                 .scan_locks(Some(&start_key), None, |l| l.ts <= max_ts, limit)
@@ -888,7 +938,7 @@ where
         }
     }
 
-    fn get_snapshot(&self, store_id: u64, region: &Region) -> Result<<E as Engine>::Snap> {
+    fn get_snapshot(&mut self, store_id: u64, region: &Region) -> Result<<E as Engine>::Snap> {
         let ctx = init_snap_ctx(store_id, region);
         let snap_ctx = SnapContext {
             pb_ctx: &ctx,
@@ -896,7 +946,7 @@ where
         };
 
         Ok(block_on(async {
-            tikv_kv::snapshot(&self.engine, snap_ctx).await
+            tikv_kv::snapshot(&mut self.engine, snap_ctx).await
         })?)
     }
 }
@@ -1494,7 +1544,7 @@ pub mod test_gc_worker {
         }
 
         fn async_snapshot(
-            &self,
+            &mut self,
             ctx: SnapContext<'_>,
             callback: EngineCallback<Self::Snap>,
         ) -> EngineResult<()> {
@@ -1610,7 +1660,7 @@ pub mod test_gc_worker {
         }
 
         fn async_snapshot(
-            &self,
+            &mut self,
             ctx: SnapContext<'_>,
             callback: EngineCallback<Self::Snap>,
         ) -> EngineResult<()> {
@@ -1632,7 +1682,7 @@ pub mod test_gc_worker {
 mod tests {
 
     use std::{
-        collections::BTreeMap,
+        collections::{BTreeMap, BTreeSet},
         sync::mpsc::{self, channel},
         thread,
         time::Duration,
@@ -1657,11 +1707,12 @@ mod tests {
             RegionChangeEvent,
         },
         router::RaftStoreBlackHole,
-        store::util::new_peer,
     };
     use tempfile::Builder;
     use tikv_kv::Snapshot;
-    use tikv_util::{codec::number::NumberEncoder, future::paired_future_callback};
+    use tikv_util::{
+        codec::number::NumberEncoder, future::paired_future_callback, store::new_peer,
+    };
     use txn_types::Mutation;
 
     use super::{test_gc_worker::MultiRocksEngine, *};
@@ -1721,7 +1772,7 @@ mod tests {
         ]));
 
         let keys = vec![Key::from_encoded(b"k05".to_vec())];
-        let regions = get_regions_for_gc(store_id, &keys, ri_provider.clone()).unwrap();
+        let regions = get_regions_for_range_of_keys(store_id, &keys, ri_provider.clone()).unwrap();
         // store id not match
         assert!(regions.is_empty());
 
@@ -1730,7 +1781,7 @@ mod tests {
             Key::from_encoded(b"k10".to_vec()),
             Key::from_encoded(b"k25".to_vec()),
         ];
-        let regions = get_regions_for_gc(store_id, &keys, ri_provider.clone()).unwrap();
+        let regions = get_regions_for_range_of_keys(store_id, &keys, ri_provider.clone()).unwrap();
         let rs = vec![r2.clone()];
         assert_eq!(regions, rs);
 
@@ -1740,7 +1791,7 @@ mod tests {
             Key::from_encoded(b"k25".to_vec()),
             Key::from_encoded(b"k35".to_vec()),
         ];
-        let regions = get_regions_for_gc(store_id, &keys, ri_provider).unwrap();
+        let regions = get_regions_for_range_of_keys(store_id, &keys, ri_provider).unwrap();
         let rs = vec![r2, r3];
         assert_eq!(regions, rs);
     }
@@ -2049,7 +2100,7 @@ mod tests {
     fn test_gc_keys_with_region_info_provider() {
         let store_id = 1;
         let engine = TestEngineBuilder::new().build().unwrap();
-        let prefixed_engine = PrefixedEngine(engine.clone());
+        let mut prefixed_engine = PrefixedEngine(engine.clone());
 
         let (tx, _rx) = mpsc::channel();
         let feature_gate = FeatureGate::default();
@@ -2103,10 +2154,10 @@ mod tests {
 
         for i in 0..100 {
             let k = format!("k{:02}", i).into_bytes();
-            must_prewrite_put(&prefixed_engine, &k, b"value", &k, 101);
-            must_commit(&prefixed_engine, &k, 101, 102);
-            must_prewrite_delete(&prefixed_engine, &k, &k, 151);
-            must_commit(&prefixed_engine, &k, 151, 152);
+            must_prewrite_put(&mut prefixed_engine, &k, b"value", &k, 101);
+            must_commit(&mut prefixed_engine, &k, 101, 102);
+            must_prewrite_delete(&mut prefixed_engine, &k, &k, 151);
+            must_commit(&mut prefixed_engine, &k, 151, 152);
         }
         db.flush_cf(cf, true).unwrap();
 
@@ -2115,7 +2166,7 @@ mod tests {
             let k = format!("k{:02}", i).into_bytes();
 
             // Stale MVCC-PUTs will be cleaned in write CF's compaction filter.
-            must_get_none(&prefixed_engine, &k, 150);
+            must_get_none(&mut prefixed_engine, &k, 150);
 
             // However, MVCC-DELETIONs will be kept.
             let mut raw_k = vec![b'z'];
@@ -2146,7 +2197,7 @@ mod tests {
     fn test_gc_keys_statistics() {
         let store_id = 1;
         let engine = TestEngineBuilder::new().build().unwrap();
-        let prefixed_engine = PrefixedEngine(engine.clone());
+        let mut prefixed_engine = PrefixedEngine(engine.clone());
 
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
@@ -2178,10 +2229,10 @@ mod tests {
         let mut keys = vec![];
         for i in 0..100 {
             let k = format!("k{:02}", i).into_bytes();
-            must_prewrite_put(&prefixed_engine, &k, b"value", &k, 101);
-            must_commit(&prefixed_engine, &k, 101, 102);
-            must_prewrite_delete(&prefixed_engine, &k, &k, 151);
-            must_commit(&prefixed_engine, &k, 151, 152);
+            must_prewrite_put(&mut prefixed_engine, &k, b"value", &k, 101);
+            must_commit(&mut prefixed_engine, &k, 101, 102);
+            must_prewrite_delete(&mut prefixed_engine, &k, &k, 151);
+            must_commit(&mut prefixed_engine, &k, 151, 152);
             keys.push(Key::from_raw(&k));
         }
         db.flush_cf(cf, true).unwrap();
@@ -2209,7 +2260,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let builder = TestEngineBuilder::new().path(dir.path());
         let engine = builder.build_with_cfg(&cfg).unwrap();
-        let prefixed_engine = PrefixedEngine(engine);
+        let mut prefixed_engine = PrefixedEngine(engine);
 
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
@@ -2293,9 +2344,10 @@ mod tests {
         assert_eq!(7, runner.mut_stats(GcKeyMode::raw).data.next);
         assert_eq!(2, runner.mut_stats(GcKeyMode::raw).data.seek);
 
-        let snapshot =
-            block_on(async { tikv_kv::snapshot(&prefixed_engine, SnapContext::default()).await })
-                .unwrap();
+        let snapshot = block_on(async {
+            tikv_kv::snapshot(&mut prefixed_engine, SnapContext::default()).await
+        })
+        .unwrap();
 
         test_raws
             .clone()
@@ -2310,7 +2362,7 @@ mod tests {
     #[test]
     fn test_gc_keys_scan_range_limit() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let prefixed_engine = PrefixedEngine(engine.clone());
+        let mut prefixed_engine = PrefixedEngine(engine.clone());
 
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
@@ -2341,10 +2393,10 @@ mod tests {
         let cf = get_cf_handle(&db, CF_WRITE).unwrap();
         // Generate some tombstone
         for i in 10u64..30 {
-            must_rollback(&prefixed_engine, b"k2\x00", i, true);
+            must_rollback(&mut prefixed_engine, b"k2\x00", i, true);
         }
         db.flush_cf(cf, true).unwrap();
-        must_gc(&prefixed_engine, b"k2\x00", 30);
+        must_gc(&mut prefixed_engine, b"k2\x00", 30);
 
         // Test tombstone counter works
         assert_eq!(runner.mut_stats(GcKeyMode::txn).write.seek_tombstone, 0);
@@ -2399,8 +2451,8 @@ mod tests {
         let versions = (MAX_TXN_WRITE_SIZE - 1) / key_size + 4;
         for start_ts in (1..versions).map(|x| x as u64 * 2) {
             let commit_ts = start_ts + 1;
-            must_prewrite_put(&prefixed_engine, b"k2", b"v2", b"k2", start_ts);
-            must_commit(&prefixed_engine, b"k2", start_ts, commit_ts);
+            must_prewrite_put(&mut prefixed_engine, b"k2", b"v2", b"k2", start_ts);
+            must_commit(&mut prefixed_engine, b"k2", start_ts, commit_ts);
         }
         db.flush_cf(cf, true).unwrap();
         let safepoint = versions as u64 * 2;
@@ -2430,9 +2482,9 @@ mod tests {
     #[test]
     fn delete_range_when_worker_is_full() {
         let store_id = 1;
-        let engine = PrefixedEngine(TestEngineBuilder::new().build().unwrap());
-        must_prewrite_put(&engine, b"key", b"value", b"key", 10);
-        must_commit(&engine, b"key", 10, 20);
+        let mut engine = PrefixedEngine(TestEngineBuilder::new().build().unwrap());
+        must_prewrite_put(&mut engine, b"key", b"value", b"key", 10);
+        must_commit(&mut engine, b"key", 10, 20);
         let db = engine.kv_engine().unwrap().as_inner().clone();
         let cf = get_cf_handle(&db, CF_WRITE).unwrap();
         db.flush_cf(cf, true).unwrap();
@@ -2496,7 +2548,7 @@ mod tests {
         // After the worker starts running, the destroy range task should run,
         // and the key in the range will be deleted.
         rx.recv_timeout(Duration::from_secs(10)).unwrap().unwrap();
-        must_get_none(&engine, b"key", 30);
+        must_get_none(&mut engine, b"key", 30);
     }
 
     #[test]
@@ -2562,15 +2614,23 @@ mod tests {
         assert!(ks.is_empty());
     }
 
-    // setup engine and prepare some data
+    // setup engine and prepare some data:
+    //  three regions:
+    //  region 1: includes ("k00", "value-00") to ("k09", "value-09")
+    //  region 2: includes ("k10", "value-10") to ("k19", "value-19")
+    //  region 3: includes ("k20", "value-20") to ("k29", "value-29")
     fn multi_gc_engine_setup(
         store_id: u64,
+        put_start_ts: u64,
+        delete_start_ts: u64,
+        need_deletion: bool,
     ) -> (
         Arc<TestTabletFactoryV2>,
         MultiRocksEngine,
         Arc<MockRegionInfoProvider>,
         GcRunner<MultiRocksEngine, RaftStoreBlackHole>,
         Vec<Region>,
+        mpsc::Receiver<FlowInfo>,
     ) {
         // Building a tablet factory
         let ops = DbOptions::default();
@@ -2597,12 +2657,12 @@ mod tests {
         region_info.insert(1, r1.clone());
         region_info.insert(2, r2.clone());
         region_info.insert(3, r3.clone());
-        let engine = MultiRocksEngine {
+        let mut engine = MultiRocksEngine {
             factory: factory.clone(),
             region_info,
         };
 
-        let (tx, _rx) = mpsc::channel();
+        let (tx, rx) = mpsc::channel();
         let feature_gate = FeatureGate::default();
         feature_gate.set_version("5.0.0").unwrap();
 
@@ -2630,21 +2690,39 @@ mod tests {
                 region_id += 1;
             }
             let k = format!("k{:02}", i).into_bytes();
-            must_prewrite_put_on_region(&engine, region_id, &k, b"value", &k, 101);
-            must_commit_on_region(&engine, region_id, &k, 101, 102);
-            must_prewrite_delete_on_region(&engine, region_id, &k, &k, 151);
-            must_commit_on_region(&engine, region_id, &k, 151, 152);
+            let v = format!("value-{:02}", i).into_bytes();
+            must_prewrite_put_on_region(&mut engine, region_id, &k, &v, &k, put_start_ts);
+            must_commit_on_region(&mut engine, region_id, &k, put_start_ts, put_start_ts + 1);
+            if need_deletion {
+                must_prewrite_delete_on_region(&mut engine, region_id, &k, &k, delete_start_ts);
+                must_commit_on_region(
+                    &mut engine,
+                    region_id,
+                    &k,
+                    delete_start_ts,
+                    delete_start_ts + 1,
+                );
+            }
         }
 
-        (factory, engine, ri_provider, gc_runner, vec![r1, r2, r3])
+        (
+            factory,
+            engine,
+            ri_provider,
+            gc_runner,
+            vec![r1, r2, r3],
+            rx,
+        )
     }
 
     #[test]
     fn test_gc_for_multi_rocksdb() {
         let store_id = 1;
 
-        let (factory, engine, _ri_provider, mut gc_runner, regions) =
-            multi_gc_engine_setup(store_id);
+        let put_start_ts = 100;
+        let delete_start_ts = 150;
+        let (factory, mut engine, _ri_provider, mut gc_runner, regions, _) =
+            multi_gc_engine_setup(store_id, put_start_ts, delete_start_ts, true);
 
         gc_runner.gc(regions[0].clone(), 200.into()).unwrap();
         gc_runner.gc(regions[1].clone(), 200.into()).unwrap();
@@ -2661,11 +2739,11 @@ mod tests {
                 let k = format!("k{:02}", i).into_bytes();
 
                 // Stale MVCC-PUTs will be cleaned in write CF's compaction filter.
-                must_get_none_on_region(&engine, region_id, &k, 150);
+                must_get_none_on_region(&mut engine, region_id, &k, delete_start_ts - 1);
 
                 // MVCC-DELETIONs is cleaned
                 let mut raw_k = vec![b'z'];
-                let suffix = Key::from_raw(&k).append_ts(152.into());
+                let suffix = Key::from_raw(&k).append_ts((delete_start_ts + 1).into());
                 raw_k.extend_from_slice(suffix.as_encoded());
                 assert!(db.get_cf(cf, &raw_k).unwrap().is_none());
             }
@@ -2676,8 +2754,10 @@ mod tests {
     fn test_gc_keys_for_multi_rocksdb() {
         let store_id = 1;
 
-        let (factory, engine, ri_provider, mut gc_runner, _regions) =
-            multi_gc_engine_setup(store_id);
+        let put_start_ts = 100;
+        let delete_start_ts = 150;
+        let (factory, mut engine, ri_provider, mut gc_runner, ..) =
+            multi_gc_engine_setup(store_id, put_start_ts, delete_start_ts, true);
 
         let mut keys = Vec::new();
         for i in 0..30 {
@@ -2702,17 +2782,18 @@ mod tests {
             let cf = get_cf_handle(&db, CF_WRITE).unwrap();
             for i in 10 * (region_id - 1)..10 * region_id {
                 let k = format!("k{:02}", i).into_bytes();
+                let val = format!("value-{:02}", i).into_bytes();
 
                 let mut raw_k = vec![b'z'];
-                let suffix = Key::from_raw(&k).append_ts(152.into());
+                let suffix = Key::from_raw(&k).append_ts((delete_start_ts + 1).into());
                 raw_k.extend_from_slice(suffix.as_encoded());
 
                 if i % 2 == 0 {
                     assert!(db.get_cf(cf, &raw_k).unwrap().is_some());
-                    must_get_on_region(&engine, region_id, &k, 150, b"value");
+                    must_get_on_region(&mut engine, region_id, &k, delete_start_ts - 1, &val);
                 } else {
-                    must_get_none_on_region(&engine, region_id, &k, 150);
                     assert!(db.get_cf(cf, &raw_k).unwrap().is_none());
+                    must_get_none_on_region(&mut engine, region_id, &k, delete_start_ts - 1);
                 }
             }
         }
@@ -2744,7 +2825,7 @@ mod tests {
         let mut region_info = HashMap::default();
         region_info.insert(1, r1.clone());
         region_info.insert(2, r2.clone());
-        let engine = MultiRocksEngine {
+        let mut engine = MultiRocksEngine {
             factory,
             region_info,
         };
@@ -2842,7 +2923,8 @@ mod tests {
                 pb_ctx: &ctx,
                 ..Default::default()
             };
-            let snapshot = block_on(async { tikv_kv::snapshot(&engine, snap_ctx).await }).unwrap();
+            let snapshot =
+                block_on(async { tikv_kv::snapshot(&mut engine, snap_ctx).await }).unwrap();
 
             test_raws_region
                 .clone()
@@ -2853,5 +2935,83 @@ mod tests {
                     assert_eq!(entry.unwrap().is_some(), expect_exist);
                 });
         }
+    }
+
+    // `start_key` and `end_key` determines which regions or how how many regions or
+    // which parts of regions are deleted. The data used in this method are shown in
+    // the comment of `multi_gc_engine_setup`.
+    fn test_destroy_range_for_multi_rocksdb_impl(
+        start_key: &[u8],
+        end_key: &[u8],
+        exected_regions: Vec<u64>,
+    ) {
+        let store_id = 1;
+        let put_start_ts = 100;
+        let (factory, mut engine, ri_provider, gc_runner, _, _rx) =
+            multi_gc_engine_setup(store_id, put_start_ts, 0, false);
+
+        let start_key = Key::from_raw(start_key);
+        let end_key = Key::from_raw(end_key);
+
+        let ctx = Context::default();
+        gc_runner
+            .unsafe_destroy_range(&ctx, &start_key, &end_key, ri_provider)
+            .unwrap();
+
+        let mut regions = BTreeSet::new();
+        for region_id in 1..=3 {
+            let db = factory
+                .open_tablet(region_id, None, OpenOptions::default().set_cache_only(true))
+                .unwrap()
+                .as_inner()
+                .clone();
+            let cf = get_cf_handle(&db, CF_WRITE).unwrap();
+
+            for i in 10 * (region_id - 1)..10 * region_id {
+                let k = format!("k{:02}", i).into_bytes();
+                let key = Key::from_raw(&k);
+                let val = format!("value-{:02}", i).into_bytes();
+
+                let mut raw_k = vec![b'z'];
+                let suffix = Key::from_raw(&k).append_ts((put_start_ts + 1).into());
+                raw_k.extend_from_slice(suffix.as_encoded());
+
+                if start_key <= key && key < end_key {
+                    regions.insert(region_id);
+                    assert!(db.get_cf(cf, &raw_k).unwrap().is_none());
+                    must_get_none_on_region(&mut engine, region_id, &k, put_start_ts + 10);
+                } else {
+                    assert!(db.get_cf(cf, &raw_k).unwrap().is_some());
+                    must_get_on_region(&mut engine, region_id, &k, put_start_ts + 10, &val);
+                }
+            }
+        }
+
+        let regions: Vec<_> = regions.into_iter().collect();
+        assert!(regions == exected_regions);
+    }
+
+    #[test]
+    fn test_destroy_range_for_multi_rocksdb() {
+        // Cover all keys in all regions
+        test_destroy_range_for_multi_rocksdb_impl(b"", b"k99", vec![1, 2, 3]);
+
+        // Cover some keys in region 1, and all keys in the other regions
+        test_destroy_range_for_multi_rocksdb_impl(b"k051", b"k99", vec![1, 2, 3]);
+
+        // Cover some keys in region 3, and all keys in the other regions
+        test_destroy_range_for_multi_rocksdb_impl(b"", b"k25", vec![1, 2, 3]);
+        test_destroy_range_for_multi_rocksdb_impl(b"", b"k249", vec![1, 2, 3]);
+
+        // Cover some keys in region 1 and region 3, and all keys in region 2
+        test_destroy_range_for_multi_rocksdb_impl(b"k032", b"k249", vec![1, 2, 3]);
+
+        // Cover all keys in region 2, and no keys in others
+        test_destroy_range_for_multi_rocksdb_impl(b"k10", b"k20", vec![2]);
+        test_destroy_range_for_multi_rocksdb_impl(b"k099", b"k195", vec![2]);
+
+        // Cover two regions
+        test_destroy_range_for_multi_rocksdb_impl(b"k05", b"k195", vec![1, 2]);
+        test_destroy_range_for_multi_rocksdb_impl(b"k099", b"k25", vec![2, 3]);
     }
 }

@@ -7,8 +7,8 @@ use rocksdb::{Writable, WriteBatch as RawWriteBatch, DB};
 
 use crate::{engine::RocksEngine, options::RocksWriteOptions, r2e, util::get_cf_handle};
 
-const WRITE_BATCH_MAX_BATCH: usize = 16;
-const WRITE_BATCH_LIMIT: usize = 16;
+const WRITE_BATCH_MAX_BATCH_NUM: usize = 16;
+const WRITE_BATCH_MAX_KEY_NUM: usize = 16;
 
 impl WriteBatchExt for RocksEngine {
     type WriteBatch = RocksWriteBatchVec;
@@ -18,7 +18,7 @@ impl WriteBatchExt for RocksEngine {
     fn write_batch(&self) -> RocksWriteBatchVec {
         RocksWriteBatchVec::new(
             Arc::clone(self.as_inner()),
-            WRITE_BATCH_LIMIT,
+            WRITE_BATCH_MAX_KEY_NUM,
             1,
             self.support_multi_batch_write(),
         )
@@ -67,7 +67,7 @@ impl RocksWriteBatchVec {
     pub fn with_unit_capacity(engine: &RocksEngine, cap: usize) -> RocksWriteBatchVec {
         Self::new(
             engine.as_inner().clone(),
-            WRITE_BATCH_LIMIT,
+            WRITE_BATCH_MAX_KEY_NUM,
             cap,
             engine.support_multi_batch_write(),
         )
@@ -129,7 +129,11 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
     }
 
     fn should_write_to_engine(&self) -> bool {
-        false
+        if self.support_write_batch_vec {
+            self.index >= WRITE_BATCH_MAX_BATCH_NUM
+        } else {
+            self.wbs[0].count() > RocksEngine::WRITE_BATCH_MAX_KEYS
+        }
     }
 
     fn clear(&mut self) {
@@ -139,8 +143,8 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
         self.save_points.clear();
         // Avoid making the wbs too big at one time, then the memory will be kept
         // after reusing
-        if self.index > WRITE_BATCH_MAX_BATCH + 1 {
-            self.wbs.shrink_to(WRITE_BATCH_MAX_BATCH + 1);
+        if self.index > WRITE_BATCH_MAX_BATCH_NUM + 1 {
+            self.wbs.shrink_to(WRITE_BATCH_MAX_BATCH_NUM + 1);
         }
         self.index = 0;
     }
@@ -304,7 +308,7 @@ mod tests {
         wb.put(b"aaa", b"bbb").unwrap();
         assert!(wb.should_write_to_engine());
         let mut wb = RocksWriteBatchVec::with_unit_capacity(&engine, 1024);
-        for _i in 0..WRITE_BATCH_MAX_BATCH * WRITE_BATCH_LIMIT {
+        for _i in 0..WRITE_BATCH_MAX_BATCH_NUM * WRITE_BATCH_MAX_KEY_NUM {
             wb.put(b"aaa", b"bbb").unwrap();
         }
         assert!(!wb.should_write_to_engine());

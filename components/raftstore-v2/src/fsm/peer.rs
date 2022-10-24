@@ -7,15 +7,16 @@ use std::borrow::Cow;
 use batch_system::{BasicMailbox, Fsm};
 use crossbeam::channel::TryRecvError;
 use engine_traits::{KvEngine, RaftEngine, TabletFactory};
-use kvproto::metapb;
 use raftstore::store::{Config, Transport};
 use slog::{debug, error, info, trace, Logger};
 use tikv_util::{
     is_zero_duration,
-    mpsc::{self, LooseBoundedSender, Receiver, Sender},
+    mpsc::{self, LooseBoundedSender, Receiver},
     time::{duration_to_sec, Instant},
+    yatp_pool::FuturePool,
 };
 
+use super::ApplyFsm;
 use crate::{
     batch::StoreContext,
     raft::{Peer, Storage},
@@ -176,6 +177,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
     fn on_start(&mut self) {
         self.schedule_tick(PeerTick::Raft);
+        if self.fsm.peer.storage().is_initialized() {
+            self.fsm.peer.schedule_apply_fsm(self.store_ctx);
+        }
     }
 
     #[inline]
@@ -215,7 +219,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     self.on_command(cmd.request, cmd.ch)
                 }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
-                PeerMsg::ApplyRes(res) => unimplemented!(),
+                PeerMsg::ApplyRes(res) => self.fsm.peer.on_apply_res(res),
                 PeerMsg::Start => self.on_start(),
                 PeerMsg::Noop => unimplemented!(),
                 PeerMsg::Persisted {

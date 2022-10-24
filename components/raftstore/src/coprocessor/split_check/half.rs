@@ -206,8 +206,8 @@ mod tests {
             region_max_size: Some(ReadableSize(BUCKET_NUMBER_LIMIT as u64)),
             ..Default::default()
         };
-        let cop_host = CoprocessorHost::new(tx.clone(), cfg);
-        let mut runnable = SplitCheckRunner::new(engine.clone(), tx, cop_host.clone());
+        let mut runnable =
+            SplitCheckRunner::new(engine.clone(), tx.clone(), CoprocessorHost::new(tx, cfg));
 
         for i in 0..11 {
             let k = format!("{:04}", i).into_bytes();

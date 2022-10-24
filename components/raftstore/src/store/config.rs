@@ -31,18 +31,6 @@ lazy_static! {
     .unwrap();
 }
 
-#[cfg(test)]
-pub const STALE_PEER_CHECK_TICK: usize = 1; // 1000 milliseconds
-
-#[cfg(not(test))]
-pub const STALE_PEER_CHECK_TICK: usize = 10; // 10000 milliseconds
-
-// used to periodically check whether schedule pending applies in region runner
-#[cfg(not(test))]
-pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 1_000; // 1000 milliseconds
-#[cfg(test)]
-pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 200; // 200 milliseconds
-
 with_prefix!(prefix_apply "apply-");
 with_prefix!(prefix_store "store-");
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
@@ -290,9 +278,6 @@ pub struct Config {
     #[online_config(skip)]
     pub clean_stale_peer_delay: ReadableDuration,
 
-    #[online_config(skip)]
-    pub store_batch_retry_recv_timeout: ReadableDuration,
-
     // Interval to inspect the latency of raftstore for slow store detection.
     pub inspect_interval: ReadableDuration,
 
@@ -318,6 +303,12 @@ pub struct Config {
     pub max_snapshot_file_raw_size: ReadableSize,
 
     pub unreachable_backoff: ReadableDuration,
+
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    // Interval to check peers availability info.
+    pub check_peers_availability_interval: ReadableDuration,
 }
 
 impl Default for Config {
@@ -415,7 +406,6 @@ impl Default for Config {
             region_max_size: ReadableSize(0),
             region_split_size: ReadableSize(0),
             clean_stale_peer_delay: ReadableDuration::minutes(0),
-            store_batch_retry_recv_timeout: ReadableDuration::millis(4),
             inspect_interval: ReadableDuration::millis(500),
             report_min_resolved_ts_interval: ReadableDuration::secs(1),
             check_leader_lease_interval: ReadableDuration::secs(0),
@@ -423,6 +413,8 @@ impl Default for Config {
             report_region_buckets_tick_interval: ReadableDuration::secs(10),
             max_snapshot_file_raw_size: ReadableSize::mb(100),
             unreachable_backoff: ReadableDuration::secs(10),
+            // TODO: make its value reasonable
+            check_peers_availability_interval: ReadableDuration::secs(30),
         }
     }
 }
@@ -866,10 +858,6 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["snap_apply_batch_size"])
             .set(self.snap_apply_batch_size.0 as f64);
-
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["store_batch_retry_recv_timeout"])
-            .set(self.store_batch_retry_recv_timeout.as_millis() as f64 / 1000.0);
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["consistency_check_interval_seconds"])

@@ -9,7 +9,7 @@ on:
       - 'raftstore-proxy*'
 
 jobs:
-  build-check:
+  build-check-old:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
@@ -52,7 +52,7 @@ jobs:
         run: |
           M="testold" ./ci_check.sh
 
-  build-check-new:
+  build-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2

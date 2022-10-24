@@ -1453,39 +1453,4 @@ mod tests {
             }
         }
     }
-
-    #[test]
-    fn test_plaintext_encrypter_writer() {
-        use std::io::{Read, Write};
-
-        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
-        let (key_path, _tmp_key_dir) = create_key_file("key");
-        let master_key_backend =
-            Box::new(FileBackend::new(key_path.as_path()).unwrap()) as Box<dyn Backend>;
-        let tmp_dir = tempfile::TempDir::new().unwrap();
-        let previous = new_mock_backend() as Box<dyn Backend>;
-        let manager = new_key_manager(&tmp_dir, None, master_key_backend, previous).unwrap();
-        let path = tmp_dir.path().join("nonencyrpted");
-        let content = "I'm exposed.".to_string();
-        {
-            let raw = File::create(&path).unwrap();
-            let mut f = manager
-                .open_file_with_writer(&path, raw, false /* create */)
-                .unwrap();
-            f.write_all(content.as_bytes()).unwrap();
-            f.sync_all().unwrap();
-        }
-        {
-            let mut buffer = String::new();
-            let mut f = File::open(&path).unwrap();
-            assert_eq!(f.read_to_string(&mut buffer).unwrap(), content.len());
-            assert_eq!(buffer, content);
-        }
-        {
-            let mut buffer = String::new();
-            let mut f = manager.open_file_for_read(&path).unwrap();
-            assert_eq!(f.read_to_string(&mut buffer).unwrap(), content.len());
-            assert_eq!(buffer, content);
-        }
-    }
 }

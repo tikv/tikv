@@ -12,15 +12,15 @@ use encryption::{
     from_engine_encryption_method, DataKeyManager, DecrypterReader, EncrypterWriter, Iv,
 };
 use engine_traits::{
-    CfName, EncryptionKeyManager, Error as EngineError, ImportExt, IngestExternalFileOptions,
-    Iterable, KvEngine, Mutable, SstCompressionType, SstWriter, SstWriterBuilder, WriteBatch,
+    CfName, EncryptionKeyManager, Error as EngineError, Iterable, KvEngine, Mutable,
+    SstCompressionType, SstWriter, SstWriterBuilder, WriteBatch,
 };
 use kvproto::encryptionpb::EncryptionMethod;
 use tikv_util::{
     box_try,
     codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder},
     debug, info,
-    time::Limiter,
+    time::{Instant, Limiter},
 };
 
 use super::{CfFile, Error, IO_LIMITER_CHUNK_SIZE};
@@ -132,6 +132,8 @@ where
         .to_string();
     let sst_writer = RefCell::new(create_sst_file_writer::<E>(engine, cf, &path)?);
     let mut file_length: usize = 0;
+
+    let instant = Instant::now();
     box_try!(snap.scan(cf, start_key, end_key, false, |key, value| {
         let entry_len = key.len() + value.len();
         if file_length + entry_len > raw_size_per_file as usize {
@@ -158,6 +160,7 @@ where
                 }
             }
         }
+
         while entry_len > remained_quota {
             // It's possible to acquire more than necessary, but let it be.
             io_limiter.blocking_consume(IO_LIMITER_CHUNK_SIZE);
@@ -179,12 +182,13 @@ where
         box_try!(sst_writer.into_inner().finish());
         box_try!(File::open(path).and_then(|f| f.sync_all()));
         info!(
-            "build_sst_cf_file_list builds {} files in cf {}. Total keys {}, total size {}. raw_size_per_file {}",
+            "build_sst_cf_file_list builds {} files in cf {}. Total keys {}, total size {}. raw_size_per_file {}, total takes {:?}",
             file_id + 1,
             cf,
             stats.key_count,
             stats.total_size,
             raw_size_per_file,
+            instant.saturating_elapsed(),
         );
     } else {
         box_try!(fs::remove_file(path));

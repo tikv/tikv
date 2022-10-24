@@ -49,13 +49,6 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
         Ok(())
     }
 
-    fn delete_all_in_range(&self, strategy: DeleteStrategy, ranges: &[Range<'_>]) -> Result<()> {
-        for cf in self.cf_names() {
-            self.delete_ranges_cf(cf, strategy.clone(), ranges)?;
-        }
-        Ok(())
-    }
-
     fn delete_ranges_cf(
         &self,
         cf: &str,

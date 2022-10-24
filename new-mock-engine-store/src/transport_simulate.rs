@@ -246,7 +246,7 @@ impl<C: RaftStoreRouter<TiFlashEngine>> RaftStoreRouter<TiFlashEngine> for Simul
 
 impl<C: LocalReadRouter<TiFlashEngine>> LocalReadRouter<TiFlashEngine> for SimulateTransport<C> {
     fn read(
-        &self,
+        &mut self,
         read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
@@ -254,7 +254,7 @@ impl<C: LocalReadRouter<TiFlashEngine>> LocalReadRouter<TiFlashEngine> for Simul
         self.ch.read(read_id, req, cb)
     }
 
-    fn release_snapshot_cache(&self) {
+    fn release_snapshot_cache(&mut self) {
         self.ch.release_snapshot_cache()
     }
 }

@@ -22555,7 +22555,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_gc_compaction_filtered{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by {key_mode}",
+              "expr": "sum(rate(tikv_gc_compaction_filtered{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (key_mode)",
               "format": "time_series",
               "instant": false,
               "interval": "",

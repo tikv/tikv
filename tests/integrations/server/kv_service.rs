@@ -660,6 +660,10 @@ fn test_mvcc_flashback() {
     // Flashback
     let mut flashback_to_version_req = FlashbackToVersionRequest::default();
     flashback_to_version_req.set_context(ctx.clone());
+    ts += 1;
+    flashback_to_version_req.set_start_ts(ts);
+    ts += 1;
+    flashback_to_version_req.set_commit_ts(ts);
     flashback_to_version_req.version = 5;
     flashback_to_version_req.start_key = b"a".to_vec();
     flashback_to_version_req.end_key = b"z".to_vec();
@@ -680,6 +684,8 @@ fn test_mvcc_flashback_block_rw() {
     // Flashback
     let mut flashback_to_version_req = FlashbackToVersionRequest::default();
     flashback_to_version_req.set_context(ctx.clone());
+    flashback_to_version_req.set_start_ts(1);
+    flashback_to_version_req.set_commit_ts(2);
     flashback_to_version_req.version = 0;
     flashback_to_version_req.start_key = b"a".to_vec();
     flashback_to_version_req.end_key = b"z".to_vec();
@@ -727,6 +733,8 @@ fn test_mvcc_flashback_block_scheduling() {
     // Flashback
     let mut flashback_to_version_req = FlashbackToVersionRequest::default();
     flashback_to_version_req.set_context(ctx);
+    flashback_to_version_req.set_start_ts(1);
+    flashback_to_version_req.set_commit_ts(2);
     flashback_to_version_req.version = 0;
     flashback_to_version_req.start_key = b"a".to_vec();
     flashback_to_version_req.end_key = b"z".to_vec();
@@ -1135,6 +1143,7 @@ fn test_double_run_node() {
             AutoSplitController::default(),
             ConcurrencyManager::new(1.into()),
             CollectorRegHandle::new_for_test(),
+            None,
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);

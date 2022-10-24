@@ -124,6 +124,18 @@ pub fn new_mock_cluster(id: u64, count: usize) -> (Cluster<NodeCluster>, Arc<Tes
     (cluster, pd_client)
 }
 
+pub fn new_mock_cluster_snap(id: u64, count: usize) -> (Cluster<NodeCluster>, Arc<TestPdClient>) {
+    let pd_client = Arc::new(TestPdClient::new(0, false));
+    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
+    let mut proxy_config = ProxyConfig::default();
+    proxy_config.raft_store.snap_handle_pool_size = 2;
+    let mut cluster = Cluster::new(id, count, sim, pd_client.clone(), proxy_config);
+    // Compat new proxy
+    cluster.cfg.proxy_compat = true;
+
+    (cluster, pd_client)
+}
+
 pub fn must_get_mem(
     engine_store_server: &Box<new_mock_engine_store::EngineStoreServer>,
     region_id: u64,

@@ -29,7 +29,7 @@ pub use self::{
 };
 
 // `bytes::Bytes` is generated for `bytes` in protobuf.
-fn bytes_capacity(b: &bytes::Bytes) -> usize {
+pub fn bytes_capacity(b: &bytes::Bytes) -> usize {
     // NOTE: For deserialized raft messages, `len` equals capacity.
     // This is used to report memory usage to metrics.
     b.len()

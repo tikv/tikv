@@ -9,7 +9,7 @@ use std::{
 };
 
 use api_version::{dispatch_api_version, KvFormat};
-use causal_ts::{tests::DummyRawTsTracker, CausalTsProvider};
+use causal_ts::CausalTsProvider;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
@@ -376,7 +376,7 @@ impl ServerCluster {
                 block_on(causal_ts::BatchTsoProvider::new_opt(
                     self.pd_client.clone(),
                     cfg.causal_ts.renew_interval.0,
-                    cfg.causal_ts.available_interval.0,
+                    cfg.causal_ts.alloc_ahead_buffer.0,
                     cfg.causal_ts.renew_batch_min_size,
                     cfg.causal_ts.renew_batch_max_size,
                 ))
@@ -384,9 +384,6 @@ impl ServerCluster {
             );
             self.causal_ts_providers
                 .insert(node_id, causal_ts_provider.clone());
-            let causal_ob =
-                causal_ts::CausalObserver::new(causal_ts_provider, DummyRawTsTracker::default());
-            causal_ob.register_to(&mut coprocessor_host);
         }
 
         // Start resource metering.
@@ -449,6 +446,7 @@ impl ServerCluster {
             res_tag_factory.clone(),
             quota_limiter.clone(),
             self.pd_client.feature_gate().clone(),
+            None,
         )?;
         self.storages.insert(node_id, raft_engine);
 
@@ -596,6 +594,7 @@ impl ServerCluster {
             auto_split_controller,
             concurrency_manager.clone(),
             collector_reg_handle,
+            None,
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
@@ -709,13 +708,13 @@ impl Simulator<TiFlashEngine> for ServerCluster {
     }
 
     fn async_read(
-        &self,
+        &mut self,
         node_id: u64,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
     ) {
-        match self.metas.get(&node_id) {
+        match self.metas.get_mut(&node_id) {
             None => {
                 let e: RaftError = box_err!("missing sender for store {}", node_id);
                 let mut resp = RaftCmdResponse::default();
@@ -772,7 +771,7 @@ impl Simulator<TiFlashEngine> for ServerCluster {
     }
 
     fn read(
-        &self,
+        &mut self,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
         timeout: Duration,
@@ -824,7 +823,7 @@ impl Cluster<ServerCluster> {
             ctx.set_peer(leader);
             ctx.set_region_epoch(epoch);
 
-            let storage = self.sim.rl().storages.get(&store_id).unwrap().clone();
+            let mut storage = self.sim.rl().storages.get(&store_id).unwrap().clone();
             let snap_ctx = SnapContext {
                 pb_ctx: &ctx,
                 ..Default::default()

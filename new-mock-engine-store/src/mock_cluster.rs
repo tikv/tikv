@@ -497,7 +497,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
             }
         }
         let ret = if is_read {
-            self.sim.rl().read(None, request.clone(), timeout)
+            self.sim.wl().read(None, request.clone(), timeout)
         } else {
             self.sim.rl().call_command(request.clone(), timeout)
         };
@@ -1186,7 +1186,7 @@ pub trait Simulator<EK: KvEngine> {
     }
 
     fn read(
-        &self,
+        &mut self,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
         timeout: Duration,
@@ -1199,7 +1199,7 @@ pub trait Simulator<EK: KvEngine> {
     }
 
     fn async_read(
-        &self,
+        &mut self,
         node_id: u64,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,

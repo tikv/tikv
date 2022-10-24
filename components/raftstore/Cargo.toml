@@ -10,7 +10,6 @@ publish = false
 default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "engine_rocks"]
 failpoints = ["fail/failpoints"]
 testexport = []
-test-raftstore-proxy = []
 test-engine-kv-rocksdb = [
   "engine_test/test-engine-kv-rocksdb"
 ]
@@ -33,6 +32,7 @@ batch-system = { path = "../batch-system", default-features = false }
 bitflags = "1.0.1"
 byteorder = "1.2"
 bytes = "1.0"
+causal_ts = { path = "../causal_ts" }
 collections = { path = "../collections" }
 concurrency_manager = { path = "../concurrency_manager", default-features = false }
 crc32fast = "1.2"
@@ -40,6 +40,7 @@ crossbeam = "0.8"
 derivative = "2"
 encryption = { path = "../encryption", default-features = false }
 engine_rocks = { path = "../engine_rocks", default-features = false, optional = true } 
+
 # Should be [dev-dependencies] but we need to control the features
 # https://github.com/rust-lang/cargo/issues/6915
 engine_test = { path = "../engine_test", default-features = false }
@@ -94,5 +95,6 @@ yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 [dev-dependencies]
 encryption_export = { path = "../encryption/export", default-features = false }
 engine_panic = { path = "../engine_panic", default-features = false }
+engine_rocks = { path = "../engine_rocks", default-features = false }
 panic_hook = { path = "../panic_hook" }
 test_sst_importer = { path = "../test_sst_importer", default-features = false }

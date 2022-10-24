@@ -16,7 +16,6 @@ use std::{
     cell::UnsafeCell,
     fmt::{self, Debug, Formatter},
     future::Future,
-    mem,
     pin::Pin,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -25,15 +24,13 @@ use std::{
     task::{Context, Poll},
 };
 
-use engine_traits::Snapshot;
 use futures::task::AtomicWaker;
 use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, raft_cmdpb::RaftCmdResponse};
 use raftstore::store::{
     local_metrics::TimeTracker, msg::ErrorCallback, region_meta::RegionMeta, ReadCallback,
-    RegionSnapshot, WriteCallback,
+    WriteCallback,
 };
 use smallvec::SmallVec;
-use tikv_util::memory::HeapSize;
 use tracker::TrackerToken;
 
 /// A struct allows to watch and notify specific events.
@@ -221,7 +218,7 @@ pub struct BaseSubscriber<Res> {
 impl<Res> BaseSubscriber<Res> {
     /// Wait for the result.
     #[inline]
-    pub async fn result(mut self) -> Option<Res> {
+    pub async fn result(self) -> Option<Res> {
         WaitResult { core: &self.core }.await
     }
 }
@@ -244,7 +241,7 @@ impl<Res> BaseChannel<Res> {
 
     /// Sets the final result.
     #[inline]
-    pub fn set_result(mut self, res: Res) {
+    pub fn set_result(self, res: Res) {
         self.core.set_result(res);
     }
 }
@@ -331,7 +328,7 @@ impl WriteCallback for CmdResChannel {
 
     // TODO: support executing hooks inside setting result.
     #[inline]
-    fn set_result(mut self, res: RaftCmdResponse) {
+    fn set_result(self, res: RaftCmdResponse) {
         self.set_result(res);
     }
 }
@@ -342,7 +339,17 @@ impl WriteCallback for CmdResChannel {
 /// need to be a field of the struct.
 #[derive(Clone, PartialEq, Debug)]
 pub struct ReadResponse {
+    pub read_index: u64,
     pub txn_extra_op: TxnExtraOp,
+}
+
+impl ReadResponse {
+    pub fn new(read_index: u64) -> Self {
+        ReadResponse {
+            read_index,
+            txn_extra_op: TxnExtraOp::Noop,
+        }
+    }
 }
 
 /// Possible result of a raft query.
@@ -401,19 +408,24 @@ impl ReadCallback for QueryResChannel {
 
 pub type QueryResSubscriber = BaseSubscriber<QueryResult>;
 
+impl fmt::Debug for QueryResChannel {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(fmt, "QueryResChannel")
+    }
+}
+
 pub type DebugInfoChannel = BaseChannel<RegionMeta>;
 pub type DebugInfoSubscriber = BaseSubscriber<RegionMeta>;
 
 #[cfg(test)]
 mod tests {
-    use engine_test::kv::KvTestSnapshot;
     use futures::executor::block_on;
 
     use super::*;
 
     #[test]
     fn test_cancel() {
-        let (mut chan, mut sub) = CmdResChannel::pair();
+        let (chan, mut sub) = CmdResChannel::pair();
         drop(chan);
         assert!(!block_on(sub.wait_proposed()));
         assert!(!block_on(sub.wait_committed()));
@@ -428,7 +440,7 @@ mod tests {
         assert!(!block_on(sub.wait_committed()));
         assert_eq!(block_on(sub.result()), Some(result));
 
-        let (mut chan, mut sub) = QueryResChannel::pair();
+        let (chan, sub) = QueryResChannel::pair();
         drop(chan);
         assert!(block_on(sub.result()).is_none());
     }
@@ -445,13 +457,14 @@ mod tests {
         assert!(block_on(sub.wait_committed()));
         assert_eq!(block_on(sub.result()), Some(result.clone()));
 
-        let (mut chan, mut sub) = QueryResChannel::pair();
+        let (chan, sub) = QueryResChannel::pair();
         let resp = QueryResult::Response(result.clone());
         chan.set_result(resp.clone());
         assert_eq!(block_on(sub.result()).unwrap(), resp);
 
-        let (mut chan, mut sub) = QueryResChannel::pair();
+        let (chan, sub) = QueryResChannel::pair();
         let read = QueryResult::Read(ReadResponse {
+            read_index: 0,
             txn_extra_op: TxnExtraOp::ReadOldValue,
         });
         chan.set_result(read.clone());

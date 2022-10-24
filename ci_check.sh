@@ -17,7 +17,6 @@ elif [[ $M == "testold" ]]; then
     cargo test --package tests --test failpoints cases::test_transaction
     cargo test --package tests --test failpoints cases::test_cmd_epoch_checker
     cargo test --package tests --test failpoints cases::test_disk_full
-    cargo test --package tests --test failpoints cases::test_snap
     cargo test --package tests --test failpoints cases::test_merge
     cargo test --package tests --test failpoints cases::test_import_service
     cargo test --package tests --test failpoints cases::test_proxy_replica_read

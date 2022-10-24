@@ -19,6 +19,7 @@ use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Config as BatchSystemConfig, Fsm, HandleResult,
     HandlerBuilder, PollHandler, Priority,
 };
+use causal_ts::CausalTsProviderImpl;
 use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{unbounded, TryRecvError, TrySendError};
@@ -45,13 +46,15 @@ use resource_metering::CollectorRegHandle;
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
-    box_err, box_try,
+    box_try,
     config::{Tracker, VersionTrack},
     debug, defer, error,
     future::poll_future_notify,
     info, is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver},
-    slow_log, sys as sys_util,
+    slow_log,
+    store::find_peer,
+    sys as sys_util,
     sys::disk::{get_disk_status, DiskUsage},
     time::{duration_to_sec, Instant as TiInstant},
     timer::SteadyTimer,
@@ -99,7 +102,7 @@ use crate::{
         Callback, CasualMessage, GlobalReplicationState, InspectedRaftMessage, MergeResultKind,
         PdTask, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapManager, StoreMsg, StoreTick,
     },
-    Result,
+    Error, Result,
 };
 
 type Key = Vec<u8>;
@@ -555,6 +558,8 @@ where
             self.cfg.report_region_buckets_tick_interval.0;
         self.tick_batch[PeerTick::CheckLongUncommitted as usize].wait_duration =
             self.cfg.check_long_uncommitted_interval.0;
+        self.tick_batch[PeerTick::CheckPeersAvailability as usize].wait_duration =
+            self.cfg.check_peers_availability_interval.0;
     }
 }
 
@@ -706,10 +711,20 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 StoreMsg::Tick(tick) => self.on_tick(tick),
                 StoreMsg::RaftMessage(msg) => {
                     if let Err(e) = self.on_raft_message(msg) {
-                        error!(?e;
-                            "handle raft message failed";
-                            "store_id" => self.fsm.store.id,
-                        );
+                        if matches!(&e, Error::RegionNotRegistered { .. }) {
+                            // This may happen in normal cases when add-peer runs slowly
+                            // occasionally after a region split. Avoid printing error
+                            // log here, which may confuse users.
+                            info!("handle raft message failed";
+                                "err" => ?e,
+                                "store_id" => self.fsm.store.id,
+                            );
+                        } else {
+                            error!(?e;
+                                "handle raft message failed";
+                                "store_id" => self.fsm.store.id,
+                            );
+                        }
                     }
                 }
                 StoreMsg::CompactedEvent(event) => self.on_compaction_finished(event),
@@ -770,8 +785,6 @@ pub struct RaftPoller<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: 'stat
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
     trace_event: TraceEvent,
-    last_sync_time: tikv_util::time::Instant,
-    batch_retry_recv_timeout: Duration,
     last_flush_time: TiInstant,
     need_flush_events: bool,
 
@@ -786,6 +799,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
         self.flush_ticks();
         self.poll_ctx.raft_metrics.maybe_flush();
         self.poll_ctx.store_stat.flush();
+
         MEMTRACE_PEERS.trace(mem::take(&mut self.trace_event));
     }
 
@@ -1340,8 +1354,6 @@ where
             poll_ctx: ctx,
             cfg_tracker: self.cfg.clone().tracker(tag),
             trace_event: TraceEvent::default(),
-            last_sync_time: tikv_util::time::Instant::now_coarse(),
-            batch_retry_recv_timeout: self.cfg.value().store_batch_retry_recv_timeout.0 / 2,
             last_flush_time: TiInstant::now(),
             need_flush_events: false,
             previous_append: 0,
@@ -1452,6 +1464,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         health_service: Option<HealthService>,
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1590,6 +1603,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             collector_reg_handle,
             region_read_progress,
             health_service,
+            causal_ts_provider,
         )?;
         Ok(())
     }
@@ -1606,6 +1620,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         collector_reg_handle: CollectorRegHandle,
         region_read_progress: RegionReadProgressRegistry,
         health_service: Option<HealthService>,
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
@@ -1640,7 +1655,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let tag = format!("raftstore-{}", store.get_id());
         let coprocessor_host = builder.coprocessor_host.clone();
         self.system.spawn(tag, builder);
-
         let mut mailboxes = Vec::with_capacity(region_peers.len());
         let mut address = Vec::with_capacity(region_peers.len());
         for (tx, fsm) in region_peers {
@@ -1688,6 +1702,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             region_read_progress,
             health_service,
             coprocessor_host,
+            causal_ts_provider,
         );
         assert!(workers.pd_worker.start_with_timer(pd_runner));
 
@@ -1787,11 +1802,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                     .message_dropped
                     .region_nonexistent
                     .inc();
-                return Err(box_err!(
-                    "[region {}] region not exist but not tombstone: {:?}",
+                return Err(Error::RegionNotRegistered {
                     region_id,
-                    local_state
-                ));
+                    local_state,
+                });
             }
             info!(
                 "region doesn't exist yet, wait for it to be split";
@@ -1814,7 +1828,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 "msg_type" => ?msg_type,
             );
 
-            let merge_target = if let Some(peer) = util::find_peer(region, from_store_id) {
+            let merge_target = if let Some(peer) = find_peer(region, from_store_id) {
                 // Maybe the target is promoted from learner to voter, but the follower
                 // doesn't know it. So we only compare peer id.
                 if peer.get_id() < msg.get_from_peer().get_id() {
@@ -1851,7 +1865,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 "current_region_epoch" => ?region_epoch,
                 "msg_type" => ?msg_type,
             );
-            if util::find_peer(region, from_store_id).is_none() {
+            if find_peer(region, from_store_id).is_none() {
                 self.ctx.handle_stale_msg(msg, region_epoch.clone(), None);
             } else {
                 let mut need_gc_msg = util::is_vote_msg(msg.get_message());
@@ -1888,9 +1902,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         // In this case, the local epoch is stale and the local peer can be found from
         // region. We can compare the local peer id with to_peer_id to verify whether it
         // is correct to create a new peer.
-        if let Some(local_peer_id) =
-            util::find_peer(region, self.ctx.store_id()).map(|r| r.get_id())
-        {
+        if let Some(local_peer_id) = find_peer(region, self.ctx.store_id()).map(|r| r.get_id()) {
             if to_peer_id <= local_peer_id {
                 self.ctx
                     .raft_metrics
@@ -2662,7 +2674,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             if target_region_id == 0 {
                 return;
             }
-            match util::find_peer(&meta.regions[&target_region_id], self.ctx.store_id()) {
+            match find_peer(&meta.regions[&target_region_id], self.ctx.store_id()) {
                 None => return,
                 Some(p) => p.clone(),
             }
