@@ -2825,7 +2825,8 @@ where
         let region_id = self.region_id();
         let region_state_key = keys::region_state_key(region_id);
         let is_in_flashback = req.get_cmd_type() == AdminCmdType::PrepareFlashback;
-        // We need to make sure the `RegionLocalState` read from the engine is latest.
+        // We need to make sure the `RegionLocalState` read from the engine is latest,
+        // so the flush is needed before this function being called.
         let mut old_state = match ctx
             .engine
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
