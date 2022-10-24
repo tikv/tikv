@@ -5,40 +5,77 @@ use std::{
     time::{Duration, Instant},
 };
 
+use futures::{channel::oneshot, executor::block_on};
 use kvproto::{
+    errorpb::FlashbackInProgress,
     metapb,
     raft_cmdpb::{AdminCmdType, CmdType, Request},
 };
+use raftstore::store::Callback;
 use test_raftstore::*;
 use txn_types::WriteBatchFlags;
 
 #[test]
-fn test_prepare_flashback_after_split_and_merge() {
+fn test_prepare_flashback_after_split() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.run();
 
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
+    // Pause the apply to make sure the split cmd and prepare flashback cmd are in
+    // the same batch.
+    let on_handle_apply_fp = "on_handle_apply";
+    fail::cfg(on_handle_apply_fp, "pause").unwrap();
+
     let old_region = cluster.get_region(b"a");
-    cluster.must_split(&old_region, b"b");
-    cluster.must_send_flashback_msg(old_region.get_id(), AdminCmdType::PrepareFlashback);
+    // Send the split msg.
+    cluster.split_region(
+        &old_region,
+        b"b",
+        Callback::write(Box::new(|resp| {
+            if resp.response.get_header().has_error() {
+                panic!("split failed: {:?}", resp.response.get_header().get_error());
+            }
+        })),
+    );
+    // Make sure the admin split cmd is ready.
+    sleep(Duration::from_millis(500));
+    // Send the prepare flashback msg.
+    let (result_tx, result_rx) = oneshot::channel();
+    cluster.must_send_flashback_msg(
+        old_region.get_id(),
+        AdminCmdType::PrepareFlashback,
+        Callback::write(Box::new(move |resp| {
+            if resp.response.get_header().has_error() {
+                result_tx
+                    .send(Some(resp.response.get_header().get_error().clone()))
+                    .unwrap();
+                return;
+            }
+            result_tx.send(None).unwrap();
+        })),
+    );
 
-    let right_region = cluster.get_region(b"b");
-    assert!(right_region.get_id() == old_region.get_id());
-    must_check_flashback_state(&mut cluster, right_region.get_id(), 1, true);
+    // Remove the pause to make these two commands are in the same batch.
+    fail::remove(on_handle_apply_fp);
+    let prepare_flashback_err = block_on(result_rx).unwrap().unwrap();
+    assert!(
+        prepare_flashback_err.has_epoch_not_match(),
+        "prepare flashback should fail with epoch not match, but got {:?}",
+        prepare_flashback_err
+    );
+
     let left_region = cluster.get_region(b"a");
+    let right_region = cluster.get_region(b"b");
+    // Check the region meta.
     assert!(left_region.get_id() != old_region.get_id());
-    must_check_flashback_state(&mut cluster, left_region.get_id(), 1, false);
-
-    cluster.must_send_flashback_msg(right_region.get_id(), AdminCmdType::FinishFlashback);
+    assert!(left_region.get_end_key() == right_region.get_start_key());
+    assert!(
+        left_region.get_region_epoch().get_version()
+            == right_region.get_region_epoch().get_version()
+    );
     must_check_flashback_state(&mut cluster, left_region.get_id(), 1, false);
     must_check_flashback_state(&mut cluster, right_region.get_id(), 1, false);
-
-    cluster.must_try_merge(left_region.get_id(), right_region.get_id());
-    let merged_region = cluster.get_region(b"a");
-    assert!(merged_region.get_id() != left_region.get_id());
-    assert!(merged_region.get_id() == right_region.get_id());
-    must_check_flashback_state(&mut cluster, merged_region.get_id(), 1, false);
 }
 
 #[test]
@@ -76,7 +113,7 @@ fn test_flashback_for_schedule() {
 
     // Prepare for flashback
     let region = cluster.get_region(b"k1");
-    cluster.must_send_flashback_msg(region.get_id(), AdminCmdType::PrepareFlashback);
+    cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::PrepareFlashback);
 
     // Verify the schedule is disabled.
     let mut region = cluster.get_region(b"k3");
@@ -89,13 +126,13 @@ fn test_flashback_for_schedule() {
     let e = resp.get_header().get_error();
     assert_eq!(
         e.get_flashback_in_progress(),
-        &kvproto::errorpb::FlashbackInProgress {
+        &FlashbackInProgress {
             region_id: region.get_id(),
             ..Default::default()
         }
     );
 
-    cluster.must_send_flashback_msg(region.get_id(), AdminCmdType::FinishFlashback);
+    cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::FinishFlashback);
     // Transfer leader to (2, 2) should succeed.
     cluster.must_transfer_leader(1, new_peer(2, 2));
 }
@@ -112,7 +149,7 @@ fn test_flashback_for_write() {
 
     // Prepare for flashback
     let region = cluster.get_region(b"k1");
-    cluster.must_send_flashback_msg(region.get_id(), AdminCmdType::PrepareFlashback);
+    cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::PrepareFlashback);
 
     // Write will be blocked
     let value = vec![1_u8; 8096];
@@ -124,7 +161,7 @@ fn test_flashback_for_write() {
         new_put_cmd(b"k1", &value),
     );
 
-    cluster.must_send_flashback_msg(region.get_id(), AdminCmdType::FinishFlashback);
+    cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::FinishFlashback);
 
     multi_do_cmd(&mut cluster, new_put_cf_cmd("write", b"k1", &value));
 }
@@ -143,7 +180,7 @@ fn test_flashback_for_read() {
 
     // Prepare for flashback
     let region = cluster.get_region(b"k1");
-    cluster.must_send_flashback_msg(region.get_id(), AdminCmdType::PrepareFlashback);
+    cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::PrepareFlashback);
 
     // read will be blocked
     must_get_error_flashback_in_progress(&mut cluster, &region, new_get_cf_cmd("write", b"k1"));
@@ -156,7 +193,7 @@ fn test_flashback_for_read() {
         new_get_cf_cmd("write", b"k1"),
     );
 
-    cluster.must_send_flashback_msg(region.get_id(), AdminCmdType::FinishFlashback);
+    cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::FinishFlashback);
 
     multi_do_cmd(&mut cluster, new_get_cf_cmd("write", b"k1"));
 }
@@ -191,7 +228,7 @@ fn test_flashback_for_local_read() {
     assert_eq!(state.get_last_index(), last_index);
 
     // Prepare for flashback
-    cluster.must_send_flashback_msg(region.get_id(), AdminCmdType::PrepareFlashback);
+    cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::PrepareFlashback);
 
     // Check the leader does a local read.
     let state = cluster.raft_local_state(region.get_id(), store_id);
@@ -222,7 +259,7 @@ fn test_flashback_for_local_read() {
     let state = cluster.raft_local_state(region.get_id(), store_id);
     assert_eq!(state.get_last_index(), last_index + 1);
 
-    cluster.must_send_flashback_msg(region.get_id(), AdminCmdType::FinishFlashback);
+    cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::FinishFlashback);
 
     let state = cluster.raft_local_state(region.get_id(), store_id);
     assert_eq!(state.get_last_index(), last_index + 2);
@@ -246,7 +283,7 @@ fn test_flashback_for_status_cmd_as_region_detail() {
 
     let leader = cluster.leader_of_region(1).unwrap();
     let region = cluster.get_region(b"k1");
-    cluster.must_send_flashback_msg(region.get_id(), AdminCmdType::PrepareFlashback);
+    cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::PrepareFlashback);
 
     let region_detail = cluster.region_detail(region.get_id(), leader.get_store_id());
     assert!(region_detail.has_region());
@@ -272,10 +309,10 @@ fn test_flashback_for_check_is_in_persist() {
     must_check_flashback_state(&mut cluster, 1, 2, false);
 
     // Prepare for flashback
-    cluster.must_send_flashback_msg(1, AdminCmdType::PrepareFlashback);
+    cluster.must_send_wait_flashback_msg(1, AdminCmdType::PrepareFlashback);
     must_check_flashback_state(&mut cluster, 1, 2, true);
 
-    cluster.must_send_flashback_msg(1, AdminCmdType::FinishFlashback);
+    cluster.must_send_wait_flashback_msg(1, AdminCmdType::FinishFlashback);
     must_check_flashback_state(&mut cluster, 1, 2, false);
 }
 
@@ -302,7 +339,7 @@ fn test_flashback_for_apply_snapshot() {
     }
 
     // Prepare for flashback
-    cluster.must_send_flashback_msg(1, AdminCmdType::PrepareFlashback);
+    cluster.must_send_wait_flashback_msg(1, AdminCmdType::PrepareFlashback);
     must_check_flashback_state(&mut cluster, 1, 1, true);
     must_check_flashback_state(&mut cluster, 1, 3, false);
 
@@ -311,7 +348,7 @@ fn test_flashback_for_apply_snapshot() {
     must_check_flashback_state(&mut cluster, 1, 1, true);
     must_check_flashback_state(&mut cluster, 1, 3, true);
 
-    cluster.must_send_flashback_msg(1, AdminCmdType::FinishFlashback);
+    cluster.must_send_wait_flashback_msg(1, AdminCmdType::FinishFlashback);
     must_check_flashback_state(&mut cluster, 1, 1, false);
     must_check_flashback_state(&mut cluster, 1, 3, false);
 }
@@ -339,7 +376,7 @@ fn must_check_flashback_state(
     );
 }
 
-fn multi_do_cmd<T: Simulator>(cluster: &mut Cluster<T>, cmd: kvproto::raft_cmdpb::Request) {
+fn multi_do_cmd<T: Simulator>(cluster: &mut Cluster<T>, cmd: Request) {
     for _ in 0..100 {
         let mut reqs = vec![];
         for _ in 0..100 {
@@ -352,7 +389,7 @@ fn multi_do_cmd<T: Simulator>(cluster: &mut Cluster<T>, cmd: kvproto::raft_cmdpb
 fn must_do_cmd_with_flashback_flag<T: Simulator>(
     cluster: &mut Cluster<T>,
     region: &mut metapb::Region,
-    cmd: kvproto::raft_cmdpb::Request,
+    cmd: Request,
 ) {
     // Verify the read can be executed if add flashback flag in request's
     // header.
@@ -373,7 +410,7 @@ fn must_do_cmd_with_flashback_flag<T: Simulator>(
 fn must_get_error_flashback_in_progress<T: Simulator>(
     cluster: &mut Cluster<T>,
     region: &metapb::Region,
-    cmd: kvproto::raft_cmdpb::Request,
+    cmd: Request,
 ) {
     for _ in 0..100 {
         let mut reqs = vec![];
@@ -385,7 +422,7 @@ fn must_get_error_flashback_in_progress<T: Simulator>(
             Err(e) => {
                 assert_eq!(
                     e.get_flashback_in_progress(),
-                    &kvproto::errorpb::FlashbackInProgress {
+                    &FlashbackInProgress {
                         region_id: region.get_id(),
                         ..Default::default()
                     }
