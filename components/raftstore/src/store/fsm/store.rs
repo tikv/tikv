@@ -754,11 +754,8 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     drop(syncer);
                 }
                 StoreMsg::GcSnapshotFinish => self.register_snap_mgr_gc_tick(),
-                StoreMsg::AwakenRegions {
-                    abnormal_stores,
-                    abnormal_regions,
-                } => {
-                    self.on_wake_up_regions(abnormal_stores, abnormal_regions);
+                StoreMsg::AwakenRegions { abnormal_stores } => {
+                    self.on_wake_up_regions(abnormal_stores);
                 }
             }
         }
@@ -2531,7 +2528,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         self.register_compact_lock_cf_tick();
     }
 
-    fn on_wake_up_regions(&self, abnormal_stores: Vec<u64>, _region_ids: Vec<u64>) {
+    fn on_wake_up_regions(&self, abnormal_stores: Vec<u64>) {
         info!("try to wake up all hibernated regions in this store";
             "to_all" => abnormal_stores.is_empty());
         let meta = self.ctx.store_meta.lock().unwrap();

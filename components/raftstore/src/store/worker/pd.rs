@@ -1355,7 +1355,6 @@ where
                         info!("forcely awaken hibernated regions in this store");
                         let _ = router.send_store_msg(StoreMsg::AwakenRegions {
                             abnormal_stores: awaken_regions.get_abnormal_stores().to_vec(),
-                            abnormal_regions: awaken_regions.get_abnormal_regions().to_vec(),
                         });
                     }
                 }

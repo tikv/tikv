@@ -850,7 +850,6 @@ where
 
     AwakenRegions {
         abnormal_stores: Vec<u64>,
-        abnormal_regions: Vec<u64>,
     },
 }
 
