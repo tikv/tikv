@@ -17945,7 +17945,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Task execution time during one schedule.",
+          "description": "Unified read pool task execution time during one schedule.",
           "fill": 1,
           "gridPos": {
             "h": 8,
@@ -18022,7 +18022,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Unified Read Pool Duration of One Time Slice",
+          "title": "Duration of One Time Slice",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -18065,7 +18065,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Task total execution duration.",
+          "description": "Unified read pool task total execution duration.",
           "fill": 1,
           "gridPos": {
             "h": 8,
@@ -18142,7 +18142,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Unified Read Pool Execute Duration",
+          "title": "Task Execute Duration",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -18262,7 +18262,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Unified Read Pool Task Schedule Times",
+          "title": "Task Schedule Times",
           "tooltip": {
             "shared": true,
             "sort": 0,
