@@ -3,12 +3,13 @@
 use std::{
     collections::HashMap,
     future::Future,
+    ops::Add,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
 
 use collections::HashSet;
-use engine_traits::{KvEngine, CF_DEFAULT, CF_WRITE};
+use engine_traits::{range, KvEngine, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IoType};
 use futures::{
     executor::{ThreadPool, ThreadPoolBuilder},
@@ -33,6 +34,7 @@ use raftstore::{
     store::{Callback, RaftCmdExtraOpts, RegionSnapshot},
 };
 use sst_importer::{error_inc, metrics::*, sst_meta_to_path, Config, Error, Result, SstImporter};
+use tidb_query_aggr::AggrFunctionStateUpdatePartial;
 use tikv_util::{
     config::ReadableSize,
     future::{create_stream_with_buffer, paired_future_callback},
@@ -455,7 +457,14 @@ where
                 let mut reqs_write = RequestCollector::from_cf(CF_WRITE);
                 let mut req_default_size = 0_u64;
                 let mut req_write_size = 0_u64;
-                let rules = req.take_rewrite_rules();
+                let mut range: Option<Range> = None;
+                let mut rules = req.take_rewrite_rules();
+                let mut metas = req.get_metas().to_vec();
+                // For compatibility with old requests.
+                if req.has_meta() {
+                    metas.push(req.take_meta());
+                    rules.push(req.take_rewrite_rule());
+                }
 
                 for (i, meta) in req.get_metas().iter().enumerate() {
                     let (reqs, req_size) = if meta.get_cf() == CF_DEFAULT {
@@ -464,8 +473,6 @@ where
                         (&mut reqs_write, &mut req_write_size)
                     };
 
-                    let file_buff =
-                        importer.do_download_kv_file2(meta, req.get_storage_backend(), &limiter)?;
                     let mut build_req_fn = build_apply_request(
                         req_size,
                         raft_size.0,
@@ -476,7 +483,9 @@ where
                         context.clone(),
                     );
 
-                    let _range = importer.do_apply_kv_file(
+                    let file_buff =
+                        importer.do_read_kv_file(meta, req.get_storage_backend(), &limiter)?;
+                    let r: Option<Range> = importer.do_apply_kv_file(
                         meta.get_start_key(),
                         meta.get_end_key(),
                         meta.get_restore_ts(),
@@ -484,6 +493,17 @@ where
                         &rules[i],
                         &mut build_req_fn,
                     )?;
+                    if let Some(mut r) = r {
+                        range = range.map_or(Some(r.clone()), |mut v| {
+                            let s = v.take_start().min(r.take_start());
+                            let e = v.take_end().max(r.take_end());
+                            Some(Range {
+                                start: s,
+                                end: e,
+                                ..Default::default()
+                            })
+                        });
+                    }
                 }
 
                 if !reqs_default.is_empty() {
@@ -510,9 +530,9 @@ where
                         }
                     }
                 }
-                // if let Some(r) = range {
-                //     apply_resp.set_range(r);
-                // }
+                if let Some(r) = range {
+                    apply_resp.set_range(r);
+                }
                 Ok(())
             })();
             if let Err(e) = result {
@@ -1016,7 +1036,7 @@ where
 
         // When the request size get grow to max request size,
         // build the request and add it to a batch.
-        if *req_size + req.compute_size() as u64 > raft_size {
+        if *req_size + req.compute_size() as u64 > raft_size * 7 / 8 {
             IMPORTER_APPLY_BYTES.observe(*req_size as _);
             *req_size = 0;
             let cmd = make_request(reqs, context.clone());

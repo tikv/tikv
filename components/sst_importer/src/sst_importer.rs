@@ -19,7 +19,7 @@ use engine_traits::{
     IterOptions, Iterator, KvEngine, RefIterable, SstCompressionType, SstExt, SstMetaInfo,
     SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
-use external_storage_export::compression_reader_dispatcher;
+use external_storage_export::{compression_reader_dispatcher, encrypt_wrap_reader, RestoreConfig};
 use file_system::{get_io_rate_limiter, OpenOptions};
 use futures::{executor::ThreadPool, AsyncRead, AsyncReadExt};
 use kvproto::{
@@ -295,7 +295,7 @@ impl SstImporter {
         Ok(())
     }
 
-    pub fn do_download_kv_file2(
+    pub fn do_read_kv_file(
         &self,
         meta: &KvMeta,
         backend: &StorageBackend,
@@ -309,38 +309,90 @@ impl SstImporter {
             None
         };
 
-        let length = meta.get_length();
+        let file_length = meta.get_length();
         let range_length = meta.get_range_length();
+        let range = if range_length == 0 {
+            None
+        } else {
+            Some((meta.get_range_offset(), range_length))
+        };
+        let restore_config = external_storage_export::RestoreConfig {
+            range,
+            compression_type: Some(meta.get_compression_type()),
+            expected_sha256,
+            file_crypter: None,
+        };
+
+        let buff = self.read_kv_files_from_external_storage(
+            file_length,
+            meta.get_name(),
+            backend,
+            false,
+            speed_limiter,
+            restore_config,
+        )?;
+
+        IMPORTER_DOWNLOAD_BYTES.observe(file_length as _);
+        IMPORTER_APPLY_DURATION
+            .with_label_values(&["download"])
+            .observe(start.saturating_elapsed().as_secs_f64());
+
+        Ok(buff)
+    }
+
+    fn read_kv_files_from_external_storage(
+        &self,
+        file_length: u64,
+        file_name: &str,
+        backend: &StorageBackend,
+        support_kms: bool,
+        speed_limiter: &Limiter,
+        restore_config: RestoreConfig,
+    ) -> Result<Vec<u8>> {
+        let RestoreConfig {
+            range,
+            compression_type,
+            expected_sha256,
+            file_crypter,
+        } = restore_config;
         let ext_storage = external_storage_export::create_storage(backend, Default::default())?;
-        let mut reader = {
-            let inner = if range_length > 0 {
-                ext_storage.read_part(meta.get_name(), meta.get_range_offset(), range_length)
+        let ext_storage: Box<dyn external_storage_export::ExternalStorage> = if support_kms {
+            if let Some(key_manager) = &self.key_manager {
+                Box::new(external_storage_export::EncryptedExternalStorage {
+                    key_manager: (*key_manager).clone(),
+                    storage: ext_storage,
+                }) as _
             } else {
-                ext_storage.read(meta.get_name())
+                ext_storage as _
+            }
+        } else {
+            ext_storage as _
+        };
+
+        let mut reader = {
+            let inner = if let Some((off, len)) = range {
+                ext_storage.read_part(file_name, off, len)
+            } else {
+                ext_storage.read(file_name)
             };
 
-            let compression_type = Some(meta.compression_type);
-            compression_reader_dispatcher(compression_type, inner)?
+            let inner = compression_reader_dispatcher(compression_type, inner)?;
+            encrypt_wrap_reader(file_crypter, inner)?
         };
 
         let r = block_on_external_io(external_storage_export::read_external_storage_info_buff(
             &mut reader,
             speed_limiter,
-            length,
+            file_length,
             expected_sha256,
         ));
         let url = ext_storage.url()?.to_string();
         let buff = r.map_err(|e| Error::CannotReadExternalStorage {
             url: url.to_string(),
-            name: meta.get_name().to_owned(),
+            name: file_name.to_string(),
             err: e,
             local_path: PathBuf::default(),
         })?;
-
-        IMPORTER_DOWNLOAD_BYTES.observe(length as _);
-        IMPORTER_APPLY_DURATION
-            .with_label_values(&["download"])
-            .observe(start.saturating_elapsed().as_secs_f64());
 
         Ok(buff)
     }
