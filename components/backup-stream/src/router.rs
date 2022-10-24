@@ -18,7 +18,7 @@ use std::{
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use external_storage::{BackendConfig, UnpinReader};
 use external_storage_export::{create_storage, ExternalStorage};
-use futures::io::Cursor;
+use futures::io::{AllowStdIo, Cursor};
 use kvproto::{
     brpb::{
         CompressionType, DataFileGroup, DataFileInfo, FileType, MetaVersion, Metadata,
@@ -32,20 +32,15 @@ use raftstore::coprocessor::CmdBatch;
 use slog_global::debug;
 use tidb_query_datatype::codec::table::decode_table_id;
 use tikv_util::{
-    box_err,
-    codec::stream_event::EventEncoder,
-    error, info,
-    time::{Instant, Limiter},
-    warn,
-    worker::Scheduler,
-    Either, HandyRwLock,
+    box_err, codec::stream_event::EventEncoder, error, info, time::Instant, warn,
+    worker::Scheduler, Either, HandyRwLock,
 };
 use tokio::{
-    fs::{remove_file, File},
-    io::AsyncWriteExt,
+    fs::remove_file,
+    io::{AsyncWriteExt, BufReader},
     sync::{Mutex, RwLock},
 };
-use tokio_util::compat::TokioAsyncReadCompatExt;
+use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use txn_types::{Key, Lock, TimeStamp, WriteRef};
 
 use super::errors::Result;
@@ -1025,11 +1020,11 @@ impl StreamTaskInfo {
             //  and push it into merged_file_info(DataFileGroup).
             file_info_clone.set_range_offset(stat_length);
             data_files_open.push({
-                let file = File::open(data_file.local_path.clone()).await?;
-                let compress_length = file.metadata().await?.len();
+                let file = std::fs::File::open(data_file.local_path.clone())?;
+                let compress_length = file.metadata()?.len();
                 stat_length += compress_length;
                 file_info_clone.set_range_length(compress_length);
-                file
+                BufReader::new(AllowStdIo::new(file).compat())
             });
             data_file_infos.push(file_info_clone);
 
@@ -1053,14 +1048,17 @@ impl StreamTaskInfo {
         merged_file_info.set_min_resolved_ts(min_resolved_ts.unwrap_or_default());
 
         // to do: limiter to storage
-        let limiter = Limiter::builder(std::f64::INFINITY).build();
 
         let files_reader = FilesReader::new(data_files_open);
-
-        let reader = UnpinReader(Box::new(limiter.limit(files_reader.compat())));
         let filepath = &merged_file_info.path;
 
-        let ret = storage.write(filepath, reader, stat_length).await;
+        let ret = storage
+            .write(
+                filepath,
+                UnpinReader(Box::new(files_reader.compat())),
+                stat_length,
+            )
+            .await;
 
         match ret {
             Ok(_) => {
