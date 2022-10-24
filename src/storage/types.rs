@@ -2,16 +2,17 @@
 
 //! Core data types.
 
-use std::{fmt::Debug, sync::Arc};
+use std::fmt::Debug;
 
 use kvproto::kvrpcpb;
 use txn_types::{Key, Value};
 
 use crate::storage::{
+    errors::SharedError,
     lock_manager::WaitTimeout,
     mvcc::{Lock, LockType, TimeStamp, Write, WriteType},
     txn::ProcessResult,
-    Callback, Error, Result,
+    Callback, Result,
 };
 
 /// `MvccInfo` stores all mvcc information of given key.
@@ -160,7 +161,7 @@ pub enum PessimisticLockKeyResult {
         conflict_ts: TimeStamp,
     },
     Waiting,
-    Failed(Arc<Error>),
+    Failed(SharedError),
 }
 
 impl PessimisticLockKeyResult {
@@ -251,7 +252,7 @@ impl PessimisticLockKeyResult {
     }
 
     #[cfg(test)]
-    pub fn unwrap_err(&self) -> Arc<Error> {
+    pub fn unwrap_err(&self) -> SharedError {
         match self {
             Self::Failed(e) => e.clone(),
             x => panic!(
@@ -278,7 +279,7 @@ impl PessimisticLockResults {
         self.0.push(key_res);
     }
 
-    pub fn into_pb(self) -> (Vec<kvrpcpb::PessimisticLockKeyResult>, Option<Arc<Error>>) {
+    pub fn into_pb(self) -> (Vec<kvrpcpb::PessimisticLockKeyResult>, Option<SharedError>) {
         let mut error = None;
         let res = self
             .0

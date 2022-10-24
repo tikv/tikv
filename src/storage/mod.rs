@@ -8340,15 +8340,14 @@ mod tests {
                         return_values,
                         check_existence,
                     )
-                    .allow_lock_with_conflict(true),
+                    .allow_lock_with_conflict(true)
+                    .lock_wait_timeout(None),
                     expect_value_with_checker_callback(
                         tx.clone(),
                         0,
                         |res: Result<PessimisticLockResults>| {
-                            let res = res.unwrap().0;
-                            assert_eq!(res.len(), 1);
-                            let e = res[0].unwrap_err();
-                            match core::ops::Deref::deref(&e) {
+                            let e = res.unwrap_err();
+                            match e {
                                 Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
                                     mvcc::Error(box mvcc::ErrorInner::KeyIsLocked(..)),
                                 )))) => (),

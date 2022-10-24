@@ -470,17 +470,23 @@ pub fn extract_key_errors(res: Result<Vec<Result<()>>>) -> Vec<kvrpcpb::KeyError
 /// support cloning.
 #[derive(Debug, Clone, Error)]
 #[error(transparent)]
-pub struct SharedError(pub Arc<ErrorInner>);
+pub struct SharedError(pub Arc<Error>);
+
+impl SharedError {
+    pub fn inner(&self) -> &ErrorInner {
+        &self.0.0
+    }
+}
 
 impl From<ErrorInner> for SharedError {
     fn from(e: ErrorInner) -> Self {
-        Self(Arc::new(e))
+        Self(Arc::new(Error::from(e)))
     }
 }
 
 impl From<Error> for SharedError {
     fn from(e: Error) -> Self {
-        Self(Arc::from(e.0))
+        Self(Arc::new(e))
     }
 }
 
@@ -490,7 +496,7 @@ impl TryFrom<SharedError> for Error {
     type Error = ();
 
     fn try_from(e: SharedError) -> std::result::Result<Self, Self::Error> {
-        Arc::try_unwrap(e.0).map(Into::into).map_err(|_| ())
+        Arc::try_unwrap(e.0).map_err(|_| ())
     }
 }
 

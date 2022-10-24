@@ -984,7 +984,7 @@ mod tests {
         assert!(queues.get_delayed_notify_id(b"k1").is_none());
         handles1
             .into_iter()
-            .for_each(|h| expect_write_conflict(&h.wait_for_result().unwrap_err().0, 5, 6));
+            .for_each(|h| expect_write_conflict(h.wait_for_result().unwrap_err().inner(), 5, 6));
         // 14 is not woken up.
         assert!(
             handles2[0]
@@ -1020,7 +1020,11 @@ mod tests {
 
         let mut it = handles2.into_iter();
         // Receive 14.
-        expect_write_conflict(&it.next().unwrap().wait_for_result().unwrap_err().0, 7, 8);
+        expect_write_conflict(
+            it.next().unwrap().wait_for_result().unwrap_err().inner(),
+            7,
+            8,
+        );
         // 15 is not woken up.
         assert!(
             it.next()
@@ -1081,7 +1085,7 @@ mod tests {
         // Current queue: [18*, 19]
         assert!(delayed_wake_up_future.await.is_none());
         // 18 will be cancelled with ts of the latest wake-up event.
-        expect_write_conflict(&handle18.wait_for_result().unwrap_err().0, 9, 10);
+        expect_write_conflict(handle18.wait_for_result().unwrap_err().inner(), 9, 10);
         // Current queue: [19]
 
         // Don't need to create new future if the queue is cleared.

@@ -2251,10 +2251,10 @@ txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, Pes
                         let (res, error) = res.into_pb();
                         resp.set_results(res.into());
                         if let Some(e) = error {
-                            if let Some(region_error) = extract_region_error_from_ref(&e) {
+                            if let Some(region_error) = extract_region_error_from_ref(&e.0) {
                                 resp.set_region_error(region_error);
                             } else {
-                                resp.set_errors(vec![extract_key_error(&e)].into());
+                                resp.set_errors(vec![extract_key_error(&e.0)].into());
                             }
                         }
                     }

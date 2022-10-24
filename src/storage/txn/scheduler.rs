@@ -1314,10 +1314,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 if lock_info.parameters.wait_timeout.is_some() {
                     assert_eq!(to_be_write.size(), 0);
                     pr = Some(ProcessResult::Res);
-                    // allow_lock_with_conflict is not supported yet in this version.
-                    assert!(!lock_info.parameters.allow_lock_with_conflict);
 
                     scheduler.on_wait_for_lock(&ctx, cid, lock_info, tracker);
+                } else {
+                    pr = Some(ProcessResult::PessimisticLockRes {
+                        res: Err(StorageError::from(Error::from(MvccError::from(
+                            MvccErrorInner::KeyIsLocked(lock_info.lock_info_pb),
+                        )))),
+                    })
                 }
             } else if tag == CommandKind::acquire_pessimistic_lock_resumed {
                 // Some requests meets lock again after waiting and resuming.

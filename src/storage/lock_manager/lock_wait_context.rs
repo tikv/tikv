@@ -22,7 +22,8 @@ use crate::storage::{
         lock_waiting_queue::{LockWaitQueues, PessimisticLockKeyCallback},
         LockManager, LockWaitToken,
     },
-    Error as StorageError, PessimisticLockKeyResult, ProcessResult, StorageCallback,
+    Error as StorageError, PessimisticLockKeyResult, PessimisticLockResults, ProcessResult,
+    StorageCallback,
 };
 
 pub struct LockWaitContextInner {
@@ -156,9 +157,19 @@ impl<L: LockManager> LockWaitContext<L> {
             return;
         }
 
-        // The following code is only valid after implementing the new lock-waiting
-        // model.
-        unreachable!();
+        let key_res = match result {
+            Ok(key_res) => {
+                assert!(!matches!(key_res, PessimisticLockKeyResult::Waiting));
+                key_res
+            }
+            Err(e) => PessimisticLockKeyResult::Failed(e),
+        };
+
+        let mut res = PessimisticLockResults::with_capacity(1);
+        res.push(key_res);
+        let pr = ProcessResult::PessimisticLockRes { res: Ok(res) };
+
+        ctx_inner.cb.execute(pr);
     }
 }
 

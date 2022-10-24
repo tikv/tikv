@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::{fmt::Formatter, sync::Arc};
+use std::fmt::Formatter;
 
 use kvproto::kvrpcpb::{Context, ExtraOp};
 use txn_types::{Key, OldValues, TimeStamp, TxnExtra};
@@ -19,7 +19,7 @@ use crate::storage::{
         Error, ErrorInner, Result,
     },
     types::{PessimisticLockKeyResult, PessimisticLockParameters, PessimisticLockResults},
-    ProcessResult, Result as StorageResult, Snapshot,
+    Error as StorageError, ProcessResult, Result as StorageResult, Snapshot,
 };
 
 pub struct ResumedPessimisticLockItem {
@@ -366,9 +366,9 @@ impl AcquirePessimisticLock {
                     encountered_locks.push(lock_info);
                 }
                 Err(e) => {
-                    res.push(PessimisticLockKeyResult::Failed(Arc::new(
-                        Error::from(e).into(),
-                    )));
+                    res.push(PessimisticLockKeyResult::Failed(
+                        StorageError::from(Error::from(e)).into(),
+                    ));
                 }
             };
         }
