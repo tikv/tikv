@@ -1029,6 +1029,9 @@ where
                 break;
             }
 
+            // TODO: if there are multiple admin commands, and the first one changes it from
+            // witness to non-witness, it would check the index and panic.
+            //
             // the applied index of witness is not continuous, skip index check
             if !self.peer.is_witness {
                 let expect_index = self.apply_state.get_applied_index() + 1;
