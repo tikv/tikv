@@ -418,12 +418,6 @@ where
     }
 
     fn can_batch(&self, cfg: &Config, req: &RaftCmdRequest, req_size: u32) -> bool {
-        // Do not batch admin request with other requests in one entry, so witness can
-        // just skip applying the entries not having admin request.
-        if req.has_admin_request() {
-            return false;
-        }
-
         // No batch request whose size exceed 20% of raft_entry_max_size,
         // so total size of request in batch_raft_request would not exceed
         // (40% + 20%) of raft_entry_max_size
