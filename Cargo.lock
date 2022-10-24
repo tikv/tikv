@@ -2672,7 +2672,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/MyonKeminta/kvproto?branch=m/lock-optimization#7e20e4a73d928b41878096ccfe9b3e6dd5ab3ab0"
+source = "git+https://github.com/MyonKeminta/kvproto?branch=m/lock-optimization#bbac8a2d154613ae4561ff673c317d98abf820c6"
 dependencies = [
  "futures 0.3.15",
  "grpcio",

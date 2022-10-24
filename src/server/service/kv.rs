@@ -2241,13 +2241,13 @@ txn_command_future!(future_prewrite, PrewriteRequest, PrewriteResponse, (v, resp
 }});
 txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, PessimisticLockResponse,
     (req) {
-        let mode = req.get_wait_lock_mode()
+        let mode = req.get_lock_waiting_mode()
     };
     (v, resp, tracker) {{
         match v {
             Ok(Ok(res)) => {
                 match mode {
-                    PessimisticWaitLockMode::LockFirst => {
+                    PessimisticLockWaitingMode::ResumeAfterWait => {
                         let (res, error) = res.into_pb();
                         resp.set_results(res.into());
                         if let Some(e) = error {
@@ -2258,10 +2258,10 @@ txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, Pes
                             }
                         }
                     }
-                    PessimisticWaitLockMode::RetryFirst => {
+                    PessimisticLockWaitingMode::RetryAfterWait => {
                         let (values, not_founds) = res.into_legacy_values_and_not_founds();
                         resp.set_values(values.into());
-                    resp.set_not_founds(not_founds);
+                        resp.set_not_founds(not_founds);
                     }
                 }
             },

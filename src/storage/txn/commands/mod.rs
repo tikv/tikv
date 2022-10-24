@@ -208,9 +208,9 @@ impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLock
             })
             .collect();
 
-        let allow_lock_with_conflict = match req.get_wait_lock_mode() {
-            PessimisticWaitLockMode::RetryFirst => false,
-            PessimisticWaitLockMode::LockFirst => true,
+        let allow_lock_with_conflict = match req.get_lock_waiting_mode() {
+            PessimisticLockWaitingMode::RetryAfterWait => false,
+            PessimisticLockWaitingMode::ResumeAfterWait => true,
         };
 
         AcquirePessimisticLock::new_normal(
