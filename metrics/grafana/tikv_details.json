@@ -19396,7 +19396,7 @@
               "hide": false,
               "interval": "",
               "intervalFactor": 2,
-              "legendFormat": "pending-compaction-bytes-{{instance}}",
+              "legendFormat": "pending-bytes-{{instance}}",
               "metric": "tikv_engine_pending_compaction_bytes",
               "refId": "B",
               "step": 10
