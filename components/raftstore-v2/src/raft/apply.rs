@@ -24,6 +24,8 @@ pub struct Apply<EK: KvEngine, R> {
 
     callbacks: Vec<(Vec<CmdResChannel>, RaftCmdResponse)>,
 
+    /// A flag indicates whether the peer is destroyed by applying admin
+    /// command.
     tombstone: bool,
     applied_index: u64,
     applied_term: u64,

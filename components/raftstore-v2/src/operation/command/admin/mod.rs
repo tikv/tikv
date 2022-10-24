@@ -21,7 +21,7 @@ use raftstore::{
 use slog::info;
 use tikv_util::box_err;
 
-use self::conf_change::ConfChange;
+use self::conf_change::ConfChangeResult;
 use crate::{
     batch::StoreContext,
     raft::{Apply, Peer},
@@ -30,7 +30,7 @@ use crate::{
 
 #[derive(Debug)]
 pub enum AdminCmdResult {
-    ConfChange(ConfChange),
+    ConfChange(ConfChangeResult),
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {

@@ -37,7 +37,7 @@ use crate::{
 
 /// The apply result of conf change.
 #[derive(Default, Debug)]
-pub struct ConfChange {
+pub struct ConfChangeResult {
     pub index: u64,
     // The proposed ConfChangeV2 or (legacy) ConfChange
     // ConfChange (if it is) will convert to ConfChangeV2
@@ -126,7 +126,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         Ok(proposal_index)
     }
 
-    pub fn on_apply_res_conf_change(&mut self, conf_change: ConfChange) {
+    pub fn on_apply_res_conf_change(&mut self, conf_change: ConfChangeResult) {
         // TODO: cancel generating snapshot.
 
         // Snapshot is applied in memory without waiting for all entries being
@@ -265,7 +265,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         }
         let mut resp = AdminResponse::default();
         resp.mut_change_peer().set_region(new_region);
-        let mut conf_change = ConfChange {
+        let mut conf_change = ConfChangeResult {
             index,
             conf_change: cc,
             changes: changes.to_vec(),
