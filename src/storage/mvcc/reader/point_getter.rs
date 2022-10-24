@@ -347,11 +347,7 @@ impl<S: Snapshot> PointGetter<S> {
             Ok(value)
         } else {
             Err(default_not_found_error(
-                user_key
-                    .clone()
-                    .append_ts(write_start_ts)
-                    .as_encoded()
-                    .to_vec(),
+                user_key.clone().append_ts(write_start_ts).into_encoded(),
                 "load_data_from_default_cf",
             ))
         }

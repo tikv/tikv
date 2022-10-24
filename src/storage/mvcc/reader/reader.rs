@@ -204,7 +204,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
                 self.statistics.data.processed_keys += 1;
                 Ok(val)
             }
-            None => Err(default_not_found_error(k.as_encoded().to_vec(), "get")),
+            None => Err(default_not_found_error(k.into_encoded(), "get")),
         }
     }
 
@@ -2164,10 +2164,7 @@ pub mod tests {
             Case {
                 // write has no short_value, the reader has a cursor, got nothing
                 expected: Err(default_not_found_error(
-                    Key::from_raw(k)
-                        .append_ts(TimeStamp::new(3))
-                        .as_encoded()
-                        .to_vec(),
+                    Key::from_raw(k).append_ts(TimeStamp::new(3)).into_encoded(),
                     "get",
                 )),
                 modifies: vec![Modify::Put(
@@ -2196,10 +2193,7 @@ pub mod tests {
             Case {
                 // write has no short_value, the reader has no cursor, got nothing
                 expected: Err(default_not_found_error(
-                    Key::from_raw(k)
-                        .append_ts(TimeStamp::new(5))
-                        .as_encoded()
-                        .to_vec(),
+                    Key::from_raw(k).append_ts(TimeStamp::new(5)).into_encoded(),
                     "get",
                 )),
                 modifies: vec![],
@@ -2261,10 +2255,7 @@ pub mod tests {
                 // todo: "some write for `key` at `ts` exists" should be checked by `test_get_write`
                 // "load data return Err" is checked by test_load_data
                 expected: Err(default_not_found_error(
-                    Key::from_raw(k)
-                        .append_ts(TimeStamp::new(2))
-                        .as_encoded()
-                        .to_vec(),
+                    Key::from_raw(k).append_ts(TimeStamp::new(2)).into_encoded(),
                     "get",
                 )),
                 modifies: vec![Modify::Put(
