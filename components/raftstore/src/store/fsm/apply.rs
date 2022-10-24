@@ -1382,12 +1382,12 @@ where
             _ => (None, None),
         };
         let old_pending_count = self.pending_delete_ssts.len() as i64;
-        let region_state = RegionState {
-            peer_id: self.id(),
-            pending_remove: self.pending_remove,
-            modified_region,
-        };
         let should_write = {
+            let region_state = RegionState {
+                peer_id: self.id(),
+                pending_remove: self.pending_remove,
+                modified_region,
+            };
             let mut apply_ctx_info = ApplyCtxInfo {
                 pending_handle_ssts: &mut pending_handle_ssts,
                 delete_ssts: &mut ctx.delete_ssts,
