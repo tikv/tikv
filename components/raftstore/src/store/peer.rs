@@ -153,7 +153,7 @@ impl<C: WriteCallback> ProposalQueue<C> {
             })
     }
 
-    fn find_propose_time(&self, term: u64, index: u64) -> Option<Timespec> {
+    pub fn find_propose_time(&self, term: u64, index: u64) -> Option<Timespec> {
         self.queue
             .binary_search_by_key(&(term, index), |p: &Proposal<_>| (p.term, p.index))
             .ok()
