@@ -1459,6 +1459,9 @@ mod tests {
     }
 
     #[test]
+    // FIXME: Either implement storage::kv traits for all engine types, or avoid using raw engines
+    // in this test.
+    #[cfg(feature = "test-engine-kv-rocksdb")]
     fn test_out_of_sync_max_ts() {
         use engine_test::kv::KvTestEngineIterator;
         use engine_traits::{IterOptions, ReadOptions};

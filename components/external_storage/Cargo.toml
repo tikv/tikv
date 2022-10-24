@@ -19,16 +19,16 @@ failpoints = ["fail/failpoints"]
 async-compression = { version = "0.3.14", features = ["futures-io", "zstd"] }
 async-trait = "0.1"
 bytes = "1.0"
-encryption = { path = "../encryption" }
-engine_traits = { path = "../engine_traits" }
+encryption = { workspace = true }
+engine_traits = { workspace = true }
 fail = "0.5"
 ffi-support = { optional = true, version = "0.4.2" }
-file_system = { path = "../file_system" }
+file_system = { workspace = true }
 futures = "0.3"
 futures-executor = "0.3"
 futures-io = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
-grpcio = { version = "0.10", optional = true, default-features = false, features = ["openssl-vendored"] }
+grpcio = { workspace = true, optional = true }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 lazy_static = "1.3"
 libloading = { optional = true, version = "0.7.0" }
@@ -40,8 +40,8 @@ rusoto_core = "0.46.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 # better to not use slog-global, but pass in the logger
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
-tikv_alloc = { path = "../tikv_alloc" }
-tikv_util = { path = "../tikv_util", default-features = false }
+tikv_alloc = { workspace = true }
+tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["time", "fs", "process"] }
 tokio-util = { version = "0.7", features = ["compat"] }
 url = "2.0"
