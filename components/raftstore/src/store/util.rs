@@ -903,7 +903,7 @@ impl RegionReadProgressRegistry {
             .lock()
             .unwrap()
             .get(region_id)
-            .map(|rp| rp.core.lock().unwrap().applied_index)
+            .map(|rp| rp.core.lock().unwrap().read_state.idx)
     }
 
     // NOTICE: this function is an alias of `get_safe_ts` to distinguish the
@@ -1029,6 +1029,16 @@ impl RegionReadProgress {
                     TimeStamp::new(ts).physical(),
                     INVALID_TIMESTAMP,
                 )
+            }
+        }
+    }
+
+    // TODO: remove it when coprocessor hook is implemented in v2.
+    pub fn update_applied_core(&self, applied: u64) {
+        let mut core = self.core.lock().unwrap();
+        if let Some(ts) = core.update_applied(applied) {
+            if !core.pause {
+                self.safe_ts.store(ts, AtomicOrdering::Release);
             }
         }
     }

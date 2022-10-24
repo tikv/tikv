@@ -178,7 +178,8 @@ where
 
         let mut err = errorpb::Error::default();
         err.set_message(format!(
-            "Fail to get snapshot from LocalReader for region {}. Maybe due to `not leader` or `not applied to the current term`",
+            "Fail to get snapshot from LocalReader for region {}. \
+            Maybe due to `not leader`, `region not found` or `not applied to the current term`",
             region_id
         ));
         let mut resp = RaftCmdResponse::default();
@@ -432,7 +433,7 @@ mod tests {
         ctor::{CfOptions, DbOptions},
         kv::{KvTestEngine, TestTabletFactoryV2},
     };
-    use engine_traits::{OpenOptions, Peekable, SyncMutable, TabletFactory, ALL_CFS};
+    use engine_traits::{MiscExt, OpenOptions, Peekable, SyncMutable, TabletFactory, ALL_CFS};
     use futures::executor::block_on;
     use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, raft_cmdpb::*};
     use raftstore::store::{
@@ -496,22 +497,28 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn test_read() {
-        // It mocks that local reader communications with raftstore.
-        // rx receives msgs like raftstore, then call f() to do something (such as renew
-        // lease or something), then send the result back to the local reader through ch
-        fn handle_msg<F: FnOnce() + Send + 'static>(
-            f: F,
-            rx: Receiver<(u64, PeerMsg)>,
-            ch_tx: SyncSender<Receiver<(u64, PeerMsg)>>,
-        ) -> JoinHandle<()> {
-            thread::spawn(move || {
-                // Msg for query will be sent
+    // It mocks that local reader communications with raftstore.
+    // mix_rx receives a closure, msg receiver, and sender of the msg receiver
+    // - closure: do some update such as renew lease or something which we could do
+    //   in real raftstore
+    // - msg receiver: receives the msg from local reader
+    // - sender of the msg receiver: send the msg receiver out of the thread so that
+    //   we can use it again.
+    fn mock_raftstore(
+        mix_rx: Receiver<(
+            Box<dyn FnOnce() + Send + 'static>,
+            Receiver<(u64, PeerMsg)>,
+            SyncSender<Receiver<(u64, PeerMsg)>>,
+        )>,
+    ) -> JoinHandle<()> {
+        thread::spawn(move || {
+            while let Ok((f, rx, ch_tx)) = mix_rx.recv() {
+                // Receives msg from local reader
                 let (_, msg) = rx.recv().unwrap();
-
                 f();
+
                 match msg {
+                    // send the result back to local reader
                     PeerMsg::RaftQuery(query) => ReadCallback::set_result(
                         query.ch,
                         QueryResult::Read(ReadResponse {
@@ -522,9 +529,12 @@ mod tests {
                     _ => unreachable!(),
                 }
                 ch_tx.send(rx).unwrap();
-            })
-        }
+            }
+        })
+    }
 
+    #[test]
+    fn test_read() {
         let store_id = 1;
 
         // Building a tablet factory
@@ -538,6 +548,8 @@ mod tests {
 
         let store_meta = Arc::new(Mutex::new(StoreMeta::new()));
         let (mut reader, mut rx) = new_reader(store_id, store_meta.clone());
+        let (mix_tx, mix_rx) = sync_channel(1);
+        let handler = mock_raftstore(mix_rx);
 
         let mut region1 = metapb::Region::default();
         region1.set_id(1);
@@ -552,7 +564,7 @@ mod tests {
         let leader2 = prs[0].clone();
         region1.set_region_epoch(epoch13.clone());
         let term6 = 6;
-        let mut lease = Lease::new(Duration::seconds(1), Duration::milliseconds(250));
+        let mut lease = Lease::new(Duration::seconds(10), Duration::milliseconds(2500));
         let read_progress = Arc::new(RegionReadProgress::new(&region1, 1, 1, "".to_owned()));
 
         let mut cmd = RaftCmdRequest::default();
@@ -622,17 +634,20 @@ mod tests {
 
         // Case: Applied term not match
         let store_meta_clone = store_meta.clone();
-        let handler = handle_msg(
-            move || {
-                let mut meta = store_meta_clone.lock().unwrap();
-                meta.readers
-                    .get_mut(&1)
-                    .unwrap()
-                    .update(ReadProgress::applied_term(term6));
-            },
-            rx,
-            ch_tx.clone(),
-        );
+        // Send what we want to do to mock raftstore
+        mix_tx
+            .send((
+                Box::new(move || {
+                    let mut meta = store_meta_clone.lock().unwrap();
+                    meta.readers
+                        .get_mut(&1)
+                        .unwrap()
+                        .update(ReadProgress::applied_term(term6));
+                }),
+                rx,
+                ch_tx.clone(),
+            ))
+            .unwrap();
         // The first try will be rejected due to unmatched applied term but after update
         // the applied term by the above thread, the snapshot will be acquired by
         // retrying.
@@ -646,23 +661,25 @@ mod tests {
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.applied_term.get()),
             1
         );
-        handler.join().unwrap();
         rx = ch_rx.recv().unwrap();
 
         // Case: Expire lease to make the local reader lease check fail.
         lease.expire_remote_lease();
         let remote = lease.maybe_new_remote_lease(term6).unwrap();
-        let handler = handle_msg(
-            move || {
-                let mut meta = store_meta.lock().unwrap();
-                meta.readers
-                    .get_mut(&1)
-                    .unwrap()
-                    .update(ReadProgress::leader_lease(remote));
-            },
-            rx,
-            ch_tx.clone(),
-        );
+        // Send what we want to do to mock raftstore
+        mix_tx
+            .send((
+                Box::new(move || {
+                    let mut meta = store_meta.lock().unwrap();
+                    meta.readers
+                        .get_mut(&1)
+                        .unwrap()
+                        .update(ReadProgress::leader_lease(remote));
+                }),
+                rx,
+                ch_tx.clone(),
+            ))
+            .unwrap();
         let snap = block_on(reader.snapshot(cmd.clone())).unwrap();
         // Updating lease makes cache miss.
         assert_eq!(
@@ -673,15 +690,13 @@ mod tests {
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.lease_expire.get()),
             1
         );
-        handler.join().unwrap();
         rx = ch_rx.recv().unwrap();
 
         // Case: Read quorum.
         let mut cmd_read_quorum = cmd.clone();
         cmd_read_quorum.mut_header().set_read_quorum(true);
-        let handler = handle_msg(|| {}, rx, ch_tx);
+        mix_tx.send((Box::new(move || {}), rx, ch_tx)).unwrap();
         let _ = block_on(reader.snapshot(cmd_read_quorum.clone())).unwrap();
-        handler.join().unwrap();
         ch_rx.recv().unwrap();
 
         // Case: Stale read
@@ -709,6 +724,9 @@ mod tests {
         assert_eq!(read_progress.safe_ts(), 2);
         let snap = block_on(reader.snapshot(cmd.clone())).unwrap();
         assert_eq!(*snap.get_region(), region1);
+
+        drop(mix_tx);
+        handler.join().unwrap();
     }
 
     #[test]
@@ -758,7 +776,7 @@ mod tests {
         let (_, delegate) = store_meta.get_executor_and_len(1);
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
-        assert_eq!(tablet1.as_inner().path(), tablet.as_inner().path());
+        assert_eq!(tablet1.path(), tablet.path());
         let snapshot = delegate.get_snapshot(&None);
         assert_eq!(
             b"val1".to_vec(),
@@ -768,7 +786,7 @@ mod tests {
         let (_, delegate) = store_meta.get_executor_and_len(2);
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
-        assert_eq!(tablet2.as_inner().path(), tablet.as_inner().path());
+        assert_eq!(tablet2.path(), tablet.path());
         let snapshot = delegate.get_snapshot(&None);
         assert_eq!(
             b"val2".to_vec(),
