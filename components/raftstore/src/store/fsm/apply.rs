@@ -9,6 +9,7 @@ use std::{
     cmp::{Ord, Ordering as CmpOrdering},
     collections::VecDeque,
     fmt::{self, Debug, Formatter},
+    io::BufRead,
     mem,
     ops::{Deref, DerefMut, Range as StdRange},
     sync::{
@@ -45,6 +46,7 @@ use kvproto::{
 };
 use pd_client::{new_bucket_stats, BucketMeta, BucketStat};
 use prometheus::local::LocalHistogram;
+use protobuf::{wire_format::WireType, CodedInputStream};
 use raft::eraftpb::{
     ConfChange, ConfChangeType, ConfChangeV2, Entry, EntryType, Snapshot as RaftSnapshot,
 };
@@ -814,6 +816,43 @@ fn should_sync_log(cmd: &RaftCmdRequest) -> bool {
     false
 }
 
+fn can_witness_skip(entry: &Entry) -> bool {
+    // need to handle ConfChange entry type
+    if entry.get_entry_type() != EntryType::EntryNormal {
+        return false;
+    }
+
+    // HACK: check admin request field in serialized data from `RaftCmdRequest`
+    // without deserializing all. It's done by checking the existence of the
+    // field number of `admin_request`.
+    // See the encoding in `write_to_with_cached_sizes()` of `RaftCmdRequest` in
+    // `raft_cmdpb.rs` for reference.
+    let mut is = CodedInputStream::from_bytes(entry.get_data());
+    if is.eof().unwrap() {
+        return true;
+    }
+    let (mut field_number, wire_type) = is.read_tag_unpack().unwrap();
+    // Header field is of number 1
+    if field_number == 1 {
+        if wire_type != WireType::WireTypeLengthDelimited {
+            panic!("unexpected wire type");
+        }
+        let len = is.read_raw_varint32().unwrap();
+        // skip parsing the content of `Header`
+        is.consume(len as usize);
+        // read next field number
+        (field_number, _) = is.read_tag_unpack().unwrap();
+    }
+
+    // `Requests` field is of number 2 and `AdminRequest` field is of number 3.
+    // - If the next field is 2, there must be no admin request as in one
+    //   `RaftCmdRequest`, either requests or admin_request is filled.
+    // - If the next field is 3, it's exactly an admin request.
+    // - If the next field is others, neither requests nor admin_request is filled,
+    //   so there is no admin request.
+    field_number != 3
+}
+
 /// A struct that stores the state related to Merge.
 ///
 /// When executing a `CommitMerge`, the source peer may have not applied
@@ -1029,21 +1068,15 @@ where
                 break;
             }
 
-            // TODO: if there are multiple admin commands, and the first one changes it from
-            // witness to non-witness, it would check the index and panic.
-            //
-            // the applied index of witness is not continuous, skip index check
-            if !self.peer.is_witness {
-                let expect_index = self.apply_state.get_applied_index() + 1;
-                if expect_index != entry.get_index() {
-                    panic!(
-                        "{} expect index {}, but got {}, ctx {}",
-                        self.tag,
-                        expect_index,
-                        entry.get_index(),
-                        apply_ctx.tag,
-                    );
-                }
+            let expect_index = self.apply_state.get_applied_index() + 1;
+            if expect_index != entry.get_index() {
+                panic!(
+                    "{} expect index {}, but got {}, ctx {}",
+                    self.tag,
+                    expect_index,
+                    entry.get_index(),
+                    apply_ctx.tag,
+                );
             }
 
             // NOTE: before v5.0, `EntryType::EntryConfChangeV2` entry is handled by
@@ -1122,7 +1155,7 @@ where
         let term = entry.get_term();
         let data = entry.get_data();
 
-        if !data.is_empty() {
+        if (self.peer.is_witness && !can_witness_skip(entry)) || !data.is_empty() {
             let cmd = util::parse_data_at(data, index, &self.tag);
 
             if apply_ctx.yield_high_latency_operation && has_high_latency_operation(&cmd) {
@@ -3083,11 +3116,6 @@ pub struct Apply<C> {
     pub entries_size: usize,
     pub cbs: Vec<Proposal<C>>,
     pub bucket_meta: Option<Arc<BucketMeta>>,
-    // Used for witness, as witness would skip applying write commands, so the applied index in the
-    // apply fsm is not updated in time. Some admin commands would check the current applied index,
-    // such as `CompactLog`. So pass it to the apply fsm to override applied index at begin to
-    // avoid unexpected failure.
-    pub last_applied_state: Option<(u64, u64)>, // (applied_index, applied_term)
 }
 
 impl<C: WriteCallback> Apply<C> {
@@ -3100,7 +3128,6 @@ impl<C: WriteCallback> Apply<C> {
         entries: Vec<Entry>,
         cbs: Vec<Proposal<C>>,
         buckets: Option<Arc<BucketMeta>>,
-        last_applied_state: Option<(u64, u64)>,
     ) -> Apply<C> {
         let mut entries_size = 0;
         for e in &entries {
@@ -3117,7 +3144,6 @@ impl<C: WriteCallback> Apply<C> {
             entries_size,
             cbs,
             bucket_meta: buckets,
-            last_applied_state,
         }
     }
 
@@ -3539,12 +3565,6 @@ where
 
         if self.delegate.pending_remove || self.delegate.stopped {
             return;
-        }
-
-        if let Some((idx, term)) = apply.last_applied_state.take() {
-            // override the applied index for witness, see more in the comment of `Apply`
-            self.delegate.apply_state.set_applied_index(idx);
-            self.delegate.applied_term = term;
         }
 
         let mut entries = Vec::new();
@@ -4635,6 +4655,47 @@ mod tests {
         }
     }
 
+    use raft::eraftpb::{ConfChange, ConfChangeV2};
+
+    use super::*;
+    use crate::store::{msg::ExtCallback, util::u64_to_timespec};
+
+    #[test]
+    fn test_can_witness_skip() {
+        let mut entry = Entry::new();
+        let mut req = RaftCmdRequest::default();
+        entry.set_entry_type(EntryType::EntryNormal);
+        let data = req.write_to_bytes().unwrap();
+        entry.set_data(Bytes::copy_from_slice(&data));
+        assert!(can_witness_skip(&entry));
+
+        req.mut_admin_request()
+            .set_cmd_type(AdminCmdType::CompactLog);
+        let data = req.write_to_bytes().unwrap();
+        entry.set_data(Bytes::copy_from_slice(&data));
+        assert!(!can_witness_skip(&entry));
+
+        let mut req = RaftCmdRequest::default();
+        let mut request = raft_cmdpb::Request::default();
+        request.set_cmd_type(CmdType::Put);
+        req.set_requests(vec![request].into());
+        let data = req.write_to_bytes().unwrap();
+        entry.set_data(Bytes::copy_from_slice(&data));
+        assert!(can_witness_skip(&entry));
+
+        entry.set_entry_type(EntryType::EntryConfChange);
+        let conf_change = ConfChange::new();
+        let data = conf_change.write_to_bytes().unwrap();
+        entry.set_data(Bytes::copy_from_slice(&data));
+        assert!(!can_witness_skip(&entry));
+
+        entry.set_entry_type(EntryType::EntryConfChangeV2);
+        let conf_change_v2 = ConfChangeV2::new();
+        let data = conf_change_v2.write_to_bytes().unwrap();
+        entry.set_data(Bytes::copy_from_slice(&data));
+        assert!(!can_witness_skip(&entry));
+    }
+
     #[test]
     fn test_should_sync_log() {
         // Admin command
@@ -4797,7 +4858,6 @@ mod tests {
             commit_term,
             entries,
             cbs,
-            None,
             None,
         )
     }

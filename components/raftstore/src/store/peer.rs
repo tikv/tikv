@@ -5,9 +5,7 @@ use std::{
     cell::RefCell,
     cmp,
     collections::VecDeque,
-    fmt,
-    io::BufRead,
-    mem,
+    fmt, mem,
     sync::{
         atomic::{AtomicUsize, Ordering},
         mpsc::SyncSender,
@@ -46,7 +44,7 @@ use kvproto::{
 };
 use parking_lot::RwLockUpgradableReadGuard;
 use pd_client::{BucketStat, INVALID_ID};
-use protobuf::{wire_format::WireType, CodedInputStream, Message};
+use protobuf::Message;
 use raft::{
     self,
     eraftpb::{self, ConfChangeType, Entry, EntryType, MessageType},
@@ -94,7 +92,7 @@ use crate::{
         fsm::{
             apply::{self, CatchUpLogs},
             store::{PollContext, RaftRouter},
-            Apply, ApplyMetrics, ApplyRes, ApplyTask, ApplyTaskRes, Proposal,
+            Apply, ApplyMetrics, ApplyTask, Proposal,
         },
         hibernate_state::GroupState,
         memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES},
@@ -231,43 +229,6 @@ impl<C: WriteCallback> ProposalQueue<C> {
     fn back(&self) -> Option<&Proposal<C>> {
         self.queue.back()
     }
-}
-
-fn can_witness_skip(entry: &Entry) -> bool {
-    // need to handle ConfChange entry type
-    if entry.get_entry_type() != EntryType::EntryNormal {
-        return false;
-    }
-
-    // HACK: check admin request field in serialized data from `RaftCmdRequest`
-    // without deserializing all. It's done by checking the existence of the
-    // field number of `admin_request`.
-    // See the encoding in `write_to_with_cached_sizes()` of `RaftCmdRequest` in
-    // `raft_cmdpb.rs` for reference.
-    let mut is = CodedInputStream::from_bytes(entry.get_data());
-    if is.eof().unwrap() {
-        return true;
-    }
-    let (mut field_number, wire_type) = is.read_tag_unpack().unwrap();
-    // Header field is of number 1
-    if field_number == 1 {
-        if wire_type != WireType::WireTypeLengthDelimited {
-            panic!("unexpected wire type");
-        }
-        let len = is.read_raw_varint32().unwrap();
-        // skip parsing the content of `Header`
-        is.consume(len as usize);
-        // read next field number
-        (field_number, _) = is.read_tag_unpack().unwrap();
-    }
-
-    // `Requests` field is of number 2 and `AdminRequest` field is of number 3.
-    // - If the next field is 2, there must be no admin request as in one
-    //   `RaftCmdRequest`, either requests or admin_request is filled.
-    // - If the next field is 3, it's exactly an admin request.
-    // - If the next field is others, neither requests nor admin_request is filled,
-    //   so there is no admin request.
-    field_number != 3
 }
 
 bitflags! {
@@ -977,8 +938,6 @@ where
     pub pending_request_snapshot_count: Arc<AtomicUsize>,
     /// The index of last scheduled committed raft log.
     pub last_applying_idx: u64,
-    /// The term of last applying idx.
-    pub last_applying_term: u64,
     /// The index of last compacted raft log. It is used for the next compact
     /// log task.
     pub last_compacted_idx: u64,
@@ -1108,7 +1067,6 @@ where
             tag.clone(),
         )?;
         let applied_index = ps.applied_index();
-        let applied_term = ps.applied_term();
 
         let raft_cfg = raft::Config {
             id: peer.get_id(),
@@ -1163,7 +1121,6 @@ where
             leader_missing_time: Some(Instant::now()),
             tag: tag.clone(),
             last_applying_idx: applied_index,
-            last_applying_term: applied_term,
             last_compacted_idx: 0,
             last_urgent_proposal_idx: u64::MAX,
             last_committed_split_idx: 0,
@@ -2567,7 +2524,6 @@ where
 
                     // Snapshot has been applied.
                     self.last_applying_idx = self.get_store().truncated_index();
-                    self.last_applying_term = self.get_store().truncated_term();
                     self.last_compacted_idx = self.last_applying_idx + 1;
                     self.raft_group.advance_apply_to(self.last_applying_idx);
                     self.cmd_epoch_checker.advance_apply(
@@ -2958,7 +2914,7 @@ where
     fn handle_raft_committed_entries<T>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
-        mut committed_entries: Vec<Entry>,
+        committed_entries: Vec<Entry>,
     ) {
         if committed_entries.is_empty() {
             return;
@@ -3009,13 +2965,7 @@ where
             );
         }
         if let Some(last_entry) = committed_entries.last() {
-            let prev_applying_state = if self.is_witness() {
-                Some((self.last_applying_idx, self.last_applying_term))
-            } else {
-                None
-            };
             self.last_applying_idx = last_entry.get_index();
-            self.last_applying_term = last_entry.get_term();
             if self.last_applying_idx >= self.last_urgent_proposal_idx {
                 // Urgent requests are flushed, make it lazy again.
                 self.raft_group.skip_bcast_commit(true);
@@ -3044,21 +2994,6 @@ where
                 vec![]
             };
 
-            if self.is_witness() {
-                committed_entries.retain(|e| !can_witness_skip(e));
-                if committed_entries.is_empty() {
-                    // FIXME: apply index should be advanced in time
-                    return;
-                } else if committed_entries.last().unwrap().get_index() != self.last_applying_idx {
-                    // append a fake entry to update the apply index if the last entry is skipped
-                    let mut e = Entry::default();
-                    e.set_index(self.last_applying_idx);
-                    e.set_term(self.last_applying_term);
-                    e.set_entry_type(EntryType::EntryNormal);
-                    committed_entries.push(e);
-                }
-            }
-
             // Note that the `commit_index` and `commit_term` here may be used to
             // forward the commit index. So it must be less than or equal to persist
             // index.
@@ -3077,7 +3012,6 @@ where
                 committed_entries,
                 cbs,
                 self.region_buckets.as_ref().map(|b| b.meta.clone()),
-                prev_applying_state,
             );
             apply.on_schedule(&ctx.raft_metrics);
             self.mut_store()
@@ -5867,42 +5801,6 @@ mod tests {
 
     use super::*;
     use crate::store::{msg::ExtCallback, util::u64_to_timespec};
-
-    #[test]
-    fn test_can_witness_skip() {
-        let mut entry = Entry::new();
-        let mut req = RaftCmdRequest::default();
-        entry.set_entry_type(EntryType::EntryNormal);
-        let data = req.write_to_bytes().unwrap();
-        entry.set_data(Bytes::copy_from_slice(&data));
-        assert!(can_witness_skip(&entry));
-
-        req.mut_admin_request()
-            .set_cmd_type(AdminCmdType::CompactLog);
-        let data = req.write_to_bytes().unwrap();
-        entry.set_data(Bytes::copy_from_slice(&data));
-        assert!(!can_witness_skip(&entry));
-
-        let mut req = RaftCmdRequest::default();
-        let mut request = raft_cmdpb::Request::default();
-        request.set_cmd_type(CmdType::Put);
-        req.set_requests(vec![request].into());
-        let data = req.write_to_bytes().unwrap();
-        entry.set_data(Bytes::copy_from_slice(&data));
-        assert!(can_witness_skip(&entry));
-
-        entry.set_entry_type(EntryType::EntryConfChange);
-        let conf_change = ConfChange::new();
-        let data = conf_change.write_to_bytes().unwrap();
-        entry.set_data(Bytes::copy_from_slice(&data));
-        assert!(!can_witness_skip(&entry));
-
-        entry.set_entry_type(EntryType::EntryConfChangeV2);
-        let conf_change_v2 = ConfChangeV2::new();
-        let data = conf_change_v2.write_to_bytes().unwrap();
-        entry.set_data(Bytes::copy_from_slice(&data));
-        assert!(!can_witness_skip(&entry));
-    }
 
     #[test]
     fn test_sync_log() {
