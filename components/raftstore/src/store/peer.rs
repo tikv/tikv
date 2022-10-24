@@ -3047,25 +3047,7 @@ where
             if self.is_witness() {
                 committed_entries.retain(|e| !can_witness_skip(e));
                 if committed_entries.is_empty() {
-                    // send a fake apply result to update apply state
-                    let mut apply_state = self.get_store().apply_state().clone();
-                    apply_state.set_applied_index(self.last_applying_idx);
-                    ctx.router
-                        .force_send(
-                            self.region_id,
-                            PeerMsg::ApplyRes {
-                                res: ApplyTaskRes::Apply(ApplyRes {
-                                    region_id: self.region_id,
-                                    apply_state,
-                                    applied_term: self.last_applying_term,
-                                    exec_res: Default::default(),
-                                    metrics: Default::default(),
-                                    bucket_stat: None,
-                                    write_seqno: vec![],
-                                }),
-                            },
-                        )
-                        .unwrap();
+                    // FIXME: apply index should be advanced in time
                     return;
                 } else if committed_entries.last().unwrap().get_index() != self.last_applying_idx {
                     // append a fake entry to update the apply index if the last entry is skipped
