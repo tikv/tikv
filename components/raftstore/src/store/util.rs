@@ -1211,11 +1211,11 @@ impl RegionReadProgress {
     }
 
     // Dump the `LeaderInfo` and the peer list
-    pub fn dump_leader_info(&self) -> (Vec<Peer>, LeaderInfo) {
+    pub fn dump_leader_info(&self) -> (LeaderInfo, Option<u64>) {
         let core = self.core.lock().unwrap();
         (
-            core.get_local_leader_info().peers.clone(),
             core.get_leader_info(),
+            core.get_local_leader_info().leader_store_id.clone(),
         )
     }
 
@@ -1227,6 +1227,8 @@ impl RegionReadProgress {
             core.leader_info.epoch = region.get_region_epoch().clone();
             core.leader_info.peers = region.get_peers().to_vec();
         }
+        core.leader_info.leader_store_id =
+            find_store_id(&core.leader_info.peers, core.leader_info.leader_id)
     }
 
     /// Reset `safe_ts` to 0 and stop updating it
@@ -1304,6 +1306,7 @@ pub struct ReadState {
 pub struct LocalLeaderInfo {
     leader_id: u64,
     leader_term: u64,
+    leader_store_id: Option<u64>,
     epoch: RegionEpoch,
     peers: Vec<Peer>,
 }
@@ -1313,6 +1316,7 @@ impl LocalLeaderInfo {
         LocalLeaderInfo {
             leader_id: raft::INVALID_ID,
             leader_term: 0,
+            leader_store_id: None,
             epoch: region.get_region_epoch().clone(),
             peers: region.get_peers().to_vec(),
         }
@@ -1325,6 +1329,19 @@ impl LocalLeaderInfo {
     pub fn get_leader_id(&self) -> u64 {
         self.leader_id
     }
+
+    pub fn get_leader_store_id(&self) -> Option<u64> {
+        self.leader_store_id
+    }
+}
+
+fn find_store_id(peer_list: &[Peer], peer_id: u64) -> Option<u64> {
+    for peer in peer_list {
+        if peer.id == peer_id {
+            return Some(peer.store_id);
+        }
+    }
+    None
 }
 
 impl RegionReadProgressCore {
@@ -1440,7 +1457,6 @@ impl RegionReadProgressCore {
     }
 
     pub fn get_leader_info(&self) -> LeaderInfo {
-        let mut leader_info = LeaderInfo::default();
         let read_state = {
             // Get the latest `read_state`
             let ReadState { idx, ts } = self.pending_items.back().unwrap_or(&self.read_state);
@@ -1450,12 +1466,15 @@ impl RegionReadProgressCore {
             rs
         };
         let li = &self.leader_info;
-        leader_info.set_peer_id(li.leader_id);
-        leader_info.set_term(li.leader_term);
-        leader_info.set_region_id(self.region_id);
-        leader_info.set_region_epoch(li.epoch.clone());
-        leader_info.set_read_state(read_state);
-        leader_info
+        LeaderInfo {
+            peer_id: li.leader_id,
+            region_id: self.region_id,
+            term: li.leader_term,
+            region_epoch: protobuf::SingularPtrField::some(li.epoch.clone()),
+            read_state: protobuf::SingularPtrField::some(read_state),
+            unknown_fields: protobuf::UnknownFields::default(),
+            cached_size: protobuf::CachedSize::default(),
+        }
     }
 
     pub fn get_local_leader_info(&self) -> &LocalLeaderInfo {
