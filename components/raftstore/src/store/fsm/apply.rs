@@ -2201,11 +2201,10 @@ where
                     let (role, exist_id, incoming_id) =
                         (exist_peer.get_role(), exist_peer.get_id(), peer.get_id());
 
-                    let is_witness_change = exist_peer.is_witness != peer.is_witness;
                     if exist_id != incoming_id // Add peer with different id to the same store
                             // The peer is already the requested role
-                            || ((role, change_type) == (PeerRole::Voter, ConfChangeType::AddNode) && !is_witness_change)
-                            || ((role, change_type) == (PeerRole::Learner, ConfChangeType::AddLearnerNode) && !is_witness_change)
+                            || (role, change_type) == (PeerRole::Voter, ConfChangeType::AddNode)
+                            || (role, change_type) == (PeerRole::Learner, ConfChangeType::AddLearnerNode)
                     {
                         error!(
                             "can't add duplicated peer";
@@ -2223,24 +2222,6 @@ where
                             exist_peer
                         ));
                     }
-
-                    if exist_peer.is_witness && !peer.is_witness {
-                        error!(
-                            "can't promote witness peer to non-witness peer directly";
-                            "region_id" => self.region_id(),
-                            "peer_id" => self.id(),
-                            "peer" => ?peer,
-                            "region" => ?&self.region
-                        );
-                        return Err(box_err!(
-                            "can't promote witness peer {:?} to non-witness peer in region {:?}",
-                            exist_peer,
-                            self.region
-                        ));
-                    } else if !exist_peer.is_witness && peer.is_witness {
-                        exist_peer.set_is_witness(true);
-                    }
-
                     match (role, change_type) {
                         (PeerRole::Voter, ConfChangeType::AddLearnerNode) => match kind {
                             ConfChangeKind::Simple => exist_peer.set_role(PeerRole::Learner),
@@ -2256,8 +2237,7 @@ where
                             }
                             _ => unreachable!(),
                         },
-                        // possible case for converting to witness, do nothing
-                        _ => {}
+                        _ => unreachable!(),
                     }
                 }
                 // Remove node

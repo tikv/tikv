@@ -2949,6 +2949,15 @@ where
         if snap.get_metadata().get_index() < self.fsm.peer.get_store().applied_index()
             && snap_data.get_meta().get_for_witness() != self.fsm.peer.is_witness()
         {
+            info!(
+                "mismatch witness snapshot";
+                "region_id" => region_id,
+                "peer_id" => self.fsm.peer_id(),
+                "for_witness" => snap_data.get_meta().get_for_witness(),
+                "is_witness" => self.fsm.peer.is_witness(),
+                "index" => snap.get_metadata().get_index(),
+                "applied_index" => self.fsm.peer.get_store().applied_index(),
+            );
             self.ctx
                 .raft_metrics
                 .message_dropped
@@ -3647,7 +3656,6 @@ where
             // test_redundant_conf_change_by_snapshot.
         }
 
-        let prev_peer_is_witness = self.fsm.peer.is_witness();
         self.update_region(cp.region);
 
         fail_point!("change_peer_after_update_region");
@@ -3659,27 +3667,6 @@ where
             let (store_id, peer_id) = (peer.get_store_id(), peer.get_id());
             match change_type {
                 ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
-                    if peer_id == self.fsm.peer_id() {
-                        match (prev_peer_is_witness, peer.is_witness) {
-                            (false, true) => {
-                                // If the previous peer is not witness, but the new peer is witness,
-                                // we need to cleanup the kv data of this region
-                                let _ = self.fsm.peer.get_store().clear_data();
-                                // witness has lower election priority
-                                self.fsm.peer.raft_group.set_priority(0);
-                            }
-                            (true, false) => {
-                                self.fsm.peer.raft_group.set_priority(1);
-                                // TODO: support witness -> nonwitness conf change
-                                panic!(
-                                    "{} is witness, but the new peer is not witness",
-                                    self.fsm.peer.tag
-                                );
-                            }
-                            _ => {}
-                        }
-                    }
-
                     let group_id = self
                         .ctx
                         .global_replication_state

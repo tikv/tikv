@@ -48,12 +48,15 @@ fn test_witness_leader_down() {
     let peer_on_store1 = find_peer(&region, nodes[0]).unwrap().clone();
     cluster.must_transfer_leader(region.get_id(), peer_on_store1);
 
-    let mut peer_on_store2 = find_peer(&region, nodes[1]).unwrap().clone();
+    let region_id = region.get_id();
+    let mut peer = find_peer(&region, nodes[1]).unwrap().clone();
     // nonwitness -> witness
-    peer_on_store2.set_is_witness(true);
-    cluster
-        .pd_client
-        .add_peer(region.get_id(), peer_on_store2.clone());
+    peer.set_role(metapb::PeerRole::Learner);
+    cluster.pd_client.must_add_peer(region_id, peer.clone());
+    cluster.pd_client.must_remove_peer(region_id, peer.clone());
+    peer.set_role(metapb::PeerRole::Voter);
+    peer.set_is_witness(true);
+    cluster.pd_client.must_add_peer(region_id, peer);
 
     // the other follower is isolated
     cluster.add_send_filter(IsolationFilterFactory::new(3));
