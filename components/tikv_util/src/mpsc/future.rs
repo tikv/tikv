@@ -213,6 +213,8 @@ where
         for _ in 1..ctx.max_batch_size {
             if let Poll::Ready(Some(m)) = ctx.rx.poll_next_unpin(cx) {
                 (ctx.collector)(&mut collector, m);
+            } else {
+                break;
             }
         }
         Poll::Ready(Some(collector))

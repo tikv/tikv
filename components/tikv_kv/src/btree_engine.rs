@@ -103,7 +103,7 @@ impl Engine for BTreeEngine {
     /// warning: It returns a fake snapshot whose content will be affected by
     /// the later modifies!
     fn async_snapshot(
-        &self,
+        &mut self,
         _ctx: SnapContext<'_>,
         cb: EngineCallback<Self::Snap>,
     ) -> EngineResult<()> {
@@ -307,25 +307,25 @@ pub mod tests {
 
     #[test]
     fn test_btree_engine() {
-        let engine = BTreeEngine::new(TEST_ENGINE_CFS);
-        test_base_curd_options(&engine)
+        let mut engine = BTreeEngine::new(TEST_ENGINE_CFS);
+        test_base_curd_options(&mut engine)
     }
 
     #[test]
     fn test_linear_of_btree_engine() {
-        let engine = BTreeEngine::default();
-        test_linear(&engine);
+        let mut engine = BTreeEngine::default();
+        test_linear(&mut engine);
     }
 
     #[test]
     fn test_statistic_of_btree_engine() {
-        let engine = BTreeEngine::default();
-        test_cfs_statistics(&engine);
+        let mut engine = BTreeEngine::default();
+        test_cfs_statistics(&mut engine);
     }
 
     #[test]
     fn test_bounds_of_btree_engine() {
-        let engine = BTreeEngine::default();
+        let mut engine = BTreeEngine::default();
         let test_data = vec![
             (b"a1".to_vec(), b"v1".to_vec()),
             (b"a3".to_vec(), b"v3".to_vec()),

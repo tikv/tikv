@@ -430,9 +430,9 @@ mod tests {
 
     use engine_traits::Iterable;
     use kvproto::encryptionpb;
-    use raftstore::store::util::new_peer;
     use tempfile::TempDir;
     use tikv::storage::TestEngineBuilder;
+    use tikv_util::store::new_peer;
     use txn_types::OldValue;
 
     use super::*;

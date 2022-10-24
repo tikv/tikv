@@ -2,12 +2,12 @@
 
 //! ## The algorithm to make the TSO cache tolerate failure of TSO service
 //!
-//! 1. The scale of High-Available is specified by config item
-//! `causal-ts.available-interval`.
+//! 1. The expected total size (in duration) of TSO cache is specified by
+//! config item `causal-ts.alloc-ahead-buffer`.
 //!
 //! 2. Count usage of TSO on every renew interval.
 //!
-//! 3. Calculate `cache_multiplier` by `causal-ts.available-interval /
+//! 3. Calculate `cache_multiplier` by `causal-ts.alloc-ahead-buffer /
 //! causal-ts.renew-interval`.
 //!
 //! 4. Then `tso_usage x cache_multiplier` is the expected number of TSO should
@@ -30,6 +30,8 @@ use std::{
     },
 };
 
+use async_trait::async_trait;
+#[cfg(test)]
 use futures::executor::block_on;
 use parking_lot::RwLock;
 use pd_client::PdClient;
@@ -65,9 +67,9 @@ pub(crate) const DEFAULT_TSO_BATCH_MAX_SIZE: u32 = 8192;
 /// of PD. The longer of the value can provide better "High-Availability"
 /// against PD failure, but more overhead of `TsoBatchList` & pressure to TSO
 /// service.
-pub(crate) const DEFAULT_TSO_BATCH_AVAILABLE_INTERVAL_MS: u64 = 3000;
+pub(crate) const DEFAULT_TSO_BATCH_ALLOC_AHEAD_BUFFER_MS: u64 = 3000;
 /// Just a limitation for safety, in case user specify a too big
-/// `available_interval`.
+/// `alloc_ahead_buffer`.
 const MAX_TSO_BATCH_LIST_CAPACITY: u32 = 1024;
 
 /// TSO range: [(physical, logical_start), (physical, logical_end))
@@ -324,7 +326,7 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
         Self::new_opt(
             pd_client,
             Duration::from_millis(DEFAULT_TSO_BATCH_RENEW_INTERVAL_MS),
-            Duration::from_millis(DEFAULT_TSO_BATCH_AVAILABLE_INTERVAL_MS),
+            Duration::from_millis(DEFAULT_TSO_BATCH_ALLOC_AHEAD_BUFFER_MS),
             DEFAULT_TSO_BATCH_MIN_SIZE,
             DEFAULT_TSO_BATCH_MAX_SIZE,
         )
@@ -332,23 +334,23 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
     }
 
     #[allow(unused_mut)]
-    fn calc_cache_multiplier(mut renew_interval: Duration, available_interval: Duration) -> u32 {
+    fn calc_cache_multiplier(mut renew_interval: Duration, alloc_ahead: Duration) -> u32 {
         #[cfg(any(test, feature = "testexport"))]
         if renew_interval.is_zero() {
             // Should happen in test only.
             renew_interval = Duration::from_millis(DEFAULT_TSO_BATCH_RENEW_INTERVAL_MS);
         }
-        available_interval.div_duration_f64(renew_interval).ceil() as u32
+        alloc_ahead.div_duration_f64(renew_interval).ceil() as u32
     }
 
     pub async fn new_opt(
         pd_client: Arc<C>,
         renew_interval: Duration,
-        available_interval: Duration,
+        alloc_ahead: Duration,
         batch_min_size: u32,
         batch_max_size: u32,
     ) -> Result<Self> {
-        let cache_multiplier = Self::calc_cache_multiplier(renew_interval, available_interval);
+        let cache_multiplier = Self::calc_cache_multiplier(renew_interval, alloc_ahead);
         let renew_parameter = RenewParameter {
             batch_min_size,
             batch_max_size,
@@ -560,13 +562,24 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
     pub fn tso_usage(&self) -> u32 {
         self.batch_list.usage()
     }
+
+    #[cfg(test)]
+    pub fn get_ts(&self) -> Result<TimeStamp> {
+        block_on(self.async_get_ts())
+    }
+
+    #[cfg(test)]
+    pub fn flush(&self) -> Result<TimeStamp> {
+        block_on(self.async_flush())
+    }
 }
 
 const GET_TS_MAX_RETRY: u32 = 3;
 
+#[async_trait]
 impl<C: PdClient + 'static> CausalTsProvider for BatchTsoProvider<C> {
     // TODO: support `after_ts` argument.
-    fn get_ts(&self) -> Result<TimeStamp> {
+    async fn async_get_ts(&self) -> Result<TimeStamp> {
         let start = Instant::now();
         let mut retries = 0;
         let mut last_batch_size: u32;
@@ -590,7 +603,10 @@ impl<C: PdClient + 'static> CausalTsProvider for BatchTsoProvider<C> {
             if retries >= GET_TS_MAX_RETRY {
                 break;
             }
-            if let Err(err) = block_on(self.renew_tso_batch(false, TsoBatchRenewReason::used_up)) {
+            if let Err(err) = self
+                .renew_tso_batch(false, TsoBatchRenewReason::used_up)
+                .await
+            {
                 // `renew_tso_batch` failure is likely to be caused by TSO timeout, which would
                 // mean that PD is quite busy. So do not retry any more.
                 error!("BatchTsoProvider::get_ts, renew_tso_batch fail on batch used-up"; "err" => ?err);
@@ -605,9 +621,11 @@ impl<C: PdClient + 'static> CausalTsProvider for BatchTsoProvider<C> {
         Err(Error::TsoBatchUsedUp(last_batch_size))
     }
 
-    // TODO: provide asynchronous method
-    fn flush(&self) -> Result<()> {
-        block_on(self.renew_tso_batch(true, TsoBatchRenewReason::flush))
+    async fn async_flush(&self) -> Result<TimeStamp> {
+        self.renew_tso_batch(true, TsoBatchRenewReason::flush)
+            .await?;
+        // TODO: Return the first tso by renew_tso_batch instead of async_get_ts
+        self.async_get_ts().await
     }
 }
 
@@ -623,16 +641,22 @@ impl SimpleTsoProvider {
     }
 }
 
+#[async_trait]
 impl CausalTsProvider for SimpleTsoProvider {
-    fn get_ts(&self) -> Result<TimeStamp> {
-        let ts = block_on(self.pd_client.get_tso())?;
+    async fn async_get_ts(&self) -> Result<TimeStamp> {
+        let ts = self.pd_client.get_tso().await?;
         debug!("SimpleTsoProvider::get_ts"; "ts" => ?ts);
         Ok(ts)
+    }
+
+    async fn async_flush(&self) -> Result<TimeStamp> {
+        self.async_get_ts().await
     }
 }
 
 #[cfg(test)]
 pub mod tests {
+    use futures::executor::block_on;
     use test_pd_client::TestPdClient;
 
     use super::*;
@@ -849,7 +873,7 @@ pub mod tests {
         let provider = SimpleTsoProvider::new(pd_cli.clone());
 
         pd_cli.set_tso(100.into());
-        let ts = provider.get_ts().unwrap();
+        let ts = block_on(provider.async_get_ts()).unwrap();
         assert_eq!(ts, 101.into(), "ts: {:?}", ts);
     }
 
@@ -877,12 +901,12 @@ pub mod tests {
         assert_eq!(provider.tso_remain(), 90);
         assert_eq!(provider.tso_usage(), 10);
 
-        provider.flush().unwrap(); // allocated: [1101, 1200]
-        assert_eq!(provider.tso_remain(), 100);
-        assert_eq!(provider.tso_usage(), 0);
+        assert_eq!(provider.flush().unwrap(), TimeStamp::from(1101)); // allocated: [1101, 1200]
+        assert_eq!(provider.tso_remain(), 99);
+        assert_eq!(provider.tso_usage(), 1);
         // used up
         pd_cli.trigger_tso_failure(); // make renew fail to verify used-up
-        for ts in 1101..=1200u64 {
+        for ts in 1102..=1200u64 {
             assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
         }
         assert_eq!(provider.tso_remain(), 0);
@@ -891,8 +915,8 @@ pub mod tests {
         assert_eq!(provider.tso_remain(), 0);
         assert_eq!(provider.tso_usage(), 100);
 
-        provider.flush().unwrap(); // allocated: [1201, 2200]
-        for ts in 1201..=1260u64 {
+        assert_eq!(provider.flush().unwrap(), TimeStamp::from(1201)); // allocated: [1201, 2200]
+        for ts in 1202..=1260u64 {
             assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
         }
         assert_eq!(provider.tso_remain(), 940);
@@ -970,9 +994,9 @@ pub mod tests {
         pd_cli.trigger_tso_failure();
         provider.flush().unwrap_err();
 
-        provider.flush().unwrap(); // allocated: [1301, 3300]
+        assert_eq!(provider.flush().unwrap(), TimeStamp::from(1301)); // allocated: [1301, 3300]
         pd_cli.trigger_tso_failure(); // make renew fail to verify used-up
-        for ts in 1301..=3300u64 {
+        for ts in 1302..=3300u64 {
             assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
         }
         provider.get_ts().unwrap_err();

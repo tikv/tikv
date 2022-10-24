@@ -35,6 +35,7 @@ make_auto_flush_static_metric! {
         kv_resolve_lock,
         kv_gc,
         kv_delete_range,
+        kv_prepare_flashback_to_version,
         kv_flashback_to_version,
         raw_get,
         raw_batch_get,
@@ -103,6 +104,10 @@ make_auto_flush_static_metric! {
     }
 
     pub struct SnapTaskCounterVec: LocalIntCounter {
+        "type" => SnapTask,
+    }
+
+    pub struct SnapLimitTransportBytesVec:LocalIntCounter{
         "type" => SnapTask,
     }
 
@@ -287,6 +292,10 @@ lazy_static! {
         REPLICA_READ_LOCK_CHECK_HISTOGRAM_VEC,
         ReplicaReadLockCheckHistogramVec
     );
+    pub static ref SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC: SnapLimitTransportBytesVec = auto_flush_from!(
+        SNAP_LIMIT_TRANSPORT_BYTES_COUNTER,
+        SnapLimitTransportBytesVec
+    );
 }
 
 lazy_static! {
@@ -425,6 +434,12 @@ lazy_static! {
     pub static ref RAFT_APPEND_REJECTS: IntCounter = register_int_counter!(
         "tikv_server_raft_append_rejects",
         "Count for rejected Raft append messages"
+    )
+    .unwrap();
+    pub static ref SNAP_LIMIT_TRANSPORT_BYTES_COUNTER: IntCounterVec = register_int_counter_vec!(
+        "tikv_snapshot_limit_transport_bytes",
+        "Total snapshot limit transport used",
+        &["type"],
     )
     .unwrap();
 }

@@ -10,11 +10,18 @@ use tikv_util::time::Instant;
 make_auto_flush_static_metric! {
     pub label_enum SnapType {
        generate,
-       apply,
+       apply
     }
 
+    // snapshot task status
+    // |all---------start--------------|
+    //               |
+    //               |
+    //               V
+    // |success|abort|fail|delay|ignore|
     pub label_enum SnapStatus {
         all,
+        start,
         success,
         abort,
         fail,

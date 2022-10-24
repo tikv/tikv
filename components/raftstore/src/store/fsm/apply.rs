@@ -59,6 +59,7 @@ use tikv_util::{
     memory::HeapSize,
     mpsc::{loose_bounded, LooseBoundedSender, Receiver},
     safe_panic, slow_log,
+    store::{find_peer, find_peer_mut, is_learner, remove_peer},
     time::{duration_to_sec, Instant},
     warn,
     worker::Scheduler,
@@ -86,20 +87,20 @@ use crate::{
         msg::{Callback, ErrorCallback, PeerMsg, ReadResponse, SignificantMsg},
         peer::Peer,
         peer_storage::{write_initial_apply_state, write_peer_state},
-        util,
         util::{
-            admin_cmd_epoch_lookup, check_region_epoch, compare_region_epoch, is_learner,
-            ChangePeerI, ConfChangeKind, KeysInfoFormatter, LatencyInspector,
+            self, admin_cmd_epoch_lookup, check_flashback_state, check_region_epoch,
+            compare_region_epoch, ChangePeerI, ConfChangeKind, KeysInfoFormatter, LatencyInspector,
         },
         Config, RegionSnapshot, RegionTask, WriteCallback,
     },
     Error, Result,
 };
 
-const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
-const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
-const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
-const MAX_APPLY_BATCH_SIZE: usize = 64 * 1024 * 1024;
+// These consts are shared in both v1 and v2.
+pub const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
+pub const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
+pub const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
+pub const MAX_APPLY_BATCH_SIZE: usize = 64 * 1024 * 1024;
 
 pub struct PendingCmd<C> {
     pub index: u64,
@@ -274,6 +275,9 @@ pub enum ExecResult<S> {
     },
     TransferLeader {
         term: u64,
+    },
+    SetFlashbackState {
+        region: Region,
     },
 }
 
@@ -1340,6 +1344,18 @@ where
                             "peer_id" => self.id(),
                             "err" => ?e
                         ),
+                        Error::FlashbackInProgress(..) => debug!(
+                            "flashback is in process";
+                            "region_id" => self.region_id(),
+                            "peer_id" => self.id(),
+                            "err" => ?e
+                        ),
+                        Error::FlashbackNotPrepared(..) => debug!(
+                            "flashback is not prepared";
+                            "region_id" => self.region_id(),
+                            "peer_id" => self.id(),
+                            "err" => ?e
+                        ),
                         _ => error!(?e;
                             "execute raft command";
                             "region_id" => self.region_id(),
@@ -1366,6 +1382,7 @@ where
                 ExecResult::CommitMerge { ref region, .. } => (Some(region.clone()), None),
                 ExecResult::RollbackMerge { ref region, .. } => (Some(region.clone()), None),
                 ExecResult::IngestSst { ref ssts } => (None, Some(ssts.clone())),
+                ExecResult::SetFlashbackState { region } => (Some(region.clone()), None),
                 _ => (None, None),
             },
             _ => (None, None),
@@ -1429,6 +1446,9 @@ where
                 ExecResult::RollbackMerge { ref region, .. } => {
                     self.region = region.clone();
                     self.is_merging = false;
+                }
+                ExecResult::SetFlashbackState { ref region } => {
+                    self.region = region.clone();
                 }
             }
         }
@@ -1508,6 +1528,7 @@ where
         let include_region =
             req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
         check_region_epoch(req, &self.region, include_region)?;
+        check_flashback_state(self.region.get_is_in_flashback(), req, self.region_id())?;
         if req.has_admin_request() {
             self.exec_admin_cmd(ctx, req)
         } else {
@@ -1546,6 +1567,9 @@ where
             AdminCmdType::PrepareMerge => self.exec_prepare_merge(ctx, request),
             AdminCmdType::CommitMerge => self.exec_commit_merge(ctx, request),
             AdminCmdType::RollbackMerge => self.exec_rollback_merge(ctx, request),
+            AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => {
+                self.exec_flashback(ctx, request)
+            }
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
         }?;
         response.set_cmd_type(cmd_type);
@@ -1925,7 +1949,7 @@ where
                     .inc();
 
                 let mut exists = false;
-                if let Some(p) = util::find_peer_mut(&mut region, store_id) {
+                if let Some(p) = find_peer_mut(&mut region, store_id) {
                     exists = true;
                     if !is_learner(p) || p.get_id() != peer.get_id() {
                         error!(
@@ -1965,7 +1989,7 @@ where
                     .with_label_values(&["remove_peer", "all"])
                     .inc();
 
-                if let Some(p) = util::remove_peer(&mut region, store_id) {
+                if let Some(p) = remove_peer(&mut region, store_id) {
                     // Considering `is_learner` flag in `Peer` here is by design.
                     if &p != peer {
                         error!(
@@ -2018,7 +2042,7 @@ where
                     .with_label_values(&["add_learner", "all"])
                     .inc();
 
-                if util::find_peer(&region, store_id).is_some() {
+                if find_peer(&region, store_id).is_some() {
                     error!(
                         "can't add duplicated learner";
                         "region_id" => self.region_id(),
@@ -2126,7 +2150,7 @@ where
 
             confchange_cmd_metric::inc_all(change_type);
 
-            if let Some(exist_peer) = util::find_peer(&region, store_id) {
+            if let Some(exist_peer) = find_peer(&region, store_id) {
                 let r = exist_peer.get_role();
                 if r == PeerRole::IncomingVoter || r == PeerRole::DemotingVoter {
                     panic!(
@@ -2135,7 +2159,7 @@ where
                     );
                 }
             }
-            match (util::find_peer_mut(&mut region, store_id), change_type) {
+            match (find_peer_mut(&mut region, store_id), change_type) {
                 (None, ConfChangeType::AddNode) => {
                     let mut peer = peer.clone();
                     match kind {
@@ -2227,7 +2251,7 @@ where
                             self.region
                         ));
                     }
-                    match util::remove_peer(&mut region, store_id) {
+                    match remove_peer(&mut region, store_id) {
                         Some(p) => {
                             if &p != peer {
                                 error!(
@@ -2407,7 +2431,7 @@ where
             new_split_regions.insert(
                 new_region.get_id(),
                 NewSplitPeer {
-                    peer_id: util::find_peer(&new_region, ctx.store_id).unwrap().get_id(),
+                    peer_id: find_peer(&new_region, ctx.store_id).unwrap().get_id(),
                     result: None,
                 },
             );
@@ -2787,6 +2811,41 @@ where
                 region,
                 commit: rollback.get_commit(),
             }),
+        ))
+    }
+
+    fn exec_flashback(
+        &self,
+        ctx: &mut ApplyContext<EK>,
+        req: &AdminRequest,
+    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+        let region_id = self.region_id();
+        let region_state_key = keys::region_state_key(region_id);
+        let mut old_state = match ctx
+            .engine
+            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
+        {
+            Ok(Some(s)) => s,
+            _ => {
+                return Err(box_err!("failed to get region state of {}", region_id));
+            }
+        };
+        let is_in_flashback = req.get_cmd_type() == AdminCmdType::PrepareFlashback;
+        old_state.mut_region().set_is_in_flashback(is_in_flashback);
+        let mut region = self.region.clone();
+        region.set_is_in_flashback(is_in_flashback);
+        ctx.kv_wb_mut()
+            .put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &old_state)
+            .unwrap_or_else(|e| {
+                error!(
+                    "{} failed to change flashback state to {:?} for region {}: {:?}",
+                    self.tag, req, region_id, e
+                )
+            });
+
+        Ok((
+            AdminResponse::default(),
+            ApplyResult::Res(ExecResult::SetFlashbackState { region }),
         ))
     }
 
@@ -4437,7 +4496,7 @@ mod tests {
 
     use engine_panic::PanicEngine;
     use engine_test::kv::{new_engine, KvTestEngine, KvTestSnapshot};
-    use engine_traits::{Peekable as PeekableTrait, WriteBatchExt};
+    use engine_traits::{Peekable as PeekableTrait, SyncMutable, WriteBatchExt};
     use kvproto::{
         kvrpcpb::ApiVersion,
         metapb::{self, RegionEpoch},
@@ -4447,18 +4506,18 @@ mod tests {
     use sst_importer::Config as ImportConfig;
     use tempfile::{Builder, TempDir};
     use test_sst_importer::*;
-    use tikv_util::{config::VersionTrack, worker::dummy_scheduler};
+    use tikv_util::{
+        config::VersionTrack,
+        store::{new_learner_peer, new_peer},
+        worker::dummy_scheduler,
+    };
+    use txn_types::WriteBatchFlags;
     use uuid::Uuid;
 
     use super::*;
     use crate::{
         coprocessor::*,
-        store::{
-            msg::WriteResponse,
-            peer_storage::RAFT_INIT_LOG_INDEX,
-            util::{new_learner_peer, new_peer},
-            Config, RegionTask,
-        },
+        store::{msg::WriteResponse, peer_storage::RAFT_INIT_LOG_INDEX, Config, RegionTask},
     };
 
     impl GenSnapTask {
@@ -5109,6 +5168,7 @@ mod tests {
                     true
                 }
                 AdminCmdType::BatchSplit => true,
+                AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => true,
                 _ => false,
             }
         }
@@ -6514,5 +6574,95 @@ mod tests {
             // dtor.
         });
         res.unwrap_err();
+    }
+
+    #[test]
+    fn flashback_need_to_be_applied() {
+        let (_path, engine) = create_tmp_engine("flashback_need_to_be_applied");
+        let (_, importer) = create_tmp_importer("flashback_need_to_be_applied");
+        let mut host = CoprocessorHost::<KvTestEngine>::default();
+        host.registry
+            .register_query_observer(1, BoxQueryObserver::new(ApplyObserver::default()));
+
+        let (tx, rx) = mpsc::channel();
+        let (region_scheduler, _) = dummy_scheduler();
+        let sender = Box::new(TestNotifier { tx });
+        let cfg = Arc::new(VersionTrack::new(Config::default()));
+        let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
+        let builder = super::Builder::<KvTestEngine> {
+            tag: "flashback_need_to_be_applied".to_owned(),
+            cfg,
+            sender,
+            region_scheduler,
+            coprocessor_host: host,
+            importer,
+            engine: engine.clone(),
+            router: router.clone(),
+            store_id: 1,
+            pending_create_peers,
+        };
+        system.spawn("flashback_need_to_be_applied".to_owned(), builder);
+
+        let peer_id = 3;
+        let mut reg = Registration {
+            id: peer_id,
+            ..Default::default()
+        };
+        reg.region.set_id(1);
+        reg.region.mut_peers().push(new_peer(2, 3));
+        reg.region.mut_region_epoch().set_conf_ver(1);
+        reg.region.mut_region_epoch().set_version(3);
+        reg.region.set_is_in_flashback(true);
+        router.schedule_task(1, Msg::Registration(reg));
+
+        let (capture_tx, capture_rx) = mpsc::channel();
+        let mut region_state = RegionLocalState::default();
+        region_state.mut_region().set_is_in_flashback(false);
+        let region_state_key = keys::region_state_key(1);
+        engine
+            .put_msg_cf(CF_RAFT, &region_state_key, &region_state)
+            .unwrap();
+        // Check for not flashback request.
+        let mut cmd = AdminRequest::default();
+        cmd.set_cmd_type(AdminCmdType::TransferLeader);
+        let mut flashback_req = EntryBuilder::new(1, 1).epoch(1, 3);
+        flashback_req.req.set_admin_request(cmd.clone());
+        router.schedule_task(
+            1,
+            Msg::apply(apply(
+                peer_id,
+                1,
+                1,
+                vec![flashback_req.build()],
+                vec![cb(1, 1, capture_tx.clone())],
+            )),
+        );
+        let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(resp.get_header().get_error().has_flashback_in_progress());
+        // Check for flashback request.
+        cmd.set_cmd_type(AdminCmdType::PrepareFlashback);
+        region_state.mut_region().set_is_in_flashback(false);
+        let mut flashback_req = EntryBuilder::new(2, 2).epoch(1, 3);
+        flashback_req.req.set_admin_request(cmd.clone());
+        flashback_req
+            .req
+            .mut_header()
+            .set_flags(WriteBatchFlags::FLASHBACK.bits());
+        router.schedule_task(
+            1,
+            Msg::apply(apply(
+                peer_id,
+                1,
+                2,
+                vec![flashback_req.build()],
+                vec![cb(2, 2, capture_tx)],
+            )),
+        );
+        let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(!resp.get_header().has_error(), "{:?}", resp);
+
+        rx.recv_timeout(Duration::from_millis(500)).unwrap();
+        system.shutdown();
     }
 }

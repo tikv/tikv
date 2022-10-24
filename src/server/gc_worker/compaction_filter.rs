@@ -54,7 +54,7 @@ pub struct GcContext {
     pub(crate) db: RocksEngine,
     pub(crate) store_id: u64,
     pub(crate) safe_point: Arc<AtomicU64>,
-    cfg_tracker: GcWorkerConfigManager,
+    pub(crate) cfg_tracker: GcWorkerConfigManager,
     feature_gate: FeatureGate,
     pub(crate) gc_scheduler: Scheduler<GcTask<RocksEngine>>,
     pub(crate) region_info_provider: Arc<dyn RegionInfoProvider + 'static>,
@@ -679,7 +679,7 @@ fn do_check_allowed(enable: bool, skip_vcheck: bool, feature_gate: &FeatureGate)
     enable && (skip_vcheck || feature_gate.can_enable(COMPACTION_FILTER_GC_FEATURE))
 }
 
-fn check_need_gc(
+pub fn check_need_gc(
     safe_point: TimeStamp,
     ratio_threshold: f64,
     context: &CompactionFilterContext,
@@ -750,7 +750,7 @@ pub mod test_utils {
     use crate::storage::kv::RocksEngine as StorageRocksEngine;
 
     /// Do a global GC with the given safe point.
-    pub fn gc_by_compact(engine: &StorageRocksEngine, _: &[u8], safe_point: u64) {
+    pub fn gc_by_compact(engine: &mut StorageRocksEngine, _: &[u8], safe_point: u64) {
         let engine = engine.get_rocksdb();
         // Put a new key-value pair to ensure compaction can be triggered correctly.
         engine.delete_cf("write", b"znot-exists-key").unwrap();
@@ -870,11 +870,11 @@ pub mod test_utils {
             self.post_gc();
         }
 
-        pub fn gc_on_files(&mut self, engine: &RocksEngine, input_files: &[String]) {
+        pub fn gc_on_files(&mut self, engine: &RocksEngine, input_files: &[String], cf: &str) {
             let _guard = LOCK.lock().unwrap();
             self.prepare_gc(engine);
             let db = engine.as_inner();
-            let handle = get_cf_handle(db, CF_WRITE).unwrap();
+            let handle = get_cf_handle(db, cf).unwrap();
             let level = self.target_level.unwrap() as i32;
             db.compact_files_cf(handle, &CompactionOptions::new(), input_files, level)
                 .unwrap();
@@ -942,31 +942,31 @@ pub mod tests {
     // Test compaction filter won't break basic GC rules.
     #[test]
     fn test_compaction_filter_basic() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let raw_engine = engine.get_rocksdb();
         let value = vec![b'v'; 512];
         let mut gc_runner = TestGcRunner::new(0);
 
         // GC can't delete keys after the given safe point.
-        must_prewrite_put(&engine, b"zkey", &value, b"zkey", 100);
-        must_commit(&engine, b"zkey", 100, 110);
+        must_prewrite_put(&mut engine, b"zkey", &value, b"zkey", 100);
+        must_commit(&mut engine, b"zkey", 100, 110);
         gc_runner.safe_point(50).gc(&raw_engine);
-        must_get(&engine, b"zkey", 110, &value);
+        must_get(&mut engine, b"zkey", 110, &value);
 
         // GC can't delete keys before the safe ponit if they are latest versions.
         gc_runner.safe_point(200).gc(&raw_engine);
-        must_get(&engine, b"zkey", 110, &value);
+        must_get(&mut engine, b"zkey", 110, &value);
 
-        must_prewrite_put(&engine, b"zkey", &value, b"zkey", 120);
-        must_commit(&engine, b"zkey", 120, 130);
+        must_prewrite_put(&mut engine, b"zkey", &value, b"zkey", 120);
+        must_commit(&mut engine, b"zkey", 120, 130);
 
         // GC can't delete the latest version before the safe ponit.
         gc_runner.safe_point(115).gc(&raw_engine);
-        must_get(&engine, b"zkey", 110, &value);
+        must_get(&mut engine, b"zkey", 110, &value);
 
         // GC a version will also delete the key on default CF.
         gc_runner.safe_point(200).gc(&raw_engine);
-        must_get_none(&engine, b"zkey", 110);
+        must_get_none(&mut engine, b"zkey", 110);
         let default_key = Key::from_encoded_slice(b"zkey").append_ts(100.into());
         let default_key = default_key.into_encoded();
         assert!(raw_engine.get_value(&default_key).unwrap().is_none());
@@ -976,7 +976,7 @@ pub mod tests {
     #[test]
     fn test_compaction_filter_handle_deleting() {
         let value = vec![b'v'; 512];
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let raw_engine = engine.get_rocksdb();
         let mut gc_runner = TestGcRunner::new(0);
 
@@ -1001,10 +1001,10 @@ pub mod tests {
         };
 
         // No key switch after the deletion mark.
-        must_prewrite_put(&engine, b"zkey", &value, b"zkey", 100);
-        must_commit(&engine, b"zkey", 100, 110);
-        must_prewrite_delete(&engine, b"zkey", b"zkey", 120);
-        must_commit(&engine, b"zkey", 120, 130);
+        must_prewrite_put(&mut engine, b"zkey", &value, b"zkey", 100);
+        must_commit(&mut engine, b"zkey", 100, 110);
+        must_prewrite_delete(&mut engine, b"zkey", b"zkey", 120);
+        must_commit(&mut engine, b"zkey", 120, 130);
 
         // No GC task should be emit because the mvcc-deletion mark covers some older
         // versions.
@@ -1022,12 +1022,12 @@ pub mod tests {
             .unwrap();
 
         // Key switch after the deletion mark.
-        must_prewrite_put(&engine, b"zkey1", &value, b"zkey1", 200);
-        must_commit(&engine, b"zkey1", 200, 210);
-        must_prewrite_delete(&engine, b"zkey1", b"zkey1", 220);
-        must_commit(&engine, b"zkey1", 220, 230);
-        must_prewrite_put(&engine, b"zkey2", &value, b"zkey2", 220);
-        must_commit(&engine, b"zkey2", 220, 230);
+        must_prewrite_put(&mut engine, b"zkey1", &value, b"zkey1", 200);
+        must_commit(&mut engine, b"zkey1", 200, 210);
+        must_prewrite_delete(&mut engine, b"zkey1", b"zkey1", 220);
+        must_commit(&mut engine, b"zkey1", 220, 230);
+        must_prewrite_put(&mut engine, b"zkey2", &value, b"zkey2", 220);
+        must_commit(&mut engine, b"zkey2", 220, 230);
 
         // No GC task should be emit because the mvcc-deletion mark covers some older
         // versions.
@@ -1045,17 +1045,17 @@ pub mod tests {
         cfg.writecf.dynamic_level_bytes = false;
         let dir = tempfile::TempDir::new().unwrap();
         let builder = TestEngineBuilder::new().path(dir.path());
-        let engine = builder.build_with_cfg(&cfg).unwrap();
+        let mut engine = builder.build_with_cfg(&cfg).unwrap();
         let raw_engine = engine.get_rocksdb();
         let value = vec![b'v'; 512];
         let mut gc_runner = TestGcRunner::new(0);
 
         for start_ts in &[100, 110, 120, 130] {
-            must_prewrite_put(&engine, b"zkey", &value, b"zkey", *start_ts);
-            must_commit(&engine, b"zkey", *start_ts, *start_ts + 5);
+            must_prewrite_put(&mut engine, b"zkey", &value, b"zkey", *start_ts);
+            must_commit(&mut engine, b"zkey", *start_ts, *start_ts + 5);
         }
-        must_prewrite_delete(&engine, b"zkey", b"zkey", 140);
-        must_commit(&engine, b"zkey", 140, 145);
+        must_prewrite_delete(&mut engine, b"zkey", b"zkey", 140);
+        must_commit(&mut engine, b"zkey", 140, 145);
 
         // Can't perform GC because the min timestamp is greater than safe point.
         gc_runner
@@ -1072,18 +1072,18 @@ pub mod tests {
         gc_runner.target_level = Some(6);
         gc_runner.safe_point(140).gc(&raw_engine);
         for commit_ts in &[105, 115, 125] {
-            must_get_none(&engine, b"zkey", commit_ts);
+            must_get_none(&mut engine, b"zkey", commit_ts);
         }
 
         // Put an extra key to make the memtable overlap with the bottommost one.
-        must_prewrite_put(&engine, b"zkey1", &value, b"zkey1", 200);
-        must_commit(&engine, b"zkey1", 200, 205);
+        must_prewrite_put(&mut engine, b"zkey1", &value, b"zkey1", 200);
+        must_commit(&mut engine, b"zkey1", 200, 205);
         for start_ts in &[200, 210, 220, 230] {
-            must_prewrite_put(&engine, b"zkey", &value, b"zkey", *start_ts);
-            must_commit(&engine, b"zkey", *start_ts, *start_ts + 5);
+            must_prewrite_put(&mut engine, b"zkey", &value, b"zkey", *start_ts);
+            must_commit(&mut engine, b"zkey", *start_ts, *start_ts + 5);
         }
-        must_prewrite_delete(&engine, b"zkey", b"zkey", 240);
-        must_commit(&engine, b"zkey", 240, 245);
+        must_prewrite_delete(&mut engine, b"zkey", b"zkey", 240);
+        must_commit(&mut engine, b"zkey", 240, 245);
         raw_engine.flush_cf(CF_WRITE, true).unwrap();
 
         // At internal levels can't perform GC because the threshold is not reached.
@@ -1092,9 +1092,11 @@ pub mod tests {
         let files = &[l0_file.to_str().unwrap().to_owned()];
         gc_runner.target_level = Some(5);
         gc_runner.ratio_threshold = Some(10.0);
-        gc_runner.safe_point(300).gc_on_files(&raw_engine, files);
+        gc_runner
+            .safe_point(300)
+            .gc_on_files(&raw_engine, files, CF_WRITE);
         for commit_ts in &[205, 215, 225, 235] {
-            must_get(&engine, b"zkey", commit_ts, &value);
+            must_get(&mut engine, b"zkey", commit_ts, &value);
         }
     }
 
@@ -1112,14 +1114,14 @@ pub mod tests {
 
         let dir = tempfile::TempDir::new().unwrap();
         let builder = TestEngineBuilder::new().path(dir.path());
-        let engine = builder.build_with_cfg(&cfg).unwrap();
+        let mut engine = builder.build_with_cfg(&cfg).unwrap();
         let raw_engine = engine.get_rocksdb();
         let mut gc_runner = TestGcRunner::new(0);
 
         // So the construction of SST files will be:
         // L6: |key_110|
-        must_prewrite_put(&engine, b"zkey", b"zvalue", b"zkey", 100);
-        must_commit(&engine, b"zkey", 100, 110);
+        must_prewrite_put(&mut engine, b"zkey", b"zvalue", b"zkey", 100);
+        must_commit(&mut engine, b"zkey", 100, 110);
         gc_runner.target_level = Some(6);
         gc_runner.safe_point(50).gc(&raw_engine);
         assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[6], 1);
@@ -1127,8 +1129,8 @@ pub mod tests {
         // So the construction of SST files will be:
         // L0: |key_130, key_110|
         // L6: |key_110|
-        must_prewrite_delete(&engine, b"zkey", b"zkey", 120);
-        must_commit(&engine, b"zkey", 120, 130);
+        must_prewrite_delete(&mut engine, b"zkey", b"zkey", 120);
+        must_commit(&mut engine, b"zkey", 120, 130);
         let k_110 = Key::from_raw(b"zkey").append_ts(110.into()).into_encoded();
         raw_engine.delete_cf(CF_WRITE, &k_110).unwrap();
         raw_engine.flush_cf(CF_WRITE, true).unwrap();
@@ -1140,14 +1142,16 @@ pub mod tests {
         let l0_file = dir.path().join(&level_files[0][0]);
         let files = &[l0_file.to_str().unwrap().to_owned()];
         gc_runner.target_level = Some(5);
-        gc_runner.safe_point(200).gc_on_files(&raw_engine, files);
+        gc_runner
+            .safe_point(200)
+            .gc_on_files(&raw_engine, files, CF_WRITE);
         assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[5], 1);
         assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[6], 1);
-        must_get_none(&engine, b"zkey", 200);
+        must_get_none(&mut engine, b"zkey", 200);
 
         // Compact the mvcc deletion mark to L6, the stale version shouldn't be exposed.
         gc_runner.target_level = Some(6);
         gc_runner.safe_point(200).gc(&raw_engine);
-        must_get_none(&engine, b"zkey", 200);
+        must_get_none(&mut engine, b"zkey", 200);
     }
 }

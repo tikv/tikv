@@ -48,4 +48,4 @@ CLIPPY_LINTS=(
 
 cargo clippy --workspace \
     --exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
-    --features "${TIKV_ENABLE_FEATURES}" "$@" -- "${CLIPPY_LINTS[@]}"
+    --no-default-features --features "${TIKV_ENABLE_FEATURES}" "$@" -- "${CLIPPY_LINTS[@]}"

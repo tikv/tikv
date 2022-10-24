@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use causal_ts::CausalTsProvider;
+use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
 use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::atomic::AtomicCell;
@@ -41,7 +41,7 @@ use resolved_ts::Resolver;
 use security::SecurityManager;
 use tikv::{config::CdcConfig, storage::Statistics};
 use tikv_util::{
-    box_err, debug, error, impl_display_as_debug, info,
+    debug, error, impl_display_as_debug, info,
     sys::thread::ThreadBuildWrapper,
     time::Limiter,
     timer::SteadyTimer,
@@ -59,7 +59,6 @@ use crate::{
     delegate::{on_init_downstream, Delegate, Downstream, DownstreamId, DownstreamState},
     initializer::Initializer,
     metrics::*,
-    observer::RawRegionTs,
     old_value::{OldValueCache, OldValueCallback},
     service::{Conn, ConnId, FeatureGate},
     CdcObserver, Error,
@@ -72,8 +71,6 @@ const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
 const WARN_RESOLVED_TS_LAG_THRESHOLD: Duration = Duration::from_secs(600);
 // Suppress repeat resolved ts lag warning.
 const WARN_RESOLVED_TS_COUNT_THRESHOLD: usize = 10;
-// if raw region's count is more than 10, begin detect outlier.
-const RAW_RESOLVED_TS_OUTLIER_COUNT_THRESHOLD: usize = 10;
 
 pub enum Deregister {
     Downstream {
@@ -174,13 +171,6 @@ pub enum Task {
     TxnExtra(TxnExtra),
     Validate(Validate),
     ChangeConfig(ConfigChange),
-    RawTrackTs {
-        region_id: u64,
-        ts: TimeStamp,
-    },
-    RawUntrackTs {
-        raw_region_ts: Vec<RawRegionTs>,
-    },
 }
 
 impl_display_as_debug!(Task);
@@ -251,18 +241,6 @@ impl fmt::Debug for Task {
             Task::ChangeConfig(change) => de
                 .field("type", &"change_config")
                 .field("change", change)
-                .finish(),
-            Task::RawTrackTs {
-                ref region_id,
-                ref ts,
-            } => de
-                .field("type", &"track_ts")
-                .field("region_id", &region_id)
-                .field("ts", &ts)
-                .finish(),
-            Task::RawUntrackTs { ref raw_region_ts } => de
-                .field("type", &"raw_untrack_ts")
-                .field("raw_ts", raw_region_ts)
                 .finish(),
         }
     }
@@ -338,52 +316,6 @@ impl ResolvedRegionHeap {
     }
 }
 
-// need to sort all timestamps, vec.sort() is more efficient.
-struct ResolvedRegionVec {
-    vec: Vec<ResolvedRegion>,
-}
-
-impl ResolvedRegionVec {
-    fn push(&mut self, region_id: u64, resolved_ts: TimeStamp) {
-        self.vec.push(ResolvedRegion {
-            region_id,
-            resolved_ts,
-        })
-    }
-    // extreme outier match the following two conditions:
-    // 1. https://en.wikipedia.org/wiki/Box_plot
-    // 2. the gap with min_ts is larger than raw_min_ts_outlier_threshold.
-    // return one region at maximum.
-    fn get_extreme_outlier(
-        &mut self,
-        min_ts: TimeStamp,
-        threshold: Duration,
-    ) -> Option<ResolvedRegion> {
-        // When the number is small, the confidence of outlier detection is low.
-        if self.vec.len() > RAW_RESOLVED_TS_OUTLIER_COUNT_THRESHOLD {
-            self.vec.sort();
-            let size = self.vec.len();
-            let q1_ts = self.vec[(size + 1) / 4].resolved_ts;
-            let q3_ts = self.vec[3 * (size + 1) / 4].resolved_ts;
-            let delta = q3_ts.physical().saturating_sub(q1_ts.physical());
-            let first_resolved_region = &self.vec[0];
-            if q1_ts
-                .physical()
-                .saturating_sub(first_resolved_region.resolved_ts.physical())
-                > 3 * delta
-                && Duration::from_millis(
-                    min_ts
-                        .physical()
-                        .saturating_sub(first_resolved_region.resolved_ts.physical()),
-                ) > threshold
-            {
-                return Some(first_resolved_region.to_owned());
-            }
-        }
-        None
-    }
-}
-
 pub struct Endpoint<T, E> {
     cluster_id: u64,
 
@@ -422,7 +354,7 @@ pub struct Endpoint<T, E> {
     env: Arc<Environment>,
     security_mgr: Arc<SecurityManager>,
     region_read_progress: RegionReadProgressRegistry,
-    causal_ts_provider: Option<Arc<dyn CausalTsProvider + 'static>>,
+    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
 
     // Metrics and logging.
     current_ts: TimeStamp,
@@ -448,7 +380,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
         sink_memory_quota: MemoryQuota,
-        causal_ts_provider: Option<Arc<dyn CausalTsProvider>>,
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
     ) -> Endpoint<T, E> {
         let workers = Builder::new_multi_thread()
             .thread_name("cdcwkr")
@@ -867,19 +799,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         flush_oldvalue_stats(&statistics, TAG_DELTA_CHANGE);
     }
 
-    pub fn on_raw_untrack_ts(&mut self, batch_region_ts: Vec<RawRegionTs>) {
-        for region_ts in batch_region_ts {
-            let region_id = region_ts.region_id;
-            if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
-                if delegate.has_failed() {
-                    // Skip the batch if the delegate has failed.
-                    continue;
-                }
-                delegate.raw_untrack_ts(region_ts.cdc_id, region_ts.max_ts);
-            }
-        }
-    }
-
     fn on_region_ready(&mut self, observe_id: ObserveId, resolver: Resolver, region: Region) {
         let region_id = region.get_id();
         let mut failed_downstreams = Vec::new();
@@ -911,45 +830,10 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         }
     }
 
-    // detect outlier raw regions, schedule deregister for outlier raw regions.
-    fn handle_raw_outlier_regions(
-        &self,
-        raw_resolved_regions: &mut ResolvedRegionVec,
-        min_ts: TimeStamp,
-    ) {
-        if let Some(region) = raw_resolved_regions
-            .get_extreme_outlier(min_ts, self.config.raw_min_ts_outlier_threshold.into())
-        {
-            if let Some(delegate) = self.capture_regions.get(&region.region_id) {
-                let observe_id = delegate.handle.id;
-                let deregister = Deregister::Delegate {
-                    region_id: region.region_id,
-                    observe_id,
-                    err: Error::Other(box_err!("raw region dead lock")),
-                };
-                warn!(
-                    "cdc deregister raw region as resolved_ts has much lag, dead lock may occurs.";
-                    "region_id" => region.region_id,
-                    "resolved_ts" => region.resolved_ts,
-                );
-                if let Err(e) = self.scheduler.schedule(Task::Deregister(deregister)) {
-                    error!("cdc schedule cdc task failed"; "error" => ?e);
-                }
-                CDC_RAW_OUTLIER_RESOLVED_TS_GAP.observe(
-                    Duration::from_millis(min_ts.physical() - region.resolved_ts.physical())
-                        .as_secs_f64(),
-                );
-            }
-        }
-    }
-
     fn on_min_ts(&mut self, regions: Vec<u64>, min_ts: TimeStamp, current_ts: TimeStamp) {
         // Reset resolved_regions to empty.
         let resolved_regions = &mut self.resolved_region_heap;
         resolved_regions.clear();
-        // rawkv only, if user does not use rawkv apiv2, raw_resolved_regions should be
-        // empty.
-        let mut raw_resolved_regions = ResolvedRegionVec { vec: vec![] };
 
         let total_region_count = regions.len();
         self.min_resolved_ts = TimeStamp::max();
@@ -967,19 +851,12 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                     advance_failed_stale += 1;
                 }
                 if let Some(resolved_ts) = delegate.on_min_ts(min_ts) {
-                    if resolved_ts.min() < self.min_resolved_ts {
-                        self.min_resolved_ts = resolved_ts.min();
+                    if resolved_ts < self.min_resolved_ts {
+                        self.min_resolved_ts = resolved_ts;
                         self.min_ts_region_id = region_id;
                     }
-                    resolved_regions.push(region_id, resolved_ts.min());
-                    // The judge of raw region is not accuracy here, and we may miss at most one
-                    // "normal" raw region. But this will not break the correctness of outlier
-                    // detection.
-                    if resolved_ts.is_min_ts_from_raw() || delegate.is_raw_region() {
-                        raw_resolved_regions.push(region_id, resolved_ts.raw_ts)
-                    }
-
-                    if resolved_ts.min() == old_resolved_ts {
+                    resolved_regions.push(region_id, resolved_ts);
+                    if resolved_ts == old_resolved_ts {
                         advance_failed_same += 1;
                     } else {
                         advance_ok += 1;
@@ -1021,10 +898,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let (normal_min_resolved_ts, normal_regions) = resolved_regions.to_hash_set();
         self.broadcast_resolved_ts(outlier_min_resolved_ts, outlier_regions);
         self.broadcast_resolved_ts(normal_min_resolved_ts, normal_regions);
-
-        // rawkv only, if user does not use rawkv apiv2, raw_resolved_regions should be
-        // empty.
-        self.handle_raw_outlier_regions(&mut raw_resolved_regions, min_ts);
     }
 
     fn broadcast_resolved_ts(&self, min_resolved_ts: TimeStamp, regions: HashSet<u64>) {
@@ -1146,7 +1019,15 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let fut = async move {
             let _ = timeout.compat().await;
             // Ignore get tso errors since we will retry every `min_ts_interval`.
-            let min_ts_pd = pd_client.get_tso().await.unwrap_or_default();
+            let min_ts_pd = match causal_ts_provider {
+                // TiKV API v2 is enabled when causal_ts_provider is Some.
+                // In this scenario, get TSO from causal_ts_provider to make sure that
+                // RawKV write requests will get larger TSO after this point.
+                // RawKV CDC's resolved_ts is guaranteed by ConcurrencyManager::global_min_lock_ts,
+                // which lock flying keys's ts in raw put and delete interfaces in `Storage`.
+                Some(provider) => provider.async_get_ts().await.unwrap_or_default(),
+                None => pd_client.get_tso().await.unwrap_or_default(),
+            };
             let mut min_ts = min_ts_pd;
             let mut min_ts_min_lock = min_ts_pd;
 
@@ -1167,13 +1048,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                 // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
                 // advance normally.
                 Err(err) => panic!("failed to regiester min ts event, error: {:?}", err),
-            }
-
-            // If flush_causal_timestamp fails, cannot schedule MinTs task
-            // as new coming raw data may use timestamp smaller than min_ts
-            if let Err(e) = causal_ts_provider.map_or(Ok(()), |provider| provider.flush()) {
-                error!("cdc flush causal timestamp failed"; "err" => ?e);
-                return;
             }
 
             let gate = pd_client.feature_gate();
@@ -1275,15 +1149,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
     fn on_open_conn(&mut self, conn: Conn) {
         self.connections.insert(conn.get_id(), conn);
     }
-
-    fn on_raw_track_ts(&mut self, region_id: u64, ts: TimeStamp) {
-        if let Some(ref mut delegate) = self.capture_regions.get_mut(&region_id) {
-            delegate.raw_track_ts(ts);
-        } else {
-            // delegate should not be none, as region is checked in CdcObserver::track_ts.
-            warn!("no delegate is found."; "region_id" => region_id);
-        }
-    }
 }
 
 impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
@@ -1355,8 +1220,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
                 }
             },
             Task::ChangeConfig(change) => self.on_change_cfg(change),
-            Task::RawTrackTs { region_id, ts } => self.on_raw_track_ts(region_id, ts),
-            Task::RawUntrackTs { raw_region_ts } => self.on_raw_untrack_ts(raw_region_ts),
         }
     }
 }
@@ -1419,12 +1282,10 @@ impl TxnExtraScheduler for CdcTxnExtraScheduler {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        assert_matches::assert_matches,
-        ops::{Deref, DerefMut},
-    };
+    use std::ops::{Deref, DerefMut};
 
     use engine_rocks::RocksEngine;
+    use futures::executor::block_on;
     use kvproto::{
         cdcpb::{ChangeDataRequestKvApi, Header},
         errorpb::Error as ErrorHeader,
@@ -1513,7 +1374,7 @@ mod tests {
         cfg: &CdcConfig,
         engine: Option<RocksEngine>,
         api_version: ApiVersion,
-        causal_ts_provider: Option<Arc<dyn CausalTsProvider>>,
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
     ) -> TestEndpointSuite {
         let (task_sched, task_rx) = dummy_scheduler();
         let raft_router = MockRaftStoreRouter::new();
@@ -1531,7 +1392,7 @@ mod tests {
                     .kv_engine()
                     .unwrap()
             }),
-            CdcObserver::new(task_sched, api_version),
+            CdcObserver::new(task_sched),
             Arc::new(StdMutex::new(StoreMeta::new(0))),
             ConcurrencyManager::new(1.into()),
             Arc::new(Environment::new(1)),
@@ -2025,301 +1886,15 @@ mod tests {
     }
 
     #[test]
-    fn test_raw_track_ts() {
-        let cfg = CdcConfig {
-            min_ts_interval: ReadableDuration(Duration::from_secs(60)),
-            ..Default::default()
-        };
-        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V2);
-        suite.add_region(1, 100);
-        let quota = crate::channel::MemoryQuota::new(usize::MAX);
-        let (tx, _) = channel::channel(1, quota);
-
-        let conn = Conn::new(tx, String::new());
-        let conn_id = conn.get_id();
-        suite.run(Task::OpenConn { conn });
-        let mut req_header = Header::default();
-        req_header.set_cluster_id(0);
-        let mut req = ChangeDataRequest::default();
-        let region_id = 1;
-        req.set_region_id(region_id);
-        let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new(
-            "".to_string(),
-            region_epoch.clone(),
-            1,
-            conn_id,
-            ChangeDataRequestKvApi::RawKv,
-        );
-        // Enable batch resolved ts in the test.
-        let version = FeatureGate::batch_resolved_ts();
-        suite.run(Task::Register {
-            request: req.clone(),
-            downstream,
-            conn_id,
-            version,
-        });
-        assert_eq!(suite.endpoint.capture_regions.len(), 1);
-        let observe_id = suite.endpoint.capture_regions[&region_id].handle.id;
-        suite
-            .task_rx
-            .recv_timeout(Duration::from_millis(100))
-            .unwrap_err();
-        // Schedule resolver ready (resolver is built by conn a).
-        let mut region = Region::default();
-        region.id = region_id;
-        region.set_region_epoch(region_epoch);
-        let resolver = Resolver::new(region_id);
-        suite.run(Task::ResolverReady {
-            observe_id,
-            region,
-            resolver,
-        });
-        suite
-            .task_rx
-            .recv_timeout(Duration::from_millis(100))
-            .unwrap_err();
-
-        let ts = TimeStamp::compose(10, 0);
-        suite.run(Task::RawTrackTs { region_id, ts });
-        let delegate = suite.endpoint.capture_regions.get_mut(&region_id).unwrap();
-        let resolver = delegate.resolver.as_mut().unwrap();
-        let raw_resolved_ts = resolver.resolve(TimeStamp::compose(20, 0)).min();
-        assert_eq!(raw_resolved_ts, ts);
-    }
-
-    #[test]
-    fn test_raw_pending_lock() {
-        let cfg = CdcConfig {
-            min_ts_interval: ReadableDuration(Duration::from_secs(60)),
-            ..Default::default()
-        };
-        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V2);
-        suite.add_region(1, 100);
-        let quota = crate::channel::MemoryQuota::new(usize::MAX);
-        let (tx, _) = channel::channel(1, quota);
-
-        let conn = Conn::new(tx, String::new());
-        let conn_id = conn.get_id();
-        suite.run(Task::OpenConn { conn });
-        let mut req_header = Header::default();
-        req_header.set_cluster_id(0);
-        let mut req = ChangeDataRequest::default();
-        let region_id = 1;
-        req.set_region_id(region_id);
-        let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new(
-            "".to_string(),
-            region_epoch.clone(),
-            1,
-            conn_id,
-            ChangeDataRequestKvApi::RawKv,
-        );
-        // Enable batch resolved ts in the test.
-        let version = FeatureGate::batch_resolved_ts();
-        suite.run(Task::Register {
-            request: req.clone(),
-            downstream,
-            conn_id,
-            version,
-        });
-        assert_eq!(suite.endpoint.capture_regions.len(), 1);
-        let observe_id = suite.endpoint.capture_regions[&region_id].handle.id;
-        suite
-            .task_rx
-            .recv_timeout(Duration::from_millis(100))
-            .unwrap_err();
-        for i in 100..150 {
-            let ts = TimeStamp::compose(i, 0);
-            suite.run(Task::RawTrackTs { region_id, ts });
-        }
-        suite.run(Task::RawUntrackTs {
-            raw_region_ts: vec![RawRegionTs {
-                region_id,
-                cdc_id: observe_id,
-                max_ts: TimeStamp::compose(125, 0),
-            }],
-        }); // untrack ts before 125
-        let delegate = suite.endpoint.capture_regions.get_mut(&region_id).unwrap();
-        // region is not ready, so raw lock in resolver, raw ts is added to
-        // delegate.pending.
-        assert_eq!(delegate.resolver.is_none(), true);
-        // Schedule resolver ready (resolver is built by conn a).
-        let mut region = Region::default();
-        region.id = region_id;
-        region.set_region_epoch(region_epoch);
-        let resolver = Resolver::new(region_id);
-        suite.run(Task::ResolverReady {
-            observe_id,
-            region,
-            resolver,
-        });
-        suite
-            .task_rx
-            .recv_timeout(Duration::from_millis(100))
-            .unwrap_err();
-        // after region ready, pending locks will be added back to resolver.
-        let delegate = suite.endpoint.capture_regions.get_mut(&region_id).unwrap();
-        let resolver = delegate.resolver.as_mut().unwrap();
-        let raw_resolved_ts = resolver.resolve(TimeStamp::compose(200, 0)).min();
-        assert_eq!(raw_resolved_ts, TimeStamp::compose(125, 0));
-    }
-
-    #[test]
-    fn test_raw_dead_lock() {
-        let cfg = CdcConfig {
-            min_ts_interval: ReadableDuration(Duration::from_secs(60)),
-            ..Default::default()
-        };
-        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V2);
-        let quota = crate::channel::MemoryQuota::new(usize::MAX);
-        let (tx, _) = channel::channel(1, quota);
-        let mut region_cnt = 0;
-        let start_ts: u64 = 200;
-        let region_ids: Vec<u64> = (1..50).collect();
-        let dead_lock_region = 1;
-        let dead_lock_ts = TimeStamp::compose(1, 0);
-        let cur_tso = TimeStamp::compose(1000000, 0);
-        for region_id in region_ids.clone() {
-            suite.add_region(region_id, 100);
-            let conn = Conn::new(tx.clone(), String::new());
-            let conn_id = conn.get_id();
-            suite.run(Task::OpenConn { conn });
-            let mut req_header = Header::default();
-            req_header.set_cluster_id(0);
-            let mut req = ChangeDataRequest::default();
-            req.set_region_id(region_id);
-            let region_epoch = req.get_region_epoch().clone();
-            let downstream = Downstream::new(
-                "".to_string(),
-                region_epoch.clone(),
-                region_id,
-                conn_id,
-                ChangeDataRequestKvApi::RawKv,
-            );
-            // Enable batch resolved ts in the test.
-            let version = FeatureGate::batch_resolved_ts();
-            suite.run(Task::Register {
-                request: req.clone(),
-                downstream,
-                conn_id,
-                version,
-            });
-            region_cnt += 1;
-            assert_eq!(suite.endpoint.capture_regions.len(), region_cnt);
-            let observe_id = suite.endpoint.capture_regions[&region_id].handle.id;
-            suite
-                .task_rx
-                .recv_timeout(Duration::from_millis(100))
-                .unwrap_err();
-            // Schedule resolver ready (resolver is built by conn a).
-            let mut region = Region::default();
-            region.id = region_id;
-            region.set_region_epoch(region_epoch);
-            region.set_start_key(vec![b'r', 0, 0, 0, b'a']);
-            region.set_end_key(vec![b'r', 0, 0, 0, b'z']);
-            let resolver = Resolver::new(region_id);
-            suite.run(Task::ResolverReady {
-                observe_id,
-                region,
-                resolver,
-            });
-            suite
-                .task_rx
-                .recv_timeout(Duration::from_millis(100))
-                .unwrap_err();
-            // let ts is same with region for testing convenience
-            // let first region has dead lock.
-            let ts = if region_id == dead_lock_region {
-                dead_lock_ts
-            } else {
-                TimeStamp::compose(start_ts + 1, 0)
-            };
-            // Only 9 region is min_ts_from_raw, but other regions are raw regions,
-            // Them can also be counted.
-            if region_id < 10 {
-                suite.run(Task::RawTrackTs { region_id, ts });
-                let delegate = suite.endpoint.capture_regions.get_mut(&region_id).unwrap();
-                let resolver = delegate.resolver.as_mut().unwrap();
-                let raw_resolved_ts = resolver.resolve(cur_tso).min();
-                assert_eq!(raw_resolved_ts, ts);
-            }
-        }
-        let ob_id = suite
-            .endpoint
-            .capture_regions
-            .get(&dead_lock_region)
-            .unwrap()
-            .handle
-            .id;
-        suite.run(Task::MinTs {
-            regions: region_ids,
-            min_ts: cur_tso,
-            current_ts: cur_tso,
-        });
-        let task_recv = suite
-            .task_rx
-            .recv_timeout(Duration::from_millis(500))
-            .unwrap()
-            .unwrap();
-        assert_matches!(task_recv,
-            Task::Deregister(Deregister::Delegate {region_id, observe_id, ..}) if
-                region_id == dead_lock_region && observe_id == ob_id);
-        let gap = Duration::from_millis(cur_tso.physical() - dead_lock_ts.physical()).as_secs_f64();
-        assert_eq!(CDC_RAW_OUTLIER_RESOLVED_TS_GAP.get_sample_count(), 1);
-        assert_eq!(CDC_RAW_OUTLIER_RESOLVED_TS_GAP.get_sample_sum(), gap);
-        suite.run(task_recv);
-        suite
-            .task_rx
-            .recv_timeout(Duration::from_millis(100))
-            .unwrap_err();
-        assert_eq!(
-            suite
-                .endpoint
-                .capture_regions
-                .get(&dead_lock_region)
-                .is_none(),
-            true
-        );
-        let untrack_region_id = 20;
-        let cdc_id = suite
-            .endpoint
-            .capture_regions
-            .get(&untrack_region_id)
-            .unwrap()
-            .handle
-            .id;
-        let region_ts = RawRegionTs {
-            region_id: untrack_region_id,
-            cdc_id,
-            max_ts: TimeStamp::compose(1000, 0),
-        };
-        suite.run(Task::RawUntrackTs {
-            raw_region_ts: vec![region_ts],
-        });
-        suite
-            .task_rx
-            .recv_timeout(Duration::from_millis(100))
-            .unwrap_err();
-        let delegate = suite
-            .endpoint
-            .capture_regions
-            .get_mut(&untrack_region_id)
-            .unwrap();
-        let resolver = delegate.resolver.as_mut().unwrap();
-        let raw_resolved_ts = resolver.resolve(cur_tso).min();
-        assert_eq!(raw_resolved_ts, cur_tso); // region is untracked.
-    }
-
-    #[test]
-    fn test_raw_causal_ts_flush() {
+    fn test_raw_causal_min_ts() {
         let sleep_interval = Duration::from_secs(1);
         let cfg = CdcConfig {
             min_ts_interval: ReadableDuration(sleep_interval),
             ..Default::default()
         };
-        let ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
-        let start_ts = ts_provider.get_ts().unwrap();
+        let ts_provider: Arc<CausalTsProviderImpl> =
+            Arc::new(causal_ts::tests::TestProvider::default().into());
+        let start_ts = block_on(ts_provider.async_get_ts()).unwrap();
         let mut suite =
             mock_endpoint_with_ts_provider(&cfg, None, ApiVersion::V2, Some(ts_provider.clone()));
         suite.run(Task::RegisterMinTsEvent);
@@ -2328,8 +1903,8 @@ mod tests {
             .recv_timeout(Duration::from_millis(1500))
             .unwrap()
             .unwrap();
-        let end_ts = ts_provider.get_ts().unwrap();
-        assert!(end_ts.into_inner() >= start_ts.next().into_inner() + 100); // may trigger more than once.
+        let end_ts = block_on(ts_provider.async_get_ts()).unwrap();
+        assert!(end_ts.into_inner() > start_ts.next().into_inner()); // may trigger more than once.
     }
 
     #[test]
@@ -2904,64 +2479,5 @@ mod tests {
         heap1.push(1, 1.into());
         heap1.clear();
         assert!(heap1.heap.is_empty());
-    }
-
-    #[test]
-    fn test_resolved_region_vec() {
-        let mut region_vec = ResolvedRegionVec {
-            vec: Vec::with_capacity(9),
-        };
-        let threshold = Duration::from_secs(60);
-        for i in 0..9 {
-            region_vec.push(i, TimeStamp::compose(i, 0));
-        }
-        // count is not enough, no outlier.
-        assert_eq!(
-            region_vec
-                .get_extreme_outlier(1.into(), threshold)
-                .is_none(),
-            true
-        );
-        let mut region_vec2 = ResolvedRegionVec {
-            vec: Vec::with_capacity(1002),
-        };
-        for i in 2000..3000 {
-            region_vec2.push(i, TimeStamp::compose(i, 0));
-        }
-        // count is enough, but no one satisfy the outlier algorithm
-        // outlier boundary is: 2250 - 3 * 500 = 750
-        assert_eq!(
-            region_vec2
-                .get_extreme_outlier(TimeStamp::compose(60_010, 0), threshold)
-                .is_none(),
-            true
-        );
-        // count become 1001, boundary: 2249 - 3 * 501 = 746, no outlier
-        region_vec2.push(747, TimeStamp::compose(747, 0));
-        assert_eq!(
-            region_vec2
-                .get_extreme_outlier(TimeStamp::compose(61_000, 0), threshold)
-                .is_none(),
-            true
-        );
-        // count become 1002, boundary: 2248 - 3 * 502 = 742, but ts gap is not larger
-        // than 60s.
-        region_vec2.push(741, TimeStamp::compose(741, 0));
-        assert_eq!(
-            region_vec2
-                .get_extreme_outlier(TimeStamp::compose(60_741, 0), threshold)
-                .is_none(),
-            true
-        );
-        // all conditions are satisfied, return one outlier.
-        assert_eq!(
-            region_vec2
-                .get_extreme_outlier(TimeStamp::compose(60_742, 0), threshold)
-                .unwrap(),
-            ResolvedRegion {
-                region_id: 741,
-                resolved_ts: TimeStamp::compose(741, 0)
-            }
-        );
     }
 }

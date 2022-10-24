@@ -38,7 +38,6 @@ use kvproto::{
 use pd_client::PdClient;
 use protobuf::RepeatedField;
 use raft::eraftpb::ConfChangeType;
-pub use raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 use raftstore::{
     store::{fsm::RaftRouter, *},
     RaftRouterCompactedEventSender, Result,
@@ -48,6 +47,7 @@ use server::server::ConfiguredRaftEngine;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use tikv::{config::*, server::KvEngineFactoryBuilder, storage::point_key_range};
+pub use tikv_util::store::{find_peer, new_learner_peer, new_peer};
 use tikv_util::{config::*, escape, time::ThreadReadId, worker::LazyWorker, HandyRwLock};
 use txn_types::Key;
 
@@ -1216,6 +1216,28 @@ pub fn must_raw_get(client: &TikvClient, ctx: Context, key: Vec<u8>) -> Option<V
     } else {
         Some(get_resp.value)
     }
+}
+
+pub fn must_flashback_to_version(
+    client: &TikvClient,
+    ctx: Context,
+    version: u64,
+    start_ts: u64,
+    commit_ts: u64,
+) -> FlashbackToVersionResponse {
+    let mut prepare_req = PrepareFlashbackToVersionRequest::default();
+    prepare_req.set_context(ctx.clone());
+    client
+        .kv_prepare_flashback_to_version(&prepare_req)
+        .unwrap();
+    let mut req = FlashbackToVersionRequest::default();
+    req.set_context(ctx);
+    req.set_start_ts(start_ts);
+    req.set_commit_ts(commit_ts);
+    req.version = version;
+    req.start_key = b"a".to_vec();
+    req.end_key = b"z".to_vec();
+    client.kv_flashback_to_version(&req).unwrap()
 }
 
 // A helpful wrapper to make the test logic clear
