@@ -7,15 +7,16 @@ use std::borrow::Cow;
 use batch_system::{BasicMailbox, Fsm};
 use crossbeam::channel::TryRecvError;
 use engine_traits::{KvEngine, RaftEngine, TabletFactory};
-use kvproto::metapb;
 use raftstore::store::{Config, Transport};
 use slog::{debug, error, info, trace, Logger};
 use tikv_util::{
     is_zero_duration,
-    mpsc::{self, LooseBoundedSender, Receiver, Sender},
+    mpsc::{self, LooseBoundedSender, Receiver},
     time::{duration_to_sec, Instant},
+    yatp_pool::FuturePool,
 };
 
+use super::ApplyFsm;
 use crate::{
     batch::StoreContext,
     raft::{Peer, Storage},
@@ -176,6 +177,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
     fn on_start(&mut self) {
         self.schedule_tick(PeerTick::Raft);
+        if self.fsm.peer.storage().is_initialized() {
+            self.fsm.peer.schedule_apply_fsm(self.store_ctx);
+        }
     }
 
     #[inline]
@@ -212,11 +216,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 }
                 PeerMsg::RaftCommand(cmd) => {
                     self.on_receive_command(cmd.send_time);
-                    // self.on_command(cmd.cmd.request, cmd.ch)
-                    unimplemented!()
+                    self.on_command(cmd.request, cmd.ch)
                 }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
-                PeerMsg::ApplyRes(res) => unimplemented!(),
+                PeerMsg::ApplyRes(res) => self.fsm.peer.on_apply_res(self.store_ctx, res),
                 PeerMsg::Start => self.on_start(),
                 PeerMsg::Noop => unimplemented!(),
                 PeerMsg::Persisted {
@@ -232,5 +235,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 PeerMsg::QueryDebugInfo(ch) => self.fsm.peer_mut().on_query_debug_info(ch),
             }
         }
+        // TODO: instead of propose pending commands immediately, we should use timeout.
+        self.fsm.peer.propose_pending_command(self.store_ctx);
     }
 }

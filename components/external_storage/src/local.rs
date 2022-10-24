@@ -2,7 +2,7 @@
 
 use std::{
     fs::File as StdFile,
-    io,
+    io::{self, BufReader, Read, Seek},
     marker::Unpin,
     path::{Path, PathBuf},
     sync::Arc,
@@ -129,6 +129,23 @@ impl ExternalStorage for LocalStorage {
             Ok(file) => Box::new(AllowStdIo::new(file)) as _,
             Err(e) => Box::new(error_stream(e).into_async_read()) as _,
         }
+    }
+
+    fn read_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin> {
+        debug!("read part of file from local storage";
+            "name" => %name, "off" => %off, "len" => %len, "base" => %self.base.display());
+
+        let mut file = match StdFile::open(self.base.join(name)) {
+            Ok(file) => file,
+            Err(e) => return Box::new(error_stream(e).into_async_read()) as _,
+        };
+        match file.seek(std::io::SeekFrom::Start(off)) {
+            Ok(_) => (),
+            Err(e) => return Box::new(error_stream(e).into_async_read()) as _,
+        };
+        let reader = BufReader::new(file);
+        let take = reader.take(len);
+        Box::new(AllowStdIo::new(take)) as _
     }
 }
 

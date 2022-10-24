@@ -303,6 +303,12 @@ pub struct Config {
     pub max_snapshot_file_raw_size: ReadableSize,
 
     pub unreachable_backoff: ReadableDuration,
+
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    // Interval to check peers availability info.
+    pub check_peers_availability_interval: ReadableDuration,
 }
 
 impl Default for Config {
@@ -407,6 +413,8 @@ impl Default for Config {
             report_region_buckets_tick_interval: ReadableDuration::secs(10),
             max_snapshot_file_raw_size: ReadableSize::mb(100),
             unreachable_backoff: ReadableDuration::secs(10),
+            // TODO: make its value reasonable
+            check_peers_availability_interval: ReadableDuration::secs(30),
         }
     }
 }

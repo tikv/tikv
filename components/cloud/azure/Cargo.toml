@@ -6,18 +6,18 @@ publish = false
 
 [dependencies]
 async-trait = "0.1"
-azure_core = { version = "0.1.0", git = "https://github.com/Azure/azure-sdk-for-rust"}
+azure_core = { version = "0.1.0", git = "https://github.com/Azure/azure-sdk-for-rust" }
 azure_identity = { version = "0.1.0", git = "https://github.com/Azure/azure-sdk-for-rust" }
 azure_storage = { version = "0.1.0", git = "https://github.com/Azure/azure-sdk-for-rust", default-features = false, features = ["account", "blob"] }
 base64 = "0.13"
 chrono = "0.4"
-cloud = { path = "../", default-features = false }
+cloud = { workspace = true }
 futures = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 oauth2 = { version = "4.0.0", default-features = false }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
-tikv_util = { path = "../../tikv_util", default-features = false }
+tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["time"] }
 url = "2.0"

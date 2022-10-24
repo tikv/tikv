@@ -2,9 +2,11 @@
 
 //! Types for storage related errors and associated helper methods.
 use std::{
+    convert::TryFrom,
     error::Error as StdError,
     fmt::{self, Debug, Display, Formatter},
     io::Error as IoError,
+    sync::Arc,
 };
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
@@ -453,6 +455,35 @@ pub fn extract_key_errors(res: Result<Vec<Result<()>>>) -> Vec<kvrpcpb::KeyError
             })
             .collect(),
         Err(e) => vec![extract_key_error(&e)],
+    }
+}
+
+/// The shared version of [`Error`]. In some cases, it's necessary to pass a
+/// single error to more than one requests, since the inner error doesn't
+/// support cloning.
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct SharedError(pub Arc<ErrorInner>);
+
+impl From<ErrorInner> for SharedError {
+    fn from(e: ErrorInner) -> Self {
+        Self(Arc::new(e))
+    }
+}
+
+impl From<Error> for SharedError {
+    fn from(e: Error) -> Self {
+        Self(Arc::from(e.0))
+    }
+}
+
+/// Tries to convert the shared error to owned one. It can success only when
+/// it's the only reference to the error.
+impl TryFrom<SharedError> for Error {
+    type Error = ();
+
+    fn try_from(e: SharedError) -> std::result::Result<Self, Self::Error> {
+        Arc::try_unwrap(e.0).map(Into::into).map_err(|_| ())
     }
 }
 

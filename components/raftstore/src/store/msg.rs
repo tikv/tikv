@@ -7,8 +7,9 @@ use std::{borrow::Cow, fmt};
 
 use collections::HashSet;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
-use futures::channel::oneshot::Sender;
+use futures::channel::mpsc::UnboundedSender;
 use kvproto::{
+    brpb::CheckAdminResponse,
     import_sstpb::SstMeta,
     kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp},
     metapb,
@@ -32,8 +33,9 @@ use crate::store::{
     fsm::apply::{CatchUpLogs, ChangeObserver, TaskRes as ApplyTaskRes},
     metrics::RaftEventDurationType,
     peer::{
-        UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
-        UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryWaitApplySyncer,
+        SnapshotRecoveryWaitApplySyncer, UnsafeRecoveryExecutePlanSyncer,
+        UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
+        UnsafeRecoveryWaitApplySyncer,
     },
     util::{KeysInfoFormatter, LatencyInspector},
     worker::{Bucket, BucketRange},
@@ -235,6 +237,20 @@ pub trait ErrorCallback: Send {
     fn is_none(&self) -> bool;
 }
 
+impl<C: ErrorCallback> ErrorCallback for Vec<C> {
+    #[inline]
+    fn report_error(self, err: RaftCmdResponse) {
+        for cb in self {
+            cb.report_error(err.clone());
+        }
+    }
+
+    #[inline]
+    fn is_none(&self) -> bool {
+        self.iter().all(|c| c.is_none())
+    }
+}
+
 impl<S: Snapshot> ReadCallback for Callback<S> {
     type Response = ReadResponse<S>;
 
@@ -280,6 +296,45 @@ impl<S: Snapshot> WriteCallback for Callback<S> {
     }
 }
 
+impl<C> WriteCallback for Vec<C>
+where
+    C: WriteCallback,
+    C::Response: Clone,
+{
+    type Response = C::Response;
+
+    #[inline]
+    fn notify_proposed(&mut self) {
+        for c in self {
+            c.notify_proposed();
+        }
+    }
+
+    #[inline]
+    fn notify_committed(&mut self) {
+        for c in self {
+            c.notify_committed();
+        }
+    }
+
+    #[inline]
+    fn write_trackers(&self) -> Option<&SmallVec<[TimeTracker; 4]>> {
+        None
+    }
+
+    #[inline]
+    fn write_trackers_mut(&mut self) -> Option<&mut SmallVec<[TimeTracker; 4]>> {
+        None
+    }
+
+    #[inline]
+    fn set_result(self, result: Self::Response) {
+        for c in self {
+            c.set_result(result.clone());
+        }
+    }
+}
+
 impl<S: Snapshot> ErrorCallback for Callback<S> {
     #[inline]
     fn report_error(self, err: RaftCmdResponse) {
@@ -321,6 +376,7 @@ pub enum PeerTick {
     ReactivateMemoryLock = 8,
     ReportBuckets = 9,
     CheckLongUncommitted = 10,
+    CheckPeersAvailability = 11,
 }
 
 impl PeerTick {
@@ -340,6 +396,7 @@ impl PeerTick {
             PeerTick::ReactivateMemoryLock => "reactivate_memory_lock",
             PeerTick::ReportBuckets => "report_buckets",
             PeerTick::CheckLongUncommitted => "check_long_uncommitted",
+            PeerTick::CheckPeersAvailability => "check_peers_availability",
         }
     }
 
@@ -356,6 +413,7 @@ impl PeerTick {
             PeerTick::ReactivateMemoryLock,
             PeerTick::ReportBuckets,
             PeerTick::CheckLongUncommitted,
+            PeerTick::CheckPeersAvailability,
         ];
         TICKS
     }
@@ -457,8 +515,8 @@ where
     UnsafeRecoveryDestroy(UnsafeRecoveryExecutePlanSyncer),
     UnsafeRecoveryWaitApply(UnsafeRecoveryWaitApplySyncer),
     UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSyncer),
-    PrepareFlashback(Sender<bool>),
-    FinishFlashback,
+    SnapshotRecoveryWaitApply(SnapshotRecoveryWaitApplySyncer),
+    CheckPendingAdmin(UnboundedSender<CheckAdminResponse>),
 }
 
 /// Message that will be sent to a peer.

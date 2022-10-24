@@ -8,7 +8,8 @@ use std::{
     u64,
 };
 
-use engine_traits::{MvccProperties, Range};
+use api_version::{ApiV2, KeyMode, KvFormat};
+use engine_traits::{raw_ttl::ttl_current_ts, MvccProperties, Range};
 use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
     UserCollectedProperties,
@@ -128,12 +129,6 @@ impl<'a> DecodeProperties for UserCollectedPropertiesDecoder<'a> {
             None => Err(Error::KeyNotFound),
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Copy)]
-pub enum RangeOffsetKind {
-    Size,
-    Keys,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -386,7 +381,8 @@ impl TablePropertiesCollectorFactory<RangePropertiesCollector> for RangeProperti
     }
 }
 
-/// Can only be used for write CF.
+/// Can be used for write CF in TiDB & TxnKV scenario, or be used for default CF
+/// in RawKV scenario.
 pub struct MvccPropertiesCollector {
     props: MvccProperties,
     last_row: Vec<u8>,
@@ -394,10 +390,12 @@ pub struct MvccPropertiesCollector {
     row_versions: u64,
     cur_index_handle: IndexHandle,
     row_index_handles: IndexHandles,
+    key_mode: KeyMode, // Use KeyMode::Txn for both TiDB & TxnKV, KeyMode::Raw for RawKV.
+    current_ts: u64,
 }
 
 impl MvccPropertiesCollector {
-    fn new() -> MvccPropertiesCollector {
+    fn new(key_mode: KeyMode) -> MvccPropertiesCollector {
         MvccPropertiesCollector {
             props: MvccProperties::new(),
             last_row: Vec::new(),
@@ -405,6 +403,8 @@ impl MvccPropertiesCollector {
             row_versions: 0,
             cur_index_handle: IndexHandle::default(),
             row_index_handles: IndexHandles::new(),
+            key_mode,
+            current_ts: ttl_current_ts(),
         }
     }
 }
@@ -452,18 +452,34 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
             self.props.max_row_versions = self.row_versions;
         }
 
-        let write_type = match Write::parse_type(value) {
-            Ok(v) => v,
-            Err(_) => {
-                self.num_errors += 1;
-                return;
+        if self.key_mode == KeyMode::Raw {
+            let decode_raw_value = ApiV2::decode_raw_value(value);
+            match decode_raw_value {
+                Ok(raw_value) => {
+                    if raw_value.is_valid(self.current_ts) {
+                        self.props.num_puts += 1;
+                    } else {
+                        self.props.num_deletes += 1;
+                    }
+                }
+                Err(_) => {
+                    self.num_errors += 1;
+                }
             }
-        };
+        } else {
+            let write_type = match Write::parse_type(value) {
+                Ok(v) => v,
+                Err(_) => {
+                    self.num_errors += 1;
+                    return;
+                }
+            };
 
-        match write_type {
-            WriteType::Put => self.props.num_puts += 1,
-            WriteType::Delete => self.props.num_deletes += 1,
-            _ => {}
+            match write_type {
+                WriteType::Put => self.props.num_puts += 1,
+                WriteType::Delete => self.props.num_deletes += 1,
+                _ => {}
+            }
         }
 
         // Add new row.
@@ -493,13 +509,24 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
     }
 }
 
-/// Can only be used for write CF.
+/// Can be used for write CF of TiDB/TxnKV, default CF of RawKV.
 #[derive(Default)]
 pub struct MvccPropertiesCollectorFactory {}
 
 impl TablePropertiesCollectorFactory<MvccPropertiesCollector> for MvccPropertiesCollectorFactory {
     fn create_table_properties_collector(&mut self, _: u32) -> MvccPropertiesCollector {
-        MvccPropertiesCollector::new()
+        MvccPropertiesCollector::new(KeyMode::Txn)
+    }
+}
+
+#[derive(Default)]
+pub struct RawMvccPropertiesCollectorFactory {}
+
+impl TablePropertiesCollectorFactory<MvccPropertiesCollector>
+    for RawMvccPropertiesCollectorFactory
+{
+    fn create_table_properties_collector(&mut self, _: u32) -> MvccPropertiesCollector {
+        MvccPropertiesCollector::new(KeyMode::Raw)
     }
 }
 
@@ -536,6 +563,7 @@ pub fn get_range_entries_and_versions(
 
 #[cfg(test)]
 mod tests {
+    use api_version::RawValue;
     use engine_traits::{MiscExt, SyncMutable, CF_WRITE, LARGE_CFS};
     use rand::Rng;
     use tempfile::Builder;
@@ -764,7 +792,7 @@ mod tests {
             ("ef", 6, WriteType::Put, DBEntryType::Delete),
             ("gh", 7, WriteType::Delete, DBEntryType::Put),
         ];
-        let mut collector = MvccPropertiesCollector::new();
+        let mut collector = MvccPropertiesCollector::new(KeyMode::Txn);
         for &(key, ts, write_type, entry_type) in &cases {
             let ts = ts.into();
             let k = Key::from_raw(key.as_bytes()).append_ts(ts);
@@ -783,6 +811,42 @@ mod tests {
         assert_eq!(props.max_row_versions, 3);
     }
 
+    #[test]
+    fn test_mvcc_properties_rawkv_mode() {
+        let test_raws = vec![
+            (b"r\0a", 1, false, u64::MAX),
+            (b"r\0a", 5, false, u64::MAX),
+            (b"r\0a", 7, false, u64::MAX),
+            (b"r\0b", 1, false, u64::MAX),
+            (b"r\0b", 1, true, u64::MAX),
+            (b"r\0c", 1, true, 10),
+            (b"r\0d", 1, true, 10),
+        ];
+
+        let mut collector = MvccPropertiesCollector::new(KeyMode::Raw);
+        for &(key, ts, is_delete, expire_ts) in &test_raws {
+            let encode_key = ApiV2::encode_raw_key(key, Some(ts.into()));
+            let k = keys::data_key(encode_key.as_encoded());
+            let v = ApiV2::encode_raw_value(RawValue {
+                user_value: &[0; 10][..],
+                expire_ts: Some(expire_ts),
+                is_delete,
+            });
+            collector.add(&k, &v, DBEntryType::Put, 0, 0);
+        }
+
+        let result = UserProperties(collector.finish());
+
+        let props = RocksMvccProperties::decode(&result).unwrap();
+        assert_eq!(props.min_ts, 1.into());
+        assert_eq!(props.max_ts, 7.into());
+        assert_eq!(props.num_rows, 4);
+        assert_eq!(props.num_deletes, 3);
+        assert_eq!(props.num_puts, 4);
+        assert_eq!(props.num_versions, 7);
+        assert_eq!(props.max_row_versions, 3);
+    }
+
     #[bench]
     fn bench_mvcc_properties(b: &mut Bencher) {
         let ts = 1.into();
@@ -796,7 +860,7 @@ mod tests {
             entries.push((k, w.as_ref().to_bytes()));
         }
 
-        let mut collector = MvccPropertiesCollector::new();
+        let mut collector = MvccPropertiesCollector::new(KeyMode::Txn);
         b.iter(|| {
             for &(ref k, ref v) in &entries {
                 collector.add(k, v, DBEntryType::Put, 0, 0);

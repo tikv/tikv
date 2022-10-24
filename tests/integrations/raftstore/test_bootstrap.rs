@@ -13,6 +13,7 @@ use raftstore::{
 };
 use resource_metering::CollectorRegHandle;
 use tempfile::Builder;
+use test_pd_client::{bootstrap_with_first_region, TestPdClient};
 use test_raftstore::*;
 use tikv::{import::SstImporter, server::Node};
 use tikv_util::{
@@ -111,6 +112,7 @@ fn test_node_bootstrap_with_prepared_data() {
         AutoSplitController::default(),
         ConcurrencyManager::new(1.into()),
         CollectorRegHandle::new_for_test(),
+        None,
     )
     .unwrap();
     assert!(

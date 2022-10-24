@@ -9,24 +9,27 @@ use std::{
     time::Duration,
 };
 
+use async_compression::futures::write::ZstdDecoder;
 use backup_stream::{
     errors::Result,
     metadata::{
+        keys::{KeyValue, MetaKey},
         store::{MetaStore, SlashEtcStore},
         MetadataClient, StreamTask,
     },
     observer::BackupStreamObserver,
     router::Router,
-    Endpoint, Task,
+    Endpoint, GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task,
 };
-use futures::{executor::block_on, Future};
+use futures::{executor::block_on, AsyncWriteExt, Future};
 use grpcio::ChannelBuilder;
 use kvproto::{
-    brpb::{Local, StorageBackend},
+    brpb::{CompressionType, Local, Metadata, StorageBackend},
     kvrpcpb::*,
     tikvpb::*,
 };
 use pd_client::PdClient;
+use protobuf::parse_from_bytes;
 use tempdir::TempDir;
 use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
 use test_util::retry;
@@ -96,7 +99,6 @@ struct ErrorStore<S> {
 pub struct SuiteBuilder {
     name: String,
     nodes: usize,
-    use_v3: bool,
     metastore_error: Box<dyn Fn(&str) -> Result<()> + Send + Sync>,
 }
 
@@ -105,14 +107,8 @@ impl SuiteBuilder {
         Self {
             name: s.to_owned(),
             nodes: 4,
-            use_v3: false,
             metastore_error: Box::new(|_| Ok(())),
         }
-    }
-
-    pub fn use_v3(mut self) -> Self {
-        self.use_v3 = true;
-        self
     }
 
     pub fn nodes(mut self, n: usize) -> Self {
@@ -132,7 +128,6 @@ impl SuiteBuilder {
         let Self {
             name: case,
             nodes: n,
-            use_v3,
             metastore_error,
         } = self;
 
@@ -160,7 +155,7 @@ impl SuiteBuilder {
         }
         suite.cluster.run();
         for id in 1..=(n as u64) {
-            suite.start_endpoint(id, use_v3);
+            suite.start_endpoint(id);
         }
         // We must wait until the endpoints get ready to watching the metastore, or some
         // modifies may be lost. Either make Endpoint::with_client wait until watch did
@@ -231,6 +226,7 @@ impl Suite {
         storage.set_local(local);
         task.info.set_storage(storage);
         task.info.set_table_filter(vec!["*.*".to_owned()].into());
+        task.info.set_compression_type(CompressionType::Zstd);
         task
     }
 
@@ -251,7 +247,7 @@ impl Suite {
         worker
     }
 
-    fn start_endpoint(&mut self, id: u64, use_v3: bool) {
+    fn start_endpoint(&mut self, id: u64) {
         let cluster = &mut self.cluster;
         let worker = self.endpoints.get_mut(&id).unwrap();
         let sim = cluster.sim.wl();
@@ -260,7 +256,6 @@ impl Suite {
         let regions = sim.region_info_accessors.get(&id).unwrap().clone();
         let mut cfg = BackupStreamConfig::default();
         cfg.enable = true;
-        cfg.use_checkpoint_v3 = use_v3;
         cfg.temp_path = format!("/{}/{}", self.temp_files.path().display(), id);
         let ob = self.obs.get(&id).unwrap().clone();
         let endpoint = Endpoint::new(
@@ -298,6 +293,44 @@ impl Suite {
         .unwrap();
         let name = name.to_owned();
         self.wait_with(move |r| block_on(r.get_task_info(&name)).is_ok())
+    }
+
+    /// This function tries to calculate the global checkpoint from the flush
+    /// status of nodes.
+    ///
+    /// NOTE: this won't check the region consistency for now, the checkpoint
+    /// may be weaker than expected.
+    fn global_checkpoint(&self) -> u64 {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.run(|| {
+            let tx = tx.clone();
+            Task::RegionCheckpointsOp(RegionCheckpointOperation::Get(
+                RegionSet::Universal,
+                Box::new(move |rs| rs.into_iter().for_each(|x| tx.send(x).unwrap())),
+            ))
+        });
+        drop(tx);
+
+        rx.into_iter()
+            .map(|r| match r {
+                GetCheckpointResult::Ok { checkpoint, .. } => checkpoint.into_inner(),
+                GetCheckpointResult::NotFound { .. }
+                | GetCheckpointResult::EpochNotMatch { .. } => {
+                    unreachable!()
+                }
+            })
+            .min()
+            .unwrap_or(0)
+    }
+
+    async fn advance_global_checkpoint(&self, task: &str) -> Result<()> {
+        let cp = self.global_checkpoint();
+        self.meta_store
+            .set(KeyValue(
+                MetaKey::central_global_checkpoint_of(task),
+                cp.to_be_bytes().to_vec(),
+            ))
+            .await
     }
 
     async fn write_records(&mut self, from: usize, n: usize, for_table: i64) -> HashSet<Vec<u8>> {
@@ -361,7 +394,42 @@ impl Suite {
         }
     }
 
-    fn check_for_write_records<'a>(
+    fn load_metadata_for_write_records(&self, path: &Path) -> HashMap<String, Vec<(usize, usize)>> {
+        let mut meta_map: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
+        for entry in WalkDir::new(path) {
+            let entry = entry.unwrap();
+            if entry.file_type().is_file()
+                && entry
+                    .file_name()
+                    .to_str()
+                    .map_or(false, |s| s.ends_with(".meta"))
+            {
+                let content = std::fs::read(entry.path()).unwrap();
+                let meta = parse_from_bytes::<Metadata>(content.as_ref()).unwrap();
+                for g in meta.file_groups.into_iter() {
+                    let path = g.path.split('/').last().unwrap();
+                    for f in g.data_files_info.into_iter() {
+                        let file_info = meta_map.get_mut(path);
+                        if let Some(v) = file_info {
+                            v.push((
+                                f.range_offset as usize,
+                                (f.range_offset + f.range_length) as usize,
+                            ));
+                        } else {
+                            let v = vec![(
+                                f.range_offset as usize,
+                                (f.range_offset + f.range_length) as usize,
+                            )];
+                            meta_map.insert(String::from(path), v);
+                        }
+                    }
+                }
+            }
+        }
+        meta_map
+    }
+
+    async fn check_for_write_records<'a>(
         &self,
         path: &Path,
         key_set: impl std::iter::Iterator<Item = &'a [u8]>,
@@ -370,6 +438,7 @@ impl Suite {
         let n = remain_keys.len();
         let mut extra_key = 0;
         let mut extra_len = 0;
+        let meta_map = self.load_metadata_for_write_records(path);
         for entry in WalkDir::new(path) {
             let entry = entry.unwrap();
             println!("checking: {:?}", entry);
@@ -379,21 +448,31 @@ impl Suite {
                     .to_str()
                     .map_or(false, |s| s.ends_with(".log"))
             {
-                let content = std::fs::read(entry.path()).unwrap();
-                let mut iter = EventIterator::new(content);
-                loop {
-                    if !iter.valid() {
-                        break;
-                    }
-                    iter.next().unwrap();
-                    if !remain_keys.remove(iter.key()) {
-                        extra_key += 1;
-                        extra_len += iter.key().len() + iter.value().len();
-                    }
+                let buf = std::fs::read(entry.path()).unwrap();
+                let file_infos = meta_map.get(entry.file_name().to_str().unwrap()).unwrap();
+                for &file_info in file_infos {
+                    let mut decoder = ZstdDecoder::new(Vec::new());
+                    let pbuf: &[u8] = &buf[file_info.0..file_info.1];
+                    decoder.write_all(pbuf).await.unwrap();
+                    decoder.flush().await.unwrap();
+                    decoder.close().await.unwrap();
+                    let content = decoder.into_inner();
 
-                    let value = iter.value();
-                    let wf = WriteRef::parse(value).unwrap();
-                    assert_eq!(wf.short_value, Some(b"hello, world" as &[u8]));
+                    let mut iter = EventIterator::new(content);
+                    loop {
+                        if !iter.valid() {
+                            break;
+                        }
+                        iter.next().unwrap();
+                        if !remain_keys.remove(iter.key()) {
+                            extra_key += 1;
+                            extra_len += iter.key().len() + iter.value().len();
+                        }
+
+                        let value = iter.value();
+                        let wf = WriteRef::parse(value).unwrap();
+                        assert_eq!(wf.short_value, Some(b"hello, world" as &[u8]));
+                    }
                 }
             }
         }
@@ -647,8 +726,8 @@ mod test {
     use std::time::{Duration, Instant};
 
     use backup_stream::{
-        errors::Error, metadata::MetadataClient, router::TaskSelector, GetCheckpointResult,
-        RegionCheckpointOperation, RegionSet, Task,
+        errors::Error, router::TaskSelector, GetCheckpointResult, RegionCheckpointOperation,
+        RegionSet, Task,
     };
     use pd_client::PdClient;
     use tikv_util::{box_err, defer, info, HandyRwLock};
@@ -660,7 +739,7 @@ mod test {
 
     #[test]
     fn basic() {
-        let mut suite = super::SuiteBuilder::new_named("basic").use_v3().build();
+        let mut suite = super::SuiteBuilder::new_named("basic").build();
         fail::cfg("try_start_observe", "1*return").unwrap();
 
         run_async_test(async {
@@ -671,19 +750,19 @@ mod test {
             let round2 = suite.write_records(256, 128, 1).await;
             suite.force_flush_files("test_basic");
             suite.wait_for_flush();
-            suite.check_for_write_records(
-                suite.flushed_files.path(),
-                round1.union(&round2).map(Vec::as_slice),
-            );
+            suite
+                .check_for_write_records(
+                    suite.flushed_files.path(),
+                    round1.union(&round2).map(Vec::as_slice),
+                )
+                .await;
         });
         suite.cluster.shutdown();
     }
 
     #[test]
     fn with_split() {
-        let mut suite = super::SuiteBuilder::new_named("with_split")
-            .use_v3()
-            .build();
+        let mut suite = super::SuiteBuilder::new_named("with_split").build();
         run_async_test(async {
             let round1 = suite.write_records(0, 128, 1).await;
             suite.must_split(&make_split_key_at_record(1, 42));
@@ -691,10 +770,12 @@ mod test {
             let round2 = suite.write_records(256, 128, 1).await;
             suite.force_flush_files("test_with_split");
             suite.wait_for_flush();
-            suite.check_for_write_records(
-                suite.flushed_files.path(),
-                round1.union(&round2).map(Vec::as_slice),
-            );
+            suite
+                .check_for_write_records(
+                    suite.flushed_files.path(),
+                    round1.union(&round2).map(Vec::as_slice),
+                )
+                .await;
         });
         suite.cluster.shutdown();
     }
@@ -716,7 +797,7 @@ mod test {
     ///   scanning get the snapshot.
     #[test]
     fn with_split_txn() {
-        let mut suite = super::SuiteBuilder::new_named("split_txn").use_v3().build();
+        let mut suite = super::SuiteBuilder::new_named("split_txn").build();
         run_async_test(async {
             let start_ts = suite.cluster.pd_client.get_tso().await.unwrap();
             let keys = (1..1960).map(|i| make_record_key(1, i)).collect::<Vec<_>>();
@@ -743,10 +824,12 @@ mod test {
                         .into_encoded()
                 })
                 .collect::<Vec<_>>();
-            suite.check_for_write_records(
-                suite.flushed_files.path(),
-                keys_encoded.iter().map(Vec::as_slice),
-            );
+            suite
+                .check_for_write_records(
+                    suite.flushed_files.path(),
+                    keys_encoded.iter().map(Vec::as_slice),
+                )
+                .await;
         });
         suite.cluster.shutdown();
     }
@@ -754,9 +837,7 @@ mod test {
     #[test]
     /// This case tests whether the backup can continue when the leader failes.
     fn leader_down() {
-        let mut suite = super::SuiteBuilder::new_named("leader_down")
-            .use_v3()
-            .build();
+        let mut suite = super::SuiteBuilder::new_named("leader_down").build();
         suite.must_register_task(1, "test_leader_down");
         suite.sync();
         let round1 = run_async_test(suite.write_records(0, 128, 1));
@@ -765,10 +846,10 @@ mod test {
         let round2 = run_async_test(suite.write_records(256, 128, 1));
         suite.force_flush_files("test_leader_down");
         suite.wait_for_flush();
-        suite.check_for_write_records(
+        run_async_test(suite.check_for_write_records(
             suite.flushed_files.path(),
             round1.union(&round2).map(Vec::as_slice),
-        );
+        ));
         suite.cluster.shutdown();
     }
 
@@ -787,20 +868,11 @@ mod test {
             suite.write_records(258, 128, 1).await;
             suite.force_flush_files("test_async_commit");
             std::thread::sleep(Duration::from_secs(4));
-            let cli = MetadataClient::new(suite.meta_store.clone(), 1);
-            assert_eq!(
-                cli.global_progress_of_task("test_async_commit")
-                    .await
-                    .unwrap(),
-                256
-            );
+            assert_eq!(suite.global_checkpoint(), 256);
             suite.just_commit_a_key(make_record_key(1, 256), TimeStamp::new(256), ts);
             suite.force_flush_files("test_async_commit");
             suite.wait_for_flush();
-            let cp = cli
-                .global_progress_of_task("test_async_commit")
-                .await
-                .unwrap();
+            let cp = suite.global_checkpoint();
             assert!(cp > 256, "it is {:?}", cp);
         });
         suite.cluster.shutdown();
@@ -816,6 +888,7 @@ mod test {
         run_async_test(suite.write_records(0, 1, 1));
         suite.force_flush_files("test_fatal_error");
         suite.wait_for_flush();
+        run_async_test(suite.advance_global_checkpoint("test_fatal_error")).unwrap();
         let (victim, endpoint) = suite.endpoints.iter().next().unwrap();
         endpoint
             .scheduler()
@@ -824,24 +897,23 @@ mod test {
                 Box::new(Error::Other(box_err!("everything is alright"))),
             ))
             .unwrap();
-        let meta_cli = suite.get_meta_cli();
         suite.sync();
-        let err = run_async_test(meta_cli.get_last_error("test_fatal_error", *victim))
-            .unwrap()
-            .unwrap();
+        let err = run_async_test(
+            suite
+                .get_meta_cli()
+                .get_last_error("test_fatal_error", *victim),
+        )
+        .unwrap()
+        .unwrap();
         info!("err"; "err" => ?err);
         assert_eq!(err.error_code, error_code::backup_stream::OTHER.code);
         assert!(err.error_message.contains("everything is alright"));
         assert_eq!(err.store_id, *victim);
-        let paused = run_async_test(meta_cli.check_task_paused("test_fatal_error")).unwrap();
+        let paused =
+            run_async_test(suite.get_meta_cli().check_task_paused("test_fatal_error")).unwrap();
         assert!(paused);
         let safepoints = suite.cluster.pd_client.gc_safepoints.rl();
-        let checkpoint = run_async_test(
-            suite
-                .get_meta_cli()
-                .global_progress_of_task("test_fatal_error"),
-        )
-        .unwrap();
+        let checkpoint = suite.global_checkpoint();
 
         assert!(
             safepoints.iter().any(|sp| {
@@ -855,54 +927,9 @@ mod test {
     }
 
     #[test]
-    fn inflight_messages() {
-        // We should remove the failpoints when paniked or we may get stucked.
-        defer! {{
-            fail::remove("delay_on_start_observe");
-            fail::remove("delay_on_flush");
-        }}
-        let mut suite = super::SuiteBuilder::new_named("inflight_message")
-            .nodes(3)
-            .build();
-        suite.must_register_task(1, "inflight_message");
-        run_async_test(suite.write_records(0, 128, 1));
-        fail::cfg("delay_on_flush", "pause").unwrap();
-        suite.force_flush_files("inflight_message");
-        fail::cfg("delay_on_start_observe", "pause").unwrap();
-        suite.must_shuffle_leader(1);
-        // Handling the `StartObserve` message and doing flush are executed
-        // asynchronously. Make a delay of unblocking flush thread for make sure
-        // we have handled the `StartObserve`.
-        std::thread::sleep(Duration::from_secs(1));
-        fail::cfg("delay_on_flush", "off").unwrap();
-        suite.wait_for_flush();
-        let checkpoint = run_async_test(
-            suite
-                .get_meta_cli()
-                .global_progress_of_task("inflight_message"),
-        );
-        fail::cfg("delay_on_start_observe", "off").unwrap();
-        // The checkpoint should not advance if there are inflight messages.
-        assert_eq!(checkpoint.unwrap(), 0);
-        run_async_test(suite.write_records(256, 128, 1));
-        suite.force_flush_files("inflight_message");
-        suite.wait_for_flush();
-        let checkpoint = run_async_test(
-            suite
-                .get_meta_cli()
-                .global_progress_of_task("inflight_message"),
-        )
-        .unwrap();
-        // The checkpoint should be advanced as expected when the inflight message has
-        // been consumed.
-        assert!(checkpoint > 512, "checkpoint = {}", checkpoint);
-    }
-
-    #[test]
     fn region_checkpoint_info() {
         let mut suite = super::SuiteBuilder::new_named("checkpoint_info")
             .nodes(1)
-            .use_v3()
             .build();
         suite.must_register_task(1, "checkpoint_info");
         suite.must_split(&make_split_key_at_record(1, 42));
@@ -944,10 +971,10 @@ mod test {
         let keys2 = run_async_test(suite.write_records(256, 128, 1));
         suite.force_flush_files("region_failure");
         suite.wait_for_flush();
-        suite.check_for_write_records(
+        run_async_test(suite.check_for_write_records(
             suite.flushed_files.path(),
             keys.union(&keys2).map(|s| s.as_slice()),
-        );
+        ));
     }
 
     #[test]
@@ -969,10 +996,10 @@ mod test {
         let keys2 = run_async_test(suite.write_records(256, 128, 1));
         suite.force_flush_files("initial_scan_failure");
         suite.wait_for_flush();
-        suite.check_for_write_records(
+        run_async_test(suite.check_for_write_records(
             suite.flushed_files.path(),
             keys.union(&keys2).map(|s| s.as_slice()),
-        );
+        ));
     }
 
     #[test]
@@ -1015,7 +1042,6 @@ mod test {
 
         let mut suite = SuiteBuilder::new_named("fail_to_refresh_region")
             .nodes(1)
-            .use_v3()
             .build();
 
         suite.must_register_task(1, "fail_to_refresh_region");
@@ -1029,10 +1055,10 @@ mod test {
         let keys2 = run_async_test(suite.write_records(256, 128, 1));
         suite.force_flush_files("fail_to_refresh_region");
         suite.wait_for_flush();
-        suite.check_for_write_records(
+        run_async_test(suite.check_for_write_records(
             suite.flushed_files.path(),
             keys.union(&keys2).map(|s| s.as_slice()),
-        );
+        ));
         let leader = suite.cluster.leader_of_region(1).unwrap().store_id;
         let (tx, rx) = std::sync::mpsc::channel();
         suite.endpoints[&leader]
@@ -1076,6 +1102,7 @@ mod test {
         suite.force_flush_files("pessimistic_lock");
         suite.wait_for_flush();
         std::thread::sleep(Duration::from_secs(1));
+        run_async_test(suite.advance_global_checkpoint("pessimistic_lock")).unwrap();
         let checkpoint = run_async_test(
             suite
                 .get_meta_cli()
