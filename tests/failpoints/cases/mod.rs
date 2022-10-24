@@ -38,4 +38,3 @@ mod test_transaction;
 mod test_transfer_leader;
 mod test_ttl;
 mod test_unsafe_recovery;
-mod test_witness;

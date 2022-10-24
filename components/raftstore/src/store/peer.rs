@@ -33,9 +33,9 @@ use kvproto::{
     metapb::{self, PeerRole},
     pdpb::{self, PeerStats},
     raft_cmdpb::{
-        self, AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType,
-        CommitMergeRequest, PutRequest, RaftCmdRequest, RaftCmdResponse, Request,
-        TransferLeaderRequest, TransferLeaderResponse,
+        self, AdminCmdType, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
+        PutRequest, RaftCmdRequest, RaftCmdResponse, Request, TransferLeaderRequest,
+        TransferLeaderResponse,
     },
     raft_serverpb::{
         ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
@@ -2311,7 +2311,6 @@ where
                             "region_id" => self.region_id,
                         );
                     }
-                    self.maybe_witness_transfer_leader(ctx);
                 }
                 StateRole::Follower => {
                     self.leader_lease.expire();
@@ -3939,78 +3938,6 @@ where
         };
         prs.apply_conf(cfg, changes, self.raft_group.raft.raft_log.last_index());
         Ok(prs)
-    }
-
-    pub fn maybe_witness_transfer_leader<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
-        if !(self.is_witness() && self.is_leader()) {
-            return;
-        }
-        fail_point!("witness_transfer_leader", |_| {});
-
-        if self.raft_group.raft.lead_transferee.is_some() {
-            // already being in transfer leader
-            return;
-        }
-
-        let prs = self.raft_group.raft.prs();
-        // find other peers that are not down
-        // TODO: fitler out non-witnesses waiting for data
-        let (_, peer) = self
-            .region()
-            .get_peers()
-            .iter()
-            .filter(|peer| peer.id != self.peer.id)
-            .filter(|peer| !peer.is_witness && peer.role != PeerRole::Learner)
-            .filter(|peer| {
-                if let Some(instant) = self.peer_heartbeats.get(&peer.get_id()) {
-                    let elapsed = instant.saturating_elapsed();
-                    if elapsed < ctx.cfg.max_peer_down_duration.0 {
-                        return true;
-                    }
-                } else {
-                    info!("can't find peer heartbeat"; "peer_id" => peer.get_id());
-                }
-                false
-            })
-            .fold((0, None), |(max_matched, chosen), peer| {
-                if let Some(pr) = prs.get(peer.id) {
-                    if pr.matched > max_matched {
-                        return (pr.matched, Some(peer));
-                    }
-                }
-                (max_matched, chosen)
-            });
-
-        if peer.is_none() {
-            info!(
-                "witness no target to transfer leader";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-                "region_peers" => ?self.region().get_peers(),
-            );
-            return;
-        }
-
-        let mut admin = AdminRequest::default();
-        admin.set_cmd_type(AdminCmdType::TransferLeader);
-        admin.mut_transfer_leader().set_peer(peer.unwrap().clone());
-
-        let mut req = RaftCmdRequest::default();
-        req.mut_header().set_region_id(self.region_id);
-        req.mut_header()
-            .set_region_epoch(self.region().get_region_epoch().clone());
-        req.mut_header().set_peer(self.peer.clone());
-        req.set_admin_request(admin);
-
-        let cmd = RaftCommand::new(req, Callback::None);
-        if let Err(e) = ctx.router.send_raft_command(cmd) {
-            error!(
-                "witness send transfer leader failed";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-                "err" => ?e,
-            );
-        }
     }
 
     pub fn transfer_leader(&mut self, peer: &metapb::Peer) {

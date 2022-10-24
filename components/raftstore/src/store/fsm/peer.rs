@@ -2054,7 +2054,6 @@ where
         self.fsm.peer.retry_pending_reads(&self.ctx.cfg);
 
         self.check_force_leader();
-        self.fsm.peer.maybe_witness_transfer_leader(self.ctx);
 
         let mut res = None;
         if self.ctx.cfg.hibernate_regions {
