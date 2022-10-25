@@ -19,6 +19,7 @@ use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Config as BatchSystemConfig, Fsm, HandleResult,
     HandlerBuilder, PollHandler, Priority,
 };
+use causal_ts::CausalTsProviderImpl;
 use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{unbounded, TryRecvError, TrySendError};
@@ -45,7 +46,7 @@ use resource_metering::CollectorRegHandle;
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
-    box_err, box_try,
+    box_try,
     config::{Tracker, VersionTrack},
     debug, defer, error,
     future::poll_future_notify,
@@ -101,7 +102,7 @@ use crate::{
         Callback, CasualMessage, GlobalReplicationState, InspectedRaftMessage, MergeResultKind,
         PdTask, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapManager, StoreMsg, StoreTick,
     },
-    Result,
+    Error, Result,
 };
 
 type Key = Vec<u8>;
@@ -557,6 +558,8 @@ where
             self.cfg.report_region_buckets_tick_interval.0;
         self.tick_batch[PeerTick::CheckLongUncommitted as usize].wait_duration =
             self.cfg.check_long_uncommitted_interval.0;
+        self.tick_batch[PeerTick::CheckPeersAvailability as usize].wait_duration =
+            self.cfg.check_peers_availability_interval.0;
     }
 }
 
@@ -708,10 +711,20 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 StoreMsg::Tick(tick) => self.on_tick(tick),
                 StoreMsg::RaftMessage(msg) => {
                     if let Err(e) = self.on_raft_message(msg) {
-                        error!(?e;
-                            "handle raft message failed";
-                            "store_id" => self.fsm.store.id,
-                        );
+                        if matches!(&e, Error::RegionNotRegistered { .. }) {
+                            // This may happen in normal cases when add-peer runs slowly
+                            // occasionally after a region split. Avoid printing error
+                            // log here, which may confuse users.
+                            info!("handle raft message failed";
+                                "err" => ?e,
+                                "store_id" => self.fsm.store.id,
+                            );
+                        } else {
+                            error!(?e;
+                                "handle raft message failed";
+                                "store_id" => self.fsm.store.id,
+                            );
+                        }
                     }
                 }
                 StoreMsg::CompactedEvent(event) => self.on_compaction_finished(event),
@@ -1451,6 +1464,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         health_service: Option<HealthService>,
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1589,6 +1603,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             collector_reg_handle,
             region_read_progress,
             health_service,
+            causal_ts_provider,
         )?;
         Ok(())
     }
@@ -1605,6 +1620,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         collector_reg_handle: CollectorRegHandle,
         region_read_progress: RegionReadProgressRegistry,
         health_service: Option<HealthService>,
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
@@ -1686,6 +1702,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             region_read_progress,
             health_service,
             coprocessor_host,
+            causal_ts_provider,
         );
         assert!(workers.pd_worker.start_with_timer(pd_runner));
 
@@ -1785,11 +1802,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                     .message_dropped
                     .region_nonexistent
                     .inc();
-                return Err(box_err!(
-                    "[region {}] region not exist but not tombstone: {:?}",
+                return Err(Error::RegionNotRegistered {
                     region_id,
-                    local_state
-                ));
+                    local_state,
+                });
             }
             info!(
                 "region doesn't exist yet, wait for it to be split";

@@ -4,7 +4,6 @@ use std::time::SystemTime;
 
 use batch_system::Fsm;
 use collections::HashMap;
-use crossbeam::channel::TryRecvError;
 use engine_traits::{KvEngine, RaftEngine};
 use raftstore::store::{Config, ReadDelegate};
 use slog::{o, Logger};

@@ -204,7 +204,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
                 self.statistics.data.processed_keys += 1;
                 Ok(val)
             }
-            None => Err(default_not_found_error(key.to_raw()?, "get")),
+            None => Err(default_not_found_error(k.into_encoded(), "get")),
         }
     }
 
@@ -2163,7 +2163,10 @@ pub mod tests {
             },
             Case {
                 // write has no short_value, the reader has a cursor, got nothing
-                expected: Err(default_not_found_error(k.to_vec(), "get")),
+                expected: Err(default_not_found_error(
+                    Key::from_raw(k).append_ts(TimeStamp::new(3)).into_encoded(),
+                    "get",
+                )),
                 modifies: vec![Modify::Put(
                     CF_WRITE,
                     Key::from_raw(k).append_ts(TimeStamp::new(1)),
@@ -2189,7 +2192,10 @@ pub mod tests {
             },
             Case {
                 // write has no short_value, the reader has no cursor, got nothing
-                expected: Err(default_not_found_error(k.to_vec(), "get")),
+                expected: Err(default_not_found_error(
+                    Key::from_raw(k).append_ts(TimeStamp::new(5)).into_encoded(),
+                    "get",
+                )),
                 modifies: vec![],
                 scan_mode: None,
                 key: Key::from_raw(k),
@@ -2248,7 +2254,10 @@ pub mod tests {
                 // some write for `key` at `ts` exists, load data return Err
                 // todo: "some write for `key` at `ts` exists" should be checked by `test_get_write`
                 // "load data return Err" is checked by test_load_data
-                expected: Err(default_not_found_error(k.to_vec(), "get")),
+                expected: Err(default_not_found_error(
+                    Key::from_raw(k).append_ts(TimeStamp::new(2)).into_encoded(),
+                    "get",
+                )),
                 modifies: vec![Modify::Put(
                     CF_WRITE,
                     Key::from_raw(k).append_ts(TimeStamp::new(2)),
@@ -2428,7 +2437,7 @@ pub mod tests {
             },
         ];
         for (i, case) in cases.into_iter().enumerate() {
-            let engine = TestEngineBuilder::new().build().unwrap();
+            let mut engine = TestEngineBuilder::new().build().unwrap();
             let cm = ConcurrencyManager::new(42.into());
             let mut txn = MvccTxn::new(TimeStamp::new(10), cm.clone());
             for (write_record, put_ts) in case.written.iter() {
@@ -2461,7 +2470,7 @@ pub mod tests {
 
         // Must return Oldvalue::None when prev_write_loaded is true and prev_write is
         // None.
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true);
         let prev_write_loaded = true;

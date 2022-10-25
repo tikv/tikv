@@ -9,7 +9,7 @@ use std::{
 };
 
 use api_version::{dispatch_api_version, KvFormat};
-use causal_ts::CausalTs;
+use causal_ts::CausalTsProviderImpl;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
@@ -155,7 +155,7 @@ pub struct ServerCluster {
     raft_client: RaftClient<AddressMap, RaftStoreBlackHole, RocksEngine>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     env: Arc<Environment>,
-    pub causal_ts_providers: HashMap<u64, Arc<CausalTs>>,
+    pub causal_ts_providers: HashMap<u64, Arc<CausalTsProviderImpl>>,
 }
 
 impl ServerCluster {
@@ -226,7 +226,7 @@ impl ServerCluster {
         self.concurrency_managers.get(&node_id).unwrap().clone()
     }
 
-    pub fn get_causal_ts_provider(&self, node_id: u64) -> Option<Arc<CausalTs>> {
+    pub fn get_causal_ts_provider(&self, node_id: u64) -> Option<Arc<CausalTsProviderImpl>> {
         self.causal_ts_providers.get(&node_id).cloned()
     }
 
@@ -350,6 +350,8 @@ impl ServerCluster {
             let mut rts_worker = LazyWorker::new("resolved-ts");
             let rts_ob = resolved_ts::Observer::new(rts_worker.scheduler());
             rts_ob.register_to(&mut coprocessor_host);
+            // resolved ts endpoint needs store id.
+            store_meta.lock().unwrap().store_id = Some(node_id);
             // Resolved ts endpoint
             let rts_endpoint = resolved_ts::Endpoint::new(
                 &cfg.resolved_ts,
@@ -370,21 +372,18 @@ impl ServerCluster {
         };
 
         if ApiVersion::V2 == F::TAG {
-            let causal_ts_provider: Arc<CausalTs> = Arc::new(
+            let causal_ts_provider: Arc<CausalTsProviderImpl> = Arc::new(
                 block_on(causal_ts::BatchTsoProvider::new_opt(
                     self.pd_client.clone(),
                     cfg.causal_ts.renew_interval.0,
-                    cfg.causal_ts.available_interval.0,
+                    cfg.causal_ts.alloc_ahead_buffer.0,
                     cfg.causal_ts.renew_batch_min_size,
                     cfg.causal_ts.renew_batch_max_size,
                 ))
                 .unwrap()
                 .into(),
             );
-            self.causal_ts_providers
-                .insert(node_id, causal_ts_provider.clone());
-            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
-            causal_ob.register_to(&mut coprocessor_host);
+            self.causal_ts_providers.insert(node_id, causal_ts_provider);
         }
 
         // Start resource metering.
@@ -583,6 +582,8 @@ impl ServerCluster {
             max_unified_read_pool_thread_count,
             None,
         );
+
+        let causal_ts_provider = self.get_causal_ts_provider(node_id);
         node.start(
             engines,
             simulate_trans.clone(),
@@ -595,6 +596,7 @@ impl ServerCluster {
             auto_split_controller,
             concurrency_manager.clone(),
             collector_reg_handle,
+            causal_ts_provider,
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
@@ -708,13 +710,13 @@ impl Simulator for ServerCluster {
     }
 
     fn async_read(
-        &self,
+        &mut self,
         node_id: u64,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
     ) {
-        match self.metas.get(&node_id) {
+        match self.metas.get_mut(&node_id) {
             None => {
                 let e: RaftError = box_err!("missing sender for store {}", node_id);
                 let mut resp = RaftCmdResponse::default();
@@ -781,7 +783,7 @@ impl Cluster<ServerCluster> {
             ctx.set_peer(leader);
             ctx.set_region_epoch(epoch);
 
-            let storage = self.sim.rl().storages.get(&store_id).unwrap().clone();
+            let mut storage = self.sim.rl().storages.get(&store_id).unwrap().clone();
             let snap_ctx = SnapContext {
                 pb_ctx: &ctx,
                 ..Default::default()

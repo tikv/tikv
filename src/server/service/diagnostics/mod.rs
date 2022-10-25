@@ -28,7 +28,8 @@ use tokio::runtime::Handle;
 use crate::server::Error;
 
 mod log;
-mod sys;
+/// Information about the current hardware and operating system.
+pub mod sys;
 
 lazy_static! {
     pub static ref SYS_INFO: Mutex<sysinfo::System> = Mutex::new(sysinfo::System::new());

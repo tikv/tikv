@@ -5,8 +5,9 @@ edition = "2018"
 publish = false
 
 [dependencies]
-futures-util = { version = "0.3", default-features = false, features = ["io"] }
 async-trait = "0.1"
+cloud = { workspace = true }
+futures-util = { version = "0.3", default-features = false, features = ["io"] }
 http = "0.2.0"
 hyper = "0.14"
 hyper-tls = "0.5"
@@ -16,8 +17,7 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tame-gcs = { version = "0.10", features = ["async-multipart"] }
 tame-oauth = "0.4.7"
-cloud = { path = "../", default-features = false }
-tikv_util = { path = "../../tikv_util", default-features = false }
+tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["time"] }
 url = "2.0"
 

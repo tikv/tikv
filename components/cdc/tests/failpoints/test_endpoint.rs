@@ -493,7 +493,7 @@ fn test_cdc_rawkv_resolved_ts() {
 
     let pause_write_fp = "raftkv_async_write";
     fail::cfg(pause_write_fp, "pause").unwrap();
-    let ts = ts_provider.get_ts().unwrap();
+    let ts = block_on(ts_provider.async_get_ts()).unwrap();
     let handle = thread::spawn(move || {
         let _ = client.raw_put(&put_req).unwrap();
     });
@@ -501,7 +501,20 @@ fn test_cdc_rawkv_resolved_ts() {
     sleep_ms(100);
 
     let event = receive_event(true).resolved_ts.unwrap();
-    assert_eq!(ts.next(), TimeStamp::from(event.ts));
+    assert!(
+        ts.next() >= TimeStamp::from(event.ts),
+        "{} {}",
+        ts,
+        TimeStamp::from(event.ts)
+    );
+    // Receive again to make sure resolved ts <= ongoing request's ts.
+    let event = receive_event(true).resolved_ts.unwrap();
+    assert!(
+        ts.next() >= TimeStamp::from(event.ts),
+        "{} {}",
+        ts,
+        TimeStamp::from(event.ts)
+    );
 
     fail::remove(pause_write_fp);
     handle.join().unwrap();

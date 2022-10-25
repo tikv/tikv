@@ -28,12 +28,12 @@ use protobuf::Message as _;
 use raft::{eraftpb, Ready};
 use raftstore::store::{util, ExtraStates, FetchedLogs, Transport, WriteTask};
 use slog::{debug, error, trace, warn};
+use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 
 pub use self::async_writer::AsyncWriter;
 use crate::{
     batch::StoreContext,
-    fsm::{PeerFsm, PeerFsmDelegate},
-    operation::DestroyProgress,
+    fsm::PeerFsmDelegate,
     raft::{Peer, Storage},
     router::PeerTick,
 };
@@ -83,7 +83,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         if msg.has_merge_target() {
             unimplemented!();
-            return;
+            // return;
         }
         // We don't handle stale message like v1, as we rely on leader to actively
         // cleanup stale peers.
@@ -103,7 +103,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         if msg.has_extra_msg() {
             unimplemented!();
-            return;
+            // return;
         }
         // TODO: drop all msg append when the peer is uninitialized and has conflict
         // ranges with other peers.
@@ -229,7 +229,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // TODO: skip handling committed entries if a snapshot is being applied
         // asynchronously.
         if self.is_leader() {
-            // TODO: Update lease
+            for entry in committed_entries.iter().rev() {
+                // TODO: handle raft_log_size_hint
+                let propose_time = self
+                    .proposals()
+                    .find_propose_time(entry.get_term(), entry.get_index());
+                if let Some(propose_time) = propose_time {
+                    // We must renew current_time because this value may be created a long time ago.
+                    // If we do not renew it, this time may be smaller than propose_time of a
+                    // command, which was proposed in another thread while this thread receives its
+                    // AppendEntriesResponse and is ready to calculate its commit-log-duration.
+                    ctx.current_time.replace(monotonic_raw_now());
+                    ctx.raft_metrics.commit_log.observe(duration_to_sec(
+                        (ctx.current_time.unwrap() - propose_time).to_std().unwrap(),
+                    ));
+                    self.maybe_renew_leader_lease(propose_time, &mut ctx.store_meta, None);
+                    break;
+                }
+            }
         }
         self.schedule_apply_committed_entries(ctx, committed_entries);
     }
@@ -244,11 +261,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn handle_raft_ready<T: Transport>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
         let has_ready = self.reset_has_ready();
         if !has_ready || self.destroy_progress().started() {
+            #[cfg(feature = "testexport")]
+            self.async_writer.notify_flush();
             return;
         }
         ctx.has_ready = true;
 
         if !self.raft_group().has_ready() && (self.serving() || self.postpond_destroy()) {
+            #[cfg(feature = "testexport")]
+            self.async_writer.notify_flush();
             return;
         }
 
@@ -319,6 +340,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
 
         ctx.raft_metrics.ready.has_ready_region.inc();
+        #[cfg(feature = "testexport")]
+        self.async_writer.notify_flush();
     }
 
     /// Called when an asynchronously write finishes.
@@ -354,6 +377,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // is persisted.
             self.finish_destroy(ctx);
         }
+    }
+
+    #[cfg(feature = "testexport")]
+    pub fn on_wait_flush(&mut self, ch: crate::router::FlushChannel) {
+        self.async_writer.subscirbe_flush(ch);
     }
 }
 

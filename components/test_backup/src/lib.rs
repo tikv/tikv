@@ -339,7 +339,7 @@ impl TestSuite {
         let mut total_kvs = 0;
         let mut total_bytes = 0;
         let sim = self.cluster.sim.rl();
-        let engine = sim.storages[&self.context.get_peer().get_store_id()].clone();
+        let mut engine = sim.storages[&self.context.get_peer().get_store_id()].clone();
         let snap_ctx = SnapContext {
             pb_ctx: &self.context,
             ..Default::default()
@@ -382,7 +382,7 @@ impl TestSuite {
         let mut total_bytes = 0;
 
         let sim = self.cluster.sim.rl();
-        let engine = sim.storages[&self.context.get_peer().get_store_id()].clone();
+        let mut engine = sim.storages[&self.context.get_peer().get_store_id()].clone();
         let snap_ctx = SnapContext {
             pb_ctx: &self.context,
             ..Default::default()
