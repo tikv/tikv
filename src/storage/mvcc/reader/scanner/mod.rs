@@ -366,7 +366,7 @@ where
         || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
     {
         return Err(default_not_found_error(
-            user_key.to_raw()?,
+            user_key.clone().append_ts(write_start_ts).into_encoded(),
             "near_load_data_by_write",
         ));
     }
@@ -391,7 +391,7 @@ where
         || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
     {
         return Err(default_not_found_error(
-            user_key.to_raw()?,
+            user_key.clone().append_ts(write_start_ts).into_encoded(),
             "near_reverse_load_data_by_write",
         ));
     }
