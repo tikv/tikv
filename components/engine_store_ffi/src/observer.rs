@@ -657,13 +657,19 @@ fn retrieve_sst_files(snap: &store::Snapshot) -> Vec<(PathBuf, ColumnFamilyType)
         }
         // We have only one file for each cf for now.
         let mut full_paths = cf_file.file_paths();
-        if full_paths.len() != 1 {
-            tikv_util::warn!("observe multi-file snapshot";
-                "snap" => ?snap
-            );
-        }
         assert!(full_paths.len() != 0);
-        {
+        if full_paths.len() != 1 {
+            // Multi sst files for one cf.
+            tikv_util::info!("observe multi-file snapshot";
+                "snap" => ?snap,
+                "cf" => ?cf_file.cf,
+                "total" => full_paths.len(),
+            );
+            for f in full_paths.into_iter() {
+                ssts.push((f, name_to_cf(cf_file.cf)));
+            }
+        } else {
+            // Old case, one file for one cf.
             ssts.push((full_paths.remove(0), name_to_cf(cf_file.cf)));
         }
     }

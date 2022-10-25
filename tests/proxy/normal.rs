@@ -1528,19 +1528,7 @@ mod snapshot {
         // add peer (engine_2,engine_2) to region 1.
         pd_client.must_add_peer(r1, new_peer(eng_ids[1], eng_ids[1]));
 
-        if is_multi {
-            // TODO(tiflash) We can not handle multi snap for now.
-            // Change this test if we support later.
-            std::thread::sleep(std::time::Duration::from_millis(2500));
-            check_key(
-                &cluster,
-                b"000",
-                &first_value,
-                Some(false),
-                None,
-                Some(vec![eng_ids[1]]),
-            );
-        } else {
+        {
             let (key, value) = (b"k2", b"v2");
             cluster.must_put(key, value);
             // we can get in memory, since snapshot is pre handled, though it is not

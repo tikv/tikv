@@ -576,19 +576,6 @@ impl Snapshot {
         snapshot_meta: SnapshotMeta,
     ) -> RaftStoreResult<Self> {
         let mut s = Self::new(dir, key, false, CheckPolicy::ErrNotAllowed, mgr)?;
-        // TODO(tiflash) remove when we support big snapshot and multi-file
-        if snapshot_meta.get_cf_files().len() > 3 {
-            error!(
-                "we don't support multi-file snapshot, snap_key {:?}, got {}",
-                key,
-                snapshot_meta.get_cf_files().len(),
-            );
-            return Err(box_err!(
-                "we don't support multi-file snapshot, snap_key {:?}, got {}",
-                key,
-                snapshot_meta.get_cf_files().len()
-            ));
-        }
         s.set_snapshot_meta(snapshot_meta)?;
         if s.exists() {
             return Ok(s);
