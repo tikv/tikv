@@ -29,6 +29,8 @@ pub struct AsyncWriter<EK: KvEngine, ER: RaftEngine> {
     write_router: WriteRouter<EK, ER>,
     unpersisted_readies: VecDeque<UnpersistedReady>,
     persisted_number: u64,
+    #[cfg(feature = "testexport")]
+    flush_subscribers: VecDeque<(u64, crate::router::FlushChannel)>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
@@ -38,6 +40,8 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
             write_router,
             unpersisted_readies: VecDeque::new(),
             persisted_number: 0,
+            #[cfg(feature = "testexport")]
+            flush_subscribers: VecDeque::new(),
         }
     }
 
@@ -156,6 +160,34 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
 
     pub fn all_ready_persisted(&self) -> bool {
         self.unpersisted_readies.is_empty()
+    }
+}
+
+#[cfg(feature = "testexport")]
+impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
+    pub fn subscirbe_flush(&mut self, ch: crate::router::FlushChannel) {
+        self.flush_subscribers
+            .push_back((self.known_largest_number(), ch));
+    }
+
+    pub fn notify_flush(&mut self) {
+        if self.flush_subscribers.is_empty() {
+            return;
+        }
+        if self.all_ready_persisted() {
+            for (_, ch) in self.flush_subscribers.drain(..) {
+                ch.set_result(());
+            }
+        }
+        while let Some((number, ch)) = self.flush_subscribers.pop_front() {
+            // A channel is registered without ready, so persisted_number should be larger.
+            if self.persisted_number > number {
+                ch.set_result(());
+            } else {
+                self.flush_subscribers.push_front((number, ch));
+                break;
+            }
+        }
     }
 }
 
