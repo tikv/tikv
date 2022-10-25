@@ -176,7 +176,7 @@ where
 
 impl<EK: KvEngine, ER: RaftEngine> AsyncReadNotifier for RaftRouter<EK, ER> {
     #[inline]
-    fn notify_fetched_logs(&self, region_id: u64, fetched: FetchedLogs) {
+    fn notify_logs_fetched(&self, region_id: u64, fetched: FetchedLogs) {
         // Ignore region not found as it may be removed.
         let _ = self.significant_send(region_id, SignificantMsg::RaftlogFetched(fetched));
     }

@@ -18,6 +18,7 @@
 //! There two steps can be processed concurrently.
 
 mod async_writer;
+mod snapshot;
 
 use std::cmp;
 
@@ -114,7 +115,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     /// Callback for fetching logs asynchronously.
-    pub fn on_fetched_logs(&mut self, fetched_logs: FetchedLogs) {
+    pub fn on_logs_fetched(&mut self, fetched_logs: FetchedLogs) {
         let FetchedLogs { context, logs } = fetched_logs;
         let low = logs.low;
         if !self.is_leader() {
@@ -130,12 +131,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.raft_group_mut().on_entries_fetched(context);
         // clean the async fetch result immediately if not used to free memory
         self.entry_storage_mut().update_async_fetch_res(low, None);
-        self.set_has_ready();
-    }
-
-    pub fn on_snapshot_generated(&mut self, snapshot: Box<eraftpb::Snapshot>) {
-        self.storage_mut().on_snapshot_generated(snapshot);
-        self.raft_group_mut().ping();
         self.set_has_ready();
     }
 

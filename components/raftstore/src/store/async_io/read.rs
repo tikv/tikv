@@ -68,7 +68,7 @@ pub struct FetchedLogs {
 
 /// A router for receiving fetched result.
 pub trait AsyncReadNotifier: Send {
-    fn notify_fetched_logs(&self, region_id: u64, fetched: FetchedLogs);
+    fn notify_logs_fetched(&self, region_id: u64, fetched: FetchedLogs);
     fn notify_snapshot_generated(&self, region_id: u64, snapshot: Box<RaftSnapshot>);
 }
 
@@ -126,7 +126,7 @@ where
                     .map(|c| (*c as u64) != high - low)
                     .unwrap_or(false);
                 fail_point!("worker_async_fetch_raft_log");
-                self.notifier.notify_fetched_logs(
+                self.notifier.notify_logs_fetched(
                     region_id,
                     FetchedLogs {
                         context,
@@ -142,7 +142,7 @@ where
                 );
             }
             ReadTask::GenTabletSnapshot { region_id, .. } => {
-                // TODO(FIXME): implement generate tablet snapshot for raftstore v2
+                // TODO: implement generate tablet snapshot for raftstore v2
                 self.notifier
                     .notify_snapshot_generated(region_id, Box::new(RaftSnapshot::default()));
             }

@@ -16,8 +16,8 @@ use super::PeerMsg;
 use crate::{batch::StoreRouter, operation::LocalReader, StoreMeta};
 
 impl<EK: KvEngine, ER: RaftEngine> AsyncReadNotifier for StoreRouter<EK, ER> {
-    fn notify_fetched_logs(&self, region_id: u64, fetched: FetchedLogs) {
-        let _ = self.force_send(region_id, PeerMsg::FetchedLogs(fetched));
+    fn notify_logs_fetched(&self, region_id: u64, fetched_logs: FetchedLogs) {
+        let _ = self.force_send(region_id, PeerMsg::LogsFetched(fetched_logs));
     }
 
     fn notify_snapshot_generated(&self, region_id: u64, snapshot: Box<RaftSnapshot>) {

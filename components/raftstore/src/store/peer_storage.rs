@@ -1381,7 +1381,7 @@ pub mod tests {
     }
 
     impl AsyncReadNotifier for TestRouter {
-        fn notify_fetched_logs(&self, _region_id: u64, fetched_logs: FetchedLogs) {
+        fn notify_logs_fetched(&self, _region_id: u64, fetched_logs: FetchedLogs) {
             self.ch.send(fetched_logs).unwrap();
         }
 

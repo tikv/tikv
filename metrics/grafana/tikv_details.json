@@ -17417,6 +17417,14 @@
               "interval": "",
               "legendFormat": "pending-task",
               "refId": "D"
+            },
+            {
+              "exemplar": true,
+              "expr": "sum(tikv_worker_pending_task_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=~\"$tidb_cluster.*\", instance=~\"$instance\", name=~\"async-read-worker\"})",
+              "hide": true,
+              "interval": "",
+              "legendFormat": "pending-task-v2",
+              "refId": "E"
             }
           ],
           "thresholds": [],

@@ -125,7 +125,7 @@ pub enum PeerMsg {
     Tick(PeerTick),
     /// Result of applying committed entries. The message can't be lost.
     ApplyRes(ApplyRes),
-    FetchedLogs(FetchedLogs),
+    LogsFetched(FetchedLogs),
     SnapshotGenerated(Box<RaftSnapshot>),
     /// Start the FSM.
     Start,
@@ -173,7 +173,7 @@ impl fmt::Debug for PeerMsg {
                 "Persisted peer_id {}, ready_number {}",
                 peer_id, ready_number
             ),
-            PeerMsg::FetchedLogs(fetched) => write!(fmt, "FetchedLogs {:?}", fetched),
+            PeerMsg::LogsFetched(fetched) => write!(fmt, "LogsFetched {:?}", fetched),
             PeerMsg::SnapshotGenerated(_) => write!(fmt, "SnapshotGenerated"),
             PeerMsg::QueryDebugInfo(_) => write!(fmt, "QueryDebugInfo"),
         }

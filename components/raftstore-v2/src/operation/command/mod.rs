@@ -345,27 +345,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         }
     }
 
-    pub fn handle_snapshot(&mut self, snap_task: GenSnapTask) {
-        // Flush before do snapshot.
-        self.flush();
-
-        // Send generate snapshot task to region worker.
-        let (last_applied_index, last_applied_term) = self.apply_progress();
-        if let Err(e) = snap_task.generate_and_schedule_snapshot(
-            self.tablet().clone(),
-            self.region_state().clone(),
-            last_applied_index,
-            last_applied_term,
-            self.read_scheduler(),
-        ) {
-            error!(
-                self.logger,
-                "schedule snapshot failed";
-                "error" => ?e,
-            );
-        }
-    }
-
     #[inline]
     pub fn flush(&mut self) {
         if let Some(wb) = self.write_batch_mut() && !wb.is_empty() {

@@ -1,7 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cell::RefCell,
+    cell::{RefCell, RefMut},
     fmt::{self, Debug, Formatter},
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -17,13 +17,12 @@ use kvproto::{
         PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
     },
 };
-use protobuf::Message;
 use raft::{
     eraftpb::{ConfState, Entry, Snapshot},
     GetEntriesContext, RaftState, INVALID_ID,
 };
 use raftstore::store::{
-    metrics::*, util, EntryStorage, ReadTask, SnapState, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+    util, EntryStorage, ReadTask, SnapState, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
 };
 use slog::{error, info, o, warn, Logger};
 use tikv_util::{box_err, store::find_peer, worker::Scheduler};
@@ -70,9 +69,9 @@ pub struct Storage<EK: KvEngine, ER> {
     ever_persisted: bool,
     logger: Logger,
 
-    /// Snapshot state
+    /// Snapshot part.
     snap_state: RefCell<SnapState>,
-    gen_snap_task: RefCell<Option<GenSnapTask>>,
+    gen_snap_task: RefCell<Box<Option<GenSnapTask>>>,
 }
 
 impl<EK: KvEngine, ER> Debug for Storage<EK, ER> {
@@ -115,6 +114,16 @@ impl<EK: KvEngine, ER> Storage<EK, ER> {
     #[inline]
     pub fn logger(&self) -> &Logger {
         &self.logger
+    }
+
+    #[inline]
+    pub fn snap_state_mut(&self) -> RefMut<'_, SnapState> {
+        self.snap_state.borrow_mut()
+    }
+
+    #[inline]
+    pub fn gen_snap_task_mut(&self) -> RefMut<'_, Box<Option<GenSnapTask>>> {
+        self.gen_snap_task.borrow_mut()
     }
 }
 
@@ -231,7 +240,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             ever_persisted: persisted,
             logger,
             snap_state: RefCell::new(SnapState::Relax),
-            gen_snap_task: RefCell::new(None),
+            gen_snap_task: RefCell::new(Box::new(None)),
         })
     }
 
@@ -267,148 +276,12 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         self.gen_snap_task.get_mut().take()
     }
 
-    fn get_tablet_index(&self) -> u64 {
+    #[inline]
+    pub fn get_tablet_index(&self) -> u64 {
         match self.region_state.get_state() {
             PeerState::Tombstone | PeerState::Applying => 0,
             _ => self.region_state.get_tablet_index(),
         }
-    }
-
-    /// Cancel generating snapshot.
-    pub fn cancel_generating_snap(&mut self, compact_to: Option<u64>) {
-        let mut snap_state = self.snap_state.borrow_mut();
-        if let SnapState::Generating {
-            ref canceled,
-            ref index,
-            ..
-        } = *snap_state
-        {
-            if let Some(idx) = compact_to {
-                let snap_index = index.load(Ordering::SeqCst);
-                if snap_index == 0 || idx <= snap_index + 1 {
-                    return;
-                }
-            }
-            canceled.store(true, Ordering::SeqCst);
-            *snap_state = SnapState::Relax;
-            info!(
-                self.logger(),
-                "snapshot is canceled";
-                "compact_to" => compact_to,
-            );
-            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.cancel.inc();
-        }
-    }
-
-    pub fn on_snapshot_generated(&mut self, snap: Box<Snapshot>) {
-        let mut snap_state = self.snap_state.borrow_mut();
-        if let SnapState::Generating {
-            ref canceled,
-            ref index,
-            ..
-        } = *snap_state
-        {
-            *snap_state = SnapState::Generated(snap);
-            info!(
-                self.logger(),
-                "snapshot is generated";
-            );
-        }
-    }
-
-    fn validate_snap(&self, snap: &Snapshot, request_index: u64) -> bool {
-        let idx = snap.get_metadata().get_index();
-        // TODO(nolouch): check tuncated index
-        if idx < request_index {
-            // stale snapshot, should generate again.
-            info!(
-                self.logger(),
-                "snapshot is stale, generate again";
-                "snap_index" => idx,
-                "request_index" => request_index,
-            );
-            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.stale.inc();
-            return false;
-        }
-
-        let mut snap_data = RaftSnapshotData::default();
-        if let Err(e) = snap_data.merge_from_bytes(snap.get_data()) {
-            error!(
-                self.logger(),
-                "failed to decode snapshot, it may be corrupted";
-                "err" => ?e,
-            );
-            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.decode.inc();
-            return false;
-        }
-        let snap_epoch = snap_data.get_region().get_region_epoch();
-        let latest_epoch = self.region().get_region_epoch();
-        if snap_epoch.get_conf_ver() < latest_epoch.get_conf_ver() {
-            info!(
-                self.logger(),
-                "snapshot epoch is stale";
-                "snap_epoch" => ?snap_epoch,
-                "latest_epoch" => ?latest_epoch,
-            );
-            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.epoch.inc();
-            return false;
-        }
-
-        true
-    }
-
-    /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no
-    /// unavailable snapshot.
-    pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
-        let mut snap_state = self.snap_state.borrow_mut();
-        match *snap_state {
-            SnapState::Generating { .. } => {
-                return Err(raft::Error::Store(
-                    raft::StorageError::SnapshotTemporarilyUnavailable,
-                ));
-            }
-            SnapState::Generated(ref s) => {
-                let snap = *s.clone();
-                *snap_state = SnapState::Relax;
-                if self.validate_snap(&snap, request_index) {
-                    return Ok(snap);
-                }
-            }
-            _ => {}
-        }
-
-        if SnapState::Relax != *snap_state {
-            panic!(
-                "[region {}] unexpected state: {:?}",
-                self.region().get_id(),
-                *snap_state
-            );
-        }
-
-        info!(
-            self.logger(),
-            "requesting snapshot";
-            "tablet_index" => self.get_tablet_index(),
-            "request_index" => request_index,
-            "request_peer" => to,
-        );
-        let (_, receiver) = mpsc::sync_channel(1);
-        let canceled = Arc::new(AtomicBool::new(false));
-        let index = Arc::new(AtomicU64::new(0));
-        *snap_state = SnapState::Generating {
-            canceled: canceled.clone(),
-            index: index.clone(),
-            receiver,
-        };
-
-        let task = GenSnapTask::new(self.region().get_id(), index, canceled);
-
-        let mut gen_snap_task = self.gen_snap_task.borrow_mut();
-        assert!(gen_snap_task.is_none());
-        *gen_snap_task = Some(task);
-        Err(raft::Error::Store(
-            raft::StorageError::SnapshotTemporarilyUnavailable,
-        ))
     }
 }
 
@@ -512,7 +385,7 @@ mod tests {
     }
 
     impl AsyncReadNotifier for TestRouter {
-        fn notify_fetched_logs(&self, _region_id: u64, _fetched_logs: FetchedLogs) {
+        fn notify_logs_fetched(&self, _region_id: u64, _fetched_logs: FetchedLogs) {
             unreachable!();
         }
 
