@@ -135,7 +135,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     /// Partially filled a raft message that will be sent to other peer.
-    fn prepare_raft_message(&mut self) -> RaftMessage {
+    pub fn prepare_raft_message(&mut self) -> RaftMessage {
         let mut raft_msg = RaftMessage::new();
         raft_msg.set_region_id(self.region().id);
         raft_msg.set_from_peer(self.peer().clone());

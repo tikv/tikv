@@ -27,7 +27,7 @@ use crate::{
     batch::StoreContext,
     fsm::{PeerFsm, Store},
     raft::{Peer, Storage},
-    router::PeerMsg,
+    router::{message::PeerCreation, PeerMsg},
 };
 
 /// When a peer is about to destroy, it becomes `WaitReady` first. If there is
@@ -89,6 +89,22 @@ impl DestroyProgress {
 }
 
 impl Store {
+    #[inline]
+    pub fn on_peer_creation<EK, ER, T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        msg: PeerCreation,
+    ) where
+        EK: KvEngine,
+        ER: RaftEngine,
+    {
+        let region_id = msg.raft_message.get_region_id();
+        // Create the peer if not created before
+        self.on_raft_message(ctx, msg.raft_message);
+        ctx.router
+            .send(region_id, PeerMsg::Initialization(msg.split_region_info));
+    }
+
     /// When a message's recipient doesn't exist, it will be redirected to
     /// store. Store is responsible for checking if it's neccessary to create
     /// a peer to handle the message.

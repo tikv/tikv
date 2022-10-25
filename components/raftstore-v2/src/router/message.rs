@@ -13,6 +13,7 @@ use super::{
     },
     ApplyRes,
 };
+use crate::operation::SplitRegionInitInfo;
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
 #[repr(u8)]
@@ -126,6 +127,8 @@ pub enum PeerMsg {
     FetchedLogs(FetchedLogs),
     /// Start the FSM.
     Start,
+    /// Init the FSM
+    Initialization(Box<SplitRegionInitInfo>),
     /// A message only used to notify a peer.
     Noop,
     /// A message that indicates an asynchronous write has finished.
@@ -161,6 +164,9 @@ impl fmt::Debug for PeerMsg {
             },
             PeerMsg::ApplyRes(res) => write!(fmt, "ApplyRes {:?}", res),
             PeerMsg::Start => write!(fmt, "Startup"),
+            PeerMsg::Initialization(info) => {
+                write!(fmt, "Peer initialization, region {:?}", info.region)
+            }
             PeerMsg::Noop => write!(fmt, "Noop"),
             PeerMsg::Persisted {
                 peer_id,
@@ -178,6 +184,7 @@ impl fmt::Debug for PeerMsg {
 
 pub enum StoreMsg {
     RaftMessage(Box<RaftMessage>),
+    PeerCreation(PeerCreation),
     Tick(StoreTick),
     Start,
 }
@@ -186,8 +193,14 @@ impl fmt::Debug for StoreMsg {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             StoreMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
+            StoreMsg::PeerCreation(_) => write!(fmt, "Peer Creation"),
             StoreMsg::Tick(tick) => write!(fmt, "StoreTick {:?}", tick),
             StoreMsg::Start => write!(fmt, "Start store"),
         }
     }
+}
+
+pub struct PeerCreation {
+    pub raft_message: Box<RaftMessage>,
+    pub split_region_info: Box<SplitRegionInitInfo>,
 }

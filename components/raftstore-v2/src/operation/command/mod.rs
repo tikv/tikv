@@ -60,6 +60,7 @@ mod write;
 pub use admin::{AdminCmdResult, SplitResult};
 pub use write::{SimpleWriteDecoder, SimpleWriteEncoder};
 
+pub use self::admin::SplitRegionInitInfo;
 use self::write::SimpleWrite;
 
 #[derive(Debug)]
@@ -459,23 +460,6 @@ impl<EK: KvEngine, ER: RaftEngine, R: ApplyResReporter> Apply<EK, ER, R> {
                 wb.clear();
             } else {
                 self.write_batch_mut().take();
-            }
-        }
-        if let Some(mut wb) = self.take_log_batch() && !wb.is_empty() {
-            self.raft_engine.consume(&mut wb, true).unwrap_or_else(|e| {
-                panic!(
-                    "{:?} fails to consume the write: {:?}",
-                    self.logger.list(),
-                    e,
-                )
-            });
-            if let Some(tablet_index) = self.take_new_tablet_index() {
-                let region_state = self.region_state_mut();
-                let prev_tablet_index = region_state.tablet_index;
-                assert!(prev_tablet_index != tablet_index);
-                region_state.tablet_index = tablet_index;
-                let region_id = region_state.get_region().id;
-                self.tablet_factory.destroy_tablet(region_id, prev_tablet_index).unwrap();
             }
         }
         let callbacks = self.callbacks_mut();

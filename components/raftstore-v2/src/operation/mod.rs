@@ -9,4 +9,4 @@ pub use command::{AdminCmdResult, CommittedEntries, SimpleWriteDecoder, SimpleWr
 pub use life::DestroyProgress;
 pub use ready::AsyncWriter;
 
-pub(crate) use self::query::LocalReader;
+pub(crate) use self::{command::SplitRegionInitInfo, query::LocalReader};
