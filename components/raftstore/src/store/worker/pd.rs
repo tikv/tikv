@@ -205,6 +205,9 @@ pub struct StoreStat {
     pub engine_last_total_bytes_read: u64,
     pub engine_last_total_keys_read: u64,
     pub engine_last_query_num: QueryStats,
+    pub engine_last_capacity_size: u64,
+    pub engine_last_used_size: u64,
+    pub engine_last_available_size: u64,
     pub last_report_ts: UnixSecs,
 
     pub region_bytes_read: LocalHistogram,
@@ -230,6 +233,9 @@ impl Default for StoreStat {
             engine_total_keys_read: 0,
             engine_last_total_bytes_read: 0,
             engine_last_total_keys_read: 0,
+            engine_last_capacity_size: 0,
+            engine_last_used_size: 0,
+            engine_last_available_size: 0,
             engine_total_query_num: QueryStats::default(),
             engine_last_query_num: QueryStats::default(),
 
@@ -1220,11 +1226,21 @@ where
                 store_info.as_ref(),
                 self.snap_mgr.get_total_snap_size().unwrap(),
             ) {
-                Some((capacity, used_size, available)) => (capacity, used_size, available),
+                Some((capacity, used_size, available)) => {
+                    // Update last reported infos on engine_size.
+                    self.store_stat.engine_last_capacity_size = capacity;
+                    self.store_stat.engine_last_used_size = used_size;
+                    self.store_stat.engine_last_available_size = available;
+                    (capacity, used_size, available)
+                }
                 None => return,
             }
         } else {
-            (0, 0, 0)
+            (
+                self.store_stat.engine_last_capacity_size,
+                self.store_stat.engine_last_used_size,
+                self.store_stat.engine_last_available_size,
+            )
         };
 
         stats.set_capacity(capacity);
@@ -1262,7 +1278,14 @@ where
         self.store_stat
             .engine_last_query_num
             .fill_query_stats(&self.store_stat.engine_total_query_num);
-        self.store_stat.last_report_ts = UnixSecs::now();
+        self.store_stat.last_report_ts = if store_info.is_some() {
+            UnixSecs::now()
+        } else {
+            // If `store_info` is None, the given Task::StoreHeartbeat should be a fake
+            // heartbeat to PD, we won't update the last_report_ts to avoid incorrectly
+            // marking current TiKV node in normal state.
+            self.store_stat.last_report_ts
+        };
         self.store_stat.region_bytes_written.flush();
         self.store_stat.region_keys_written.flush();
         self.store_stat.region_bytes_read.flush();
