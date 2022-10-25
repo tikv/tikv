@@ -240,6 +240,17 @@ impl<ER: RaftEngine> Storage<ER> {
     pub fn set_ever_persisted(&mut self) {
         self.ever_persisted = true;
     }
+
+    #[inline]
+    pub fn set_region_state(&mut self, state: RegionLocalState) {
+        self.region_state = state;
+        for peer in self.region_state.get_region().get_peers() {
+            if peer.get_id() == self.peer.get_id() {
+                self.peer = peer.clone();
+                break;
+            }
+        }
+    }
 }
 
 impl<ER: RaftEngine> raft::Storage for Storage<ER> {
@@ -295,7 +306,9 @@ impl<ER: RaftEngine> raft::Storage for Storage<ER> {
     }
 
     fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
-        unimplemented!()
+        Err(raft::Error::Store(
+            raft::StorageError::SnapshotTemporarilyUnavailable,
+        ))
     }
 }
 
