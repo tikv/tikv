@@ -4555,6 +4555,10 @@ where
         ctx: &mut PollContext<EK, ER, T>,
         msg: &eraftpb::Message,
     ) -> bool {
+        if !ctx.cfg.warmup_entry_cache_enabled() {
+            return true;
+        }
+
         // The start index of warmup range. It is leader's entry_cache_first_index,
         // which in general is equal to the lowest matched index.
         let mut low = msg.get_index();
@@ -4630,11 +4634,11 @@ where
     ///     the follower reply an ACK with type MsgTransferLeader and
     ///     its promised persistent index.
     ///
-    /// (Condition: when there are remaining pessimistic locks to propose)
-    ///    1. ready_to_transfer_leader on leader:
-    ///        Leader firstly proposes pessimistic locks and then proposes a
-    ///        TransferLeader command.
-    ///    2. ack_transfer_leader_msg on follower:
+    /// Additional steps for behavior when there are remaining pessimistic
+    /// locks to propose (detected in function on_transfer_leader_msg).
+    ///    1. Leader firstly proposes pessimistic locks and then proposes a
+    ///       TransferLeader command.
+    ///    2. ack_transfer_leader_msg on follower again:
     ///        The follower applies the TransferLeader command and replies an
     ///        ACK with special context TRANSFER_LEADER_COMMAND_REPLY_CTX.
     ///

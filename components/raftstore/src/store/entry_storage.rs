@@ -1087,7 +1087,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
 
     /// Trigger a task to warm up the entry cache.
     ///
-    /// This will ensure the range [low..high..last_index] are loaded into
+    /// This will ensure the range [low..=last_index] are loaded into
     /// cache. Return the high index of the warmup range if a task is
     /// successfully triggered.
     pub fn async_warm_up_entry_cache(&mut self, low: u64) -> Option<u64> {
@@ -1108,6 +1108,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
         match self.entries(low, high, u64::MAX, GetEntriesContext::empty(true)) {
             Ok(_) => {
                 // This should not happen, but it's OK :)
+                debug_assert!(false, "entries should not have been fetched");
                 error!("entries are fetched unexpectedly during warming up");
                 None
             }
