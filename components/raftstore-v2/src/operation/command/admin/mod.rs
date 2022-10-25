@@ -51,6 +51,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
 
+        // The admin request is rejected because it may need to update epoch checker
+        // which introduces an uncertainty and may breaks the correctness of epoch
+        // checker.
         if !self.applied_to_current_term() {
             let e = box_err!(
                 "{:?} peer has not applied to current term, applied_term {}, current_term {}",
