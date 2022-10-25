@@ -5244,7 +5244,13 @@ mod tests {
     fn test_raw_v2_multi_versions() {
         // Test update on the same key to verify multi-versions implementation of RawKV
         // V2.
-        let test_data = vec![Some(b"v1"), Some(b"v2"), None, Some(b"v3")];
+        let test_data = vec![
+            Some(b"v1".to_vec()),
+            Some(b"v2".to_vec()),
+            None,
+            Some(b"".to_vec()),
+            Some(b"v3".to_vec()),
+        ];
         let k = b"r\0k".to_vec();
 
         let storage = TestStorageBuilder::<_, _, ApiV2>::new(DummyLockManager)
@@ -5256,7 +5262,11 @@ mod tests {
             ..Default::default()
         };
 
-        let last_data = test_data.last().unwrap().map(|x| (k.clone(), x.to_vec()));
+        let last_data = test_data
+            .last()
+            .unwrap()
+            .as_ref()
+            .map(|x| (k.clone(), x.clone()));
         for v in test_data {
             if let Some(v) = v {
                 storage
@@ -5264,7 +5274,7 @@ mod tests {
                         ctx.clone(),
                         "".to_string(),
                         k.clone(),
-                        v.to_vec(),
+                        v.clone(),
                         0,
                         expect_ok_callback(tx.clone(), 0),
                     )
@@ -5272,7 +5282,7 @@ mod tests {
                 rx.recv().unwrap();
 
                 expect_value(
-                    v.to_vec(),
+                    v.clone(),
                     block_on(storage.raw_get(ctx.clone(), "".to_string(), k.clone())).unwrap(),
                 );
             } else {
@@ -5543,12 +5553,19 @@ mod tests {
             ..Default::default()
         };
 
+        let empty_key = if F::TAG == ApiVersion::V2 {
+            b"r".to_vec()
+        } else {
+            b"".to_vec()
+        };
         let test_data = vec![
+            (empty_key.clone(), b"ff".to_vec(), 10), // empty key
             (b"r\0a".to_vec(), b"aa".to_vec(), 10),
             (b"r\0b".to_vec(), b"bb".to_vec(), 20),
             (b"r\0c".to_vec(), b"cc".to_vec(), 30),
             (b"r\0d".to_vec(), b"dd".to_vec(), 0),
             (b"r\0e".to_vec(), b"ee".to_vec(), 40),
+            (b"r\0g".to_vec(), b"".to_vec(), 50), // empty value
         ];
 
         let kvpairs = test_data
@@ -5601,7 +5618,7 @@ mod tests {
             block_on(storage.raw_scan(
                 ctx,
                 "".to_string(),
-                b"r".to_vec(),
+                empty_key,
                 Some(b"rz".to_vec()),
                 20,
                 false,
