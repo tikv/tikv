@@ -2534,8 +2534,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let meta = self.ctx.store_meta.lock().unwrap();
         for region_id in meta.regions.keys() {
             let region = &meta.regions[region_id];
+            // Check whether the current region is not found on abnormal stores. If so,
+            // this region is not the target to be awaken.
             if !region_on_stores(region, &abnormal_stores) {
-                // Current region is not found on abnormal stores.
                 continue;
             }
             let peer = {
