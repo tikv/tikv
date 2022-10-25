@@ -2,9 +2,9 @@
 
 use std::{
     marker::PhantomData,
+    path::Path,
     sync::{atomic::AtomicU64, Arc},
 };
-use std::path::Path;
 
 use api_version::{ApiV1, KvFormat};
 use collections::HashMap;
@@ -142,7 +142,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
     pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider + Clone + 'static>(
         &mut self,
         cfg: AutoGcConfig<S, R>,
-        root_path: &Path
+        root_path: &Path,
     ) {
         // Building a tablet factory
         let ops = DbOptions::default();
@@ -159,7 +159,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
     pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider + Clone + 'static>(
         &mut self,
         _cfg: AutoGcConfig<S, R>,
-        _root_path: &Path
+        _root_path: &Path,
     ) {
         // place holder
     }

@@ -1,11 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    path::Path,
     sync::{atomic::AtomicU64, Arc},
     thread,
     time::Duration,
 };
-use std::path::Path;
 
 use collections::HashMap;
 use engine_test::{ctor::DbOptions, kv::TestTabletFactory};
@@ -369,7 +369,12 @@ fn test_orphan_versions_from_compaction_filter() {
     let safe_point = 100;
     let mut gc_runner = TestGcRunner::new(safe_point);
 
-    init_compaction_filter(&cluster, leader_store, Arc::new(AtomicU64::new(safe_point)), root_path);
+    init_compaction_filter(
+        &cluster,
+        leader_store,
+        Arc::new(AtomicU64::new(safe_point)),
+        root_path,
+    );
 
     let pk = b"k1".to_vec();
     let large_value = vec![b'x'; 300];
