@@ -838,7 +838,7 @@ impl SlowScore {
     }
 
     fn should_force_report_slow_store(&self) -> bool {
-        self.value >= OrderedFloat(100.0)
+        self.value >= OrderedFloat(100.0) && self.last_tick_id % self.round_ticks == 0
     }
 }
 
