@@ -475,8 +475,22 @@ fn test_node_snapshot_with_append() {
 }
 
 #[test]
+fn test_node_snapshot_with_append_wal_disabled() {
+    let mut cluster = new_node_cluster(0, 4);
+    cluster.cfg.raft_store.disable_kv_wal = true;
+    test_snapshot_with_append(&mut cluster);
+}
+
+#[test]
 fn test_server_snapshot_with_append() {
     let mut cluster = new_server_cluster(0, 4);
+    test_snapshot_with_append(&mut cluster);
+}
+
+#[test]
+fn test_server_snapshot_with_append_wal_disabled() {
+    let mut cluster = new_server_cluster(0, 4);
+    cluster.cfg.raft_store.disable_kv_wal = true;
     test_snapshot_with_append(&mut cluster);
 }
 

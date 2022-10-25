@@ -2,17 +2,18 @@
 
 // #[PerformanceCriticalPath]
 use engine_traits::{
-    Error, Iterable, KvEngine, MiscExt, Mutable, Peekable, RaftEngine, RaftEngineDebug,
-    RaftEngineReadOnly, RaftLogBatch, RaftLogGcTask, Result, SyncMutable, WriteBatch,
-    WriteBatchExt, WriteOptions, CF_DEFAULT, RAFT_LOG_MULTI_GET_CNT,
+    util::FlushedSeqno, Error, Iterable, KvEngine, MiscExt, Mutable, Peekable, RaftEngine,
+    RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch, RaftLogGcTask, Result, SyncMutable,
+    WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT, RAFT_LOG_MULTI_GET_CNT,
 };
 use kvproto::{
     metapb::Region,
     raft_serverpb::{
-        RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent, StoreRecoverState,
+        RaftApplyState, RaftLocalState, RegionLocalState, RegionSequenceNumberRelation, StoreIdent,
+        StoreRecoverState,
     },
 };
-use protobuf::Message;
+use protobuf::{parse_from_bytes, Message};
 use raft::eraftpb::Entry;
 use tikv_util::{box_err, box_try};
 
@@ -24,9 +25,37 @@ impl RaftEngineReadOnly for RocksEngine {
         self.get_msg_cf(CF_DEFAULT, &key)
     }
 
+    fn get_seqno_relation(
+        &self,
+        raft_group_id: u64,
+        seqno: u64,
+    ) -> Result<Option<RegionSequenceNumberRelation>> {
+        let key = keys::sequence_number_relation_key(raft_group_id, seqno);
+        let res = if let Some((_, value)) = self.seek(CF_DEFAULT, &key)? {
+            Some(parse_from_bytes::<RegionSequenceNumberRelation>(&value)?)
+        } else {
+            None
+        };
+        Ok(res)
+    }
+
     fn get_entry(&self, raft_group_id: u64, index: u64) -> Result<Option<Entry>> {
         let key = keys::raft_log_key(raft_group_id, index);
         self.get_msg_cf(CF_DEFAULT, &key)
+    }
+
+    fn get_apply_snapshot_state(
+        &self,
+        raft_group_id: u64,
+    ) -> Result<Option<(RegionLocalState, RaftApplyState)>> {
+        let key = keys::snapshot_region_state_key(raft_group_id);
+        if let Some(region_state) = self.get_msg_cf(CF_DEFAULT, &key)? {
+            let key = keys::snapshot_apply_state_key(raft_group_id);
+            let apply_state = self.get_msg_cf(CF_DEFAULT, &key)?.unwrap();
+            Ok(Some((region_state, apply_state)))
+        } else {
+            Ok(None)
+        }
     }
 
     fn fetch_entries_to(
@@ -156,6 +185,11 @@ impl RaftEngineReadOnly for RocksEngine {
 
     fn get_recover_state(&self) -> Result<Option<StoreRecoverState>> {
         self.get_msg_cf(CF_DEFAULT, keys::RECOVER_STATE_KEY)
+    }
+
+    fn get_flushed_seqno(&self) -> Result<Option<FlushedSeqno>> {
+        let value = self.get_value_cf(CF_DEFAULT, keys::FLUSHED_SEQNO_KEY)?;
+        Ok(value.map(|v| serde_json::from_slice(&v).unwrap()))
     }
 }
 
@@ -374,6 +408,41 @@ impl RaftEngine for RocksEngine {
     fn put_recover_state(&self, state: &StoreRecoverState) -> Result<()> {
         self.put_msg(keys::RECOVER_STATE_KEY, state)
     }
+
+    fn scan_seqno_relations<F>(
+        &self,
+        raft_group_id: u64,
+        start: Option<u64>,
+        end: Option<u64>,
+        mut f: F,
+    ) -> Result<()>
+    where
+        F: FnMut(u64, &RegionSequenceNumberRelation) -> bool,
+    {
+        let start = start.unwrap_or(0);
+        let end = end.unwrap_or(u64::MAX);
+        let start_key = keys::sequence_number_relation_key(raft_group_id, start);
+        let end_key = keys::sequence_number_relation_key(raft_group_id, end);
+        self.scan(
+            CF_DEFAULT,
+            &start_key,
+            &end_key,
+            false, // fill_cache
+            |key, value| {
+                let mut relation = RegionSequenceNumberRelation::default();
+                relation.merge_from_bytes(value)?;
+                let (_, seqno) = keys::decode_sequence_number_relation_key(key).unwrap();
+                f(seqno, &relation);
+                Ok(true)
+            },
+        )?;
+        Ok(())
+    }
+
+    fn put_flushed_seqno(&self, flushed_seqno: &FlushedSeqno) -> Result<()> {
+        let result = serde_json::to_string(&flushed_seqno).unwrap();
+        self.put(keys::FLUSHED_SEQNO_KEY, result.as_bytes())
+    }
 }
 
 impl RaftLogBatch for RocksWriteBatchVec {
@@ -394,6 +463,17 @@ impl RaftLogBatch for RocksWriteBatchVec {
 
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
         self.put_msg(&keys::raft_state_key(raft_group_id), state)
+    }
+
+    fn put_seqno_relation(
+        &mut self,
+        raft_group_id: u64,
+        relation: &RegionSequenceNumberRelation,
+    ) -> Result<()> {
+        self.put_msg(
+            &keys::sequence_number_relation_key(raft_group_id, relation.sequence_number),
+            relation,
+        )
     }
 
     fn persist_size(&self) -> usize {
@@ -426,6 +506,36 @@ impl RaftLogBatch for RocksWriteBatchVec {
 
     fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()> {
         self.put_msg(&keys::apply_state_key(raft_group_id), state)
+    }
+
+    fn put_apply_snapshot_state(
+        &mut self,
+        raft_group_id: u64,
+        region_state: &RegionLocalState,
+        apply_state: &RaftApplyState,
+    ) -> Result<()> {
+        self.put_msg(
+            &keys::snapshot_region_state_key(raft_group_id),
+            region_state,
+        )?;
+        self.put_msg(&keys::snapshot_apply_state_key(raft_group_id), apply_state)
+    }
+
+    fn delete_apply_snapshot_state(&mut self, raft_group_id: u64) -> Result<()> {
+        self.delete(&keys::snapshot_region_state_key(raft_group_id))?;
+        self.delete(&keys::snapshot_apply_state_key(raft_group_id))
+    }
+
+    fn delete_seqno_relation(&mut self, raft_group_id: u64, seqno: u64) -> Result<()> {
+        self.delete(&keys::sequence_number_relation_key(raft_group_id, seqno))
+    }
+
+    fn delete_apply_state(&mut self, raft_group_id: u64) -> Result<()> {
+        self.delete(&keys::apply_state_key(raft_group_id))
+    }
+
+    fn delete_region_state(&mut self, raft_group_id: u64) -> Result<()> {
+        self.delete(&keys::region_state_key(raft_group_id))
     }
 }
 

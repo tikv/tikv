@@ -52,8 +52,8 @@ use crate::{
 
 const KV_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const KV_WB_DEFAULT_SIZE: usize = 16 * 1024;
-const RAFT_WB_SHRINK_SIZE: usize = 10 * 1024 * 1024;
-const RAFT_WB_DEFAULT_SIZE: usize = 256 * 1024;
+pub const RAFT_WB_SHRINK_SIZE: usize = 10 * 1024 * 1024;
+pub const RAFT_WB_DEFAULT_SIZE: usize = 256 * 1024;
 
 /// Notify the event to the specified region.
 pub trait PersistedNotifier: Clone + Send + 'static {
@@ -457,6 +457,7 @@ where
     fn before_write_to_db(&mut self, engine: &ER, metrics: &StoreWriteMetrics) {
         // Put raft state to raft writebatch
         for (region_id, state) in self.raft_states.drain() {
+            fail_point!("raft_before_put_raft_state");
             self.raft_wb.put_raft_state(region_id, &state).unwrap();
         }
         if let ExtraBatchWrite::V2(extra_states_map) = &mut self.extra_batch_write {
@@ -663,6 +664,10 @@ where
 
     pub fn handle_write_task(&mut self, task: WriteTask<EK, ER>) {
         self.batch.add_write_task(task);
+    }
+
+    pub fn handle_raft_write(&mut self, raft_wb: ER::LogBatch) {
+        self.batch.raft_wb.merge(raft_wb).unwrap();
     }
 
     pub fn write_to_db(&mut self, notify: bool) {

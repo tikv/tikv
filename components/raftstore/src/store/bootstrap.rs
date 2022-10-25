@@ -1,6 +1,8 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{Engines, KvEngine, Mutable, RaftEngine, WriteBatch, CF_DEFAULT, CF_RAFT};
+use engine_traits::{
+    Engines, KvEngine, Mutable, RaftEngine, RaftLogBatch, WriteBatch, CF_DEFAULT, CF_RAFT,
+};
 use kvproto::{
     metapb,
     raft_serverpb::{RaftLocalState, RegionLocalState, StoreIdent},
@@ -10,7 +12,7 @@ use tikv_util::{box_err, box_try, store::new_peer};
 use super::peer_storage::{
     write_initial_apply_state, write_initial_raft_state, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
 };
-use crate::Result;
+use crate::{store::peer_storage::write_initial_apply_state_raft, Result};
 
 pub fn initial_region(store_id: u64, region_id: u64, peer_id: u64) -> metapb::Region {
     let mut region = metapb::Region::default();
@@ -79,11 +81,14 @@ pub fn prepare_bootstrap_cluster(
     box_try!(wb.put_msg(keys::PREPARE_BOOTSTRAP_KEY, region));
     box_try!(wb.put_msg_cf(CF_RAFT, &keys::region_state_key(region.get_id()), &state));
     write_initial_apply_state(&mut wb, region.get_id())?;
+    // TODO(5kbpers): move states to raftdb.
     wb.write()?;
     engines.sync_kv()?;
 
     let mut raft_wb = engines.raft.log_batch(1024);
+    raft_wb.put_region_state(region.get_id(), &state).unwrap();
     write_initial_raft_state(&mut raft_wb, region.get_id())?;
+    write_initial_apply_state_raft(&mut raft_wb, region.get_id())?;
     box_try!(engines.raft.consume(&mut raft_wb, true));
     Ok(())
 }
@@ -106,6 +111,7 @@ pub fn clear_prepare_bootstrap_cluster(
     // should clear raft initial state too.
     box_try!(wb.delete_cf(CF_RAFT, &keys::region_state_key(region_id)));
     box_try!(wb.delete_cf(CF_RAFT, &keys::apply_state_key(region_id)));
+    // TODO(5kbpers): move states to raftdb.
     wb.write()?;
     engines.sync_kv()?;
     Ok(())

@@ -24,17 +24,16 @@ use encryption_export::DataKeyManager;
 use engine_rocks::{
     config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel as RocksLogLevel},
     get_env,
-    properties::MvccPropertiesCollectorFactory,
     raw::{
         BlockBasedOptions, Cache, ChecksumType, CompactionPriority, DBCompactionStyle,
         DBCompressionType, DBRateLimiterMode, DBRecoveryMode, Env, LRUCacheOptions,
         PrepopulateBlockCache,
     },
     util::{FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform},
-    RaftDbLogger, RangePropertiesCollectorFactory, RawMvccPropertiesCollectorFactory,
-    RocksCfOptions, RocksDbOptions, RocksEngine, RocksEventListener, RocksTitanDbOptions,
-    RocksdbLogger, TtlPropertiesCollectorFactory, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
-    DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+    MvccPropertiesCollectorFactory, RaftDbLogger, RangePropertiesCollectorFactory,
+    RawMvccPropertiesCollectorFactory, RocksCfOptions, RocksDbOptions, RocksEngine,
+    RocksEventListener, RocksTitanDbOptions, RocksdbLogger, TtlPropertiesCollectorFactory,
+    DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{
     CfOptions as _, CfOptionsExt, DbOptions as _, DbOptionsExt, MiscExt, TabletAccessor,

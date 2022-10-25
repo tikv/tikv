@@ -1509,6 +1509,7 @@ dependencies = [
  "rocksdb",
  "serde",
  "serde_derive",
+ "serde_json",
  "slog",
  "slog-global",
  "slog_derive",
@@ -2801,7 +2802,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#bd07e9e598db63574cf06edaeea3c4687eadff59"
+source = "git+https://github.com/5kbpers/rust-rocksdb.git?branch=largest-seqno#1b3bc46eb9317e096811202eac1a9e47760daac7"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2820,7 +2821,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#bd07e9e598db63574cf06edaeea3c4687eadff59"
+source = "git+https://github.com/5kbpers/rust-rocksdb.git?branch=largest-seqno#1b3bc46eb9317e096811202eac1a9e47760daac7"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3435,9 +3436,9 @@ dependencies = [
 
 [[package]]
 name = "once_cell"
-version = "1.10.0"
+version = "1.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "87f3e037eac156d1775da914196f0f37741a274155e34a0b7e427c35d2a2ecb9"
+checksum = "18a6dbe30758c9f83eb00cbea4ac95966305f5a7772f3f42ebfc7fc7eddbd8e1"
 
 [[package]]
 name = "online_config"
@@ -4086,7 +4087,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#2357cb22760719bcd107a90d1e64ef505bdb1e15"
+source = "git+https://github.com/5kbpers/raft-rs?branch=option-commit-since-index#f57f7761868eec6626cc76dd0315117be54bee69"
 dependencies = [
  "bytes",
  "fxhash",
@@ -4145,7 +4146,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#2357cb22760719bcd107a90d1e64ef505bdb1e15"
+source = "git+https://github.com/5kbpers/raft-rs?branch=option-commit-since-index#f57f7761868eec6626cc76dd0315117be54bee69"
 dependencies = [
  "bytes",
  "protobuf",
@@ -4168,6 +4169,7 @@ dependencies = [
  "raft-engine",
  "serde",
  "serde_derive",
+ "serde_json",
  "slog",
  "slog-global",
  "tikv_util",
@@ -4665,7 +4667,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#bd07e9e598db63574cf06edaeea3c4687eadff59"
+source = "git+https://github.com/5kbpers/rust-rocksdb.git?branch=largest-seqno#1b3bc46eb9317e096811202eac1a9e47760daac7"
 dependencies = [
  "libc 0.2.132",
  "librocksdb_sys",
@@ -5303,13 +5305,11 @@ checksum = "f2dd574626839106c320a323308629dcb1acfc96e32a8cba364ddc61ac23ee83"
 
 [[package]]
 name = "smartstring"
-version = "1.0.1"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fb72c633efbaa2dd666986505016c32c3044395ceaf881518399d2f4127ee29"
+checksum = "ea958ad90cacc8ece7f238fde3671e1b350ee1741964edf2a22fd16f60224163"
 dependencies = [
- "autocfg",
  "static_assertions",
- "version_check 0.9.4",
 ]
 
 [[package]]
@@ -5504,7 +5504,7 @@ version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "063e6045c0e62079840579a7e47a355ae92f60eb74daaf156fb1e84ba164e63f"
 dependencies = [
- "strum_macros 0.24.2",
+ "strum_macros 0.24.3",
 ]
 
 [[package]]
@@ -5521,9 +5521,9 @@ dependencies = [
 
 [[package]]
 name = "strum_macros"
-version = "0.24.2"
+version = "0.24.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4faebde00e8ff94316c01800f9054fd2ba77d30d9e922541913051d1d978918b"
+checksum = "1e385be0d24f186b4ce2f9982191e7101bb737312ad61c1f2f984f34bcf85d59"
 dependencies = [
  "heck 0.4.0",
  "proc-macro2",

@@ -7,8 +7,8 @@ use std::{
 
 use engine_rocks::{
     raw::{Cache, Env},
-    CompactedEventSender, CompactionListener, FlowListener, RocksCompactionJobInfo, RocksEngine,
-    RocksEventListener,
+    CompactedEventSender, CompactionListener, FlowListener, FlushListener, RocksCompactionJobInfo,
+    RocksEngine, RocksEventListener,
 };
 use engine_traits::{
     CfOptions, CfOptionsExt, CompactionJobInfo, OpenOptions, Result, TabletAccessor, TabletFactory,
@@ -31,6 +31,8 @@ struct FactoryInner {
     flow_listener: Option<engine_rocks::FlowListener>,
     sst_recovery_sender: Option<Scheduler<String>>,
     root_db: Mutex<Option<RocksEngine>>,
+    flush_listener: Option<FlushListener>,
+    disable_kv_wal: bool,
 }
 
 pub struct KvEngineFactoryBuilder {
@@ -51,6 +53,8 @@ impl KvEngineFactoryBuilder {
                 flow_listener: None,
                 sst_recovery_sender: None,
                 root_db: Mutex::default(),
+                flush_listener: None,
+                disable_kv_wal: config.raft_store.disable_kv_wal,
             },
             compact_event_sender: None,
         }
@@ -68,6 +72,11 @@ impl KvEngineFactoryBuilder {
 
     pub fn flow_listener(mut self, listener: FlowListener) -> Self {
         self.inner.flow_listener = Some(listener);
+        self
+    }
+
+    pub fn flush_listener(mut self, listener: FlushListener) -> Self {
+        self.inner.flush_listener = Some(listener);
         self
     }
 
@@ -142,6 +151,9 @@ impl KvEngineFactory {
             "kv",
             self.inner.sst_recovery_sender.clone(),
         ));
+        if let Some(listener) = &self.inner.flush_listener {
+            kv_db_opts.add_event_listener(listener.clone());
+        }
         if let Some(filter) = self.create_raftstore_compaction_listener() {
             kv_db_opts.add_event_listener(filter);
         }
@@ -167,6 +179,7 @@ impl KvEngineFactory {
         };
         let shared_block_cache = self.inner.block_cache.is_some();
         kv_engine.set_shared_block_cache(shared_block_cache);
+        kv_engine.set_disable_kv_wal(self.inner.disable_kv_wal);
         Ok(kv_engine)
     }
 

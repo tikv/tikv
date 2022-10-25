@@ -93,6 +93,9 @@ impl RocksEngine {
             if wb.count() > 0 {
                 wb.write()?;
             }
+            if self.disable_kv_wal {
+                self.flush_cf(cf, true)?;
+            }
         }
         Ok(())
     }
@@ -121,6 +124,9 @@ impl RocksEngine {
             wb.write()?;
         }
         self.sync_wal()?;
+        if self.disable_kv_wal {
+            self.flush_cf(cf, true)?;
+        }
         Ok(())
     }
 }
@@ -131,7 +137,8 @@ impl MiscExt for RocksEngine {
         for cf in self.cf_names() {
             handles.push(util::get_cf_handle(self.as_inner(), cf)?);
         }
-        self.as_inner().flush_cfs(&handles, wait).map_err(r2e)
+        self.as_inner().flush_cfs(&handles, wait).map_err(r2e)?;
+        Ok(())
     }
 
     fn flush_cf(&self, cf: &str, wait: bool) -> Result<()> {
@@ -195,6 +202,9 @@ impl MiscExt for RocksEngine {
                     wb.delete_range_cf(cf, r.start_key, r.end_key)?;
                 }
                 wb.write()?;
+                if self.disable_kv_wal {
+                    self.flush_cf(cf, true)?;
+                }
             }
             DeleteStrategy::DeleteByKey => {
                 for r in ranges {

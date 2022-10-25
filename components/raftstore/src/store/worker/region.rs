@@ -16,7 +16,10 @@ use std::{
     u64,
 };
 
-use engine_traits::{DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, CF_LOCK, CF_RAFT};
+use engine_traits::{
+    DeleteStrategy, Engines, KvEngine, Mutable, RaftEngine, RaftLogBatch, Range, WriteBatch,
+    CF_LOCK, CF_RAFT,
+};
 use fail::fail_point;
 use file_system::{IoType, WithIoType};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
@@ -237,15 +240,20 @@ impl PendingDeleteRanges {
     }
 }
 
-struct SnapGenContext<EK, R> {
-    engine: EK,
+struct SnapGenContext<EK, ER, R>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    engines: Engines<EK, ER>,
     mgr: SnapManager,
     router: R,
 }
 
-impl<EK, R> SnapGenContext<EK, R>
+impl<EK, ER, R> SnapGenContext<EK, ER, R>
 where
     EK: KvEngine,
+    ER: RaftEngine,
     R: CasualRouter<EK>,
 {
     /// Generates the snapshot of the Region.
@@ -262,7 +270,7 @@ where
         // do we need to check leader here?
         let snap = box_try!(store::do_snapshot::<EK>(
             self.mgr.clone(),
-            &self.engine,
+            &self.engines.kv,
             kv_snap,
             region_id,
             last_applied_term,
@@ -337,9 +345,10 @@ where
     }
 }
 
-pub struct Runner<EK, R, T>
+pub struct Runner<EK, ER, R, T>
 where
     EK: KvEngine,
+    ER: RaftEngine,
     T: PdClient + 'static,
 {
     batch_size: usize,
@@ -347,6 +356,7 @@ where
     clean_stale_tick: usize,
     clean_stale_check_interval: Duration,
     clean_stale_ranges_tick: usize,
+    disable_kv_wal: bool,
 
     tiflash_stores: HashMap<u64, bool>,
     // we may delay some apply tasks if level 0 files to write stall threshold,
@@ -362,7 +372,7 @@ where
     // whenever we can. Errors while processing them can be ignored.
     pending_delete_ranges: PendingDeleteRanges,
 
-    engine: EK,
+    engines: Engines<EK, ER>,
     mgr: SnapManager,
     coprocessor_host: CoprocessorHost<EK>,
     router: R,
@@ -370,20 +380,22 @@ where
     pool: ThreadPool<TaskCell>,
 }
 
-impl<EK, R, T> Runner<EK, R, T>
+impl<EK, ER, R, T> Runner<EK, ER, R, T>
 where
     EK: KvEngine,
+    ER: RaftEngine,
     R: CasualRouter<EK>,
     T: PdClient + 'static,
 {
     pub fn new(
-        engine: EK,
+        engines: Engines<EK, ER>,
         mgr: SnapManager,
         cfg: Arc<VersionTrack<Config>>,
         coprocessor_host: CoprocessorHost<EK>,
         router: R,
         pd_client: Option<Arc<T>>,
-    ) -> Runner<EK, R, T> {
+        disable_kv_wal: bool,
+    ) -> Self {
         Runner {
             batch_size: cfg.value().snap_apply_batch_size.0 as usize,
             use_delete_range: cfg.value().use_delete_range,
@@ -395,7 +407,7 @@ where
             tiflash_stores: HashMap::default(),
             pending_applies: VecDeque::new(),
             pending_delete_ranges: PendingDeleteRanges::default(),
-            engine,
+            engines,
             mgr,
             coprocessor_host,
             router,
@@ -403,13 +415,14 @@ where
             pool: Builder::new(thd_name!("snap-generator"))
                 .max_thread_count(cfg.value().snap_generator_pool_size)
                 .build_future_pool(),
+            disable_kv_wal,
         }
     }
 
     fn region_state(&self, region_id: u64) -> Result<RegionLocalState> {
         let region_key = keys::region_state_key(region_id);
         let region_state: RegionLocalState =
-            match box_try!(self.engine.get_msg_cf(CF_RAFT, &region_key)) {
+            match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &region_key)) {
                 Some(state) => state,
                 None => {
                     return Err(box_err!(
@@ -424,7 +437,7 @@ where
     fn apply_state(&self, region_id: u64) -> Result<RaftApplyState> {
         let state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState =
-            match box_try!(self.engine.get_msg_cf(CF_RAFT, &state_key)) {
+            match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &state_key)) {
                 Some(state) => state,
                 None => {
                     return Err(box_err!(
@@ -467,27 +480,52 @@ where
         check_abort(&abort)?;
         let timer = Instant::now();
         let options = ApplyOptions {
-            db: self.engine.clone(),
+            db: self.engines.kv.clone(),
             region: region.clone(),
             abort: Arc::clone(&abort),
             write_batch_size: self.batch_size,
             coprocessor_host: self.coprocessor_host.clone(),
+            disable_kv_wal: self.disable_kv_wal,
         };
         s.apply(options)?;
         self.coprocessor_host
             .post_apply_snapshot(&region, peer_id, &snap_key, Some(&s));
 
-        // delete snapshot state.
-        let mut wb = self.engine.write_batch();
         region_state.set_state(PeerState::Normal);
+
+        // delete snapshot state.
+        if self.disable_kv_wal {
+            let mut raft_wb = self.engines.raft.log_batch(0);
+            let (_, apply_state) =
+                box_try!(self.engines.raft.get_apply_snapshot_state(region_id)).unwrap();
+            box_try!(raft_wb.put_region_state(region_id, &region_state));
+            box_try!(raft_wb.put_apply_state(region_id, &apply_state));
+            box_try!(raft_wb.delete_apply_snapshot_state(region_id));
+            self.engines
+                .raft
+                .consume(&mut raft_wb, true)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to save apply_snap result to raft db: {:?}",
+                        region_id, e
+                    );
+                });
+        }
+
+        // delete snapshot state.
+        let mut wb = self.engines.kv.write_batch();
         box_try!(wb.put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state));
         box_try!(wb.delete_cf(CF_RAFT, &keys::snapshot_raft_state_key(region_id)));
         wb.write().unwrap_or_else(|e| {
-            panic!("{} failed to save apply_snap result: {:?}", region_id, e);
+            panic!(
+                "{} failed to save apply_snap result to kv db: {:?}",
+                region_id, e
+            );
         });
         info!(
             "apply new data";
             "region_id" => region_id,
+            "apply_state" => ?apply_state,
             "time_takes" => ?timer.saturating_elapsed(),
         );
         Ok(())
@@ -549,7 +587,8 @@ where
         }
         CLEAN_COUNTER_VEC.with_label_values(&["overlap"]).inc();
         let oldest_sequence = self
-            .engine
+            .engines
+            .kv
             .get_oldest_snapshot_sequence_number()
             .unwrap_or(u64::MAX);
         let df_ranges: Vec<_> = overlap_ranges
@@ -576,7 +615,8 @@ where
                 }
             })
             .collect();
-        self.engine
+        self.engines
+            .kv
             .delete_ranges_cfs(DeleteStrategy::DeleteFiles, &df_ranges)
             .unwrap_or_else(|e| {
                 error!("failed to delete files in range"; "err" => %e);
@@ -604,7 +644,7 @@ where
             "start_key" => log_wrappers::Value::key(&start_key),
             "end_key" => log_wrappers::Value::key(&end_key),
         );
-        let seq = self.engine.get_latest_sequence_number();
+        let seq = self.engines.kv.get_latest_sequence_number();
         self.pending_delete_ranges
             .insert(region_id, start_key, end_key, seq);
     }
@@ -616,7 +656,8 @@ where
             return;
         }
         let oldest_sequence = self
-            .engine
+            .engines
+            .kv
             .get_oldest_snapshot_sequence_number()
             .unwrap_or(u64::MAX);
         let mut region_ranges: Vec<(u64, Vec<u8>, Vec<u8>)> = self
@@ -640,7 +681,8 @@ where
             })
             .collect();
 
-        self.engine
+        self.engines
+            .kv
             .delete_ranges_cfs(DeleteStrategy::DeleteFiles, &ranges)
             .unwrap_or_else(|e| {
                 error!("failed to delete files in range"; "err" => %e);
@@ -649,7 +691,8 @@ where
             error!("failed to cleanup stale range"; "err" => %e);
             return;
         }
-        self.engine
+        self.engines
+            .kv
             .delete_ranges_cfs(DeleteStrategy::DeleteBlobs, &ranges)
             .unwrap_or_else(|e| {
                 error!("failed to delete blobs in range"; "err" => %e);
@@ -672,7 +715,12 @@ where
             if plain_file_used(cf) {
                 continue;
             }
-            if self.engine.ingest_maybe_slowdown_writes(cf).expect("cf") {
+            if self
+                .engines
+                .kv
+                .ingest_maybe_slowdown_writes(cf)
+                .expect("cf")
+            {
                 return true;
             }
         }
@@ -680,7 +728,7 @@ where
     }
 
     fn delete_all_in_range(&self, ranges: &[Range<'_>]) -> Result<()> {
-        for cf in self.engine.cf_names() {
+        for cf in self.engines.kv.cf_names() {
             // CF_LOCK usually contains fewer keys than other CFs, so we delete them by key.
             let strategy = if cf == CF_LOCK {
                 DeleteStrategy::DeleteByKey
@@ -691,7 +739,7 @@ where
                     sst_path: self.mgr.get_temp_path_for_ingest(),
                 }
             };
-            box_try!(self.engine.delete_ranges_cf(cf, strategy, ranges));
+            box_try!(self.engines.kv.delete_ranges_cf(cf, strategy, ranges));
         }
 
         Ok(())
@@ -751,7 +799,8 @@ where
             if let Some(Task::Apply { region_id, .. }) = self.pending_applies.front() {
                 fail_point!("handle_new_pending_applies", |_| {});
                 if !self
-                    .engine
+                    .engines
+                    .kv
                     .can_apply_snapshot(is_timeout, new_batch, *region_id)
                 {
                     // KvEngine can't apply snapshot for other reasons.
@@ -771,9 +820,10 @@ where
     }
 }
 
-impl<EK, R, T> Runnable for Runner<EK, R, T>
+impl<EK, ER, R, T> Runnable for Runner<EK, ER, R, T>
 where
     EK: KvEngine,
+    ER: RaftEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
     T: PdClient,
 {
@@ -818,7 +868,7 @@ where
                 }
                 SNAP_COUNTER.generate.all.inc();
                 let ctx = SnapGenContext {
-                    engine: self.engine.clone(),
+                    engines: self.engines.clone(),
                     mgr: self.mgr.clone(),
                     router: self.router.clone(),
                 };
@@ -870,9 +920,10 @@ where
     }
 }
 
-impl<EK, R, T> RunnableWithTimer for Runner<EK, R, T>
+impl<EK, ER, R, T> RunnableWithTimer for Runner<EK, ER, R, T>
 where
     EK: KvEngine,
+    ER: RaftEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
     T: PdClient + 'static,
 {
@@ -1040,12 +1091,13 @@ pub(crate) mod tests {
         let (router, _) = mpsc::sync_channel(11);
         let cfg = make_raftstore_cfg(false);
         let mut runner = RegionRunner::new(
-            engine.kv.clone(),
+            engine.clone(),
             mgr,
             cfg,
             CoprocessorHost::<KvTestEngine>::default(),
             router,
             Option::<Arc<RpcClient>>::None,
+            false,
         );
         runner.clean_stale_check_interval = Duration::from_millis(100);
 
@@ -1147,12 +1199,13 @@ pub(crate) mod tests {
         let (router, receiver) = mpsc::sync_channel(1);
         let cfg = make_raftstore_cfg(true);
         let runner = RegionRunner::new(
-            engine.kv.clone(),
+            engine.clone(),
             mgr,
             cfg,
             host,
             router,
             Option::<Arc<RpcClient>>::None,
+            false,
         );
         worker.start_with_timer(runner);
 

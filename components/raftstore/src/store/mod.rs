@@ -19,7 +19,9 @@ mod async_io;
 mod bootstrap;
 mod compaction_guard;
 mod hibernate_state;
+mod migrate_states;
 mod peer_storage;
+mod recover;
 mod region_snapshot;
 mod replication_mode;
 pub mod snap;
@@ -79,8 +81,8 @@ pub use self::{
         CheckLeaderTask, FetchedLogs, FlowStatistics, FlowStatsReporter, KeyEntry,
         LocalReadContext, LocalReader, LocalReaderCore, LogFetchedNotifier, PdTask,
         RaftlogFetchRunner, RaftlogFetchTask, ReadDelegate, ReadExecutor, ReadExecutorProvider,
-        ReadProgress, ReadStats, RefreshConfigTask, RegionTask, SplitCheckRunner, SplitCheckTask,
-        SplitConfig, SplitConfigManager, StoreMetaDelegate, TrackVer, WriteStats,
-        TLS_LOCAL_READ_METRICS,
+        ReadProgress, ReadStats, RefreshConfigTask, RegionTask, SeqnoRelationRunner,
+        SeqnoRelationTask, SplitCheckRunner, SplitCheckTask, SplitConfig, SplitConfigManager,
+        StoreMetaDelegate, TrackVer, WriteStats, TLS_LOCAL_READ_METRICS,
     },
 };

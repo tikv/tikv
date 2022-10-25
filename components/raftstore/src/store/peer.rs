@@ -96,6 +96,7 @@ use crate::{
         hibernate_state::GroupState,
         memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES},
         msg::{ErrorCallback, PeerMsg, RaftCommand, SignificantMsg, StoreMsg},
+        peer_storage::write_tombstone_state_to_raft,
         txn_ext::LocksStatus,
         util::{admin_cmd_epoch_lookup, RegionReadProgress},
         worker::{
@@ -103,7 +104,7 @@ use crate::{
             ReadProgress, RegionTask, SplitCheckTask,
         },
         Callback, Config, GlobalReplicationState, PdTask, ReadCallback, ReadIndexContext,
-        ReadResponse, TxnExt, WriteCallback, RAFT_INIT_LOG_INDEX,
+        ReadResponse, SeqnoRelationTask, TxnExt, WriteCallback, RAFT_INIT_LOG_INDEX,
     },
     Error, Result,
 };
@@ -1043,10 +1044,12 @@ where
         store_id: u64,
         cfg: &Config,
         region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+        seqno_scheduler: Option<Scheduler<SeqnoRelationTask<EK::Snapshot>>>,
         raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         engines: Engines<EK, ER>,
         region: &metapb::Region,
         peer: metapb::Peer,
+        commit_since_state: Option<RaftApplyState>,
     ) -> Result<Peer<EK, ER>> {
         let peer_id = peer.get_id();
         if peer_id == raft::INVALID_ID {
@@ -1054,13 +1057,17 @@ where
         }
 
         let tag = format!("[region {}] {}", region.get_id(), peer.get_id());
+        let commit_since_index = commit_since_state.as_ref().map(|s| s.applied_index);
 
         let ps = PeerStorage::new(
             engines,
             region,
             region_scheduler,
+            seqno_scheduler,
             raftlog_fetch_scheduler,
             peer.get_id(),
+            cfg.disable_kv_wal,
+            commit_since_state,
             tag.clone(),
         )?;
         let applied_index = ps.applied_index();
@@ -1074,6 +1081,7 @@ where
             max_size_per_msg: cfg.raft_max_size_per_msg.0,
             max_inflight_msgs: cfg.raft_max_inflight_msgs,
             applied: applied_index,
+            commit_since_index: commit_since_index.unwrap_or(applied_index),
             check_quorum: true,
             skip_bcast_commit: true,
             pre_vote: cfg.prevote,
@@ -1116,7 +1124,7 @@ where
             last_committed_prepare_merge_idx: 0,
             leader_missing_time: Some(Instant::now()),
             tag: tag.clone(),
-            last_applying_idx: applied_index,
+            last_applying_idx: commit_since_index.unwrap_or(applied_index),
             last_compacted_idx: 0,
             last_urgent_proposal_idx: u64::MAX,
             last_committed_split_idx: 0,
@@ -1354,13 +1362,16 @@ where
             }
         }
 
-        if self.get_store().is_applying_snapshot() && !self.mut_store().cancel_applying_snap() {
-            info!(
-                "stale peer is applying snapshot, will destroy next time";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-            );
-            return None;
+        if self.get_store().is_applying_snapshot() {
+            info!("cancel applying snap during destroy"; "region_id" => self.region_id);
+            if !self.mut_store().cancel_applying_snap() {
+                info!(
+                    "stale peer is applying snapshot, will destroy next time";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                );
+                return None;
+            }
         }
 
         // There is no applying snapshot or snapshot is canceled so the `apply_snap_ctx`
@@ -1404,6 +1415,7 @@ where
             "begin to destroy";
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
+            "keep_data" => keep_data,
         );
 
         let (pending_create_peers, clean) = if self.local_first_replicate {
@@ -1447,11 +1459,20 @@ where
             // Set Tombstone state explicitly
             let mut kv_wb = engines.kv.write_batch();
             let mut raft_wb = engines.raft.log_batch(1024);
+            let save_states_to_raft_db = engines.raft.get_recover_state().unwrap().is_some();
             // Raft log gc should be flushed before being destroyed, so last_compacted_idx
             // has to be the minimal index that may still have logs.
             let last_compacted_idx = self.last_compacted_idx;
-            self.mut_store()
-                .clear_meta(last_compacted_idx, &mut kv_wb, &mut raft_wb)?;
+            self.mut_store().clear_meta(
+                last_compacted_idx,
+                &mut kv_wb,
+                &mut raft_wb,
+                save_states_to_raft_db && keep_data,
+            )?;
+
+            // false + true/false => true
+            // true + false => true
+            // true + true => false
 
             // StoreFsmDelegate::check_msg use both epoch and region peer list to check
             // whether a message is targeting a staled peer. But for an uninitialized peer,
@@ -1473,6 +1494,10 @@ where
                     None
                 },
             )?;
+            if save_states_to_raft_db && !keep_data {
+                // Write region state again before clearing raft engine for region.
+                write_tombstone_state_to_raft(&mut raft_wb, &region)?;
+            }
 
             // write kv rocksdb first in case of restart happen between two write
             let mut write_opts = WriteOptions::new();
@@ -4785,6 +4810,7 @@ where
     }
 
     pub fn stop(&mut self) {
+        info!("cancel applying snap during stop"; "region_id" => self.region_id);
         self.mut_store().cancel_applying_snap();
         self.pending_reads.clear_all(None);
     }

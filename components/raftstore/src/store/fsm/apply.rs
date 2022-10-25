@@ -1,4 +1,4 @@
-// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2&.0.
 
 // #[PerformanceCriticalPath]
 #[cfg(test)]
@@ -28,9 +28,10 @@ use batch_system::{
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
-    util::SequenceNumber, DeleteStrategy, KvEngine, Mutable, PerfContext, PerfContextKind,
-    RaftEngine, RaftEngineReadOnly, Range as EngineRange, Snapshot, SstMetaInfo, WriteBatch,
-    ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    util::{SequenceNumber, SequenceNumberProgress},
+    DeleteStrategy, KvEngine, Mutable, PerfContext, PerfContextKind, RaftEngine,
+    RaftEngineReadOnly, Range as EngineRange, Snapshot, SstMetaInfo, WriteBatch, ALL_CFS,
+    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use fail::fail_point;
 use kvproto::{
@@ -201,8 +202,10 @@ pub struct ChangePeer {
     // one element
     pub changes: Vec<ChangePeerRequest>,
     pub region: Region,
+    pub remove_self: bool,
 }
 
+#[derive(Clone)]
 pub struct Range {
     pub cf: String,
     pub start_key: Vec<u8>,
@@ -251,6 +254,7 @@ pub enum ExecResult<S> {
         index: u64,
         region: Region,
         source: Region,
+        commit: u64,
     },
     RollbackMerge {
         region: Region,
@@ -291,7 +295,11 @@ pub enum ApplyResult<S> {
     /// It is unable to apply the `CommitMerge` until the source peer
     /// has applied to the required position and sets the atomic boolean
     /// to true.
-    WaitMergeSource(Arc<AtomicU64>),
+    WaitMergeSource {
+        logs_up_to_date: Arc<AtomicU64>,
+        source_region_id: u64,
+        commit: u64,
+    },
 }
 
 // The applied command and their callback
@@ -342,8 +350,12 @@ impl<S: Snapshot> ApplyCallbackBatch<S> {
 }
 
 pub trait Notifier<EK: KvEngine>: Send {
+    // Notify apply res to regions.
     fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>);
     fn notify_one(&self, region_id: u64, msg: PeerMsg<EK>);
+    fn notify_direct(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>);
+    fn notify_destroy_region(&self, region: Region, peer_id: u64, merge_from_snapshot: bool);
+    fn notify_recover_status(&self, region_id: u64, status: RecoverStatus, cb: RecoverCallback);
     fn clone_box(&self) -> Box<dyn Notifier<EK>>;
 }
 
@@ -374,6 +386,8 @@ where
     sync_log_hint: bool,
     // Whether to use the delete range API instead of deleting one by one.
     use_delete_range: bool,
+    // Whether to disable WAL.
+    disable_wal: bool,
 
     perf_context: EK::PerfContext,
 
@@ -415,9 +429,6 @@ where
 
     key_buffer: Vec<u8>,
 
-    // Whether to disable WAL.
-    disable_wal: bool,
-
     /// A general apply progress for a delegate is:
     /// `prepare_for` -> `commit` [-> `commit` ...] -> `finish_for`.
     /// Sometimes an `ApplyRes` is created with an applied_index, but data
@@ -425,6 +436,10 @@ where
     /// `ApplyRes` uncommitted. Data will finally be written to kvdb in
     /// `flush`.
     uncommitted_res_count: usize,
+
+    // TODO: add a test
+    skip_sst_ingest: bool,
+    seqno_progress: Option<Arc<SequenceNumberProgress>>,
 }
 
 impl<EK> ApplyContext<EK>
@@ -443,6 +458,7 @@ where
         store_id: u64,
         pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
         priority: Priority,
+        seqno_progress: Option<Arc<SequenceNumberProgress>>,
     ) -> ApplyContext<EK> {
         let kv_wb = engine.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
 
@@ -478,8 +494,10 @@ where
             apply_wait: APPLY_TASK_WAIT_TIME_HISTOGRAM.local(),
             apply_time: APPLY_TIME_HISTOGRAM.local(),
             key_buffer: Vec::with_capacity(1024),
-            disable_wal: false,
+            disable_wal: cfg.disable_kv_wal,
             uncommitted_res_count: 0,
+            skip_sst_ingest: false,
+            seqno_progress,
         }
     }
 
@@ -544,14 +562,14 @@ where
             write_opts.set_sync(need_sync);
             write_opts.set_disable_wal(self.disable_wal);
             if self.disable_wal {
-                let sn = SequenceNumber::pre_write();
+                let sn = self.seqno_progress.as_ref().unwrap().pre_write();
                 seqno = Some(sn);
             }
             let seq = self.kv_wb_mut().write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!("failed to write to engine: {:?}", e);
             });
             if let Some(seqno) = seqno.as_mut() {
-                seqno.post_write(seq)
+                self.seqno_progress.as_ref().unwrap().post_write(seqno, seq)
             }
             let trackers: Vec<_> = self
                 .applied_batch
@@ -617,7 +635,7 @@ where
     pub fn finish_for(
         &mut self,
         delegate: &mut ApplyDelegate<EK>,
-        results: VecDeque<ExecResult<EK::Snapshot>>,
+        results: Vec<ExecResult<EK::Snapshot>>,
     ) {
         if self.host.pre_persist(&delegate.region, true, None) {
             if !delegate.pending_remove {
@@ -1022,7 +1040,7 @@ where
         // correctly, others will be saved as a normal entry with no data, so we
         // must re-propose these commands again.
         apply_ctx.committed_count += committed_entries_drainer.len();
-        let mut results = VecDeque::new();
+        let mut results = Vec::new();
         while let Some(entry) = committed_entries_drainer.next() {
             if self.pending_remove {
                 // This peer is about to be destroyed, skip everything.
@@ -1045,7 +1063,7 @@ where
             // running on data written by new version tikv), but PD will reject old version
             // tikv join the cluster, so this should not happen.
             let res = match entry.get_entry_type() {
-                EntryType::EntryNormal => self.handle_raft_entry_normal(apply_ctx, &entry),
+                EntryType::EntryNormal => self.handle_raft_entry_normal(apply_ctx, &entry, false),
                 EntryType::EntryConfChange | EntryType::EntryConfChangeV2 => {
                     self.handle_raft_entry_conf_change(apply_ctx, &entry)
                 }
@@ -1053,8 +1071,8 @@ where
 
             match res {
                 ApplyResult::None => {}
-                ApplyResult::Res(res) => results.push_back(res),
-                ApplyResult::Yield | ApplyResult::WaitMergeSource(_) => {
+                ApplyResult::Res(res) => results.push(res),
+                ApplyResult::Yield | ApplyResult::WaitMergeSource { .. } => {
                     // Both cancel and merge will yield current processing.
                     apply_ctx.committed_count -= committed_entries_drainer.len() + 1;
                     let mut pending_entries =
@@ -1068,7 +1086,10 @@ where
                         pending_msgs: Vec::default(),
                         heap_size: None,
                     });
-                    if let ApplyResult::WaitMergeSource(logs_up_to_date) = res {
+                    if let ApplyResult::WaitMergeSource {
+                        logs_up_to_date, ..
+                    } = res
+                    {
                         self.wait_merge_state = Some(WaitSourceMergeState { logs_up_to_date });
                     }
                     return;
@@ -1105,6 +1126,7 @@ where
         &mut self,
         apply_ctx: &mut ApplyContext<EK>,
         entry: &Entry,
+        skip_yield: bool,
     ) -> ApplyResult<EK::Snapshot> {
         fail_point!(
             "yield_apply_first_region",
@@ -1130,13 +1152,13 @@ where
             {
                 apply_ctx.commit(self);
                 if let Some(start) = self.handle_start.as_ref() {
-                    if start.saturating_elapsed() >= apply_ctx.yield_duration {
+                    if !skip_yield && start.saturating_elapsed() >= apply_ctx.yield_duration {
                         return ApplyResult::Yield;
                     }
                 }
                 has_unflushed_data = false;
             }
-            if self.priority != apply_ctx.priority {
+            if !skip_yield && self.priority != apply_ctx.priority {
                 if has_unflushed_data {
                     apply_ctx.commit(self);
                 }
@@ -1205,7 +1227,7 @@ where
                 }
                 ApplyResult::Res(res)
             }
-            ApplyResult::Yield | ApplyResult::WaitMergeSource(_) => unreachable!(),
+            ApplyResult::Yield | ApplyResult::WaitMergeSource { .. } => unreachable!(),
         }
     }
 
@@ -1265,7 +1287,7 @@ where
         apply_ctx.host.pre_apply(&self.region, &cmd);
         let (mut resp, exec_result, should_write) =
             self.apply_raft_cmd(apply_ctx, index, term, &cmd);
-        if let ApplyResult::WaitMergeSource(_) = exec_result {
+        if let ApplyResult::WaitMergeSource { .. } = exec_result {
             return exec_result;
         }
 
@@ -1367,7 +1389,7 @@ where
             };
             (resp, exec_result)
         };
-        if let ApplyResult::WaitMergeSource(_) = exec_result {
+        if let ApplyResult::WaitMergeSource { .. } = exec_result {
             return (resp, exec_result, false);
         }
 
@@ -1834,6 +1856,9 @@ where
         req: &Request,
         ssts: &mut Vec<SstMetaInfo>,
     ) -> Result<()> {
+        if ctx.skip_sst_ingest {
+            return Ok(());
+        }
         PEER_WRITE_CMD_COUNTER.ingest_sst.inc();
         let sst = req.get_ingest_sst().get_sst();
 
@@ -2090,6 +2115,7 @@ where
                 conf_change: Default::default(),
                 changes: vec![request.clone()],
                 region,
+                remove_self: self.pending_remove,
             })),
         ))
     }
@@ -2134,6 +2160,7 @@ where
                 conf_change: Default::default(),
                 changes,
                 region,
+                remove_self: self.pending_remove,
             })),
         ))
     }
@@ -2688,7 +2715,11 @@ where
                 .notify_one(source_region_id, PeerMsg::SignificantMsg(msg));
             return Ok((
                 AdminResponse::default(),
-                ApplyResult::WaitMergeSource(logs_up_to_date),
+                ApplyResult::WaitMergeSource {
+                    logs_up_to_date,
+                    source_region_id,
+                    commit: merge.get_commit(),
+                },
             ));
         }
 
@@ -2767,6 +2798,7 @@ where
                 index: ctx.exec_log_index,
                 region,
                 source: source_region.to_owned(),
+                commit: merge.get_commit(),
             }),
         ))
     }
@@ -3342,6 +3374,29 @@ impl ChangeObserver {
     }
 }
 
+#[derive(Debug)]
+pub enum RecoverStatus {
+    VersionChanged {
+        new_version: u64,
+        applied_index: u64,
+    },
+    WaitMergeSource {
+        logs_up_to_date: Arc<AtomicU64>,
+        source_region_id: u64,
+        commit: u64,
+        applied_index: u64,
+    },
+    Finished,
+}
+
+pub struct RecoverCallback(pub Box<dyn FnOnce(RecoverStatus) + Send>);
+
+impl Debug for RecoverCallback {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("RecoverCallback").finish()
+    }
+}
+
 pub enum Msg<EK>
 where
     EK: KvEngine,
@@ -3359,6 +3414,14 @@ where
         cmd: ChangeObserver,
         region_epoch: RegionEpoch,
         cb: Callback<EK::Snapshot>,
+    },
+    Recover {
+        region_id: u64,
+        term: u64,
+        commit_index: u64,
+        commit_term: u64,
+        entries: Vec<Entry>,
+        cb: RecoverCallback,
     },
     #[cfg(any(test, feature = "testexport"))]
     #[allow(clippy::type_complexity)]
@@ -3386,6 +3449,24 @@ where
             merge_from_snapshot,
         })
     }
+
+    pub fn recover(
+        region_id: u64,
+        term: u64,
+        commit_index: u64,
+        commit_term: u64,
+        entries: Vec<Entry>,
+        cb: RecoverCallback,
+    ) -> Msg<EK> {
+        Msg::Recover {
+            region_id,
+            term,
+            commit_index,
+            commit_term,
+            entries,
+            cb,
+        }
+    }
 }
 
 impl<EK> Debug for Msg<EK>
@@ -3410,6 +3491,7 @@ where
             } => write!(f, "[region {}] change cmd", region_id),
             #[cfg(any(test, feature = "testexport"))]
             Msg::Validate(region_id, _) => write!(f, "[region {}] validate", region_id),
+            Msg::Recover { region_id, .. } => write!(f, "[regopm {}] recover", region_id),
         }
     }
 }
@@ -3434,9 +3516,11 @@ where
     pub region_id: u64,
     pub apply_state: RaftApplyState,
     pub applied_term: u64,
-    pub exec_res: VecDeque<ExecResult<S>>,
+    pub exec_res: Vec<ExecResult<S>>,
     pub metrics: ApplyMetrics,
     pub bucket_stat: Option<Box<BucketStat>>,
+    // write_senqo should be a vector because there may be multiple `commit` before a ApplyRes
+    // created. See more details in the comment of `prepare_for`.
     pub write_seqno: Vec<SequenceNumber>,
 }
 
@@ -3583,6 +3667,156 @@ where
         fail_point!("post_handle_apply_1003", self.delegate.id() == 1003, |_| {});
     }
 
+    /// Handles apply tasks, and uses the apply delegate to handle the committed
+    /// entries.
+    fn handle_recover(
+        &mut self,
+        apply_ctx: &mut ApplyContext<EK>,
+        term: u64,
+        commit_index: u64,
+        commit_term: u64,
+        mut entries: Vec<Entry>,
+        cb: RecoverCallback,
+    ) {
+        if apply_ctx.timer.is_none() {
+            apply_ctx.timer = Some(Instant::now_coarse());
+        }
+
+        if self.delegate.pending_remove || self.delegate.stopped {
+            return;
+        }
+
+        self.delegate.term = term;
+
+        let prev_state = (
+            self.delegate.apply_state.get_commit_index(),
+            self.delegate.apply_state.get_commit_term(),
+        );
+        let cur_state = (commit_index, commit_term);
+        if prev_state.0 > cur_state.0 || prev_state.1 > cur_state.1 {
+            panic!(
+                "{} commit state jump backward {:?} -> {:?}",
+                self.delegate.tag, prev_state, cur_state
+            );
+        }
+        self.delegate.apply_state.set_commit_index(cur_state.0);
+        self.delegate.apply_state.set_commit_term(cur_state.1);
+
+        // If there is any apply task, we change this fsm to normal-priority.
+        // When it meets a ingest-request or a delete-range request, it will change to
+        // low-priority.
+        self.delegate.priority = Priority::Normal;
+        if entries.is_empty() {
+            apply_ctx.notifier.notify_recover_status(
+                self.delegate.region_id(),
+                RecoverStatus::Finished,
+                cb,
+            );
+            return;
+        }
+        if let Some(ref state) = self.delegate.wait_merge_state.take() {
+            let source_region_id = state.logs_up_to_date.load(Ordering::SeqCst);
+            if source_region_id == 0 {
+                panic!(
+                    "region {} send recover entries again without setting wait_merge_state",
+                    self.delegate.region_id()
+                );
+            }
+            self.delegate.ready_source_region_id = source_region_id;
+        }
+        info!("apply handle recover"; "region_id" => self.delegate.region_id(), "start" => entries[0].index, "end" => entries[entries.len()-1].index);
+        apply_ctx.prepare_for(&mut self.delegate);
+        // If we send multiple ConfChange commands, only first one will be proposed
+        // correctly, others will be saved as a normal entry with no data, so we
+        // must re-propose these commands again.
+        apply_ctx.committed_count += entries.len();
+        apply_ctx.skip_sst_ingest = true;
+        let mut results = Vec::new();
+        let mut wait_merge_source = None;
+        let mut entries_drainer = entries.drain(..);
+        for entry in entries_drainer.by_ref() {
+            if self.delegate.pending_remove {
+                // This peer is about to be destroyed, skip everything.
+                break;
+            }
+
+            let expect_index = self.delegate.apply_state.get_applied_index() + 1;
+            if expect_index != entry.get_index() {
+                panic!(
+                    "{} expect index {}, but got {}, ctx {}",
+                    self.delegate.tag,
+                    expect_index,
+                    entry.get_index(),
+                    apply_ctx.tag,
+                );
+            }
+
+            let prev_version = self.delegate.region.get_region_epoch().get_version();
+            let res = match entry.get_entry_type() {
+                EntryType::EntryNormal => self
+                    .delegate
+                    .handle_raft_entry_normal(apply_ctx, &entry, true),
+                EntryType::EntryConfChange | EntryType::EntryConfChangeV2 => self
+                    .delegate
+                    .handle_raft_entry_conf_change(apply_ctx, &entry),
+            };
+
+            match res {
+                ApplyResult::None => {}
+                ApplyResult::Res(res) => {
+                    if !matches!(
+                        res,
+                        ExecResult::ComputeHash { .. } | ExecResult::VerifyHash { .. }
+                    ) {
+                        results.push(res)
+                    } else {
+                        info!("ignore compute/verify hash during recovery"; "region_id" => self.delegate.region_id());
+                    }
+                    let new_version = self.delegate.region.get_region_epoch().get_version();
+                    if prev_version != new_version {
+                        break;
+                    }
+                }
+                ApplyResult::WaitMergeSource {
+                    logs_up_to_date,
+                    source_region_id,
+                    commit,
+                } => {
+                    wait_merge_source = Some((logs_up_to_date.clone(), source_region_id, commit));
+                    self.delegate.wait_merge_state = Some(WaitSourceMergeState { logs_up_to_date });
+                    break;
+                }
+                ApplyResult::Yield => panic!("should not yield during recovery"),
+            }
+        }
+        apply_ctx.finish_for(&mut self.delegate, results);
+        apply_ctx.skip_sst_ingest = false;
+
+        if self.delegate.pending_remove {
+            self.destroy(apply_ctx);
+        }
+        apply_ctx.flush();
+        let recover_status =
+            if let Some((logs_up_to_date, source_region_id, commit)) = wait_merge_source {
+                RecoverStatus::WaitMergeSource {
+                    logs_up_to_date,
+                    source_region_id,
+                    commit,
+                    applied_index: self.delegate.apply_state.get_applied_index(),
+                }
+            } else if entries_drainer.len() == 0 || self.delegate.pending_remove {
+                RecoverStatus::Finished
+            } else {
+                RecoverStatus::VersionChanged {
+                    new_version: self.delegate.region.get_region_epoch().get_version(),
+                    applied_index: self.delegate.apply_state.get_applied_index(),
+                }
+            };
+        apply_ctx
+            .notifier
+            .notify_recover_status(self.delegate.region_id(), recover_status, cb);
+    }
+
     /// Handles proposals, and appends the commands to the apply delegate.
     fn append_proposal(&mut self, props_drainer: Drain<'_, Proposal<Callback<EK::Snapshot>>>) {
         let (region_id, peer_id) = (self.delegate.region_id(), self.delegate.id());
@@ -3641,15 +3875,10 @@ where
         }
         if !self.delegate.stopped {
             self.destroy(ctx);
-            ctx.notifier.notify_one(
-                self.delegate.region_id(),
-                PeerMsg::ApplyRes {
-                    res: TaskRes::Destroy {
-                        region_id: self.delegate.region_id(),
-                        peer_id: self.delegate.id,
-                        merge_from_snapshot: d.merge_from_snapshot,
-                    },
-                },
+            ctx.notifier.notify_destroy_region(
+                self.delegate.region.clone(),
+                self.delegate.id,
+                d.merge_from_snapshot,
             );
         }
     }
@@ -3820,7 +4049,7 @@ where
                 // Commit the writebatch for ensuring the following snapshot can get all
                 // previous writes.
                 if apply_ctx.kv_wb().count() > 0 {
-                    apply_ctx.commit(&mut self.delegate);
+                    apply_ctx.flush();
                 }
                 ReadResponse {
                     response: Default::default(),
@@ -3927,6 +4156,16 @@ where
                 Msg::Validate(_, f) => {
                     let delegate = &self.delegate as *const ApplyDelegate<EK> as *const u8;
                     f(delegate)
+                }
+                Msg::Recover {
+                    term,
+                    commit_index,
+                    commit_term,
+                    entries,
+                    cb,
+                    ..
+                } => {
+                    self.handle_recover(apply_ctx, term, commit_index, commit_term, entries, cb);
                 }
             }
         }
@@ -4151,6 +4390,10 @@ where
     fn get_priority(&self) -> Priority {
         self.apply_ctx.priority
     }
+
+    fn exit(&mut self) {
+        self.apply_ctx.flush();
+    }
 }
 
 pub struct Builder<EK: KvEngine> {
@@ -4164,6 +4407,7 @@ pub struct Builder<EK: KvEngine> {
     router: ApplyRouter<EK>,
     store_id: u64,
     pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+    seqno_progress: Option<Arc<SequenceNumberProgress>>,
 }
 
 impl<EK: KvEngine> Builder<EK> {
@@ -4171,6 +4415,7 @@ impl<EK: KvEngine> Builder<EK> {
         builder: &RaftPollerBuilder<EK, ER, T>,
         sender: Box<dyn Notifier<EK>>,
         router: ApplyRouter<EK>,
+        seqno_progress: Option<Arc<SequenceNumberProgress>>,
     ) -> Builder<EK> {
         Builder {
             tag: format!("[store {}]", builder.store.get_id()),
@@ -4183,6 +4428,7 @@ impl<EK: KvEngine> Builder<EK> {
             router,
             store_id: builder.store.get_id(),
             pending_create_peers: builder.pending_create_peers.clone(),
+            seqno_progress,
         }
     }
 }
@@ -4209,6 +4455,7 @@ where
                 self.store_id,
                 self.pending_create_peers.clone(),
                 priority,
+                self.seqno_progress.clone(),
             ),
             messages_per_tick: cfg.messages_per_tick,
             cfg_tracker: self.cfg.clone().tracker(self.tag.clone()),
@@ -4233,6 +4480,7 @@ where
             router: self.router.clone(),
             store_id: self.store_id,
             pending_create_peers: self.pending_create_peers.clone(),
+            seqno_progress: self.seqno_progress.clone(),
         }
     }
 }
@@ -4337,6 +4585,9 @@ where
                 }
                 #[cfg(any(test, feature = "testexport"))]
                 Msg::Validate(..) => return,
+                Msg::Recover { region_id, .. } => {
+                    panic!("region {} schedule reocver failed", region_id)
+                }
             },
             Either::Left(Err(TrySendError::Full(_))) => unreachable!(),
         };
@@ -4466,7 +4717,8 @@ mod memtrace {
                 | Msg::Snapshot(_)
                 | Msg::Destroy(_)
                 | Msg::Noop
-                | Msg::Change { .. } => 0,
+                | Msg::Change { .. }
+                | Msg::Recover { .. } => 0,
                 #[cfg(any(test, feature = "testexport"))]
                 Msg::Validate(..) => 0,
             }
@@ -4570,11 +4822,35 @@ mod tests {
                 let _ = self.tx.send(PeerMsg::ApplyRes { res });
             }
         }
+        fn notify_direct(&self, apply_res: Vec<ApplyRes<<EK as KvEngine>::Snapshot>>) {
+            for r in apply_res {
+                let res = TaskRes::Apply(r);
+                let _ = self.tx.send(PeerMsg::ApplyRes { res });
+            }
+        }
         fn notify_one(&self, _: u64, msg: PeerMsg<EK>) {
             let _ = self.tx.send(msg);
         }
         fn clone_box(&self) -> Box<dyn Notifier<EK>> {
             Box::new(self.clone())
+        }
+
+        fn notify_destroy_region(&self, region: Region, peer_id: u64, merge_from_snapshot: bool) {
+            let _ = self.tx.send(PeerMsg::ApplyRes {
+                res: TaskRes::Destroy {
+                    region_id: region.get_id(),
+                    peer_id,
+                    merge_from_snapshot,
+                },
+            });
+        }
+
+        fn notify_recover_status(
+            &self,
+            _region_id: u64,
+            _status: RecoverStatus,
+            _cb: RecoverCallback,
+        ) {
         }
     }
 
@@ -4795,6 +5071,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            seqno_progress: None,
         };
         system.spawn("test-basic".to_owned(), builder);
 
@@ -5255,6 +5532,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            seqno_progress: None,
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -5599,6 +5877,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            seqno_progress: None,
         };
         system.spawn("test-ingest".to_owned(), builder);
 
@@ -5779,6 +6058,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            seqno_progress: None,
         };
         system.spawn("test-bucket".to_owned(), builder);
 
@@ -5832,7 +6112,7 @@ mod tests {
         router.schedule_task(1, Msg::apply(apply2));
 
         let res = fetch_apply_res(&rx);
-        let bucket_version = res.bucket_stat.unwrap().as_ref().meta.version;
+        let bucket_version = res.bucket_stat.unwrap().meta.version;
 
         assert_eq!(bucket_version, 2);
 
@@ -5872,6 +6152,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            seqno_progress: None,
         };
         system.spawn("test-exec-observer".to_owned(), builder);
 
@@ -5996,7 +6277,7 @@ mod tests {
             regions,
             derived: _,
             new_split_regions: _,
-        } = apply_res.exec_res.front().unwrap()
+        } = apply_res.exec_res.get(0).unwrap()
         {
             let r8 = regions.get(0).unwrap();
             let r1 = regions.get(1).unwrap();
@@ -6096,6 +6377,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            seqno_progress: None,
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -6376,6 +6658,7 @@ mod tests {
             router: router.clone(),
             store_id: 2,
             pending_create_peers,
+            seqno_progress: None,
         };
         system.spawn("test-split".to_owned(), builder);
 
@@ -6601,6 +6884,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            seqno_progress: None,
         };
         system.spawn("flashback_need_to_be_applied".to_owned(), builder);
 

@@ -309,6 +309,11 @@ pub struct Config {
     #[online_config(hidden)]
     // Interval to check peers availability info.
     pub check_peers_availability_interval: ReadableDuration,
+
+    #[online_config(skip)]
+    /// Whether to disable write-ahead log for kv rocksdb. Once enable it, Raft
+    /// CF of kv rocksdb will also be removed.
+    pub disable_kv_wal: bool,
 }
 
 impl Default for Config {
@@ -415,6 +420,7 @@ impl Default for Config {
             unreachable_backoff: ReadableDuration::secs(10),
             // TODO: make its value reasonable
             check_peers_availability_interval: ReadableDuration::secs(30),
+            disable_kv_wal: false,
         }
     }
 }

@@ -13,7 +13,7 @@ use encryption::{
 };
 use engine_traits::{
     CfName, EncryptionKeyManager, Error as EngineError, Iterable, KvEngine, Mutable,
-    SstCompressionType, SstWriter, SstWriterBuilder, WriteBatch,
+    SstCompressionType, SstWriter, SstWriterBuilder, WriteBatch, WriteOptions,
 };
 use kvproto::encryptionpb::EncryptionMethod;
 use tikv_util::{
@@ -205,6 +205,7 @@ pub fn apply_plain_cf_file<E, F>(
     db: &E,
     cf: &str,
     batch_size: usize,
+    disable_kv_wal: bool,
     mut callback: F,
 ) -> Result<(), Error>
 where
@@ -222,7 +223,9 @@ where
     let mut wb = db.write_batch();
     let mut write_to_db = |batch: &mut Vec<(Vec<u8>, Vec<u8>)>| -> Result<(), EngineError> {
         batch.iter().try_for_each(|(k, v)| wb.put_cf(cf, k, v))?;
-        wb.write()?;
+        let mut opt = WriteOptions::default();
+        opt.set_disable_wal(disable_kv_wal);
+        wb.write_opt(&opt)?;
         wb.clear();
         callback(batch);
         batch.clear();
@@ -242,6 +245,9 @@ where
         if key.is_empty() {
             if !batch.is_empty() {
                 box_try!(write_to_db(&mut batch));
+            }
+            if disable_kv_wal {
+                box_try!(db.flush_cf(cf, true));
             }
             return Ok(());
         }
@@ -366,7 +372,7 @@ mod tests {
 
                     let detector = TestStaleDetector {};
                     let tmp_file_path = &cf_file.tmp_file_paths()[0];
-                    apply_plain_cf_file(tmp_file_path, None, &detector, &db1, cf, 16, |v| {
+                    apply_plain_cf_file(tmp_file_path, None, &detector, &db1, cf, 16, false, |v| {
                         v.iter()
                             .cloned()
                             .for_each(|pair| applied_keys.entry(cf).or_default().push(pair))

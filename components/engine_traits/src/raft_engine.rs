@@ -3,12 +3,13 @@
 use kvproto::{
     metapb::Region,
     raft_serverpb::{
-        RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent, StoreRecoverState,
+        RaftApplyState, RaftLocalState, RegionLocalState, RegionSequenceNumberRelation, StoreIdent,
+        StoreRecoverState,
     },
 };
 use raft::eraftpb::Entry;
 
-use crate::*;
+use crate::{util::FlushedSeqno, *};
 
 pub const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
 
@@ -22,6 +23,20 @@ pub trait RaftEngineReadOnly: Sync + Send + 'static {
     fn get_region_state(&self, raft_group_id: u64) -> Result<Option<RegionLocalState>>;
     fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>>;
     fn get_recover_state(&self) -> Result<Option<StoreRecoverState>>;
+
+    /// Return the relation with the biggest seqno which its seqno <= `seqno`.
+    fn get_seqno_relation(
+        &self,
+        raft_group_id: u64,
+        seqno: u64,
+    ) -> Result<Option<RegionSequenceNumberRelation>>;
+
+    fn get_apply_snapshot_state(
+        &self,
+        raft_group_id: u64,
+    ) -> Result<Option<(RegionLocalState, RaftApplyState)>>;
+
+    fn get_flushed_seqno(&self) -> Result<Option<FlushedSeqno>>;
 
     fn get_entry(&self, raft_group_id: u64, index: u64) -> Result<Option<Entry>>;
 
@@ -62,6 +77,7 @@ pub trait RaftEngineDebug: RaftEngine + Sync + Send + 'static {
     }
 }
 
+#[derive(Debug)]
 pub struct RaftLogGcTask {
     pub raft_group_id: u64,
     pub from: u64,
@@ -153,6 +169,19 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
     /// When kvdb's write-ahead-log is disabled, the sequence number of the last
     /// boot time is saved.
     fn put_recover_state(&self, state: &StoreRecoverState) -> Result<()>;
+
+    /// scan the relations between start(inclusive) and end(exclusive).
+    fn scan_seqno_relations<F>(
+        &self,
+        raft_group_id: u64,
+        start: Option<u64>,
+        end: Option<u64>,
+        f: F,
+    ) -> Result<()>
+    where
+        F: FnMut(u64, &RegionSequenceNumberRelation) -> bool;
+
+    fn put_flushed_seqno(&self, flushed_seqno: &FlushedSeqno) -> Result<()>;
 }
 
 pub trait RaftLogBatch: Send {
@@ -170,6 +199,26 @@ pub trait RaftLogBatch: Send {
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()>;
     fn put_region_state(&mut self, raft_group_id: u64, state: &RegionLocalState) -> Result<()>;
     fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()>;
+
+    fn delete_apply_state(&mut self, raft_group_id: u64) -> Result<()>;
+    fn delete_region_state(&mut self, raft_group_id: u64) -> Result<()>;
+
+    fn put_seqno_relation(
+        &mut self,
+        raft_group_id: u64,
+        relation: &RegionSequenceNumberRelation,
+    ) -> Result<()>;
+
+    fn delete_seqno_relation(&mut self, raft_group_id: u64, seqno: u64) -> Result<()>;
+
+    fn put_apply_snapshot_state(
+        &mut self,
+        raft_group_id: u64,
+        region_state: &RegionLocalState,
+        apply_state: &RaftApplyState,
+    ) -> Result<()>;
+
+    fn delete_apply_snapshot_state(&mut self, raft_group_id: u64) -> Result<()>;
 
     /// The data size of this RaftLogBatch.
     fn persist_size(&self) -> usize;

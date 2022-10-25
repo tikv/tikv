@@ -737,12 +737,28 @@ fn test_snapshot_clean_up_logs_with_unfinished_log_gc() {
     assert!(dest[0].get_index() > truncated_index, "{:?}", dest);
 }
 
-/// Redo snapshot apply after restart when kvdb state is updated but raftdb
-/// state is not.
 #[test]
 fn test_snapshot_recover_from_raft_write_failure() {
     let mut cluster = new_server_cluster(0, 3);
-    configure_for_snapshot(&mut cluster);
+    cluster.cfg.raft_store.disable_kv_wal = false;
+    snapshot_recover_from_raft_write_failure(&mut cluster);
+}
+
+#[test]
+fn test_snapshot_recover_from_raft_write_failure_wal_disabled() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.disable_kv_wal = true;
+    // After wal is disabled, region state and raft state would be saved atomically.
+    // So if raft state of snapshot was written failed, region state should be also
+    // written failed. After TiKV restarted, region state would start from Normal
+    // rather than Applying.
+    snapshot_recover_from_raft_write_failure(&mut cluster);
+}
+
+/// Redo snapshot apply after restart when kvdb state is updated but raftdb
+/// state is not.
+fn snapshot_recover_from_raft_write_failure(cluster: &mut Cluster<ServerCluster>) {
+    configure_for_snapshot(cluster);
     // Avoid triggering snapshot at final step.
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(10);
     let pd_client = Arc::clone(&cluster.pd_client);

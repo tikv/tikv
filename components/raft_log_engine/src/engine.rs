@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    convert::TryInto,
     fs,
     io::{Read, Result as IoResult, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
@@ -9,15 +10,16 @@ use std::{
 
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
-    CacheStats, EncryptionKeyManager, EncryptionMethod, PerfContextExt, PerfContextKind, PerfLevel,
-    RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait,
-    RaftLogGcTask, Result,
+    util::FlushedSeqno, CacheStats, EncryptionKeyManager, EncryptionMethod, PerfContextExt,
+    PerfContextKind, PerfLevel, RaftEngine, RaftEngineDebug, RaftEngineReadOnly,
+    RaftLogBatch as RaftLogBatchTrait, RaftLogGcTask, Result,
 };
 use file_system::{IoOp, IoRateLimiter, IoType};
 use kvproto::{
     metapb::Region,
     raft_serverpb::{
-        RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent, StoreRecoverState,
+        RaftApplyState, RaftLocalState, RegionLocalState, RegionSequenceNumberRelation, StoreIdent,
+        StoreRecoverState,
     },
 };
 use raft::eraftpb::Entry;
@@ -344,6 +346,35 @@ const PREPARE_BOOTSTRAP_REGION_KEY: &[u8] = &[0x02];
 const REGION_STATE_KEY: &[u8] = &[0x03];
 const APPLY_STATE_KEY: &[u8] = &[0x04];
 const RECOVER_STATE_KEY: &[u8] = &[0x05];
+const SEQNO_RELATION_KEY: &[u8] = &[0x06];
+const SNAPSHOT_APPLY_STATE_KEY: &[u8] = &[0x07];
+const SNAPSHOT_REGION_STATE_KEY: &[u8] = &[0x08];
+const FLUSHED_SEQNO_KEY: &[u8] = &[0x09];
+
+fn raft_seqno_relation_key(seqno: u64) -> Vec<u8> {
+    let mut key = Vec::with_capacity(SEQNO_RELATION_KEY.len() + 8);
+    key.extend_from_slice(SEQNO_RELATION_KEY);
+    key.extend_from_slice(&seqno.to_be_bytes());
+    key
+}
+
+fn min_raft_seqno_relation_key() -> Vec<u8> {
+    SEQNO_RELATION_KEY.to_vec()
+}
+
+fn max_raft_seqno_relation_key() -> Vec<u8> {
+    let mut key = Vec::with_capacity(SEQNO_RELATION_KEY.len() + 8);
+    key.extend_from_slice(SEQNO_RELATION_KEY);
+    key.extend_from_slice(&u64::MAX.to_be_bytes());
+    key
+}
+
+fn parse_raft_seqno_relation_key(key: &[u8]) -> Option<u64> {
+    if &key[..1] != SEQNO_RELATION_KEY {
+        return None;
+    }
+    Some(u64::from_be_bytes(key[1..].try_into().unwrap()))
+}
 
 impl RaftLogBatchTrait for RaftLogBatch {
     fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
@@ -360,6 +391,20 @@ impl RaftLogBatchTrait for RaftLogBatch {
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
         self.0
             .put_message(raft_group_id, RAFT_LOG_STATE_KEY.to_vec(), state)
+            .map_err(transfer_error)
+    }
+
+    fn put_seqno_relation(
+        &mut self,
+        raft_group_id: u64,
+        relation: &RegionSequenceNumberRelation,
+    ) -> Result<()> {
+        self.0
+            .put_message(
+                raft_group_id,
+                raft_seqno_relation_key(relation.sequence_number),
+                relation,
+            )
             .map_err(transfer_error)
     }
 
@@ -408,6 +453,51 @@ impl RaftLogBatchTrait for RaftLogBatch {
             .put_message(raft_group_id, APPLY_STATE_KEY.to_vec(), state)
             .map_err(transfer_error)
     }
+
+    fn put_apply_snapshot_state(
+        &mut self,
+        raft_group_id: u64,
+        region_state: &RegionLocalState,
+        apply_state: &RaftApplyState,
+    ) -> Result<()> {
+        self.0
+            .put_message(
+                raft_group_id,
+                SNAPSHOT_REGION_STATE_KEY.to_vec(),
+                region_state,
+            )
+            .map_err(transfer_error)?;
+        self.0
+            .put_message(
+                raft_group_id,
+                SNAPSHOT_APPLY_STATE_KEY.to_vec(),
+                apply_state,
+            )
+            .map_err(transfer_error)
+    }
+
+    fn delete_apply_snapshot_state(&mut self, raft_group_id: u64) -> Result<()> {
+        self.0
+            .delete(raft_group_id, SNAPSHOT_REGION_STATE_KEY.to_vec());
+        self.0
+            .delete(raft_group_id, SNAPSHOT_APPLY_STATE_KEY.to_vec());
+        Ok(())
+    }
+
+    fn delete_seqno_relation(&mut self, raft_group_id: u64, seqno: u64) -> Result<()> {
+        self.0.delete(raft_group_id, raft_seqno_relation_key(seqno));
+        Ok(())
+    }
+
+    fn delete_apply_state(&mut self, raft_group_id: u64) -> Result<()> {
+        self.0.delete(raft_group_id, APPLY_STATE_KEY.to_vec());
+        Ok(())
+    }
+
+    fn delete_region_state(&mut self, raft_group_id: u64) -> Result<()> {
+        self.0.delete(raft_group_id, REGION_STATE_KEY.to_vec());
+        Ok(())
+    }
 }
 
 impl RaftEngineReadOnly for RaftLogEngine {
@@ -415,6 +505,27 @@ impl RaftEngineReadOnly for RaftLogEngine {
         self.0
             .get_message(raft_group_id, RAFT_LOG_STATE_KEY)
             .map_err(transfer_error)
+    }
+
+    fn get_seqno_relation(
+        &self,
+        raft_group_id: u64,
+        seqno: u64,
+    ) -> Result<Option<RegionSequenceNumberRelation>> {
+        let mut res = None;
+        self.0
+            .scan_messages(
+                raft_group_id,
+                Some(SEQNO_RELATION_KEY),
+                Some(&raft_seqno_relation_key(seqno + 1)),
+                true,
+                |_, value| {
+                    res = Some(value);
+                    false
+                },
+            )
+            .map_err(transfer_error)?;
+        Ok(res)
     }
 
     fn get_entry(&self, raft_group_id: u64, index: u64) -> Result<Option<Entry>> {
@@ -477,6 +588,31 @@ impl RaftEngineReadOnly for RaftLogEngine {
         self.0
             .get_message(STORE_STATE_ID, RECOVER_STATE_KEY)
             .map_err(transfer_error)
+    }
+
+    fn get_flushed_seqno(&self) -> Result<Option<FlushedSeqno>> {
+        let value = self.0.get(STORE_STATE_ID, FLUSHED_SEQNO_KEY);
+        Ok(value.map(|v| serde_json::from_slice(&v).unwrap()))
+    }
+
+    fn get_apply_snapshot_state(
+        &self,
+        raft_group_id: u64,
+    ) -> Result<Option<(RegionLocalState, RaftApplyState)>> {
+        let region_state = self
+            .0
+            .get_message(raft_group_id, SNAPSHOT_REGION_STATE_KEY)
+            .map_err(transfer_error)?;
+        if let Some(region_state) = region_state {
+            let apply_state = self
+                .0
+                .get_message(raft_group_id, SNAPSHOT_APPLY_STATE_KEY)
+                .map_err(transfer_error)?
+                .unwrap();
+            Ok(Some((region_state, apply_state)))
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -635,6 +771,47 @@ impl RaftEngine for RaftLogEngine {
             .put_message(STORE_STATE_ID, RECOVER_STATE_KEY.to_vec(), state)
             .map_err(transfer_error)?;
         self.0.write(&mut batch.0, true).map_err(transfer_error)?;
+        Ok(())
+    }
+
+    fn scan_seqno_relations<F>(
+        &self,
+        raft_group_id: u64,
+        start: Option<u64>,
+        end: Option<u64>,
+        mut f: F,
+    ) -> Result<()>
+    where
+        F: FnMut(u64, &RegionSequenceNumberRelation) -> bool,
+    {
+        let start = start
+            .map(|s| raft_seqno_relation_key(s))
+            .unwrap_or_else(min_raft_seqno_relation_key);
+        let end = end
+            .map(|s| raft_seqno_relation_key(s))
+            .unwrap_or_else(max_raft_seqno_relation_key);
+        self.0
+            .scan_messages(
+                raft_group_id,
+                Some(start.as_slice()),
+                Some(end.as_slice()),
+                false,
+                |key, value| {
+                    let index = parse_raft_seqno_relation_key(key).unwrap();
+                    f(index, &value)
+                },
+            )
+            .map_err(transfer_error)
+    }
+
+    fn put_flushed_seqno(&self, flushed_seqno: &FlushedSeqno) -> Result<()> {
+        let result = serde_json::to_string(&flushed_seqno).unwrap();
+        let mut batch = Self::LogBatch::default();
+        batch.0.put(
+            STORE_STATE_ID,
+            FLUSHED_SEQNO_KEY.to_vec(),
+            result.as_bytes().to_vec(),
+        );
         Ok(())
     }
 }

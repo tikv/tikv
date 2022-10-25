@@ -7,6 +7,8 @@
 #![feature(box_patterns)]
 #![feature(hash_drain_filter)]
 #![feature(let_else)]
+#![feature(map_first_last)]
+#![feature(once_cell)]
 #![recursion_limit = "256"]
 
 #[cfg(test)]

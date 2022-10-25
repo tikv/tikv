@@ -5,10 +5,7 @@ use std::{
     borrow::Cow,
     cell::Cell,
     cmp,
-    collections::{
-        Bound::{Excluded, Unbounded},
-        VecDeque,
-    },
+    collections::Bound::{Excluded, Unbounded},
     iter::{FromIterator, Iterator},
     mem,
     sync::{Arc, Mutex},
@@ -35,8 +32,8 @@ use kvproto::{
         StatusCmdType, StatusResponse,
     },
     raft_serverpb::{
-        ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftMessage, RaftSnapshotData,
-        RaftTruncatedState, RegionLocalState,
+        ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
+        RaftSnapshotData, RaftTruncatedState, RegionLocalState,
     },
     replication_modepb::{DrAutoSyncState, ReplicationMode},
 };
@@ -98,7 +95,7 @@ use crate::{
         },
         CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg, PeerTick,
         ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, ReadCallback,
-        SignificantMsg, SnapKey, StoreMsg, WriteCallback,
+        SeqnoRelationTask, SignificantMsg, SnapKey, StoreMsg, WriteCallback,
     },
     Error, Result,
 };
@@ -152,6 +149,7 @@ where
     hibernate_state: HibernateState,
     stopped: bool,
     has_ready: bool,
+    started: bool,
     mailbox: Option<BasicMailbox<PeerFsm<EK, ER>>>,
     pub receiver: Receiver<PeerMsg<EK>>,
     /// when snapshot is generating or sending, skip split check at most
@@ -244,9 +242,11 @@ where
         store_id: u64,
         cfg: &Config,
         region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+        seqno_scheduler: Option<Scheduler<SeqnoRelationTask<EK::Snapshot>>>,
         raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         engines: Engines<EK, ER>,
         region: &metapb::Region,
+        commit_since_state: Option<RaftApplyState>,
     ) -> Result<SenderFsmPair<EK, ER>> {
         let meta_peer = match find_peer(region, store_id) {
             None => {
@@ -273,10 +273,12 @@ where
                     store_id,
                     cfg,
                     region_scheduler,
+                    seqno_scheduler,
                     raftlog_fetch_scheduler,
                     engines,
                     region,
                     meta_peer,
+                    commit_since_state,
                 )?,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
@@ -292,6 +294,7 @@ where
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
                 logs_gc_flushed: false,
+                started: false,
             }),
         ))
     }
@@ -303,6 +306,7 @@ where
         store_id: u64,
         cfg: &Config,
         region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+        seqno_scheduler: Option<Scheduler<SeqnoRelationTask<EK::Snapshot>>>,
         raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         engines: Engines<EK, ER>,
         region_id: u64,
@@ -327,10 +331,12 @@ where
                     store_id,
                     cfg,
                     region_scheduler,
+                    seqno_scheduler,
                     raftlog_fetch_scheduler,
                     engines,
                     &region,
                     peer,
+                    None,
                 )?,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
@@ -346,6 +352,7 @@ where
                 trace: PeerMemoryTrace::default(),
                 delayed_destroy: None,
                 logs_gc_flushed: false,
+                started: false,
             }),
         ))
     }
@@ -1195,6 +1202,7 @@ where
         self.register_split_region_check_tick();
         self.register_check_peer_stale_state_tick();
         self.on_check_merge();
+        self.fsm.started = true;
         // Apply committed entries more quickly.
         // Or if it's a leader. This implicitly means it's a singleton
         // because it becomes leader in `Peer::new` when it's a
@@ -1436,6 +1444,10 @@ where
                 self.on_snapshot_recovery_wait_apply(syncer)
             }
             SignificantMsg::CheckPendingAdmin(ch) => self.on_check_pending_admin(ch),
+            SignificantMsg::RecoverStatus { status, cb } => {
+                info!("report region recover status"; "region_id" => self.region_id(), "status" => ?status);
+                cb.0(status);
+            }
         }
     }
 
@@ -1930,6 +1942,11 @@ where
     ///
     /// Returns false is no readiness is generated.
     pub fn collect_ready(&mut self) -> bool {
+        if !self.fsm.started {
+            // Should not handle any ready before recovery was done and fsm got started,
+            // otherwise it could be inconsistent in ApplyFsm.
+            return false;
+        }
         let has_ready = self.fsm.has_ready;
         self.fsm.has_ready = false;
         if !has_ready || self.fsm.stopped {
@@ -2209,14 +2226,14 @@ where
     fn on_apply_res(&mut self, res: ApplyTaskRes<EK::Snapshot>) {
         fail_point!("on_apply_res", |_| {});
         match res {
-            ApplyTaskRes::Apply(mut res) => {
+            ApplyTaskRes::Apply(res) => {
                 debug!(
                     "async apply finish";
                     "region_id" => self.region_id(),
                     "peer_id" => self.fsm.peer_id(),
                     "res" => ?res,
                 );
-                self.on_ready_result(&mut res.exec_res, &res.metrics);
+                self.on_ready_result(res.exec_res, &res.metrics);
                 if self.fsm.stopped {
                     return;
                 }
@@ -3759,7 +3776,19 @@ where
     fn on_ready_compact_log(&mut self, first_index: u64, state: RaftTruncatedState) {
         let total_cnt = self.fsm.peer.last_applying_idx - first_index;
         // the size of current CompactLog command can be ignored.
-        let remain_cnt = self.fsm.peer.last_applying_idx - state.get_index() - 1;
+        let remain_cnt = self
+            .fsm
+            .peer
+            .last_applying_idx
+            .checked_sub(state.get_index() - 1)
+            .unwrap_or_else(|| {
+                panic!(
+                    "region {} last_applying_idx {} truncated_idx {}",
+                    self.region_id(),
+                    self.fsm.peer.last_applying_idx,
+                    state.get_index()
+                )
+            });
         self.fsm.peer.raft_log_size_hint =
             self.fsm.peer.raft_log_size_hint * remain_cnt / total_cnt;
         let compact_to = state.get_index() + 1;
@@ -3855,16 +3884,19 @@ where
             // Check if this new region should be splitted
             let new_split_peer = new_split_regions.get(&new_region.get_id()).unwrap();
             if new_split_peer.result.is_some() {
-                if let Err(e) = self
-                    .fsm
-                    .peer
-                    .mut_store()
-                    .clear_extra_split_data(enc_start_key(&new_region), enc_end_key(&new_region))
-                {
-                    error!(?e;
-                        "failed to cleanup extra split data, may leave some dirty data";
-                        "region_id" => new_region.get_id(),
-                    );
+                // If fsm is not started and it receives an `ApplyRes`, it could be doing a
+                // recovery. During recovery some region ranges maybe overlapped, here we skip
+                // clearing data to avoid deleting other living regions' data.
+                if self.fsm.started {
+                    if let Err(e) = self.fsm.peer.mut_store().clear_extra_split_data(
+                        enc_start_key(&new_region),
+                        enc_end_key(&new_region),
+                    ) {
+                        error!(?e;
+                            "failed to cleanup extra split data, may leave some dirty data";
+                            "region_id" => new_region.get_id(),
+                        );
+                    }
                 }
                 continue;
             }
@@ -3904,9 +3936,11 @@ where
                 self.ctx.store_id(),
                 &self.ctx.cfg,
                 self.ctx.region_scheduler.clone(),
+                self.ctx.seqno_scheduler.clone(),
                 self.ctx.raftlog_fetch_scheduler.clone(),
                 self.ctx.engines.clone(),
                 &new_region,
+                None,
             ) {
                 Ok((sender, new_peer)) => (sender, new_peer),
                 Err(e) => {
@@ -4233,6 +4267,7 @@ where
 
     fn on_check_merge(&mut self) {
         if self.fsm.stopped
+            || !self.fsm.started
             || self.fsm.peer.pending_remove
             || self.fsm.peer.pending_merge_state.is_none()
         {
@@ -4633,6 +4668,7 @@ where
             "region_id" => self.fsm.region_id(),
             "peer_id" => self.fsm.peer_id(),
             "region" => ?region,
+            "destroy_regions" => ?persist_res.destroy_regions,
         );
 
         let mut state = self.ctx.global_replication_state.lock().unwrap();
@@ -4749,11 +4785,11 @@ where
 
     fn on_ready_result(
         &mut self,
-        exec_results: &mut VecDeque<ExecResult<EK::Snapshot>>,
+        exec_results: Vec<ExecResult<EK::Snapshot>>,
         metrics: &ApplyMetrics,
     ) {
         // handle executing committed log results
-        while let Some(result) = exec_results.pop_front() {
+        for result in exec_results {
             match result {
                 ExecResult::ChangePeer(cp) => self.on_ready_change_peer(cp),
                 ExecResult::CompactLog { first_index, state } => {
@@ -4771,6 +4807,7 @@ where
                     index,
                     region,
                     source,
+                    ..
                 } => self.on_ready_commit_merge(index, region, source),
                 ExecResult::RollbackMerge { region, commit } => {
                     self.on_ready_rollback_merge(commit, Some(region))

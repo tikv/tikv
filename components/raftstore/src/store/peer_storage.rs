@@ -37,7 +37,7 @@ use super::{metrics::*, worker::RegionTask, SnapEntry, SnapKey, SnapManager};
 use crate::{
     store::{
         async_io::write::WriteTask, entry_storage::EntryStorage, fsm::GenSnapTask,
-        peer::PersistSnapshotResult, util, worker::RaftlogFetchTask,
+        peer::PersistSnapshotResult, util, worker::RaftlogFetchTask, SeqnoRelationTask,
     },
     Error, Result,
 };
@@ -216,9 +216,12 @@ where
     snap_state: RefCell<SnapState>,
     gen_snap_task: RefCell<Option<GenSnapTask>>,
     region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+    seqno_scheduler: Option<Scheduler<SeqnoRelationTask<EK::Snapshot>>>,
     snap_tried_cnt: RefCell<usize>,
 
     entry_storage: EntryStorage<ER>,
+
+    disable_kv_wal: bool,
 
     pub tag: String,
 }
@@ -286,8 +289,11 @@ where
         engines: Engines<EK, ER>,
         region: &metapb::Region,
         region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+        seqno_scheduler: Option<Scheduler<SeqnoRelationTask<EK::Snapshot>>>,
         raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         peer_id: u64,
+        disable_kv_wal: bool,
+        commit_since_state: Option<RaftApplyState>,
         tag: String,
     ) -> Result<PeerStorage<EK, ER>> {
         debug!(
@@ -304,17 +310,20 @@ where
             engines.raft.clone(),
             raft_state,
             apply_state,
+            commit_since_state,
             region,
             raftlog_fetch_scheduler,
         )?;
 
         Ok(PeerStorage {
+            disable_kv_wal,
             engines,
             peer_id,
             region: region.clone(),
             snap_state: RefCell::new(SnapState::Relax),
             gen_snap_task: RefCell::new(None),
             region_scheduler,
+            seqno_scheduler,
             snap_tried_cnt: RefCell::new(0),
             tag,
             entry_storage,
@@ -386,6 +395,7 @@ where
             &keys::apply_state_key(self.region.get_id()),
             self.apply_state(),
         )?;
+        info!("save apply state for snapshot"; "region_id" => self.region.get_id(), "apply_state" => ?self.apply_state());
         Ok(())
     }
 
@@ -588,15 +598,15 @@ where
             // It's possible that there will be some logs between `last_compacted_idx` and
             // `first_index` are not deleted. So a cleanup task for the range should be
             // triggered after applying the snapshot.
-            self.clear_meta(first_index, kv_wb, raft_wb)?;
+            self.clear_meta(first_index, kv_wb, raft_wb, false)?;
         }
         // Write its source peers' `RegionLocalState` together with itself for atomicity
         for r in destroy_regions {
             write_peer_state(kv_wb, r, PeerState::Tombstone, None)?;
         }
-        write_peer_state(kv_wb, &region, PeerState::Applying, None)?;
-
         let last_index = snap.get_metadata().get_index();
+
+        write_peer_state(kv_wb, &region, PeerState::Applying, None)?;
 
         self.raft_state_mut().set_last_index(last_index);
         self.set_last_term(snap.get_metadata().get_term());
@@ -612,6 +622,10 @@ where
         self.apply_state_mut()
             .mut_truncated_state()
             .set_term(snap.get_metadata().get_term());
+
+        if self.disable_kv_wal {
+            write_snapshot_state_to_raft(raft_wb, &region, self.apply_state())?;
+        }
 
         // `region` will be updated after persisting.
         // Although there is an interval that other metadata are updated while `region`
@@ -640,6 +654,7 @@ where
         first_index: u64,
         kv_wb: &mut EK::WriteBatch,
         raft_wb: &mut ER::LogBatch,
+        keep_raft_meta: bool,
     ) -> Result<()> {
         let region_id = self.get_region_id();
         clear_meta(
@@ -649,6 +664,7 @@ where
             region_id,
             first_index,
             self.raft_state(),
+            keep_raft_meta,
         )?;
         self.entry_storage.clear();
         Ok(())
@@ -820,23 +836,39 @@ where
     pub fn schedule_applying_snapshot(&mut self) {
         let status = Arc::new(AtomicUsize::new(JOB_STATUS_PENDING));
         self.set_snap_state(SnapState::Applying(Arc::clone(&status)));
-        let task = RegionTask::Apply {
-            region_id: self.get_region_id(),
-            status,
-            peer_id: self.peer_id,
-        };
 
         // Don't schedule the snapshot to region worker.
         fail_point!("skip_schedule_applying_snapshot", |_| {});
 
         // TODO: gracefully remove region instead.
-        if let Err(e) = self.region_scheduler.schedule(task) {
-            info!(
-                "failed to to schedule apply job, are we shutting down?";
-                "region_id" => self.region.get_id(),
-                "peer_id" => self.peer_id,
-                "err" => ?e,
-            );
+        if self.disable_kv_wal {
+            let task = SeqnoRelationTask::ApplySnapshot {
+                region_id: self.get_region_id(),
+                status,
+                peer_id: self.peer_id,
+            };
+            if let Err(e) = self.seqno_scheduler.as_ref().unwrap().schedule(task) {
+                info!(
+                    "failed to to schedule apply job, are we shutting down?";
+                    "region_id" => self.region.get_id(),
+                    "peer_id" => self.peer_id,
+                    "err" => ?e,
+                );
+            }
+        } else {
+            let task = RegionTask::Apply {
+                region_id: self.get_region_id(),
+                status,
+                peer_id: self.peer_id,
+            };
+            if let Err(e) = self.region_scheduler.schedule(task) {
+                info!(
+                    "failed to to schedule apply job, are we shutting down?";
+                    "region_id" => self.region.get_id(),
+                    "peer_id" => self.peer_id,
+                    "err" => ?e,
+                );
+            }
         }
     }
 
@@ -956,6 +988,7 @@ pub fn clear_meta<EK, ER>(
     region_id: u64,
     first_index: u64,
     raft_state: &RaftLocalState,
+    keep_raft_meta: bool,
 ) -> Result<()>
 where
     EK: KvEngine,
@@ -964,11 +997,13 @@ where
     let t = Instant::now();
     box_try!(kv_wb.delete_cf(CF_RAFT, &keys::region_state_key(region_id)));
     box_try!(kv_wb.delete_cf(CF_RAFT, &keys::apply_state_key(region_id)));
-    box_try!(
-        engines
-            .raft
-            .clean(region_id, first_index, raft_state, raft_wb)
-    );
+    if !keep_raft_meta {
+        box_try!(
+            engines
+                .raft
+                .clean(region_id, first_index, raft_state, raft_wb)
+        );
+    }
 
     info!(
         "finish clear peer meta";
@@ -1082,6 +1117,24 @@ pub fn write_initial_apply_state<T: Mutable>(kv_wb: &mut T, region_id: u64) -> R
     Ok(())
 }
 
+pub fn write_initial_apply_state_raft<T: RaftLogBatch>(
+    raft_wb: &mut T,
+    region_id: u64,
+) -> Result<()> {
+    let mut apply_state = RaftApplyState::default();
+    apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
+    apply_state
+        .mut_truncated_state()
+        .set_index(RAFT_INIT_LOG_INDEX);
+    apply_state
+        .mut_truncated_state()
+        .set_term(RAFT_INIT_LOG_TERM);
+
+    info!("write initial apply state to raftdb"; "region_id" => region_id, "apply_state" => ?apply_state);
+    raft_wb.put_apply_state(region_id, &apply_state).unwrap();
+    Ok(())
+}
+
 pub fn write_peer_state<T: Mutable>(
     kv_wb: &mut T,
     region: &metapb::Region,
@@ -1102,6 +1155,33 @@ pub fn write_peer_state<T: Mutable>(
         "state" => ?region_state,
     );
     kv_wb.put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state)?;
+    Ok(())
+}
+
+pub fn write_tombstone_state_to_raft<T: RaftLogBatch>(
+    raft_wb: &mut T,
+    region: &metapb::Region,
+) -> Result<()> {
+    let region_id = region.get_id();
+    let mut region_state = RegionLocalState::default();
+    region_state.set_state(PeerState::Tombstone);
+    region_state.set_region(region.clone());
+    raft_wb.put_region_state(region_id, &region_state).unwrap();
+    Ok(())
+}
+
+pub fn write_snapshot_state_to_raft<T: RaftLogBatch>(
+    raft_wb: &mut T,
+    region: &metapb::Region,
+    apply_state: &RaftApplyState,
+) -> Result<()> {
+    let region_id = region.get_id();
+    let mut region_state = RegionLocalState::default();
+    region_state.set_state(PeerState::Applying);
+    region_state.set_region(region.clone());
+    raft_wb
+        .put_apply_snapshot_state(region_id, &region_state, apply_state)
+        .unwrap();
     Ok(())
 }
 
@@ -1174,8 +1254,11 @@ pub mod tests {
             engines,
             &region,
             region_scheduler,
+            None,
             raftlog_fetch_scheduler,
             1,
+            false,
+            None,
             "".to_owned(),
         )
         .unwrap()
@@ -1206,6 +1289,9 @@ pub mod tests {
         let kv_wb = write_task
             .extra_write
             .ensure_v1(|| store.engines.kv.write_batch());
+        if write_task.raft_wb.is_none() {
+            write_task.raft_wb = Some(store.engines.raft.log_batch(64));
+        }
         store.save_apply_state_to(kv_wb).unwrap();
         write_task.raft_state = Some(store.raft_state().clone());
         write_to_db_for_test(&store.engines, write_task);
@@ -1354,7 +1440,7 @@ pub mod tests {
             let mut kv_wb = store.engines.kv.write_batch();
             let mut raft_wb = store.engines.raft.log_batch(0);
             store
-                .clear_meta(first_index, &mut kv_wb, &mut raft_wb)
+                .clear_meta(first_index, &mut kv_wb, &mut raft_wb, false)
                 .unwrap();
             kv_wb.write().unwrap();
             store
@@ -1556,12 +1642,13 @@ pub mod tests {
         let (router, _) = mpsc::sync_channel(100);
         let cfg = make_region_worker_raftstore_cfg(true);
         let runner = RegionRunner::new(
-            s.engines.kv.clone(),
+            s.engines.clone(),
             mgr,
             cfg,
             CoprocessorHost::<KvTestEngine>::default(),
             router,
             Option::<Arc<TestPdClient>>::None,
+            false,
         );
         worker.start_with_timer(runner);
         let snap = s.snapshot(0, 0);
@@ -1620,6 +1707,9 @@ pub mod tests {
         let kv_wb = write_task
             .extra_write
             .ensure_v1(|| s.engines.kv.write_batch());
+        if write_task.raft_wb.is_none() {
+            write_task.raft_wb = Some(s.engines.raft.log_batch(64));
+        }
         s.save_apply_state_to(kv_wb).unwrap();
         write_to_db_for_test(&s.engines, write_task);
         let term = s.term(7).unwrap();
@@ -1703,12 +1793,13 @@ pub mod tests {
         let pd_mock = Arc::new(pd_client);
         let cfg = make_region_worker_raftstore_cfg(true);
         let runner = RegionRunner::new(
-            s.engines.kv.clone(),
+            s.engines.clone(),
             mgr,
             cfg,
             CoprocessorHost::<KvTestEngine>::default(),
             router,
             Some(pd_mock),
+            false,
         );
         worker.start_with_timer(runner);
         let snap = s.snapshot(0, 1);
@@ -1768,12 +1859,13 @@ pub mod tests {
         let (router, _) = mpsc::sync_channel(100);
         let cfg = make_region_worker_raftstore_cfg(true);
         let runner = RegionRunner::new(
-            s1.engines.kv.clone(),
+            s1.engines.clone(),
             mgr,
             cfg,
             CoprocessorHost::<KvTestEngine>::default(),
             router,
             Option::<Arc<TestPdClient>>::None,
+            false,
         );
         worker.start(runner);
         s1.snapshot(0, 0).unwrap_err();
@@ -1940,8 +2032,11 @@ pub mod tests {
                 engines.clone(),
                 &region,
                 region_sched.clone(),
+                None,
                 raftlog_fetch_sched.clone(),
                 0,
+                false,
+                None,
                 "".to_owned(),
             )
         };

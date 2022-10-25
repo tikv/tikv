@@ -477,6 +477,7 @@ pub mod ctor {
     pub struct DbOptions {
         key_manager: Option<Arc<DataKeyManager>>,
         rate_limiter: Option<Arc<IoRateLimiter>>,
+        avoid_flush_during_shutdown: bool,
         enable_multi_batch_write: bool,
     }
 
@@ -487,6 +488,10 @@ pub mod ctor {
 
         pub fn set_rate_limiter(&mut self, rate_limiter: Option<Arc<IoRateLimiter>>) {
             self.rate_limiter = rate_limiter;
+        }
+
+        pub fn avoid_flush_during_shutdown(&mut self, avoid: bool) {
+            self.avoid_flush_during_shutdown = avoid;
         }
 
         pub fn set_enable_multi_batch_write(&mut self, enable: bool) {

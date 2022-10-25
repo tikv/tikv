@@ -14,12 +14,13 @@ use std::{
     u64,
 };
 
-use engine_traits::KvEngine;
+use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
+use fail::fail_point;
 use kvproto::{
     kvrpcpb::{self, KeyRange, LeaderInfo},
     metapb::{self, Peer, PeerRole, Region, RegionEpoch},
     raft_cmdpb::{AdminCmdType, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest},
-    raft_serverpb::RaftMessage,
+    raft_serverpb::{PeerState, RaftMessage},
 };
 use protobuf::{self, Message};
 use raft::{
@@ -31,7 +32,7 @@ use tikv_util::{box_err, debug, info, store::region, time::monotonic_raw_now, Ei
 use time::{Duration, Timespec};
 use txn_types::{TimeStamp, WriteBatchFlags};
 
-use super::peer_storage;
+use super::{peer_storage, RaftRouter};
 use crate::{coprocessor::CoprocessorHost, Error, Result};
 
 const INVALID_TIMESTAMP: u64 = u64::MAX;
@@ -1399,6 +1400,69 @@ impl LatencyInspector {
     pub fn finish(self) {
         (self.cb)(self.id, self.duration);
     }
+}
+
+pub fn gc_seqno_relations<EK: KvEngine, ER: RaftEngine>(
+    seqno: u64,
+    raft_engine: &ER,
+    router: &RaftRouter<EK, ER>,
+    wb: &mut ER::LogBatch,
+) -> Result<Vec<u64>> {
+    fail_point!("gc_seqno_relations", |_| Ok(vec![]));
+    let mut pending_clean_regions = vec![];
+    raft_engine.for_each_raft_group(&mut |region_id| {
+        let mut apply_state_update = None;
+        let mut region_state_update = None;
+        raft_engine
+            .scan_seqno_relations(region_id, None, Some(seqno + 1), |s, relation| {
+                if relation.has_region_state()
+                {
+                    let region_state = relation.get_region_state();
+                    if region_state.get_state() == PeerState::Tombstone {
+                        if let Some(raft_state) = raft_engine.get_raft_state(region_id).unwrap() {
+                            if router.mailbox(region_id).is_none() {
+                                raft_engine.clean(region_id, 0, &raft_state, wb).unwrap();
+                            } else {
+                                // Region destroy may be delayed, clean up meta later.
+                                pending_clean_regions.push(region_id);
+                                info!("peer not destroyed, clean up meta later"; "region_id" => region_id);
+                                return false;
+                            }
+                        }
+                        wb.delete_apply_state(region_id).unwrap();
+                    }
+                    region_state_update = Some(region_state.clone());
+                }
+                info!("delete relation during gc relation"; "region_id" => region_id, "relation" => ?relation);
+                apply_state_update = Some(relation.get_apply_state().clone());
+                wb.delete_seqno_relation(region_id, s).unwrap();
+                true
+            })
+            .unwrap();
+        if let Some(apply_state) = apply_state_update {
+            info!("update apply state during gc relation"; "region_id" => region_id, "apply_state" => ?apply_state);
+            wb.put_apply_state(region_id, &apply_state).unwrap();
+        }
+        if let Some(region_state) = region_state_update {
+            info!("update region state during gc relation"; "region_id" => region_id, "state" => ?region_state);
+            wb.put_region_state(region_id, &region_state).unwrap();
+        }
+        engine_traits::Result::Ok(())
+    })?;
+    Ok(pending_clean_regions)
+}
+
+pub fn clear_region_seqno_relation<ER: RaftEngine>(
+    region_id: u64,
+    raft_engine: &ER,
+    wb: &mut ER::LogBatch,
+) {
+    raft_engine
+        .scan_seqno_relations(region_id, None, None, |seqno, _| {
+            wb.delete_seqno_relation(region_id, seqno).unwrap();
+            true
+        })
+        .unwrap();
 }
 
 #[cfg(test)]

@@ -42,6 +42,7 @@ impl From<engine_traits::WriteOptions> for RocksWriteOptions {
         r.set_no_slowdown(opts.no_slowdown());
         // TODO: enable it.
         r.set_memtable_insert_hint_per_batch(false);
+        r.disable_wal(opts.disable_wal());
         RocksWriteOptions(r)
     }
 }

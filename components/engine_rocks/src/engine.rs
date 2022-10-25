@@ -27,6 +27,7 @@ pub struct RocksEngine {
     db: Arc<DB>,
     shared_block_cache: bool,
     support_multi_batch_write: bool,
+    pub(crate) disable_kv_wal: bool,
 }
 
 impl RocksEngine {
@@ -39,6 +40,7 @@ impl RocksEngine {
             db: db.clone(),
             shared_block_cache: false,
             support_multi_batch_write: db.get_db_options().is_enable_multi_batch_write(),
+            disable_kv_wal: false,
         }
     }
 
@@ -52,6 +54,10 @@ impl RocksEngine {
 
     pub fn set_shared_block_cache(&mut self, enable: bool) {
         self.shared_block_cache = enable;
+    }
+
+    pub fn set_disable_kv_wal(&mut self, disable: bool) {
+        self.disable_kv_wal = disable;
     }
 
     pub fn shared_block_cache(&self) -> bool {

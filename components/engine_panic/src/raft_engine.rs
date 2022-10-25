@@ -1,10 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{Error, RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch, Result};
+use engine_traits::{
+    util::FlushedSeqno, Error, RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch,
+    Result,
+};
 use kvproto::{
     metapb::Region,
     raft_serverpb::{
-        RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent, StoreRecoverState,
+        RaftApplyState, RaftLocalState, RegionLocalState, RegionSequenceNumberRelation, StoreIdent,
+        StoreRecoverState,
     },
 };
 use raft::eraftpb::Entry;
@@ -56,6 +60,25 @@ impl RaftEngineReadOnly for PanicEngine {
     }
 
     fn get_recover_state(&self) -> Result<Option<StoreRecoverState>> {
+        panic!()
+    }
+
+    fn get_seqno_relation(
+        &self,
+        raft_group_id: u64,
+        seqno: u64,
+    ) -> Result<Option<RegionSequenceNumberRelation>> {
+        panic!()
+    }
+
+    fn get_flushed_seqno(&self) -> Result<Option<FlushedSeqno>> {
+        panic!()
+    }
+
+    fn get_apply_snapshot_state(
+        &self,
+        raft_group_id: u64,
+    ) -> Result<Option<(RegionLocalState, RaftApplyState)>> {
         panic!()
     }
 }
@@ -159,6 +182,23 @@ impl RaftEngine for PanicEngine {
     fn put_recover_state(&self, state: &StoreRecoverState) -> Result<()> {
         panic!()
     }
+
+    fn scan_seqno_relations<F>(
+        &self,
+        raft_group_id: u64,
+        start: Option<u64>,
+        end: Option<u64>,
+        f: F,
+    ) -> Result<()>
+    where
+        F: FnMut(u64, &RegionSequenceNumberRelation) -> bool,
+    {
+        panic!()
+    }
+
+    fn put_flushed_seqno(&self, flushed_seqno: &FlushedSeqno) -> Result<()> {
+        panic!()
+    }
 }
 
 impl RaftLogBatch for PanicWriteBatch {
@@ -203,6 +243,39 @@ impl RaftLogBatch for PanicWriteBatch {
     }
 
     fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()> {
+        panic!()
+    }
+
+    fn put_seqno_relation(
+        &mut self,
+        raft_group_id: u64,
+        relation: &RegionSequenceNumberRelation,
+    ) -> Result<()> {
+        panic!()
+    }
+
+    fn put_apply_snapshot_state(
+        &mut self,
+        raft_group_id: u64,
+        region_state: &RegionLocalState,
+        apply_state: &RaftApplyState,
+    ) -> Result<()> {
+        panic!()
+    }
+
+    fn delete_apply_snapshot_state(&mut self, raft_group_id: u64) -> Result<()> {
+        panic!()
+    }
+
+    fn delete_seqno_relation(&mut self, raft_group_id: u64, seqno: u64) -> Result<()> {
+        panic!()
+    }
+
+    fn delete_apply_state(&mut self, raft_group_id: u64) -> Result<()> {
+        panic!()
+    }
+
+    fn delete_region_state(&mut self, raft_group_id: u64) -> Result<()> {
         panic!()
     }
 }
