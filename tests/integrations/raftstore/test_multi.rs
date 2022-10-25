@@ -14,7 +14,7 @@ use rand::{Rng, RngCore};
 use test_raftstore::*;
 use tikv::storage::{kv::SnapshotExt, Snapshot};
 use tikv_util::{config::*, HandyRwLock};
-use txn_types::{Key, PessimisticLock};
+use txn_types::{Key, PessimisticLock, TimeStamp};
 
 fn test_multi_base<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
@@ -833,6 +833,7 @@ fn test_leader_drop_with_pessimistic_lock() {
                 ttl: 1000,
                 for_update_ts: 10.into(),
                 min_commit_ts: 10.into(),
+                recent_mark_ts: TimeStamp::zero(),
             },
         )])
         .unwrap();

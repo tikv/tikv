@@ -324,6 +324,7 @@ mod tests {
             ttl: 3000,
             for_update_ts: 100.into(),
             min_commit_ts: Default::default(),
+            recent_mark_ts: Default::default(),
         }
     }
 
@@ -424,6 +425,7 @@ mod tests {
                         ttl: 1000,
                         for_update_ts: 10.into(),
                         min_commit_ts: 20.into(),
+                        recent_mark_ts: 8.into(),
                     },
                     deleted,
                 ),

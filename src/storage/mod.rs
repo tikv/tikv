@@ -9610,6 +9610,7 @@ mod tests {
                         ttl: 3000,
                         for_update_ts: 10.into(),
                         min_commit_ts: 11.into(),
+                        recent_mark_ts: TimeStamp::zero(),
                     },
                     false
                 )

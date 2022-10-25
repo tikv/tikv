@@ -19,7 +19,7 @@ use raftstore::{
 use test_raftstore::*;
 use tikv::storage::{kv::SnapshotExt, Snapshot};
 use tikv_util::config::*;
-use txn_types::{Key, PessimisticLock};
+use txn_types::{Key, PessimisticLock, TimeStamp};
 
 pub const REGION_MAX_SIZE: u64 = 50000;
 pub const REGION_SPLIT_SIZE: u64 = 30000;
@@ -963,6 +963,7 @@ fn test_split_with_in_memory_pessimistic_locks() {
         ttl: 3000,
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
+        recent_mark_ts: TimeStamp::zero(),
     };
     let lock_c = PessimisticLock {
         primary: b"c".to_vec().into_boxed_slice(),
@@ -970,6 +971,7 @@ fn test_split_with_in_memory_pessimistic_locks() {
         ttl: 3000,
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
+        recent_mark_ts: TimeStamp::zero(),
     };
     {
         let mut locks = txn_ext.pessimistic_locks.write();

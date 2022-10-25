@@ -142,6 +142,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 ttl: lock_ttl,
                 for_update_ts,
                 min_commit_ts,
+                recent_mark_ts: lock.recent_mark_ts,
             };
             txn.put_pessimistic_lock(key, lock);
         } else {
@@ -152,6 +153,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         return Ok((ret_val(need_value, need_check_existence, val), old_value));
     }
 
+    let mut recent_mark_ts = TimeStamp::zero();
     // Following seek_write read the previous write.
     let (prev_write_loaded, mut prev_write) = (true, None);
     if let Some((commit_ts, write)) = reader.seek_write(&key, TimeStamp::max())? {
@@ -214,6 +216,10 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         // Check data constraint when acquiring pessimistic lock.
         check_data_constraint(reader, should_not_exist, &write, commit_ts, &key)?;
 
+        if write.is_removable_mark() {
+            recent_mark_ts = commit_ts;
+        }
+
         if need_value || need_check_existence {
             val = match write.write_type {
                 // If it's a valid Write, no need to read again.
@@ -256,6 +262,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         ttl: lock_ttl,
         for_update_ts,
         min_commit_ts,
+        recent_mark_ts,
     };
 
     // When lock_only_if_exists is false, always accquire pessimitic lock, otherwise

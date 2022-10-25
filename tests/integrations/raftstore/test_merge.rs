@@ -18,7 +18,7 @@ use tikv::storage::{
     Engine, Snapshot,
 };
 use tikv_util::{config::*, HandyRwLock};
-use txn_types::{Key, PessimisticLock};
+use txn_types::{Key, PessimisticLock, TimeStamp};
 
 /// Test if merge is working as expected in a general condition.
 #[test]
@@ -1298,6 +1298,7 @@ fn test_propose_in_memory_pessimistic_locks() {
         ttl: 3000,
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
+        recent_mark_ts: TimeStamp::zero(),
     };
     txn_ext
         .pessimistic_locks
@@ -1314,6 +1315,7 @@ fn test_propose_in_memory_pessimistic_locks() {
         ttl: 3000,
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
+        recent_mark_ts: TimeStamp::zero(),
     };
     txn_ext
         .pessimistic_locks
@@ -1421,6 +1423,7 @@ fn test_merge_pessimistic_locks_repeated_merge() {
         ttl: 3000,
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
+        recent_mark_ts: TimeStamp::zero(),
     };
     txn_ext
         .pessimistic_locks

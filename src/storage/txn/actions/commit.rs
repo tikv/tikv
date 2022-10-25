@@ -105,6 +105,9 @@ pub fn commit<S: Snapshot>(
     if enable_mark_cf && lock.lock_type == LockType::Lock {
         txn.put_mark(key.clone(), MarkType::Lock, reader.start_ts, commit_ts);
     }
+    if enable_mark_cf && !lock.recent_mark_ts.is_zero() && lock.recent_mark_ts < commit_ts {
+        txn.delete_write(key.clone(), lock.recent_mark_ts);
+    }
     Ok(txn.unlock_key(key, lock.is_pessimistic_txn()))
 }
 

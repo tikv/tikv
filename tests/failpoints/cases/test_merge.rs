@@ -22,7 +22,7 @@ use raftstore::store::*;
 use test_raftstore::*;
 use tikv::storage::{kv::SnapshotExt, Snapshot};
 use tikv_util::{config::*, time::Instant, HandyRwLock};
-use txn_types::{Key, PessimisticLock};
+use txn_types::{Key, PessimisticLock, TimeStamp};
 
 /// Test if merge is rollback as expected.
 #[test]
@@ -1346,6 +1346,7 @@ fn test_merge_with_concurrent_pessimistic_locking() {
                 ttl: 3000,
                 for_update_ts: 20.into(),
                 min_commit_ts: 30.into(),
+                recent_mark_ts: TimeStamp::zero(),
             },
         )])
         .unwrap();
@@ -1433,6 +1434,7 @@ fn test_merge_pessimistic_locks_with_concurrent_prewrite() {
         ttl: 3000,
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
+        recent_mark_ts: TimeStamp::zero(),
     };
     txn_ext
         .pessimistic_locks
@@ -1512,6 +1514,7 @@ fn test_retry_pending_prepare_merge_fail() {
         ttl: 3000,
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
+        recent_mark_ts: TimeStamp::zero(),
     };
     txn_ext
         .pessimistic_locks
@@ -1586,6 +1589,7 @@ fn test_merge_pessimistic_locks_propose_fail() {
         ttl: 3000,
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
+        recent_mark_ts: TimeStamp::zero(),
     };
     txn_ext
         .pessimistic_locks

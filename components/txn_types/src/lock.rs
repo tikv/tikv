@@ -33,6 +33,7 @@ const TXN_SIZE_PREFIX: u8 = b't';
 const MIN_COMMIT_TS_PREFIX: u8 = b'c';
 const ASYNC_COMMIT_PREFIX: u8 = b'a';
 const ROLLBACK_TS_PREFIX: u8 = b'r';
+const RECENT_MARK_TS_PREFIX: u8 = b'm';
 
 impl LockType {
     pub fn from_mutation(mutation: &Mutation) -> Option<LockType> {
@@ -85,6 +86,7 @@ pub struct Lock {
     // while committing is relatively expensive. So the solution is putting the ts of the rollback
     // to the lock.
     pub rollback_ts: Vec<TimeStamp>,
+    pub recent_mark_ts: TimeStamp,
 }
 
 impl std::fmt::Debug for Lock {
@@ -108,6 +110,7 @@ impl std::fmt::Debug for Lock {
             .field("use_async_commit", &self.use_async_commit)
             .field("secondaries", &secondary_keys)
             .field("rollback_ts", &self.rollback_ts)
+            .field("recent_mark_ts", &self.recent_mark_ts)
             .finish()
     }
 }
@@ -135,6 +138,7 @@ impl Lock {
             use_async_commit: false,
             secondaries: Vec::default(),
             rollback_ts: Vec::default(),
+            recent_mark_ts: TimeStamp::zero(),
         }
     }
 
@@ -188,6 +192,10 @@ impl Lock {
                 b.encode_u64(ts.into_inner()).unwrap();
             }
         }
+        if !self.recent_mark_ts.is_zero() {
+            b.push(RECENT_MARK_TS_PREFIX);
+            b.encode_u64(self.recent_mark_ts.into_inner()).unwrap();
+        }
         b
     }
 
@@ -216,6 +224,9 @@ impl Lock {
         }
         if !self.rollback_ts.is_empty() {
             size += 1 + MAX_VAR_U64_LEN + size_of::<u64>() * self.rollback_ts.len();
+        }
+        if !self.recent_mark_ts.is_zero() {
+            size += 1 + size_of::<u64>();
         }
         size
     }
@@ -253,6 +264,7 @@ impl Lock {
         let mut use_async_commit = false;
         let mut secondaries = Vec::new();
         let mut rollback_ts = Vec::new();
+        let mut recent_mark_ts = TimeStamp::zero();
         while !b.is_empty() {
             match b.read_u8()? {
                 SHORT_VALUE_PREFIX => {
@@ -286,6 +298,7 @@ impl Lock {
                         rollback_ts.push(number::decode_u64(&mut b)?.into());
                     }
                 }
+                RECENT_MARK_TS_PREFIX => recent_mark_ts = number::decode_u64(&mut b)?.into(),
                 _ => {
                     // To support forward compatibility, all fields should be serialized in order
                     // and stop parsing if meets an unknown byte.
@@ -307,6 +320,7 @@ impl Lock {
             lock = lock.use_async_commit(secondaries);
         }
         lock.rollback_ts = rollback_ts;
+        lock.recent_mark_ts = recent_mark_ts;
         Ok(lock)
     }
 
@@ -328,6 +342,7 @@ impl Lock {
         info.set_use_async_commit(self.use_async_commit);
         info.set_min_commit_ts(self.min_commit_ts.into_inner());
         info.set_secondaries(self.secondaries.into());
+        // FIXME: add recent_mark_ts to proto
         info
     }
 
@@ -434,11 +449,12 @@ pub struct PessimisticLock {
     pub ttl: u64,
     pub for_update_ts: TimeStamp,
     pub min_commit_ts: TimeStamp,
+    pub recent_mark_ts: TimeStamp,
 }
 
 impl PessimisticLock {
     pub fn to_lock(&self) -> Lock {
-        Lock::new(
+        let mut lock = Lock::new(
             LockType::Pessimistic,
             self.primary.to_vec(),
             self.start_ts,
@@ -447,12 +463,14 @@ impl PessimisticLock {
             self.for_update_ts,
             0,
             self.min_commit_ts,
-        )
+        );
+        lock.recent_mark_ts = self.recent_mark_ts;
+        lock
     }
 
     // Same with `to_lock` but does not copy the primary key.
     pub fn into_lock(self) -> Lock {
-        Lock::new(
+        let mut lock = Lock::new(
             LockType::Pessimistic,
             Vec::from(self.primary),
             self.start_ts,
@@ -461,7 +479,9 @@ impl PessimisticLock {
             self.for_update_ts,
             0,
             self.min_commit_ts,
-        )
+        );
+        lock.recent_mark_ts = self.recent_mark_ts;
+        lock
     }
 
     pub fn memory_size(&self) -> usize {
@@ -477,6 +497,7 @@ impl std::fmt::Debug for PessimisticLock {
             .field("ttl", &self.ttl)
             .field("for_update_ts", &self.for_update_ts)
             .field("min_commit_ts", &self.min_commit_ts)
+            .field("recent_mark_ts", &self.recent_mark_ts)
             .finish()
     }
 }
@@ -932,6 +953,7 @@ mod tests {
             b"secondary_k3k3k3k3k3k3".to_vec(),
             b"secondary_k4".to_vec(),
         ]);
+        lock.recent_mark_ts = 80.into();
 
         assert_eq!(
             format!("{:?}", lock),
@@ -939,7 +961,8 @@ mod tests {
             short_value: 73686F72745F76616C7565, for_update_ts: TimeStamp(101), txn_size: 10, \
             min_commit_ts: TimeStamp(127), use_async_commit: true, \
             secondaries: [7365636F6E646172795F6B31, 7365636F6E646172795F6B6B6B6B6B32, \
-            7365636F6E646172795F6B336B336B336B336B336B33, 7365636F6E646172795F6B34], rollback_ts: [] }"
+            7365636F6E646172795F6B336B336B336B336B336B33, 7365636F6E646172795F6B34], rollback_ts: [], \
+            recent_mark_ts: TimeStamp(80) }"
         );
         log_wrappers::set_redact_info_log(true);
         let redact_result = format!("{:?}", lock);
@@ -948,7 +971,7 @@ mod tests {
             redact_result,
             "Lock { lock_type: Put, primary_key: ?, start_ts: TimeStamp(100), ttl: 3, \
             short_value: ?, for_update_ts: TimeStamp(101), txn_size: 10, min_commit_ts: TimeStamp(127), \
-            use_async_commit: true, secondaries: [?, ?, ?, ?], rollback_ts: [] }"
+            use_async_commit: true, secondaries: [?, ?, ?, ?], rollback_ts: [], recent_mark_ts: TimeStamp(80) }"
         );
 
         lock.short_value = None;
@@ -957,7 +980,7 @@ mod tests {
             format!("{:?}", lock),
             "Lock { lock_type: Put, primary_key: 706B, start_ts: TimeStamp(100), ttl: 3, short_value: , \
             for_update_ts: TimeStamp(101), txn_size: 10, min_commit_ts: TimeStamp(127), \
-            use_async_commit: true, secondaries: [], rollback_ts: [] }"
+            use_async_commit: true, secondaries: [], rollback_ts: [], recent_mark_ts: TimeStamp(80) }"
         );
         log_wrappers::set_redact_info_log(true);
         let redact_result = format!("{:?}", lock);
@@ -966,7 +989,7 @@ mod tests {
             redact_result,
             "Lock { lock_type: Put, primary_key: ?, start_ts: TimeStamp(100), ttl: 3, short_value: ?, \
             for_update_ts: TimeStamp(101), txn_size: 10, min_commit_ts: TimeStamp(127), \
-            use_async_commit: true, secondaries: [], rollback_ts: [] }"
+            use_async_commit: true, secondaries: [], rollback_ts: [], recent_mark_ts: TimeStamp(80) }"
         );
     }
 
@@ -978,6 +1001,7 @@ mod tests {
             ttl: 1000,
             for_update_ts: 10.into(),
             min_commit_ts: 20.into(),
+            recent_mark_ts: 8.into(),
         };
         let expected_lock = Lock {
             lock_type: LockType::Pessimistic,
@@ -991,6 +1015,7 @@ mod tests {
             use_async_commit: false,
             secondaries: vec![],
             rollback_ts: vec![],
+            recent_mark_ts: 8.into(),
         };
         assert_eq!(pessimistic_lock.to_lock(), expected_lock);
         assert_eq!(pessimistic_lock.into_lock(), expected_lock);
@@ -1004,11 +1029,12 @@ mod tests {
             ttl: 1000,
             for_update_ts: 10.into(),
             min_commit_ts: 20.into(),
+            recent_mark_ts: 8.into(),
         };
         assert_eq!(
             format!("{:?}", pessimistic_lock),
             "PessimisticLock { primary_key: 7072696D617279, start_ts: TimeStamp(5), ttl: 1000, \
-            for_update_ts: TimeStamp(10), min_commit_ts: TimeStamp(20) }"
+            for_update_ts: TimeStamp(10), min_commit_ts: TimeStamp(20), recent_mark_ts: TimeStamp(8) }"
         );
         log_wrappers::set_redact_info_log(true);
         let redact_result = format!("{:?}", pessimistic_lock);
@@ -1016,7 +1042,7 @@ mod tests {
         assert_eq!(
             redact_result,
             "PessimisticLock { primary_key: ?, start_ts: TimeStamp(5), ttl: 1000, \
-            for_update_ts: TimeStamp(10), min_commit_ts: TimeStamp(20) }"
+            for_update_ts: TimeStamp(10), min_commit_ts: TimeStamp(20), recent_mark_ts: TimeStamp(8) }"
         );
     }
 
@@ -1028,8 +1054,9 @@ mod tests {
             ttl: 1000,
             for_update_ts: 10.into(),
             min_commit_ts: 20.into(),
+            recent_mark_ts: 8.into(),
         };
         // 7 bytes for primary key, 16 bytes for Box<[u8]>, and 4 8-byte integers.
-        assert_eq!(lock.memory_size(), 7 + 16 + 4 * 8);
+        assert_eq!(lock.memory_size(), 7 + 16 + 5 * 8);
     }
 }

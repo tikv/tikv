@@ -14,7 +14,7 @@ use pd_client::PdClient;
 use test_raftstore::*;
 use tikv::storage::Snapshot;
 use tikv_util::HandyRwLock;
-use txn_types::{Key, PessimisticLock};
+use txn_types::{Key, PessimisticLock, TimeStamp};
 
 /// When a follower applies log slowly, leader should not transfer leader
 /// to it. Otherwise, new leader may wait a long time to serve read/write
@@ -129,6 +129,7 @@ fn test_delete_lock_proposed_after_proposing_locks_impl(transfer_msg_count: usiz
                 ttl: 1000,
                 for_update_ts: 10.into(),
                 min_commit_ts: 20.into(),
+                recent_mark_ts: TimeStamp::zero(),
             },
         )])
         .unwrap();
@@ -206,6 +207,7 @@ fn test_delete_lock_proposed_before_proposing_locks() {
                 ttl: 1000,
                 for_update_ts: 10.into(),
                 min_commit_ts: 20.into(),
+                recent_mark_ts: TimeStamp::zero(),
             },
         )])
         .unwrap();
@@ -288,6 +290,7 @@ fn test_read_lock_after_become_follower() {
                 ttl: 1000,
                 for_update_ts,
                 min_commit_ts: for_update_ts,
+                recent_mark_ts: TimeStamp::zero(),
             },
         )])
         .unwrap();

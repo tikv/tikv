@@ -13,7 +13,7 @@ use tikv::storage::{
     Engine, Snapshot,
 };
 use tikv_util::config::*;
-use txn_types::{Key, PessimisticLock};
+use txn_types::{Key, PessimisticLock, TimeStamp};
 
 fn test_basic_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
@@ -299,6 +299,7 @@ fn test_propose_in_memory_pessimistic_locks() {
         ttl: 3000,
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
+        recent_mark_ts: TimeStamp::zero(),
     };
     // Write a pessimistic lock to the in-memory pessimistic lock table.
     {
@@ -339,6 +340,7 @@ fn test_memory_pessimistic_locks_status_after_transfer_leader_failure() {
         ttl: 3000,
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
+        recent_mark_ts: TimeStamp::zero(),
     };
     // Write a pessimistic lock to the in-memory pessimistic lock table.
     txn_ext

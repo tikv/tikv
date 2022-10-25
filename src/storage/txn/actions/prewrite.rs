@@ -62,7 +62,7 @@ pub fn prewrite<S: Snapshot>(
     let lock_status = match reader.load_lock(&mutation.key)? {
         Some(lock) => mutation.check_lock(lock, pessimistic_action)?,
         None if matches!(pessimistic_action, DoPessimisticCheck) => {
-            amend_pessimistic_lock(&mutation, reader)?;
+            amend_pessimistic_lock(&mut mutation, reader)?;
             lock_amended = true;
             LockStatus::None
         }
@@ -79,6 +79,12 @@ pub fn prewrite<S: Snapshot>(
     } else {
         (None, false)
     };
+
+    if let Some((write, commit_ts)) = prev_write.as_ref() {
+        if write.is_removable_mark() {
+            mutation.recent_mark_ts = *commit_ts;
+        }
+    }
 
     // Check assertion if necessary. There are couple of different cases:
     // * If the write is already loaded, then assertion can be checked without
@@ -241,6 +247,7 @@ struct PrewriteMutation<'a> {
     should_not_write: bool,
     assertion: Assertion,
     txn_props: &'a TransactionProperties<'a>,
+    recent_mark_ts: TimeStamp,
 }
 
 impl<'a> PrewriteMutation<'a> {
@@ -278,6 +285,7 @@ impl<'a> PrewriteMutation<'a> {
             should_not_write,
             assertion,
             txn_props,
+            recent_mark_ts: TimeStamp::zero(),
         })
     }
 
@@ -335,6 +343,7 @@ impl<'a> PrewriteMutation<'a> {
             // The ttl and min_commit_ts of the lock may have been pushed forward.
             self.lock_ttl = std::cmp::max(self.lock_ttl, lock.ttl);
             self.min_commit_ts = std::cmp::max(self.min_commit_ts, lock.min_commit_ts);
+            self.recent_mark_ts = lock.recent_mark_ts;
 
             return Ok(LockStatus::Pessimistic);
         }
@@ -440,6 +449,7 @@ impl<'a> PrewriteMutation<'a> {
             self.txn_props.txn_size,
             self.min_commit_ts,
         );
+        lock.recent_mark_ts = self.recent_mark_ts;
 
         if let Some(value) = self.value {
             if is_short_value(&value) {
@@ -694,11 +704,11 @@ fn async_commit_timestamps(
 // If the data is not changed after acquiring the lock, we can still prewrite
 // the key.
 fn amend_pessimistic_lock<S: Snapshot>(
-    mutation: &PrewriteMutation<'_>,
+    mutation: &mut PrewriteMutation<'_>,
     reader: &mut SnapshotReader<S>,
 ) -> Result<()> {
     let write = reader.seek_write(&mutation.key, TimeStamp::max())?;
-    if let Some((commit_ts, _)) = write.as_ref() {
+    if let Some((commit_ts, write)) = write.as_ref() {
         // The invariants of pessimistic locks are:
         //   1. lock's for_update_ts >= key's latest commit_ts
         //   2. lock's for_update_ts >= txn's start_ts
@@ -726,6 +736,9 @@ fn amend_pessimistic_lock<S: Snapshot>(
                 key: mutation.key.clone().into_raw()?,
             }
             .into());
+        }
+        if write.is_removable_mark() {
+            mutation.recent_mark_ts = *commit_ts;
         }
     }
     // Used pipelined pessimistic lock acquiring in this txn but failed

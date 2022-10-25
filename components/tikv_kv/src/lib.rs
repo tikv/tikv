@@ -1183,6 +1183,7 @@ mod unit_tests {
                     ttl: 200,
                     for_update_ts: 101.into(),
                     min_commit_ts: 102.into(),
+                    recent_mark_ts: 50.into(),
                 },
             ),
             Modify::DeleteRange(
@@ -1225,6 +1226,7 @@ mod unit_tests {
                         ttl: 200,
                         for_update_ts: 101.into(),
                         min_commit_ts: 102.into(),
+                        recent_mark_ts: 50.into(),
                     }
                     .into_lock()
                     .to_bytes(),

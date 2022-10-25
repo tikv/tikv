@@ -32,7 +32,7 @@ use tikv_util::{
     config::{ReadableDuration, ReadableSize},
     HandyRwLock,
 };
-use txn_types::{Key, PessimisticLock};
+use txn_types::{Key, PessimisticLock, TimeStamp};
 
 #[test]
 fn test_follower_slow_split() {
@@ -943,6 +943,7 @@ fn test_split_pessimistic_locks_with_concurrent_prewrite() {
         ttl: 3000,
         for_update_ts: (commit_ts + 10).into(),
         min_commit_ts: (commit_ts + 10).into(),
+        recent_mark_ts: TimeStamp::zero(),
     };
     let lock_c = PessimisticLock {
         primary: b"c".to_vec().into_boxed_slice(),
@@ -950,6 +951,7 @@ fn test_split_pessimistic_locks_with_concurrent_prewrite() {
         ttl: 3000,
         for_update_ts: (commit_ts + 10).into(),
         min_commit_ts: (commit_ts + 10).into(),
+        recent_mark_ts: TimeStamp::zero(),
     };
     {
         let mut locks = txn_ext.pessimistic_locks.write();

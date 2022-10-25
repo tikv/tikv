@@ -233,6 +233,12 @@ impl Write {
             gc_fence: self.gc_fence,
         }
     }
+
+    pub fn is_removable_mark(&self) -> bool {
+        (self.write_type == WriteType::Lock || self.write_type == WriteType::Rollback)
+            && !self.has_overlapped_rollback
+            && self.gc_fence.is_none()
+    }
 }
 
 #[derive(PartialEq, Clone)]

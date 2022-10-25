@@ -870,6 +870,9 @@ fn handle_1pc_locks(
         if enable_mark_cf && lock.lock_type == LockType::Lock {
             txn.put_mark(key.clone(), MarkType::Lock, txn.start_ts, commit_ts);
         }
+        if enable_mark_cf && !lock.recent_mark_ts.is_zero() && lock.recent_mark_ts < commit_ts {
+            txn.delete_write(key.clone(), lock.recent_mark_ts);
+        }
         if delete_pessimistic_lock {
             released_locks.push(txn.unlock_key(key, true));
         }
