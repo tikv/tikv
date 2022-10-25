@@ -34,7 +34,6 @@ pub struct PeerFsm<EK: KvEngine, ER: RaftEngine> {
     /// twice accidentally.
     tick_registry: u16,
     is_stopped: bool,
-    has_ready: bool,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
@@ -52,7 +51,6 @@ impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
             receiver: rx,
             tick_registry: 0,
             is_stopped: false,
-            has_ready: false,
         });
         Ok((tx, fsm))
     }
@@ -100,16 +98,6 @@ impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
     #[inline]
     pub fn peer_id(&self) -> u64 {
         self.peer.peer_id()
-    }
-
-    #[inline]
-    pub fn has_ready(&self) -> bool {
-        self.has_ready
-    }
-
-    #[inline]
-    pub fn set_has_ready(&mut self, ready: bool) {
-        self.has_ready = ready;
     }
 }
 
@@ -243,7 +231,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 PeerMsg::Tick(tick) => self.on_tick(tick),
                 PeerMsg::ApplyRes(res) => self.fsm.peer.on_apply_res(self.store_ctx, res),
                 PeerMsg::Initialization(init_info) => {
-                    self.fsm.peer.init_split_region(self.store_ctx, init_info)
+                    let campaigned = self.fsm.peer.init_split_region(self.store_ctx, init_info);
+                    self.on_start();
                 }
                 PeerMsg::Start => self.on_start(),
                 PeerMsg::Noop => unimplemented!(),

@@ -15,7 +15,7 @@ use kvproto::{
     raft_cmdpb::{AdminRequest, AdminResponse},
     raft_serverpb::RaftMessage,
 };
-use raft::{eraftpb::Message, prelude::MessageType};
+use raft::{eraftpb::Message, prelude::MessageType, RawNode};
 use raftstore::{
     coprocessor::RegionChangeReason,
     store::{
@@ -38,7 +38,7 @@ use crate::{
     batch::StoreContext,
     fsm::{PeerFsm, PeerFsmDelegate},
     operation::AdminCmdResult,
-    raft::{write_initial_states, write_peer_state, Apply, Peer, Storage},
+    raft::{raft_config, write_initial_states, write_peer_state, Apply, Peer, Storage},
     router::{message::PeerCreation, ApplyRes, ExecResult, PeerMsg, StoreMsg},
 };
 
@@ -158,17 +158,6 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
                         e
                     )
                 });
-
-            // write_initial_states(self.log_batch_or_default(),
-            // new_region.clone()).unwrap_or_else(     |e| {
-            //         panic!(
-            //             "{:?} fails to save split region {:?}: {:?}",
-            //             self.logger.list(),
-            //             new_region,
-            //             e
-            //         )
-            //     },
-            // );
         }
 
         let new_tablet_path = self.tablet_factory.tablet_path(region_id, log_index);
@@ -193,8 +182,8 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
             .unwrap();
         self.publish_tablet(tablet);
 
-        // // Clear the write batch belonging to the old tablet
-        // self.clear_write_batch();
+        // Clear the write batch belonging to the old tablet
+        self.clear_write_batch();
 
         // write_peer_state(
         //     self.log_batch_mut().as_mut().unwrap(),
@@ -387,7 +376,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
         init_info: Box<SplitRegionInitInfo>,
-    ) {
+    ) -> bool {
         let SplitRegionInitInfo {
             region,
             parent_is_leader,
@@ -400,33 +389,59 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // todo: check if it is inited
         let region_id = region.id;
 
+        let mut campaigned = false;
+        if !self.storage().is_initialized() {
+            let mut wb = store_ctx.engine.log_batch(5);
+            write_initial_states(&mut wb, region.clone()).unwrap_or_else(|e| {
+                panic!(
+                    "{:?} fails to save split region {:?}: {:?}",
+                    self.logger.list(),
+                    region,
+                    e
+                )
+            });
+            store_ctx.engine.consume(&mut wb, true).unwrap_or_else(|e| {
+                panic!(
+                    "{:?} fails to consume the write: {:?}",
+                    self.logger.list(),
+                    e,
+                )
+            });
+
+            let storage = Storage::new(
+                region_id,
+                store_ctx.store_id,
+                store_ctx.engine.clone(),
+                store_ctx.log_fetch_scheduler.clone(),
+                &store_ctx.logger,
+            )
+            .unwrap_or_else(|e| panic!("fail to create storage: {:?}", e))
+            .unwrap();
+
+            let applied_index = storage.apply_state().get_applied_index();
+            let peer_id = storage.peer().get_id();
+            let raft_cfg = raft_config(peer_id, applied_index, &store_ctx.cfg);
+
+            let mut raft_group = RawNode::new(&raft_cfg, storage, &self.logger).unwrap();
+            // If this region has only one peer and I am the one, campaign directly.
+            if region.get_peers().len() == 1 {
+                campaigned = true;
+                raft_group.campaign().unwrap();
+                // peer.set_has_ready();
+            }
+            // FIXME: unwrap
+            self.set_raft_group(raft_group);
+        } else {
+        }
+
+        let mut meta = store_ctx.store_meta.lock().unwrap();
+
         info!(
             self.logger,
             "init split region";
             "region_id" => region_id,
             "region" => ?region,
         );
-
-        let mut meta = store_ctx.store_meta.lock().unwrap();
-
-        // // todo: consider there's only one initialization, and if we only insert the
-        // // region into meta.regions in this method, this check can be removed.
-        // if let Some(region) = meta.regions.get(&region_id) {
-        //     // Suppose a new node is added by conf change and the snapshot comes
-        // slowly.     // Then, the region splits and the first vote message
-        // comes to the new node     // before the old snapshot, which will
-        // create an uninitialized peer on the     // store. After that, the old
-        // snapshot comes, followed with the last split     // proposal. After
-        // it's applied, the uninitialized peer will be met.     // We can
-        // remove this uninitialized peer directly.
-        //     if util::is_region_initialized(region) {
-        //         panic!(
-        //             "[region {}] duplicated region {:?} for split region {:?}",
-        //             region_id, region, new_region
-        //         );
-        //     }
-        //     store_ctx.router.close(region_id);
-        // }
 
         // todo(SpadeA)
         // let mut replication_state =
@@ -449,12 +464,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             + 1;
         self.set_last_compacted_idx(last_compacted_idx);
 
-        let campaigned = self.maybe_campaign(parent_is_leader);
+        campaigned = campaigned || self.maybe_campaign(parent_is_leader);
+        if campaigned {
+            self.set_has_ready();
+        }
 
         if parent_is_leader {
             self.set_approximate_size(approximate_size);
             self.set_approximate_keys(approximate_keys);
             *self.txn_ext().pessimistic_locks.write() = locks;
+            // The new peer is likely to become leader, send a heartbeat immediately to
+            // reduce client query miss.
             self.heartbeat_pd(store_ctx);
         }
 
@@ -479,23 +499,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .insert(region_id, self.generate_read_delegate());
         meta.region_read_progress
             .insert(region_id, self.read_progress().clone());
-
-        let mut wb = store_ctx.engine.log_batch(5);
-        write_initial_states(&mut wb, region.clone()).unwrap_or_else(|e| {
-            panic!(
-                "{:?} fails to save split region {:?}: {:?}",
-                self.logger.list(),
-                region,
-                e
-            )
-        });
-        store_ctx.engine.consume(&mut wb, true).unwrap_or_else(|e| {
-            panic!(
-                "{:?} fails to consume the write: {:?}",
-                self.logger.list(),
-                e,
-            )
-        });
 
         if !campaigned {
             if let Some(msg) = meta
@@ -530,6 +533,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             //     .set_size_diff_hint(store_ctx.cfg.
             // region_split_check_diff().0);
         }
+
+        campaigned
     }
 }
 

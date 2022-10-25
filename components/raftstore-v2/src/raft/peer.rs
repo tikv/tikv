@@ -113,6 +113,24 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     pub(crate) logger: Logger,
 }
 
+pub fn raft_config(peer_id: u64, applied_index: u64, cfg: &Config) -> raft::Config {
+    raft::Config {
+        id: peer_id,
+        election_tick: cfg.raft_election_timeout_ticks,
+        heartbeat_tick: cfg.raft_heartbeat_ticks,
+        min_election_tick: cfg.raft_min_election_timeout_ticks,
+        max_election_tick: cfg.raft_max_election_timeout_ticks,
+        max_size_per_msg: cfg.raft_max_size_per_msg.0,
+        max_inflight_msgs: cfg.raft_max_inflight_msgs,
+        applied: applied_index,
+        check_quorum: true,
+        skip_bcast_commit: true,
+        pre_vote: cfg.prevote,
+        max_committed_size_per_ready: ReadableSize::mb(16).0,
+        ..Default::default()
+    }
+}
+
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// Creates a new peer.
     ///
@@ -126,22 +144,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         let applied_index = storage.apply_state().get_applied_index();
         let peer_id = storage.peer().get_id();
-
-        let raft_cfg = raft::Config {
-            id: peer_id,
-            election_tick: cfg.raft_election_timeout_ticks,
-            heartbeat_tick: cfg.raft_heartbeat_ticks,
-            min_election_tick: cfg.raft_min_election_timeout_ticks,
-            max_election_tick: cfg.raft_max_election_timeout_ticks,
-            max_size_per_msg: cfg.raft_max_size_per_msg.0,
-            max_inflight_msgs: cfg.raft_max_inflight_msgs,
-            applied: applied_index,
-            check_quorum: true,
-            skip_bcast_commit: true,
-            pre_vote: cfg.prevote,
-            max_committed_size_per_ready: ReadableSize::mb(16).0,
-            ..Default::default()
-        };
+        let raft_cfg = raft_config(peer_id, applied_index, cfg);
 
         let region_id = storage.region().get_id();
         let tablet_index = storage.region_state().get_tablet_index();
@@ -363,6 +366,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn raft_group_mut(&mut self) -> &mut RawNode<Storage<ER>> {
         &mut self.raft_group
+    }
+
+    #[inline]
+    pub fn set_raft_group(&mut self, raft_group: RawNode<Storage<ER>>) {
+        self.raft_group = raft_group;
     }
 
     /// Mark the peer has a ready so it will be checked at the end of every

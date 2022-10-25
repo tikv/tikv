@@ -96,6 +96,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 return;
             }
             cmp::Ordering::Greater => {
+                println!("wrong msg {:?}, self peer {:?}", msg, self.peer());
                 // We need to create the target peer.
                 self.mark_for_destroy(Some(msg));
                 return;
@@ -261,11 +262,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn handle_raft_ready<T: Transport>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
         let has_ready = self.reset_has_ready();
         if !has_ready || self.destroy_progress().started() {
+            debug!(self.logger, "return 265 ---------"; "has_ready" => has_ready,);
             return;
         }
         ctx.has_ready = true;
 
         if !self.raft_group().has_ready() && (self.serving() || self.postpond_destroy()) {
+            debug!(self.logger, "return 271 ---------");
             return;
         }
 

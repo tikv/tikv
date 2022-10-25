@@ -94,7 +94,7 @@ where
                 Ok(RequestPolicy::ReadLocal) => Ok(Some((delegate, RequestPolicy::ReadLocal))),
                 Ok(RequestPolicy::StaleRead) => Ok(Some((delegate, RequestPolicy::StaleRead))),
                 // It can not handle other policies.
-                Ok(_) => Ok(None),
+                Ok(a) => Ok(None),
                 Err(e) => Err(e),
             }
         } else {
@@ -183,6 +183,7 @@ where
             region_id
         ));
         let mut resp = RaftCmdResponse::default();
+        debug!(self.logger, "Fail to get snapshot from LocalReader for region"; "region_id" => region_id);
         resp.mut_header().set_error(err);
         Err(resp)
     }
@@ -339,6 +340,10 @@ where
                 }),
             );
         }
+        println!(
+            "missing reader, id {}, current meta {:?}",
+            region_id, meta.readers
+        );
         (meta.readers.len(), None)
     }
 

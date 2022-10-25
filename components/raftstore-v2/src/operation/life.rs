@@ -191,7 +191,12 @@ impl Store {
         region.set_id(region_id);
         region.set_region_epoch(from_epoch.clone());
         // Peer list doesn't have to be complete, as it's uninitialized.
-        region.mut_peers().push(from_peer.clone());
+        // If the store_id of from_peer and to_peer being the same means the from_peer
+        // if the parent peer in the split process in which case we do not add it into
+        // the region.
+        if from_peer.store_id != to_peer.store_id {
+            region.mut_peers().push(from_peer.clone());
+        }
         region.mut_peers().push(to_peer.clone());
         // We don't set the region range here as we allow range conflict.
         let (tx, fsm) = match Storage::uninit(

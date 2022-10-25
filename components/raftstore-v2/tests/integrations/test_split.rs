@@ -83,7 +83,7 @@ fn split_region(
     block_on(sub.result()).unwrap();
 
     // Wait for apply exect result
-    thread::sleep(Duration::from_millis(1500));
+    thread::sleep(Duration::from_millis(500));
 
     let (left, right) = if !right_derive {
         (
