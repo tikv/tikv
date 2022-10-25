@@ -19,12 +19,12 @@ fn test_resolved_ts_basic() {
 
     // Prewrite
     let (k, v) = (b"k1", b"v");
-    let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let mut start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
     mutation.key = k.to_vec();
     mutation.value = v.to_vec();
-    suite.must_kv_prewrite(region.id, vec![mutation], k.to_vec(), start_ts);
+    suite.must_kv_prewrite(region.id, vec![mutation], k.to_vec(), start_ts, false);
 
     // The `resolved-ts` won't be updated due to there is lock on the region,
     // the `resolved-ts` may not be the `start_ts` of the lock if the `resolved-ts`
@@ -72,6 +72,27 @@ fn test_resolved_ts_basic() {
     let tracked_index_before = suite.region_tracked_index(r1.id);
     suite.must_ingest_sst(r1.id, meta);
     let mut tracked_index_after = suite.region_tracked_index(r1.id);
+    for _ in 0..10 {
+        if tracked_index_after > tracked_index_before {
+            break;
+        }
+        tracked_index_after = suite.region_tracked_index(r1.id);
+        sleep_ms(200)
+    }
+    assert!(tracked_index_after > tracked_index_before);
+
+    // 1PC
+    let tracked_index_before = suite.region_tracked_index(r1.id);
+
+    start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let (k, v) = (b"k2", b"v");
+    let mut mutation_1pc = Mutation::default();
+    mutation_1pc.set_op(Op::Put);
+    mutation_1pc.key = k.to_vec();
+    mutation_1pc.value = v.to_vec();
+    suite.must_kv_prewrite(r1.id, vec![mutation_1pc], k.to_vec(), start_ts, true);
+
+    tracked_index_after = suite.region_tracked_index(r1.id);
     for _ in 0..10 {
         if tracked_index_after > tracked_index_before {
             break;

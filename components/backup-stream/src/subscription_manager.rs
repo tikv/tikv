@@ -128,12 +128,15 @@ where
         handle: ObserveHandle,
     ) -> Result<Statistics> {
         let region_id = region.get_id();
+        let h = handle.clone();
         // Note: we have external retry at `ScanCmd::exec_by_with_retry`, should we keep
         // retrying here?
         let snap = self.observe_over_with_retry(region, move || {
             ChangeObserver::from_pitr(region_id, handle.clone())
         })?;
-        let stat = self.do_initial_scan(region, start_ts, snap)?;
+        #[cfg(feature = "failpoints")]
+        fail::fail_point!("scan_after_get_snapshot");
+        let stat = self.do_initial_scan(region, h, start_ts, snap)?;
         Ok(stat)
     }
 
