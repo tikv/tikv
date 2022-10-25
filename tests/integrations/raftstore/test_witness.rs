@@ -40,6 +40,8 @@ fn test_witness_split_merge() {
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k2", b"v2");
     cluster.must_split(&region, b"k2");
+    must_get_none(&cluster.get_engine(3), b"k1");
+    must_get_none(&cluster.get_engine(3), b"k2");
 
     // the newly split peer should be witness as well
     let left = cluster.get_region(b"k1");
@@ -51,6 +53,8 @@ fn test_witness_split_merge() {
     pd_client.must_merge(left.get_id(), right.get_id());
     let after_merge = cluster.get_region(b"k1");
     assert!(find_peer(&after_merge, nodes[2]).unwrap().is_witness);
+    must_get_none(&cluster.get_engine(3), b"k1");
+    must_get_none(&cluster.get_engine(3), b"k2");
 }
 
 // TODO: add back when switch witness is supported

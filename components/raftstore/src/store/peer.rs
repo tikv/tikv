@@ -5797,7 +5797,6 @@ mod memtrace {
 mod tests {
     use kvproto::raft_cmdpb;
     use protobuf::ProtobufEnum;
-    use raft::eraftpb::{ConfChange, ConfChangeV2};
 
     use super::*;
     use crate::store::{msg::ExtCallback, util::u64_to_timespec};

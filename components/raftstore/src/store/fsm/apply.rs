@@ -1155,39 +1155,41 @@ where
         let term = entry.get_term();
         let data = entry.get_data();
 
-        if (self.peer.is_witness && !can_witness_skip(entry)) || !data.is_empty() {
-            let cmd = util::parse_data_at(data, index, &self.tag);
+        if !data.is_empty() {
+            if !(self.peer.is_witness && can_witness_skip(entry)) {
+                let cmd = util::parse_data_at(data, index, &self.tag);
 
-            if apply_ctx.yield_high_latency_operation && has_high_latency_operation(&cmd) {
-                self.priority = Priority::Low;
-            }
-            let mut has_unflushed_data =
-                self.last_flush_applied_index != self.apply_state.get_applied_index();
-            if (has_unflushed_data && should_write_to_engine(&cmd)
-                || apply_ctx.kv_wb().should_write_to_engine())
-                && apply_ctx.host.pre_persist(&self.region, false, Some(&cmd))
-            {
-                apply_ctx.commit(self);
-                if let Some(start) = self.handle_start.as_ref() {
-                    if start.saturating_elapsed() >= apply_ctx.yield_duration {
-                        return ApplyResult::Yield;
-                    }
+                if apply_ctx.yield_high_latency_operation && has_high_latency_operation(&cmd) {
+                    self.priority = Priority::Low;
                 }
-                has_unflushed_data = false;
-            }
-            if self.priority != apply_ctx.priority {
-                if has_unflushed_data {
+                let mut has_unflushed_data =
+                    self.last_flush_applied_index != self.apply_state.get_applied_index();
+                if (has_unflushed_data && should_write_to_engine(&cmd)
+                    || apply_ctx.kv_wb().should_write_to_engine())
+                    && apply_ctx.host.pre_persist(&self.region, false, Some(&cmd))
+                {
                     apply_ctx.commit(self);
+                    if let Some(start) = self.handle_start.as_ref() {
+                        if start.saturating_elapsed() >= apply_ctx.yield_duration {
+                            return ApplyResult::Yield;
+                        }
+                    }
+                    has_unflushed_data = false;
                 }
-                return ApplyResult::Yield;
+                if self.priority != apply_ctx.priority {
+                    if has_unflushed_data {
+                        apply_ctx.commit(self);
+                    }
+                    return ApplyResult::Yield;
+                }
+
+                return self.process_raft_cmd(apply_ctx, index, term, cmd);
             }
-
-            return self.process_raft_cmd(apply_ctx, index, term, cmd);
+        } else {
+            // we should observe empty cmd, aka leader change,
+            // read index during confchange, or other situations.
+            apply_ctx.host.on_empty_cmd(&self.region, index, term);
         }
-
-        // we should observe empty cmd, aka leader change,
-        // read index during confchange, or other situations.
-        apply_ctx.host.on_empty_cmd(&self.region, index, term);
 
         self.apply_state.set_applied_index(index);
         self.applied_term = term;
@@ -4541,6 +4543,7 @@ mod tests {
         time::*,
     };
 
+    use bytes::Bytes;
     use engine_panic::PanicEngine;
     use engine_test::kv::{new_engine, KvTestEngine, KvTestSnapshot};
     use engine_traits::{Peekable as PeekableTrait, SyncMutable, WriteBatchExt};
@@ -4550,6 +4553,7 @@ mod tests {
         raft_cmdpb::*,
     };
     use protobuf::Message;
+    use raft::eraftpb::{ConfChange, ConfChangeV2};
     use sst_importer::Config as ImportConfig;
     use tempfile::{Builder, TempDir};
     use test_sst_importer::*;
@@ -4655,11 +4659,6 @@ mod tests {
         }
     }
 
-    use raft::eraftpb::{ConfChange, ConfChangeV2};
-
-    use super::*;
-    use crate::store::{msg::ExtCallback, util::u64_to_timespec};
-
     #[test]
     fn test_can_witness_skip() {
         let mut entry = Entry::new();
@@ -4676,7 +4675,7 @@ mod tests {
         assert!(!can_witness_skip(&entry));
 
         let mut req = RaftCmdRequest::default();
-        let mut request = raft_cmdpb::Request::default();
+        let mut request = Request::default();
         request.set_cmd_type(CmdType::Put);
         req.set_requests(vec![request].into());
         let data = req.write_to_bytes().unwrap();
