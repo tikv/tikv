@@ -589,6 +589,24 @@ pub enum PeerMsg<EK: KvEngine> {
     Destroy(u64),
 }
 
+impl<EK: KvEngine> PeerMsg<EK> {
+    pub fn tag(&self) -> RaftEventDurationType {
+        match self {
+            PeerMsg::RaftMessage(_) => RaftEventDurationType::raft_message,
+            PeerMsg::RaftCommand(_) => RaftEventDurationType::raft_command,
+            PeerMsg::Tick(_) => RaftEventDurationType::tick,
+            PeerMsg::ApplyRes { res: _ } => RaftEventDurationType::apply_res,
+            PeerMsg::SignificantMsg(_) => RaftEventDurationType::significant_msg,
+            PeerMsg::Start => RaftEventDurationType::start,
+            PeerMsg::Noop => RaftEventDurationType::noop,
+            PeerMsg::CasualMessage(_) => RaftEventDurationType::casual_message,
+            PeerMsg::HeartbeatPd => RaftEventDurationType::heartbeat_pd,
+            PeerMsg::UpdateReplicationMode => RaftEventDurationType::update_replication_mode,
+            PeerMsg::Destroy(_) => RaftEventDurationType::destroy,
+        }
+    }
+}
+
 impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

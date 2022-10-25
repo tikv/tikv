@@ -610,7 +610,11 @@ where
     }
 
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK>>) {
+        let timer = TiInstant::now_coarse();
+        let count = msgs.len();
         for m in msgs.drain(..) {
+            let timer1 = TiInstant::now_coarse();
+            let typ = m.tag();
             match m {
                 PeerMsg::RaftMessage(msg) => {
                     if let Err(e) = self.on_raft_message(msg) {
@@ -683,6 +687,9 @@ where
                     }
                 }
             }
+            RAFT_EVENT_DURATION
+                .get(typ)
+                .observe(duration_to_sec(timer1.saturating_elapsed()) as f64);
         }
         // Propose batch request which may be still waiting for more raft-command
         if self.ctx.sync_write_worker.is_some() {
@@ -691,6 +698,10 @@ where
             self.propose_batch_raft_command(false);
             self.check_batch_cmd_and_proposed_cb();
         }
+        PEER_MSG_LEN.observe(count as f64);
+        RAFT_EVENT_DURATION
+            .get(RaftEventDurationType::peer_msg)
+            .observe(duration_to_sec(timer.saturating_elapsed()) as f64);
     }
 
     fn propose_batch_raft_command(&mut self, force: bool) {
@@ -967,7 +978,11 @@ where
                 self.on_schedule_half_split_region(&region_epoch, policy, source, cb);
             }
             CasualMessage::GcSnap { snaps } => {
+                let timer = TiInstant::now_coarse();
                 self.on_gc_snap(snaps);
+                RAFT_EVENT_DURATION
+                    .get(RaftEventDurationType::peer_gc_snap)
+                    .observe(duration_to_sec(timer.saturating_elapsed()) as f64);
             }
             CasualMessage::ClearRegionSize => {
                 self.on_clear_region_size();
@@ -1255,7 +1270,11 @@ where
                 target,
                 result,
             } => {
+                let timer = TiInstant::now_coarse();
                 self.on_merge_result(target_region_id, target, result);
+                RAFT_EVENT_DURATION
+                    .get(RaftEventDurationType::merge_result)
+                    .observe(duration_to_sec(timer.saturating_elapsed()) as f64);
             }
             SignificantMsg::CatchUpLogs(catch_up_logs) => {
                 self.on_catch_up_logs_for_merge(catch_up_logs);
@@ -2120,6 +2139,9 @@ where
                 assert_eq!(peer_id, self.fsm.peer.peer_id());
                 if !merge_from_snapshot {
                     self.destroy_peer(false);
+                    RAFT_EVENT_DURATION
+                        .get(RaftEventDurationType::destroy_peer)
+                        .observe(duration_to_sec(timer.saturating_elapsed()) as f64);
                 } else {
                     // Wait for its target peer to apply snapshot and then send `MergeResult` back
                     // to destroy itself
@@ -4533,7 +4555,13 @@ where
                     derived,
                     regions,
                     new_split_regions,
-                } => self.on_ready_split_region(derived, regions, new_split_regions),
+                } => {
+                    let timer = TiInstant::now_coarse();
+                    self.on_ready_split_region(derived, regions, new_split_regions);
+                    RAFT_EVENT_DURATION
+                        .get(RaftEventDurationType::split_region)
+                        .observe(duration_to_sec(timer.saturating_elapsed()) as f64);
+                }
                 ExecResult::PrepareMerge { region, state } => {
                     self.on_ready_prepare_merge(region, state)
                 }
