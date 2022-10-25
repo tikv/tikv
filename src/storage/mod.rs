@@ -8346,11 +8346,11 @@ mod tests {
                         tx.clone(),
                         0,
                         |res: Result<PessimisticLockResults>| {
-                            let e = res.unwrap_err();
-                            match e {
-                                Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
+                            let e = res.unwrap().0[0].unwrap_err();
+                            match e.inner() {
+                                ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
                                     mvcc::Error(box mvcc::ErrorInner::KeyIsLocked(..)),
-                                )))) => (),
+                                ))) => (),
                                 e => panic!("unexpected error chain: {:?}", e),
                             }
                         },

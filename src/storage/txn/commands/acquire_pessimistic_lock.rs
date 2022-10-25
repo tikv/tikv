@@ -234,11 +234,10 @@ impl AcquirePessimisticLock {
                     );
                     encountered_locks.push(lock_info);
                     // Do not lock previously succeeded keys.
-                    // For multiple keys, is_first_lock should be unset if some of the keys
-                    // can be successfully locked.
                     txn.clear();
                     res.0.clear();
                     new_locked_keys.clear();
+                    written_rows = 0;
                     res.push(PessimisticLockKeyResult::Waiting);
                     break;
                 }
@@ -248,7 +247,28 @@ impl AcquirePessimisticLock {
 
         let modifies = txn.into_modifies();
 
-        let pr = ProcessResult::PessimisticLockRes { res: Ok(res) };
+        let mut res = Ok(res);
+
+        // If encountered lock and `wait_timeout` is `None` (which means no wait),
+        // return error directly here.
+        if !encountered_locks.is_empty() && params.wait_timeout.is_none() {
+            // Mind the difference of the protocols of legacy requests and resumable
+            // requests. For resumable requests (allow_lock_with_conflict ==
+            // true), key errors are considered key by key instead of for the
+            // whole request.
+            let lock_info = encountered_locks.drain(..).next().unwrap().lock_info_pb;
+            let err = StorageError::from(Error::from(MvccError::from(
+                MvccErrorInner::KeyIsLocked(lock_info),
+            )));
+            if params.allow_lock_with_conflict {
+                res.as_mut().unwrap().0[0] = PessimisticLockKeyResult::Failed(err.into())
+            } else {
+                res = Err(err)
+            }
+        }
+
+        let pr = ProcessResult::PessimisticLockRes { res };
+
         let to_be_write = if written_rows > 0 {
             let extra = TxnExtra {
                 old_values,

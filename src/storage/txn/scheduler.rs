@@ -1317,11 +1317,17 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
                     scheduler.on_wait_for_lock(&ctx, cid, lock_info, tracker);
                 } else {
-                    pr = Some(ProcessResult::PessimisticLockRes {
-                        res: Err(StorageError::from(Error::from(MvccError::from(
-                            MvccErrorInner::KeyIsLocked(lock_info.lock_info_pb),
-                        )))),
-                    })
+                    // For requests with `allow_lock_with_conflict`, key errors are set key-wise.
+                    // TODO: It's better to return this error from
+                    // `commands::AcquirePessimisticLocks::process_write`.
+                    if lock_info.parameters.allow_lock_with_conflict {
+                        pr = Some(ProcessResult::PessimisticLockRes {
+                            res: Err(StorageError::from(Error::from(MvccError::from(
+                                MvccErrorInner::KeyIsLocked(lock_info.lock_info_pb),
+                            )))),
+                        });
+                    } else {
+                    }
                 }
             } else if tag == CommandKind::acquire_pessimistic_lock_resumed {
                 // Some requests meets lock again after waiting and resuming.
