@@ -65,7 +65,7 @@ use crate::{
 };
 
 const FEATURE_RESOLVED_TS_STORE: Feature = Feature::require(5, 0, 0);
-const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
+const METRICS_FLUSH_INTERVAL: u64 = 1_000; // 1s
 // 10 minutes, it's the default gc life time of TiDB
 // and is long enough for most transactions.
 const WARN_RESOLVED_TS_LAG_THRESHOLD: Duration = Duration::from_secs(600);
@@ -1246,6 +1246,12 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> RunnableWithTimer for Endpoin
                 self.current_ts
                     .physical()
                     .saturating_sub(self.min_resolved_ts.physical()) as i64,
+            );
+            CDC_RESOLVED_TS_GAP_HISTOGRAM.observe(
+                self.current_ts
+                    .physical()
+                    .saturating_sub(self.min_resolved_ts.physical()) as f64
+                    / 1000f64,
             );
         }
         self.min_resolved_ts = TimeStamp::max();
