@@ -118,7 +118,7 @@ impl MvccTxn {
     }
 
     /// Append a modify that unlocks the key. If the lock is removed due to
-    /// committing, a non-zero `commit_ts` need to be provided; otherwise if
+    /// committing, a non-zero `commit_ts` needs to be provided; otherwise if
     /// the lock is removed due to rolling back, `commit_ts` must be set to
     /// zero.
     pub(crate) fn unlock_key(
