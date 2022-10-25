@@ -995,6 +995,8 @@ pub fn kv_pessimistic_lock_resumable(
     ts: u64,
     for_update_ts: u64,
     wait_timeout: Option<i64>,
+    return_values: bool,
+    check_existence: bool,
 ) -> PessimisticLockResponse {
     let mut req = PessimisticLockRequest::default();
     req.set_context(ctx);
@@ -1014,6 +1016,8 @@ pub fn kv_pessimistic_lock_resumable(
     req.is_first_lock = false;
     req.wait_timeout = wait_timeout.unwrap_or(-1);
     req.set_lock_waiting_mode(PessimisticLockWaitingMode::ResumeAfterWait);
+    req.return_values = return_values;
+    req.check_existence = check_existence;
     client.kv_pessimistic_lock(&req).unwrap()
 }
 
