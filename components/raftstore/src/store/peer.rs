@@ -4634,7 +4634,7 @@ where
     ///     the follower reply an ACK with type MsgTransferLeader and
     ///     its promised persistent index.
     ///
-    /// Additional steps for behavior when there are remaining pessimistic
+    /// Additional steps when there are remaining pessimistic
     /// locks to propose (detected in function on_transfer_leader_msg).
     ///    1. Leader firstly proposes pessimistic locks and then proposes a
     ///       TransferLeader command.
