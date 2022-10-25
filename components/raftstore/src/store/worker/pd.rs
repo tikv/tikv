@@ -1806,6 +1806,12 @@ where
         }
     }
 
+    fn is_store_heartbeat_delayed(&self) -> bool {
+        let now = UnixSecs::now();
+        let interval_second = now.into_inner() - self.store_stat.last_report_ts.into_inner();
+        interval_second >= self.store_heartbeat_interval.as_secs()
+    }
+
     /// Force to send a special heartbeat to pd when current store is hung on
     /// some special circumstances, i.e. disk busy, handler busy and others.
     fn force_report_store_heartbeat(&mut self) {
@@ -2128,10 +2134,7 @@ where
             self.slow_score.record_timeout();
             // If the last slow_score already reached abnormal state and was delayed for
             // reporting by `store-heartbeat` to PD, we should report it here manually.
-            let now = UnixSecs::now();
-            let interval_second = now.into_inner() - self.store_stat.last_report_ts.into_inner();
-            if self.slow_score.should_force_report_slow_store()
-                && interval_second >= self.store_heartbeat_interval.as_secs()
+            if self.slow_score.should_force_report_slow_store() && self.is_store_heartbeat_delayed()
             {
                 self.force_report_store_heartbeat();
             }
