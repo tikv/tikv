@@ -6,6 +6,10 @@ pub mod message;
 mod response_channel;
 
 pub(crate) use self::internal_message::ApplyTask;
+#[cfg(feature = "testexport")]
+pub use self::response_channel::FlushChannel;
+#[cfg(feature = "testexport")]
+pub use self::response_channel::FlushSubscriber;
 pub use self::{
     imp::RaftRouter,
     internal_message::ApplyRes,
