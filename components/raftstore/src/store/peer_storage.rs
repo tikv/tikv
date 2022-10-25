@@ -632,7 +632,7 @@ where
         }
 
         // Witness snapshot is applied atomically as no async applying operation to
-        // region worker, so need to set the peer state
+        // region worker, so no need to set the peer state
         if !for_witness {
             write_peer_state(kv_wb, &region, PeerState::Applying, None)?;
         }
