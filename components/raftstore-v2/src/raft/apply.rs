@@ -142,7 +142,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     pub fn mark_tombstone(&mut self) {
         self.tombstone = true;
     }
-    
+
     #[inline]
     pub fn tombstone(&self) -> bool {
         self.tombstone
