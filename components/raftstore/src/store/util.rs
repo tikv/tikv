@@ -14,6 +14,7 @@ use std::{
     u64,
 };
 
+use collections::HashSet;
 use engine_traits::KvEngine;
 use kvproto::{
     kvrpcpb::{self, KeyRange, LeaderInfo},
@@ -24,14 +25,14 @@ use kvproto::{
 use protobuf::{self, Message};
 use raft::{
     eraftpb::{self, ConfChangeType, ConfState, MessageType},
-    INVALID_INDEX,
+    Changer, RawNode, INVALID_INDEX,
 };
 use raft_proto::ConfChangeI;
 use tikv_util::{box_err, debug, info, store::region, time::monotonic_raw_now, Either};
 use time::{Duration, Timespec};
 use txn_types::{TimeStamp, WriteBatchFlags};
 
-use super::peer_storage;
+use super::{metrics::PEER_ADMIN_CMD_COUNTER_VEC, peer_storage, Config};
 use crate::{coprocessor::CoprocessorHost, Error, Result};
 
 const INVALID_TIMESTAMP: u64 = u64::MAX;
@@ -280,21 +281,31 @@ pub fn compare_region_epoch(
     Ok(())
 }
 
-pub fn check_flashback_state(req: &RaftCmdRequest, region: &metapb::Region) -> Result<()> {
-    // If admin flashback has not been applied but the region is already in a
-    // flashback state, the request is rejected
-    if region.get_is_in_flashback() {
-        let flags = WriteBatchFlags::from_bits_truncate(req.get_header().get_flags());
-        if flags.contains(WriteBatchFlags::FLASHBACK) {
-            return Ok(());
-        }
-        if req.has_admin_request()
-            && (req.get_admin_request().get_cmd_type() == AdminCmdType::PrepareFlashback
-                || req.get_admin_request().get_cmd_type() == AdminCmdType::FinishFlashback)
-        {
-            return Ok(());
-        }
-        return Err(Error::FlashbackInProgress(region.get_id()));
+// Check if the request could be proposed/applied under the current state of the
+// flashback.
+pub fn check_flashback_state(
+    is_in_flashback: bool,
+    req: &RaftCmdRequest,
+    region_id: u64,
+) -> Result<()> {
+    // The admin flashback cmd could be proposed/applied under any state.
+    if req.has_admin_request()
+        && (req.get_admin_request().get_cmd_type() == AdminCmdType::PrepareFlashback
+            || req.get_admin_request().get_cmd_type() == AdminCmdType::FinishFlashback)
+    {
+        return Ok(());
+    }
+    let is_flashback_request = WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
+        .contains(WriteBatchFlags::FLASHBACK);
+    // If the region is in the flashback state, the only allowed request is the
+    // flashback request itself.
+    if is_in_flashback && !is_flashback_request {
+        return Err(Error::FlashbackInProgress(region_id));
+    }
+    // If the region is not in the flashback state, the flashback request itself
+    // should be rejected.
+    if !is_in_flashback && is_flashback_request {
+        return Err(Error::FlashbackNotPrepared(region_id));
     }
     Ok(())
 }
@@ -755,7 +766,7 @@ impl<
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 pub enum ConfChangeKind {
     // Only contains one configuration change
     Simple,
@@ -837,6 +848,118 @@ impl<'a> ChangePeerI for &'a ChangePeerV2Request {
     }
 }
 
+/// Check if the conf change request is valid.
+///
+/// The function will try to keep operation safe. In some edge cases (or
+/// tests), we may not care about safety. In this case, `ignore_safety`
+/// can be set to true.
+///
+/// Make sure the peer can serve read and write when ignore safety, otherwise
+/// it may produce stale result or cause unavailability.
+pub fn check_conf_change(
+    cfg: &Config,
+    node: &RawNode<impl raft::Storage>,
+    leader: &metapb::Peer,
+    change_peers: &[ChangePeerRequest],
+    cc: &impl ConfChangeI,
+    ignore_safety: bool,
+) -> Result<()> {
+    let current_progress = node.status().progress.unwrap().clone();
+    let mut after_progress = current_progress.clone();
+    let cc_v2 = cc.as_v2();
+    let mut changer = Changer::new(&after_progress);
+    let (conf, changes) = if cc_v2.leave_joint() {
+        changer.leave_joint()?
+    } else if let Some(auto_leave) = cc_v2.enter_joint() {
+        changer.enter_joint(auto_leave, &cc_v2.changes)?
+    } else {
+        changer.simple(&cc_v2.changes)?
+    };
+    after_progress.apply_conf(conf, changes, node.raft.raft_log.last_index());
+
+    // Because the conf change can be applied successfully above, so the current
+    // raft group state must matches the command. For example, won't call leave
+    // joint on a non joint state.
+    let kind = ConfChangeKind::confchange_kind(change_peers.len());
+    if kind == ConfChangeKind::LeaveJoint {
+        if ignore_safety || leader.get_role() != PeerRole::DemotingVoter {
+            return Ok(());
+        }
+        return Err(box_err!("ignore leave joint command that demoting leader"));
+    }
+
+    let mut check_dup = HashSet::default();
+    let mut only_learner_change = true;
+    let current_voter = current_progress.conf().voters().ids();
+    for cp in change_peers {
+        let (change_type, peer) = (cp.get_change_type(), cp.get_peer());
+        match (change_type, peer.get_role()) {
+            (ConfChangeType::RemoveNode, PeerRole::Voter) if kind != ConfChangeKind::Simple => {
+                return Err(box_err!("{:?}: can not remove voter directly", cp));
+            }
+            (ConfChangeType::RemoveNode, _)
+            | (ConfChangeType::AddNode, PeerRole::Voter)
+            | (ConfChangeType::AddLearnerNode, PeerRole::Learner) => {}
+            _ => {
+                return Err(box_err!("{:?}: op not match role", cp));
+            }
+        }
+
+        if !check_dup.insert(peer.get_id()) {
+            return Err(box_err!(
+                "have multiple commands for the same peer {}",
+                peer.get_id()
+            ));
+        }
+
+        if peer.get_id() == leader.get_id()
+            && (change_type == ConfChangeType::RemoveNode
+                // In Joint confchange, the leader is allowed to be DemotingVoter
+                || (kind == ConfChangeKind::Simple
+                && change_type == ConfChangeType::AddLearnerNode))
+            && !cfg.allow_remove_leader()
+        {
+            return Err(box_err!("ignore remove leader or demote leader"));
+        }
+
+        if current_voter.contains(peer.get_id()) || change_type == ConfChangeType::AddNode {
+            only_learner_change = false;
+        }
+    }
+
+    // Multiple changes that only effect learner will not product `IncommingVoter`
+    // or `DemotingVoter` after apply, but raftstore layer and PD rely on these
+    // roles to detect joint state
+    if kind != ConfChangeKind::Simple && only_learner_change {
+        return Err(box_err!("multiple changes that only effect learner"));
+    }
+
+    if !ignore_safety {
+        let promoted_commit_index = after_progress.maximal_committed_index().0;
+        let first_index = node.raft.raft_log.first_index();
+        if current_progress.is_singleton() // It's always safe if there is only one node in the cluster.
+                || promoted_commit_index + 1 >= first_index
+        {
+            return Ok(());
+        }
+
+        PEER_ADMIN_CMD_COUNTER_VEC
+            .with_label_values(&["conf_change", "reject_unsafe"])
+            .inc();
+
+        Err(box_err!(
+            "{:?}: before: {:?}, after: {:?}, first index {}, promoted commit index {}",
+            change_peers,
+            current_progress.conf().to_conf_state(),
+            after_progress.conf().to_conf_state(),
+            first_index,
+            promoted_commit_index
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 pub struct MsgType<'a>(pub &'a RaftMessage);
 
 impl Display for MsgType<'_> {
@@ -893,7 +1016,7 @@ impl RegionReadProgressRegistry {
             .lock()
             .unwrap()
             .get(region_id)
-            .map(|rp| rp.core.lock().unwrap().applied_index)
+            .map(|rp| rp.core.lock().unwrap().read_state.idx)
     }
 
     // NOTICE: this function is an alias of `get_safe_ts` to distinguish the
@@ -1019,6 +1142,16 @@ impl RegionReadProgress {
                     TimeStamp::new(ts).physical(),
                     INVALID_TIMESTAMP,
                 )
+            }
+        }
+    }
+
+    // TODO: remove it when coprocessor hook is implemented in v2.
+    pub fn update_applied_core(&self, applied: u64) {
+        let mut core = self.core.lock().unwrap();
+        if let Some(ts) = core.update_applied(applied) {
+            if !core.pause {
+                self.safe_ts.store(ts, AtomicOrdering::Release);
             }
         }
     }

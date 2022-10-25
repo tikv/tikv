@@ -12,10 +12,13 @@ use std::{
 use engine_traits::KvEngine;
 use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
-use raftstore::store::ReadTask;
+use raftstore::store::{fsm::ChangePeer, ReadTask};
 use tikv_util::{box_try, worker::Scheduler};
 
-use crate::{operation::CommittedEntries, Result};
+use crate::{
+    operation::{AdminCmdResult, CommittedEntries},
+    Result,
+};
 
 pub struct GenSnapTask {
     pub(crate) region_id: u64,
@@ -83,5 +86,5 @@ pub enum ApplyTask {
 pub struct ApplyRes {
     pub applied_index: u64,
     pub applied_term: u64,
-    pub region_state: Option<RegionLocalState>,
+    pub admin_result: Vec<AdminCmdResult>,
 }

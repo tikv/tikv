@@ -137,6 +137,9 @@ pub enum PeerMsg {
         ready_number: u64,
     },
     QueryDebugInfo(DebugInfoChannel),
+    /// A message that used to check if a flush is happened.
+    #[cfg(feature = "testexport")]
+    WaitFlush(super::FlushChannel),
 }
 
 impl PeerMsg {
@@ -176,6 +179,8 @@ impl fmt::Debug for PeerMsg {
             PeerMsg::LogsFetched(fetched) => write!(fmt, "LogsFetched {:?}", fetched),
             PeerMsg::SnapshotGenerated(_) => write!(fmt, "SnapshotGenerated"),
             PeerMsg::QueryDebugInfo(_) => write!(fmt, "QueryDebugInfo"),
+            #[cfg(feature = "testexport")]
+            PeerMsg::WaitFlush(_) => write!(fmt, "FlushMessages"),
         }
     }
 }

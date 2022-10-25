@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
+default = ["testexport", "test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
 failpoints = ["raftstore/failpoints"]
 testexport = ["raftstore/testexport"]
 test-engine-kv-rocksdb = [
@@ -29,41 +29,42 @@ cloud-gcp = ["raftstore/cloud-gcp"]
 cloud-azure = ["raftstore/cloud-azure"]
 
 [dependencies]
-batch-system = { path = "../batch-system", default-features = false }
-collections = { path = "../collections" }
+batch-system = { workspace = true }
+collections = { workspace = true }
 crossbeam = "0.8"
-engine_traits = { path = "../engine_traits" }
-error_code = { path = "../error_code" }
+engine_traits = { workspace = true }
+error_code = { workspace = true }
 fail = "0.5"
-file_system = { path = "../file_system" }
+file_system = { workspace = true }
 futures = { version = "0.3", features = ["compat"] }
-keys = { path = "../keys", default-features = false }
+keys = { workspace = true }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
-log_wrappers = { path = "../log_wrappers" }
-pd_client = { path = "../pd_client" }
+log_wrappers = { workspace = true }
+pd_client = { workspace = true }
 protobuf = { version = "2.8", features = ["bytes"] }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raft-proto = { version = "0.7.0" }
-raftstore = { path = "../raftstore" }
+raftstore = { workspace = true }
 slog = "2.3"
 smallvec = "1.4"
-tikv_util = { path = "../tikv_util", default-features = false }
+tikv_util = { workspace = true }
 time = "0.1"
-tracker = { path = "../tracker" }
-txn_types = { path = "../txn_types", default-features = false }
+tracker = { workspace = true }
+txn_types = { workspace = true }
 
 [dev-dependencies]
-engine_test = { path = "../engine_test", default-features = false }
+engine_test = { workspace = true }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tempfile = "3.0"
-test_pd = { path = "../test_pd" }
-test_util = { path = "../test_util" }
+test_pd = { workspace = true }
+test_util = { workspace = true }
 
 [[test]]
 name = "raftstore-v2-failpoints"
 path = "tests/failpoints/mod.rs"
-required-features = ["failpoints"]
+required-features = ["failpoints", "testexport"]
 
 [[test]]
 name = "raftstore-v2-integrations"
 path = "tests/integrations/mod.rs"
+required-features = ["testexport"]

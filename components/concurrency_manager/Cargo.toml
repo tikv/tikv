@@ -8,9 +8,9 @@ version = "0.0.1"
 fail = "0.5"
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 parking_lot = "0.12"
-tikv_util = { path = "../tikv_util", default-features = false }
+tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["macros", "sync", "time"] }
-txn_types = { path = "../txn_types", default-features = false }
+txn_types = { workspace = true }
 
 # FIXME: switch to the crates.io version after crossbeam-skiplist is released
 [dependencies.crossbeam-skiplist]
@@ -22,7 +22,7 @@ package = "crossbeam-skiplist"
 criterion = "0.3"
 futures = "0.3"
 rand = "0.8.3"
-tikv_alloc = { path = "../tikv_alloc", features = ["jemalloc"] }
+tikv_alloc = { workspace = true, features = ["jemalloc"] }
 
 [[bench]]
 name = "lock_table"

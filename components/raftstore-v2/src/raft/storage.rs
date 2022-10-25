@@ -272,6 +272,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         self.ever_persisted = true;
     }
 
+    #[inline]
     pub fn take_gen_snap_task(&mut self) -> Option<GenSnapTask> {
         self.gen_snap_task.get_mut().take()
     }
@@ -281,6 +282,17 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         match self.region_state.get_state() {
             PeerState::Tombstone | PeerState::Applying => 0,
             _ => self.region_state.get_tablet_index(),
+        }
+    }
+
+    #[inline]
+    pub fn set_region_state(&mut self, state: RegionLocalState) {
+        self.region_state = state;
+        for peer in self.region_state.get_region().get_peers() {
+            if peer.get_id() == self.peer.get_id() {
+                self.peer = peer.clone();
+                break;
+            }
         }
     }
 }

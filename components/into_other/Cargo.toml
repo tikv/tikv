@@ -5,6 +5,6 @@ edition = "2018"
 publish = false
 
 [dependencies]
-engine_traits = { path = "../engine_traits", default-features = false }
+engine_traits = { workspace = true }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
