@@ -161,6 +161,7 @@ make_auto_flush_static_metric! {
         heartbeat_pd,
         update_replication_mode,
         destroy,
+        other,
     }
 
     pub label_enum CompactionGuardAction {

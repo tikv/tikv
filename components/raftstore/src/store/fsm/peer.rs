@@ -2095,6 +2095,7 @@ where
 
     fn on_apply_res(&mut self, res: ApplyTaskRes<EK::Snapshot>) {
         fail_point!("on_apply_res", |_| {});
+        let timer = TiInstant::now_coarse();
         match res {
             ApplyTaskRes::Apply(mut res) => {
                 debug!(
@@ -2130,6 +2131,9 @@ where
                     self.register_split_region_check_tick();
                     self.retry_pending_prepare_merge(applied_index);
                 }
+                RAFT_EVENT_DURATION
+                    .get(RaftEventDurationType::apply_res)
+                    .observe(duration_to_sec(timer.saturating_elapsed()) as f64);
             }
             ApplyTaskRes::Destroy {
                 region_id,
@@ -2139,9 +2143,6 @@ where
                 assert_eq!(peer_id, self.fsm.peer.peer_id());
                 if !merge_from_snapshot {
                     self.destroy_peer(false);
-                    RAFT_EVENT_DURATION
-                        .get(RaftEventDurationType::destroy_peer)
-                        .observe(duration_to_sec(timer.saturating_elapsed()) as f64);
                 } else {
                     // Wait for its target peer to apply snapshot and then send `MergeResult` back
                     // to destroy itself
@@ -2158,6 +2159,9 @@ where
                         .unwrap();
                     *is_ready = true;
                 }
+                RAFT_EVENT_DURATION
+                        .get(RaftEventDurationType::destroy_peer)
+                        .observe(duration_to_sec(timer.saturating_elapsed()) as f64);
             }
         }
         if self.fsm.peer.unsafe_recovery_state.is_some() {

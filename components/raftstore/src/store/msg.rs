@@ -603,6 +603,7 @@ impl<EK: KvEngine> PeerMsg<EK> {
             PeerMsg::HeartbeatPd => RaftEventDurationType::heartbeat_pd,
             PeerMsg::UpdateReplicationMode => RaftEventDurationType::update_replication_mode,
             PeerMsg::Destroy(_) => RaftEventDurationType::destroy,
+            _ => RaftEventDurationType::other,
         }
     }
 }
