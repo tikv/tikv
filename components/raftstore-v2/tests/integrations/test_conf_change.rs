@@ -10,7 +10,7 @@ use crate::cluster::Cluster;
 
 #[test]
 fn test_simple_change() {
-    let cluster = Cluster::with_node_count(2);
+    let cluster = Cluster::with_node_count(2, None);
     let router0 = cluster.router(0);
     let mut req = router0.new_request_for(2);
     let admin_req = req.mut_admin_request();
@@ -31,13 +31,10 @@ fn test_simple_change() {
         .unwrap();
     assert_eq!(meta.region_state.epoch.version, epoch.get_version());
     assert_eq!(meta.region_state.epoch.conf_ver, new_conf_ver);
-    assert_eq!(
-        meta.region_state.peers,
-        vec![leader_peer.clone(), new_peer.clone()]
-    );
+    assert_eq!(meta.region_state.peers, vec![leader_peer, new_peer]);
 
     // So heartbeat will create a learner.
-    cluster.send(2, vec![]);
+    cluster.dispatch(2, vec![]);
     let router1 = cluster.router(1);
     let meta = router1
         .must_query_debug_info(2, Duration::from_secs(3))
@@ -66,7 +63,7 @@ fn test_simple_change() {
         .unwrap();
     assert_eq!(meta.region_state.epoch.version, epoch.get_version());
     assert_eq!(meta.region_state.epoch.conf_ver, new_conf_ver);
-    assert_eq!(meta.region_state.peers, vec![leader_peer.clone()]);
+    assert_eq!(meta.region_state.peers, vec![leader_peer]);
     // TODO: check if the peer is removed once life trace is implemented or
     // snapshot is implemented.
 }

@@ -18,14 +18,16 @@ use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
     errorpb,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, StatusCmdType},
+    raft_serverpb::RaftApplyState,
 };
 use raft::Ready;
 use raftstore::{
     errors::RAFTSTORE_IS_BUSY,
     store::{
-        cmd_resp, local_metrics::RaftMetrics, metrics::RAFT_READ_INDEX_PENDING_COUNT,
-        msg::ErrorCallback, region_meta::RegionMeta, util, util::LeaseState, GroupState,
-        ReadIndexContext, RequestPolicy, Transport,
+        cmd_resp, fsm::ApplyMetrics, local_metrics::RaftMetrics,
+        metrics::RAFT_READ_INDEX_PENDING_COUNT, msg::ErrorCallback, region_meta::RegionMeta, util,
+        util::LeaseState, GroupState, ReadCallback, ReadIndexContext, ReadProgress, RequestPolicy,
+        Transport,
     },
     Error, Result,
 };
@@ -38,7 +40,8 @@ use crate::{
     fsm::PeerFsmDelegate,
     raft::Peer,
     router::{
-        message::RaftRequest, DebugInfoChannel, PeerMsg, QueryResChannel, QueryResult, ReadResponse,
+        message::RaftRequest, ApplyRes, DebugInfoChannel, PeerMsg, QueryResChannel, QueryResult,
+        ReadResponse,
     },
 };
 
@@ -56,12 +59,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
             return Ok(RequestPolicy::ReadIndex);
         }
 
-        // If applied index's term differs from current raft's term, leader
-        // transfer must happened, if read locally, we may read old value.
-        // TODO: to add the block back when apply is implemented.
-        // if !self.fsm.peer().has_applied_to_current_term() {
-        // return Ok(RequestPolicy::ReadIndex);
-        // }
+        // If applied index's term is differ from current raft's term, leader transfer
+        // must happened, if read locally, we may read old value.
+        if !self.fsm.peer().applied_to_current_term() {
+            return Ok(RequestPolicy::ReadIndex);
+        }
 
         match self.fsm.peer_mut().inspect_lease() {
             LeaseState::Valid => Ok(RequestPolicy::ReadLocal),
@@ -218,9 +220,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
             }
 
-            // TODO: add ready_to_handle_read for splitting and merging
-            while let Some(mut read) = self.pending_reads_mut().pop_front() {
-                self.respond_read_index(&mut read, ctx);
+            if self.ready_to_handle_read() {
+                while let Some(mut read) = self.pending_reads_mut().pop_front() {
+                    self.respond_read_index(&mut read, ctx);
+                }
             }
         }
 
@@ -376,5 +379,40 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .term(meta.raft_apply.commit_index)
             .unwrap();
         ch.set_result(meta);
+    }
+
+    // the v1's post_apply
+    // As the logic is mostly for read, rename it to handle_read_after_apply
+    pub fn handle_read_on_apply<T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        applied_term: u64,
+        applied_index: u64,
+        progress_to_be_updated: bool,
+    ) {
+        // TODO: add is_handling_snapshot check
+        // it could update has_ready
+
+        // TODO: add peer_stat(for PD hotspot scheduling) and deleted_keys_hint
+        if !self.is_leader() {
+            self.post_pending_read_index_on_replica(ctx)
+        } else if self.ready_to_handle_read() {
+            while let Some(mut read) = self.pending_reads_mut().pop_front() {
+                self.respond_read_index(&mut read, ctx);
+            }
+        }
+        self.pending_reads_mut().gc();
+        self.read_progress_mut().update_applied_core(applied_index);
+
+        // Only leaders need to update applied_term.
+        if progress_to_be_updated && self.is_leader() {
+            // TODO: add coprocessor_host hook
+            let progress = ReadProgress::applied_term(applied_term);
+            // TODO: remove it
+            self.add_reader_if_necessary(&mut ctx.store_meta);
+            let mut meta = ctx.store_meta.lock().unwrap();
+            let reader = meta.readers.get_mut(&self.region_id()).unwrap();
+            self.maybe_update_read_progress(reader, progress);
+        }
     }
 }

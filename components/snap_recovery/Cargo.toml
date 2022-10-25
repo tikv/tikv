@@ -7,26 +7,26 @@ publish = false
 
 [dependencies]
 chrono = "0.4"
-encryption = { path = "../../components/encryption", default-features = false }
-encryption_export = { path = "../../components/encryption/export", default-features = false }
-engine_rocks = { path = "../../components/engine_rocks", default-features = false }
-engine_traits = { path = "../../components/engine_traits", default-features = false }
+encryption = { workspace = true }
+encryption_export = { workspace = true }
+engine_rocks = { workspace = true }
+engine_traits = { workspace = true }
 futures = { version = "0.3", features = ["executor"] }
-grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
-keys = { path = "../../components/keys", default-features = false }
+grpcio = { workspace = true }
+keys = { workspace = true }
 kvproto = { git = "https://github.com/pingcap/kvproto" }
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
-pd_client = { path = "../pd_client", default-features = false }
+pd_client = { workspace = true }
 protobuf = { version = "2.8", features = ["bytes"] }
-raft_log_engine = { path = "../raft_log_engine", default-features = false }
-raftstore = { path = "../../components/raftstore", default-features = false }
+raft_log_engine = { workspace = true }
+raftstore = { workspace = true }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 structopt = "0.3"
 tempfile = "3.0"
 thiserror = "1.0"
-tikv = { path = "../.." }
-tikv_alloc = { path = "../../components/tikv_alloc" }
-tikv_util = { path = "../../components/tikv_util", default-features = false }
+tikv = { workspace = true }
+tikv_alloc = { workspace = true }
+tikv_util = { workspace = true }
 toml = "0.5"
-txn_types = { path = "../../components/txn_types", default-features = false }
+txn_types = { workspace = true }

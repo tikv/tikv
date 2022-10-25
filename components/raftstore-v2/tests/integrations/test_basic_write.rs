@@ -5,7 +5,7 @@ use std::{assert_matches::assert_matches, time::Duration};
 use engine_traits::{OpenOptions, Peekable, TabletFactory};
 use futures::executor::block_on;
 use kvproto::{
-    raft_cmdpb::{CmdType, RaftCmdRequest, Request},
+    raft_cmdpb::{CmdType, Request},
     raft_serverpb::RaftMessage,
 };
 use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};

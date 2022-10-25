@@ -133,13 +133,12 @@ impl TestRouter {
         let epoch_meta = &meta.region_state.epoch;
         epoch.set_version(epoch_meta.version);
         epoch.set_conf_ver(epoch_meta.conf_ver);
-        let target_peer = meta
+        let target_peer = *meta
             .region_state
             .peers
             .iter()
             .find(|p| p.id == meta.raft_status.id)
-            .unwrap()
-            .clone();
+            .unwrap();
         let mut peer = new_peer(target_peer.store_id, target_peer.id);
         peer.role = target_peer.role.into();
         req.mut_header().set_peer(peer);
@@ -371,12 +370,16 @@ pub struct Cluster {
 
 impl Default for Cluster {
     fn default() -> Cluster {
-        Cluster::with_node_count(1)
+        Cluster::with_node_count(1, None)
     }
 }
 
 impl Cluster {
-    pub fn with_node_count(count: usize) -> Self {
+    pub fn with_config(config: Config) -> Cluster {
+        Cluster::with_node_count(1, Some(config))
+    }
+
+    pub fn with_node_count(count: usize, config: Option<Config>) -> Self {
         let pd_server = test_pd::Server::new(1);
         let logger = slog_global::borrow_global().new(o!());
         let mut cluster = Cluster {
@@ -386,7 +389,11 @@ impl Cluster {
             routers: vec![],
             logger,
         };
-        let mut cfg = v2_default_config();
+        let mut cfg = if let Some(config) = config {
+            config
+        } else {
+            v2_default_config()
+        };
         disable_all_auto_ticks(&mut cfg);
         for _ in 1..=count {
             let mut node = TestNode::with_pd(&cluster.pd_server, cluster.logger.clone());
@@ -413,6 +420,7 @@ impl Cluster {
     }
 
     /// Send messages and wait for side effects are all handled.
+    #[allow(clippy::vec_box)]
     pub fn dispatch(&self, region_id: u64, mut msgs: Vec<Box<RaftMessage>>) {
         let mut regions = HashSet::default();
         regions.insert(region_id);
