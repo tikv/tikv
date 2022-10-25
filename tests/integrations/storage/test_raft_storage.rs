@@ -312,8 +312,8 @@ fn test_auto_gc() {
             *id,
         );
         cfg.post_a_round_of_gc = Some(Box::new(move || tx.send(()).unwrap()));
-
-        storage.start_auto_gc(cfg);
+        let root_path = cluster.paths[(*id-1) as usize].path();
+        storage.start_auto_gc(cfg, root_path);
     }
 
     assert_eq!(storages.len(), count);

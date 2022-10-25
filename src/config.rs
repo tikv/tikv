@@ -805,7 +805,6 @@ impl WriteCfConfig {
         };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_titan_cf_options(&self.titan.build_opts());
-
         cf_opts
     }
 }

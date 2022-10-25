@@ -4,6 +4,7 @@ use std::{
     marker::PhantomData,
     sync::{atomic::AtomicU64, Arc},
 };
+use std::path::Path;
 
 use api_version::{ApiV1, KvFormat};
 use collections::HashMap;
@@ -17,7 +18,6 @@ use raftstore::{
     coprocessor::{region_info_accessor::MockRegionInfoProvider, RegionInfoProvider},
     router::RaftStoreBlackHole,
 };
-use tempfile::Builder;
 use tikv::{
     server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker},
     storage::{
@@ -142,18 +142,15 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
     pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider + Clone + 'static>(
         &mut self,
         cfg: AutoGcConfig<S, R>,
+        root_path: &Path
     ) {
         // Building a tablet factory
         let ops = DbOptions::default();
-        let path = Builder::new()
-            .prefix("test_gc_keys_with_region_info_provider")
-            .tempdir()
-            .unwrap();
         self.gc_worker
             .start_auto_gc(
                 cfg,
                 Arc::new(AtomicU64::new(0)),
-                Arc::new(TestTabletFactory::new(path.path(), ops)),
+                Arc::new(TestTabletFactory::new(root_path, ops)),
             )
             .unwrap();
     }
@@ -161,7 +158,8 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
     #[cfg(feature = "test-engines-panic")]
     pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider + Clone + 'static>(
         &mut self,
-        cfg: AutoGcConfig<S, R>,
+        _cfg: AutoGcConfig<S, R>,
+        _root_path: &Path
     ) {
         // place holder
     }

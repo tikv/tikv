@@ -1070,8 +1070,6 @@ where
                 self.concurrency_manager.clone(),
             )
             .unwrap_or_else(|e| fatal!("gc worker failed to observe lock apply: {}", e));
-        // table_factory of TiKvServer won't be None
-        assert!(self.tablet_factory.is_some());
         if let Err(e) = gc_worker.start_auto_gc(
             auto_gc_config,
             safe_point,

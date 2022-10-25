@@ -5,6 +5,7 @@ use std::{
     thread,
     time::Duration,
 };
+use std::path::Path;
 
 use collections::HashMap;
 use engine_test::{ctor::DbOptions, kv::TestTabletFactory};
@@ -15,7 +16,6 @@ use kvproto::{kvrpcpb::*, metapb::Region, tikvpb::TikvClient};
 use raftstore::coprocessor::{
     RegionInfo, RegionInfoCallback, RegionInfoProvider, Result as CopResult, SeekRegionCallback,
 };
-use tempfile::Builder;
 use test_raftstore::*;
 use tikv::{
     server::gc_worker::{
@@ -362,12 +362,14 @@ fn test_orphan_versions_from_compaction_filter() {
     let channel = ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader_store));
     let client = TikvClient::new(channel);
 
+    let root_path = cluster.paths[0].path();
+
     let engine = cluster.engines.get(&leader_store).unwrap();
 
     let safe_point = 100;
     let mut gc_runner = TestGcRunner::new(safe_point);
 
-    init_compaction_filter(&cluster, leader_store, Arc::new(AtomicU64::new(safe_point)));
+    init_compaction_filter(&cluster, leader_store, Arc::new(AtomicU64::new(safe_point)), root_path);
 
     let pk = b"k1".to_vec();
     let large_value = vec![b'x'; 300];
@@ -415,12 +417,13 @@ fn init_compaction_filter(
     cluster: &Cluster<ServerCluster>,
     store_id: u64,
     safe_point: Arc<AtomicU64>,
+    root_path: &Path,
 ) {
     #[derive(Clone)]
     struct MockSafePointProvider;
     impl GcSafePointProvider for MockSafePointProvider {
         fn get_safe_point(&self) -> GcWorkerResult<TimeStamp> {
-            Ok(TimeStamp::from(100))
+            Ok(TimeStamp::from(0))
         }
     }
 
@@ -452,12 +455,8 @@ fn init_compaction_filter(
     let kv_engine = cluster.get_engine(store_id);
     // Building a tablet factory
     let ops = DbOptions::default();
-    let path = Builder::new()
-        .prefix("test_gc_keys_with_region_info_provider")
-        .tempdir()
-        .unwrap();
 
-    let factory = TestTabletFactory::new(path.path(), ops);
+    let factory = TestTabletFactory::new(root_path, ops);
     {
         let arc_root_db = factory.get_root_db();
         let mut root_db = arc_root_db.lock().unwrap();
@@ -474,9 +473,10 @@ fn init_compaction_filter(
 }
 #[cfg(feature = "test-engines-panic")]
 fn init_compaction_filter(
-    cluster: &Cluster<ServerCluster>,
-    store_id: u64,
-    safe_point: Arc<AtomicU64>,
+    _cluster: &Cluster<ServerCluster>,
+    _store_id: u64,
+    _safe_point: Arc<AtomicU64>,
+    _root_path: &Path,
 ) {
     // place holder
 }
