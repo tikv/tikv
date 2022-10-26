@@ -263,23 +263,24 @@ impl LockManagerTrait for LockManager {
         // but the waiter_mgr haven't processed it, subsequent WakeUp msgs may be lost.
         self.waiter_count.fetch_add(1, Ordering::SeqCst);
 
-        // If it is the first lock the transaction tries to lock, it won't cause
-        // deadlock.
-        if !is_first_lock {
-            self.detector_scheduler
-                .detect(start_ts, wait_info.clone(), diag_ctx.clone()); // TODO: Try to avoid cloning.
-        }
         self.waiter_mgr_scheduler.wait_for(
             token,
             region_id,
             region_epoch,
             term,
             start_ts,
-            wait_info,
+            wait_info.clone(),
             timeout,
             cancel_callback,
-            diag_ctx,
+            diag_ctx.clone(),
         );
+
+        // If it is the first lock the transaction tries to lock, it won't cause
+        // deadlock.
+        if !is_first_lock {
+            self.detector_scheduler
+                .detect(start_ts, wait_info, diag_ctx);
+        }
     }
 
     fn update_wait_for(&self, updated_items: Vec<UpdateWaitForEvent>) {

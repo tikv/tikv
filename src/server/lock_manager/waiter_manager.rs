@@ -252,7 +252,7 @@ impl Waiter {
         self.delay.reset(deadline);
     }
 
-    /// Consumes the `Waiter` to notify the corresponding transaction `going on.
+    /// Consumes the `Waiter` to notify the corresponding transaction going on.
     fn cancel(self, error: Option<StorageError>) -> KeyLockWaitInfo {
         let elapsed = self.start_waiting_time.saturating_elapsed();
         GLOBAL_TRACKERS.with_tracker(self.diag_ctx.tracker, |tracker| {
@@ -517,7 +517,6 @@ impl WaiterManager {
             wait_table: Rc::new(RefCell::new(wait_table)),
             detector_scheduler,
             default_wait_for_lock_timeout: cfg.wait_for_lock_timeout,
-            // wake_up_delay_duration: cfg.wake_up_delay_duration,
         }
     }
 
