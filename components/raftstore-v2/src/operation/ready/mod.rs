@@ -31,7 +31,7 @@ use raftstore::store::{util, ExtraStates, FetchedLogs, Transport, WriteTask};
 use slog::{debug, error, trace, warn};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 
-pub use self::async_writer::AsyncWriter;
+pub use self::{async_writer::AsyncWriter, snapshot::GenSnapTask};
 use crate::{
     batch::StoreContext,
     fsm::PeerFsmDelegate,
@@ -301,7 +301,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         // Check whether there is a pending generate snapshot task, the task
         // needs to be sent to the apply system.
-        // Always sending snapshot task behind apply task, so it gets latest
+        // Always sending snapshot task after apply task, so it gets latest
         // snapshot.
         if let Some(gen_task) = self.storage_mut().take_gen_snap_task() {
             self.apply_scheduler().send(ApplyTask::Snapshot(gen_task));

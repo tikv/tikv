@@ -49,8 +49,9 @@ use tikv_util::{box_err, time::monotonic_raw_now};
 use crate::{
     batch::StoreContext,
     fsm::{ApplyFsm, ApplyResReporter, PeerFsmDelegate},
+    operation::GenSnapTask,
     raft::{Apply, Peer},
-    router::{ApplyRes, ApplyTask, CmdResChannel, GenSnapTask, PeerMsg},
+    router::{ApplyRes, ApplyTask, CmdResChannel, PeerMsg},
 };
 
 mod admin;

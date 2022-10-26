@@ -27,7 +27,7 @@ use raftstore::store::{
 use slog::{error, info, o, warn, Logger};
 use tikv_util::{box_err, store::find_peer, worker::Scheduler};
 
-use crate::{router::GenSnapTask, Result};
+use crate::{operation::GenSnapTask, Result};
 
 pub fn write_initial_states(wb: &mut impl RaftLogBatch, region: Region) -> Result<()> {
     let region_id = region.get_id();

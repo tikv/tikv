@@ -129,6 +129,8 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     pub fn tablet(&self) -> &EK {
         &self.tablet
     }
+
+    #[inline]
     pub fn peer(&self) -> &metapb::Peer {
         &self.peer
     }

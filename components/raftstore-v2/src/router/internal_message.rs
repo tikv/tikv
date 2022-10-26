@@ -10,71 +10,9 @@ use std::{
 };
 
 use engine_traits::KvEngine;
-use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState};
-use raft::eraftpb::Snapshot as RaftSnapshot;
-use raftstore::store::{fsm::ChangePeer, ReadTask};
-use tikv_util::{box_try, worker::Scheduler};
+use raftstore::store::fsm::ChangePeer;
 
-use crate::{
-    operation::{AdminCmdResult, CommittedEntries},
-    Result,
-};
-
-pub struct GenSnapTask {
-    pub(crate) region_id: u64,
-    // Fill it when you are going to generate the snapshot.
-    // index used to check if the gen task should be canceled.
-    pub index: Arc<AtomicU64>,
-    // Fetch it to cancel the task if necessary.
-    pub canceled: Arc<AtomicBool>,
-    // indicates whether the snapshot is triggered due to load balance
-    for_balance: bool,
-}
-
-impl GenSnapTask {
-    pub fn new(region_id: u64, index: Arc<AtomicU64>, canceled: Arc<AtomicBool>) -> GenSnapTask {
-        GenSnapTask {
-            region_id,
-            index,
-            canceled,
-            for_balance: false,
-        }
-    }
-
-    pub fn set_for_balance(&mut self) {
-        self.for_balance = true;
-    }
-
-    pub fn generate_and_schedule_snapshot<EK: KvEngine>(
-        self,
-        tablet: EK,
-        region_state: RegionLocalState,
-        last_applied_term: u64,
-        last_applied_index: u64,
-        region_sched: &Scheduler<ReadTask<EK>>,
-    ) -> Result<()> {
-        self.index.store(last_applied_index, Ordering::SeqCst);
-        let snapshot = ReadTask::GenTabletSnapshot {
-            region_id: self.region_id,
-            tablet,
-            region_state,
-            last_applied_term,
-            last_applied_index,
-            for_balance: self.for_balance,
-            canceled: self.canceled,
-        };
-        box_try!(region_sched.schedule(snapshot));
-        Ok(())
-    }
-}
-
-impl Debug for GenSnapTask {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("GenSnapTask")
-            .field("region_id", &self.region_id)
-            .finish()
-    }
-}
+use crate::operation::{AdminCmdResult, CommittedEntries, GenSnapTask};
 
 #[derive(Debug)]
 pub enum ApplyTask {
