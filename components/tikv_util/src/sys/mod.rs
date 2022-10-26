@@ -9,14 +9,14 @@ pub mod ioload;
 pub mod thread;
 
 // re-export some traits for ease of use
-use std::{
-    path::PathBuf,
-    sync::atomic::{AtomicU64, Ordering},
-};
+#[cfg(target_os = "linux")]
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use fail::fail_point;
 #[cfg(target_os = "linux")]
 use lazy_static::lazy_static;
+#[cfg(target_os = "linux")]
 use mnt::get_mount;
 use sysinfo::RefreshKind;
 pub use sysinfo::{DiskExt, NetworkExt, ProcessExt, ProcessorExt, SystemExt};
@@ -190,7 +190,7 @@ pub fn path_in_diff_mount_point(path1: &str, path2: &str) -> bool {
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn path_in_diff_mount_point(path1: &str, path2: &str) -> bool {
+pub fn path_in_diff_mount_point(_path1: &str, _path2: &str) -> bool {
     return false;
 }
 
