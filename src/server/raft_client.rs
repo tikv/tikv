@@ -421,6 +421,15 @@ fn grpc_error_is_unimplemented(e: &grpcio::Error) -> bool {
     }
 }
 
+fn grpc_error_is_connect_err(e: &grpcio::Error) -> bool {
+    if let grpcio::Error::RpcFailure(ref status) = e {
+        status.code() == RpcStatusCode::UNAVAILABLE
+            && status.message() == "failed to connect to all addresses"
+    } else {
+        false
+    }
+}
+
 /// Struct tracks the lifetime of a `raft` or `batch_raft` RPC.
 struct AsyncRaftSender<R, M, B, E> {
     sender: ClientCStreamSender<M>,
@@ -550,10 +559,17 @@ where
     }
 }
 
+#[derive(PartialEq)]
+enum RaftCallRes {
+    UnImplemented,
+    Disconnected(bool), // bool indicates whether it's ever connected
+    Closed,
+}
+
 struct RaftCall<R, M, B, E> {
     sender: AsyncRaftSender<R, M, B, E>,
     receiver: ClientCStreamReceiver<Done>,
-    lifetime: Option<oneshot::Sender<()>>,
+    lifetime: Option<oneshot::Sender<RaftCallRes>>,
     store_id: u64,
 }
 
@@ -563,29 +579,37 @@ where
     B: Buffer<OutputMessage = M> + Unpin,
     E: KvEngine,
 {
-    fn clean_up(&mut self, sink_err: Option<grpcio::Error>, recv_err: Option<grpcio::Error>) {
-        error!("connection aborted"; "store_id" => self.store_id, "sink_error" => ?sink_err, "receiver_err" => ?recv_err, "addr" => %self.sender.addr);
-
-        if let Some(tx) = self.lifetime.take() {
-            let should_fallback = [sink_err, recv_err]
-                .iter()
-                .any(|e| e.as_ref().map_or(false, grpc_error_is_unimplemented));
-            if should_fallback {
-                // Asks backend to fallback.
-                let _ = tx.send(());
-                return;
-            }
-        }
-        self.sender.router.broadcast_unreachable(self.store_id);
-    }
-
     async fn poll(&mut self) {
         let res = futures::join!(&mut self.sender, &mut self.receiver);
         if let (Ok(()), Ok(Done { .. })) = res {
             info!("connection close"; "store_id" => self.store_id, "addr" => %self.sender.addr);
+            if let Some(tx) = self.lifetime.take() {
+                let _ = tx.send(RaftCallRes::Closed);
+            }
             return;
         }
-        self.clean_up(res.0.err(), res.1.err());
+
+        let (sink_err, recv_err) = (res.0.err(), res.1.err());
+        error!("connection aborted"; "store_id" => self.store_id, "sink_error" => ?sink_err, "receiver_err" => ?recv_err, "addr" => %self.sender.addr);
+        if let Some(tx) = self.lifetime.take() {
+            let errs = [sink_err, recv_err];
+            let should_fallback = errs
+                .iter()
+                .any(|e| e.as_ref().map_or(false, grpc_error_is_unimplemented));
+
+            let res = if should_fallback {
+                // Asks backend to fallback.
+                RaftCallRes::UnImplemented
+            } else {
+                let ever_connected = !errs
+                    .iter()
+                    .any(|e| e.as_ref().map_or(false, grpc_error_is_connect_err));
+
+                RaftCallRes::Disconnected(ever_connected)
+            };
+            let _ = tx.send(res);
+            return;
+        }
     }
 }
 
@@ -706,7 +730,7 @@ where
         TikvClient::new(channel)
     }
 
-    fn batch_call(&self, client: &TikvClient, addr: String) -> oneshot::Receiver<()> {
+    fn batch_call(&self, client: &TikvClient, addr: String) -> oneshot::Receiver<RaftCallRes> {
         let (batch_sink, batch_stream) = client.batch_raft().unwrap();
         let (tx, rx) = oneshot::channel();
         let mut call = RaftCall {
@@ -731,7 +755,7 @@ where
         rx
     }
 
-    fn call(&self, client: &TikvClient, addr: String) -> oneshot::Receiver<()> {
+    fn call(&self, client: &TikvClient, addr: String) -> oneshot::Receiver<RaftCallRes> {
         let (sink, stream) = client.raft().unwrap();
         let (tx, rx) = oneshot::channel();
         let mut call = RaftCall {
@@ -824,20 +848,20 @@ async fn start<S, R, E>(
         };
         let client = back_end.connect(&addr);
         let f = back_end.batch_call(&client, addr.clone());
-        let mut res = f.await;
-        if res == Ok(()) {
+        let mut res = f.await; // block here until the stream call is closed or aborted.
+        if res == Ok(RaftCallRes::UnImplemented) {
             // If the call is setup successfully, it will never finish. Returning `Ok(())`
-            // means the batch_call is not supported, we are probably connect to
-            // an old version of TiKV. So we need to fallback to use legacy API.
+            // means the batch_call is not supported, we are probably connect to an old
+            // version of TiKV. So we need to fallback to use legacy API.
             let f = back_end.call(&client, addr.clone());
             res = f.await;
         }
         match res {
-            Ok(()) => {
+            Ok(RaftCallRes::UnImplemented) => {
                 error!("connection fail"; "store_id" => back_end.store_id, "addr" => addr, "err" => "require fallback even with legacy API");
             }
-            Err(_) => {
-                error!("connection abort"; "store_id" => back_end.store_id, "addr" => addr);
+            Ok(RaftCallRes::Disconnected(ever_connected)) => {
+                error!("connection abort"; "store_id" => back_end.store_id, "addr" => addr, "ever_connected" => ever_connected);
                 if retry_times > 1 {
                     // Clears pending messages to avoid consuming high memory when one node is
                     // shutdown.
@@ -848,10 +872,21 @@ async fn start<S, R, E>(
                         .with_label_values(&["unreachable", &back_end.store_id.to_string()])
                         .inc_by(1);
                 }
-                back_end
-                    .builder
-                    .router
-                    .broadcast_unreachable(back_end.store_id);
+
+                if retry_times == 1 || ever_connected {
+                    back_end
+                        .builder
+                        .router
+                        .broadcast_unreachable(back_end.store_id);
+                }
+            }
+            Ok(RaftCallRes::Closed) | Err(_) => {
+                error!("connection close"; "store_id" => back_end.store_id, "addr" => addr);
+                let mut pool = pool.lock().unwrap();
+                if let Some(s) = pool.connections.remove(&(back_end.store_id, conn_id)) {
+                    s.set_conn_state(ConnState::Disconnected);
+                }
+                return;
             }
         }
     }

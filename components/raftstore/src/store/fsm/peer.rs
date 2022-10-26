@@ -102,7 +102,7 @@ use crate::{
     },
     Error, Result,
 };
-
+use tikv_util::time::duration_to_sec;
 #[derive(Clone, Copy, Debug)]
 pub struct DelayDestroy {
     merged_by_target: bool,
@@ -605,6 +605,8 @@ where
     }
 
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK>>) {
+        let timer = TiInstant::now_coarse();
+        let count = msgs.len();
         for m in msgs.drain(..) {
             match m {
                 PeerMsg::RaftMessage(msg) => {
@@ -687,6 +689,12 @@ where
             }
         }
         self.on_loop_finished();
+        self.ctx.raft_metrics.peer_msg_len.observe(count as f64);
+        self.ctx
+            .raft_metrics
+            .event_time
+            .peer_msg
+            .observe(duration_to_sec(timer.saturating_elapsed()) as f64);
     }
 
     #[inline]
