@@ -606,8 +606,7 @@ impl RegionChangeObserver for TiFlashObserver {
         cmd: Option<&RaftCmdRequest>,
     ) -> bool {
         let should_persist = if is_finished {
-            fail::fail_point!("on_pre_persist_with_finish", |_| { true });
-            false
+            true
         } else {
             let cmd = cmd.unwrap();
             if cmd.has_admin_request() {
@@ -635,6 +634,11 @@ impl RegionChangeObserver for TiFlashObserver {
             );
         };
         should_persist
+    }
+
+    fn pre_write_apply_state(&self, ob_ctx: &mut ObserverContext<'_>) -> bool {
+        fail::fail_point!("on_pre_write_apply_state", |_| { true });
+        false
     }
 }
 
