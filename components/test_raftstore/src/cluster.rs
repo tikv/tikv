@@ -1476,7 +1476,7 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    fn wait_applied_to_current_term(&mut self, region_id: u64, timeout: Duration) {
+    pub fn wait_applied_to_current_term(&mut self, region_id: u64, timeout: Duration) {
         let mut now = Instant::now();
         let deadline = now + timeout;
         while now < deadline {

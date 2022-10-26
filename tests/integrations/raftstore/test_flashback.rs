@@ -22,12 +22,12 @@ fn test_prepare_flashback_after_split() {
 
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
+    let old_region = cluster.get_region(b"a");
+    cluster.wait_applied_to_current_term(old_region.get_id(), Duration::from_secs(3));
     // Pause the apply to make sure the split cmd and prepare flashback cmd are in
     // the same batch.
     let on_handle_apply_fp = "on_handle_apply";
     fail::cfg(on_handle_apply_fp, "pause").unwrap();
-
-    let old_region = cluster.get_region(b"a");
     // Send the split msg.
     cluster.split_region(
         &old_region,
@@ -39,7 +39,7 @@ fn test_prepare_flashback_after_split() {
         })),
     );
     // Make sure the admin split cmd is ready.
-    sleep(Duration::from_millis(500));
+    sleep(Duration::from_millis(100));
     // Send the prepare flashback msg.
     let (result_tx, result_rx) = oneshot::channel();
     cluster.must_send_flashback_msg(
@@ -55,8 +55,7 @@ fn test_prepare_flashback_after_split() {
             result_tx.send(None).unwrap();
         })),
     );
-
-    // Remove the pause to make these two commands are in the same batch.
+    // Remove the pause to make these two commands are in the same batch to apply.
     fail::remove(on_handle_apply_fp);
     let prepare_flashback_err = block_on(result_rx).unwrap().unwrap();
     assert!(
@@ -64,10 +63,9 @@ fn test_prepare_flashback_after_split() {
         "prepare flashback should fail with epoch not match, but got {:?}",
         prepare_flashback_err
     );
-
+    // Check the region meta.
     let left_region = cluster.get_region(b"a");
     let right_region = cluster.get_region(b"b");
-    // Check the region meta.
     assert!(left_region.get_id() != old_region.get_id());
     assert!(left_region.get_end_key() == right_region.get_start_key());
     assert!(
@@ -76,6 +74,52 @@ fn test_prepare_flashback_after_split() {
     );
     must_check_flashback_state(&mut cluster, left_region.get_id(), 1, false);
     must_check_flashback_state(&mut cluster, right_region.get_id(), 1, false);
+}
+
+#[test]
+fn test_prepare_flashback_after_conf_change() {
+    let mut cluster = new_node_cluster(0, 3);
+    // Disable default max peer count check.
+    cluster.pd_client.disable_default_operator();
+
+    let region_id = cluster.run_conf_change();
+    cluster.wait_applied_to_current_term(region_id, Duration::from_secs(3));
+    // Pause the apply to make sure the conf change cmd and prepare flashback cmd
+    // are in the same batch.
+    let on_handle_apply_fp = "on_handle_apply";
+    fail::cfg(on_handle_apply_fp, "pause").unwrap();
+    // Send the conf change msg.
+    cluster.async_add_peer(region_id, new_peer(2, 2)).unwrap();
+    // Make sure the conf change cmd is ready.
+    sleep(Duration::from_millis(100));
+    // Send the prepare flashback msg.
+    let (result_tx, result_rx) = oneshot::channel();
+    cluster.must_send_flashback_msg(
+        region_id,
+        AdminCmdType::PrepareFlashback,
+        Callback::write(Box::new(move |resp| {
+            if resp.response.get_header().has_error() {
+                result_tx
+                    .send(Some(resp.response.get_header().get_error().clone()))
+                    .unwrap();
+                return;
+            }
+            result_tx.send(None).unwrap();
+        })),
+    );
+    // Remove the pause to make these two commands are in the same batch to apply.
+    fail::remove(on_handle_apply_fp);
+    let prepare_flashback_err = block_on(result_rx).unwrap().unwrap();
+    assert!(
+        prepare_flashback_err.has_epoch_not_match(),
+        "prepare flashback should fail with epoch not match, but got {:?}",
+        prepare_flashback_err
+    );
+    // Check the region meta.
+    let region = cluster.get_region(b"a");
+    assert!(region.get_id() == region_id);
+    assert!(region.get_peers().len() == 2);
+    must_check_flashback_state(&mut cluster, region_id, 1, false);
 }
 
 #[test]
