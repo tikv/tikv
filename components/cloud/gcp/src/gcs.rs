@@ -456,12 +456,7 @@ impl BlobStorage for GcsStorage {
         Box::new(self.config.clone()) as Box<dyn BlobConfig>
     }
 
-    async fn put(
-        &self,
-        name: &str,
-        reader: PutResource,
-        content_length: u64,
-    ) -> io::Result<()> {
+    async fn put(&self, name: &str, reader: PutResource, content_length: u64) -> io::Result<()> {
         if content_length == 0 {
             // It is probably better to just write the empty file
             // However, currently going forward results in a body write aborted error
@@ -530,6 +525,10 @@ impl BlobStorage for GcsStorage {
 
 #[cfg(test)]
 mod tests {
+    extern crate test;
+    use std::{task::Poll};
+
+    use futures_util::{AsyncReadExt};
     use matches::assert_matches;
 
     use super::*;
@@ -629,6 +628,91 @@ mod tests {
         let c2 = Config::from_cloud_dynamic(&cloud_dynamic_from_input(input)).unwrap();
         assert_eq!(c1.bucket.bucket, c2.bucket.bucket);
         assert_eq!(c1.bucket.prefix, c2.bucket.prefix);
+    }
+
+    enum ThrottleReadState {
+        Spawning,
+        Emitting,
+    }
+    /// ThrottleRead throttles a `Read` -- make it emits 2 chars for each
+    /// `read` call. This is copy & paste from the implmentation from s3.rs.
+    #[pin_project::pin_project]
+    struct ThrottleRead<R> {
+        #[pin]
+        inner: R,
+        state: ThrottleReadState,
+    }
+    impl<R: AsyncRead> AsyncRead for ThrottleRead<R> {
+        fn poll_read(
+            self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            buf: &mut [u8],
+        ) -> Poll<io::Result<usize>> {
+            let this = self.project();
+            match this.state {
+                ThrottleReadState::Spawning => {
+                    *this.state = ThrottleReadState::Emitting;
+                    cx.waker().wake_by_ref();
+                    this.inner.poll_read(cx, &mut buf[..2])
+                }
+                ThrottleReadState::Emitting => {
+                    *this.state = ThrottleReadState::Spawning;
+                    Poll::Pending
+                }
+            }
+        }
+    }
+    impl<R> ThrottleRead<R> {
+        fn new(r: R) -> Self {
+            Self {
+                inner: r,
+                state: ThrottleReadState::Spawning,
+            }
+        }
+    }
+
+    const BENCH_READ_SIZE: usize = 128 * 1024;
+
+    // 88,852,361 ns/iter (+/- 11,536,292) (futures-util 0.3.15)
+    #[bench]
+    fn bench_read_to_end(b: &mut test::Bencher) {
+        b.iter(|| {
+            let mut v = Vec::<u8>::with_capacity(BENCH_READ_SIZE);
+            // Safety: we won't try to understand those bytes, they are just
+            // treated as random bytes. And the len is exactly equal to the capacity.
+            // And `u8` should be well defined from any memory pattern.
+            unsafe { v.set_len(BENCH_READ_SIZE) }
+
+            let mut r = ThrottleRead::new(Cursor::new(&mut v));
+            let mut dst = Vec::with_capacity(BENCH_READ_SIZE);
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap();
+
+            rt.block_on(r.read_to_end(&mut dst)).unwrap();
+            assert_eq!(dst.len(), BENCH_READ_SIZE)
+        })
+    }
+
+    // 6,086,659 ns/iter (+/- 816,577)
+    #[bench]
+    fn bench_manual_read_to_end(b: &mut test::Bencher) {
+        b.iter(|| {
+            let mut v = Vec::<u8>::with_capacity(BENCH_READ_SIZE);
+            // Safety: we won't try to understand those bytes, they are just
+            // treated as random bytes. And the len is exactly equal to the capacity.
+            // And `u8` should be well defined from any memory pattern.
+            unsafe { v.set_len(BENCH_READ_SIZE) }
+
+            let r = ThrottleRead::new(Cursor::new(&mut v));
+            let mut dst = Vec::with_capacity(1024);
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap();
+
+            rt.block_on(read_to_end(r, &mut dst)).unwrap();
+            assert_eq!(dst.len(), BENCH_READ_SIZE)
+        })
     }
 
     fn cloud_dynamic_from_input(mut gcs: InputConfig) -> CloudDynamic {
