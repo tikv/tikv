@@ -740,6 +740,9 @@ fn hotspot_query_num_report_threshold() -> u64 {
     HOTSPOT_QUERY_RATE_THRESHOLD * 10
 }
 
+/// Max limitation of delayed store_heartbeat.
+const STORE_HEARTBEAT_DELAY_LIMIT: u64 = 5 * 60;
+
 // Slow score is a value that represents the speed of a store and ranges in [1,
 // 100]. It is maintained in the AIMD way.
 // If there are some inspecting requests timeout during a round, by default the
@@ -778,7 +781,7 @@ impl SlowScore {
 
             inspect_interval,
             ratio_thresh: OrderedFloat(0.1),
-            min_ttr: Duration::from_secs(5 * 60),
+            min_ttr: Duration::from_secs(STORE_HEARTBEAT_DELAY_LIMIT),
             last_record_time: Instant::now(),
             last_update_time: Instant::now(),
             round_ticks: 30,
@@ -920,8 +923,6 @@ where
     T: PdClient + 'static,
 {
     const INTERVAL_DIVISOR: u32 = 2;
-    /// Max tikc limitation of delayed store_heartbeat.
-    const STORE_HEARTBEAT_DELAY_TICK_LIMIT: u64 = 10;
 
     pub fn new(
         cfg: &Config,
@@ -1837,8 +1838,7 @@ where
         // To avoid reporting too many fake heartbeats to PD, we should also
         // check whether it reach the report limitation or not.
         (interval_second >= self.store_heartbeat_interval.as_secs())
-            && (interval_second
-                <= self.store_heartbeat_interval.as_secs() * Self::STORE_HEARTBEAT_DELAY_TICK_LIMIT)
+            && (interval_second <= STORE_HEARTBEAT_DELAY_LIMIT)
     }
 
     /// Force to send a special heartbeat to pd when current store is hung on
