@@ -26,6 +26,7 @@ portable = ["tikv/portable"]
 sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
+pprof-fp = ["tikv/pprof-fp"]
 
 [dependencies]
 api_version = { workspace = true }

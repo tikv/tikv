@@ -514,6 +514,7 @@ fn test_inspected_snapshot() {
     assert_ne!(stats.fetch(IoType::Replication, IoOp::Write), 0);
 
     pd_client.must_remove_peer(1, new_peer(2, 2));
+    must_get_none(&cluster.get_engine(2), b"k2");
     assert_eq!(stats.fetch(IoType::LoadBalance, IoOp::Read), 0);
     assert_eq!(stats.fetch(IoType::LoadBalance, IoOp::Write), 0);
     pd_client.must_add_peer(1, new_peer(2, 2));
