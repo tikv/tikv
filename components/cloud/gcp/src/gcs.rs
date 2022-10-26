@@ -677,11 +677,7 @@ mod tests {
     #[bench]
     fn bench_read_to_end(b: &mut test::Bencher) {
         b.iter(|| {
-            let mut v = Vec::<u8>::with_capacity(BENCH_READ_SIZE);
-            // Safety: we won't try to understand those bytes, they are just
-            // treated as random bytes. And the len is exactly equal to the capacity.
-            // And `u8` should be well defined from any memory pattern.
-            unsafe { v.set_len(BENCH_READ_SIZE) }
+            let mut v = [0; BENCH_READ_SIZE];
 
             let mut r = ThrottleRead::new(Cursor::new(&mut v));
             let mut dst = Vec::with_capacity(BENCH_READ_SIZE);
@@ -698,11 +694,7 @@ mod tests {
     #[bench]
     fn bench_manual_read_to_end(b: &mut test::Bencher) {
         b.iter(|| {
-            let mut v = Vec::<u8>::with_capacity(BENCH_READ_SIZE);
-            // Safety: we won't try to understand those bytes, they are just
-            // treated as random bytes. And the len is exactly equal to the capacity.
-            // And `u8` should be well defined from any memory pattern.
-            unsafe { v.set_len(BENCH_READ_SIZE) }
+            let mut v = [0; BENCH_READ_SIZE];
 
             let r = ThrottleRead::new(Cursor::new(&mut v));
             let mut dst = Vec::with_capacity(1024);
