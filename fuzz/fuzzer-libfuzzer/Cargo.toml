@@ -4,5 +4,5 @@ version = "0.0.1"
 publish = false
 
 [dependencies]
-fuzz-targets = { path = "../targets", default-features = false }
+fuzz-targets = { path = "../targets" }
 libfuzzer-sys = "0.3.1"

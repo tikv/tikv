@@ -334,7 +334,7 @@ pre-format: unset-override
 
 format: pre-format
 	@cargo fmt
-	@cargo sort -w ./Cargo.toml ./*/Cargo.toml components/*/Cargo.toml cmd/*/Cargo.toml >/dev/null 
+	@cargo sort -w >/dev/null 
 
 doc:
 	@cargo doc --workspace --document-private-items \

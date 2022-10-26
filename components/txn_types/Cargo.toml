@@ -7,17 +7,17 @@ publish = false
 [dependencies]
 bitflags = "1.0.1"
 byteorder = "1.2"
-codec = { path = "../codec", default-features = false }
-collections = { path = "../collections" }
-error_code = { path = "../error_code", default-features = false }
+codec = { workspace = true }
+collections = { workspace = true }
+error_code = { workspace = true }
 farmhash = "1.1.5"
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
-log_wrappers = { path = "../log_wrappers" }
+log_wrappers = { workspace = true }
 slog = "2.3"
 thiserror = "1.0"
-tikv_alloc = { path = "../tikv_alloc" }
-tikv_util = { path = "../tikv_util", default-features = false }
+tikv_alloc = { workspace = true }
+tikv_util = { workspace = true }
 
 [dev-dependencies]
-panic_hook = { path = "../panic_hook" }
+panic_hook = { workspace = true }
 rand = "0.8"

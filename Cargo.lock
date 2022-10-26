@@ -1673,7 +1673,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f7531096570974c3a9dcf9e4b8e1cede1ec26cf5046219fb3b9d897503b9be59"
 
 [[package]]
-name = "example_plugin"
+name = "example_coprocessor_plugin"
 version = "0.1.0"
 dependencies = [
  "coprocessor_plugin_api",
@@ -2672,7 +2672,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#4c6f1502851ed55b3ed023d180b6b10766446630"
+source = "git+https://github.com/pingcap/kvproto.git#26e28e6a281abb927f91ef992eb8f93b39698ffa"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4101,7 +4101,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.3.0"
-source = "git+https://github.com/tikv/raft-engine.git#5f718cfe50a28f7fee0282c0959670de5962eec8"
+source = "git+https://github.com/tikv/raft-engine.git#a0d29980f1448565a6d03f911ebb103c4266f1f4"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4135,7 +4135,7 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.3.0"
-source = "git+https://github.com/tikv/raft-engine.git#5f718cfe50a28f7fee0282c0959670de5962eec8"
+source = "git+https://github.com/tikv/raft-engine.git#a0d29980f1448565a6d03f911ebb103c4266f1f4"
 dependencies = [
  "clap 3.1.6",
  "env_logger",
@@ -6181,7 +6181,7 @@ dependencies = [
  "engine_traits",
  "engine_traits_tests",
  "error_code",
- "example_plugin",
+ "example_coprocessor_plugin",
  "fail",
  "file_system",
  "flate2",
