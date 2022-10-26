@@ -20,7 +20,7 @@ use raftstore::{
     Result,
 };
 use slog::info;
-pub use split::{SplitRegionInitInfo, SplitResult};
+pub use split::{AcrossPeerMsg, SplitRegionInitInfo, SplitResult};
 use tikv_util::box_err;
 
 use self::conf_change::ConfChangeResult;

@@ -23,6 +23,7 @@ use raftstore::store::{util, ExtraStates, WriteTask};
 use slog::{debug, error, info};
 use tikv_util::store::find_peer;
 
+use super::AcrossPeerMsg;
 use crate::{
     batch::StoreContext,
     fsm::{PeerFsm, Store},
@@ -101,8 +102,10 @@ impl Store {
         let region_id = msg.raft_message.get_region_id();
         // Create the peer if not created before
         self.on_raft_message(ctx, msg.raft_message);
-        ctx.router
-            .send(region_id, PeerMsg::Initialization(msg.split_region_info));
+        ctx.router.force_send(
+            region_id,
+            PeerMsg::AcrossPeerMsg(AcrossPeerMsg::SplitRegionInit(msg.split_region_info)),
+        );
     }
 
     /// When a message's recipient doesn't exist, it will be redirected to

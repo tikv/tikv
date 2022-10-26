@@ -13,7 +13,7 @@ use super::{
     },
     ApplyRes,
 };
-use crate::operation::SplitRegionInitInfo;
+use crate::operation::{AcrossPeerMsg, SplitRegionInitInfo};
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
 #[repr(u8)]
@@ -127,8 +127,8 @@ pub enum PeerMsg {
     FetchedLogs(FetchedLogs),
     /// Start the FSM.
     Start,
-    /// Init the FSM
-    Initialization(Box<SplitRegionInitInfo>),
+    /// Messages from peer to peer in the same store
+    AcrossPeerMsg(AcrossPeerMsg),
     /// A message only used to notify a peer.
     Noop,
     /// A message that indicates an asynchronous write has finished.
@@ -167,8 +167,8 @@ impl fmt::Debug for PeerMsg {
             },
             PeerMsg::ApplyRes(res) => write!(fmt, "ApplyRes {:?}", res),
             PeerMsg::Start => write!(fmt, "Startup"),
-            PeerMsg::Initialization(info) => {
-                write!(fmt, "Peer initialization, region {:?}", info.region)
+            PeerMsg::AcrossPeerMsg(_) => {
+                write!(fmt, "Across peer msg")
             }
             PeerMsg::Noop => write!(fmt, "Noop"),
             PeerMsg::Persisted {

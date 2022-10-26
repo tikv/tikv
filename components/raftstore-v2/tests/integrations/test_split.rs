@@ -1,6 +1,6 @@
 use std::{thread, time::Duration};
 
-use engine_traits::Peekable;
+use engine_traits::{Peekable, RaftEngineReadOnly};
 use futures::executor::block_on;
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 use kvproto::{
@@ -32,10 +32,32 @@ fn new_batch_split_region_request(
     req
 }
 
+fn must_split<F: Fn(u64) -> u64>(
+    region_id: u64,
+    req: RaftCmdRequest,
+    router: &mut TestRouter,
+    get_tablet_index: F,
+) {
+    let current_tablet_index = get_tablet_index(region_id);
+    let (msg, sub) = PeerMsg::raft_command(req);
+    router.send(region_id, msg).unwrap();
+    block_on(sub.result()).unwrap();
+
+    loop {
+        // Tablet index changed means the split has been finished
+        if current_tablet_index < get_tablet_index(region_id) {
+            return;
+        }
+
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
 // Split the region according to the parameters
 // return the updated original region
-fn split_region(
+fn split_region<F: Fn(u64) -> u64>(
     router: &mut TestRouter,
+    get_tablet_index: F,
     region: metapb::Region,
     peer: metapb::Peer,
     split_region_id: u64,
@@ -78,12 +100,8 @@ fn split_region(
         new_batch_split_region_request(vec![split_key.to_vec()], vec![split_id], right_derive);
     req.mut_requests().clear();
     req.set_admin_request(admin_req);
-    let (msg, sub) = PeerMsg::raft_command(req.clone());
-    router.send(region_id, msg).unwrap();
-    block_on(sub.result()).unwrap();
 
-    // Wait for apply exect result
-    thread::sleep(Duration::from_millis(500));
+    must_split(region_id, req, router, get_tablet_index);
 
     let (left, right) = if !right_derive {
         (
@@ -123,6 +141,14 @@ fn test_split() {
     let region_id = 2;
     let peer = new_peer(store_id, 3);
     let region = router.region_detail(region_id);
+    let raft_engine = cluster.node(0).running_state().unwrap().raft_engine.clone();
+    let get_tablet_index = |region_id| -> u64 {
+        raft_engine
+            .get_region_state(region_id)
+            .unwrap()
+            .unwrap()
+            .tablet_index
+    };
 
     router.wait_applied_to_current_term(2, Duration::from_secs(3));
 
@@ -131,6 +157,7 @@ fn test_split() {
     //      Region 1000 ["k22", ""] peer(1, 10)
     let (left, right) = split_region(
         &mut router,
+        get_tablet_index,
         region,
         peer.clone(),
         1000,
@@ -146,6 +173,7 @@ fn test_split() {
     //      Region 1001 ["k11", "k22"] peer(1, 11)
     let _ = split_region(
         &mut router,
+        get_tablet_index,
         left,
         peer,
         1001,
@@ -161,6 +189,7 @@ fn test_split() {
     //      Region 1002 ["k33", ""]    peer(1, 12)
     let _ = split_region(
         &mut router,
+        get_tablet_index,
         right,
         new_peer(store_id, 10),
         1002,

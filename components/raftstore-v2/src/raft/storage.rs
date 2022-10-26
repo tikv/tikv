@@ -108,6 +108,11 @@ impl<ER> Storage<ER> {
     }
 
     #[inline]
+    pub fn set_tablet_index(&mut self, tablet_index: u64) {
+        self.region_state.set_tablet_index(tablet_index);
+    }
+
+    #[inline]
     pub fn peer(&self) -> &metapb::Peer {
         &self.peer
     }

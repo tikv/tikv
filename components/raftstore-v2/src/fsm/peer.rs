@@ -19,6 +19,7 @@ use tikv_util::{
 use super::ApplyFsm;
 use crate::{
     batch::StoreContext,
+    operation::AcrossPeerMsg,
     raft::{Peer, Storage},
     router::{PeerMsg, PeerTick},
     Result,
@@ -230,10 +231,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
                 PeerMsg::ApplyRes(res) => self.fsm.peer.on_apply_res(self.store_ctx, res),
-                PeerMsg::Initialization(init_info) => {
-                    let campaigned = self.fsm.peer.init_split_region(self.store_ctx, init_info);
-                    self.on_start();
-                }
+                PeerMsg::AcrossPeerMsg(msg) => self.on_across_peer_msg(msg),
                 PeerMsg::Start => self.on_start(),
                 PeerMsg::Noop => unimplemented!(),
                 PeerMsg::Persisted {
@@ -253,5 +251,19 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         }
         // TODO: instead of propose pending commands immediately, we should use timeout.
         self.fsm.peer.propose_pending_command(self.store_ctx);
+    }
+
+    pub fn on_across_peer_msg(&mut self, msg: AcrossPeerMsg) {
+        match msg {
+            AcrossPeerMsg::SplitRegionInit(init_info) => {
+                self.fsm.peer.init_split_region(self.store_ctx, init_info);
+                self.on_start();
+            }
+            AcrossPeerMsg::SplitRegionInitResp(resp) => {
+                self.fsm
+                    .peer
+                    .handle_peer_split_response(self.store_ctx, resp);
+            }
+        }
     }
 }

@@ -2,6 +2,7 @@
 
 use std::{mem, sync::Arc};
 
+use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory};
 use fail::fail_point;
@@ -110,6 +111,10 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     txn_ext: Arc<TxnExt>,
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
 
+    // Recording whether the response of the split peer initialization of each region has been
+    // received
+    split_progress: HashMap<u64, bool>,
+
     pub(crate) logger: Logger,
 }
 
@@ -209,6 +214,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 create_time: TiInstant::now(),
             }),
             last_region_buckets: None,
+            split_progress: HashMap::default(),
             txn_ext: Arc::default(),
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
         };
@@ -246,6 +252,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         reader: &mut ReadDelegate,
         region: metapb::Region,
         reason: RegionChangeReason,
+        tablet_index: u64,
     ) {
         if self.region().get_region_epoch().get_version() < region.get_region_epoch().get_version()
         {
@@ -262,6 +269,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.leader_lease.expire();
         }
         self.storage_mut().set_region(region.clone());
+        self.storage_mut().set_tablet_index(tablet_index);
         let progress = ReadProgress::region(region);
         // Always update read delegate's region to avoid stale region info after a
         // follower becoming a leader.
@@ -625,6 +633,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     pub fn may_skip_split_check(&self) -> bool {
         self.may_skip_split_check
+    }
+
+    pub fn split_progress_mut(&mut self) -> &mut HashMap<u64, bool> {
+        &mut self.split_progress
     }
 
     pub fn set_may_skip_split_check(&mut self, may_skip_split_check: bool) {

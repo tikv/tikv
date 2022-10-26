@@ -68,6 +68,7 @@ where
         region: Region,
         peer: &mut Peer<E, ER>,
         reason: RegionChangeReason,
+        tablet_index: u64,
     ) {
         let prev = self.regions.insert(region.get_id(), region.clone());
         if prev.map_or(true, |r| r.get_id() != region.get_id()) {
@@ -75,7 +76,7 @@ where
             panic!("{:?} region corrupted", peer.logger.list());
         }
         let reader = self.readers.get_mut(&region.get_id()).unwrap();
-        peer.set_region(reader, region, reason);
+        peer.set_region(reader, region, reason, tablet_index);
     }
 }
 

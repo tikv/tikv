@@ -58,7 +58,7 @@ use crate::{
 mod admin;
 mod write;
 
-pub use admin::{AdminCmdResult, SplitResult};
+pub use admin::{AcrossPeerMsg, AdminCmdResult, SplitResult};
 pub use write::{SimpleWriteDecoder, SimpleWriteEncoder};
 
 pub use self::admin::SplitRegionInitInfo;
@@ -268,11 +268,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 AdminCmdResult::SplitRegion(SplitResult {
                     regions,
                     derived,
+                    tablet_index,
                     new_split_regions,
                     auto_compactions,
                 }) => self.on_ready_split_region(
                     store_ctx,
                     derived,
+                    tablet_index,
                     regions,
                     new_split_regions,
                     auto_compactions,
