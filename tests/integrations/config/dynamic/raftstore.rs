@@ -156,8 +156,8 @@ fn test_update_raftstore_config() {
 
     // dispatch updated config
     let change = new_changes(vec![
-        ("raftstore.messages-per-tick", "10KiB"),
-        ("raftstore.messages-size-per-tick", "123456"),
+        ("raftstore.messages-per-tick", "12345"),
+        ("raftstore.messages-size-per-tick", "10KiB"),
         ("raftstore.raft-log-gc-threshold", "54321"),
         ("raftstore.raft-max-size-per-msg", "128MiB"),
         ("raftstore.apply-max-batch-size", "1234"),
