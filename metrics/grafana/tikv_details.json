@@ -17369,7 +17369,7 @@
           "seriesOverrides": [
             {
               "$$hashKey": "object:521",
-              "alias": "/.*pending-task/",
+              "alias": "/pending-task/",
               "transform": "negative-Y",
               "yaxis": 2
             }
@@ -17418,14 +17418,6 @@
               "legendFormat": "pending-task",
               "refId": "D"
             },
-            {
-              "exemplar": true,
-              "expr": "sum(tikv_worker_pending_task_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=~\"$tidb_cluster.*\", instance=~\"$instance\", name=~\"async-read-worker\"})",
-              "hide": false,
-              "interval": "",
-              "legendFormat": "async-read-pending-task",
-              "refId": "E"
-            }
           ],
           "thresholds": [],
           "timeFrom": null,
