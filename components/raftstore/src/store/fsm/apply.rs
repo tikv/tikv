@@ -4070,7 +4070,7 @@ where
                 }
                 _ => {}
             }
-            self.messages_size_per_tick = incoming.messages_size_per_tick;
+            self.messages_size_per_tick = incoming.messages_size_per_tick.0 as usize;
             update_cfg(&incoming.apply_batch_system);
         }
     }
@@ -4220,7 +4220,7 @@ where
                 priority,
             ),
             messages_per_tick: cfg.messages_per_tick,
-            messages_size_per_tick: cfg.messages_size_per_tick,
+            messages_size_per_tick: cfg.messages_size_per_tick.0 as usize,
             cfg_tracker: self.cfg.clone().tracker(self.tag.clone()),
             trace_event: Default::default(),
         }

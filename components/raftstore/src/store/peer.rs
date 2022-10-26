@@ -2964,7 +2964,7 @@ where
         for (i, entry) in committed_entries.into_iter().enumerate() {
             batch_size += entry.get_data().len();
             entry_batch.push(entry);
-            if batch_size >= ctx.cfg.messages_size_per_tick
+            if batch_size >= ctx.cfg.messages_size_per_tick.0 as usize
                 || entry_batch.len() >= ctx.cfg.messages_per_tick
                 || i == length - 1
             {
