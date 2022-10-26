@@ -3,26 +3,20 @@
 use std::{
     cell::{RefCell, RefMut},
     fmt::{self, Debug, Formatter},
-    sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-        mpsc::{self, Receiver, TryRecvError},
-        Arc,
-    },
+    sync::{mpsc::Receiver, Arc},
 };
 
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
 use kvproto::{
     metapb::{self, Region},
-    raft_serverpb::{
-        PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
-    },
+    raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState},
 };
 use raft::{
     eraftpb::{ConfState, Entry, Snapshot},
     GetEntriesContext, RaftState, INVALID_ID,
 };
 use raftstore::store::{util, EntryStorage, ReadTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
-use slog::{error, info, o, warn, Logger};
+use slog::{info, o, Logger};
 use tikv_util::{box_err, store::find_peer, worker::Scheduler};
 
 use crate::{
@@ -358,7 +352,6 @@ impl<EK: KvEngine, ER: RaftEngine> raft::Storage for Storage<EK, ER> {
 #[cfg(test)]
 mod tests {
     use std::{
-        marker::PhantomData,
         sync::mpsc::{sync_channel, SyncSender},
         time::Duration,
     };
@@ -382,10 +375,12 @@ mod tests {
     };
     use slog::o;
     use tempfile::TempDir;
-    use tikv_util::worker::{dummy_scheduler, Runnable, Worker};
+    use tikv_util::worker::{Runnable, Worker};
 
     use super::*;
+    use crate::{fsm::ApplyResReporter, raft::Apply, router::ApplyRes, tablet::CachedTablet};
 
+    #[derive(Clone)]
     pub struct TestRouter {
         ch: SyncSender<Box<Snapshot>>,
     }
@@ -405,6 +400,10 @@ mod tests {
         fn notify_snapshot_generated(&self, _region_id: u64, snapshot: Box<Snapshot>) {
             self.ch.send(snapshot).unwrap();
         }
+    }
+
+    impl ApplyResReporter for TestRouter {
+        fn report(&self, _res: ApplyRes) {}
     }
 
     fn new_region() -> Region {
@@ -471,32 +470,38 @@ mod tests {
         let tablet = factory
             .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
             .unwrap();
-        let (dummy_scheduler, _) = dummy_scheduler::<raftstore::store::ReadTask<KvTestEngine>>();
+        // setup read runner worker and peer storage
+        let mut worker = Worker::new("test-read-worker").lazy_build("test-read-worker");
+        let sched = worker.scheduler();
+        let logger = slog_global::borrow_global().new(o!());
         let mut s = Storage::uninit(
             6,
-            region,
+            region.clone(),
             raft_engine.clone(),
-            dummy_scheduler,
-            &slog_global::borrow_global().new(o!()),
+            sched.clone(),
+            &logger.clone(),
         )
         .unwrap();
+        let (router, rx) = TestRouter::new();
+        worker.start(ReadRunner::new(router.clone(), raft_engine));
+        // setup peer applyer
+        let mut apply = Apply::new(
+            region.get_peers()[0].clone(),
+            RegionLocalState::default(),
+            router,
+            CachedTablet::new(Some(tablet)),
+            sched,
+            logger,
+        );
+
+        // test get snapshot
         let snap = s.snapshot(0, 0);
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);
-        let mut worker = Worker::new("test-read-worker").lazy_build("test-read-worker");
-        let sched = worker.scheduler();
-        let (router, rx) = TestRouter::new();
-        worker.start(ReadRunner::new(router, raft_engine));
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
-        gen_task.generate_and_schedule_snapshot(
-            tablet.clone(),
-            RegionLocalState::default(),
-            0,
-            0,
-            &sched,
-        );
+        apply.handle_snapshot(gen_task);
         let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        s.on_snapshot_generated(res);
+        s.try_switch_snap_state_to_generated(res);
         let snap = match *s.snap_state.borrow() {
             SnapState::Generated(ref snap) => *snap.clone(),
             ref s => panic!("unexpected state: {:?}", s),
@@ -505,12 +510,12 @@ mod tests {
         assert_eq!(snap.get_metadata().get_term(), 0);
         assert!(snap.get_data().is_empty());
 
-        // cancel snapshot
+        // test cancel snapshot
         let snap = s.snapshot(0, 0);
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
-        gen_task.generate_and_schedule_snapshot(tablet, RegionLocalState::default(), 0, 0, &sched);
+        apply.handle_snapshot(gen_task);
         let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         s.cancel_generating_snap(None);
         assert_eq!(*s.snap_state.borrow(), SnapState::Relax);

@@ -3,6 +3,7 @@
 use std::{
     borrow::BorrowMut,
     fmt::{self, Debug},
+    mem,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc, Arc,
@@ -71,28 +72,6 @@ impl GenSnapTask {
     pub fn set_for_balance(&mut self) {
         self.for_balance = true;
     }
-
-    pub fn generate_and_schedule_snapshot<EK: KvEngine>(
-        self,
-        tablet: EK,
-        region_state: RegionLocalState,
-        last_applied_term: u64,
-        last_applied_index: u64,
-        region_sched: &Scheduler<ReadTask<EK>>,
-    ) -> Result<()> {
-        self.index.store(last_applied_index, Ordering::SeqCst);
-        let snapshot = ReadTask::GenTabletSnapshot {
-            region_id: self.region_id,
-            tablet,
-            region_state,
-            last_applied_term,
-            last_applied_index,
-            for_balance: self.for_balance,
-            canceled: self.canceled,
-        };
-        box_try!(region_sched.schedule(snapshot));
-        Ok(())
-    }
 }
 
 impl Debug for GenSnapTask {
@@ -105,9 +84,13 @@ impl Debug for GenSnapTask {
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_snapshot_generated(&mut self, snapshot: Box<Snapshot>) {
-        self.storage_mut().on_snapshot_generated(snapshot);
-        self.raft_group_mut().ping();
-        self.set_has_ready();
+        if self
+            .storage_mut()
+            .try_switch_snap_state_to_generated(snapshot)
+        {
+            self.raft_group_mut().ping();
+            self.set_has_ready();
+        }
     }
 }
 
@@ -122,18 +105,23 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
         // Send generate snapshot task to region worker.
         let (last_applied_index, last_applied_term) = self.apply_progress();
-        if let Err(e) = snap_task.generate_and_schedule_snapshot(
-            self.tablet().clone(),
-            self.region_state().clone(),
-            last_applied_index,
+        snap_task.index.store(last_applied_index, Ordering::SeqCst);
+        let gen_tablet_sanp_task = ReadTask::GenTabletSnapshot {
+            region_id: snap_task.region_id,
+            tablet: self.tablet().clone(),
+            region_state: self.region_state().clone(),
             last_applied_term,
-            self.read_scheduler(),
-        ) {
+            last_applied_index,
+            for_balance: snap_task.for_balance,
+            canceled: snap_task.canceled.clone(),
+        };
+        if let Err(e) = self.read_scheduler().schedule(gen_tablet_sanp_task) {
             error!(
                 self.logger,
                 "schedule snapshot failed";
                 "error" => ?e,
             );
+            snap_task.canceled.store(true, Ordering::SeqCst);
         }
     }
 }
@@ -144,16 +132,19 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
         let mut snap_state = self.snap_state_mut();
         match *snap_state {
-            SnapState::Generating { .. } => {
-                return Err(raft::Error::Store(
-                    raft::StorageError::SnapshotTemporarilyUnavailable,
-                ));
+            SnapState::Generating { ref canceled, .. } => {
+                if canceled.load(Ordering::SeqCst) {
+                    self.cancel_generating_snap(None);
+                } else {
+                    return Err(raft::Error::Store(
+                        raft::StorageError::SnapshotTemporarilyUnavailable,
+                    ));
+                }
             }
             SnapState::Generated(ref s) => {
-                let snap = *s.clone();
-                *snap_state = SnapState::Relax;
+                let SnapState::Generated(snap) = mem::replace(&mut *snap_state, SnapState::Relax) else { unreachable!() };
                 if self.validate_snap(&snap, request_index) {
-                    return Ok(snap);
+                    return Ok(*snap);
                 }
             }
             _ => {}
@@ -161,8 +152,8 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
 
         if SnapState::Relax != *snap_state {
             panic!(
-                "[region {}] unexpected state: {:?}",
-                self.region().get_id(),
+                "{:?} unexpected state: {:?}",
+                self.logger().list(),
                 *snap_state
             );
         }
@@ -233,44 +224,49 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     }
 
     /// Cancel generating snapshot.
-    pub fn cancel_generating_snap(&mut self, compact_to: Option<u64>) {
+    pub fn cancel_generating_snap(&self, compact_to: Option<u64>) {
         let mut snap_state = self.snap_state_mut();
-        if let SnapState::Generating {
-            ref canceled,
-            ref index,
-            ..
-        } = *snap_state
-        {
-            if let Some(idx) = compact_to {
-                let snap_index = index.load(Ordering::SeqCst);
-                if snap_index == 0 || idx <= snap_index + 1 {
-                    return;
-                }
+        let SnapState::Generating {
+           ref canceled,
+           ref index,
+        } = *snap_state else { return };
+
+        if let Some(idx) = compact_to {
+            let snap_index = index.load(Ordering::SeqCst);
+            if snap_index == 0 || idx <= snap_index + 1 {
+                return;
             }
-            canceled.store(true, Ordering::SeqCst);
-            *snap_state = SnapState::Relax;
-            info!(
-                self.logger(),
-                "snapshot is canceled";
-                "compact_to" => compact_to,
-            );
-            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.cancel.inc();
         }
+        canceled.store(true, Ordering::SeqCst);
+        *snap_state = SnapState::Relax;
+        info!(
+            self.logger(),
+            "snapshot is canceled";
+            "compact_to" => compact_to,
+        );
+        STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.cancel.inc();
     }
 
-    pub fn on_snapshot_generated(&mut self, snap: Box<Snapshot>) {
+    /// Try to switch snap state to generated. only `Generating` can switch to
+    /// `Generated`.
+    pub fn try_switch_snap_state_to_generated(&self, snap: Box<Snapshot>) -> bool {
         let mut snap_state = self.snap_state_mut();
-        if let SnapState::Generating {
+        let SnapState::Generating {
             ref canceled,
             ref index,
-            ..
-        } = *snap_state
-        {
-            *snap_state = SnapState::Generated(snap);
-            info!(
-                self.logger(),
-                "snapshot is generated";
-            );
+         } = *snap_state else { return false };
+
+        if snap.get_metadata().get_index() < index.load(Ordering::SeqCst) {
+            drop(snap_state);
+            self.cancel_generating_snap(None);
+            return false;
         }
+
+        *snap_state = SnapState::Generated(snap);
+        info!(
+            self.logger(),
+            "snap state switched to generated";
+        );
+        true
     }
 }
