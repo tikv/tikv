@@ -921,7 +921,7 @@ where
 {
     const INTERVAL_DIVISOR: u32 = 2;
     /// Max tikc limitation of delayed store_heartbeat.
-    const STORE_HEARTBEAT_DELAY_TICK_LIMIT: u32 = 10;
+    const STORE_HEARTBEAT_DELAY_TICK_LIMIT: u64 = 10;
 
     pub fn new(
         cfg: &Config,
