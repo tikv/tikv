@@ -21,6 +21,7 @@ use kvproto::{
 };
 use raft::eraftpb::Entry;
 use raftstore::{
+    store::StoreMsg,
     errors::DiscardReason,
     router::{RaftStoreBlackHole, RaftStoreRouter},
 };
@@ -29,6 +30,8 @@ use tikv::server::{
     RaftClient, StoreAddrResolver, TestRaftStoreRouter,
 };
 use tikv_util::{
+    Either,
+    config::ReadableDuration,
     config::VersionTrack,
     worker::{Builder as WorkerBuilder, LazyWorker},
 };
@@ -60,6 +63,7 @@ where
 {
     let env = Arc::new(Environment::new(2));
     let cfg = Arc::new(VersionTrack::new(Config::default()));
+    cfg.update(|c| c.raft_client_backoff_step = ReadableDuration::millis(10));
     let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let worker = LazyWorker::new("test-raftclient");
     let loads = Arc::new(ThreadLoadPool::with_threshold(1000));
@@ -188,13 +192,13 @@ fn test_raft_client_reconnect() {
     mock_server.shutdown();
     drop(mock_server);
 
-    rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    rx.recv_timeout(Duration::from_millis(50)).unwrap();
 
     for _ in 0..100 {
         raft_client.send(RaftMessage::default()).unwrap();
     }
     raft_client.flush();
-    rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    rx.recv_timeout(Duration::from_millis(50)).unwrap();
 
     // `send` should success after the mock server restarted.
     let service = MockKvForRaft::new(Arc::clone(&msg_count), batch_msg_count, true);
@@ -205,6 +209,56 @@ fn test_raft_client_reconnect() {
     check_msg_count(3000, &msg_count, 100);
 
     drop(mock_server);
+}
+
+
+#[test]
+// Test raft_client reports store unreachable only once until being connected again
+fn test_raft_client_report_unreachable() {
+    test_util::init_log_for_test();
+    let msg_count = Arc::new(AtomicUsize::new(0));
+    let batch_msg_count = Arc::new(AtomicUsize::new(0));
+    let service = MockKvForRaft::new(Arc::clone(&msg_count), Arc::clone(&batch_msg_count), true);
+    let (mut mock_server, port) = create_mock_server(service, 60100, 60200).unwrap();
+
+    let (tx, rx) = mpsc::channel();
+    let (significant_msg_sender, _significant_msg_receiver) = mpsc::channel();
+    let router = TestRaftStoreRouter::new(tx, significant_msg_sender);
+    let mut raft_client = get_raft_client(router, StaticResolver::new(port));
+
+    // server is disconnected
+    mock_server.shutdown();
+    drop(mock_server); 
+
+    raft_client.send(RaftMessage::default()).unwrap();
+    let msg = rx.recv_timeout(Duration::from_millis(50)).unwrap();
+    if let Either::Right(StoreMsg::StoreUnreachable { store_id }) = msg {
+        assert_eq!(store_id, 0);
+    } else {
+        panic!("expect StoreUnreachable");
+    }
+    // no more unreachable message is sent until it's connected again.
+    assert!(rx.recv_timeout(Duration::from_millis(50)).is_err());
+
+    // restart the mock server.
+    let service = MockKvForRaft::new(Arc::clone(&msg_count), batch_msg_count, true);
+    let mut mock_server = create_mock_server_on(service, port);
+
+    (0..50).for_each(|_| raft_client.send(RaftMessage::default()).unwrap());
+    raft_client.flush(); 
+    check_msg_count(500, &msg_count, 50);
+
+    // server is disconnected
+    mock_server.take().unwrap().shutdown();
+
+    let msg = rx.recv_timeout(Duration::from_millis(50)).unwrap();
+    if let Either::Right(StoreMsg::StoreUnreachable { store_id }) = msg {
+        assert_eq!(store_id, 0);
+    } else {
+        panic!("expect StoreUnreachable");
+    }
+    // no more unreachable message is sent until it's connected again.
+    assert!(rx.recv_timeout(Duration::from_millis(50)).is_err());
 }
 
 #[test]
