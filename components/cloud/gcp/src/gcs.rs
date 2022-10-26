@@ -8,7 +8,7 @@ use cloud::{
 };
 use futures_util::{
     future::TryFutureExt,
-    io::{AsyncRead, AsyncReadExt, Cursor},
+    io::{self as async_io, AsyncRead, AsyncReadExt, Cursor},
     stream::{StreamExt, TryStreamExt},
 };
 use http::HeaderValue;
@@ -440,6 +440,14 @@ fn parse_predefined_acl(acl: &str) -> Result<Option<PredefinedAcl>, &str> {
     }))
 }
 
+/// Like AsyncReadExt::read_to_end, but only try to initialize the buffer once.
+/// Check https://github.com/rust-lang/futures-rs/issues/2658 for the reason we cannot
+/// directly use it.
+async fn read_to_end<R: AsyncRead>(r: R, v: &mut Vec<u8>) -> Result<()> {
+    let c = Cursor::new(v);
+    async_io::copy(r, &mut c).await
+}
+
 const STORAGE_NAME: &str = "gcs";
 
 #[async_trait]
@@ -479,7 +487,7 @@ impl BlobStorage for GcsStorage {
         // memory in order to retry.
         let begin = Instant::now_coarse();
         let mut data = Vec::with_capacity(content_length as usize);
-        reader.read_to_end(&mut data).await?;
+        read_to_end(reader, &mut data).await?;
         metrics::CLOUD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["gcp", "read_local"])
             .observe(begin.saturating_elapsed_secs());
