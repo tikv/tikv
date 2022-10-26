@@ -261,7 +261,9 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             self.cancel_generating_snap(None);
             return false;
         }
-
+        // TODO: we should changed `SnapState::Generated` to `SnapState::Relax` when the
+        // snap is consumed or canceled. Like leader changed, the snap generated should
+        // be canceled.
         *snap_state = SnapState::Generated(snap);
         info!(
             self.logger(),
