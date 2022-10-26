@@ -758,10 +758,7 @@ fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
             AdminCmdType::ComputeHash |
             // Merge needs to get the latest apply index.
             AdminCmdType::CommitMerge |
-            AdminCmdType::RollbackMerge |
-            // Flashback needs to get the latest region meta.
-            AdminCmdType::PrepareFlashback |
-            AdminCmdType::FinishFlashback => return true,
+            AdminCmdType::RollbackMerge => return true,
             _ => {}
         }
     }
