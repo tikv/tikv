@@ -2,7 +2,10 @@
 
 use std::collections::HashMap;
 
-use kvproto::{metapb::PeerRole, raft_serverpb};
+use kvproto::{
+    metapb::{self, PeerRole},
+    raft_serverpb,
+};
 use raft::{Progress, ProgressState, StateRole, Status};
 use serde::{Deserialize, Serialize};
 
@@ -175,6 +178,13 @@ pub struct RegionPeer {
     pub id: u64,
     pub store_id: u64,
     pub role: RaftPeerRole,
+}
+
+impl PartialEq<metapb::Peer> for RegionPeer {
+    #[inline]
+    fn eq(&self, other: &metapb::Peer) -> bool {
+        self.id == other.id && self.store_id == other.store_id && self.role == other.role
+    }
 }
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]

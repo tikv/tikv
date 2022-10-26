@@ -5,7 +5,7 @@ use std::{assert_matches::assert_matches, time::Duration};
 use engine_traits::{OpenOptions, Peekable, TabletFactory};
 use futures::executor::block_on;
 use kvproto::{
-    raft_cmdpb::{CmdType, RaftCmdRequest, Request},
+    raft_cmdpb::{CmdType, Request},
     raft_serverpb::RaftMessage,
 };
 use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
@@ -19,12 +19,7 @@ use crate::cluster::Cluster;
 fn test_basic_write() {
     let cluster = Cluster::default();
     let router = cluster.router(0);
-    let mut req = RaftCmdRequest::default();
-    req.mut_header().set_region_id(2);
-    let epoch = req.mut_header().mut_region_epoch();
-    epoch.set_version(INIT_EPOCH_VER);
-    epoch.set_conf_ver(INIT_EPOCH_CONF_VER);
-    req.mut_header().set_peer(new_peer(1, 3));
+    let mut req = router.new_request_for(2);
     let mut put_req = Request::default();
     put_req.set_cmd_type(CmdType::Put);
     put_req.mut_put().set_key(b"key".to_vec());
@@ -119,12 +114,7 @@ fn test_basic_write() {
 fn test_put_delete() {
     let cluster = Cluster::default();
     let router = cluster.router(0);
-    let mut req = RaftCmdRequest::default();
-    req.mut_header().set_region_id(2);
-    let epoch = req.mut_header().mut_region_epoch();
-    epoch.set_version(INIT_EPOCH_VER);
-    epoch.set_conf_ver(INIT_EPOCH_CONF_VER);
-    req.mut_header().set_peer(new_peer(1, 3));
+    let mut req = router.new_request_for(2);
     let mut put_req = Request::default();
     put_req.set_cmd_type(CmdType::Put);
     put_req.mut_put().set_key(b"key".to_vec());

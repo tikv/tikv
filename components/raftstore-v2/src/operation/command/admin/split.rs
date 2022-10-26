@@ -739,6 +739,12 @@ mod test {
         let (reporter, rx) = MockReporter::new();
         let mut apply = Apply::new(
             store_id,
+            region
+                .get_peers()
+                .iter()
+                .find(|p| p.store_id == store_id)
+                .unwrap()
+                .clone(),
             region_state,
             reporter,
             CachedTablet::new(Some(tablet)),

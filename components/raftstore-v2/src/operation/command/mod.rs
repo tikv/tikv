@@ -25,13 +25,14 @@ use kvproto::{
     raft_serverpb::RegionLocalState,
 };
 use protobuf::Message;
-use raft::eraftpb::Entry;
+use raft::eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType};
+use raft_proto::ConfChangeI;
 use raftstore::{
     store::{
         cmd_resp,
         fsm::{
             apply::{
-                ApplyResult, APPLY_WB_SHRINK_SIZE, DEFAULT_APPLY_WB_SIZE,
+                self, ApplyResult, APPLY_WB_SHRINK_SIZE, DEFAULT_APPLY_WB_SIZE,
                 SHRINK_PENDING_CMD_QUEUE_CAP,
             },
             Proposal,
@@ -62,6 +63,20 @@ pub use write::{SimpleWriteDecoder, SimpleWriteEncoder};
 
 pub use self::admin::SplitRegionInitInfo;
 use self::write::SimpleWrite;
+
+fn parse_at<M: Message + Default>(logger: &slog::Logger, buf: &[u8], index: u64, term: u64) -> M {
+    let mut m = M::default();
+    match m.merge_from_bytes(buf) {
+        Ok(()) => m,
+        Err(e) => panic!(
+            "{:?} data is corrupted at [{}] {}: {:?}",
+            logger.list(),
+            term,
+            index,
+            e
+        ),
+    }
+}
 
 #[derive(Debug)]
 pub struct CommittedEntries {
@@ -110,6 +125,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let logger = self.logger.clone();
         let (apply_scheduler, mut apply_fsm) = ApplyFsm::new(
             store_ctx.store_id,
+            self.peer().clone(),
             region_state,
             mailbox,
             tablet,
@@ -261,6 +277,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     new_split_regions,
                     auto_compactions,
                 ),
+                AdminCmdResult::ConfChange(conf_change) => {
+                    self.on_apply_res_conf_change(conf_change)
+                }
             }
         }
     }
@@ -271,7 +290,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         // It must just applied a snapshot.
         if apply_res.applied_index < self.entry_storage().first_index() {
-            // TODO: handle admin side effects like split/merge.
+            // Ignore admin command side effects, otherwise it may split incomplete
+            // region.
             return;
         }
 
@@ -289,8 +309,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if !is_leader {
             entry_storage.compact_entry_cache(apply_res.applied_index + 1);
         }
-
-        self.handle_read_on_apply(ctx, apply_res, progress_to_be_updated);
+        self.handle_read_on_apply(
+            ctx,
+            apply_res.applied_term,
+            apply_res.applied_index,
+            progress_to_be_updated,
+        );
     }
 }
 
@@ -299,6 +323,10 @@ impl<EK: KvEngine, ER: RaftEngine, R: ApplyResReporter> Apply<EK, ER, R> {
     pub async fn apply_committed_entries(&mut self, ce: CommittedEntries) {
         fail::fail_point!("APPLY_COMMITTED_ENTRIES");
         for (e, ch) in ce.entry_and_proposals {
+            if self.tombstone() {
+                apply::notify_req_region_removed(self.region_state().get_region().get_id(), ch);
+                continue;
+            }
             if !e.get_data().is_empty() {
                 let mut set_save_point = false;
                 if let Some(wb) = self.write_batch_mut() {
@@ -329,123 +357,153 @@ impl<EK: KvEngine, ER: RaftEngine, R: ApplyResReporter> Apply<EK, ER, R> {
 
     #[inline]
     async fn apply_entry(&mut self, entry: &Entry) -> Result<RaftCmdResponse> {
-        match SimpleWriteDecoder::new(entry.get_data()) {
-            Ok(decoder) => {
-                util::compare_region_epoch(
-                    decoder.header().get_region_epoch(),
-                    self.region_state().get_region(),
-                    false,
-                    true,
-                    true,
-                )?;
-                let res = Ok(new_response(decoder.header()));
-                for req in decoder {
-                    match req {
-                        SimpleWrite::Put(put) => self.apply_put(put.cf, put.key, put.value)?,
-                        SimpleWrite::Delete(delete) => self.apply_delete(delete.cf, delete.key)?,
-                        SimpleWrite::DeleteRange(dr) => self.apply_delete_range(
-                            dr.cf,
-                            dr.start_key,
-                            dr.end_key,
-                            dr.notify_only,
-                        )?,
-                    }
-                }
-                res
-            }
-            Err(req) => {
-                util::check_region_epoch(&req, self.region_state().get_region(), true)?;
-                if req.has_admin_request() {
-                    // TODO: implement admin request.
-                    let (resp, exec_res) = self.exec_admin_cmd(&req, entry)?;
-                    self.push_admin_result(exec_res);
-                    Ok(resp)
-                } else {
-                    for r in req.get_requests() {
-                        match r.get_cmd_type() {
-                            // These three writes should all use the new codec. Keep them here for
-                            // backward compatibility.
-                            CmdType::Put => {
-                                let put = r.get_put();
-                                self.apply_put(put.get_cf(), put.get_key(), put.get_value())?;
+        let mut conf_change = None;
+        let req = match entry.get_entry_type() {
+            EntryType::EntryNormal => match SimpleWriteDecoder::new(
+                &self.logger,
+                entry.get_data(),
+                entry.get_index(),
+                entry.get_term(),
+            ) {
+                Ok(decoder) => {
+                    util::compare_region_epoch(
+                        decoder.header().get_region_epoch(),
+                        self.region_state().get_region(),
+                        false,
+                        true,
+                        true,
+                    )?;
+                    let res = Ok(new_response(decoder.header()));
+                    for req in decoder {
+                        match req {
+                            SimpleWrite::Put(put) => self.apply_put(put.cf, put.key, put.value)?,
+                            SimpleWrite::Delete(delete) => {
+                                self.apply_delete(delete.cf, delete.key)?
                             }
-                            CmdType::Delete => {
-                                let delete = r.get_delete();
-                                self.apply_delete(delete.get_cf(), delete.get_key())?;
-                            }
-                            CmdType::DeleteRange => {
-                                let dr = r.get_delete_range();
-                                self.apply_delete_range(
-                                    dr.get_cf(),
-                                    dr.get_start_key(),
-                                    dr.get_end_key(),
-                                    dr.get_notify_only(),
-                                )?;
-                            }
-                            _ => unimplemented!(),
+                            SimpleWrite::DeleteRange(dr) => self.apply_delete_range(
+                                dr.cf,
+                                dr.start_key,
+                                dr.end_key,
+                                dr.notify_only,
+                            )?,
                         }
                     }
-                    Ok(new_response(req.get_header()))
+                    return res;
+                }
+                Err(req) => req,
+            },
+            EntryType::EntryConfChange => {
+                let cc: ConfChange = parse_at(
+                    &self.logger,
+                    entry.get_data(),
+                    entry.get_index(),
+                    entry.get_term(),
+                );
+                let req: RaftCmdRequest = parse_at(
+                    &self.logger,
+                    cc.get_context(),
+                    entry.get_index(),
+                    entry.get_term(),
+                );
+                conf_change = Some(cc.into_v2());
+                req
+            }
+            EntryType::EntryConfChangeV2 => {
+                let cc: ConfChangeV2 = parse_at(
+                    &self.logger,
+                    entry.get_data(),
+                    entry.get_index(),
+                    entry.get_term(),
+                );
+                let req: RaftCmdRequest = parse_at(
+                    &self.logger,
+                    cc.get_context(),
+                    entry.get_index(),
+                    entry.get_term(),
+                );
+                conf_change = Some(cc);
+                req
+            }
+        };
+
+        util::check_region_epoch(&req, self.region_state().get_region(), true)?;
+        if req.has_admin_request() {
+            let admin_req = req.get_admin_request();
+            let cmd_type = req.get_admin_request().get_cmd_type();
+            let origin_epoch = self.region_state().get_region().get_region_epoch().clone();
+            let (admin_resp, admin_result) = match cmd_type {
+                AdminCmdType::CompactLog => unimplemented!(),
+                AdminCmdType::Split => unimplemented!(),
+                AdminCmdType::BatchSplit => self.exec_batch_split(admin_req, entry.index)?,
+                AdminCmdType::PrepareMerge => unimplemented!(),
+                AdminCmdType::CommitMerge => unimplemented!(),
+                AdminCmdType::RollbackMerge => unimplemented!(),
+                AdminCmdType::TransferLeader => unreachable!(),
+                AdminCmdType::ChangePeer => {
+                    self.apply_conf_change(entry.get_index(), admin_req, conf_change.unwrap())?
+                }
+                AdminCmdType::ChangePeerV2 => {
+                    self.apply_conf_change_v2(entry.get_index(), admin_req, conf_change.unwrap())?
+                }
+                AdminCmdType::ComputeHash => unimplemented!(),
+                AdminCmdType::VerifyHash => unimplemented!(),
+                AdminCmdType::PrepareFlashback => unimplemented!(),
+                AdminCmdType::FinishFlashback => unimplemented!(),
+                AdminCmdType::InvalidAdmin => {
+                    return Err(box_err!("invalid admin command type"));
+                }
+            };
+
+            // Check if the region epoch changes as expected
+            let epoch_state = admin_cmd_epoch_lookup(cmd_type);
+            let cur_epoch = self.region_state().get_region().get_region_epoch();
+            // The change-epoch behavior **MUST BE** equal to the settings in
+            // `admin_cmd_epoch_lookup`
+            if (epoch_state.change_ver && origin_epoch.get_version() == cur_epoch.get_version())
+                || (epoch_state.change_conf_ver
+                    && origin_epoch.get_conf_ver() == cur_epoch.get_conf_ver())
+            {
+                panic!(
+                    "{:?} apply admin cmd {:?} but epoch change is not expected, epoch state {:?}, before {:?}, after {:?}",
+                    self.logger.list(),
+                    req,
+                    epoch_state,
+                    epoch_state,
+                    cur_epoch,
+                );
+            }
+
+            self.push_admin_result(admin_result);
+            let mut resp = new_response(req.get_header());
+            resp.set_admin_response(admin_resp);
+            Ok(resp)
+        } else {
+            for r in req.get_requests() {
+                match r.get_cmd_type() {
+                    // These three writes should all use the new codec. Keep them here for
+                    // backward compatibility.
+                    CmdType::Put => {
+                        let put = r.get_put();
+                        self.apply_put(put.get_cf(), put.get_key(), put.get_value())?;
+                    }
+                    CmdType::Delete => {
+                        let delete = r.get_delete();
+                        self.apply_delete(delete.get_cf(), delete.get_key())?;
+                    }
+                    CmdType::DeleteRange => {
+                        let dr = r.get_delete_range();
+                        self.apply_delete_range(
+                            dr.get_cf(),
+                            dr.get_start_key(),
+                            dr.get_end_key(),
+                            dr.get_notify_only(),
+                        )?;
+                    }
+                    _ => unimplemented!(),
                 }
             }
+            Ok(new_response(req.get_header()))
         }
-    }
-
-    fn exec_admin_cmd(
-        &mut self,
-        req: &RaftCmdRequest,
-        entry: &Entry,
-    ) -> Result<(RaftCmdResponse, AdminCmdResult)> {
-        let origin_epoch = self.region_state().get_region().get_region_epoch().clone();
-        let request = req.get_admin_request();
-        let cmd_type = request.get_cmd_type();
-        if cmd_type != AdminCmdType::CompactLog && cmd_type != AdminCmdType::CommitMerge {
-            // info!(
-            //     self.logger,
-            //     "execute admin command";
-            //     "region_id" => self.region_state().get_region().id,
-            //     "peer_id" => self.id(),
-            //     "term" => ctx.exec_log_term,
-            //     "index" => ctx.exec_log_index,
-            //     "command" => ?request,
-            // );
-        }
-
-        let (mut response, admin_result) = match cmd_type {
-            AdminCmdType::Split => unimplemented!(),
-            AdminCmdType::BatchSplit => self.exec_batch_split(request, entry.index),
-            _ => unimplemented!(),
-        }?;
-
-        // Check if the region epoch changes as expected
-        let cmd_type = req.get_admin_request().get_cmd_type();
-        let epoch_state = admin_cmd_epoch_lookup(cmd_type);
-        let cur_epoch = self.region_state().get_region().get_region_epoch();
-        // The change-epoch behavior **MUST BE** equal to the settings in
-        // `admin_cmd_epoch_lookup`
-        if (epoch_state.change_ver && origin_epoch.get_version() == cur_epoch.get_version())
-            || (epoch_state.change_conf_ver
-                && origin_epoch.get_conf_ver() == cur_epoch.get_conf_ver())
-        {
-            panic!(
-                "{:?} apply admin cmd {:?} but epoch change is not expected, epoch state {:?}, before {:?}, after {:?}",
-                self.logger.list(),
-                req,
-                epoch_state,
-                epoch_state,
-                cur_epoch,
-            );
-        }
-
-        response.set_cmd_type(cmd_type);
-
-        let mut resp = RaftCmdResponse::default();
-        if !req.get_header().get_uuid().is_empty() {
-            let uuid = req.get_header().get_uuid().to_vec();
-            resp.mut_header().set_uuid(uuid);
-        }
-        resp.set_admin_response(response);
-        Ok((resp, admin_result))
     }
 
     #[inline]

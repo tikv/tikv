@@ -14,7 +14,7 @@ use collections::HashMap;
 use crossbeam::channel::TryRecvError;
 use engine_traits::{KvEngine, RaftEngine, TabletFactory};
 use futures::{Future, StreamExt};
-use kvproto::raft_serverpb::RegionLocalState;
+use kvproto::{metapb, raft_serverpb::RegionLocalState};
 use slog::Logger;
 use tikv_util::mpsc::future::{self, Receiver, Sender, WakePolicy};
 
@@ -59,6 +59,7 @@ pub struct ApplyFsm<EK: KvEngine, ER: RaftEngine, R> {
 impl<EK: KvEngine, ER: RaftEngine, R> ApplyFsm<EK, ER, R> {
     pub fn new(
         store_id: u64,
+        peer: metapb::Peer,
         region_state: RegionLocalState,
         res_reporter: R,
         remote_tablet: CachedTablet<EK>,
@@ -70,6 +71,7 @@ impl<EK: KvEngine, ER: RaftEngine, R> ApplyFsm<EK, ER, R> {
         let (tx, rx) = future::unbounded(WakePolicy::Immediately);
         let apply = Apply::new(
             store_id,
+            peer,
             region_state,
             res_reporter,
             remote_tablet,

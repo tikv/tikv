@@ -262,13 +262,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn handle_raft_ready<T: Transport>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
         let has_ready = self.reset_has_ready();
         if !has_ready || self.destroy_progress().started() {
-            debug!(self.logger, "return 265 ---------"; "has_ready" => has_ready,);
+            #[cfg(feature = "testexport")]
+            self.async_writer.notify_flush();
             return;
         }
         ctx.has_ready = true;
 
         if !self.raft_group().has_ready() && (self.serving() || self.postpond_destroy()) {
-            debug!(self.logger, "return 271 ---------");
+            #[cfg(feature = "testexport")]
+            self.async_writer.notify_flush();
             return;
         }
 
@@ -339,6 +341,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
 
         ctx.raft_metrics.ready.has_ready_region.inc();
+        #[cfg(feature = "testexport")]
+        self.async_writer.notify_flush();
     }
 
     /// Called when an asynchronously write finishes.
@@ -374,6 +378,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // is persisted.
             self.finish_destroy(ctx);
         }
+    }
+
+    #[cfg(feature = "testexport")]
+    pub fn on_wait_flush(&mut self, ch: crate::router::FlushChannel) {
+        self.async_writer.subscirbe_flush(ch);
     }
 }
 

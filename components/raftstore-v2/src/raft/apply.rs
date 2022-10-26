@@ -2,12 +2,13 @@
 
 use std::{
     collections::VecDeque,
+    mem,
     sync::{Arc, Mutex},
 };
 
 use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletFactory, WriteBatch};
-use kvproto::{raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
+use kvproto::{metapb, raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
 use raftstore::store::fsm::apply::DEFAULT_APPLY_WB_SIZE;
 use slog::Logger;
 
@@ -23,6 +24,7 @@ use crate::{
 pub struct Apply<EK: KvEngine, ER: RaftEngine, R> {
     pub(crate) store_id: u64,
 
+    peer: metapb::Peer,
     remote_tablet: CachedTablet<EK>,
     tablet: EK,
     write_batch: Option<EK::WriteBatch>,
@@ -34,12 +36,14 @@ pub struct Apply<EK: KvEngine, ER: RaftEngine, R> {
 
     callbacks: Vec<(Vec<CmdResChannel>, RaftCmdResponse)>,
 
+    /// A flag indicates whether the peer is destroyed by applying admin
+    /// command.
+    tombstone: bool,
     applied_index: u64,
     applied_term: u64,
     admin_cmd_result: VecDeque<AdminCmdResult>,
 
     region_state: RegionLocalState,
-    state_changed: bool,
 
     /// Used for handling race between splitting and creating new peer.
     /// An uninitialized peer can be replaced to the one from splitting iff they
@@ -54,6 +58,7 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
     #[inline]
     pub fn new(
         store_id: u64,
+        peer: metapb::Peer,
         region_state: RegionLocalState,
         res_reporter: R,
         mut remote_tablet: CachedTablet<EK>,
@@ -64,17 +69,18 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
     ) -> Self {
         Apply {
             store_id,
+            peer,
             tablet: remote_tablet.latest().unwrap().clone(),
             remote_tablet,
             write_batch: None,
             log_batch: None,
             new_tablet_index: None,
             callbacks: vec![],
+            tombstone: false,
             applied_index: 0,
             applied_term: 0,
             admin_cmd_result: VecDeque::new(),
             region_state,
-            state_changed: false,
             pending_create_peers,
             raft_engine,
             tablet_factory,
@@ -169,21 +175,6 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
     }
 
     #[inline]
-    pub fn reset_state_changed(&mut self) -> bool {
-        std::mem::take(&mut self.state_changed)
-    }
-
-    #[inline]
-    pub fn push_admin_result(&mut self, admin_result: AdminCmdResult) {
-        self.admin_cmd_result.push_back(admin_result);
-    }
-
-    #[inline]
-    pub fn take_admin_result(&mut self) -> VecDeque<AdminCmdResult> {
-        std::mem::take(&mut self.admin_cmd_result)
-    }
-
-    #[inline]
     pub fn tablet(&mut self) -> Option<EK> {
         self.remote_tablet.latest().cloned()
     }
@@ -206,5 +197,34 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
     #[inline]
     pub fn raft_engine(&self) -> &ER {
         &self.raft_engine
+    }
+
+    pub fn peer(&self) -> &metapb::Peer {
+        &self.peer
+    }
+
+    #[inline]
+    pub fn set_peer(&mut self, peer: metapb::Peer) {
+        self.peer = peer;
+    }
+
+    #[inline]
+    pub fn mark_tombstone(&mut self) {
+        self.tombstone = true;
+    }
+
+    #[inline]
+    pub fn tombstone(&self) -> bool {
+        self.tombstone
+    }
+
+    #[inline]
+    pub fn push_admin_result(&mut self, admin_result: AdminCmdResult) {
+        self.admin_cmd_result.push_back(admin_result);
+    }
+
+    #[inline]
+    pub fn take_admin_result(&mut self) -> VecDeque<AdminCmdResult> {
+        mem::take(&mut self.admin_cmd_result)
     }
 }

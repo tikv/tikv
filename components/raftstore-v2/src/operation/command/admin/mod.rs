@@ -1,5 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod conf_change;
 mod split;
 
 use engine_traits::{KvEngine, RaftEngine};
@@ -22,6 +23,7 @@ use slog::info;
 pub use split::{SplitRegionInitInfo, SplitResult};
 use tikv_util::box_err;
 
+use self::conf_change::ConfChangeResult;
 use crate::{
     batch::StoreContext,
     raft::{Apply, Peer},
@@ -31,6 +33,7 @@ use crate::{
 #[derive(Debug)]
 pub enum AdminCmdResult {
     SplitRegion(SplitResult),
+    ConfChange(ConfChangeResult),
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -51,6 +54,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
 
+        // The admin request is rejected because it may need to update epoch checker
+        // which introduces an uncertainty and may breaks the correctness of epoch
+        // checker.
         if !self.applied_to_current_term() {
             let e = box_err!(
                 "{:?} peer has not applied to current term, applied_term {}, current_term {}",
@@ -66,7 +72,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.propose_pending_command(ctx);
         let cmd_type = req.get_admin_request().get_cmd_type();
         let res = if apply::is_conf_change_cmd(&req) {
-            unimplemented!()
+            self.propose_conf_change(ctx, req)
         } else {
             // propose other admin command.
             self.propose_command(ctx, req)
