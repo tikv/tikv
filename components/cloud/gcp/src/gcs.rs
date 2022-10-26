@@ -526,9 +526,9 @@ impl BlobStorage for GcsStorage {
 #[cfg(test)]
 mod tests {
     extern crate test;
-    use std::{task::Poll};
+    use std::task::Poll;
 
-    use futures_util::{AsyncReadExt};
+    use futures_util::AsyncReadExt;
     use matches::assert_matches;
 
     use super::*;
@@ -653,11 +653,11 @@ mod tests {
                 ThrottleReadState::Spawning => {
                     *this.state = ThrottleReadState::Emitting;
                     cx.waker().wake_by_ref();
-                    this.inner.poll_read(cx, &mut buf[..2])
+                    Poll::Pending
                 }
                 ThrottleReadState::Emitting => {
                     *this.state = ThrottleReadState::Spawning;
-                    Poll::Pending
+                    this.inner.poll_read(cx, &mut buf[..2])
                 }
             }
         }
