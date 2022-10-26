@@ -321,6 +321,13 @@ pub trait RegionChangeObserver: Coprocessor {
     ) -> bool {
         true
     }
+
+    /// Should be called everytime before we want to write apply state when
+    /// applying. Return a bool which indicates whether we can actually do
+    /// this write.
+    fn pre_write_apply_state(&self, _: &mut ObserverContext<'_>) -> bool {
+        true
+    }
 }
 
 #[derive(Clone, Debug, Default)]
