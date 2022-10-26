@@ -31,6 +31,7 @@ define_error_codes!(
     PENDING_PREPARE_MERGE => ("PendingPrepareMerge", "", ""),
     RECOVERY_IN_PROGRESS => ("RecoveryInProgress", "", ""),
     FLASHBACK_IN_PROGRESS => ("FlashbackInProgress", "", ""),
+    FLASHBACK_NOT_PREPARED => ("FlashbackNotPrepared", "", ""),
 
     SNAP_ABORT => ("SnapAbort", "", ""),
     SNAP_TOO_MANY => ("SnapTooMany", "", ""),
@@ -67,6 +68,8 @@ impl ErrorCodeExt for errorpb::Error {
             RECOVERY_IN_PROGRESS
         } else if self.has_flashback_in_progress() {
             FLASHBACK_IN_PROGRESS
+        } else if self.has_flashback_not_prepared() {
+            FLASHBACK_NOT_PREPARED
         } else {
             UNKNOWN
         }

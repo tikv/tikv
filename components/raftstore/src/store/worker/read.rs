@@ -203,6 +203,11 @@ where
 {
     read_id: Option<ThreadReadId>,
     snap_cache: &'a mut SnapCache<E>,
+
+    // Used when read_id is not set, duplicated definition to avoid cache invalidation in case
+    // stale read and local read are mixed in one batch.
+    snapshot: Option<Arc<E::Snapshot>>,
+    snapshot_ts: Option<Timespec>,
 }
 
 impl<'a, E> LocalReadContext<'a, E>
@@ -213,6 +218,8 @@ where
         Self {
             snap_cache,
             read_id,
+            snapshot: None,
+            snapshot_ts: None,
         }
     }
 
@@ -232,25 +239,40 @@ where
             }
 
             self.snap_cache.cached_read_id = self.read_id.clone();
+            self.snap_cache.snapshot = Some(Arc::new(engine.snapshot()));
+
+            // Ensures the snapshot is acquired before getting the time
+            atomic::fence(atomic::Ordering::Release);
+            self.snap_cache.cached_snapshot_ts = monotonic_raw_now();
+        } else {
+            // read_id being None means the snapshot acquired will only be used in this
+            // request
+            self.snapshot = Some(Arc::new(engine.snapshot()));
+
+            // Ensures the snapshot is acquired before getting the time
+            atomic::fence(atomic::Ordering::Release);
+            self.snapshot_ts = Some(monotonic_raw_now());
         }
-
-        self.snap_cache.snapshot = Some(Arc::new(engine.snapshot()));
-
-        // Ensures the snapshot is acquired before getting the time
-        atomic::fence(atomic::Ordering::Release);
-        self.snap_cache.cached_snapshot_ts = monotonic_raw_now();
 
         true
     }
 
-    // Note: must be called after `maybe_update_snapshot`
-    fn snapshot_ts(&self) -> Timespec {
-        self.snap_cache.cached_snapshot_ts
+    fn snapshot_ts(&self) -> Option<Timespec> {
+        if self.read_id.is_some() {
+            Some(self.snap_cache.cached_snapshot_ts)
+        } else {
+            self.snapshot_ts
+        }
     }
 
     // Note: must be called after `maybe_update_snapshot`
     fn snapshot(&self) -> Option<Arc<E::Snapshot>> {
-        self.snap_cache.snapshot.clone()
+        // read_id being some means we go through cache
+        if self.read_id.is_some() {
+            self.snap_cache.snapshot.clone()
+        } else {
+            self.snapshot.clone()
+        }
     }
 }
 
@@ -894,7 +916,7 @@ where
                         snap_updated = local_read_ctx
                             .maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
 
-                        let snapshot_ts = local_read_ctx.snapshot_ts();
+                        let snapshot_ts = local_read_ctx.snapshot_ts().unwrap();
                         if !delegate.is_in_leader_lease(snapshot_ts) {
                             fail_point!("localreader_before_redirect", |_| {});
                             // Forward to raftstore.
@@ -921,8 +943,8 @@ where
                             return;
                         }
 
-                        let mut local_read_ctx =
-                            LocalReadContext::new(&mut self.snap_cache, read_id);
+                        // Stale read does not use cache, so we pass None for read_id
+                        let mut local_read_ctx = LocalReadContext::new(&mut self.snap_cache, None);
                         snap_updated = local_read_ctx
                             .maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
 
@@ -1075,7 +1097,7 @@ mod tests {
 
     use crossbeam::channel::TrySendError;
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
-    use engine_traits::{Peekable, SyncMutable, ALL_CFS};
+    use engine_traits::{MiscExt, Peekable, SyncMutable, ALL_CFS};
     use kvproto::{metapb::RegionEpoch, raft_cmdpb::*};
     use tempfile::{Builder, TempDir};
     use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
@@ -1632,14 +1654,14 @@ mod tests {
         let mut delegate = delegate.unwrap();
         assert_eq!(1, delegate.region.id);
         let tablet = delegate.get_tablet();
-        assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
+        assert_eq!(kv_engine.path(), tablet.path());
 
         let (len, delegate) = store_meta.get_executor_and_len(2);
         assert_eq!(2, len);
         let mut delegate = delegate.unwrap();
         assert_eq!(2, delegate.region.id);
         let tablet = delegate.get_tablet();
-        assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
+        assert_eq!(kv_engine.path(), tablet.path());
     }
 
     fn prepare_read_delegate(
@@ -1785,15 +1807,15 @@ mod tests {
         let mut snap_cache = SnapCache::new();
         let mut read_context = LocalReadContext::new(&mut snap_cache, None);
 
-        // Have not inited the snap cache
         assert!(read_context.snapshot().is_none());
+        assert!(read_context.snapshot_ts().is_none());
 
         db.put(b"a1", b"val1").unwrap();
 
         let compare_ts = monotonic_raw_now();
         // Case 1: snap_cache_context.read_id is None
         assert!(read_context.maybe_update_snapshot(&db, Timespec::new(0, 0)));
-        assert!(read_context.snapshot_ts() > compare_ts);
+        assert!(read_context.snapshot_ts().unwrap() > compare_ts);
         assert_eq!(
             read_context
                 .snapshot()
@@ -1808,7 +1830,7 @@ mod tests {
         // `maybe_update_snapshot` again will update the snapshot
         let compare_ts = monotonic_raw_now();
         assert!(read_context.maybe_update_snapshot(&db, Timespec::new(0, 0)));
-        assert!(read_context.snapshot_ts() > compare_ts);
+        assert!(read_context.snapshot_ts().unwrap() > compare_ts);
 
         let read_id = ThreadReadId::new();
         let read_id_clone = read_id.clone();
@@ -1818,8 +1840,8 @@ mod tests {
         // Case 2: snap_cache_context.read_id is not None but not equals to the
         // snap_cache.cached_read_id
         assert!(read_context.maybe_update_snapshot(&db, Timespec::new(0, 0)));
-        assert!(read_context.snapshot_ts() > compare_ts);
-        let snap_ts = read_context.snapshot_ts();
+        assert!(read_context.snapshot_ts().unwrap() > compare_ts);
+        let snap_ts = read_context.snapshot_ts().unwrap();
         assert_eq!(
             read_context
                 .snapshot()
@@ -1836,7 +1858,7 @@ mod tests {
         // Case 3: snap_cache_context.read_id is not None and equals to the
         // snap_cache.cached_read_id
         assert!(!read_context.maybe_update_snapshot(&db2, Timespec::new(0, 0)));
-        assert_eq!(read_context.snapshot_ts(), snap_ts);
+        assert_eq!(read_context.snapshot_ts().unwrap(), snap_ts);
         assert_eq!(
             read_context
                 .snapshot()
@@ -1851,7 +1873,7 @@ mod tests {
         let mut last_valid_ts = read_id_clone.create_time;
         last_valid_ts = last_valid_ts.add(Duration::nanoseconds(1));
         assert!(read_context.maybe_update_snapshot(&db2, last_valid_ts));
-        assert!(read_context.snapshot_ts() > snap_ts);
+        assert!(read_context.snapshot_ts().unwrap() > snap_ts);
         assert!(
             read_context
                 .snapshot()
@@ -1859,6 +1881,97 @@ mod tests {
                 .get_value(b"a1")
                 .unwrap()
                 .is_none(),
+        );
+    }
+
+    #[test]
+    fn test_snap_release_for_not_using_cache() {
+        let store_id = 2;
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
+        let (_tmp, mut reader, rx) = new_reader("test-local-reader", store_id, store_meta.clone());
+        reader.kv_engine.put(b"key", b"value").unwrap();
+
+        let epoch13 = {
+            let mut ep = metapb::RegionEpoch::default();
+            ep.set_conf_ver(1);
+            ep.set_version(3);
+            ep
+        };
+        let term6 = 6;
+
+        // Register region1
+        let pr_ids1 = vec![2, 3, 4];
+        let prs1 = new_peers(store_id, pr_ids1.clone());
+        prepare_read_delegate(store_id, 1, term6, pr_ids1, epoch13.clone(), store_meta);
+        let leader1 = prs1[0].clone();
+
+        // Local read
+        let mut cmd = RaftCmdRequest::default();
+        let mut header = RaftRequestHeader::default();
+        header.set_region_id(1);
+        header.set_peer(leader1);
+        header.set_region_epoch(epoch13);
+        header.set_term(term6);
+        cmd.set_header(header.clone());
+        let mut req = Request::default();
+        req.set_cmd_type(CmdType::Snap);
+        cmd.set_requests(vec![req].into());
+
+        // using cache and release
+        let read_id = ThreadReadId::new();
+        let task = RaftCommand::<KvTestSnapshot>::new(
+            cmd.clone(),
+            Callback::read(Box::new(move |_: ReadResponse<KvTestSnapshot>| {})),
+        );
+        must_not_redirect_with_read_id(&mut reader, &rx, task, Some(read_id));
+        assert!(
+            reader
+                .kv_engine
+                .get_oldest_snapshot_sequence_number()
+                .is_some()
+        );
+        reader.release_snapshot_cache();
+        assert!(
+            reader
+                .kv_engine
+                .get_oldest_snapshot_sequence_number()
+                .is_none()
+        );
+
+        let task = RaftCommand::<KvTestSnapshot>::new(
+            cmd.clone(),
+            Callback::read(Box::new(move |_: ReadResponse<KvTestSnapshot>| {})),
+        );
+
+        // not use cache
+        must_not_redirect_with_read_id(&mut reader, &rx, task, None);
+        assert!(
+            reader
+                .kv_engine
+                .get_oldest_snapshot_sequence_number()
+                .is_none()
+        );
+
+        // Stale read
+        let mut data = [0u8; 8];
+        (&mut data[..]).encode_u64(0).unwrap();
+        header.set_flags(header.get_flags() | WriteBatchFlags::STALE_READ.bits());
+        header.set_flag_data(data.into());
+
+        cmd.set_header(header);
+        let task = RaftCommand::<KvTestSnapshot>::new(
+            cmd,
+            Callback::read(Box::new(move |_: ReadResponse<KvTestSnapshot>| {})),
+        );
+        let read_id = ThreadReadId::new();
+        must_not_redirect_with_read_id(&mut reader, &rx, task, Some(read_id));
+        // Stale read will not use snap cache
+        assert!(reader.snap_cache.snapshot.is_none());
+        assert!(
+            reader
+                .kv_engine
+                .get_oldest_snapshot_sequence_number()
+                .is_none()
         );
     }
 }
