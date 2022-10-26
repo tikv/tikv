@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
+default = ["testexport", "test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
 failpoints = ["raftstore/failpoints"]
 testexport = ["raftstore/testexport"]
 test-engine-kv-rocksdb = [
@@ -62,8 +62,9 @@ test_util = { workspace = true }
 [[test]]
 name = "raftstore-v2-failpoints"
 path = "tests/failpoints/mod.rs"
-required-features = ["failpoints"]
+required-features = ["failpoints", "testexport"]
 
 [[test]]
 name = "raftstore-v2-integrations"
 path = "tests/integrations/mod.rs"
+required-features = ["testexport"]
