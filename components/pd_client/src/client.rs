@@ -1088,27 +1088,3 @@ impl PdClient for RpcClient {
             .execute()
     }
 }
-
-pub struct DummyPdClient {
-    pub next_ts: TimeStamp,
-}
-
-impl DummyPdClient {
-    pub fn new() -> DummyPdClient {
-        DummyPdClient {
-            next_ts: TimeStamp::zero(),
-        }
-    }
-}
-
-impl Default for DummyPdClient {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl PdClient for DummyPdClient {
-    fn batch_get_tso(&self, _count: u32) -> PdFuture<TimeStamp> {
-        Box::pin(future::ok(self.next_ts))
-    }
-}

@@ -23,7 +23,7 @@ use tikv_util::time::{Instant, UnixSecs};
 use txn_types::TimeStamp;
 
 pub use self::{
-    client::{DummyPdClient, RpcClient},
+    client::RpcClient,
     config::Config,
     errors::{Error, Result},
     feature_gate::{Feature, FeatureGate},
