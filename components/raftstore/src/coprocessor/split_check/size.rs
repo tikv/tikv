@@ -615,7 +615,7 @@ pub mod tests {
         };
         let cop_host = CoprocessorHost::new(tx.clone(), cfg);
         let mut runnable = SplitCheckRunner::new(engine.clone(), tx, cop_host.clone());
-        for i in 0..2000 {
+        for i in 0..1000 {
             // if not mvcc, kv size is (6+1)*2 = 14, given bucket size is 3000, expect each
             // bucket has about 210 keys if mvcc, kv size is about 18*2 = 36, expect each
             // bucket has about 80 keys
@@ -646,7 +646,7 @@ pub mod tests {
         let end = format!("{:04}", 20).into_bytes();
 
         // insert keys into 0000 ~ 0020 with 000000 ~ 002000
-        for i in 0..2000 {
+        for i in 0..1000 {
             // kv size is (6+1)*2 = 14, given bucket size is 3000, expect each bucket has
             // about 210 keys if mvcc, kv size is about 18*2 = 36, expect each bucket has
             // about 80 keys
@@ -667,9 +667,9 @@ pub mod tests {
         assert_eq!(host.policy(), CheckPolicy::Approximate);
 
         if !mvcc {
-            must_generate_buckets_approximate(&rx, Some(BucketRange(start, end)), 150, 450, mvcc);
+            must_generate_buckets_approximate(&rx, Some(BucketRange(start, end)), 75, 225, mvcc);
         } else {
-            must_generate_buckets_approximate(&rx, Some(BucketRange(start, end)), 70, 150, mvcc);
+            must_generate_buckets_approximate(&rx, Some(BucketRange(start, end)), 35, 85, mvcc);
         }
         drop(rx);
     }
@@ -685,16 +685,12 @@ pub mod tests {
 
     #[test]
     fn test_generate_bucket_by_approximate() {
-        for cf in LARGE_CFS {
-            test_generate_bucket_impl(LARGE_CFS, cf, false);
-        }
+        test_generate_bucket_impl(LARGE_CFS, CF_WRITE, false);
     }
 
     #[test]
     fn test_generate_bucket_mvcc_by_approximate() {
-        for cf in LARGE_CFS {
-            test_generate_bucket_impl(LARGE_CFS, cf, true);
-        }
+        test_generate_bucket_impl(LARGE_CFS, CF_DEFAULT, true);
     }
 
     #[test]

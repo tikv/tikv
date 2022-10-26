@@ -11,7 +11,6 @@ use std::{
 };
 
 use api_version::{ApiV1, ApiV2, KvFormat};
-use causal_ts::CausalTsProvider;
 use collections::HashMap;
 use engine_traits::DummyFactory;
 use errors::{extract_key_error, extract_region_error};
@@ -19,8 +18,8 @@ use futures::executor::block_on;
 use grpcio::*;
 use kvproto::{
     kvrpcpb::{
-        self, ApiVersion, AssertionLevel, BatchRollbackRequest, CommandPri, CommitRequest, Context,
-        GetRequest, Op, PrewriteRequest, PrewriteRequestPessimisticAction::*, RawPutRequest,
+        self, AssertionLevel, BatchRollbackRequest, CommandPri, CommitRequest, Context, GetRequest,
+        Op, PrewriteRequest, PrewriteRequestPessimisticAction::*, RawPutRequest,
     },
     tikvpb::TikvClient,
 };
@@ -31,7 +30,7 @@ use tikv::{
         self,
         config_manager::StorageConfigManger,
         kv::{Error as KvError, ErrorInner as KvErrorInner, SnapContext, SnapshotExt},
-        lock_manager::DummyLockManager,
+        lock_manager::MockLockManager,
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         test_util::*,
         txn::{
@@ -55,7 +54,7 @@ fn test_scheduler_leader_change_twice() {
     cluster.must_transfer_leader(region0.get_id(), peers[0].clone());
     let engine0 = cluster.sim.rl().storages[&peers[0].get_id()].clone();
     let storage0 =
-        TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine0, DummyLockManager::new())
+        TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine0, MockLockManager::new())
             .build()
             .unwrap();
 
@@ -249,11 +248,10 @@ fn test_scale_scheduler_pool() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage =
-        TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager::new())
-            .config(cluster.cfg.tikv.storage.clone())
-            .build()
-            .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
+        .config(cluster.cfg.tikv.storage.clone())
+        .build()
+        .unwrap();
 
     let cfg = new_tikv_config(1);
     let kv_engine = storage.get_engine().kv_engine().unwrap();
@@ -347,7 +345,7 @@ fn test_pipelined_pessimistic_lock() {
     let before_pipelined_write_finish_fp = "before_pipelined_write_finish";
 
     {
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .pipelined_pessimistic_lock(false)
             .build()
             .unwrap();
@@ -374,7 +372,7 @@ fn test_pipelined_pessimistic_lock() {
         fail::remove(rockskv_write_modifies_fp);
     }
 
-    let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
+    let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
         .pipelined_pessimistic_lock(true)
         .build()
         .unwrap();
@@ -534,7 +532,7 @@ fn test_async_commit_prewrite_with_stale_max_ts_impl<F: KvFormat>() {
         .clone();
     let storage = TestStorageBuilder::<_, _, F>::from_engine_and_lock_mgr(
         engine.clone(),
-        DummyLockManager::new(),
+        MockLockManager::new(),
     )
     .build()
     .unwrap();
@@ -651,7 +649,7 @@ fn expect_locked(err: tikv::storage::Error, key: &[u8], lock_ts: TimeStamp) {
 }
 
 fn test_async_apply_prewrite_impl<E: Engine, F: KvFormat>(
-    storage: &Storage<E, DummyLockManager, F>,
+    storage: &Storage<E, MockLockManager, F>,
     ctx: Context,
     key: &[u8],
     value: &[u8],
@@ -835,11 +833,10 @@ fn test_async_apply_prewrite() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage =
-        TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager::new())
-            .async_apply_prewrite(true)
-            .build()
-            .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
+        .async_apply_prewrite(true)
+        .build()
+        .unwrap();
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);
@@ -934,11 +931,10 @@ fn test_async_apply_prewrite_fallback() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage =
-        TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager::new())
-            .async_apply_prewrite(true)
-            .build()
-            .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
+        .async_apply_prewrite(true)
+        .build()
+        .unwrap();
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);
@@ -997,7 +993,7 @@ fn test_async_apply_prewrite_fallback() {
 }
 
 fn test_async_apply_prewrite_1pc_impl<E: Engine, F: KvFormat>(
-    storage: &Storage<E, DummyLockManager, F>,
+    storage: &Storage<E, MockLockManager, F>,
     ctx: Context,
     key: &[u8],
     value: &[u8],
@@ -1124,11 +1120,10 @@ fn test_async_apply_prewrite_1pc() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage =
-        TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager::new())
-            .async_apply_prewrite(true)
-            .build()
-            .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
+        .async_apply_prewrite(true)
+        .build()
+        .unwrap();
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);
@@ -1152,10 +1147,9 @@ fn test_atomic_cas_lock_by_latch() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage =
-        TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager::new())
-            .build()
-            .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
+        .build()
+        .unwrap();
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);
@@ -1241,10 +1235,9 @@ fn test_before_async_write_deadline() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage =
-        TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager::new())
-            .build()
-            .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
+        .build()
+        .unwrap();
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);
@@ -1274,10 +1267,9 @@ fn test_before_propose_deadline() {
     cluster.run();
 
     let engine = cluster.sim.read().unwrap().storages[&1].clone();
-    let storage =
-        TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager::new())
-            .build()
-            .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
+        .build()
+        .unwrap();
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);
@@ -1308,10 +1300,9 @@ fn test_resolve_lock_deadline() {
     cluster.run();
 
     let engine = cluster.sim.read().unwrap().storages[&1].clone();
-    let storage =
-        TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager::new())
-            .build()
-            .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
+        .build()
+        .unwrap();
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);
@@ -1494,50 +1485,4 @@ fn test_raw_put_deadline() {
     let put_resp = client.raw_put(&put_req).unwrap();
     assert!(!put_resp.has_region_error(), "{:?}", put_resp);
     must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
-}
-
-#[test]
-fn test_raw_put_key_guard() {
-    let api_version = ApiVersion::V2;
-    let pause_write_fp = "raftkv_async_write";
-    let mut cluster = new_server_cluster_with_api_ver(0, 1, api_version);
-    cluster.run();
-    let region = cluster.get_region(b"");
-    let leader = region.get_peers()[0].clone();
-    let node_id = leader.get_id();
-    let leader_cm = cluster.sim.rl().get_concurrency_manager(node_id);
-    let ts_provider = cluster.sim.rl().get_causal_ts_provider(node_id).unwrap();
-    let ts = block_on(ts_provider.async_get_ts()).unwrap();
-
-    let env = Arc::new(Environment::new(1));
-    let channel =
-        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
-    let client = TikvClient::new(channel);
-
-    let mut ctx = Context::default();
-    ctx.set_region_id(region.get_id());
-    ctx.set_region_epoch(region.get_region_epoch().clone());
-    ctx.set_peer(leader);
-    ctx.set_api_version(api_version);
-    let mut put_req = RawPutRequest::default();
-    put_req.set_context(ctx);
-    put_req.key = b"rk3".to_vec();
-    put_req.value = b"v3".to_vec();
-
-    fail::cfg(pause_write_fp, "pause").unwrap();
-    let handle = thread::spawn(move || {
-        let _ = client.raw_put(&put_req).unwrap();
-    });
-
-    thread::sleep(Duration::from_millis(100));
-    must_get_none(&cluster.get_engine(1), b"rk3");
-    let min_ts = leader_cm.global_min_lock_ts();
-    assert_eq!(min_ts.unwrap(), ts.next());
-
-    fail::remove(pause_write_fp);
-    handle.join().unwrap();
-    thread::sleep(Duration::from_millis(100));
-    must_get_none(&cluster.get_engine(1), b"rk3");
-    let min_ts = leader_cm.global_min_lock_ts();
-    assert!(min_ts.is_none());
 }

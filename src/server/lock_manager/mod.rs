@@ -32,11 +32,13 @@ use self::{
     waiter_manager::{Waiter, WaiterManager},
 };
 use crate::{
-    server::{resolve::StoreAddrResolver, Error, Result},
+    server::{
+        lock_manager::deadlock::RoleChangeNotifier, resolve::StoreAddrResolver, Error, Result,
+    },
     storage::{
         lock_manager::{
-            DiagnosticContext, KeyLockWaitInfo, KeyWakeUpEvent, LockManager as LockManagerTrait,
-            LockWaitToken, UpdateWaitForEvent, WaitTimeout,
+            DiagnosticContext, KeyLockWaitInfo, LockManager as LockManagerTrait, LockWaitToken,
+            UpdateWaitForEvent, WaitTimeout,
         },
         DynamicConfigs as StorageDynamicConfigs, Error as StorageError,
     },
@@ -199,8 +201,7 @@ impl LockManager {
         &self,
         host: &mut CoprocessorHost<impl KvEngine>,
     ) {
-        let role_change_notifier =
-            deadlock::RoleChangeNotifier::new(self.detector_scheduler.clone());
+        let role_change_notifier = RoleChangeNotifier::new(self.detector_scheduler.clone());
         role_change_notifier.register(host);
     }
 
@@ -234,7 +235,7 @@ impl LockManager {
 
 impl LockManagerTrait for LockManager {
     fn allocate_token(&self) -> LockWaitToken {
-        LockWaitToken(Some(self.token_allocator.fetch_add(1, Ordering::SeqCst)))
+        LockWaitToken(Some(self.token_allocator.fetch_add(1, Ordering::Relaxed)))
     }
 
     fn wait_for(
@@ -262,34 +263,31 @@ impl LockManagerTrait for LockManager {
         // but the waiter_mgr haven't processed it, subsequent WakeUp msgs may be lost.
         self.waiter_count.fetch_add(1, Ordering::SeqCst);
 
-        // If it is the first lock the transaction tries to lock, it won't cause
-        // deadlock.
-        if !is_first_lock {
-            self.detector_scheduler
-                .detect(start_ts, wait_info.clone(), diag_ctx.clone()); // TODO: Try to avoid cloning.
-        }
         self.waiter_mgr_scheduler.wait_for(
             token,
             region_id,
             region_epoch,
             term,
             start_ts,
-            wait_info,
+            wait_info.clone(),
             timeout,
             cancel_callback,
-            diag_ctx,
+            diag_ctx.clone(),
         );
+
+        // If it is the first lock the transaction tries to lock, it won't cause
+        // deadlock.
+        if !is_first_lock {
+            self.detector_scheduler
+                .detect(start_ts, wait_info, diag_ctx);
+        }
     }
 
     fn update_wait_for(&self, updated_items: Vec<UpdateWaitForEvent>) {
         self.waiter_mgr_scheduler.update_wait_for(updated_items);
     }
 
-    fn on_keys_wakeup(&self, _wake_up_events: Vec<KeyWakeUpEvent>) {}
-
     fn remove_lock_wait(&self, token: LockWaitToken) {
-        // If `hashes` is some, there may be some waiters waiting for these locks.
-        // Try to wake up them.
         if self.has_waiter() {
             self.waiter_mgr_scheduler.remove_lock_wait(token);
         }

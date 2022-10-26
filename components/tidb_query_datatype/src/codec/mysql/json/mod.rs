@@ -65,6 +65,7 @@ mod modifier;
 mod path_expr;
 mod serde;
 // json functions
+mod json_contains;
 mod json_depth;
 mod json_extract;
 mod json_keys;

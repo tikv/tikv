@@ -500,7 +500,7 @@ where
     /// `finish_for`.
     pub fn commit(&mut self, delegate: &mut ApplyDelegate<EK>) {
         if delegate.last_flush_applied_index < delegate.apply_state.get_applied_index() {
-            delegate.write_apply_state(self.kv_wb_mut());
+            delegate.maybe_write_apply_state(self);
         }
         self.commit_opt(delegate, true);
     }
@@ -621,7 +621,7 @@ where
     ) {
         if self.host.pre_persist(&delegate.region, true, None) {
             if !delegate.pending_remove {
-                delegate.write_apply_state(self.kv_wb_mut());
+                delegate.maybe_write_apply_state(self);
             }
             self.commit_opt(delegate, false);
         } else {
@@ -1101,6 +1101,13 @@ where
         });
     }
 
+    fn maybe_write_apply_state(&self, apply_ctx: &mut ApplyContext<EK>) {
+        let can_write = apply_ctx.host.pre_write_apply_state(&self.region);
+        if can_write {
+            self.write_apply_state(apply_ctx.kv_wb_mut());
+        }
+    }
+
     fn handle_raft_entry_normal(
         &mut self,
         apply_ctx: &mut ApplyContext<EK>,
@@ -1285,6 +1292,9 @@ where
             .applied_batch
             .push(cmd_cb, cmd, &self.observe_info, self.region_id());
         if should_write {
+            // An observer shall prevent a write_apply_state here by not return true
+            // when `post_exec`.
+            self.write_apply_state(apply_ctx.kv_wb_mut());
             apply_ctx.commit(self);
         }
         exec_result
@@ -1346,6 +1356,12 @@ where
                         ),
                         Error::FlashbackInProgress(..) => debug!(
                             "flashback is in process";
+                            "region_id" => self.region_id(),
+                            "peer_id" => self.id(),
+                            "err" => ?e
+                        ),
+                        Error::FlashbackNotPrepared(..) => debug!(
+                            "flashback is not prepared";
                             "region_id" => self.region_id(),
                             "peer_id" => self.id(),
                             "err" => ?e
@@ -1522,7 +1538,7 @@ where
         let include_region =
             req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
         check_region_epoch(req, &self.region, include_region)?;
-        check_flashback_state(req, &self.region)?;
+        check_flashback_state(self.region.get_is_in_flashback(), req, self.region_id())?;
         if req.has_admin_request() {
             self.exec_admin_cmd(ctx, req)
         } else {
@@ -3735,7 +3751,7 @@ where
             if apply_ctx.timer.is_none() {
                 apply_ctx.timer = Some(Instant::now_coarse());
             }
-            self.delegate.write_apply_state(apply_ctx.kv_wb_mut());
+            self.delegate.maybe_write_apply_state(apply_ctx);
             fail_point!(
                 "apply_on_handle_snapshot_1_1",
                 self.delegate.id == 1 && self.delegate.region_id() == 1,

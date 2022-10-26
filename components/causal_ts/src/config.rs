@@ -28,28 +28,29 @@ pub struct Config {
     /// interval. The 50ms limitation can not be broken through now (see
     /// `tso-update-physical-interval`).
     pub renew_batch_max_size: u32,
-    /// The available interval of BatchTsoProvider.
+    /// The size (in duration) of TSO buffer allocated ahead for
+    /// BatchTsoProvider.
     ///
     /// Default is 3s.
-    /// The longer of the value can provide better "high-availability" against
-    /// PD failure, but more overhead of `TsoBatchList` & pressure to TSO
+    /// The longer of the value will help to improve tolerance against PD
+    /// failure, but more overhead of `TsoBatchList` & pressure to TSO
     /// service.
-    pub available_interval: ReadableDuration,
+    pub alloc_ahead_buffer: ReadableDuration,
 }
 
 impl Config {
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
         if self.renew_interval.is_zero() {
-            return Err("causal-ts.renew_interval can't be zero".into());
+            return Err("causal-ts.renew-interval can't be zero".into());
         }
         if self.renew_batch_min_size == 0 {
-            return Err("causal-ts.renew_batch_min_size should be greater than 0".into());
+            return Err("causal-ts.renew-batch-min-size should be greater than 0".into());
         }
         if self.renew_batch_max_size == 0 {
-            return Err("causal-ts.renew_batch_max_size should be greater than 0".into());
+            return Err("causal-ts.renew-batch-max-size should be greater than 0".into());
         }
-        if self.available_interval.is_zero() {
-            return Err("causal-ts.available-interval can't be zero".into());
+        if self.alloc_ahead_buffer.is_zero() {
+            return Err("causal-ts.alloc-ahead-buffer can't be zero".into());
         }
         Ok(())
     }
@@ -63,8 +64,8 @@ impl Default for Config {
             ),
             renew_batch_min_size: crate::tso::DEFAULT_TSO_BATCH_MIN_SIZE,
             renew_batch_max_size: crate::tso::DEFAULT_TSO_BATCH_MAX_SIZE,
-            available_interval: ReadableDuration::millis(
-                crate::tso::DEFAULT_TSO_BATCH_AVAILABLE_INTERVAL_MS,
+            alloc_ahead_buffer: ReadableDuration::millis(
+                crate::tso::DEFAULT_TSO_BATCH_ALLOC_AHEAD_BUFFER_MS,
             ),
         }
     }

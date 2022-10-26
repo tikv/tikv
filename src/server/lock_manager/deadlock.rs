@@ -889,8 +889,7 @@ where
                 }
             }
             DetectType::CleanUpWaitFor => {
-                let wait_info = wait_info.unwrap();
-                detect_table.clean_up_wait_for(txn_ts, wait_info.lock_digest)
+                detect_table.clean_up_wait_for(txn_ts, wait_info.unwrap().lock_digest)
             }
             DetectType::CleanUp => detect_table.clean_up(txn_ts),
         }

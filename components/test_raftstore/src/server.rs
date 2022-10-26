@@ -350,6 +350,8 @@ impl ServerCluster {
             let mut rts_worker = LazyWorker::new("resolved-ts");
             let rts_ob = resolved_ts::Observer::new(rts_worker.scheduler());
             rts_ob.register_to(&mut coprocessor_host);
+            // resolved ts endpoint needs store id.
+            store_meta.lock().unwrap().store_id = Some(node_id);
             // Resolved ts endpoint
             let rts_endpoint = resolved_ts::Endpoint::new(
                 &cfg.resolved_ts,
@@ -374,7 +376,7 @@ impl ServerCluster {
                 block_on(causal_ts::BatchTsoProvider::new_opt(
                     self.pd_client.clone(),
                     cfg.causal_ts.renew_interval.0,
-                    cfg.causal_ts.available_interval.0,
+                    cfg.causal_ts.alloc_ahead_buffer.0,
                     cfg.causal_ts.renew_batch_min_size,
                     cfg.causal_ts.renew_batch_max_size,
                 ))

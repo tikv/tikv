@@ -37,7 +37,7 @@ use engine_rocks::{
     DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{
-    CfOptions as _, CfOptionsExt, DbOptions as _, DbOptionsExt, TabletAccessor,
+    CfOptions as _, CfOptionsExt, DbOptions as _, DbOptionsExt, MiscExt, TabletAccessor,
     TabletErrorCollector, TitanCfOptions as _, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use file_system::IoRateLimiter;
@@ -4104,7 +4104,7 @@ mod tests {
         server::{config::ServerConfigManager, ttl::TtlCheckerTask},
         storage::{
             config_manager::StorageConfigManger,
-            lock_manager::DummyLockManager,
+            lock_manager::MockLockManager,
             txn::flow_controller::{EngineFlowController, FlowController},
             Storage, TestStorageBuilder,
         },
@@ -4494,7 +4494,7 @@ mod tests {
     fn new_engines<F: KvFormat>(
         cfg: TikvConfig,
     ) -> (
-        Storage<RocksDBEngine, DummyLockManager, F>,
+        Storage<RocksDBEngine, MockLockManager, F>,
         ConfigController,
         ReceiverWrapper<TtlCheckerTask>,
         Arc<FlowController>,
@@ -4512,13 +4512,11 @@ mod tests {
             None,
         )
         .unwrap();
-        let storage = TestStorageBuilder::<_, _, F>::from_engine_and_lock_mgr(
-            engine,
-            DummyLockManager::new(),
-        )
-        .config(cfg.storage.clone())
-        .build()
-        .unwrap();
+        let storage =
+            TestStorageBuilder::<_, _, F>::from_engine_and_lock_mgr(engine, MockLockManager::new())
+                .config(cfg.storage.clone())
+                .build()
+                .unwrap();
         let engine = storage.get_engine().get_rocksdb();
         let (_tx, rx) = std::sync::mpsc::channel();
         let flow_controller = Arc::new(FlowController::Singleton(EngineFlowController::new(

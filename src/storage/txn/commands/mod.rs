@@ -440,7 +440,7 @@ impl WriteResultLockInfo {
 }
 
 #[derive(Default)]
-pub struct ReleasedLocks(pub Vec<ReleasedLock>);
+pub struct ReleasedLocks(Vec<ReleasedLock>);
 
 impl ReleasedLocks {
     pub fn new() -> Self {
@@ -455,6 +455,14 @@ impl ReleasedLocks {
 
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear()
+    }
+
+    pub fn into_iter(self) -> impl Iterator<Item = ReleasedLock> {
+        self.0.into_iter()
     }
 }
 
@@ -765,7 +773,7 @@ pub mod test_util {
     use crate::storage::{
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{Error, ErrorInner, Result},
-        DummyLockManager, Engine,
+        Engine, MockLockManager,
     };
 
     // Some utils for tests that may be used in multiple source code files.
@@ -778,7 +786,7 @@ pub mod test_util {
     ) -> Result<PrewriteResult> {
         let snap = engine.snapshot(Default::default())?;
         let context = WriteContext {
-            lock_mgr: &DummyLockManager::new(),
+            lock_mgr: &MockLockManager::new(),
             concurrency_manager: cm,
             extra_op: ExtraOp::Noop,
             statistics,
@@ -916,7 +924,7 @@ pub mod test_util {
         );
 
         let context = WriteContext {
-            lock_mgr: &DummyLockManager::new(),
+            lock_mgr: &MockLockManager::new(),
             concurrency_manager,
             extra_op: ExtraOp::Noop,
             statistics,
@@ -941,7 +949,7 @@ pub mod test_util {
         let concurrency_manager = ConcurrencyManager::new(start_ts.into());
         let cmd = Rollback::new(keys, TimeStamp::from(start_ts), ctx);
         let context = WriteContext {
-            lock_mgr: &DummyLockManager::new(),
+            lock_mgr: &MockLockManager::new(),
             concurrency_manager,
             extra_op: ExtraOp::Noop,
             statistics,

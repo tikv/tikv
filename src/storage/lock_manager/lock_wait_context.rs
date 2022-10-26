@@ -183,7 +183,7 @@ mod tests {
 
     use super::*;
     use crate::storage::{
-        lock_manager::{lock_waiting_queue::LockWaitEntry, DummyLockManager},
+        lock_manager::{lock_waiting_queue::LockWaitEntry, MockLockManager},
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{Error as TxnError, ErrorInner as TxnErrorInner},
         types::PessimisticLockParameters,
@@ -237,7 +237,7 @@ mod tests {
 
         // TODO: Use `ProxyLockMgr` to check the correctness of the `remove_lock_wait`
         // invocation.
-        let lock_wait_queues = LockWaitQueues::new(DummyLockManager::new());
+        let lock_wait_queues = LockWaitQueues::new(MockLockManager::new());
 
         let (_, ctx, rx) = create_test_lock_wait_ctx(&key, &lock_wait_queues);
         // Nothing happens currently.

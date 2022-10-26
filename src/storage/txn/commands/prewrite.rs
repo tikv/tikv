@@ -869,7 +869,7 @@ fn handle_1pc_locks(txn: &mut MvccTxn, commit_ts: TimeStamp) -> ReleasedLocks {
         // records.
         txn.put_write(key.clone(), commit_ts, write.as_ref().to_bytes());
         if delete_pessimistic_lock {
-            released_locks.push(txn.unlock_key(key, true, Some(commit_ts)));
+            released_locks.push(txn.unlock_key(key, true, commit_ts));
         }
     }
 
@@ -921,7 +921,7 @@ mod tests {
             Error, ErrorInner,
         },
         types::TxnStatus,
-        DummyLockManager, Engine, Snapshot, Statistics, TestEngineBuilder,
+        Engine, MockLockManager, Snapshot, Statistics, TestEngineBuilder,
     };
 
     fn inner_test_prewrite_skip_constraint_check(pri_key_number: u8, write_num: usize) {
@@ -1475,12 +1475,15 @@ mod tests {
     }
 
     #[test]
+    // FIXME: Either implement storage::kv traits for all engine types, or avoid using raw engines
+    // in this test.
+    #[cfg(feature = "test-engine-kv-rocksdb")]
     fn test_out_of_sync_max_ts() {
         use engine_test::kv::KvTestEngineIterator;
         use engine_traits::{IterOptions, ReadOptions};
         use kvproto::kvrpcpb::ExtraOp;
 
-        use crate::storage::{kv::Result, CfName, ConcurrencyManager, DummyLockManager, Value};
+        use crate::storage::{kv::Result, CfName, ConcurrencyManager, MockLockManager, Value};
         #[derive(Clone)]
         struct MockSnapshot;
 
@@ -1516,7 +1519,7 @@ mod tests {
         macro_rules! context {
             () => {
                 WriteContext {
-                    lock_mgr: &DummyLockManager::new(),
+                    lock_mgr: &MockLockManager::new(),
                     concurrency_manager: ConcurrencyManager::new(10.into()),
                     extra_op: ExtraOp::Noop,
                     statistics: &mut Statistics::default(),
@@ -1686,7 +1689,7 @@ mod tests {
                 )
             };
             let context = WriteContext {
-                lock_mgr: &DummyLockManager::new(),
+                lock_mgr: &MockLockManager::new(),
                 concurrency_manager: cm.clone(),
                 extra_op: ExtraOp::Noop,
                 statistics: &mut statistics,
@@ -1800,7 +1803,7 @@ mod tests {
             Context::default(),
         );
         let context = WriteContext {
-            lock_mgr: &DummyLockManager::new(),
+            lock_mgr: &MockLockManager::new(),
             concurrency_manager: cm.clone(),
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
@@ -1828,7 +1831,7 @@ mod tests {
             TimeStamp::default(),
         );
         let context = WriteContext {
-            lock_mgr: &DummyLockManager::new(),
+            lock_mgr: &MockLockManager::new(),
             concurrency_manager: cm,
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
@@ -1910,7 +1913,7 @@ mod tests {
             Context::default(),
         );
         let context = WriteContext {
-            lock_mgr: &DummyLockManager::new(),
+            lock_mgr: &MockLockManager::new(),
             concurrency_manager: cm.clone(),
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
@@ -1942,7 +1945,7 @@ mod tests {
             TimeStamp::default(),
         );
         let context = WriteContext {
-            lock_mgr: &DummyLockManager::new(),
+            lock_mgr: &MockLockManager::new(),
             concurrency_manager: cm,
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
@@ -2211,7 +2214,7 @@ mod tests {
             Context::default(),
         );
         let context = WriteContext {
-            lock_mgr: &DummyLockManager::new(),
+            lock_mgr: &MockLockManager::new(),
             concurrency_manager: cm.clone(),
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
@@ -2235,7 +2238,7 @@ mod tests {
             10.into(),
         );
         let context = WriteContext {
-            lock_mgr: &DummyLockManager::new(),
+            lock_mgr: &MockLockManager::new(),
             concurrency_manager: cm,
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
@@ -2441,7 +2444,7 @@ mod tests {
             Context::default(),
         );
         let context = WriteContext {
-            lock_mgr: &DummyLockManager::new(),
+            lock_mgr: &MockLockManager::new(),
             concurrency_manager: ConcurrencyManager::new(20.into()),
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,

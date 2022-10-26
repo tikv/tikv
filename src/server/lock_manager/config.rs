@@ -113,7 +113,7 @@ impl ConfigManager for LockManagerConfigManager {
         {
             info!(
                 "Waiter manager config changed";
-                "wake_up_delay_duration" => p.to_string(),
+                "wake_up_delay_duration" => %p,
             );
             self.wake_up_delay_duration_ms
                 .store(p.as_millis(), Ordering::Relaxed);
