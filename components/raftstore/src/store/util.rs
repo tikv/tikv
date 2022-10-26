@@ -1215,7 +1215,7 @@ impl RegionReadProgress {
         let core = self.core.lock().unwrap();
         (
             core.get_leader_info(),
-            core.get_local_leader_info().leader_store_id.clone(),
+            core.get_local_leader_info().leader_store_id,
         )
     }
 
