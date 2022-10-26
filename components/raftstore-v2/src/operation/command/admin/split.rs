@@ -60,7 +60,6 @@ pub struct SplitResult {
     pub regions: Vec<Region>,
     pub derived: Region,
     pub tablet_index: u64,
-    pub new_split_regions: HashMap<u64, NewSplitPeer>,
     pub auto_compactions: HashMap<&'static str, bool>,
 }
 
@@ -78,8 +77,8 @@ pub struct SplitRegionInitInfo {
 
 #[derive(Debug)]
 pub struct SplitRegionInitResp {
-    pub source_state: RegionLocalState,
-    pub region_id: u64,
+    pub parent_state: RegionLocalState,
+    pub child_region_id: u64,
     pub result: bool,
 }
 
@@ -107,12 +106,12 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
             self.logger,
             "split region";
             "region_id" => region_id,
-            "peer_id" => 0, // FIXME
+            "peer_id" => self.peer().id,
             "region" => ?derived,
             "keys" => %KeysInfoFormatter(split_keys.iter()),
         );
 
-        let (regions, mut new_split_regions) =
+        let (regions, _) =
             init_split_regions(self.store_id, split_reqs, &mut derived, &mut split_keys);
 
         // todo(SpadeA): Here: we use a temporary solution that we disable auto
@@ -136,23 +135,10 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
             if new_region_id == region_id {
                 continue;
             }
-            let new_split_peer = new_split_regions.get(&new_region_id).unwrap();
-            if let Some(ref r) = new_split_peer.result {
-                warn!(
-                    self.logger,
-                    "new region from splitting already exists";
-                    "new_region_id" => new_region.get_id(),
-                    "new_peer_id" => new_split_peer.peer_id,
-                    "reason" => r,
-                    "region_id" => region_id,
-                    "peer_id" => 0, // FIXME
-                );
-                continue;
-            }
 
             let new_tablet_path = self
                 .tablet_factory
-                .tablet_path(new_region_id, RAFT_INIT_LOG_INDEX);
+                .split_tablet_path(new_region_id, RAFT_INIT_LOG_INDEX);
             tablet
                 .create_checkpoint(&new_tablet_path)
                 .unwrap_or_else(|e| {
@@ -165,7 +151,7 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
                 });
         }
 
-        let new_tablet_path = self.tablet_factory.tablet_path(region_id, log_index);
+        let new_tablet_path = self.tablet_factory.split_tablet_path(region_id, log_index);
         // Change the tablet path by using the new tablet suffix
         tablet
             .create_checkpoint(&new_tablet_path)
@@ -182,7 +168,7 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
             .open_tablet(
                 region_id,
                 Some(log_index),
-                OpenOptions::default().set_create(true),
+                OpenOptions::default().set_create(true).set_split_use(true),
             )
             .unwrap();
         self.publish_tablet(tablet);
@@ -205,7 +191,6 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
                 regions,
                 derived,
                 tablet_index: log_index,
-                new_split_regions,
                 auto_compactions,
             }),
         ))
@@ -242,7 +227,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // todo: check if it is inited
         let region_id = region.id;
 
-        let mut campaigned = false;
         if !self.storage().is_initialized() {
             let mut wb = store_ctx.engine.log_batch(5);
             write_initial_states(&mut wb, region.clone()).unwrap_or_else(|e| {
@@ -259,6 +243,23 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     "{:?} fails to consume the write: {:?}",
                     self.logger.list(),
                     e,
+                )
+            });
+
+            let split_tablet_path = store_ctx
+                .tablet_factory
+                .split_tablet_path(region_id, RAFT_INIT_LOG_INDEX);
+            println!("{:?}", split_tablet_path);
+            let tablet_path = store_ctx
+                .tablet_factory
+                .tablet_path(region_id, RAFT_INIT_LOG_INDEX);
+            std::fs::rename(&split_tablet_path, &tablet_path).unwrap_or_else(|e| {
+                panic!(
+                    "{:?} fails to rename from tablet path {:?} to normal path {:?} :{:?}",
+                    self.logger.list(),
+                    split_tablet_path,
+                    tablet_path,
+                    e
                 )
             });
 
@@ -279,9 +280,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let mut raft_group = RawNode::new(&raft_cfg, storage, &self.logger).unwrap();
             // If this region has only one peer and I am the one, campaign directly.
             if region.get_peers().len() == 1 {
-                campaigned = true;
                 raft_group.campaign().unwrap();
-                // peer.set_has_ready();
+                self.set_has_ready();
             }
             // FIXME: unwrap
             self.set_raft_group(raft_group);
@@ -318,7 +318,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             + 1;
         self.set_last_compacted_idx(last_compacted_idx);
 
-        campaigned = campaigned || self.maybe_campaign(parent_is_leader);
+        let campaigned = self.maybe_campaign(parent_is_leader);
         if campaigned {
             self.set_has_ready();
         }
@@ -392,8 +392,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             source_state.get_region().id,
             PeerMsg::AcrossPeerMsg(AcrossPeerMsg::SplitRegionInitResp(Box::new(
                 SplitRegionInitResp {
-                    source_state,
-                    region_id,
+                    parent_state: source_state,
+                    child_region_id: region_id,
                     result: true,
                 },
             ))),
@@ -406,15 +406,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         resp: Box<SplitRegionInitResp>,
     ) {
         let SplitRegionInitResp {
-            source_state,
-            region_id,
+            parent_state,
+            child_region_id,
             result,
         } = Box::into_inner(resp);
 
-        assert_eq!(source_state, *self.storage().region_state());
+        assert_eq!(parent_state, *self.storage().region_state());
 
         let mut split_progress = self.split_progress_mut();
-        *split_progress.get_mut(&region_id).unwrap() = true;
+        *split_progress.get_mut(&child_region_id).unwrap() = true;
 
         if split_progress.values().all(|v| *v) {
             // Split can be finished
@@ -430,6 +430,22 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     )
                 });
             store_ctx.engine.consume(&mut wb, true).unwrap();
+
+            let split_tablet_path = store_ctx
+                .tablet_factory
+                .split_tablet_path(self.region_id(), self.storage().region_state().tablet_index);
+            let tablet_path = store_ctx
+                .tablet_factory
+                .tablet_path(self.region_id(), self.storage().region_state().tablet_index);
+            std::fs::rename(&split_tablet_path, &tablet_path).unwrap_or_else(|e| {
+                panic!(
+                    "{:?} fails to rename from tablet path {:?} to normal path {:?} :{:?}",
+                    self.logger.list(),
+                    split_tablet_path,
+                    tablet_path,
+                    e
+                )
+            });
         }
     }
 
@@ -439,7 +455,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         derived: Region,
         tablet_index: u64,
         regions: Vec<Region>,
-        new_split_regions: HashMap<u64, apply::NewSplitPeer>,
         auto_compactions: HashMap<&'static str, bool>,
     ) {
         let region_id = derived.get_id();

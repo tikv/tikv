@@ -269,14 +269,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     regions,
                     derived,
                     tablet_index,
-                    new_split_regions,
                     auto_compactions,
                 }) => self.on_ready_split_region(
                     store_ctx,
                     derived,
                     tablet_index,
                     regions,
-                    new_split_regions,
                     auto_compactions,
                 ),
                 AdminCmdResult::ConfChange(conf_change) => {

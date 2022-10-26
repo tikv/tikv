@@ -81,7 +81,11 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
                 }
                 return Ok(tablet.clone());
             } else if !options.cache_only() {
-                let tablet_path = self.tablet_path(id, suffix);
+                let tablet_path = if !options.split_use() {
+                    self.tablet_path(id, suffix)
+                } else {
+                    self.split_tablet_path(id, suffix)
+                };
                 let tablet = self.open_tablet_raw(&tablet_path, id, suffix, options.clone())?;
                 if !options.skip_cache() {
                     debug!("Insert a tablet"; "key" => ?(id, suffix));
@@ -158,6 +162,13 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
         self.inner
             .store_path()
             .join(format!("tablets/{}_{}", id, suffix))
+    }
+
+    #[inline]
+    fn split_tablet_path(&self, id: u64, suffix: u64) -> PathBuf {
+        self.inner
+            .store_path()
+            .join(format!("tablets/split_{}_{}", id, suffix))
     }
 
     #[inline]
