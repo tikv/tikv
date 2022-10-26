@@ -838,7 +838,7 @@ impl SlowScore {
     }
 
     fn should_force_report_slow_store(&self) -> bool {
-        self.value >= OrderedFloat(100.0) && self.last_tick_id % self.round_ticks == 0
+        self.value >= OrderedFloat(100.0) && (self.last_tick_id % self.round_ticks == 0)
     }
 }
 
@@ -920,6 +920,8 @@ where
     T: PdClient + 'static,
 {
     const INTERVAL_DIVISOR: u32 = 2;
+    /// Max tikc limitation of delayed store_heartbeat.
+    const STORE_HEARTBEAT_DELAY_TICK_LIMIT: u32 = 10;
 
     pub fn new(
         cfg: &Config,
@@ -1832,7 +1834,11 @@ where
     fn is_store_heartbeat_delayed(&self) -> bool {
         let now = UnixSecs::now();
         let interval_second = now.into_inner() - self.store_stat.last_report_ts.into_inner();
-        interval_second >= self.store_heartbeat_interval.as_secs()
+        // To avoid reporting too many fake heartbeats to PD, we should also
+        // check whether it reach the report limitation or not.
+        (interval_second >= self.store_heartbeat_interval.as_secs())
+            && (interval_second
+                <= self.store_heartbeat_interval.as_secs() * Self::STORE_HEARTBEAT_DELAY_TICK_LIMIT)
     }
 
     /// Force to send a special heartbeat to pd when current store is hung on
@@ -2156,7 +2162,8 @@ where
         if !self.slow_score.last_tick_finished {
             self.slow_score.record_timeout();
             // If the last slow_score already reached abnormal state and was delayed for
-            // reporting by `store-heartbeat` to PD, we should report it here manually.
+            // reporting by `store-heartbeat` to PD, we should report it here manually as
+            // a FAKE `store-heartbeat`.
             if self.slow_score.should_force_report_slow_store() && self.is_store_heartbeat_delayed()
             {
                 self.force_report_store_heartbeat();
