@@ -2160,8 +2160,8 @@ where
                     *is_ready = true;
                 }
                 RAFT_EVENT_DURATION
-                        .get(RaftEventDurationType::destroy_peer)
-                        .observe(duration_to_sec(timer.saturating_elapsed()) as f64);
+                    .get(RaftEventDurationType::destroy_peer)
+                    .observe(duration_to_sec(timer.saturating_elapsed()) as f64);
             }
         }
         if self.fsm.peer.unsafe_recovery_state.is_some() {

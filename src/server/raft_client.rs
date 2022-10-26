@@ -410,7 +410,8 @@ fn grpc_error_is_unimplemented(e: &grpcio::Error) -> bool {
 
 fn grpc_error_is_connect_err(e: &grpcio::Error) -> bool {
     if let grpcio::Error::RpcFailure(ref status) = e {
-        status.code() == RpcStatusCode::UNAVAILABLE && status.message() == "failed to connect to all addresses"
+        status.code() == RpcStatusCode::UNAVAILABLE
+            && status.message() == "failed to connect to all addresses"
     } else {
         false
     }
@@ -578,13 +579,17 @@ where
         error!("connection aborted"; "store_id" => self.store_id, "sink_error" => ?sink_err, "receiver_err" => ?recv_err, "addr" => %self.sender.addr);
         if let Some(tx) = self.lifetime.take() {
             let errs = [sink_err, recv_err];
-            let should_fallback = errs.iter().any(|e| e.as_ref().map_or(false, grpc_error_is_unimplemented));
-            
+            let should_fallback = errs
+                .iter()
+                .any(|e| e.as_ref().map_or(false, grpc_error_is_unimplemented));
+
             let res = if should_fallback {
                 // Asks backend to fallback.
                 RaftCallRes::UnImplemented
             } else {
-                let ever_connected = !errs.iter().any(|e| e.as_ref().map_or(false, grpc_error_is_connect_err));
+                let ever_connected = !errs
+                    .iter()
+                    .any(|e| e.as_ref().map_or(false, grpc_error_is_connect_err));
 
                 RaftCallRes::Disconnected(ever_connected)
             };
@@ -850,8 +855,8 @@ async fn start<S, R, E>(
                         .with_label_values(&["unreachable", &back_end.store_id.to_string()])
                         .inc_by(1);
                 }
-                
-                if retry_times == 1 || ever_connected { 
+
+                if retry_times == 1 || ever_connected {
                     back_end
                         .builder
                         .router

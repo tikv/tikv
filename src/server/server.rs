@@ -371,7 +371,8 @@ pub mod test_router {
         fn send(
             &self,
             cmd: RaftCommand<RocksSnapshot>,
-        ) -> std::result::Result<(), crossbeam::channel::TrySendError<RaftCommand<RocksSnapshot>>> {
+        ) -> std::result::Result<(), crossbeam::channel::TrySendError<RaftCommand<RocksSnapshot>>>
+        {
             let _ = self.tx.send(Either::Left(PeerMsg::RaftCommand(cmd)));
             Ok(())
         }
@@ -397,8 +398,12 @@ pub mod test_router {
 
     impl RaftStoreRouter<RocksEngine> for TestRaftStoreRouter {
         fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
-            let _ = self.tx.send(Either::Left(PeerMsg::RaftMessage(InspectedRaftMessage{
-                heap_size:0, msg})));
+            let _ = self
+                .tx
+                .send(Either::Left(PeerMsg::RaftMessage(InspectedRaftMessage {
+                    heap_size: 0,
+                    msg,
+                })));
             Ok(())
         }
 

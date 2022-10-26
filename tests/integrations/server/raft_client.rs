@@ -21,19 +21,18 @@ use kvproto::{
 };
 use raft::eraftpb::Entry;
 use raftstore::{
-    store::StoreMsg,
     errors::DiscardReason,
     router::{RaftStoreBlackHole, RaftStoreRouter},
+    store::StoreMsg,
 };
 use tikv::server::{
     self, load_statistics::ThreadLoadPool, resolve, resolve::Callback, Config, ConnectionBuilder,
     RaftClient, StoreAddrResolver, TestRaftStoreRouter,
 };
 use tikv_util::{
-    Either,
-    config::ReadableDuration,
-    config::VersionTrack,
+    config::{ReadableDuration, VersionTrack},
     worker::{Builder as WorkerBuilder, LazyWorker},
+    Either,
 };
 
 use super::*;
@@ -211,7 +210,6 @@ fn test_raft_client_reconnect() {
     drop(mock_server);
 }
 
-
 #[test]
 // Test raft_client reports store unreachable only once until being connected again
 fn test_raft_client_report_unreachable() {
@@ -228,7 +226,7 @@ fn test_raft_client_report_unreachable() {
 
     // server is disconnected
     mock_server.shutdown();
-    drop(mock_server); 
+    drop(mock_server);
 
     raft_client.send(RaftMessage::default()).unwrap();
     let msg = rx.recv_timeout(Duration::from_millis(50)).unwrap();
@@ -245,7 +243,7 @@ fn test_raft_client_report_unreachable() {
     let mut mock_server = create_mock_server_on(service, port);
 
     (0..50).for_each(|_| raft_client.send(RaftMessage::default()).unwrap());
-    raft_client.flush(); 
+    raft_client.flush();
     check_msg_count(500, &msg_count, 50);
 
     // server is disconnected
