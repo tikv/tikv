@@ -55,6 +55,10 @@ pub struct ServerConfig {
     pub engine_addr: String,
     pub engine_store_version: String,
     pub engine_store_git_hash: String,
+    pub addr: String,
+    pub status_addr: String,
+    pub advertise_status_addr: String,
+    pub advertise_addr: String,
 }
 
 impl Default for ServerConfig {
@@ -63,6 +67,10 @@ impl Default for ServerConfig {
             engine_addr: DEFAULT_ENGINE_ADDR.to_string(),
             engine_store_version: String::default(),
             engine_store_git_hash: String::default(),
+            addr: TIFLASH_DEFAULT_LISTENING_ADDR.to_string(),
+            status_addr: TIFLASH_DEFAULT_STATUS_ADDR.to_string(),
+            advertise_status_addr: TIFLASH_DEFAULT_STATUS_ADDR.to_string(),
+            advertise_addr: TIFLASH_DEFAULT_ADVERTISE_LISTENING_ADDR.to_string(),
         }
     }
 }
@@ -83,26 +91,6 @@ impl Default for StorageConfig {
             reserve_space: ReadableSize::gb(1), // No longer use DEFAULT_RESERVED_SPACE_GB
         }
     }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
-pub struct ProxyConfig {
-    #[online_config(submodule)]
-    pub server: ServerConfig,
-
-    #[online_config(submodule)]
-    #[serde(rename = "raftstore")]
-    pub raft_store: RaftstoreConfig,
-
-    #[online_config(submodule)]
-    pub rocksdb: RocksDbConfig,
-    #[online_config(submodule)]
-    pub raftdb: RaftDbConfig,
-
-    #[online_config(submodule)]
-    pub storage: StorageConfig,
 }
 
 pub const DEFAULT_ENGINE_ADDR: &str = if cfg!(feature = "failpoints") {
@@ -200,6 +188,31 @@ impl Default for RocksDbConfig {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct ProxyConfig {
+    #[online_config(submodule)]
+    pub server: ServerConfig,
+
+    #[online_config(submodule)]
+    #[serde(rename = "raftstore")]
+    pub raft_store: RaftstoreConfig,
+
+    #[online_config(submodule)]
+    pub rocksdb: RocksDbConfig,
+    #[online_config(submodule)]
+    pub raftdb: RaftDbConfig,
+
+    #[online_config(submodule)]
+    pub storage: StorageConfig,
+
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(skip)]
+    pub enable_io_snoop: bool,
+}
+
 impl Default for ProxyConfig {
     fn default() -> Self {
         ProxyConfig {
@@ -208,6 +221,7 @@ impl Default for ProxyConfig {
             rocksdb: RocksDbConfig::default(),
             raftdb: RaftDbConfig::default(),
             storage: StorageConfig::default(),
+            enable_io_snoop: false,
         }
     }
 }
@@ -261,6 +275,8 @@ pub fn ensure_no_common_unrecognized_keys(
 // Not the same as TiKV
 pub const TIFLASH_DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20170";
 pub const TIFLASH_DEFAULT_STATUS_ADDR: &str = "127.0.0.1:20292";
+// Same as TiKV
+pub const TIFLASH_DEFAULT_ADVERTISE_LISTENING_ADDR: &str = "";
 
 pub fn make_tikv_config() -> TikvConfig {
     let mut default = TikvConfig::default();
@@ -269,8 +285,9 @@ pub fn make_tikv_config() -> TikvConfig {
 }
 
 pub fn setup_default_tikv_config(default: &mut TikvConfig) {
-    // Compat test.
+    // Compat CI test. If there is no config file given, we will use this default.
     default.server.addr = TIFLASH_DEFAULT_LISTENING_ADDR.to_string();
+    default.server.advertise_addr = TIFLASH_DEFAULT_ADVERTISE_LISTENING_ADDR.to_string();
     default.server.status_addr = TIFLASH_DEFAULT_STATUS_ADDR.to_string();
     default.server.advertise_status_addr = TIFLASH_DEFAULT_STATUS_ADDR.to_string();
     // Do not add here, try use `address_proxy_config`.
@@ -303,6 +320,12 @@ pub fn address_proxy_config(config: &mut TikvConfig, proxy_config: &ProxyConfig)
     config.rocksdb.lockcf.block_cache_size = proxy_config.rocksdb.lockcf.block_cache_size;
 
     config.storage.reserve_space = proxy_config.storage.reserve_space;
+
+    config.enable_io_snoop = proxy_config.enable_io_snoop;
+    config.server.addr = proxy_config.server.addr.clone();
+    config.server.advertise_addr = proxy_config.server.advertise_addr.clone();
+    config.server.status_addr = proxy_config.server.status_addr.clone();
+    config.server.advertise_status_addr = proxy_config.server.advertise_status_addr.clone();
 }
 
 pub fn validate_and_persist_config(config: &mut TikvConfig, persist: bool) {

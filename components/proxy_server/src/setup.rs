@@ -43,20 +43,27 @@ pub fn overwrite_config_with_cmd_args(
         config.log_file = "".to_owned();
     }
 
+    // See https://github.com/pingcap/tidb-engine-ext/blob/raftstore-proxy-5.4/components/server/src/setup.rs
+    // For addr/advertise-addr/status-addr/advertise-status-addr, we firstly use
+    // what TiFlash gives us.
     if let Some(addr) = matches.value_of("addr") {
         config.server.addr = addr.to_owned();
+        proxy_config.server.addr = addr.to_owned();
     }
 
     if let Some(advertise_addr) = matches.value_of("advertise-addr") {
         config.server.advertise_addr = advertise_addr.to_owned();
+        proxy_config.server.advertise_addr = advertise_addr.to_owned();
     }
 
     if let Some(status_addr) = matches.value_of("status-addr") {
         config.server.status_addr = status_addr.to_owned();
+        proxy_config.server.status_addr = status_addr.to_owned();
     }
 
     if let Some(advertise_status_addr) = matches.value_of("advertise-status-addr") {
         config.server.advertise_status_addr = advertise_status_addr.to_owned();
+        proxy_config.server.advertise_status_addr = advertise_status_addr.to_owned();
     }
 
     if let Some(engine_store_version) = matches.value_of("engine-version") {
@@ -67,6 +74,13 @@ pub fn overwrite_config_with_cmd_args(
         proxy_config.server.engine_store_git_hash = engine_store_git_hash.to_owned();
     }
 
+    // The special case is engine-addr:
+    // 1. If we have set our own engine-addr, we just ignore what TiFlash gives us.
+    // 2. However, if we have not set our own value, we use what TiFlash gives us.
+    // Which is:     a. If `flash.proxy.server.engine-addr` is not set by
+    // TiFlash,        it will use `flash.service_addr` as `engine-addr` here.
+    //     b. Otherwise, TiFlash will use `flash.proxy.server.engine-addr` as
+    // `advertise-engine-addr`.
     if proxy_config.server.engine_addr.is_empty() {
         if let Some(engine_addr) = matches.value_of("engine-addr") {
             proxy_config.server.engine_addr = engine_addr.to_owned();

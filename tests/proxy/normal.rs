@@ -367,9 +367,12 @@ mod config {
 
         let total_mem = SysQuota::memory_limit_in_bytes();
         assert_eq!(config.rocksdb.max_open_files, 56);
-        assert_eq!(config.server.addr, DEFAULT_LISTENING_ADDR);
-        assert_eq!(config.server.status_addr, "");
-        assert_eq!(config.server.advertise_status_addr, "");
+        assert_eq!(config.server.addr, TIFLASH_DEFAULT_LISTENING_ADDR);
+        assert_eq!(config.server.status_addr, TIFLASH_DEFAULT_STATUS_ADDR);
+        assert_eq!(
+            config.server.advertise_status_addr,
+            TIFLASH_DEFAULT_STATUS_ADDR
+        );
         assert_eq!(
             config.raft_store.region_worker_tick_interval.as_millis(),
             500

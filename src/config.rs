@@ -106,10 +106,10 @@ const MAX_BLOCK_SIZE: usize = 32 * MIB as usize;
 
 fn memory_limit_for_cf(is_raft_db: bool, cf: &str, total_mem: u64) -> ReadableSize {
     let (ratio, min, max) = match (is_raft_db, cf) {
-        (true, CF_DEFAULT) => (0.02, 256 * MIB as usize, usize::MAX),
-        (false, CF_DEFAULT) => (0.25, 0, 128 * MIB as usize),
-        (false, CF_LOCK) => (0.02, 0, 128 * MIB as usize),
-        (false, CF_WRITE) => (0.15, 0, 128 * MIB as usize),
+        (true, CF_DEFAULT) => (0.02, RAFT_MIN_MEM, RAFT_MAX_MEM),
+        (false, CF_DEFAULT) => (0.25, 0, usize::MAX),
+        (false, CF_LOCK) => (0.02, LOCKCF_MIN_MEM, LOCKCF_MAX_MEM),
+        (false, CF_WRITE) => (0.15, 0, usize::MAX),
         _ => unreachable!(),
     };
     let mut size = (total_mem as f64 * ratio) as usize;
@@ -2988,7 +2988,7 @@ impl Default for TikvConfig {
             slow_log_file: "".to_owned(),
             slow_log_threshold: ReadableDuration::secs(1),
             panic_when_unexpected_key_or_data: false,
-            enable_io_snoop: false,
+            enable_io_snoop: true,
             abort_on_panic: false,
             memory_usage_limit: None,
             memory_usage_high_water: 0.9,

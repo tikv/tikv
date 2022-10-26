@@ -956,8 +956,6 @@ where
     /// impact on other normal commands.
     priority: Priority,
 
-    pending_clean_ssts: Vec<SstMetaInfo>,
-
     /// To fetch Raft entries for applying if necessary.
     #[derivative(Debug = "ignore")]
     raft_engine: Box<dyn RaftEngineReadOnly>,
@@ -996,7 +994,6 @@ where
             // use a default `CmdObserveInfo` because observing is disable by default
             observe_info: CmdObserveInfo::default(),
             priority: Priority::Normal,
-            pending_clean_ssts: vec![],
             raft_engine: reg.raft_engine,
             trace: ApplyMemoryTrace::default(),
             buckets: None,
@@ -2612,11 +2609,8 @@ where
         fail_point!("apply_after_prepare_merge");
         PEER_ADMIN_CMD_COUNTER.prepare_merge.success.inc();
 
-        let mut response = AdminResponse::default();
-        response.mut_split().set_left(region.clone());
-
         Ok((
-            response,
+            AdminResponse::default(),
             ApplyResult::Res(ExecResult::PrepareMerge {
                 region,
                 state: merging_state,
@@ -2764,11 +2758,9 @@ where
 
         PEER_ADMIN_CMD_COUNTER.commit_merge.success.inc();
 
-        let mut response = AdminResponse::default();
-        response.mut_split().set_left(region.clone());
-
+        let resp = AdminResponse::default();
         Ok((
-            response,
+            resp,
             ApplyResult::Res(ExecResult::CommitMerge {
                 index: ctx.exec_log_index,
                 region,
@@ -2810,11 +2802,10 @@ where
         });
 
         PEER_ADMIN_CMD_COUNTER.rollback_merge.success.inc();
-        let mut response = AdminResponse::new();
-        response.mut_split().set_left(region.clone());
+        let resp = AdminResponse::default();
 
         Ok((
-            response,
+            resp,
             ApplyResult::Res(ExecResult::RollbackMerge {
                 region,
                 commit: rollback.get_commit(),
@@ -3925,9 +3916,7 @@ where
                 Msg::Destroy(d) => self.handle_destroy(apply_ctx, d),
                 Msg::LogsUpToDate(cul) => self.logs_up_to_date_for_merge(apply_ctx, cul),
                 Msg::Noop => {}
-                Msg::Snapshot(snap_task) => {
-                    return self.handle_snapshot(apply_ctx, snap_task);
-                }
+                Msg::Snapshot(snap_task) => self.handle_snapshot(apply_ctx, snap_task),
                 Msg::Change {
                     cmd,
                     region_epoch,
