@@ -31,7 +31,10 @@ use raftstore::store::{util, ExtraStates, FetchedLogs, Transport, WriteTask};
 use slog::{debug, error, trace, warn};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 
-pub use self::{async_writer::AsyncWriter, snapshot::GenSnapTask};
+pub use self::{
+    async_writer::AsyncWriter,
+    snapshot::{GenSnapTask, SnapState},
+};
 use crate::{
     batch::StoreContext,
     fsm::PeerFsmDelegate,

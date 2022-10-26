@@ -13,7 +13,7 @@ use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_serverpb::{RaftSnapshotData, RegionLocalState};
 use protobuf::Message;
 use raft::eraftpb::Snapshot;
-use raftstore::store::{metrics::STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER, ReadTask, SnapState};
+use raftstore::store::{metrics::STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER, ReadTask};
 use slog::{error, info};
 use tikv_util::{box_try, worker::Scheduler};
 
@@ -23,6 +23,29 @@ use crate::{
     router::{ApplyTask, PeerTick},
     Result,
 };
+
+#[derive(Debug)]
+pub enum SnapState {
+    Relax,
+    Generating {
+        canceled: Arc<AtomicBool>,
+        index: Arc<AtomicU64>,
+    },
+    Generated(Box<Snapshot>),
+}
+
+impl PartialEq for SnapState {
+    fn eq(&self, other: &SnapState) -> bool {
+        match (self, other) {
+            (&SnapState::Relax, &SnapState::Relax)
+            | (&SnapState::Generating { .. }, &SnapState::Generating { .. }) => true,
+            (&SnapState::Generated(ref snap1), &SnapState::Generated(ref snap2)) => {
+                *snap1 == *snap2
+            }
+            _ => false,
+        }
+    }
+}
 
 pub struct GenSnapTask {
     pub(crate) region_id: u64,
@@ -151,13 +174,11 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             "request_index" => request_index,
             "request_peer" => to,
         );
-        let (_, receiver) = mpsc::sync_channel(1);
         let canceled = Arc::new(AtomicBool::new(false));
         let index = Arc::new(AtomicU64::new(0));
         *snap_state = SnapState::Generating {
             canceled: canceled.clone(),
             index: index.clone(),
-            receiver,
         };
 
         let task = GenSnapTask::new(self.region().get_id(), index, canceled);

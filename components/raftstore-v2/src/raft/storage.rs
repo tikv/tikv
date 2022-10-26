@@ -21,13 +21,14 @@ use raft::{
     eraftpb::{ConfState, Entry, Snapshot},
     GetEntriesContext, RaftState, INVALID_ID,
 };
-use raftstore::store::{
-    util, EntryStorage, ReadTask, SnapState, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
-};
+use raftstore::store::{util, EntryStorage, ReadTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
 use slog::{error, info, o, warn, Logger};
 use tikv_util::{box_err, store::find_peer, worker::Scheduler};
 
-use crate::{operation::GenSnapTask, Result};
+use crate::{
+    operation::{GenSnapTask, SnapState},
+    Result,
+};
 
 pub fn write_initial_states(wb: &mut impl RaftLogBatch, region: Region) -> Result<()> {
     let region_id = region.get_id();

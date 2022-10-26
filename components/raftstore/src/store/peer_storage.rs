@@ -82,7 +82,6 @@ pub enum SnapState {
         index: Arc<AtomicU64>,
         receiver: Receiver<Snapshot>,
     },
-    Generated(Box<Snapshot>),
     Applying(Arc<AtomicUsize>),
     ApplyAborted,
 }
