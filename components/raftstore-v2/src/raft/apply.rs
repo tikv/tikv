@@ -38,7 +38,7 @@ pub struct Apply<EK: KvEngine, R> {
     tombstone: bool,
     applied_index: u64,
     applied_term: u64,
-    admin_cmd_result: VecDeque<AdminCmdResult>,
+    admin_cmd_result: Vec<AdminCmdResult>,
 
     region_state: RegionLocalState,
 
@@ -67,7 +67,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             tombstone: false,
             applied_index: 0,
             applied_term: 0,
-            admin_cmd_result: VecDeque::new(),
+            admin_cmd_result: vec![],
             region_state,
             tablet_factory,
             res_reporter,
@@ -181,11 +181,11 @@ impl<EK: KvEngine, R> Apply<EK, R> {
 
     #[inline]
     pub fn push_admin_result(&mut self, admin_result: AdminCmdResult) {
-        self.admin_cmd_result.push_back(admin_result);
+        self.admin_cmd_result.push(admin_result);
     }
 
     #[inline]
-    pub fn take_admin_result(&mut self) -> VecDeque<AdminCmdResult> {
+    pub fn take_admin_result(&mut self) -> Vec<AdminCmdResult> {
         mem::take(&mut self.admin_cmd_result)
     }
 }

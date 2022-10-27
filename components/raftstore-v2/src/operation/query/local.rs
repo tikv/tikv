@@ -94,7 +94,7 @@ where
                 Ok(RequestPolicy::ReadLocal) => Ok(Some((delegate, RequestPolicy::ReadLocal))),
                 Ok(RequestPolicy::StaleRead) => Ok(Some((delegate, RequestPolicy::StaleRead))),
                 // It can not handle other policies.
-                Ok(a) => Ok(None),
+                Ok(_) => Ok(None),
                 Err(e) => Err(e),
             }
         } else {

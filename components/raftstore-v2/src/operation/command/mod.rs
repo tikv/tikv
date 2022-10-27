@@ -255,26 +255,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .send(ApplyTask::CommittedEntries(apply));
     }
 
-    fn on_ready_result<T>(
-        &mut self,
-        store_ctx: &mut StoreContext<EK, ER, T>,
-        admin_results: &mut VecDeque<AdminCmdResult>,
-    ) {
-        // handle executing commiited log results
-        while let Some(result) = admin_results.pop_front() {
-            match result {
-                AdminCmdResult::SplitRegion(SplitResult {
-                    regions,
-                    derived,
-                    tablet_index,
-                }) => self.on_ready_split_region(store_ctx, derived, tablet_index, regions),
-                AdminCmdResult::ConfChange(conf_change) => {
-                    self.on_apply_res_conf_change(conf_change)
-                }
-            }
-        }
-    }
-
     pub fn on_apply_res<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>, mut apply_res: ApplyRes) {
         if !self.serving() {
             return;
@@ -286,7 +266,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
 
-        self.on_ready_result(ctx, &mut apply_res.admin_result);
+        for admin_res in apply_res.admin_result {
+            match admin_res {
+                AdminCmdResult::ConfChange(conf_change) => {
+                    self.on_apply_res_conf_change(conf_change)
+                }
+                AdminCmdResult::SplitRegion(SplitResult {
+                    regions,
+                    derived,
+                    tablet_index,
+                }) => self.on_ready_split_region(ctx, derived, tablet_index, regions),
+            }
+        }
 
         self.raft_group_mut()
             .advance_apply_to(apply_res.applied_index);

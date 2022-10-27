@@ -17,5 +17,5 @@ pub enum ApplyTask {
 pub struct ApplyRes {
     pub applied_index: u64,
     pub applied_term: u64,
-    pub admin_result: VecDeque<AdminCmdResult>,
+    pub admin_result: Vec<AdminCmdResult>,
 }
