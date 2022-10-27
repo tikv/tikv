@@ -244,9 +244,19 @@ pub mod kv {
 
     // Extract tablet id and tablet suffix from the path.
     fn get_id_and_suffix_from_path(path: &Path) -> (u64, u64) {
+        let split_path = path
+            .as_os_str()
+            .to_str()
+            .map_or(false, |s| s.contains("split"));
         let (mut tablet_id, mut tablet_suffix) = (0, 1);
         if let Some(s) = path.file_name().map(|s| s.to_string_lossy()) {
             let mut split = s.split('_');
+            // Normal tablet path format is x_y while the path format used for creating new
+            // tablet during split execution is split_x_y, so if this is a split
+            // path, we should skip "split"
+            if split_path {
+                split.next();
+            }
             tablet_id = split.next().and_then(|s| s.parse().ok()).unwrap_or(0);
             tablet_suffix = split.next().and_then(|s| s.parse().ok()).unwrap_or(1);
         }
@@ -269,13 +279,16 @@ pub mod kv {
             if let Some(suffix) = suffix {
                 if let Some(tablet) = reg.get(&(id, suffix)) {
                     // Target tablet exist in the cache
-
                     if options.create_new() {
                         return Err(box_err!("region {} {} already exists", id, tablet.path()));
                     }
                     return Ok(tablet.clone());
                 } else if !options.cache_only() {
-                    let tablet_path = self.tablet_path(id, suffix);
+                    let tablet_path = if !options.split_use() {
+                        self.tablet_path(id, suffix)
+                    } else {
+                        self.split_tablet_path(id, suffix)
+                    };
                     let tablet = self.open_tablet_raw(&tablet_path, id, suffix, options.clone())?;
                     if !options.skip_cache() {
                         reg.insert((id, suffix), tablet.clone());
@@ -347,6 +360,13 @@ pub mod kv {
             self.inner
                 .root_path
                 .join(format!("tablets/{}_{}", id, suffix))
+        }
+
+        #[inline]
+        fn split_tablet_path(&self, id: u64, suffix: u64) -> PathBuf {
+            self.inner
+                .root_path
+                .join(format!("tablets/split_{}_{}", id, suffix))
         }
 
         #[inline]

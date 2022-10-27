@@ -170,6 +170,7 @@ pub struct OpenOptions {
     read_only: bool,
     cache_only: bool,
     skip_cache: bool,
+    split_use: bool,
 }
 
 impl OpenOptions {
@@ -203,6 +204,12 @@ impl OpenOptions {
         self
     }
 
+    /// Only used during split where tablet path contains "split_" prefix
+    pub fn set_split_use(mut self, split_use: bool) -> Self {
+        self.split_use = split_use;
+        self
+    }
+
     pub fn create(&self) -> bool {
         self.create
     }
@@ -221,6 +228,10 @@ impl OpenOptions {
 
     pub fn skip_cache(&self) -> bool {
         self.skip_cache
+    }
+
+    pub fn split_use(&self) -> bool {
+        self.split_use
     }
 }
 
@@ -262,6 +273,14 @@ pub trait TabletFactory<EK>: TabletAccessor<EK> + Send + Sync {
 
     /// Get the tablet path by id and suffix
     fn tablet_path(&self, id: u64, suffix: u64) -> PathBuf;
+
+    /// Get the tablet path by id and suffix with "split_" prefix in it.
+    ///
+    /// Only used during split execution.
+    fn split_tablet_path(&self, _id: u64, _suffix: u64) -> PathBuf {
+        // Raftstore-v1 will not use it.
+        unimplemented!();
+    }
 
     /// Tablets root path
     fn tablets_path(&self) -> PathBuf;
