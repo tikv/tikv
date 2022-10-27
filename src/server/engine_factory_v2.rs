@@ -229,6 +229,11 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
         new_engine
     }
 
+    #[inline]
+    fn unregister_tablet(&self, region_id: u64, suffix: u64) {
+        self.registry.lock().unwrap().remove(&(region_id, suffix));
+    }
+
     fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()> {
         let reg = self.registry.lock().unwrap();
         // pick up any tablet and set the shared block cache capacity
@@ -420,6 +425,12 @@ mod tests {
         factory
             .open_tablet(1, Some(20), OpenOptions::default().set_cache_only(true))
             .unwrap();
+
+        // Unregister it, so we cannot get it in the cache
+        factory.unregister_tablet(1, 20);
+        factory
+            .open_tablet(1, Some(20), OpenOptions::default().set_cache_only(true))
+            .unwrap_err();
 
         factory.mark_tombstone(1, 20);
         assert!(factory.is_tombstoned(1, 20));

@@ -411,6 +411,11 @@ pub mod kv {
             new_engine
         }
 
+        #[inline]
+        fn unregister_tablet(&self, region_id: u64, suffix: u64) {
+            self.registry.lock().unwrap().remove(&(region_id, suffix));
+        }
+
         fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()> {
             let reg = self.registry.lock().unwrap();
             // pick up any tablet and set the shared block cache capacity

@@ -301,6 +301,11 @@ pub trait TabletFactory<EK>: TabletAccessor<EK> + Send + Sync {
         unimplemented!();
     }
 
+    /// Unregister the tablet if it is not used
+    fn unregister_tablet(&self, _region_id: u64, _suffix: u64) {
+        unimplemented!()
+    }
+
     fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()>;
 }
 
