@@ -88,16 +88,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         );
 
         let rows = keys.len();
-        // let mut res = if self.return_values {
-        //     Ok(PessimisticLockRes::Values(vec![]))
-        // } else if self.check_existence {
-        //     // If return_value is set, the existence status is implicitly included in
-        // the     // result. So check_existence only need to be explicitly
-        // handled if     // `return_values` is not set.
-        //     Ok(PessimisticLockRes::Existence(vec![]))
-        // } else {
-        //     Ok(PessimisticLockRes::Empty)
-        // };
         let total_keys = keys.len();
         let mut res = Ok(PessimisticLockResults::with_capacity(total_keys));
         let need_old_value = context.extra_op == ExtraOp::ReadOldValue;
