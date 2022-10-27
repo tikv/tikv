@@ -40,8 +40,9 @@ fn get_id_and_suffix_from_path(path: &Path) -> (u64, u64) {
     let (mut tablet_id, mut tablet_suffix) = (0, 1);
     if let Some(s) = path.file_name().map(|s| s.to_string_lossy()) {
         let mut split = s.split('_');
-        // Normal tablet path format is x_y while the split path format is split_x_y, so
-        // if this is a split path, we should skip "split"
+        // Normal tablet path format is x_y while the path format used for creating new
+        // tablet during split execution is split_x_y, so if this is a split
+        // path, we should skip "split"
         if split_path {
             split.next();
         }

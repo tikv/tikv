@@ -21,9 +21,8 @@ use raftstore::{
         fsm::Proposal,
         metrics::PEER_PROPOSE_LOG_SIZE_HISTOGRAM,
         util::{Lease, RegionReadProgress},
-        Config, EntryStorage, HeartbeatTask, PdTask, PeerStat, ProposalQueue, RaftlogFetchTask,
-        ReadDelegate, ReadIndexQueue, ReadIndexRequest, ReadProgress, TrackVer, Transport, TxnExt,
-        WriteRouter,
+        Config, EntryStorage, PdTask, PeerStat, ProposalQueue, RaftlogFetchTask, ReadDelegate,
+        ReadIndexQueue, ReadIndexRequest, ReadProgress, TrackVer, Transport, TxnExt, WriteRouter,
     },
     Error,
 };
