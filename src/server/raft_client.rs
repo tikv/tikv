@@ -27,8 +27,8 @@ use futures::{
 };
 use futures_timer::Delay;
 use grpcio::{
-    ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environment, RpcStatusCode,
-    WriteFlags,
+    Channel, ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environment,
+    RpcStatusCode, WriteFlags,
 };
 use kvproto::{
     raft_serverpb::{Done, RaftMessage},
@@ -421,15 +421,6 @@ fn grpc_error_is_unimplemented(e: &grpcio::Error) -> bool {
     }
 }
 
-fn grpc_error_is_connect_err(e: &grpcio::Error) -> bool {
-    if let grpcio::Error::RpcFailure(ref status) = e {
-        status.code() == RpcStatusCode::UNAVAILABLE
-            && status.message() == "failed to connect to all addresses"
-    } else {
-        false
-    }
-}
-
 /// Struct tracks the lifetime of a `raft` or `batch_raft` RPC.
 struct AsyncRaftSender<R, M, B, E> {
     sender: ClientCStreamSender<M>,
@@ -562,7 +553,7 @@ where
 #[derive(PartialEq)]
 enum RaftCallRes {
     UnImplemented,
-    Disconnected(bool), // bool indicates whether it's ever connected
+    Disconnected,
     Closed,
 }
 
@@ -592,8 +583,7 @@ where
         let (sink_err, recv_err) = (res.0.err(), res.1.err());
         error!("connection aborted"; "store_id" => self.store_id, "sink_error" => ?sink_err, "receiver_err" => ?recv_err, "addr" => %self.sender.addr);
         if let Some(tx) = self.lifetime.take() {
-            let errs = [sink_err, recv_err];
-            let should_fallback = errs
+            let should_fallback = [sink_err, recv_err]
                 .iter()
                 .any(|e| e.as_ref().map_or(false, grpc_error_is_unimplemented));
 
@@ -601,11 +591,7 @@ where
                 // Asks backend to fallback.
                 RaftCallRes::UnImplemented
             } else {
-                let ever_connected = !errs
-                    .iter()
-                    .any(|e| e.as_ref().map_or(false, grpc_error_is_connect_err));
-
-                RaftCallRes::Disconnected(ever_connected)
+                RaftCallRes::Disconnected
             };
             let _ = tx.send(res);
         }
@@ -709,7 +695,7 @@ where
             .inc_by(len as u64);
     }
 
-    fn connect(&self, addr: &str) -> TikvClient {
+    fn connect(&self, addr: &str) -> Channel {
         info!("server: new connection with tikv endpoint"; "addr" => addr, "store_id" => self.store_id);
 
         let cfg = self.builder.cfg.value();
@@ -725,8 +711,7 @@ where
                 CString::new("random id").unwrap(),
                 CONN_ID.fetch_add(1, Ordering::SeqCst),
             );
-        let channel = self.builder.security_mgr.connect(cb, addr);
-        TikvClient::new(channel)
+        self.builder.security_mgr.connect(cb, addr)
     }
 
     fn batch_call(&self, client: &TikvClient, addr: String) -> oneshot::Receiver<RaftCallRes> {
@@ -788,7 +773,7 @@ async fn maybe_backoff(backoff: Duration, last_wake_time: &mut Instant, retry_ti
     if *last_wake_time + timeout < now {
         // We have spent long enough time in last retry, no need to backoff again.
         *last_wake_time = now;
-        *retry_times = 0;
+        *retry_times = 1;
         return;
     }
     if let Err(e) = GLOBAL_TIMER_HANDLE.delay(now + timeout).compat().await {
@@ -845,13 +830,33 @@ async fn start<S, R, E>(
                 continue;
             }
         };
-        let client = back_end.connect(&addr);
+        let channel = back_end.connect(&addr);
+        if !channel.wait_for_connected(Duration::from_secs(1)).await {
+            error!("connection fail"; "store_id" => back_end.store_id, "addr" => addr, "err" => "can not establish channel");
+
+            // Clears pending messages to avoid consuming high memory when one node is
+            // shutdown.
+            back_end.clear_pending_message("unestablished");
+
+            // broadcast is time consuming operation which would blocks raftstore, so report
+            // unreachable only once until being connected again.
+            if retry_times == 1 {
+                back_end
+                    .builder
+                    .router
+                    .broadcast_unreachable(back_end.store_id);
+            }
+            continue;
+        }
+
+        let client = TikvClient::new(channel);
         let f = back_end.batch_call(&client, addr.clone());
         let mut res = f.await; // block here until the stream call is closed or aborted.
         if res == Ok(RaftCallRes::UnImplemented) {
-            // If the call is setup successfully, it will never finish. Returning `Ok(())`
-            // means the batch_call is not supported, we are probably connect to an old
-            // version of TiKV. So we need to fallback to use legacy API.
+            // If the call is setup successfully, it will never finish. Returning
+            // `UnImplemented` means the batch_call is not supported, we are probably
+            // connect to an old version of TiKV. So we need to fallback to use
+            // legacy API.
             let f = back_end.call(&client, addr.clone());
             res = f.await;
         }
@@ -859,8 +864,8 @@ async fn start<S, R, E>(
             Ok(RaftCallRes::UnImplemented) => {
                 error!("connection fail"; "store_id" => back_end.store_id, "addr" => addr, "err" => "require fallback even with legacy API");
             }
-            Ok(RaftCallRes::Disconnected(ever_connected)) => {
-                error!("connection abort"; "store_id" => back_end.store_id, "addr" => addr, "ever_connected" => ever_connected);
+            Ok(RaftCallRes::Disconnected) => {
+                error!("connection abort"; "store_id" => back_end.store_id, "addr" => addr);
                 if retry_times > 1 {
                     // Clears pending messages to avoid consuming high memory when one node is
                     // shutdown.
@@ -871,15 +876,10 @@ async fn start<S, R, E>(
                         .with_label_values(&["unreachable", &back_end.store_id.to_string()])
                         .inc_by(1);
                 }
-
-                // broadcast is time consuming operation which would blocks raftstore, so report
-                // unreachable only once until being connected again.
-                if retry_times == 1 || ever_connected {
-                    back_end
-                        .builder
-                        .router
-                        .broadcast_unreachable(back_end.store_id);
-                }
+                back_end
+                    .builder
+                    .router
+                    .broadcast_unreachable(back_end.store_id);
             }
             Ok(RaftCallRes::Closed) | Err(_) => {
                 error!("connection close"; "store_id" => back_end.store_id, "addr" => addr);

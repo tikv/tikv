@@ -192,13 +192,13 @@ fn test_raft_client_reconnect() {
     mock_server.shutdown();
     drop(mock_server);
 
-    rx.recv_timeout(Duration::from_millis(50)).unwrap();
+    rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
     for _ in 0..100 {
         raft_client.send(RaftMessage::default()).unwrap();
     }
     raft_client.flush();
-    rx.recv_timeout(Duration::from_millis(50)).unwrap();
+    rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
     // `send` should success after the mock server restarted.
     let service = MockKvForRaft::new(Arc::clone(&msg_count), batch_msg_count, true);
@@ -215,6 +215,7 @@ fn test_raft_client_reconnect() {
 // Test raft_client reports store unreachable only once until being connected
 // again
 fn test_raft_client_report_unreachable() {
+    test_util::init_log_for_test();
     let msg_count = Arc::new(AtomicUsize::new(0));
     let batch_msg_count = Arc::new(AtomicUsize::new(0));
     let service = MockKvForRaft::new(Arc::clone(&msg_count), Arc::clone(&batch_msg_count), true);
@@ -230,14 +231,14 @@ fn test_raft_client_report_unreachable() {
     drop(mock_server);
 
     raft_client.send(RaftMessage::default()).unwrap();
-    let msg = rx.recv_timeout(Duration::from_millis(50)).unwrap();
+    let msg = rx.recv_timeout(Duration::from_secs(2)).unwrap();
     if let Either::Right(StoreMsg::StoreUnreachable { store_id }) = msg {
         assert_eq!(store_id, 0);
     } else {
         panic!("expect StoreUnreachable");
     }
     // no more unreachable message is sent until it's connected again.
-    rx.recv_timeout(Duration::from_millis(50)).unwrap_err();
+    rx.recv_timeout(Duration::from_secs(2)).unwrap_err();
 
     // restart the mock server.
     let service = MockKvForRaft::new(Arc::clone(&msg_count), batch_msg_count, true);
@@ -250,14 +251,14 @@ fn test_raft_client_report_unreachable() {
     // server is disconnected
     mock_server.take().unwrap().shutdown();
 
-    let msg = rx.recv_timeout(Duration::from_millis(50)).unwrap();
+    let msg = rx.recv_timeout(Duration::from_secs(2)).unwrap();
     if let Either::Right(StoreMsg::StoreUnreachable { store_id }) = msg {
         assert_eq!(store_id, 0);
     } else {
         panic!("expect StoreUnreachable");
     }
     // no more unreachable message is sent until it's connected again.
-    rx.recv_timeout(Duration::from_millis(50)).unwrap_err();
+    rx.recv_timeout(Duration::from_secs(2)).unwrap_err();
 }
 
 #[test]
