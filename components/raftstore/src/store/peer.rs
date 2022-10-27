@@ -2955,74 +2955,55 @@ where
                 self.raft_group.skip_bcast_commit(true);
                 self.last_urgent_proposal_idx = u64::MAX;
             }
-        }
-        let mut batch_size = 0;
-        let mut entry_batch = Vec::with_capacity(committed_entries.len());
-        let length = committed_entries.len();
-        let has_entry = !committed_entries.is_empty();
-        let has_proposal = !self.proposals.is_empty();
-        for (i, entry) in committed_entries.into_iter().enumerate() {
-            batch_size += entry.get_data().len();
-            entry_batch.push(entry);
-            if batch_size >= ctx.cfg.apply_yield_msg_size.0 as usize
-                || entry_batch.len() >= ctx.cfg.messages_per_tick
-                || i == length - 1
-            {
-                let entries = mem::take(&mut entry_batch);
-                batch_size = 0;
-                let cbs = if !self.proposals.is_empty() {
-                    let current_term = self.term();
-                    entries
-                        .iter()
-                        .filter_map(|e| {
-                            self.proposals
-                                .find_proposal(e.get_term(), e.get_index(), current_term)
-                        })
-                        .map(|mut p| {
-                            if p.must_pass_epoch_check {
-                                // In this case the apply can be guaranteed to be successful. Invoke
-                                // the on_committed callback if necessary.
-                                p.cb.invoke_committed();
-                            }
-                            p
-                        })
-                        .collect()
-                } else {
-                    vec![]
-                };
-                // Note that the `commit_index` and `commit_term` here may be used to
-                // forward the commit index. So it must be less than or equal to persist
-                // index.
-                let commit_index = cmp::min(
-                    self.raft_group.raft.raft_log.committed,
-                    self.raft_group.raft.raft_log.persisted,
-                );
-                let commit_term = self.get_store().term(commit_index).unwrap();
-                let mut apply = Apply::new(
-                    self.peer_id(),
-                    self.region_id,
-                    self.term(),
-                    commit_index,
-                    commit_term,
-                    entries,
-                    cbs,
-                    self.region_buckets.as_ref().map(|b| b.meta.clone()),
-                );
-                apply.on_schedule(&ctx.raft_metrics);
-                self.mut_store()
-                    .trace_cached_entries(apply.entries[0].clone());
-                ctx.apply_router
-                    .schedule_task(self.region_id, ApplyTask::apply(apply));
-            }
-        }
-        if has_entry {
-            if has_proposal {
+            let cbs = if !self.proposals.is_empty() {
+                let current_term = self.term();
+                let cbs = committed_entries
+                    .iter()
+                    .filter_map(|e| {
+                        self.proposals
+                            .find_proposal(e.get_term(), e.get_index(), current_term)
+                    })
+                    .map(|mut p| {
+                        if p.must_pass_epoch_check {
+                            // In this case the apply can be guaranteed to be successful. Invoke the
+                            // on_committed callback if necessary.
+                            p.cb.invoke_committed();
+                        }
+                        p
+                    })
+                    .collect();
                 self.proposals.gc();
-            }
+                cbs
+            } else {
+                vec![]
+            };
+            // Note that the `commit_index` and `commit_term` here may be used to
+            // forward the commit index. So it must be less than or equal to persist
+            // index.
+            let commit_index = cmp::min(
+                self.raft_group.raft.raft_log.committed,
+                self.raft_group.raft.raft_log.persisted,
+            );
+            let commit_term = self.get_store().term(commit_index).unwrap();
+            let mut apply = Apply::new(
+                self.peer_id(),
+                self.region_id,
+                self.term(),
+                commit_index,
+                commit_term,
+                committed_entries,
+                cbs,
+                self.region_buckets.as_ref().map(|b| b.meta.clone()),
+            );
+            apply.on_schedule(&ctx.raft_metrics);
+            self.mut_store()
+                .trace_cached_entries(apply.entries[0].clone());
             if needs_evict_entry_cache(ctx.cfg.evict_cache_on_memory_ratio) {
                 // Compact all cached entries instead of half evict.
                 self.mut_store().evict_entry_cache(false);
             }
+            ctx.apply_router
+                .schedule_task(self.region_id, ApplyTask::apply(apply));
         }
         fail_point!("after_send_to_apply_1003", self.peer_id() == 1003, |_| {});
     }
