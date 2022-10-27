@@ -1994,80 +1994,6 @@ pub fn init_split_regions(
     (regions, new_split_regions)
 }
 
-// Some regions in new_split_regions may have already been created due to some
-// sophisticated cases. This methods inject reasons into `NewSplitPeer`
-// for those regions (See PR#8084).
-pub fn amend_new_split_regions(
-    _peer_id: u64,
-    tag: impl fmt::Debug,
-    new_split_regions: &mut HashMap<u64, NewSplitPeer>,
-    pending_create_peers: &Arc<Mutex<HashMap<u64, (u64, bool)>>>,
-    get_region_state_key: &dyn Fn(u64) -> engine_traits::Result<Option<RegionLocalState>>,
-) {
-    // replace regions in pending_create_peers that are not created by split
-    let mut replace_regions = HashSet::default();
-    {
-        let mut pending_create_peers = pending_create_peers.lock().unwrap();
-        for (region_id, new_split_peer) in new_split_regions.iter_mut() {
-            match pending_create_peers.entry(*region_id) {
-                HashMapEntry::Occupied(mut v) => {
-                    if *v.get() != (new_split_peer.peer_id, false) {
-                        new_split_peer.result =
-                            Some(format!("status {:?} is not expected", v.get()));
-                    } else {
-                        replace_regions.insert(*region_id);
-                        v.insert((new_split_peer.peer_id, true));
-                    }
-                }
-                HashMapEntry::Vacant(v) => {
-                    v.insert((new_split_peer.peer_id, true));
-                }
-            }
-        }
-    }
-
-    fail_point!(
-        "on_handle_apply_split_2_after_mem_check",
-        _peer_id == 2,
-        |_| unimplemented!()
-    );
-
-    // region_id -> peer_id
-    let mut already_exist_regions = Vec::new();
-    for (region_id, new_split_peer) in new_split_regions.iter_mut() {
-        match get_region_state_key(*region_id) {
-            Ok(None) => (),
-            Ok(Some(state)) => {
-                if replace_regions.get(region_id).is_some() {
-                    // It's marked replaced, then further destroy will skip cleanup, so
-                    // there should be no region local state.
-                    panic!(
-                        "{:?} failed to replace region {} peer {} because state {:?} alread exist in the underlying engine",
-                        tag, region_id, new_split_peer.peer_id, state
-                    )
-                }
-                already_exist_regions.push((*region_id, new_split_peer.peer_id));
-                new_split_peer.result =
-                    Some(format!("state {:?} exist in the underlying engine", state));
-            }
-            e => panic!(
-                "{:?} failed to get regions state of {}: {:?}",
-                tag, region_id, e
-            ),
-        }
-    }
-
-    if !already_exist_regions.is_empty() {
-        let mut pending_create_peers = pending_create_peers.lock().unwrap();
-        for (region_id, peer_id) in &already_exist_regions {
-            assert_eq!(
-                pending_create_peers.remove(region_id),
-                Some((*peer_id, true))
-            );
-        }
-    }
-}
-
 // Admin commands related.
 impl<EK> ApplyDelegate<EK>
 where
@@ -2552,19 +2478,71 @@ where
         let (regions, mut new_split_regions) =
             init_split_regions(ctx.store_id, split_reqs, &mut derived, &mut split_keys);
 
-        amend_new_split_regions(
-            self.id(),
-            &self.tag,
-            &mut new_split_regions,
-            &ctx.pending_create_peers,
-            &|region_id| {
-                let region_state_key = keys::region_state_key(region_id);
-                ctx.engine
-                    .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
-            },
+        let mut replace_regions = HashSet::default();
+        {
+            let mut pending_create_peers = ctx.pending_create_peers.lock().unwrap();
+            for (region_id, new_split_peer) in new_split_regions.iter_mut() {
+                match pending_create_peers.entry(*region_id) {
+                    HashMapEntry::Occupied(mut v) => {
+                        if *v.get() != (new_split_peer.peer_id, false) {
+                            new_split_peer.result =
+                                Some(format!("status {:?} is not expected", v.get()));
+                        } else {
+                            replace_regions.insert(*region_id);
+                            v.insert((new_split_peer.peer_id, true));
+                        }
+                    }
+                    HashMapEntry::Vacant(v) => {
+                        v.insert((new_split_peer.peer_id, true));
+                    }
+                }
+            }
+        }
+
+        fail_point!(
+            "on_handle_apply_split_2_after_mem_check",
+            self.id() == 2,
+            |_| unimplemented!()
         );
 
-        // write region information of split regions into disk
+        // region_id -> peer_id
+        let mut already_exist_regions = Vec::new();
+        for (region_id, new_split_peer) in new_split_regions.iter_mut() {
+            let region_state_key = keys::region_state_key(*region_id);
+            match ctx
+                .engine
+                .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
+            {
+                Ok(None) => (),
+                Ok(Some(state)) => {
+                    if replace_regions.get(region_id).is_some() {
+                        // It's marked replaced, then further destroy will skip cleanup, so there
+                        // should be no region local state.
+                        panic!(
+                            "{} failed to replace region {} peer {} because state {:?} alread exist in kv engine",
+                            self.tag, region_id, new_split_peer.peer_id, state
+                        )
+                    }
+                    already_exist_regions.push((*region_id, new_split_peer.peer_id));
+                    new_split_peer.result = Some(format!("state {:?} exist in kv engine", state));
+                }
+                e => panic!(
+                    "{} failed to get regions state of {}: {:?}",
+                    self.tag, region_id, e
+                ),
+            }
+        }
+
+        if !already_exist_regions.is_empty() {
+            let mut pending_create_peers = ctx.pending_create_peers.lock().unwrap();
+            for (region_id, peer_id) in &already_exist_regions {
+                assert_eq!(
+                    pending_create_peers.remove(region_id),
+                    Some((*peer_id, true))
+                );
+            }
+        }
+
         let kv_wb_mut = ctx.kv_wb_mut();
         for new_region in &regions {
             if new_region.get_id() == derived.get_id() {
@@ -2591,7 +2569,6 @@ where
                     )
                 });
         }
-        // update region state of the splitting region
         write_peer_state(kv_wb_mut, &derived, PeerState::Normal, None).unwrap_or_else(|e| {
             panic!("{} fails to update region {:?}: {:?}", self.tag, derived, e)
         });

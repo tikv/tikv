@@ -506,12 +506,12 @@ mod tests {
     #[test]
     fn test_extract_id_and_suffix() {
         let path = Path::new("xxx/1_10");
-        assert_eq!(get_id_and_suffix_from_path(&path), (1, 10));
+        assert_eq!(get_id_and_suffix_from_path(path), (1, 10));
         let path = Path::new("xxxx/split_1_10");
-        assert_eq!(get_id_and_suffix_from_path(&path), (1, 10));
+        assert_eq!(get_id_and_suffix_from_path(path), (1, 10));
         let path = Path::new("xxxasdafge");
-        assert_eq!(get_id_and_suffix_from_path(&path), (0, 1));
+        assert_eq!(get_id_and_suffix_from_path(path), (0, 1));
         let path = Path::new("xxxx/split_1");
-        assert_eq!(get_id_and_suffix_from_path(&path), (1, 1));
+        assert_eq!(get_id_and_suffix_from_path(path), (1, 1));
     }
 }

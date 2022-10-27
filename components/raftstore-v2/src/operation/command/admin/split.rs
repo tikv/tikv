@@ -20,8 +20,7 @@ use raftstore::{
     coprocessor::RegionChangeReason,
     store::{
         fsm::apply::{
-            self, amend_new_split_regions, init_split_regions, validate_and_get_split_keys,
-            ApplyResult, NewSplitPeer,
+            self, init_split_regions, validate_and_get_split_keys, ApplyResult, NewSplitPeer,
         },
         metrics::PEER_ADMIN_CMD_COUNTER,
         util::{self, KeysInfoFormatter},
