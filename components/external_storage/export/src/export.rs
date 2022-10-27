@@ -308,13 +308,13 @@ impl<Blob: BlobStorage> std::ops::Deref for BlobStore<Blob> {
     }
 }
 
-pub struct EncryptedExternalStorage {
+pub struct EncryptedExternalStorage<S> {
     pub key_manager: Arc<DataKeyManager>,
-    pub storage: Box<dyn ExternalStorage>,
+    pub storage: S,
 }
 
 #[async_trait]
-impl ExternalStorage for EncryptedExternalStorage {
+impl<S: ExternalStorage> ExternalStorage for EncryptedExternalStorage<S> {
     fn name(&self) -> &'static str {
         self.storage.name()
     }

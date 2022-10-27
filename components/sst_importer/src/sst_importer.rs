@@ -18,6 +18,7 @@ use engine_traits::{
     IterOptions, Iterator, KvEngine, RefIterable, SstCompressionType, SstExt, SstMetaInfo,
     SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
+use external_storage_export::{EncryptedExternalStorage, ExternalStorage};
 use file_system::{get_io_rate_limiter, OpenOptions};
 use futures::executor::ThreadPool;
 use kvproto::{
@@ -28,6 +29,7 @@ use kvproto::{
 use tikv_util::{
     codec::stream_event::{EventIterator, Iterator as EIterator},
     time::{Instant, Limiter},
+    Either,
 };
 use txn_types::{Key, TimeStamp, WriteRef};
 
@@ -48,6 +50,7 @@ pub struct SstImporter {
     api_version: ApiVersion,
     compression_types: HashMap<CfName, SstCompressionType>,
     file_locks: Arc<DashMap<String, ()>>,
+    cached_storage: Arc<DashMap<String, Arc<dyn ExternalStorage>>>,
 }
 
 impl SstImporter {
@@ -65,6 +68,7 @@ impl SstImporter {
             api_version,
             compression_types: HashMap::with_capacity(2),
             file_locks: Arc::new(DashMap::default()),
+            cached_storage: Arc::default(),
         })
     }
 
@@ -182,6 +186,7 @@ impl SstImporter {
         rewrite_rule: &RewriteRule,
         crypter: Option<CipherInfo>,
         speed_limiter: Limiter,
+        cache_key: &str,
         engine: E,
     ) -> Result<Option<Range>> {
         debug!("download start";
@@ -198,6 +203,7 @@ impl SstImporter {
             rewrite_rule,
             crypter,
             &speed_limiter,
+            cache_key,
             engine,
         ) {
             Ok(r) => {
@@ -231,6 +237,7 @@ impl SstImporter {
         backend: &StorageBackend,
         support_kms: bool,
         speed_limiter: &Limiter,
+        cache_key: &str,
         restore_config: external_storage_export::RestoreConfig,
     ) -> Result<()> {
         let start_read = Instant::now();
@@ -245,20 +252,29 @@ impl SstImporter {
         }
         // prepare to download the file from the external_storage
         // TODO: pass a config to support hdfs
-        let ext_storage = external_storage_export::create_storage(backend, Default::default())?;
+        let ext_storage = match self.cached_storage.get(cache_key) {
+            Some(s) => Arc::clone(s.value()),
+            None => {
+                let s = external_storage_export::create_storage(backend, Default::default())?;
+                let cached = Arc::from(s);
+
+                self.cached_storage
+                    .insert(cache_key.to_owned(), Arc::clone(&cached));
+                cached
+            }
+        };
         let url = ext_storage.url()?.to_string();
 
-        let ext_storage: Box<dyn external_storage_export::ExternalStorage> = if support_kms {
-            if let Some(key_manager) = &self.key_manager {
-                Box::new(external_storage_export::EncryptedExternalStorage {
-                    key_manager: (*key_manager).clone(),
-                    storage: ext_storage,
-                }) as _
-            } else {
-                ext_storage as _
-            }
-        } else {
-            ext_storage as _
+        let ext_storage = match (support_kms, &self.key_manager) {
+            (true, Some(key_manager)) => Either::Left(EncryptedExternalStorage {
+                key_manager: (*key_manager).clone(),
+                storage: ext_storage,
+            }),
+            _ => Either::Right(ext_storage),
+        };
+        let ext_storage: &dyn ExternalStorage = match &ext_storage {
+            Either::Left(x) => x,
+            Either::Right(y) => y,
         };
 
         let result = ext_storage.restore(
@@ -343,6 +359,7 @@ impl SstImporter {
             false,
             // don't support encrypt for now.
             speed_limiter,
+            "",
             restore_config,
         )?;
         info!("download file finished {}, offset {}", src_name, offset);
@@ -494,6 +511,7 @@ impl SstImporter {
         rewrite_rule: &RewriteRule,
         crypter: Option<CipherInfo>,
         speed_limiter: &Limiter,
+        cache_key: &str,
         engine: E,
     ) -> Result<Option<Range>> {
         let path = self.dir.join(meta)?;
@@ -516,6 +534,7 @@ impl SstImporter {
             backend,
             true,
             speed_limiter,
+            cache_key,
             restore_config,
         )?;
 
@@ -1273,6 +1292,7 @@ mod tests {
                 &backend,
                 true,
                 &Limiter::new(f64::INFINITY),
+                "",
                 restore_config,
             )
             .unwrap();
@@ -1310,6 +1330,7 @@ mod tests {
                 &backend,
                 false,
                 &Limiter::new(f64::INFINITY),
+                "",
                 restore_config,
             )
             .unwrap();
@@ -1398,6 +1419,7 @@ mod tests {
                 &RewriteRule::default(),
                 None,
                 Limiter::new(f64::INFINITY),
+                "",
                 db,
             )
             .unwrap()

@@ -566,6 +566,7 @@ where
                 req.get_rewrite_rule(),
                 cipher,
                 limiter,
+                req.get_storage_cache_id(),
                 engine,
             );
             let mut resp = DownloadResponse::default();
