@@ -60,7 +60,6 @@ pub struct SplitResult {
     pub regions: Vec<Region>,
     pub derived: Region,
     pub tablet_index: u64,
-    pub auto_compactions: HashMap<&'static str, bool>,
 }
 
 #[derive(Debug)]
@@ -114,21 +113,12 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
         let (regions, _) =
             init_split_regions(self.store_id, split_reqs, &mut derived, &mut split_keys);
 
-        // todo(SpadeA): Here: we use a temporary solution that we disable auto
-        // compaction and use checkpoint API to clone new tablets. It may cause large
-        // jitter as checkpoint with log_size_for_flush being 0 will flush the memtable.
-        // We will freeze the memtable rather than flush it in the following PR.
+        // todo(SpadeA): Here: we use a temporary solution that we use checkpoint API to
+        // clone new tablets. It may cause large jitter as we need to flush the
+        // memtable. We will freeze the memtable rather than flush it in the
+        // following PR.
         let region_id = derived.get_id();
         let tablet = self.tablet().unwrap();
-        let mut auto_compactions = HashMap::default();
-        for &cf in DATA_CFS {
-            let mut cf_option = tablet.get_options_cf(cf).unwrap();
-            auto_compactions.insert(cf, cf_option.get_disable_auto_compactions());
-            tablet
-                .set_options_cf(cf, &[("disable_auto_compactions", "true")])
-                .unwrap();
-        }
-        let current_tablet_path = std::path::Path::new(tablet.path());
 
         for new_region in &regions {
             let new_region_id = new_region.id;
@@ -196,7 +186,6 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
                 regions,
                 derived,
                 tablet_index: log_index,
-                auto_compactions,
             }),
         ))
     }
@@ -455,7 +444,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         derived: Region,
         tablet_index: u64,
         regions: Vec<Region>,
-        auto_compactions: HashMap<&'static str, bool>,
     ) {
         let region_id = derived.get_id();
 
@@ -658,12 +646,7 @@ mod test {
 
         // Exec batch split
         let (resp, apply_res) = apply.exec_batch_split(&req, log_index).unwrap();
-        apply.flush();
 
-        // for cf in DATA_CFS {
-        //     let opt = apply.tablet().unwrap().get_options_cf(cf).unwrap();
-        //     assert!(opt.get_disable_auto_compactions());
-        // }
         let regions = resp.get_splits().get_regions();
         assert!(regions.len() == region_boundries.len() - 1);
 
@@ -671,54 +654,26 @@ mod test {
         epoch.version += children_peers.len() as u64;
 
         let mut child_idx = 0;
-        let mut region_state = RegionLocalState::default();
         for (i, region) in regions.iter().enumerate() {
-            let state = get_region_local_state(region.id);
-            assert_eq!(state.get_state(), PeerState::Normal);
-            assert_eq!(state.get_region().get_id(), region.id);
-            assert_eq!(
-                state.get_region().get_start_key().to_vec(),
-                region_boundries[i]
-            );
-            assert_eq!(
-                state.get_region().get_end_key().to_vec(),
-                region_boundries[i + 1]
-            );
-            assert_eq!(*state.get_region().get_region_epoch(), epoch);
+            assert_eq!(region.get_start_key().to_vec(), region_boundries[i]);
+            assert_eq!(region.get_end_key().to_vec(), region_boundries[i + 1]);
+            assert_eq!(*region.get_region_epoch(), epoch);
 
             if region.id == region_to_split.id {
-                assert_eq! {
-                    state.get_region().get_peers(),
-                    region_to_split.get_peers()
-                }
-                assert_eq!(state, *apply.region_state());
+                let state = apply.region_state();
                 assert_eq!(state.tablet_index, log_index);
-                // assert we can read the tablet by the new tablet_index
-                let tablet_path = factory.tablet_path(region_to_split.id, log_index);
+                assert_eq!(state.get_region(), region);
+                let tablet_path = factory.split_tablet_path(region.id, log_index);
                 assert!(factory.exists_raw(&tablet_path));
-
-                region_state = state.clone();
             } else {
                 assert_eq! {
-                    state.get_region().get_peers().iter().map(|peer| peer.id).collect::<Vec<_>>(),
+                    region.get_peers().iter().map(|peer| peer.id).collect::<Vec<_>>(),
                     children_peers[child_idx]
                 }
                 child_idx += 1;
 
-                assert_eq!(state.tablet_index, RAFT_INIT_LOG_INDEX);
-                let tablet_path = factory.tablet_path(region.id, RAFT_INIT_LOG_INDEX);
+                let tablet_path = factory.split_tablet_path(region.id, RAFT_INIT_LOG_INDEX);
                 assert!(factory.exists_raw(&tablet_path));
-
-                let initial_state = get_raft_apply_state(region.id);
-                assert_eq!(initial_state.get_applied_index(), RAFT_INIT_LOG_INDEX);
-                assert_eq!(
-                    initial_state.get_truncated_state().get_index(),
-                    RAFT_INIT_LOG_INDEX
-                );
-                assert_eq!(
-                    initial_state.get_truncated_state().get_term(),
-                    RAFT_INIT_LOG_INDEX
-                );
             }
         }
 
@@ -767,7 +722,7 @@ mod test {
         region_state.set_region(region.clone());
         region_state.set_tablet_index(5);
 
-        let (reporter, rx) = MockReporter::new();
+        let (reporter, _) = MockReporter::new();
         let mut apply = Apply::new(
             store_id,
             region
@@ -870,7 +825,6 @@ mod test {
             vec![vec![11, 12, 13]],
             log_index,
         );
-        rx.recv().unwrap();
 
         log_index = 20;
         // After split: region 20 ["", "k01"], region 1 ["k01", "k09"]
@@ -886,7 +840,6 @@ mod test {
             vec![vec![21, 22, 23]],
             log_index,
         );
-        rx.recv().unwrap();
 
         log_index = 30;
         // After split: region 30 ["k01", "k02"], region 40 ["k02", "k03"],
@@ -903,7 +856,6 @@ mod test {
             vec![vec![31, 32, 33], vec![41, 42, 43]],
             log_index,
         );
-        rx.recv().unwrap();
 
         // After split: region 50 ["k07", "k08"], region 60 ["k08", "k09"],
         //              region 1 ["k03", "k07"]
@@ -920,6 +872,5 @@ mod test {
             vec![vec![51, 52, 53], vec![61, 62, 63]],
             log_index,
         );
-        rx.recv().unwrap();
     }
 }
