@@ -39,6 +39,7 @@ use tikv_util::{
     sys::thread::ThreadBuildWrapper,
     time::{Instant, Limiter},
 };
+use tokio::runtime::Runtime;
 use txn_types::{Key, WriteRef, WriteType};
 
 use super::make_rpc_error;
@@ -56,7 +57,7 @@ where
     cfg: Config,
     engine: E,
     router: Router,
-    threads: ThreadPool,
+    threads: Arc<Runtime>,
     importer: Arc<SstImporter>,
     limiter: Limiter,
     task_slots: Arc<Mutex<HashSet<PathBuf>>>,
@@ -81,22 +82,23 @@ where
         importer: Arc<SstImporter>,
     ) -> ImportSstService<E, Router> {
         let props = tikv_util::thread_group::current_properties();
-        let threads = ThreadPoolBuilder::new()
-            .pool_size(cfg.num_threads)
-            .name_prefix("sst-importer")
+        let threads = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(cfg.num_threads)
+            .enable_all()
+            .thread_name("sst-importer")
             .after_start_wrapper(move || {
                 tikv_util::thread_group::set_properties(props.clone());
                 tikv_alloc::add_thread_memory_accessor();
                 set_io_type(IoType::Import);
             })
             .before_stop_wrapper(move || tikv_alloc::remove_thread_memory_accessor())
-            .create()
+            .build()
             .unwrap();
-        importer.start_switch_mode_check(&threads, engine.clone());
+        importer.start_switch_mode_check(threads.handle().clone(), engine.clone());
         ImportSstService {
             cfg,
             engine,
-            threads,
+            threads: Arc::new(threads),
             router,
             importer,
             limiter: Limiter::new(f64::INFINITY),
@@ -299,8 +301,8 @@ macro_rules! impl_write {
                 $crate::send_rpc_response!(res, sink, label, timer);
             };
 
-            self.threads.spawn_ok(buf_driver);
-            self.threads.spawn_ok(handle_task);
+            self.threads.spawn(buf_driver);
+            self.threads.spawn(handle_task);
         }
     };
 }
@@ -383,8 +385,8 @@ where
             crate::send_rpc_response!(res, sink, label, timer);
         };
 
-        self.threads.spawn_ok(buf_driver);
-        self.threads.spawn_ok(handle_task);
+        self.threads.spawn(buf_driver);
+        self.threads.spawn(handle_task);
     }
 
     // clear_files the KV files after apply finished.
@@ -419,7 +421,7 @@ where
             let resp = Ok(resp);
             crate::send_rpc_response!(resp, sink, label, timer);
         };
-        self.threads.spawn_ok(handle_task);
+        self.threads.spawn(handle_task);
     }
 
     // Downloads KV file and performs key-rewrite then apply kv into this tikv
@@ -526,7 +528,7 @@ where
             debug!("finished apply kv file with {:?}", resp);
             crate::send_rpc_response!(resp, sink, label, timer);
         };
-        self.threads.spawn_ok(handle_task);
+        self.threads.spawn(handle_task);
     }
 
     /// Downloads the file and performs key-rewrite for later ingesting.
@@ -570,7 +572,7 @@ where
                 engine,
             );
             let mut resp = DownloadResponse::default();
-            match res {
+            match res.await {
                 Ok(range) => match range {
                     Some(r) => resp.set_range(r),
                     None => resp.set_is_empty(true),
@@ -581,7 +583,7 @@ where
             crate::send_rpc_response!(resp, sink, label, timer);
         };
 
-        self.threads.spawn_ok(handle_task);
+        self.threads.spawn(handle_task);
     }
 
     /// Ingest the file by sending a raft command to raftstore.
@@ -627,7 +629,7 @@ where
             Self::release_lock(&task_slots, &meta).unwrap();
             crate::send_rpc_response!(res, sink, label, timer);
         };
-        self.threads.spawn_ok(handle_task);
+        self.threads.spawn(handle_task);
     }
 
     /// Ingest multiple files by sending a raft command to raftstore.
@@ -678,7 +680,7 @@ where
             }
             crate::send_rpc_response!(res, sink, label, timer);
         };
-        self.threads.spawn_ok(handle_task);
+        self.threads.spawn(handle_task);
     }
 
     fn compact(
@@ -727,7 +729,7 @@ where
             crate::send_rpc_response!(res, sink, label, timer);
         };
 
-        self.threads.spawn_ok(handle_task);
+        self.threads.spawn(handle_task);
     }
 
     fn set_download_speed_limit(
@@ -818,7 +820,7 @@ where
             }
             let _ = sink.close().await;
         };
-        self.threads.spawn_ok(handle_task);
+        self.threads.spawn(handle_task);
     }
 
     impl_write!(write, WriteRequest, WriteResponse, Chunk, new_txn_writer);
