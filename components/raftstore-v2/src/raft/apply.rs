@@ -26,7 +26,7 @@ pub struct Apply<EK: KvEngine, ER: RaftEngine, R> {
 
     peer: metapb::Peer,
     remote_tablet: CachedTablet<EK>,
-    tablet: EK,
+    pub tablet: EK,
     write_batch: Option<EK::WriteBatch>,
     log_batch: Option<ER::LogBatch>,
     new_tablet_index: Option<u64>,
@@ -124,6 +124,9 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
     #[inline]
     pub fn write_batch_or_default(&mut self) -> &mut EK::WriteBatch {
         if self.write_batch.is_none() {
+            // Other places (ex: raftstore) may have updated the tablet cache, so we should
+            // update it here.
+            self.tablet = self.remote_tablet.latest().unwrap().clone();
             self.write_batch = Some(self.tablet.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE));
         }
         self.write_batch.as_mut().unwrap()

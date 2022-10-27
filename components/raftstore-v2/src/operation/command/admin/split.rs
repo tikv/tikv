@@ -163,12 +163,17 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
                     e
                 )
             });
+        // Here, we open the tablet without registering as it is the split version. We
+        // will register it when switching it to the normal version.
         let tablet = self
             .tablet_factory
             .open_tablet(
                 region_id,
                 Some(log_index),
-                OpenOptions::default().set_create(true).set_split_use(true),
+                OpenOptions::default()
+                    .set_create(true)
+                    .set_split_use(true)
+                    .set_skip_cache(true),
             )
             .unwrap();
         self.publish_tablet(tablet);
@@ -249,7 +254,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let split_tablet_path = store_ctx
                 .tablet_factory
                 .split_tablet_path(region_id, RAFT_INIT_LOG_INDEX);
-            println!("{:?}", split_tablet_path);
             let tablet_path = store_ctx
                 .tablet_factory
                 .tablet_path(region_id, RAFT_INIT_LOG_INDEX);
@@ -431,21 +435,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 });
             store_ctx.engine.consume(&mut wb, true).unwrap();
 
+            let region_id = self.region_id();
+            let tablet_index = self.storage().region_state().tablet_index;
             let split_tablet_path = store_ctx
                 .tablet_factory
-                .split_tablet_path(self.region_id(), self.storage().region_state().tablet_index);
-            let tablet_path = store_ctx
+                .split_tablet_path(region_id, tablet_index);
+            let tablet = store_ctx
                 .tablet_factory
-                .tablet_path(self.region_id(), self.storage().region_state().tablet_index);
-            std::fs::rename(&split_tablet_path, &tablet_path).unwrap_or_else(|e| {
-                panic!(
-                    "{:?} fails to rename from tablet path {:?} to normal path {:?} :{:?}",
-                    self.logger.list(),
-                    split_tablet_path,
-                    tablet_path,
-                    e
-                )
-            });
+                .load_tablet(&split_tablet_path, region_id, tablet_index)
+                .unwrap();
+
+            self.tablet_mut().set(tablet);
         }
     }
 

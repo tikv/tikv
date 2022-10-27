@@ -33,9 +33,18 @@ impl KvEngineFactoryV2 {
 
 // Extract tablet id and tablet suffix from the path.
 fn get_id_and_suffix_from_path(path: &Path) -> (u64, u64) {
+    let split_path = path
+        .as_os_str()
+        .to_str()
+        .map_or(false, |s| s.contains("split"));
     let (mut tablet_id, mut tablet_suffix) = (0, 1);
     if let Some(s) = path.file_name().map(|s| s.to_string_lossy()) {
         let mut split = s.split('_');
+        // Normal tablet path format is x_y while the split path format is split_x_y, so
+        // if this is a split path, we should skip "split"
+        if split_path {
+            split.next();
+        }
         tablet_id = split.next().and_then(|s| s.parse().ok()).unwrap_or(0);
         tablet_suffix = split.next().and_then(|s| s.parse().ok()).unwrap_or(1);
     }
@@ -492,5 +501,17 @@ mod tests {
             count += 1;
         });
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_extract_id_and_suffix() {
+        let path = Path::new("xxx/1_10");
+        assert_eq!(get_id_and_suffix_from_path(&path), (1, 10));
+        let path = Path::new("xxxx/split_1_10");
+        assert_eq!(get_id_and_suffix_from_path(&path), (1, 10));
+        let path = Path::new("xxxasdafge");
+        assert_eq!(get_id_and_suffix_from_path(&path), (0, 1));
+        let path = Path::new("xxxx/split_1");
+        assert_eq!(get_id_and_suffix_from_path(&path), (1, 1));
     }
 }
