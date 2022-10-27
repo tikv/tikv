@@ -94,7 +94,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
                 let tablet_path = if !options.split_use() {
                     self.tablet_path(id, suffix)
                 } else {
-                    self.split_tablet_path(id, suffix)
+                    self.split_temp_tablet_path(id, suffix)
                 };
                 let tablet = self.open_tablet_raw(&tablet_path, id, suffix, options.clone())?;
                 if !options.skip_cache() {
@@ -175,7 +175,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
     }
 
     #[inline]
-    fn split_tablet_path(&self, id: u64, suffix: u64) -> PathBuf {
+    fn split_temp_tablet_path(&self, id: u64, suffix: u64) -> PathBuf {
         self.inner
             .store_path()
             .join(format!("tablets/split_{}_{}", id, suffix))
@@ -525,5 +525,43 @@ mod tests {
         assert_eq!(get_id_and_suffix_from_path(path), (0, 1));
         let path = Path::new("xxxx/split_1");
         assert_eq!(get_id_and_suffix_from_path(path), (1, 1));
+    }
+
+    #[test]
+    fn test_split_temp_tablet() {
+        let cfg = TEST_CONFIG.clone();
+        assert!(cfg.storage.block_cache.shared);
+        let cache = cfg.storage.block_cache.build_shared_cache();
+        let dir = test_util::temp_dir("test_kvengine_factory_v2", false);
+        let env = cfg.build_shared_rocks_env(None, None).unwrap();
+
+        let mut builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
+        if let Some(cache) = cache {
+            builder = builder.block_cache(cache);
+        }
+
+        let factory = builder.build_v2();
+        let _ = factory
+            .open_tablet(
+                1,
+                Some(10),
+                OpenOptions::default()
+                    .set_create_new(true)
+                    .set_skip_cache(true),
+            )
+            .unwrap();
+
+        // We can not open it with split_use being true
+        factory
+            .open_tablet(1, Some(10), OpenOptions::default().set_split_use(true))
+            .unwrap_err();
+
+        let tablet_path = factory.tablet_path(1, 10);
+        let split_path = factory.split_temp_tablet_path(1, 10);
+        std::fs::rename(tablet_path, split_path).unwrap();
+        // we can open it now
+        factory
+            .open_tablet(1, Some(10), OpenOptions::default().set_split_use(true))
+            .unwrap();
     }
 }

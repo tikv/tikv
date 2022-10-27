@@ -287,7 +287,7 @@ pub mod kv {
                     let tablet_path = if !options.split_use() {
                         self.tablet_path(id, suffix)
                     } else {
-                        self.split_tablet_path(id, suffix)
+                        self.split_temp_tablet_path(id, suffix)
                     };
                     let tablet = self.open_tablet_raw(&tablet_path, id, suffix, options.clone())?;
                     if !options.skip_cache() {
@@ -363,7 +363,7 @@ pub mod kv {
         }
 
         #[inline]
-        fn split_tablet_path(&self, id: u64, suffix: u64) -> PathBuf {
+        fn split_temp_tablet_path(&self, id: u64, suffix: u64) -> PathBuf {
             self.inner
                 .root_path
                 .join(format!("tablets/split_{}_{}", id, suffix))

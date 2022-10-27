@@ -277,7 +277,7 @@ pub trait TabletFactory<EK>: TabletAccessor<EK> + Send + Sync {
     /// Get the tablet path by id and suffix with "split_" prefix in it.
     ///
     /// Only used during split execution.
-    fn split_tablet_path(&self, _id: u64, _suffix: u64) -> PathBuf {
+    fn split_temp_tablet_path(&self, _id: u64, _suffix: u64) -> PathBuf {
         // Raftstore-v1 will not use it.
         unimplemented!();
     }
