@@ -61,8 +61,9 @@ where
     T: StoreAddrResolver + 'static,
 {
     let env = Arc::new(Environment::new(2));
-    let cfg = Arc::new(VersionTrack::new(Config::default()));
-    cfg.update(|c| Ok(c.raft_client_backoff_step = ReadableDuration::millis(10)));
+    let mut config = Config::default();
+    config.raft_client_backoff_step = ReadableDuration::millis(10);
+    let cfg = Arc::new(VersionTrack::new(config));
     let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let worker = LazyWorker::new("test-raftclient");
     let loads = Arc::new(ThreadLoadPool::with_threshold(1000));
@@ -214,7 +215,6 @@ fn test_raft_client_reconnect() {
 // Test raft_client reports store unreachable only once until being connected
 // again
 fn test_raft_client_report_unreachable() {
-    test_util::init_log_for_test();
     let msg_count = Arc::new(AtomicUsize::new(0));
     let batch_msg_count = Arc::new(AtomicUsize::new(0));
     let service = MockKvForRaft::new(Arc::clone(&msg_count), Arc::clone(&batch_msg_count), true);
@@ -237,7 +237,7 @@ fn test_raft_client_report_unreachable() {
         panic!("expect StoreUnreachable");
     }
     // no more unreachable message is sent until it's connected again.
-    assert!(rx.recv_timeout(Duration::from_millis(50)).is_err());
+    rx.recv_timeout(Duration::from_millis(50)).unwrap_err();
 
     // restart the mock server.
     let service = MockKvForRaft::new(Arc::clone(&msg_count), batch_msg_count, true);
@@ -257,7 +257,7 @@ fn test_raft_client_report_unreachable() {
         panic!("expect StoreUnreachable");
     }
     // no more unreachable message is sent until it's connected again.
-    assert!(rx.recv_timeout(Duration::from_millis(50)).is_err());
+    rx.recv_timeout(Duration::from_millis(50)).unwrap_err();
 }
 
 #[test]
