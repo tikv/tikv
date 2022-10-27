@@ -320,8 +320,7 @@ impl LeadershipResolver {
         // Approximate `LeaderInfo` size
         let leader_info_size = store_req_map
             .values()
-            .filter(|req| !req.regions.is_empty())
-            .next()
+            .find(|req| !req.regions.is_empty())
             .map_or(0, |req| req.regions[0].compute_size());
         let store_count = store_req_map.len();
         let mut check_leader_rpcs = Vec::with_capacity(store_req_map.len());
@@ -359,7 +358,7 @@ impl LeadershipResolver {
                         .observe(elapsed.as_secs_f64());
                 });
 
-                let rpc = match client.check_leader_async(&req) {
+                let rpc = match client.check_leader_async(req) {
                     Ok(rpc) => rpc,
                     Err(GrpcError::RpcFailure(status))
                         if status.code() == RpcStatusCode::UNIMPLEMENTED =>
