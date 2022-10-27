@@ -17417,7 +17417,7 @@
               "interval": "",
               "legendFormat": "pending-task",
               "refId": "D"
-            },
+            }
           ],
           "thresholds": [],
           "timeFrom": null,
