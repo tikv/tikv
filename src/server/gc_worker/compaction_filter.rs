@@ -294,7 +294,6 @@ struct WriteCompactionFilter {
     regions_provider: (u64, Arc<dyn RegionInfoProvider>),
 
     mvcc_key_prefix: Vec<u8>,
-    remove_older: bool,
 
     // Some metrics about implementation detail.
     versions: usize,
@@ -336,7 +335,6 @@ impl WriteCompactionFilter {
             regions_provider,
 
             mvcc_key_prefix: vec![],
-            remove_older: false,
 
             versions: 0,
             filtered: 0,
@@ -398,6 +396,39 @@ impl WriteCompactionFilter {
         }
     }
 
+    fn do_filter_new_key(
+        &mut self,
+        mvcc_key: &[u8],
+        write: WriteRef<'_>,
+    ) -> Result<CompactionFilterDecision, String> {
+        if self.mvcc_deletion_overlaps.take() == Some(0) {
+            self.handle_bottommost_delete();
+            if self.mvcc_deletions.len() >= DEFAULT_DELETE_BATCH_COUNT {
+                self.gc_mvcc_deletions();
+            }
+        }
+        self.switch_key_metrics();
+        self.mvcc_key_prefix.clear();
+        match write.write_type {
+            WriteType::Rollback | WriteType::Lock => {
+                self.mvcc_rollback_and_locks += 1;
+                self.filtered += 1;
+                return Ok(CompactionFilterDecision::Remove);
+            }
+            WriteType::Put => {}
+            WriteType::Delete => {
+                if self.is_bottommost_level {
+                    self.mvcc_deletion_overlaps = Some(0);
+                    GC_COMPACTION_FILTER_MVCC_DELETION_MET
+                        .with_label_values(&[STAT_TXN_KEYMODE])
+                        .inc();
+                }
+            }
+        }
+        self.mvcc_key_prefix.extend_from_slice(mvcc_key);
+        return Ok(CompactionFilterDecision::Keep);
+    }
+
     fn do_filter(
         &mut self,
         _start_level: usize,
@@ -412,59 +443,24 @@ impl WriteCompactionFilter {
         }
 
         self.versions += 1;
-        if self.mvcc_key_prefix != mvcc_key_prefix {
-            if self.mvcc_deletion_overlaps.take() == Some(0) {
-                self.handle_bottommost_delete();
-                if self.mvcc_deletions.len() >= DEFAULT_DELETE_BATCH_COUNT {
-                    self.gc_mvcc_deletions();
-                }
-            }
-            self.switch_key_metrics();
-            self.mvcc_key_prefix.clear();
-            self.mvcc_key_prefix.extend_from_slice(mvcc_key_prefix);
-            self.remove_older = false;
-        } else if let Some(ref mut overlaps) = self.mvcc_deletion_overlaps {
-            *overlaps += 1;
-        }
-
-        let mut filtered = self.remove_older;
         let write = parse_write(value)?;
-        if !self.remove_older {
-            match write.write_type {
-                WriteType::Rollback | WriteType::Lock => {
-                    self.mvcc_rollback_and_locks += 1;
-                    filtered = true;
-                }
-                WriteType::Put => self.remove_older = true,
-                WriteType::Delete => {
-                    self.remove_older = true;
-                    if self.is_bottommost_level {
-                        self.mvcc_deletion_overlaps = Some(0);
-                        GC_COMPACTION_FILTER_MVCC_DELETION_MET
-                            .with_label_values(&[STAT_TXN_KEYMODE])
-                            .inc();
-                    }
-                }
-            }
+        if self.mvcc_key_prefix != mvcc_key_prefix {
+            return self.do_filter_new_key(mvcc_key_prefix, write);
         }
 
-        if !filtered {
-            return Ok(CompactionFilterDecision::Keep);
+        if let Some(ref mut overlaps) = self.mvcc_deletion_overlaps {
+            *overlaps += 1;
         }
         self.filtered += 1;
         self.handle_filtered_write(write)?;
         self.flush_pending_writes_if_need(false /* force */)?;
-        let decision = if self.remove_older {
-            // Use `Decision::RemoveAndSkipUntil` instead of `Decision::Remove` to avoid
-            // leaving tombstones, which can only be freed at the bottommost level.
-            debug_assert!(commit_ts > 0);
-            let prefix = Key::from_encoded_slice(mvcc_key_prefix);
-            let skip_until = prefix.append_ts((commit_ts - 1).into()).into_encoded();
-            CompactionFilterDecision::RemoveAndSkipUntil(skip_until)
-        } else {
-            CompactionFilterDecision::Remove
-        };
-        Ok(decision)
+
+        // Use `Decision::RemoveAndSkipUntil` instead of `Decision::Remove` to avoid
+        // leaving tombstones, which can only be freed at the bottommost level.
+        debug_assert!(commit_ts > 0);
+        let prefix = Key::from_encoded_slice(mvcc_key_prefix);
+        let skip_until = prefix.append_ts((commit_ts - 1).into()).into_encoded();
+        Ok(CompactionFilterDecision::RemoveAndSkipUntil(skip_until))
     }
 
     fn handle_filtered_write(&mut self, write: WriteRef<'_>) -> Result<(), String> {
