@@ -258,8 +258,6 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
          } = *snap_state else { return false };
 
         if snap.get_metadata().get_index() < index.load(Ordering::SeqCst) {
-            drop(snap_state);
-            self.cancel_generating_snap(None);
             return false;
         }
         // Should changed `SnapState::Generated` to `SnapState::Relax` when the
