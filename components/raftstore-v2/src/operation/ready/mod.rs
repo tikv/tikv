@@ -96,7 +96,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 return;
             }
             cmp::Ordering::Greater => {
-                println!("wrong msg {:?}, self peer {:?}", msg, self.peer());
                 // We need to create the target peer.
                 self.mark_for_destroy(Some(msg));
                 return;

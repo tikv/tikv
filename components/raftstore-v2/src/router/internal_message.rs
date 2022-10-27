@@ -19,12 +19,3 @@ pub struct ApplyRes {
     pub applied_term: u64,
     pub admin_result: VecDeque<AdminCmdResult>,
 }
-
-#[derive(Debug)]
-pub enum ExecResult {
-    SplitRegion {
-        regions: Vec<Region>,
-        derived: Region,
-        new_split_regions: HashMap<u64, NewSplitPeer>,
-    },
-}

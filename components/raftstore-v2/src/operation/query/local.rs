@@ -176,6 +176,10 @@ where
             }
         }
 
+        debug!(self.logger,
+            "Fail to get snapshot from LocalReader for region";
+            "region_id" => region_id
+        );
         let mut err = errorpb::Error::default();
         err.set_message(format!(
             "Fail to get snapshot from LocalReader for region {}. \
@@ -183,7 +187,6 @@ where
             region_id
         ));
         let mut resp = RaftCmdResponse::default();
-        debug!(self.logger, "Fail to get snapshot from LocalReader for region"; "region_id" => region_id);
         resp.mut_header().set_error(err);
         Err(resp)
     }
@@ -340,10 +343,6 @@ where
                 }),
             );
         }
-        println!(
-            "missing reader, id {}, current meta {:?}",
-            region_id, meta.readers
-        );
         (meta.readers.len(), None)
     }
 

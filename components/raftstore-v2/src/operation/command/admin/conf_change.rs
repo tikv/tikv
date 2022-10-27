@@ -173,7 +173,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 }
 
-impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
+impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn apply_conf_change(
         &mut self,

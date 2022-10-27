@@ -52,7 +52,7 @@ use crate::{
     batch::StoreContext,
     fsm::{ApplyFsm, ApplyResReporter, PeerFsmDelegate},
     raft::{Apply, Peer},
-    router::{ApplyRes, ApplyTask, CmdResChannel, ExecResult, PeerMsg},
+    router::{ApplyRes, ApplyTask, CmdResChannel, PeerMsg},
 };
 
 mod admin;
@@ -129,9 +129,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             region_state,
             mailbox,
             tablet,
-            store_ctx.engine.clone(),
             store_ctx.tablet_factory.clone(),
-            store_ctx.pending_create_peers.clone(),
             logger,
         );
         store_ctx
@@ -311,7 +309,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 }
 
-impl<EK: KvEngine, ER: RaftEngine, R: ApplyResReporter> Apply<EK, ER, R> {
+impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     #[inline]
     pub async fn apply_committed_entries(&mut self, ce: CommittedEntries) {
         fail::fail_point!("APPLY_COMMITTED_ENTRIES");

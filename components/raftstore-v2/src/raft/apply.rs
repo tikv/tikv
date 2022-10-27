@@ -16,23 +16,20 @@ use super::Peer;
 use crate::{
     fsm::ApplyResReporter,
     operation::AdminCmdResult,
-    router::{ApplyRes, CmdResChannel, ExecResult},
+    router::{ApplyRes, CmdResChannel},
     tablet::CachedTablet,
 };
 
 /// Apply applies all the committed commands to kv db.
-pub struct Apply<EK: KvEngine, ER: RaftEngine, R> {
-    pub(crate) store_id: u64,
+pub struct Apply<EK: KvEngine, R> {
+    store_id: u64,
 
     peer: metapb::Peer,
     remote_tablet: CachedTablet<EK>,
-    pub tablet: EK,
+    tablet: EK,
     write_batch: Option<EK::WriteBatch>,
-    log_batch: Option<ER::LogBatch>,
-    new_tablet_index: Option<u64>,
 
-    pub(crate) raft_engine: ER,
-    pub(crate) tablet_factory: Arc<dyn TabletFactory<EK>>,
+    tablet_factory: Arc<dyn TabletFactory<EK>>,
 
     callbacks: Vec<(Vec<CmdResChannel>, RaftCmdResponse)>,
 
@@ -45,16 +42,11 @@ pub struct Apply<EK: KvEngine, ER: RaftEngine, R> {
 
     region_state: RegionLocalState,
 
-    /// Used for handling race between splitting and creating new peer.
-    /// An uninitialized peer can be replaced to the one from splitting iff they
-    /// are exactly the same peer.
-    pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
-
     res_reporter: R,
     pub(crate) logger: Logger,
 }
 
-impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
+impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn new(
         store_id: u64,
@@ -62,9 +54,7 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
         region_state: RegionLocalState,
         res_reporter: R,
         mut remote_tablet: CachedTablet<EK>,
-        raft_engine: ER,
         tablet_factory: Arc<dyn TabletFactory<EK>>,
-        pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
         logger: Logger,
     ) -> Self {
         Apply {
@@ -73,20 +63,26 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
             tablet: remote_tablet.latest().unwrap().clone(),
             remote_tablet,
             write_batch: None,
-            log_batch: None,
-            new_tablet_index: None,
             callbacks: vec![],
             tombstone: false,
             applied_index: 0,
             applied_term: 0,
             admin_cmd_result: VecDeque::new(),
             region_state,
-            pending_create_peers,
-            raft_engine,
             tablet_factory,
             res_reporter,
             logger,
         }
+    }
+
+    #[inline]
+    pub fn store_id(&self) -> u64 {
+        self.store_id
+    }
+
+    #[inline]
+    pub fn tablet_factory(&self) -> &Arc<dyn TabletFactory<EK>> {
+        &self.tablet_factory
     }
 
     #[inline]
@@ -107,18 +103,8 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
     }
 
     #[inline]
-    pub fn take_log_batch(&mut self) -> Option<ER::LogBatch> {
-        self.log_batch.take()
-    }
-
-    #[inline]
     pub fn write_batch_mut(&mut self) -> &mut Option<EK::WriteBatch> {
         &mut self.write_batch
-    }
-
-    #[inline]
-    pub fn log_batch_mut(&mut self) -> &mut Option<ER::LogBatch> {
-        &mut self.log_batch
     }
 
     #[inline]
@@ -130,15 +116,6 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
             self.write_batch = Some(self.tablet.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE));
         }
         self.write_batch.as_mut().unwrap()
-    }
-
-    #[inline]
-    pub fn log_batch_or_default(&mut self) -> &mut ER::LogBatch {
-        if self.log_batch.is_none() {
-            // todo: a better capacity ?
-            self.log_batch = Some(self.raft_engine.log_batch(10));
-        }
-        self.log_batch.as_mut().unwrap()
     }
 
     #[inline]
@@ -168,16 +145,6 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
     }
 
     #[inline]
-    pub fn set_new_tablet_index(&mut self, tablet_index: u64) {
-        self.new_tablet_index = Some(tablet_index);
-    }
-
-    #[inline]
-    pub fn take_new_tablet_index(&mut self) -> Option<u64> {
-        self.new_tablet_index.take()
-    }
-
-    #[inline]
     pub fn tablet(&mut self) -> Option<EK> {
         self.remote_tablet.latest().cloned()
     }
@@ -193,15 +160,6 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
     }
 
     #[inline]
-    pub fn pending_create_peers(&self) -> &Arc<Mutex<HashMap<u64, (u64, bool)>>> {
-        &self.pending_create_peers
-    }
-
-    #[inline]
-    pub fn raft_engine(&self) -> &ER {
-        &self.raft_engine
-    }
-
     pub fn peer(&self) -> &metapb::Peer {
         &self.peer
     }

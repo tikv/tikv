@@ -38,7 +38,7 @@ use crate::{
     fsm::{PeerFsm, PeerFsmDelegate},
     operation::AdminCmdResult,
     raft::{raft_config, write_initial_states, write_peer_state, Apply, Peer, Storage},
-    router::{message::PeerCreation, ApplyRes, ExecResult, PeerMsg, StoreMsg},
+    router::{message::PeerCreation, ApplyRes, PeerMsg, StoreMsg},
 };
 
 fn create_checkpoint(
@@ -85,7 +85,7 @@ pub enum AcrossPeerMsg {
     SplitRegionInitResp(Box<SplitRegionInitResp>),
 }
 
-impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
+impl<EK: KvEngine, R> Apply<EK, R> {
     pub fn exec_batch_split(
         &mut self,
         req: &AdminRequest,
@@ -110,7 +110,7 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
         );
 
         let (regions, _) =
-            init_split_regions(self.store_id, split_reqs, &mut derived, &mut split_keys);
+            init_split_regions(self.store_id(), split_reqs, &mut derived, &mut split_keys);
 
         // todo(SpadeA): Here: we use a temporary solution that we use checkpoint API to
         // clone new tablets. It may cause large jitter as we need to flush the
@@ -126,7 +126,7 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
             }
 
             let new_tablet_path = self
-                .tablet_factory
+                .tablet_factory()
                 .split_tablet_path(new_region_id, RAFT_INIT_LOG_INDEX);
             tablet
                 .create_checkpoint(&new_tablet_path)
@@ -140,7 +140,9 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
                 });
         }
 
-        let new_tablet_path = self.tablet_factory.split_tablet_path(region_id, log_index);
+        let new_tablet_path = self
+            .tablet_factory()
+            .split_tablet_path(region_id, log_index);
         // Change the tablet path by using the new tablet suffix
         tablet
             .create_checkpoint(&new_tablet_path)
@@ -155,7 +157,7 @@ impl<EK: KvEngine, ER: RaftEngine, R> Apply<EK, ER, R> {
         // Here, we open the tablet without registering as it is the split version. We
         // will register it when switching it to the normal version.
         let tablet = self
-            .tablet_factory
+            .tablet_factory()
             .open_tablet(
                 region_id,
                 Some(log_index),
@@ -613,11 +615,9 @@ mod test {
     }
 
     fn assert_split(
-        apply: &mut Apply<engine_test::kv::KvTestEngine, raft::RaftTestEngine, MockReporter>,
+        apply: &mut Apply<engine_test::kv::KvTestEngine, MockReporter>,
         factory: &Arc<TestTabletFactoryV2>,
         region_to_split: &Region,
-        get_region_local_state: &dyn Fn(u64) -> RegionLocalState,
-        get_raft_apply_state: &dyn Fn(u64) -> RaftApplyState,
         right_derived: bool,
         new_region_ids: Vec<u64>,
         split_keys: Vec<Vec<u8>>,
@@ -705,8 +705,6 @@ mod test {
             DbOptions::default(),
             cf_opts,
         ));
-        let raft_engine =
-            raft::new_engine(&format!("{}", path.path().join("raft").display()), None).unwrap();
 
         let tablet = factory
             .open_tablet(
@@ -733,9 +731,7 @@ mod test {
             region_state,
             reporter,
             CachedTablet::new(Some(tablet)),
-            raft_engine.clone(),
             factory.clone(),
-            Arc::default(),
             logger.clone(),
         );
 
@@ -802,22 +798,12 @@ mod test {
         // All requests should be checked.
         assert!(err.to_string().contains("id count"), "{:?}", err);
 
-        let get_region_local_state = |region_id| -> RegionLocalState {
-            raft_engine.get_region_state(region_id).unwrap().unwrap()
-        };
-
-        let get_raft_apply_state = |region_id| -> RaftApplyState {
-            raft_engine.get_apply_state(region_id).unwrap().unwrap()
-        };
-
         let mut log_index = 10;
         // After split: region 1 ["", "k09"], region 10 ["k09", "k10"]
         let regions = assert_split(
             &mut apply,
             &factory,
             &region,
-            &get_region_local_state,
-            &get_raft_apply_state,
             false,
             vec![10],
             vec![b"k09".to_vec()],
@@ -831,8 +817,6 @@ mod test {
             &mut apply,
             &factory,
             regions.get(&1).unwrap(),
-            &get_region_local_state,
-            &get_raft_apply_state,
             true,
             vec![20],
             vec![b"k01".to_vec()],
@@ -847,8 +831,6 @@ mod test {
             &mut apply,
             &factory,
             regions.get(&1).unwrap(),
-            &get_region_local_state,
-            &get_raft_apply_state,
             true,
             vec![30, 40],
             vec![b"k02".to_vec(), b"k03".to_vec()],
@@ -863,8 +845,6 @@ mod test {
             &mut apply,
             &factory,
             regions.get(&1).unwrap(),
-            &get_region_local_state,
-            &get_raft_apply_state,
             false,
             vec![50, 60],
             vec![b"k07".to_vec(), b"k08".to_vec()],

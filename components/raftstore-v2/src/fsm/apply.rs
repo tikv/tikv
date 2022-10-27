@@ -51,21 +51,19 @@ impl ApplyScheduler {
     }
 }
 
-pub struct ApplyFsm<EK: KvEngine, ER: RaftEngine, R> {
-    apply: Apply<EK, ER, R>,
+pub struct ApplyFsm<EK: KvEngine, R> {
+    apply: Apply<EK, R>,
     receiver: Receiver<ApplyTask>,
 }
 
-impl<EK: KvEngine, ER: RaftEngine, R> ApplyFsm<EK, ER, R> {
+impl<EK: KvEngine, R> ApplyFsm<EK, R> {
     pub fn new(
         store_id: u64,
         peer: metapb::Peer,
         region_state: RegionLocalState,
         res_reporter: R,
         remote_tablet: CachedTablet<EK>,
-        raft_engine: ER,
         tablet_factory: Arc<dyn TabletFactory<EK>>,
-        pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
         logger: Logger,
     ) -> (ApplyScheduler, Self) {
         let (tx, rx) = future::unbounded(WakePolicy::Immediately);
@@ -75,9 +73,7 @@ impl<EK: KvEngine, ER: RaftEngine, R> ApplyFsm<EK, ER, R> {
             region_state,
             res_reporter,
             remote_tablet,
-            raft_engine,
             tablet_factory,
-            pending_create_peers,
             logger,
         );
         (
@@ -90,7 +86,7 @@ impl<EK: KvEngine, ER: RaftEngine, R> ApplyFsm<EK, ER, R> {
     }
 }
 
-impl<EK: KvEngine, ER: RaftEngine, R: ApplyResReporter> ApplyFsm<EK, ER, R> {
+impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
     pub async fn handle_all_tasks(&mut self) {
         loop {
             let mut task = match self.receiver.next().await {

@@ -74,17 +74,6 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub tablet_factory: Arc<dyn TabletFactory<EK>>,
     pub apply_pool: FuturePool,
     pub log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
-    /// region_id -> (peer_id, is_splitting)
-    /// Used for handling race between splitting and creating new peer.
-    /// An uninitialized peer can be replaced to the one from splitting iff they
-    /// are exactly the same peer.
-    ///
-    /// WARNING:
-    /// To avoid deadlock, if you want to use `store_meta` and
-    /// `pending_create_peers` together, the lock sequence MUST BE:
-    /// 1. lock the store_meta.
-    /// 2. lock the pending_create_peers.
-    pub pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
 }
 
 /// A [`PollHandler`] that handles updates of [`StoreFsm`]s and [`PeerFsm`]s.
@@ -236,7 +225,6 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     apply_pool: FuturePool,
     logger: Logger,
     store_meta: Arc<Mutex<StoreMeta<EK>>>,
-    pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
@@ -274,7 +262,6 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             logger,
             write_senders: store_writers.senders(),
             store_meta,
-            pending_create_peers: Arc::default(),
         }
     }
 
@@ -311,7 +298,6 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                         regions[&region_id].1.logger().list()
                     ));
                 }
-
                 Ok(())
             })?;
         self.clean_up_tablets(&regions)?;
@@ -352,7 +338,6 @@ where
             tablet_factory: self.tablet_factory.clone(),
             apply_pool: self.apply_pool.clone(),
             log_fetch_scheduler: self.log_fetch_scheduler.clone(),
-            pending_create_peers: self.pending_create_peers.clone(),
         };
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
         StorePoller::new(poll_ctx, cfg_tracker)

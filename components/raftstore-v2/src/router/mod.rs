@@ -12,7 +12,7 @@ pub use self::response_channel::FlushChannel;
 pub use self::response_channel::FlushSubscriber;
 pub use self::{
     imp::RaftRouter,
-    internal_message::{ApplyRes, ExecResult},
+    internal_message::ApplyRes,
     message::{PeerMsg, PeerTick, RaftRequest, StoreMsg, StoreTick},
     response_channel::{
         CmdResChannel, DebugInfoChannel, DebugInfoSubscriber, QueryResChannel, QueryResult,

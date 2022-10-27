@@ -104,7 +104,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
 
     /// region buckets.
     region_buckets: Option<BucketStat>,
-    pub last_region_buckets: Option<BucketStat>,
+    last_region_buckets: Option<BucketStat>,
 
     /// Transaction extensions related to this peer.
     txn_ext: Arc<TxnExt>,
