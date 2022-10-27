@@ -474,14 +474,9 @@ mod tests {
         let mut worker = Worker::new("test-read-worker").lazy_build("test-read-worker");
         let sched = worker.scheduler();
         let logger = slog_global::borrow_global().new(o!());
-        let mut s = Storage::uninit(
-            6,
-            region.clone(),
-            raft_engine.clone(),
-            sched.clone(),
-            &logger.clone(),
-        )
-        .unwrap();
+        let mut s = Storage::new(4, 6, raft_engine.clone(), sched.clone(), &logger.clone())
+            .unwrap()
+            .unwrap();
         let (router, rx) = TestRouter::new();
         worker.start(ReadRunner::new(router.clone(), raft_engine));
         // setup peer applyer
@@ -519,5 +514,7 @@ mod tests {
         let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         s.cancel_generating_snap(None);
         assert_eq!(*s.snap_state.borrow(), SnapState::Relax);
+
+        // TODO: add test get twice snapshot and cancel once
     }
 }

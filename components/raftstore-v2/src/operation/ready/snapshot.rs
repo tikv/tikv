@@ -15,7 +15,7 @@
 //! - apply worker schedule a gen tablet snapshot task to async read worker with
 //!   region state and apply state.
 //! - async read worker generates the tablet snapshot and sends the result to
-//!   store, then Raft will get the snapshot.
+//!   peer fsm, then Raft will get the snapshot.
 
 use std::{
     borrow::BorrowMut,
@@ -281,10 +281,6 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         // snap is consumed or canceled. Such as leader changed, the state of generated
         // should be reset.
         *snap_state = SnapState::Generated(snap);
-        info!(
-            self.logger(),
-            "snap state switched to generated";
-        );
         true
     }
 }
