@@ -1,4 +1,21 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
+//! This module contains snapshot relative processing logic.
+//!
+//! # Snapshot State
+//!
+//! generator and apply snapshot works asynchronously. the snap_sate indicates
+//! the curren snapshot state.
+//!
+//! # Porcess Overview
+//!
+//! generate snapshot:
+//! - Raft call `snapshot` interface to acquire a snapshot, then storage setup
+//!   the gen_snap_task.
+//! - handle ready will send the gen_snap_task to the apply work
+//! - apply worker schedule a gen tablet snapshot task to async read worker with
+//!   region state and apply state.
+//! - async read worker generates the tablet snapshot and sends the result to
+//!   store, then Raft will get the snapshot.
 
 use std::{
     borrow::BorrowMut,
