@@ -249,6 +249,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
 
     /// Try to switch snap state to generated. only `Generating` can switch to
     /// `Generated`.
+    ///  TODO: make the snap state more clearer, the snapshot must be consumed.
     pub fn try_switch_snap_state_to_generated(&self, snap: Box<Snapshot>) -> bool {
         let mut snap_state = self.snap_state_mut();
         let SnapState::Generating {
@@ -261,9 +262,9 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             self.cancel_generating_snap(None);
             return false;
         }
-        // TODO: we should changed `SnapState::Generated` to `SnapState::Relax` when the
-        // snap is consumed or canceled. Like leader changed, the snap generated should
-        // be canceled.
+        // Should changed `SnapState::Generated` to `SnapState::Relax` when the
+        // snap is consumed or canceled. Such as leader changed, the state of generated
+        // should be reset.
         *snap_state = SnapState::Generated(snap);
         info!(
             self.logger(),
