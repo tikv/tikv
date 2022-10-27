@@ -52,9 +52,9 @@ pub struct GenSnapTask {
     region_id: u64,
     // Fill it when you are going to generate the snapshot.
     // index used to check if the gen task should be canceled.
-    pub index: Arc<AtomicU64>,
+    index: Arc<AtomicU64>,
     // Set it to true to cancel the task if necessary.
-    pub canceled: Arc<AtomicBool>,
+    canceled: Arc<AtomicBool>,
     // indicates whether the snapshot is triggered due to load balance
     for_balance: bool,
 }
