@@ -446,7 +446,7 @@ mod tests {
         config::CoprReadPoolConfig,
         coprocessor::{self, readpool_impl},
         server::TestRaftStoreRouter,
-        storage::{lock_manager::DummyLockManager, TestStorageBuilderApiV1},
+        storage::{lock_manager::MockLockManager, TestStorageBuilderApiV1},
     };
 
     #[derive(Clone)]
@@ -495,7 +495,7 @@ mod tests {
             ..Default::default()
         };
 
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .build()
             .unwrap();
 

@@ -13,7 +13,7 @@ use batch_system::{Fsm, FsmScheduler, Mailbox};
 use crossbeam::channel::TryRecvError;
 use engine_traits::KvEngine;
 use futures::{Future, StreamExt};
-use kvproto::raft_serverpb::RegionLocalState;
+use kvproto::{metapb, raft_serverpb::RegionLocalState};
 use slog::Logger;
 use tikv_util::mpsc::future::{self, Receiver, Sender, WakePolicy};
 
@@ -57,13 +57,14 @@ pub struct ApplyFsm<EK: KvEngine, R> {
 
 impl<EK: KvEngine, R> ApplyFsm<EK, R> {
     pub fn new(
+        peer: metapb::Peer,
         region_state: RegionLocalState,
         res_reporter: R,
         remote_tablet: CachedTablet<EK>,
         logger: Logger,
     ) -> (ApplyScheduler, Self) {
         let (tx, rx) = future::unbounded(WakePolicy::Immediately);
-        let apply = Apply::new(region_state, res_reporter, remote_tablet, logger);
+        let apply = Apply::new(peer, region_state, res_reporter, remote_tablet, logger);
         (
             ApplyScheduler { sender: tx },
             Self {

@@ -9,8 +9,8 @@ use crate::storage::{
     mvcc::{MvccTxn, SnapshotReader},
     txn::{
         commands::{
-            Command, CommandExt, FlashbackToVersionReadPhase, ReaderWithStats, ResponsePolicy,
-            TypedCommand, WriteCommand, WriteContext, WriteResult,
+            Command, CommandExt, FlashbackToVersionReadPhase, ReaderWithStats, ReleasedLocks,
+            ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
         },
         flashback_to_version, latch, Result,
     },
@@ -104,6 +104,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
                 }
             },
             lock_info: None,
+            released_locks: ReleasedLocks::new(),
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
         })

@@ -46,7 +46,7 @@ pub use mvcc_by_key::MvccByKey;
 pub use mvcc_by_start_ts::MvccByStartTs;
 pub use pause::Pause;
 pub use pessimistic_rollback::PessimisticRollback;
-pub use prewrite::{one_pc_commit_ts, Prewrite, PrewritePessimistic};
+pub use prewrite::{one_pc_commit, Prewrite, PrewritePessimistic};
 pub use resolve_lock::{ResolveLock, RESOLVE_LOCK_BATCH_SIZE};
 pub use resolve_lock_lite::ResolveLockLite;
 pub use resolve_lock_readphase::ResolveLockReadPhase;
@@ -63,8 +63,8 @@ use crate::storage::{
     mvcc::{Lock as MvccLock, MvccReader, ReleasedLock, SnapshotReader},
     txn::{latch, ProcessResult, Result},
     types::{
-        MvccInfo, PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallbackType,
-        TxnStatus,
+        MvccInfo, PessimisticLockParameters, PessimisticLockRes, PrewriteResult,
+        SecondaryLocksStatus, StorageCallbackType, TxnStatus,
     },
     Result as StorageResult, Snapshot, Statistics,
 };
@@ -365,14 +365,6 @@ impl From<FlashbackToVersionRequest> for TypedCommand<()> {
     }
 }
 
-#[derive(Default)]
-pub(super) struct ReleasedLocks {
-    start_ts: TimeStamp,
-    commit_ts: TimeStamp,
-    hashes: Vec<u64>,
-    pessimistic: bool,
-}
-
 /// Represents for a scheduler command, when should the response sent to the
 /// client. For most cases, the response should be sent after the result being
 /// successfully applied to the storage (if needed). But in some special cases,
@@ -398,62 +390,58 @@ pub struct WriteResult {
     pub rows: usize,
     pub pr: ProcessResult,
     pub lock_info: Option<WriteResultLockInfo>,
+    pub released_locks: ReleasedLocks,
     pub lock_guards: Vec<KeyHandleGuard>,
     pub response_policy: ResponsePolicy,
 }
 
 pub struct WriteResultLockInfo {
-    pub lock: lock_manager::Lock,
-    pub key: Vec<u8>,
-    pub is_first_lock: bool,
-    pub wait_timeout: Option<WaitTimeout>,
+    pub lock_digest: lock_manager::LockDigest,
+    pub key: Key,
+    pub lock_info_pb: LockInfo,
+    pub parameters: PessimisticLockParameters,
 }
 
 impl WriteResultLockInfo {
-    pub fn from_lock_info_pb(
-        lock_info: &LockInfo,
-        is_first_lock: bool,
-        wait_timeout: Option<WaitTimeout>,
-    ) -> Self {
-        let lock = lock_manager::Lock {
-            ts: lock_info.get_lock_version().into(),
-            hash: Key::from_raw(lock_info.get_key()).gen_hash(),
+    pub fn new(lock_info_pb: LockInfo, parameters: PessimisticLockParameters) -> Self {
+        let lock = lock_manager::LockDigest {
+            ts: lock_info_pb.get_lock_version().into(),
+            hash: Key::from_raw(lock_info_pb.get_key()).gen_hash(),
         };
-        let key = lock_info.get_key().to_owned();
+        let key = Key::from_raw(lock_info_pb.get_key());
         Self {
-            lock,
+            lock_digest: lock,
             key,
-            is_first_lock,
-            wait_timeout,
+            lock_info_pb,
+            parameters,
         }
     }
 }
 
+#[derive(Default)]
+pub struct ReleasedLocks(Vec<ReleasedLock>);
+
 impl ReleasedLocks {
-    pub fn new(start_ts: TimeStamp, commit_ts: TimeStamp) -> Self {
-        Self {
-            start_ts,
-            commit_ts,
-            ..Default::default()
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn push(&mut self, lock: Option<ReleasedLock>) {
         if let Some(lock) = lock {
-            self.hashes.push(lock.hash);
-            if !self.pessimistic {
-                self.pessimistic = lock.pessimistic;
-            }
+            self.0.push(lock);
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.hashes.is_empty()
+        self.0.is_empty()
     }
 
-    // Wake up pessimistic transactions that waiting for these locks.
-    pub fn wake_up<L: LockManager>(self, lock_mgr: &L) {
-        lock_mgr.wake_up(self.start_ts, self.hashes, self.commit_ts, self.pessimistic);
+    pub fn clear(&mut self) {
+        self.0.clear()
+    }
+
+    pub fn into_iter(self) -> impl Iterator<Item = ReleasedLock> {
+        self.0.into_iter()
     }
 }
 
@@ -756,7 +744,7 @@ pub mod test_util {
     use crate::storage::{
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{Error, ErrorInner, Result},
-        DummyLockManager, Engine,
+        Engine, MockLockManager,
     };
 
     // Some utils for tests that may be used in multiple source code files.
@@ -769,7 +757,7 @@ pub mod test_util {
     ) -> Result<PrewriteResult> {
         let snap = engine.snapshot(Default::default())?;
         let context = WriteContext {
-            lock_mgr: &DummyLockManager {},
+            lock_mgr: &MockLockManager::new(),
             concurrency_manager: cm,
             extra_op: ExtraOp::Noop,
             statistics,
@@ -907,7 +895,7 @@ pub mod test_util {
         );
 
         let context = WriteContext {
-            lock_mgr: &DummyLockManager {},
+            lock_mgr: &MockLockManager::new(),
             concurrency_manager,
             extra_op: ExtraOp::Noop,
             statistics,
@@ -932,7 +920,7 @@ pub mod test_util {
         let concurrency_manager = ConcurrencyManager::new(start_ts.into());
         let cmd = Rollback::new(keys, TimeStamp::from(start_ts), ctx);
         let context = WriteContext {
-            lock_mgr: &DummyLockManager {},
+            lock_mgr: &MockLockManager::new(),
             concurrency_manager,
             extra_op: ExtraOp::Noop,
             statistics,
