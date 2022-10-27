@@ -3,7 +3,7 @@
 use std::{
     error::Error,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
 };
@@ -80,6 +80,7 @@ pub struct LockManagerConfigManager {
     pub detector_scheduler: DeadlockScheduler,
     pub pipelined: Arc<AtomicBool>,
     pub in_memory: Arc<AtomicBool>,
+    pub wake_up_delay_duration_ms: Arc<AtomicU64>,
 }
 
 impl LockManagerConfigManager {
@@ -88,29 +89,35 @@ impl LockManagerConfigManager {
         detector_scheduler: DeadlockScheduler,
         pipelined: Arc<AtomicBool>,
         in_memory: Arc<AtomicBool>,
+        wake_up_delay_duration_ms: Arc<AtomicU64>,
     ) -> Self {
         LockManagerConfigManager {
             waiter_mgr_scheduler,
             detector_scheduler,
             pipelined,
             in_memory,
+            wake_up_delay_duration_ms,
         }
     }
 }
 
 impl ConfigManager for LockManagerConfigManager {
     fn dispatch(&mut self, mut change: ConfigChange) -> Result<(), Box<dyn Error>> {
-        match (
-            change.remove("wait_for_lock_timeout").map(Into::into),
-            change.remove("wake_up_delay_duration").map(Into::into),
-        ) {
-            (timeout @ Some(_), delay) => {
-                self.waiter_mgr_scheduler.change_config(timeout, delay);
-                self.detector_scheduler.change_ttl(timeout.unwrap().into());
-            }
-            (None, delay @ Some(_)) => self.waiter_mgr_scheduler.change_config(None, delay),
-            (None, None) => {}
-        };
+        if let Some(p) = change.remove("wait_for_lock_timeout").map(Into::into) {
+            self.waiter_mgr_scheduler.change_config(Some(p));
+            self.detector_scheduler.change_ttl(p.into());
+        }
+        if let Some(p) = change
+            .remove("wake_up_delay_duration")
+            .map(ReadableDuration::from)
+        {
+            info!(
+                "Waiter manager config changed";
+                "wake_up_delay_duration" => %p,
+            );
+            self.wake_up_delay_duration_ms
+                .store(p.as_millis(), Ordering::Relaxed);
+        }
         if let Some(p) = change.remove("pipelined").map(Into::into) {
             self.pipelined.store(p, Ordering::Relaxed);
         }
