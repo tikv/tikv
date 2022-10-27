@@ -340,14 +340,14 @@ impl GcsStorage {
         Ok(res)
     }
 
-    fn error_to_async_read<E>(kind: io::ErrorKind, e: E) -> Box<dyn AsyncRead + Unpin>
+    fn error_to_async_read<E>(kind: io::ErrorKind, e: E) -> cloud::blob::BlobStream<'static>
     where
         E: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
         Box::new(error_stream(io::Error::new(kind, e)).into_async_read())
     }
 
-    fn get_range(&self, name: &str, range: Option<String>) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn get_range(&self, name: &str, range: Option<String>) -> cloud::blob::BlobStream {
         let bucket = self.config.bucket.bucket.to_string();
         let name = self.maybe_prefix_key(name);
         debug!("read file from GCS storage"; "key" => %name);
@@ -492,11 +492,11 @@ impl BlobStorage for GcsStorage {
         Ok::<_, io::Error>(())
     }
 
-    fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn get(&self, name: &str) -> cloud::blob::BlobStream {
         self.get_range(name, None)
     }
 
-    fn get_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn get_part(&self, name: &str, off: u64, len: u64) -> cloud::blob::BlobStream {
         // inclusive, bytes=0-499 -> [0, 499]
         self.get_range(name, Some(format!("bytes={}-{}", off, off + len - 1)))
     }

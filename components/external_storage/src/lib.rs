@@ -58,6 +58,8 @@ pub fn record_storage_create(start: Instant, storage: &dyn ExternalStorage) {
 /// signature of write.) see https://github.com/rust-lang/rust/issues/63033
 pub struct UnpinReader(pub Box<dyn AsyncRead + Unpin + Send>);
 
+pub type ExternalData<'a> = Box<dyn AsyncRead + Unpin + Send + 'a>;
+
 #[derive(Debug, Default)]
 pub struct BackendConfig {
     pub s3_multi_part_size: usize,
@@ -75,8 +77,8 @@ pub struct RestoreConfig {
 /// a reader dispatcher for different compression type.
 pub fn compression_reader_dispatcher<'a>(
     compression_type: Option<CompressionType>,
-    inner: Box<dyn AsyncRead + Unpin + 'a>,
-) -> io::Result<Box<dyn AsyncRead + Unpin + 'a>> {
+    inner: ExternalData<'a>,
+) -> io::Result<ExternalData<'a>> {
     match compression_type {
         Some(c) => match c {
             // The log files generated from TiKV v6.2.0 use the default value (0).
@@ -107,13 +109,13 @@ pub trait ExternalStorage: 'static + Send + Sync {
     async fn write(&self, name: &str, reader: UnpinReader, content_length: u64) -> io::Result<()>;
 
     /// Read all contents of the given path.
-    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_>;
+    fn read(&self, name: &str) -> ExternalData;
 
     /// Read part of contents of the given path.
-    fn read_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_>;
+    fn read_part(&self, name: &str, off: u64, len: u64) -> ExternalData;
 
     /// Read from external storage and restore to the given path
-    fn restore(
+    async fn restore(
         &self,
         storage_name: &str,
         restore_name: std::path::PathBuf,
@@ -137,22 +139,23 @@ pub trait ExternalStorage: 'static + Send + Sync {
 
             compression_reader_dispatcher(compression_type, inner)?
         };
-        let output: &mut dyn Write = &mut File::create(restore_name)?;
+        let output = File::create(restore_name)?;
         // the minimum speed of reading data, in bytes/second.
         // if reading speed is slower than this rate, we will stop with
         // a "TimedOut" error.
         // (at 8 KB/s for a 2 MB buffer, this means we timeout after 4m16s.)
         let min_read_speed: usize = 8192;
-        let mut input = encrypt_wrap_reader(file_crypter, reader)?;
+        let input = encrypt_wrap_reader(file_crypter, reader)?;
 
-        block_on_external_io(read_external_storage_into_file(
-            &mut input,
+        read_external_storage_into_file(
+            input,
             output,
             speed_limiter,
             expected_length,
             expected_sha256,
             min_read_speed,
-        ))
+        )
+        .await
     }
 }
 
@@ -170,11 +173,11 @@ impl ExternalStorage for Arc<dyn ExternalStorage> {
         (**self).write(name, reader, content_length).await
     }
 
-    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn read(&self, name: &str) -> ExternalData {
         (**self).read(name)
     }
 
-    fn read_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn read_part(&self, name: &str, off: u64, len: u64) -> ExternalData {
         (**self).read_part(name, off, len)
     }
 }
@@ -193,11 +196,11 @@ impl ExternalStorage for Box<dyn ExternalStorage> {
         self.as_ref().write(name, reader, content_length).await
     }
 
-    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn read(&self, name: &str) -> ExternalData {
         self.as_ref().read(name)
     }
 
-    fn read_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn read_part(&self, name: &str, off: u64, len: u64) -> ExternalData {
         self.as_ref().read_part(name, off, len)
     }
 }
@@ -206,8 +209,8 @@ impl ExternalStorage for Box<dyn ExternalStorage> {
 /// Return the reader directly if file_crypter is None.
 pub fn encrypt_wrap_reader<'a>(
     file_crypter: Option<FileEncryptionInfo>,
-    reader: Box<dyn AsyncRead + Unpin + 'a>,
-) -> io::Result<Box<dyn AsyncRead + Unpin + 'a>> {
+    reader: ExternalData<'a>,
+) -> io::Result<ExternalData<'a>> {
     let input = match file_crypter {
         Some(x) => Box::new(DecrypterReader::new(
             reader,
@@ -221,14 +224,18 @@ pub fn encrypt_wrap_reader<'a>(
     Ok(input)
 }
 
-pub async fn read_external_storage_into_file(
-    input: &mut (dyn AsyncRead + Unpin),
-    output: &mut dyn Write,
+pub async fn read_external_storage_into_file<In, Out>(
+    mut input: In,
+    mut output: Out,
     speed_limiter: &Limiter,
     expected_length: u64,
     expected_sha256: Option<Vec<u8>>,
     min_read_speed: usize,
-) -> io::Result<()> {
+) -> io::Result<()>
+where
+    In: AsyncRead + Unpin,
+    Out: Write,
+{
     let dur = Duration::from_secs((READ_BUF_SIZE / min_read_speed) as u64);
 
     // do the I/O copy from external_storage to the local file.

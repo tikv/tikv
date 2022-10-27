@@ -8,7 +8,7 @@ use tokio::io;
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 
 use super::ExternalStorage;
-use crate::UnpinReader;
+use crate::{ExternalData, UnpinReader};
 
 /// A storage saves files into void.
 /// It is mainly for test use.
@@ -44,11 +44,11 @@ impl ExternalStorage for NoopStorage {
         Ok(())
     }
 
-    fn read(&self, _name: &str) -> Box<dyn AsyncRead + Unpin> {
+    fn read(&self, _name: &str) -> ExternalData {
         Box::new(io::empty().compat())
     }
 
-    fn read_part(&self, _name: &str, _off: u64, _len: u64) -> Box<dyn AsyncRead + Unpin> {
+    fn read_part(&self, _name: &str, _off: u64, _len: u64) -> ExternalData {
         Box::new(io::empty().compat())
     }
 }

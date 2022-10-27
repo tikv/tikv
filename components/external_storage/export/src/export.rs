@@ -24,7 +24,7 @@ use external_storage::dylib_client;
 use external_storage::grpc_client;
 use external_storage::{
     compression_reader_dispatcher, encrypt_wrap_reader, record_storage_create, BackendConfig,
-    HdfsStorage,
+    ExternalData, HdfsStorage,
 };
 pub use external_storage::{
     read_external_storage_into_file, ExternalStorage, LocalStorage, NoopStorage, RestoreConfig,
@@ -324,13 +324,13 @@ impl<S: ExternalStorage> ExternalStorage for EncryptedExternalStorage<S> {
     async fn write(&self, name: &str, reader: UnpinReader, content_length: u64) -> io::Result<()> {
         self.storage.write(name, reader, content_length).await
     }
-    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn read(&self, name: &str) -> ExternalData {
         self.storage.read(name)
     }
-    fn read_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn read_part(&self, name: &str, off: u64, len: u64) -> ExternalData {
         self.storage.read_part(name, off, len)
     }
-    fn restore(
+    async fn restore(
         &self,
         storage_name: &str,
         restore_name: std::path::PathBuf,
@@ -354,19 +354,19 @@ impl<S: ExternalStorage> ExternalStorage for EncryptedExternalStorage<S> {
 
             compression_reader_dispatcher(compression_type, inner)?
         };
-        let file_writer: &mut dyn Write =
-            &mut self.key_manager.create_file_for_write(&restore_name)?;
+        let file_writer = self.key_manager.create_file_for_write(&restore_name)?;
         let min_read_speed: usize = 8192;
         let mut input = encrypt_wrap_reader(file_crypter, reader)?;
 
-        block_on_external_io(read_external_storage_into_file(
+        read_external_storage_into_file(
             &mut input,
             file_writer,
             speed_limiter,
             expected_length,
             expected_sha256,
             min_read_speed,
-        ))
+        )
+        .await
     }
 }
 
@@ -384,11 +384,11 @@ impl<Blob: BlobStorage> ExternalStorage for BlobStore<Blob> {
             .await
     }
 
-    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn read(&self, name: &str) -> ExternalData {
         (**self).get(name)
     }
 
-    fn read_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn read_part(&self, name: &str, off: u64, len: u64) -> ExternalData {
         (**self).get_part(name, off, len)
     }
 }

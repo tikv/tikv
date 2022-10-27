@@ -2277,11 +2277,11 @@ mod tests {
             }
         }
 
-        fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
+        fn read(&self, name: &str) -> external_storage::ExternalData {
             self.s.read(name)
         }
 
-        fn read_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_> {
+        fn read_part(&self, name: &str, off: u64, len: u64) -> external_storage::ExternalData {
             self.s.read_part(name, off, len)
         }
     }

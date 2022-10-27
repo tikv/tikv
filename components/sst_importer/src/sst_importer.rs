@@ -10,7 +10,7 @@ use std::{
     sync::Arc,
 };
 
-use dashmap::DashMap;
+use dashmap::{mapref::entry::Entry, DashMap};
 use encryption::{to_engine_encryption_method, DataKeyManager};
 use engine_rocks::{get_env, RocksSstReader};
 use engine_traits::{
@@ -31,6 +31,7 @@ use tikv_util::{
     time::{Instant, Limiter},
     Either,
 };
+use tokio::runtime::Runtime;
 use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
@@ -51,6 +52,8 @@ pub struct SstImporter {
     compression_types: HashMap<CfName, SstCompressionType>,
     file_locks: Arc<DashMap<String, ()>>,
     cached_storage: Arc<DashMap<String, Arc<dyn ExternalStorage>>>,
+
+    download_rt: Runtime,
 }
 
 impl SstImporter {
@@ -69,6 +72,9 @@ impl SstImporter {
             compression_types: HashMap::with_capacity(2),
             file_locks: Arc::new(DashMap::default()),
             cached_storage: Arc::default(),
+            download_rt: tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?,
         })
     }
 
@@ -229,6 +235,40 @@ impl SstImporter {
         self.switcher.get_mode()
     }
 
+    fn cached_storage(
+        &self,
+        cache_key: &str,
+        backend: &StorageBackend,
+    ) -> Result<Arc<dyn ExternalStorage>> {
+        let s = self.cached_storage.get(cache_key);
+        match s {
+            Some(s) => {
+                EXT_STORAGE_CACHE_COUNT.with_label_values(&["hit"]).inc();
+                Ok(Arc::clone(s.value()))
+            }
+            None => {
+                drop(s);
+                let e = self.cached_storage.entry(cache_key.to_owned());
+                match e {
+                    Entry::Occupied(v) => Ok(Arc::clone(v.get())),
+                    Entry::Vacant(v) => {
+                        EXT_STORAGE_CACHE_COUNT.with_label_values(&["miss"]).inc();
+                        let s =
+                            external_storage_export::create_storage(backend, Default::default())?;
+                        let url = s
+                            .url()
+                            .map(|u| u.to_string())
+                            .unwrap_or_else(|_| "<unknown>".to_owned());
+                        info!("external storage cache missed, creating new."; "id" => %cache_key, "storage" => %url);
+                        let cached = Arc::from(s);
+                        v.insert(Arc::clone(&cached));
+                        Ok(cached)
+                    }
+                }
+            }
+        }
+    }
+
     fn download_file_from_external_storage(
         &self,
         file_length: u64,
@@ -252,16 +292,12 @@ impl SstImporter {
         }
         // prepare to download the file from the external_storage
         // TODO: pass a config to support hdfs
-        let ext_storage = match self.cached_storage.get(cache_key) {
-            Some(s) => Arc::clone(s.value()),
-            None => {
-                let s = external_storage_export::create_storage(backend, Default::default())?;
-                let cached = Arc::from(s);
-
-                self.cached_storage
-                    .insert(cache_key.to_owned(), Arc::clone(&cached));
-                cached
-            }
+        let ext_storage = if cache_key.is_empty() {
+            EXT_STORAGE_CACHE_COUNT.with_label_values(&["skip"]).inc();
+            let s = external_storage_export::create_storage(backend, Default::default())?;
+            Arc::from(s)
+        } else {
+            self.cached_storage(cache_key, backend)?
         };
         let url = ext_storage.url()?.to_string();
 
@@ -277,13 +313,13 @@ impl SstImporter {
             Either::Right(y) => y,
         };
 
-        let result = ext_storage.restore(
+        let result = self.download_rt.block_on(ext_storage.restore(
             src_file_name,
             dst_file.clone(),
             file_length,
             speed_limiter,
             restore_config,
-        );
+        ));
         IMPORTER_DOWNLOAD_BYTES.observe(file_length as _);
         result.map_err(|e| Error::CannotReadExternalStorage {
             url: url.to_string(),
