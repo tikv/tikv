@@ -676,14 +676,15 @@ mod tests {
     // 88,852,361 ns/iter (+/- 11,536,292) (futures-util 0.3.15)
     #[bench]
     fn bench_read_to_end(b: &mut test::Bencher) {
-        b.iter(|| {
-            let mut v = [0; BENCH_READ_SIZE];
+        let mut v = [0; BENCH_READ_SIZE];
+        let mut dst = Vec::with_capacity(BENCH_READ_SIZE);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
 
+        b.iter(|| {
             let mut r = ThrottleRead::new(Cursor::new(&mut v));
-            let mut dst = Vec::with_capacity(BENCH_READ_SIZE);
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .build()
-                .unwrap();
+            dst.clear();
 
             rt.block_on(r.read_to_end(&mut dst)).unwrap();
             assert_eq!(dst.len(), BENCH_READ_SIZE)
@@ -693,14 +694,14 @@ mod tests {
     // 6,086,659 ns/iter (+/- 816,577)
     #[bench]
     fn bench_manual_read_to_end(b: &mut test::Bencher) {
+        let mut v = [0; BENCH_READ_SIZE];
+        let mut dst = Vec::with_capacity(BENCH_READ_SIZE);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
         b.iter(|| {
-            let mut v = [0; BENCH_READ_SIZE];
-
             let r = ThrottleRead::new(Cursor::new(&mut v));
-            let mut dst = Vec::with_capacity(1024);
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .build()
-                .unwrap();
+            dst.clear();
 
             rt.block_on(read_to_end(r, &mut dst)).unwrap();
             assert_eq!(dst.len(), BENCH_READ_SIZE)
