@@ -62,7 +62,7 @@ where
 {
     let env = Arc::new(Environment::new(2));
     let cfg = Arc::new(VersionTrack::new(Config::default()));
-    cfg.update(|c| c.raft_client_backoff_step = ReadableDuration::millis(10));
+    cfg.update(|c| Ok(c.raft_client_backoff_step = ReadableDuration::millis(10)));
     let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let worker = LazyWorker::new("test-raftclient");
     let loads = Arc::new(ThreadLoadPool::with_threshold(1000));

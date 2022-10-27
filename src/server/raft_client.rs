@@ -608,7 +608,6 @@ where
                 RaftCallRes::Disconnected(ever_connected)
             };
             let _ = tx.send(res);
-            return;
         }
     }
 }
@@ -873,6 +872,8 @@ async fn start<S, R, E>(
                         .inc_by(1);
                 }
 
+                // broadcast is time consuming operation which would blocks raftstore, so report
+                // unreachable only once until being connected again.
                 if retry_times == 1 || ever_connected {
                     back_end
                         .builder

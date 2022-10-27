@@ -55,7 +55,7 @@ use tikv_util::{
     mpsc::{self, LooseBoundedSender, Receiver},
     store::{find_peer, is_learner, region_on_same_stores},
     sys::{disk::DiskUsage, memory_usage_reaches_high_water},
-    time::{monotonic_raw_now, Instant as TiInstant},
+    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant},
     trace, warn,
     worker::{ScheduleError, Scheduler},
     Either,
@@ -102,7 +102,7 @@ use crate::{
     },
     Error, Result,
 };
-use tikv_util::time::duration_to_sec;
+
 #[derive(Clone, Copy, Debug)]
 pub struct DelayDestroy {
     merged_by_target: bool,
