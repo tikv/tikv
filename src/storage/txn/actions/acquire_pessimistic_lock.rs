@@ -17,12 +17,19 @@ use crate::storage::{
 /// Acquires pessimistic lock on a single key. Optionally reads the previous
 /// value by the way.
 ///
-/// When `need_value` is set, the first return value will be the previous value
-/// of the key (possibly `None`). When `need_value` is not set but
-/// `need_check_existence` is set, the first return value will be an empty value
-/// (`Some(vec![])`) if the key exists before or `None` if not. If neither
-/// `need_value` nor `need_check_existence` is set, the first return value is
-/// always `None`.
+/// When `need_value` is set, the first return value will be
+/// `PessimisticLockKeyResult::Value`. When `need_value` is not set but
+/// `need_check_existence` is set, the first return value will be
+/// `PessimisticLockKeyResult::Existence`. If neither `need_value` nor
+/// `need_check_existence` is  set, the first return value will be
+/// `PessimisticLockKeyResult::Empty`.
+///
+/// If `allow_lock_with_conflict` is set, and the lock is acquired successfully
+/// ignoring a write conflict, the first return value will be
+/// `PessimisticLockKeyResult::LockedWithConflict` no matter how `need_value`
+/// and `need_check_existence` are set, and the `for_update_ts` in
+/// the actually-written lock will be equal to the `commit_ts` of the latest
+/// Write record found on the key.
 ///
 /// The second return value will also contains the previous value of the key if
 /// `need_old_value` is set, or `OldValue::Unspecified` otherwise.

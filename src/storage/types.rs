@@ -151,14 +151,26 @@ pub struct PessimisticLockParameters {
 /// Represents the result of pessimistic lock on a single key.
 #[derive(Debug, Clone)]
 pub enum PessimisticLockKeyResult {
+    /// The lock is acquired successfully, returning no additional information.
     Empty,
+    /// The lock is acquired successfully, and the previous value is read and
+    /// returned.
     Value(Option<Value>),
+    /// The lock is acquired successfully, and also checked if the key exists
+    /// previously.
     Existence(bool),
+    /// There is a write conflict, but the lock is acquired ingoring the write
+    /// conflict.
     LockedWithConflict {
+        /// The previous value of the key.
         value: Option<Value>,
+        /// The `commit_ts` of the latest Write record found on this key. This
+        /// is also the actual `for_update_ts` written to the lock.
         conflict_ts: TimeStamp,
     },
+    /// The key is already locked and lock-waiting is needed.
     Waiting,
+    /// Failed to acquire the lock due to some error.
     Failed(SharedError),
 }
 
