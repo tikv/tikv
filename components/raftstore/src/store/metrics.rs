@@ -80,6 +80,11 @@ make_auto_flush_static_metric! {
         fetch_unused,
     }
 
+    pub label_enum WarmUpEntryCacheType {
+        started,
+        timeout,
+        finished,
+    }
 
     pub label_enum RaftEventDurationType {
         compact_check,
@@ -105,6 +110,11 @@ make_auto_flush_static_metric! {
     pub struct RaftEntryFetches : LocalIntCounter {
         "type" => RaftEntryType
     }
+
+    pub struct WarmUpEntryCacheCounter : LocalIntCounter {
+        "type" => WarmUpEntryCacheType
+    }
+
     pub struct SnapCf : LocalHistogram {
         "type" => CfNames,
     }
@@ -615,6 +625,15 @@ lazy_static! {
             "Bucketed histogram of raft entry fetches task duration.",
             exponential_buckets(0.0005, 2.0, 21).unwrap()  // 500us ~ 8.7m
         ).unwrap();
+
+    pub static ref WARM_UP_ENTRY_CACHE_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_raftstore_prefill_entry_cache_total",
+            "Total number of prefill entry cache.",
+            &["type"]
+        ).unwrap();
+    pub static ref WARM_UP_ENTRY_CACHE_COUNTER: WarmUpEntryCacheCounter =
+        auto_flush_from!(WARM_UP_ENTRY_CACHE_COUNTER_VEC, WarmUpEntryCacheCounter);
 
     pub static ref LEADER_MISSING: IntGauge =
         register_int_gauge!(
