@@ -252,18 +252,4 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         // TODO: instead of propose pending commands immediately, we should use timeout.
         self.fsm.peer.propose_pending_command(self.store_ctx);
     }
-
-    pub fn on_across_peer_msg(&mut self, msg: AcrossPeerMsg) {
-        match msg {
-            AcrossPeerMsg::SplitRegionInit(init_info) => {
-                self.fsm.peer.init_split_region(self.store_ctx, init_info);
-                self.on_start();
-            }
-            AcrossPeerMsg::SplitRegionInitResp(resp) => {
-                self.fsm
-                    .peer
-                    .handle_peer_split_response(self.store_ctx, resp);
-            }
-        }
-    }
 }

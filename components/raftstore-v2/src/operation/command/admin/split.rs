@@ -219,10 +219,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             locks,
             last_split_region,
         } = Box::into_inner(init_info);
-        // todo: check if it is inited
+
+        let mut need_schedule_apply_fsm = false;
         let region_id = region.id;
 
-        if !self.storage().is_initialized() {
+        let replace = region.get_region_epoch().get_version()
+            > self
+                .storage()
+                .region_state()
+                .get_region()
+                .get_region_epoch()
+                .get_version();
+
+        if !self.storage().is_initialized() || replace {
             let mut wb = store_ctx.engine.log_batch(5);
             write_initial_states(&mut wb, region.clone()).unwrap_or_else(|e| {
                 panic!(
@@ -279,7 +288,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             // FIXME: unwrap
             self.set_raft_group(raft_group);
+
+            need_schedule_apply_fsm = true;
         } else {
+            // todo: when reaching here, it is much complexer.
+            unimplemented!();
         }
 
         let mut meta = store_ctx.store_meta.lock().unwrap();
@@ -363,7 +376,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         drop(meta);
 
         let ranges_to_delete = get_range_not_in_region(&region);
-        // todo: need to do it asynchrounously?
         tablet
             .delete_ranges_cfs(DeleteStrategy::DeleteFiles, &ranges_to_delete)
             .unwrap_or_else(|e| {
@@ -392,6 +404,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 },
             ))),
         );
+
+        if need_schedule_apply_fsm {
+            self.schedule_apply_fsm(store_ctx);
+        }
     }
 
     pub fn handle_peer_split_response<T>(
@@ -554,6 +570,23 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         if is_leader {
             self.on_split_region_check_tick();
+        }
+    }
+}
+
+impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
+    pub fn on_across_peer_msg(&mut self, msg: AcrossPeerMsg) {
+        match msg {
+            AcrossPeerMsg::SplitRegionInit(init_info) => {
+                self.fsm
+                    .peer_mut()
+                    .init_split_region(self.store_ctx, init_info);
+            }
+            AcrossPeerMsg::SplitRegionInitResp(resp) => {
+                self.fsm
+                    .peer_mut()
+                    .handle_peer_split_response(self.store_ctx, resp);
+            }
         }
     }
 }
