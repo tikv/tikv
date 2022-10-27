@@ -1131,7 +1131,13 @@ where
                 && apply_ctx.host.pre_persist(&self.region, false, Some(&cmd))
             {
                 apply_ctx.commit(self);
-                if self.metrics.written_bytes >= apply_ctx.yield_msg_size || self.handle_start.as_ref().map_or(Duration::ZERO, Instant::saturating_elapsed) >= apply_ctx.yield_duration {
+                if self.metrics.written_bytes >= apply_ctx.yield_msg_size
+                    || self
+                        .handle_start
+                        .as_ref()
+                        .map_or(Duration::ZERO, Instant::saturating_elapsed)
+                        >= apply_ctx.yield_duration
+                {
                     return ApplyResult::Yield;
                 }
                 has_unflushed_data = false;
@@ -3386,13 +3392,6 @@ where
             merge_from_snapshot,
         })
     }
-
-    pub fn entries_size(&self) -> usize {
-        match self {
-            Msg::Apply { apply, .. } => apply.entries_size,
-            _ => 0,
-        }
-    }
 }
 
 impl<EK> Debug for Msg<EK>
@@ -4119,8 +4118,7 @@ where
             normal.delegate.id() == 1003,
             |_| { HandleResult::KeepProcessing }
         );
-        while self.msg_buf.len() < self.messages_per_tick
-        {
+        while self.msg_buf.len() < self.messages_per_tick {
             match normal.receiver.try_recv() {
                 Ok(msg) => self.msg_buf.push(msg),
                 Err(TryRecvError::Empty) => {
