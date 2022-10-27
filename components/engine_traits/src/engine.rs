@@ -162,7 +162,7 @@ impl Drop for TabletErrorCollector {
 }
 
 /// OpenOptionsn is used for specifiying the way of opening a tablet.
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct OpenOptions {
     // create tablet if non-exist
     create: bool,
@@ -171,6 +171,7 @@ pub struct OpenOptions {
     cache_only: bool,
     skip_cache: bool,
     split_use: bool,
+    merge_use: bool,
 }
 
 impl OpenOptions {
@@ -210,6 +211,12 @@ impl OpenOptions {
         self
     }
 
+    /// Only used during merge where tablet path contains "merge_" prefix
+    pub fn set_merge_use(mut self, merge_use: bool) -> Self {
+        self.merge_use = merge_use;
+        self
+    }
+
     pub fn create(&self) -> bool {
         self.create
     }
@@ -233,7 +240,14 @@ impl OpenOptions {
     pub fn split_use(&self) -> bool {
         self.split_use
     }
+
+    pub fn merge_use(&self) -> bool {
+        self.merge_use
+    }
 }
+
+pub const SPLIT_PREFIX: &str = "split_";
+pub const MERGE_PREFIX: &str = "merge_";
 
 /// A factory trait to create new engine.
 // It should be named as `EngineFactory` for consistency, but we are about to
@@ -272,13 +286,16 @@ pub trait TabletFactory<EK>: TabletAccessor<EK> + Send + Sync {
     fn exists_raw(&self, path: &Path) -> bool;
 
     /// Get the tablet path by id and suffix
+    ///
+    /// Prefix is used in special situations.
+    /// Ex: split/merge.
     fn tablet_path(&self, id: u64, suffix: u64) -> PathBuf;
 
-    /// Get the tablet path by id and suffix with "split_" prefix in it.
+    /// Get the tablet path by id and suffix
     ///
-    /// Only used during split execution.
-    fn split_temp_tablet_path(&self, _id: u64, _suffix: u64) -> PathBuf {
-        // Raftstore-v1 will not use it.
+    /// Used in special situations
+    /// Ex: split/merge.
+    fn tablet_path_with_prefix(&self, _id: u64, _suffix: u64, _prefix: &str) -> PathBuf {
         unimplemented!();
     }
 
@@ -299,11 +316,6 @@ pub trait TabletFactory<EK>: TabletAccessor<EK> + Send + Sync {
     /// Check if the tablet with specified id and suffix tombostone
     fn is_tombstoned(&self, _region_id: u64, _suffix: u64) -> bool {
         unimplemented!();
-    }
-
-    /// Unregister the tablet if it is not used
-    fn unregister_tablet(&self, _region_id: u64, _suffix: u64) {
-        unimplemented!()
     }
 
     fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()>;

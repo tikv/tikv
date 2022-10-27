@@ -9,7 +9,7 @@ use collections::HashMap;
 use engine_rocks::RocksEngine;
 use engine_traits::{
     CfOptions, CfOptionsExt, MiscExt, OpenOptions, Result, TabletAccessor, TabletFactory,
-    CF_DEFAULT,
+    CF_DEFAULT, MERGE_PREFIX, SPLIT_PREFIX,
 };
 
 use crate::server::engine_factory::KvEngineFactory;
@@ -19,7 +19,8 @@ const TOMBSTONE_MARK: &str = "TOMBSTONE_TABLET";
 #[derive(Clone)]
 pub struct KvEngineFactoryV2 {
     inner: KvEngineFactory,
-    registry: Arc<Mutex<HashMap<(u64, u64), RocksEngine>>>,
+    // region_id -> (tablet, tablet_suffix)
+    registry: Arc<Mutex<HashMap<u64, (RocksEngine, u64)>>>,
 }
 
 impl KvEngineFactoryV2 {
@@ -31,39 +32,22 @@ impl KvEngineFactoryV2 {
     }
 }
 
-// Extract tablet id and tablet suffix from the path.
-fn get_id_and_suffix_from_path(path: &Path) -> (u64, u64) {
-    let split_path = path
-        .as_os_str()
-        .to_str()
-        .map_or(false, |s| s.contains("split"));
-    let (mut tablet_id, mut tablet_suffix) = (0, 1);
-    if let Some(s) = path.file_name().map(|s| s.to_string_lossy()) {
-        let mut split = s.split('_');
-        // Normal tablet path format is x_y while the path format used for creating new
-        // tablet during split execution is split_x_y, so if this is a split
-        // path, we should skip "split"
-        if split_path {
-            split.next();
-        }
-        tablet_id = split.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-        tablet_suffix = split.next().and_then(|s| s.parse().ok()).unwrap_or(1);
-    }
-    (tablet_id, tablet_suffix)
-}
-
 impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
     /// open a tablet according to the OpenOptions.
     ///
     /// If options.cache_only is true, only open the relevant tablet from
-    /// `registry`, and if suffix is None, return an arbitrary tablet with the
-    /// target region id if there are any.
+    /// `registry`.
     ///
     /// If options.create_new is true, create a tablet by id and suffix. If the
     /// tablet exists, it will fail.
     ///
     /// If options.create is true, open the tablet with id and suffix if it
     /// exists or create it otherwise.
+    ///
+    /// If options.split_use or options.merge_use is set be true, bypass the
+    /// cache.
+    ///
+    /// If options.skip_cache is true, cache will not be updated.
     ///
     /// Note: options.cache_only and options.create and/or options.create_new
     /// cannot be true simultaneously
@@ -73,15 +57,26 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
         suffix: Option<u64>,
         mut options: OpenOptions,
     ) -> Result<RocksEngine> {
+        if options.merge_use() && options.split_use() {
+            return Err(box_err!(
+                "split_use and merge_use cannot be set be true simultaneously, {:?}",
+                options
+            ));
+        }
+
         if options.create() || options.create_new() {
             options = options.set_cache_only(false);
         }
 
+        if options.split_use() || options.merge_use() {
+            options = options.set_skip_cache(true);
+        }
+
+        let split_or_merge = options.split_use() || options.merge_use();
         let mut reg = self.registry.lock().unwrap();
         if let Some(suffix) = suffix {
-            if let Some(tablet) = reg.get(&(id, suffix)) {
+            if let Some((tablet, tablet_suffix)) = reg.get(&id)  && *tablet_suffix == suffix && !split_or_merge {
                 // Target tablet exist in the cache
-
                 if options.create_new() {
                     return Err(box_err!(
                         "region {} {} already exists",
@@ -91,25 +86,22 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
                 }
                 return Ok(tablet.clone());
             } else if !options.cache_only() {
-                let tablet_path = if !options.split_use() {
-                    self.tablet_path(id, suffix)
+                let tablet_path = if options.split_use() {
+                    self.tablet_path_with_prefix(id, suffix, SPLIT_PREFIX)
+                } else if options.merge_use() {
+                    self.tablet_path_with_prefix(id, suffix, MERGE_PREFIX)
                 } else {
-                    self.split_temp_tablet_path(id, suffix)
+                    self.tablet_path(id, suffix)
                 };
                 let tablet = self.open_tablet_raw(&tablet_path, id, suffix, options.clone())?;
                 if !options.skip_cache() {
                     debug!("Insert a tablet"; "key" => ?(id, suffix));
-                    reg.insert((id, suffix), tablet.clone());
+                    reg.insert(id, (tablet.clone(), suffix));
                 }
                 return Ok(tablet);
             }
-        } else if options.cache_only() {
-            // This branch reads an arbitrary tablet with region id `id`
-
-            if let Some(k) = reg.keys().find(|k| k.0 == id) {
-                debug!("choose a random tablet"; "key" => ?k);
-                return Ok(reg.get(k).unwrap().clone());
-            }
+        } else if let Some((tablet, _)) = reg.get(&id) {
+            return Ok(tablet.clone());
         }
 
         Err(box_err!(
@@ -169,16 +161,14 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
 
     #[inline]
     fn tablet_path(&self, id: u64, suffix: u64) -> PathBuf {
-        self.inner
-            .store_path()
-            .join(format!("tablets/{}_{}", id, suffix))
+        self.tablet_path_with_prefix(id, suffix, "")
     }
 
     #[inline]
-    fn split_temp_tablet_path(&self, id: u64, suffix: u64) -> PathBuf {
+    fn tablet_path_with_prefix(&self, id: u64, suffix: u64, prefix: &str) -> PathBuf {
         self.inner
             .store_path()
-            .join(format!("tablets/split_{}_{}", id, suffix))
+            .join(format!("tablets/{}{}_{}", prefix, id, suffix))
     }
 
     #[inline]
@@ -186,7 +176,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
         let path = self.tablet_path(region_id, suffix).join(TOMBSTONE_MARK);
         std::fs::File::create(&path).unwrap();
         debug!("tombstone tablet"; "region_id" => region_id, "suffix" => suffix);
-        self.registry.lock().unwrap().remove(&(region_id, suffix));
+        self.registry.lock().unwrap().remove(&region_id);
     }
 
     #[inline]
@@ -199,7 +189,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
     #[inline]
     fn destroy_tablet(&self, id: u64, suffix: u64) -> engine_traits::Result<()> {
         let path = self.tablet_path(id, suffix);
-        self.registry.lock().unwrap().remove(&(id, suffix));
+        self.registry.lock().unwrap().remove(&id);
         self.inner.destroy_tablet(&path)?;
         self.inner.on_tablet_destroy(id, suffix);
         Ok(())
@@ -209,7 +199,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
     fn load_tablet(&self, path: &Path, id: u64, suffix: u64) -> Result<RocksEngine> {
         {
             let reg = self.registry.lock().unwrap();
-            if let Some(db) = reg.get(&(id, suffix)) {
+            if let Some((db, db_suffix)) = reg.get(&id) && *db_suffix == suffix {
                 return Err(box_err!(
                     "region {} {} already exists",
                     id,
@@ -220,24 +210,13 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
 
         let db_path = self.tablet_path(id, suffix);
         std::fs::rename(path, &db_path)?;
-        let new_engine =
-            self.open_tablet(id, Some(suffix), OpenOptions::default().set_create(true));
-        if new_engine.is_ok() {
-            let (old_id, old_suffix) = get_id_and_suffix_from_path(path);
-            self.registry.lock().unwrap().remove(&(old_id, old_suffix));
-        }
-        new_engine
-    }
-
-    #[inline]
-    fn unregister_tablet(&self, region_id: u64, suffix: u64) {
-        self.registry.lock().unwrap().remove(&(region_id, suffix));
+        self.open_tablet(id, Some(suffix), OpenOptions::default().set_create(true))
     }
 
     fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()> {
         let reg = self.registry.lock().unwrap();
         // pick up any tablet and set the shared block cache capacity
-        if let Some(((_id, _suffix), tablet)) = (*reg).iter().next() {
+        if let Some((_id, (tablet, _suffix))) = (*reg).iter().next() {
             let opt = tablet.get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
             opt.set_block_cache_capacity(capacity)?;
         }
@@ -249,7 +228,7 @@ impl TabletAccessor<RocksEngine> for KvEngineFactoryV2 {
     #[inline]
     fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &RocksEngine)) {
         let reg = self.registry.lock().unwrap();
-        for ((id, suffix), tablet) in &*reg {
+        for (id, (tablet, suffix)) in &*reg {
             f(*id, *suffix, tablet)
         }
     }
@@ -399,6 +378,11 @@ mod tests {
             .unwrap();
         assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
 
+        // Both region id and suffix match can get the tablet from the cache.
+        factory
+            .open_tablet(1, Some(20), OpenOptions::default().set_cache_only(true))
+            .unwrap_err();
+
         let tablet_path = factory.tablet_path(1, 10);
         let result = factory.open_tablet(1, Some(10), OpenOptions::default().set_create_new(true));
         result.unwrap_err();
@@ -426,17 +410,20 @@ mod tests {
             .open_tablet(1, Some(20), OpenOptions::default().set_cache_only(true))
             .unwrap();
 
-        // Unregister it, so we cannot get it in the cache
-        factory.unregister_tablet(1, 20);
+        factory
+            .open_tablet(1, Some(30), OpenOptions::default().set_create_new(true))
+            .unwrap();
+        // After open a tablet with the same id but higher suffix, we cannot get the old
+        // one from cache.
         factory
             .open_tablet(1, Some(20), OpenOptions::default().set_cache_only(true))
             .unwrap_err();
 
-        factory.mark_tombstone(1, 20);
-        assert!(factory.is_tombstoned(1, 20));
-        factory.destroy_tablet(1, 20).unwrap();
+        factory.mark_tombstone(1, 30);
+        assert!(factory.is_tombstoned(1, 30));
+        factory.destroy_tablet(1, 30).unwrap();
 
-        let result = factory.open_tablet(1, Some(20), OpenOptions::default());
+        let result = factory.open_tablet(1, Some(30), OpenOptions::default());
         result.unwrap_err();
 
         assert!(!factory.is_single_engine());
@@ -460,7 +447,7 @@ mod tests {
             .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
             .unwrap();
         drop(tablet);
-        let tablet = factory.registry.lock().unwrap().remove(&(1, 10)).unwrap();
+        let (tablet, _) = factory.registry.lock().unwrap().remove(&1).unwrap();
         drop(tablet);
         factory
             .open_tablet(1, Some(10), OpenOptions::default().set_cache_only(true))
@@ -516,19 +503,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_id_and_suffix() {
-        let path = Path::new("xxx/1_10");
-        assert_eq!(get_id_and_suffix_from_path(path), (1, 10));
-        let path = Path::new("xxxx/split_1_10");
-        assert_eq!(get_id_and_suffix_from_path(path), (1, 10));
-        let path = Path::new("xxxasdafge");
-        assert_eq!(get_id_and_suffix_from_path(path), (0, 1));
-        let path = Path::new("xxxx/split_1");
-        assert_eq!(get_id_and_suffix_from_path(path), (1, 1));
-    }
-
-    #[test]
-    fn test_split_temp_tablet() {
+    fn test_tablet_path_with_prefix() {
         let cfg = TEST_CONFIG.clone();
         assert!(cfg.storage.block_cache.shared);
         let cache = cfg.storage.block_cache.build_shared_cache();
@@ -541,14 +516,9 @@ mod tests {
         }
 
         let factory = builder.build_v2();
+        // tablet will be registerd in the cache
         let _ = factory
-            .open_tablet(
-                1,
-                Some(10),
-                OpenOptions::default()
-                    .set_create_new(true)
-                    .set_skip_cache(true),
-            )
+            .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
             .unwrap();
 
         // We can not open it with split_use being true
@@ -556,12 +526,26 @@ mod tests {
             .open_tablet(1, Some(10), OpenOptions::default().set_split_use(true))
             .unwrap_err();
 
+        // We can not open it with merge_use being true
+        factory
+            .open_tablet(1, Some(10), OpenOptions::default().set_merge_use(true))
+            .unwrap_err();
+
         let tablet_path = factory.tablet_path(1, 10);
-        let split_path = factory.split_temp_tablet_path(1, 10);
-        std::fs::rename(tablet_path, split_path).unwrap();
+        let split_path = factory.tablet_path_with_prefix(1, 10, SPLIT_PREFIX);
+        std::fs::rename(tablet_path, split_path.clone()).unwrap();
         // we can open it now
         factory
             .open_tablet(1, Some(10), OpenOptions::default().set_split_use(true))
+            .unwrap();
+
+        let merge_path = factory.tablet_path_with_prefix(1, 10, MERGE_PREFIX);
+        std::fs::rename(split_path, merge_path).unwrap();
+        factory
+            .open_tablet(1, Some(10), OpenOptions::default().set_split_use(true))
+            .unwrap_err();
+        factory
+            .open_tablet(1, Some(10), OpenOptions::default().set_merge_use(true))
             .unwrap();
     }
 }
