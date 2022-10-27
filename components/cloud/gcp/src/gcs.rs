@@ -673,7 +673,7 @@ mod tests {
 
     const BENCH_READ_SIZE: usize = 128 * 1024;
 
-    // 88,852,361 ns/iter (+/- 11,536,292) (futures-util 0.3.15)
+    // 255,120,895 ns/iter (+/- 73,332,249) (futures-util 0.3.15)
     #[bench]
     fn bench_read_to_end(b: &mut test::Bencher) {
         let mut v = [0; BENCH_READ_SIZE];
@@ -691,7 +691,7 @@ mod tests {
         })
     }
 
-    // 6,086,659 ns/iter (+/- 816,577)
+    // 5,850,042 ns/iter (+/- 3,787,438)
     #[bench]
     fn bench_manual_read_to_end(b: &mut test::Bencher) {
         let mut v = [0; BENCH_READ_SIZE];
