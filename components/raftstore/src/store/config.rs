@@ -116,7 +116,6 @@ pub struct Config {
     #[online_config(skip)]
     pub notify_capacity: usize,
     pub messages_per_tick: usize,
-    pub messages_size_per_tick: ReadableSize,
 
     /// When a peer is not active for max_peer_down_duration,
     /// the peer is considered to be down and is reported to PD.
@@ -219,6 +218,7 @@ pub struct Config {
     pub dev_assert: bool,
     #[online_config(hidden)]
     pub apply_yield_duration: ReadableDuration,
+    pub apply_yield_msg_size: ReadableSize,
 
     #[serde(with = "perf_level_serde")]
     #[online_config(skip)]
@@ -347,7 +347,6 @@ impl Default for Config {
             snap_mgr_gc_tick_interval: ReadableDuration::minutes(1),
             snap_gc_timeout: ReadableDuration::hours(4),
             messages_per_tick: 4096,
-            messages_size_per_tick: ReadableSize::kb(32),
             max_peer_down_duration: ReadableDuration::minutes(10),
             max_leader_missing_duration: ReadableDuration::hours(2),
             abnormal_leader_missing_duration: ReadableDuration::minutes(10),
@@ -384,6 +383,7 @@ impl Default for Config {
             hibernate_regions: true,
             dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
+            apply_yield_msg_size: ReadableSize::kb(32),
             perf_level: PerfLevel::Uninitialized,
             evict_cache_on_memory_ratio: 0.0,
             cmd_batch: true,
@@ -840,9 +840,6 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["messages_per_tick"])
             .set(self.messages_per_tick as f64);
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["messages_size_per_tick"])
-            .set(self.messages_size_per_tick.0 as f64);
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["max_peer_down_duration"])
@@ -893,6 +890,9 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["local_read_batch_size"])
             .set(self.local_read_batch_size as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["apply_yield_msg_size"])
+            .set(self.apply_yield_msg_size.0 as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["apply_max_batch_size"])
             .set(self.apply_batch_system.max_batch_size() as f64);

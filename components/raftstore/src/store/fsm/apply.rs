@@ -378,6 +378,7 @@ where
     perf_context: EK::PerfContext,
 
     yield_duration: Duration,
+    yield_msg_size: u64,
 
     store_id: u64,
     /// region_id -> (peer_id, is_splitting)
@@ -467,6 +468,7 @@ where
             use_delete_range: cfg.use_delete_range,
             perf_context: engine.get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply),
             yield_duration: cfg.apply_yield_duration.0,
+            yield_msg_size: cfg.apply_yield_msg_size.0,
             delete_ssts: vec![],
             pending_delete_ssts: vec![],
             store_id,
@@ -1129,10 +1131,8 @@ where
                 && apply_ctx.host.pre_persist(&self.region, false, Some(&cmd))
             {
                 apply_ctx.commit(self);
-                if let Some(start) = self.handle_start.as_ref() {
-                    if start.saturating_elapsed() >= apply_ctx.yield_duration {
-                        return ApplyResult::Yield;
-                    }
+                if self.metrics.written_bytes >= apply_ctx.yield_msg_size || self.handle_start.as_ref().map_or(Duration::ZERO, Instant::saturating_elapsed) >= apply_ctx.yield_duration {
+                    return ApplyResult::Yield;
                 }
                 has_unflushed_data = false;
             }
@@ -4050,7 +4050,6 @@ where
     msg_buf: Vec<Msg<EK>>,
     apply_ctx: ApplyContext<EK>,
     messages_per_tick: usize,
-    messages_size_per_tick: usize,
     cfg_tracker: Tracker<Config>,
 
     trace_event: TraceEvent,
@@ -4076,7 +4075,6 @@ where
                 }
                 _ => {}
             }
-            self.messages_size_per_tick = incoming.messages_size_per_tick.0 as usize;
             update_cfg(&incoming.apply_batch_system);
         }
     }
@@ -4121,15 +4119,10 @@ where
             normal.delegate.id() == 1003,
             |_| { HandleResult::KeepProcessing }
         );
-        let mut total_size = 0;
         while self.msg_buf.len() < self.messages_per_tick
-            && total_size < self.messages_size_per_tick
         {
             match normal.receiver.try_recv() {
-                Ok(msg) => {
-                    total_size += msg.entries_size();
-                    self.msg_buf.push(msg);
-                }
+                Ok(msg) => self.msg_buf.push(msg),
                 Err(TryRecvError::Empty) => {
                     handle_result = HandleResult::stop_at(0, false);
                     break;
@@ -4226,7 +4219,6 @@ where
                 priority,
             ),
             messages_per_tick: cfg.messages_per_tick,
-            messages_size_per_tick: cfg.messages_size_per_tick.0 as usize,
             cfg_tracker: self.cfg.clone().tracker(self.tag.clone()),
             trace_event: Default::default(),
         }
