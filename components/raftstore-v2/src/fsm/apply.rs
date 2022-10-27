@@ -98,7 +98,7 @@ impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
                 match task {
                     // TODO: flush by buffer size.
                     ApplyTask::CommittedEntries(ce) => self.apply.apply_committed_entries(ce).await,
-                    ApplyTask::Snapshot(snap_task) => self.apply.handle_snapshot(snap_task),
+                    ApplyTask::Snapshot(snap_task) => self.apply.schedule_gen_snapshot(snap_task),
                 }
 
                 // TODO: yield after some time.

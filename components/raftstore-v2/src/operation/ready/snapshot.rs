@@ -49,11 +49,11 @@ impl PartialEq for SnapState {
 }
 
 pub struct GenSnapTask {
-    pub(crate) region_id: u64,
+    region_id: u64,
     // Fill it when you are going to generate the snapshot.
     // index used to check if the gen task should be canceled.
     pub index: Arc<AtomicU64>,
-    // Fetch it to cancel the task if necessary.
+    // Set it to true to cancel the task if necessary.
     pub canceled: Arc<AtomicBool>,
     // indicates whether the snapshot is triggered due to load balance
     for_balance: bool,
@@ -84,10 +84,7 @@ impl Debug for GenSnapTask {
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_snapshot_generated(&mut self, snapshot: Box<Snapshot>) {
-        if self
-            .storage_mut()
-            .try_switch_snap_state_to_generated(snapshot)
-        {
+        if self.storage_mut().on_snapshot_generated(snapshot) {
             self.raft_group_mut().ping();
             self.set_has_ready();
         }
@@ -99,8 +96,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     ///
     /// Will schedule a task to read worker and then generate a snapshot
     /// asynchronously.
-    pub fn handle_snapshot(&mut self, snap_task: GenSnapTask) {
+    pub fn schedule_gen_snapshot(&mut self, snap_task: GenSnapTask) {
         // Flush before do snapshot.
+        if snap_task.canceled.load(Ordering::SeqCst) {
+            return;
+        }
         self.flush();
 
         // Send generate snapshot task to region worker.
@@ -161,7 +161,6 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         info!(
             self.logger(),
             "requesting snapshot";
-            "tablet_index" => self.get_tablet_index(),
             "request_index" => request_index,
             "request_peer" => to,
         );
@@ -239,6 +238,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         }
         canceled.store(true, Ordering::SeqCst);
         *snap_state = SnapState::Relax;
+        self.gen_snap_task_mut().take();
         info!(
             self.logger(),
             "snapshot is canceled";
@@ -250,7 +250,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     /// Try to switch snap state to generated. only `Generating` can switch to
     /// `Generated`.
     ///  TODO: make the snap state more clearer, the snapshot must be consumed.
-    pub fn try_switch_snap_state_to_generated(&self, snap: Box<Snapshot>) -> bool {
+    pub fn on_snapshot_generated(&self, snap: Box<Snapshot>) -> bool {
         let mut snap_state = self.snap_state_mut();
         let SnapState::Generating {
             ref canceled,

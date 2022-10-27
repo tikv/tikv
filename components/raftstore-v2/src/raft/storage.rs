@@ -273,7 +273,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     }
 
     #[inline]
-    pub fn get_tablet_index(&self) -> u64 {
+    pub fn tablet_index(&self) -> u64 {
         match self.region_state.get_state() {
             PeerState::Tombstone | PeerState::Applying => 0,
             _ => self.region_state.get_tablet_index(),
@@ -499,9 +499,9 @@ mod tests {
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
-        apply.handle_snapshot(gen_task);
+        apply.schedule_gen_snapshot(gen_task);
         let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        s.try_switch_snap_state_to_generated(res);
+        s.on_snapshot_generated(res);
         let snap = match *s.snap_state.borrow() {
             SnapState::Generated(ref snap) => *snap.clone(),
             ref s => panic!("unexpected state: {:?}", s),
@@ -515,7 +515,7 @@ mod tests {
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
-        apply.handle_snapshot(gen_task);
+        apply.schedule_gen_snapshot(gen_task);
         let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         s.cancel_generating_snap(None);
         assert_eq!(*s.snap_state.borrow(), SnapState::Relax);
