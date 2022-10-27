@@ -831,7 +831,7 @@ async fn start<S, R, E>(
             }
         };
         let channel = back_end.connect(&addr);
-        if !channel.wait_for_connected(Duration::from_secs(1)).await {
+        if !channel.wait_for_connected(Duration::from_secs(3)).await {
             error!("connection fail"; "store_id" => back_end.store_id, "addr" => addr, "err" => "can not establish channel");
 
             // Clears pending messages to avoid consuming high memory when one node is
