@@ -118,7 +118,6 @@ fn test_serde_custom_tikv_config() {
         heavy_load_wait_duration: Some(ReadableDuration::millis(2)),
         enable_request_batch: false,
         background_thread_count: 999,
-        raft_client_backoff_step: ReadableDuration::secs(1),
         end_point_slow_log_threshold: ReadableDuration::secs(1),
         forward_max_connections_per_address: 5,
         reject_messages_on_memory_ratio: 0.8,

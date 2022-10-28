@@ -763,15 +763,11 @@ where
     }
 }
 
-async fn maybe_backoff(backoff: Duration, last_wake_time: &mut Instant, retry_times: &mut u32) {
-    if *retry_times == 0 {
-        return;
-    }
+async fn maybe_backoff(backoff: Duration, last_wake_time: &mut Instant) {
     let now = Instant::now();
     if *last_wake_time + backoff < now {
         // We have spent long enough time in last retry, no need to backoff again.
         *last_wake_time = now;
-        *retry_times = 1;
         return;
     }
     if let Err(e) = GLOBAL_TIMER_HANDLE.delay(now + backoff).compat().await {
@@ -800,12 +796,11 @@ async fn start<S, R, E>(
     E: KvEngine,
 {
     let mut last_wake_time = Instant::now();
-    let mut retry_times = 0;
+    let mut first_time = true;
     let backoff_duration = back_end.builder.cfg.value().raft_client_max_backoff.0;
     let mut addr_channel = None;
     loop {
-        maybe_backoff(backoff_duration, &mut last_wake_time, &mut retry_times).await;
-        retry_times += 1;
+        maybe_backoff(backoff_duration, &mut last_wake_time).await;
         let f = back_end.resolve();
         let addr = match f.await {
             Ok(addr) => {
@@ -844,11 +839,12 @@ async fn start<S, R, E>(
 
             // Clears pending messages to avoid consuming high memory when one node is
             // shutdown.
-            back_end.clear_pending_message("unestablished");
+            back_end.clear_pending_message("unreachable");
 
             // broadcast is time consuming operation which would blocks raftstore, so report
             // unreachable only once until being connected again.
-            if retry_times == 1 {
+            if first_time {
+                first_time = false;
                 back_end
                     .builder
                     .router
@@ -875,16 +871,9 @@ async fn start<S, R, E>(
             // Err(_) should be tx is dropped
             Ok(RaftCallRes::Disconnected) | Err(_) => {
                 error!("connection abort"; "store_id" => back_end.store_id, "addr" => addr);
-                if retry_times > 1 {
-                    // Clears pending messages to avoid consuming high memory when one node is
-                    // shutdown.
-                    back_end.clear_pending_message("unreachable");
-                } else {
-                    // At least report failure in metrics.
-                    REPORT_FAILURE_MSG_COUNTER
-                        .with_label_values(&["unreachable", &back_end.store_id.to_string()])
-                        .inc_by(1);
-                }
+                REPORT_FAILURE_MSG_COUNTER
+                    .with_label_values(&["unreachable", &back_end.store_id.to_string()])
+                    .inc_by(1);
                 back_end
                     .builder
                     .router

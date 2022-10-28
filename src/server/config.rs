@@ -92,6 +92,7 @@ pub struct Config {
     pub raft_client_grpc_send_msg_buffer: usize,
     #[online_config(skip)]
     pub raft_client_queue_size: usize,
+    #[serde(skip_serializing)]
     #[online_config(skip)]
     pub raft_client_max_backoff: ReadableDuration,
 
@@ -196,12 +197,6 @@ pub struct Config {
     #[serde(skip_serializing)]
     #[online_config(skip)]
     pub end_point_max_tasks: Option<usize>,
-
-    // deprecated. use raft_client_max_backoff.
-    #[doc(hidden)]
-    #[serde(skip_serializing)]
-    #[online_config(skip)]
-    pub raft_client_backoff_step: ReadableDuration,
 }
 
 impl Default for Config {
@@ -219,6 +214,7 @@ impl Default for Config {
             max_grpc_send_msg_len: DEFAULT_MAX_GRPC_SEND_MSG_LEN,
             raft_client_grpc_send_msg_buffer: 512 * 1024,
             raft_client_queue_size: 8192,
+            raft_client_max_backoff: ReadableDuration::secs(5),
             raft_msg_max_batch_size: 128,
             grpc_compression_type: GrpcCompressionType::None,
             grpc_gzip_compression_level: DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL,
@@ -255,8 +251,6 @@ impl Default for Config {
             heavy_load_threshold: 75,
             heavy_load_wait_duration: None,
             enable_request_batch: true,
-            raft_client_backoff_step: ReadableDuration::secs(1),
-            raft_client_max_backoff: ReadableDuration::secs(5),
             reject_messages_on_memory_ratio: 0.2,
             background_thread_count,
             end_point_slow_log_threshold: ReadableDuration::secs(1),
