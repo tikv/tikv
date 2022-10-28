@@ -987,9 +987,13 @@ impl EngineStoreServerHelper {
         }
     }
 
+    // Please notice that when specifying (index,term), we will do a prelim update
+    // of (index,term) before post_exec. DO NOT use it other than CompactLog.
+    // Use (0,0) instead.
     pub fn try_flush_data(
         &self,
         region_id: u64,
+        force_persist: bool,
         try_until_succeed: bool,
         index: u64,
         term: u64,
@@ -999,7 +1003,11 @@ impl EngineStoreServerHelper {
             (self.fn_try_flush_data.into_inner())(
                 self.inner,
                 region_id,
-                if try_until_succeed { 1 } else { 0 },
+                if force_persist {
+                    2
+                } else {
+                    if try_until_succeed { 1 } else { 0 }
+                },
                 index,
                 term,
             ) != 0

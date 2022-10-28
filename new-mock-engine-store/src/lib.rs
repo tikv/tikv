@@ -228,13 +228,14 @@ unsafe fn load_from_db(store: &mut EngineStoreServer, region_id: u64) {
                 } else {
                     k.to_vec()
                 };
-                region.data[cf].insert(origin_key, v.to_vec());
                 debug!("restored data";
                     "store" => store_id,
                     "region_id" => region_id,
                     "cf" => cf,
                     "k" => ?k,
+                    "origin_key" => ?origin_key,
                 );
+                region.data[cf].insert(origin_key, v.to_vec());
                 Ok(true)
             })
             .unwrap();
@@ -492,6 +493,13 @@ impl EngineStoreServerWrap {
                 let res = match req.get_cmd_type() {
                     AdminCmdType::CompactLog => {
                         fail::fail_point!("no_persist_compact_log", |_| {
+                            // Persist data, but don't persist meta.
+                            ffi_interfaces::EngineStoreApplyRes::None
+                        });
+                        ffi_interfaces::EngineStoreApplyRes::Persist
+                    }
+                    AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => {
+                        fail::fail_point!("no_persist_flashback", |_| {
                             // Persist data, but don't persist meta.
                             ffi_interfaces::EngineStoreApplyRes::None
                         });

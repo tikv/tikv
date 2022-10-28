@@ -1901,7 +1901,7 @@ mod persist {
             );
         }
 
-        fail::cfg("on_pre_write_apply_state", "return").unwrap();
+        fail::cfg("on_pre_persist_with_finish", "return").unwrap();
         cluster.must_put(b"k2", b"v2");
         // Because we flush when batch ends.
         check_key(&cluster, b"k2", b"v2", Some(true), Some(false), None);
@@ -1916,7 +1916,6 @@ mod persist {
         // TODO(tiflash) wait `write_apply_state` in raftstore.
         std::thread::sleep(std::time::Duration::from_millis(1000));
         let new_states = collect_all_states(&cluster, region_id);
-        // Check apply state is persisted.
         for i in prev_states.keys() {
             let old = prev_states.get(i).unwrap();
             let new = new_states.get(i).unwrap();
@@ -1926,7 +1925,7 @@ mod persist {
                 - old.in_disk_apply_state.get_applied_index();
             assert_eq!(gap, gap2);
         }
-        fail::remove("on_pre_write_apply_state");
+        fail::remove("on_pre_persist_with_finish");
     }
 
     #[test]

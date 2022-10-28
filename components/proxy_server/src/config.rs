@@ -188,6 +188,30 @@ impl Default for RocksDbConfig {
     }
 }
 
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct UnifiedReadPoolConfig {
+    pub max_thread_count: usize,
+}
+
+pub const TIFLASH_UNIFIED_READPOOL_MIN_CONCURRENCY: usize = 4;
+impl Default for UnifiedReadPoolConfig {
+    fn default() -> UnifiedReadPoolConfig {
+        Self {
+            max_thread_count: TIFLASH_UNIFIED_READPOOL_MIN_CONCURRENCY,
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Default, PartialEq, Debug, OnlineConfig)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct ReadPoolConfig {
+    #[online_config(submodule)]
+    pub unified: UnifiedReadPoolConfig,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -211,6 +235,9 @@ pub struct ProxyConfig {
     #[serde(skip_serializing)]
     #[online_config(skip)]
     pub enable_io_snoop: bool,
+
+    #[online_config(submodule)]
+    pub readpool: ReadPoolConfig,
 }
 
 impl Default for ProxyConfig {
@@ -222,6 +249,7 @@ impl Default for ProxyConfig {
             raftdb: RaftDbConfig::default(),
             storage: StorageConfig::default(),
             enable_io_snoop: false,
+            readpool: ReadPoolConfig::default(),
         }
     }
 }
@@ -296,6 +324,11 @@ pub fn setup_default_tikv_config(default: &mut TikvConfig) {
 /// This function changes TiKV's config according to ProxyConfig.
 pub fn address_proxy_config(config: &mut TikvConfig, proxy_config: &ProxyConfig) {
     // We must add engine label to our TiFlash config
+    {
+        let cpu_num = SysQuota::cpu_cores_quota();
+        let total_mem = SysQuota::memory_limit_in_bytes();
+        info!("quota: cpu {} mem in bytes {}", cpu_num, total_mem);
+    }
     pub const DEFAULT_ENGINE_LABEL_KEY: &str = "engine";
     let engine_name = match option_env!("ENGINE_LABEL_VALUE") {
         None => {
@@ -326,6 +359,10 @@ pub fn address_proxy_config(config: &mut TikvConfig, proxy_config: &ProxyConfig)
     config.server.advertise_addr = proxy_config.server.advertise_addr.clone();
     config.server.status_addr = proxy_config.server.status_addr.clone();
     config.server.advertise_status_addr = proxy_config.server.advertise_status_addr.clone();
+
+    // TiKV now pose a quota limitation on unified_readpool.
+    // However, we still want to limit max_thread_count.
+    config.readpool.unified.max_thread_count = proxy_config.readpool.unified.max_thread_count;
 }
 
 pub fn validate_and_persist_config(config: &mut TikvConfig, persist: bool) {

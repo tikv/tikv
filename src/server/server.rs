@@ -295,10 +295,21 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
             });
         };
 
+        let startup_ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| Error::Other(box_err!("Clock may have gone backwards")))?
+            .as_secs();
+
+        SERVER_INFO_GAUGE_VEC
+            .with_label_values(&[
+                &("v".to_owned() + env!("CARGO_PKG_VERSION")),
+                option_env!("TIKV_BUILD_GIT_HASH").unwrap_or("None"),
+            ])
+            .set(startup_ts as i64);
         self.health_service
             .set_serving_status("", ServingStatus::Serving);
 
-        info!("Proxy is ready to serve");
+        info!("TiKV is ready to serve");
         Ok(())
     }
 
