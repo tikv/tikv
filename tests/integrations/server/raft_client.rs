@@ -62,7 +62,7 @@ where
 {
     let env = Arc::new(Environment::new(2));
     let mut config = Config::default();
-    config.raft_client_backoff_step = ReadableDuration::millis(10);
+    config.raft_client_max_backoff = ReadableDuration::millis(100);
     let cfg = Arc::new(VersionTrack::new(config));
     let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let worker = LazyWorker::new("test-raftclient");
@@ -229,19 +229,22 @@ fn test_raft_client_report_unreachable() {
     drop(mock_server);
 
     raft_client.send(RaftMessage::default()).unwrap();
-    let msg = rx.recv_timeout(Duration::from_secs(6)).unwrap();
+    let msg = rx.recv_timeout(Duration::from_secs(2)).unwrap();
     if let Either::Right(StoreMsg::StoreUnreachable { store_id }) = msg {
         assert_eq!(store_id, 0);
     } else {
         panic!("expect StoreUnreachable");
     }
     // no more unreachable message is sent until it's connected again.
-    rx.recv_timeout(Duration::from_secs(3)).unwrap_err();
+    rx.recv_timeout(Duration::from_secs(2)).unwrap_err();
 
     // restart the mock server.
     let service = MockKvForRaft::new(Arc::clone(&msg_count), batch_msg_count, true);
     let mut mock_server = create_mock_server_on(service, port);
 
+    // make sure the connection is connected, otherwise the following sent messages
+    // may be dropped
+    std::thread::sleep(Duration::from_secs(2));
     (0..50).for_each(|_| raft_client.send(RaftMessage::default()).unwrap());
     raft_client.flush();
     check_msg_count(500, &msg_count, 50);
@@ -249,14 +252,14 @@ fn test_raft_client_report_unreachable() {
     // server is disconnected
     mock_server.take().unwrap().shutdown();
 
-    let msg = rx.recv_timeout(Duration::from_secs(6)).unwrap();
+    let msg = rx.recv_timeout(Duration::from_secs(2)).unwrap();
     if let Either::Right(StoreMsg::StoreUnreachable { store_id }) = msg {
         assert_eq!(store_id, 0);
     } else {
         panic!("expect StoreUnreachable");
     }
     // no more unreachable message is sent until it's connected again.
-    rx.recv_timeout(Duration::from_secs(3)).unwrap_err();
+    rx.recv_timeout(Duration::from_secs(2)).unwrap_err();
 }
 
 #[test]

@@ -1,7 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cmp,
     collections::VecDeque,
     ffi::CString,
     marker::{PhantomData, Unpin},
@@ -706,6 +705,7 @@ where
             .default_compression_algorithm(cfg.grpc_compression_algorithm())
             .default_gzip_compression_level(cfg.grpc_gzip_compression_level)
             .default_grpc_min_message_size_to_compress(cfg.grpc_min_message_size_to_compress)
+            .max_reconnect_backoff(cfg.raft_client_max_backoff.0)
             // hack: so it's different args, grpc will always create a new connection.
             .raw_cfg_int(
                 CString::new("random id").unwrap(),
@@ -768,15 +768,14 @@ async fn maybe_backoff(backoff: Duration, last_wake_time: &mut Instant, retry_ti
     if *retry_times == 0 {
         return;
     }
-    let timeout = backoff * cmp::min(*retry_times, 5);
     let now = Instant::now();
-    if *last_wake_time + timeout < now {
+    if *last_wake_time + backoff < now {
         // We have spent long enough time in last retry, no need to backoff again.
         *last_wake_time = now;
         *retry_times = 1;
         return;
     }
-    if let Err(e) = GLOBAL_TIMER_HANDLE.delay(now + timeout).compat().await {
+    if let Err(e) = GLOBAL_TIMER_HANDLE.delay(now + backoff).compat().await {
         error_unknown!(?e; "failed to backoff");
     }
     *last_wake_time = Instant::now();
@@ -803,7 +802,7 @@ async fn start<S, R, E>(
 {
     let mut last_wake_time = Instant::now();
     let mut retry_times = 0;
-    let backoff_duration = back_end.builder.cfg.value().raft_client_backoff_step.0;
+    let backoff_duration = back_end.builder.cfg.value().raft_client_max_backoff.0;
     let mut addr_channel = None;
     loop {
         maybe_backoff(backoff_duration, &mut last_wake_time, &mut retry_times).await;
@@ -833,12 +832,15 @@ async fn start<S, R, E>(
         };
 
         // reuse channel if the address is the same.
-        if addr_channel.as_ref().map_or(true, |(_, prev_addr)| prev_addr != &addr ) {
+        if addr_channel
+            .as_ref()
+            .map_or(true, |(_, prev_addr)| prev_addr != &addr)
+        {
             addr_channel = Some((back_end.connect(&addr), addr.clone()));
         }
         let channel = addr_channel.as_ref().unwrap().0.clone();
 
-        if !channel.wait_for_connected(Duration::from_secs(3)).await {
+        if !channel.wait_for_connected(backoff_duration).await {
             error!("connection fail"; "store_id" => back_end.store_id, "addr" => addr, "err" => "can not establish connection");
 
             // Clears pending messages to avoid consuming high memory when one node is
@@ -891,11 +893,7 @@ async fn start<S, R, E>(
             }
             Ok(RaftCallRes::Closed) | Err(_) => {
                 error!("connection close"; "store_id" => back_end.store_id, "addr" => addr);
-                let mut pool = pool.lock().unwrap();
-                if let Some(s) = pool.connections.remove(&(back_end.store_id, conn_id)) {
-                    s.set_conn_state(ConnState::Disconnected);
-                }
-                return;
+                addr_channel = None;
             }
         }
     }
