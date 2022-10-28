@@ -2149,6 +2149,7 @@ dependencies = [
  "hyper-tls",
  "kvproto",
  "matches",
+ "pin-project",
  "slog",
  "slog-global",
  "tame-gcs",
