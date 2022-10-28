@@ -1,6 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod conf_change;
+mod split;
 
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
@@ -19,6 +20,7 @@ use raftstore::{
     Result,
 };
 use slog::info;
+pub use split::SplitResult;
 use tikv_util::box_err;
 
 use self::conf_change::ConfChangeResult;
@@ -30,6 +32,7 @@ use crate::{
 
 #[derive(Debug)]
 pub enum AdminCmdResult {
+    SplitRegion(SplitResult),
     ConfChange(ConfChangeResult),
 }
 
@@ -72,7 +75,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.propose_conf_change(ctx, req)
         } else {
             // propose other admin command.
-            unimplemented!()
+            self.propose_command(ctx, req)
         };
         if let Err(e) = &res {
             info!(
