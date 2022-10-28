@@ -14,9 +14,9 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use fail::fail_point;
 use futures::{compat::Future01CompatExt, future::select_all, FutureExt, TryFutureExt};
-use grpcio::{ChannelBuilder, Environment};
+use grpcio::{ChannelBuilder, Environment, Error as GrpcError, RpcStatusCode};
 use kvproto::{
-    kvrpcpb::{CheckLeaderRequest, LeaderInfo},
+    kvrpcpb::{CheckLeaderRequest, CheckLeaderResponse},
     metapb::{Peer, PeerRole},
     tikvpb::TikvClient,
 };
@@ -43,7 +43,7 @@ use tokio::{
 };
 use txn_types::TimeStamp;
 
-use crate::{endpoint::Task, metrics::*, util};
+use crate::{endpoint::Task, metrics::*};
 
 const DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS: u64 = 5_000; // 5s
 
@@ -143,11 +143,11 @@ pub struct LeadershipResolver {
     region_read_progress: RegionReadProgressRegistry,
     store_id: u64,
 
-    // store_id -> leaders info, record the request to each stores
-    store_map: HashMap<u64, Vec<LeaderInfo>>,
-    // region_id -> region, cache the information of regions
+    // store_id -> check leader request, record the request to each stores.
+    store_req_map: HashMap<u64, CheckLeaderRequest>,
+    // region_id -> region, cache the information of regions.
     region_map: HashMap<u64, Vec<Peer>>,
-    // region_id -> peers id, record the responses
+    // region_id -> peers id, record the responses.
     resp_map: HashMap<u64, Vec<u64>>,
     valid_regions: HashSet<u64>,
 
@@ -172,7 +172,7 @@ impl LeadershipResolver {
             security_mgr,
             region_read_progress,
 
-            store_map: HashMap::default(),
+            store_req_map: HashMap::default(),
             region_map: HashMap::default(),
             resp_map: HashMap::default(),
             valid_regions: HashSet::default(),
@@ -184,7 +184,7 @@ impl LeadershipResolver {
     fn gc(&mut self) {
         let now = Instant::now_coarse();
         if now - self.last_gc_time > self.gc_interval {
-            self.store_map = HashMap::default();
+            self.store_req_map = HashMap::default();
             self.region_map = HashMap::default();
             self.resp_map = HashMap::default();
             self.valid_regions = HashSet::default();
@@ -193,9 +193,16 @@ impl LeadershipResolver {
     }
 
     fn clear(&mut self) {
-        self.store_map.clear();
-        self.region_map.clear();
-        self.resp_map.clear();
+        for v in self.store_req_map.values_mut() {
+            v.regions.clear();
+            v.ts = 0;
+        }
+        for v in self.region_map.values_mut() {
+            v.clear();
+        }
+        for v in self.resp_map.values_mut() {
+            v.clear();
+        }
         self.valid_regions.clear();
     }
 
@@ -241,7 +248,7 @@ impl LeadershipResolver {
     // This function broadcasts a special message to all stores, gets the leader id
     // of them to confirm whether current peer has a quorum which accepts its
     // leadership.
-    pub async fn resolve(&mut self, regions: Vec<u64>, min_ts: TimeStamp) -> Vec<u64> {
+    pub async fn resolve(&mut self, _regions: Vec<u64>, min_ts: TimeStamp) -> Vec<u64> {
         // Clear previous result before resolving.
         self.clear();
         // GC when necessary to prevent memory leak.
@@ -249,21 +256,22 @@ impl LeadershipResolver {
 
         PENDING_RTS_COUNT.inc();
         defer!(PENDING_RTS_COUNT.dec());
-        fail_point!("before_sync_replica_read_state", |_| regions.clone());
+        fail_point!("before_sync_replica_read_state", |_| _regions.clone());
 
         let store_id = self.store_id;
         let valid_regions = &mut self.valid_regions;
         let region_map = &mut self.region_map;
         let resp_map = &mut self.resp_map;
-        let store_map = &mut self.store_map;
+        let store_req_map = &mut self.store_req_map;
         self.region_read_progress.with(|registry| {
             for (region_id, read_progress) in registry {
                 let core = read_progress.get_core();
                 let local_leader_info = core.get_local_leader_info();
                 let leader_id = local_leader_info.get_leader_id();
+                let leader_store_id = local_leader_info.get_leader_store_id();
                 let peer_list = local_leader_info.get_peers();
                 // Check if the leader in this store
-                if util::find_store_id(peer_list, leader_id) != Some(store_id) {
+                if leader_store_id != Some(store_id) {
                     continue;
                 }
                 let leader_info = core.get_leader_info();
@@ -271,13 +279,21 @@ impl LeadershipResolver {
                 let mut unvotes = 0;
                 for peer in peer_list {
                     if peer.store_id == store_id && peer.id == leader_id {
-                        resp_map.entry(*region_id).or_default().push(store_id);
+                        resp_map
+                            .entry(*region_id)
+                            .or_insert_with(|| Vec::with_capacity(peer_list.len()))
+                            .push(store_id);
                     } else {
                         // It's still necessary to check leader on learners even if they don't vote
                         // because performing stale read on learners require it.
-                        store_map
+                        store_req_map
                             .entry(peer.store_id)
-                            .or_default()
+                            .or_insert_with(|| {
+                                let mut req = CheckLeaderRequest::default();
+                                req.regions = Vec::with_capacity(registry.len()).into();
+                                req
+                            })
+                            .regions
                             .push(leader_info.clone());
                         if peer.get_role() != PeerRole::Learner {
                             unvotes += 1;
@@ -289,7 +305,10 @@ impl LeadershipResolver {
                 if unvotes == 0 && region_has_quorum(peer_list, &resp_map[region_id]) {
                     valid_regions.insert(*region_id);
                 } else {
-                    region_map.insert(*region_id, peer_list.to_vec());
+                    region_map
+                        .entry(*region_id)
+                        .or_insert_with(|| Vec::with_capacity(peer_list.len()))
+                        .extend_from_slice(peer_list);
                 }
             }
         });
@@ -299,62 +318,69 @@ impl LeadershipResolver {
         let security_mgr = &self.security_mgr;
         let tikv_clients = &self.tikv_clients;
         // Approximate `LeaderInfo` size
-        let leader_info_size = store_map
+        let leader_info_size = store_req_map
             .values()
-            .next()
-            .map_or(0, |regions| regions[0].compute_size());
-        let store_count = store_map.len();
-        let mut stores: Vec<_> = store_map
-            .drain()
-            .map(|(to_store, regions)| {
-                let env = env.clone();
-                let region_num = regions.len() as u32;
-                CHECK_LEADER_REQ_SIZE_HISTOGRAM.observe((leader_info_size * region_num) as f64);
-                CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM.observe(region_num as f64);
+            .find(|req| !req.regions.is_empty())
+            .map_or(0, |req| req.regions[0].compute_size());
+        let store_count = store_req_map.len();
+        let mut check_leader_rpcs = Vec::with_capacity(store_req_map.len());
+        for (store_id, req) in store_req_map {
+            if req.regions.is_empty() {
+                continue;
+            }
+            let env = env.clone();
+            let to_store = *store_id;
+            let region_num = req.regions.len() as u32;
+            CHECK_LEADER_REQ_SIZE_HISTOGRAM.observe((leader_info_size * region_num) as f64);
+            CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM.observe(region_num as f64);
 
-                // Check leadership for `regions` on `to_store`.
-                async move {
-                    PENDING_CHECK_LEADER_REQ_COUNT.inc();
-                    defer!(PENDING_CHECK_LEADER_REQ_COUNT.dec());
-                    let client =
-                        get_tikv_client(to_store, pd_client, security_mgr, env, tikv_clients)
-                            .await
-                            .map_err(|e| {
-                                (to_store, e.retryable(), format!("[get tikv client] {}", e))
-                            })?;
+            // Check leadership for `regions` on `to_store`.
+            let rpc = async move {
+                PENDING_CHECK_LEADER_REQ_COUNT.inc();
+                defer!(PENDING_CHECK_LEADER_REQ_COUNT.dec());
+                let client = get_tikv_client(to_store, pd_client, security_mgr, env, tikv_clients)
+                    .await
+                    .map_err(|e| (to_store, e.retryable(), format!("[get tikv client] {}", e)))?;
 
-                    let mut req = CheckLeaderRequest::default();
-                    req.set_regions(regions.into());
-                    req.set_ts(min_ts.into_inner());
-                    let slow_timer = SlowTimer::default();
-                    defer!({
-                        slow_log!(
-                            T
-                            slow_timer,
-                            "check leader rpc costs too long, to_store: {}",
-                            to_store
-                        );
-                        let elapsed = slow_timer.saturating_elapsed();
-                        RTS_CHECK_LEADER_DURATION_HISTOGRAM_VEC
-                            .with_label_values(&["rpc"])
-                            .observe(elapsed.as_secs_f64());
-                    });
+                // Set min_ts in the request.
+                req.set_ts(min_ts.into_inner());
+                let slow_timer = SlowTimer::default();
+                defer!({
+                    slow_log!(
+                        T
+                        slow_timer,
+                        "check leader rpc costs too long, to_store: {}",
+                        to_store
+                    );
+                    let elapsed = slow_timer.saturating_elapsed();
+                    RTS_CHECK_LEADER_DURATION_HISTOGRAM_VEC
+                        .with_label_values(&["rpc"])
+                        .observe(elapsed.as_secs_f64());
+                });
 
-                    let rpc = client
-                        .check_leader_async(&req)
-                        .map_err(|e| (to_store, true, format!("[rpc create failed]{}", e)))?;
-                    PENDING_CHECK_LEADER_REQ_SENT_COUNT.inc();
-                    defer!(PENDING_CHECK_LEADER_REQ_SENT_COUNT.dec());
-                    let timeout = Duration::from_millis(DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS);
-                    let resp = tokio::time::timeout(timeout, rpc)
-                        .map_err(|e| (to_store, true, format!("[timeout] {}", e)))
-                        .await?
-                        .map_err(|e| (to_store, true, format!("[rpc failed] {}", e)))?;
-                    Ok((to_store, resp))
-                }
-                .boxed()
-            })
-            .collect();
+                let rpc = match client.check_leader_async(req) {
+                    Ok(rpc) => rpc,
+                    Err(GrpcError::RpcFailure(status))
+                        if status.code() == RpcStatusCode::UNIMPLEMENTED =>
+                    {
+                        // Some stores like TiFlash don't implement it.
+                        return Ok((to_store, CheckLeaderResponse::default()));
+                    }
+                    Err(e) => return Err((to_store, true, format!("[rpc create failed]{}", e))),
+                };
+
+                PENDING_CHECK_LEADER_REQ_SENT_COUNT.inc();
+                defer!(PENDING_CHECK_LEADER_REQ_SENT_COUNT.dec());
+                let timeout = Duration::from_millis(DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS);
+                let resp = tokio::time::timeout(timeout, rpc)
+                    .map_err(|e| (to_store, true, format!("[timeout] {}", e)))
+                    .await?
+                    .map_err(|e| (to_store, true, format!("[rpc failed] {}", e)))?;
+                Ok((to_store, resp))
+            }
+            .boxed();
+            check_leader_rpcs.push(rpc);
+        }
         let start = Instant::now_coarse();
 
         defer!({
@@ -362,21 +388,19 @@ impl LeadershipResolver {
                 .with_label_values(&["all"])
                 .observe(start.saturating_elapsed_secs());
         });
-        for _ in 0..store_count {
+        let rpc_count = check_leader_rpcs.len();
+        for _ in 0..rpc_count {
             // Use `select_all` to avoid the process getting blocked when some
             // TiKVs were down.
-            let (res, _, remains) = select_all(stores).await;
-            stores = remains;
+            let (res, _, remains) = select_all(check_leader_rpcs).await;
+            check_leader_rpcs = remains;
             match res {
                 Ok((to_store, resp)) => {
                     for region_id in resp.regions {
-                        if let Some(r) = region_map.get(&region_id) {
-                            let resps = resp_map.entry(region_id).or_default();
-                            resps.push(to_store);
-                            if region_has_quorum(r, resps) {
-                                valid_regions.insert(region_id);
-                            }
-                        }
+                        resp_map
+                            .entry(region_id)
+                            .or_insert_with(|| Vec::with_capacity(store_count))
+                            .push(to_store);
                     }
                 }
                 Err((to_store, reconnect, err)) => {
@@ -386,11 +410,21 @@ impl LeadershipResolver {
                     }
                 }
             }
-            // Return early if all regions had already got quorum.
-            if valid_regions.len() == regions.len() {
-                // break here because all regions have quorum,
-                // so there is no need waiting for other stores to respond.
-                break;
+        }
+        for (region_id, prs) in region_map {
+            if prs.is_empty() {
+                // The peer had the leadership before, but now it's no longer
+                // the case. Skip checking the region.
+                continue;
+            }
+            if let Some(resp) = resp_map.get(region_id) {
+                if resp.is_empty() {
+                    // No response, maybe the peer lost leadership.
+                    continue;
+                }
+                if region_has_quorum(prs, resp) {
+                    valid_regions.insert(*region_id);
+                }
             }
         }
         self.valid_regions.drain().collect()
