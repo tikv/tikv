@@ -218,6 +218,13 @@ pub struct Config {
     pub dev_assert: bool,
     #[online_config(hidden)]
     pub apply_yield_duration: ReadableDuration,
+    /// yield the fsm when applyed total message size exceeds this threshold.
+    /// the yield is check after commit, so the actual handled messages can be
+    /// bigger than the configed value.
+    // NOTE: the default value is much smaller than the default max raft batch msg size(0.2
+    // * raft_entry_max_size), this is intentional because in the common case, a raft entry
+    // is unlikely to exceed this threshold, but in case when raftstore is the bottleneck,
+    // we still allow big raft batch for better throughput.
     pub apply_yield_msg_size: ReadableSize,
 
     #[serde(with = "perf_level_serde")]

@@ -5588,7 +5588,7 @@ mod tests {
         let obs = ApplyObserver::default();
         let mut host = CoprocessorHost::<KvTestEngine>::default();
         host.registry
-            .register_query_observer(1, BoxQueryObserver::new(obs.clone()));
+            .register_query_observer(1, BoxQueryObserver::new(obs));
 
         let (tx, rx) = mpsc::channel();
         let (region_scheduler, _) = dummy_scheduler();
@@ -5602,8 +5602,8 @@ mod tests {
             sender,
             region_scheduler,
             coprocessor_host: host,
-            importer: importer.clone(),
-            engine: engine.clone(),
+            importer,
+            engine,
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
@@ -5626,7 +5626,7 @@ mod tests {
             let mut entries = Vec::with_capacity(count);
             for i in 0..count {
                 let put_entry = EntryBuilder::new(idx + i as u64, 3)
-                    .put(&format!("k{:03}", i).as_ref(), &vec![0; size - 4])
+                    .put(format!("k{:03}", i).as_ref(), &vec![0; size - 4])
                     .epoch(1, 3)
                     .build();
                 entries.push(put_entry);
