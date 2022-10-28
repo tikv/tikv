@@ -426,7 +426,7 @@ impl WriteCompactionFilter {
             }
         }
         self.mvcc_key_prefix.extend_from_slice(mvcc_key);
-        return Ok(CompactionFilterDecision::Keep);
+        Ok(CompactionFilterDecision::Keep)
     }
 
     fn do_filter(
