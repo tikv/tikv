@@ -25,6 +25,7 @@ mod test_snap;
 mod test_snap_recovery;
 mod test_split_region;
 mod test_stale_peer;
+mod test_start;
 mod test_stats;
 mod test_status_command;
 mod test_tombstone;

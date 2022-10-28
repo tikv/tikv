@@ -10,7 +10,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc, RwLock,
     },
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use collections::{HashMap, HashMapEntry, HashSet};
@@ -41,7 +41,7 @@ use pd_client::{
 use raft::eraftpb::ConfChangeType;
 use tikv_util::{
     store::{check_key_in_region, find_peer, is_learner, new_peer, QueryStats},
-    time::{Instant, UnixSecs},
+    time::{duration_to_ns, Instant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
     Either, HandyRwLock,
 };
@@ -58,6 +58,13 @@ struct Store {
     region_ids: HashSet<u64>,
     sender: UnboundedSender<pdpb::RegionHeartbeatResponse>,
     receiver: Option<UnboundedReceiver<pdpb::RegionHeartbeatResponse>>,
+}
+
+impl Store {
+    fn set_last_heartbeat_ts(&mut self, ts: SystemTime) {
+        self.store
+            .set_last_heartbeat(duration_to_ns(ts.duration_since(UNIX_EPOCH).unwrap()) as i64);
+    }
 }
 
 impl Default for Store {
@@ -805,6 +812,9 @@ impl PdCluster {
 
     fn handle_store_heartbeat(&mut self, store_id: u64) -> Result<pdpb::StoreHeartbeatResponse> {
         debug!("Unsafe recovery, a heartbeat"; "store_id" => store_id, "plan" => ?self.unsafe_recovery_plan);
+        if let Some(store) = self.stores.get_mut(&store_id) {
+            store.set_last_heartbeat_ts(SystemTime::now());
+        }
         let mut resp = pdpb::StoreHeartbeatResponse::default();
         if let Some((_, plan)) = self.unsafe_recovery_plan.remove_entry(&store_id) {
             debug!("Unsafe recovery, sending recovery plan"; "store_id" => store_id, "plan" => ?plan);
