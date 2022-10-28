@@ -41,6 +41,7 @@ tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["time", "rt-multi-thread", "macros"] }
 txn_types = { workspace = true }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
+rand = "0.8"
 
 [dev-dependencies]
 tempfile = "3.0"

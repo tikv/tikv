@@ -42,6 +42,25 @@ use crate::{
     Config, Error, Result,
 };
 
+struct StoragePool(Box<[Arc<dyn ExternalStorage>]>);
+
+impl StoragePool {
+    fn create(backend: &StorageBackend, size: usize) -> Result<Self> {
+        let mut r = Vec::with_capacity(size);
+        for _ in 0..size {
+            let s = external_storage_export::create_storage(backend, Default::default())?;
+            r.push(Arc::from(s));
+        }
+        Ok(Self(r.into_boxed_slice()))
+    }
+
+    fn get(&self) -> Arc<dyn ExternalStorage> {
+        use rand::Rng;
+        let idx = rand::thread_rng().gen_range(0..self.0.len());
+        Arc::clone(&self.0[idx])
+    }
+}
+
 /// SstImporter manages SST files that are waiting for ingesting.
 pub struct SstImporter {
     dir: ImportDir,
@@ -51,7 +70,7 @@ pub struct SstImporter {
     api_version: ApiVersion,
     compression_types: HashMap<CfName, SstCompressionType>,
     file_locks: Arc<DashMap<String, ()>>,
-    cached_storage: Arc<DashMap<String, Arc<dyn ExternalStorage>>>,
+    cached_storage: Arc<DashMap<String, StoragePool>>,
 
     download_rt: Runtime,
 }
@@ -245,24 +264,18 @@ impl SstImporter {
         match s {
             Some(s) => {
                 EXT_STORAGE_CACHE_COUNT.with_label_values(&["hit"]).inc();
-                Ok(Arc::clone(s.value()))
+                Ok(s.value().get())
             }
             None => {
                 drop(s);
                 let e = self.cached_storage.entry(cache_key.to_owned());
                 match e {
-                    Entry::Occupied(v) => Ok(Arc::clone(v.get())),
+                    Entry::Occupied(v) => Ok(v.get().get()),
                     Entry::Vacant(v) => {
                         EXT_STORAGE_CACHE_COUNT.with_label_values(&["miss"]).inc();
-                        let s =
-                            external_storage_export::create_storage(backend, Default::default())?;
-                        let url = s
-                            .url()
-                            .map(|u| u.to_string())
-                            .unwrap_or_else(|_| "<unknown>".to_owned());
-                        info!("external storage cache missed, creating new."; "id" => %cache_key, "storage" => %url);
-                        let cached = Arc::from(s);
-                        v.insert(Arc::clone(&cached));
+                        let pool = StoragePool::create(backend, 16)?;
+                        let cached = pool.get();
+                        v.insert(pool);
                         Ok(cached)
                     }
                 }
