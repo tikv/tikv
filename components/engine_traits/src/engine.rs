@@ -267,15 +267,15 @@ pub trait TabletFactory<EK>: TabletAccessor<EK> + Send + Sync {
     ///
     /// Prefix is used in special situations.
     /// Ex: split/merge.
-    fn tablet_path(&self, id: u64, suffix: u64) -> PathBuf;
+    fn tablet_path(&self, id: u64, suffix: u64) -> PathBuf {
+        self.tablet_path_with_prefix(id, suffix, "")
+    }
 
     /// Get the tablet path by id and suffix
     ///
     /// Used in special situations
     /// Ex: split/merge.
-    fn tablet_path_with_prefix(&self, _id: u64, _suffix: u64, _prefix: &str) -> PathBuf {
-        unimplemented!();
-    }
+    fn tablet_path_with_prefix(&self, _id: u64, _suffix: u64, _prefix: &str) -> PathBuf;
 
     /// Tablets root path
     fn tablets_path(&self) -> PathBuf;
@@ -337,7 +337,7 @@ where
         true
     }
 
-    fn tablet_path(&self, _id: u64, _suffix: u64) -> PathBuf {
+    fn tablet_path_with_prefix(&self, _id: u64, _suffix: u64, _prefix: &str) -> PathBuf {
         PathBuf::from(&self.root_path)
     }
 

@@ -54,6 +54,12 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
         suffix: Option<u64>,
         mut options: OpenOptions,
     ) -> Result<RocksEngine> {
+        if options.create_new() && suffix.is_none() {
+            return Err(box_err!(
+                "suffix should be provided when creating new tablet"
+            ));
+        }
+
         if options.create() || options.create_new() {
             options = options.set_cache_only(false);
         }
@@ -136,11 +142,6 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
     #[inline]
     fn tablets_path(&self) -> PathBuf {
         self.inner.store_path().join("tablets")
-    }
-
-    #[inline]
-    fn tablet_path(&self, id: u64, suffix: u64) -> PathBuf {
-        self.tablet_path_with_prefix(id, suffix, "")
     }
 
     #[inline]

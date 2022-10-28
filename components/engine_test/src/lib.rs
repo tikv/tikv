@@ -189,8 +189,8 @@ pub mod kv {
         }
 
         #[inline]
-        fn tablet_path(&self, id: u64, suffix: u64) -> PathBuf {
-            Path::new(&self.root_path).join(format!("tablets/{}_{}", id, suffix))
+        fn tablet_path_with_prefix(&self, _id: u64, _suffix: u64, _prefix: &str) -> PathBuf {
+            self.root_path.join("db")
         }
 
         #[inline]
@@ -251,6 +251,12 @@ pub mod kv {
             suffix: Option<u64>,
             mut options: OpenOptions,
         ) -> Result<KvTestEngine> {
+            if options.create_new() && suffix.is_none() {
+                return Err(box_err!(
+                    "suffix should be provided when creating new tablet"
+                ));
+            }
+
             if options.create_new() || options.create() {
                 options = options.set_cache_only(false);
             }
@@ -325,11 +331,6 @@ pub mod kv {
         #[inline]
         fn tablets_path(&self) -> PathBuf {
             self.inner.root_path.join("tablets")
-        }
-
-        #[inline]
-        fn tablet_path(&self, id: u64, suffix: u64) -> PathBuf {
-            self.tablet_path_with_prefix(id, suffix, "")
         }
 
         #[inline]
