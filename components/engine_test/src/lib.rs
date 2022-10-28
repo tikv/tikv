@@ -343,7 +343,12 @@ pub mod kv {
         fn mark_tombstone(&self, region_id: u64, suffix: u64) {
             let path = self.tablet_path(region_id, suffix).join(TOMBSTONE_MARK);
             std::fs::File::create(&path).unwrap();
-            self.registry.lock().unwrap().remove(&region_id);
+            {
+                let mut reg = self.registry.lock().unwrap();
+                if let Some((cached_tablet, cached_suffix)) = reg.remove(&region_id) && cached_suffix != suffix {
+                    reg.insert(region_id, (cached_tablet, cached_suffix));
+                }
+            }
         }
 
         #[inline]
@@ -354,25 +359,34 @@ pub mod kv {
         }
 
         #[inline]
-        fn destroy_tablet(&self, id: u64, suffix: u64) -> engine_traits::Result<()> {
-            let path = self.tablet_path(id, suffix);
-            self.registry.lock().unwrap().remove(&id);
+        fn destroy_tablet(&self, region_id: u64, suffix: u64) -> engine_traits::Result<()> {
+            let path = self.tablet_path(region_id, suffix);
+            {
+                let mut reg = self.registry.lock().unwrap();
+                if let Some((cached_tablet, cached_suffix)) = reg.remove(&region_id) && cached_suffix != suffix {
+                    reg.insert(region_id, (cached_tablet, cached_suffix));
+                }
+            }
             let _ = std::fs::remove_dir_all(path);
             Ok(())
         }
 
         #[inline]
-        fn load_tablet(&self, path: &Path, id: u64, suffix: u64) -> Result<KvTestEngine> {
+        fn load_tablet(&self, path: &Path, region_id: u64, suffix: u64) -> Result<KvTestEngine> {
             {
                 let reg = self.registry.lock().unwrap();
-                if let Some((db, db_suffix)) = reg.get(&id) && *db_suffix == suffix {
-                    return Err(box_err!("region {} {} already exists", id, db.path()));
+                if let Some((db, db_suffix)) = reg.get(&region_id) && *db_suffix == suffix {
+                    return Err(box_err!("region {} {} already exists", region_id, db.path()));
                 }
             }
 
-            let db_path = self.tablet_path(id, suffix);
+            let db_path = self.tablet_path(region_id, suffix);
             std::fs::rename(path, &db_path)?;
-            self.open_tablet(id, Some(suffix), OpenOptions::default().set_create(true))
+            self.open_tablet(
+                region_id,
+                Some(suffix),
+                OpenOptions::default().set_create(true),
+            )
         }
 
         fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()> {
