@@ -1056,8 +1056,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         let mut pr = Some(pr);
 
-        // TODO: Lock wait handling here.
-        if let Some(lock_info) = lock_info {
+        if !lock_info.is_empty() {
+            assert_eq!(lock_info.len(), 1);
+            let lock_info = lock_info.into_iter().next().unwrap();
+
             // Only handle lock waiting if `wait_timeout` is set. Otherwise it indicates
             // that it's a lock-no-wait request and we need to report error
             // immediately.
@@ -1408,6 +1410,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             key: lock_info.key,
             lock_hash: lock_info.lock_digest.hash,
             parameters: lock_info.parameters,
+            should_not_exist: lock_info.should_not_exist,
             lock_wait_token,
             legacy_wake_up_index: None,
             key_cb: Some(ctx.get_callback_for_blocked_key().into()),
@@ -1546,7 +1549,7 @@ mod tests {
                 10.into(),
             )
             .into(),
-            commands::AcquirePessimisticLock::new(
+            commands::AcquirePessimisticLock::new_disallow_lock_with_conflict(
                 vec![(Key::from_raw(b"k"), false)],
                 b"k".to_vec(),
                 10.into(),

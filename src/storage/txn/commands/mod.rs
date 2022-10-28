@@ -58,7 +58,7 @@ use txn_types::{Key, OldValues, TimeStamp, Value, Write};
 
 use crate::storage::{
     kv::WriteData,
-    lock_manager::{self, LockManager, WaitTimeout},
+    lock_manager::{self, LockManager, LockWaitToken, WaitTimeout},
     metrics,
     mvcc::{Lock as MvccLock, MvccReader, ReleasedLock, SnapshotReader},
     txn::{latch, ProcessResult, Result},
@@ -207,7 +207,7 @@ impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLock
             })
             .collect();
 
-        AcquirePessimisticLock::new(
+        AcquirePessimisticLock::new_disallow_lock_with_conflict(
             keys,
             req.take_primary_lock(),
             req.get_start_version().into(),
@@ -389,7 +389,7 @@ pub struct WriteResult {
     pub to_be_write: WriteData,
     pub rows: usize,
     pub pr: ProcessResult,
-    pub lock_info: Option<WriteResultLockInfo>,
+    pub lock_info: Vec<WriteResultLockInfo>,
     pub released_locks: ReleasedLocks,
     pub lock_guards: Vec<KeyHandleGuard>,
     pub response_policy: ResponsePolicy,
@@ -398,22 +398,36 @@ pub struct WriteResult {
 pub struct WriteResultLockInfo {
     pub lock_digest: lock_manager::LockDigest,
     pub key: Key,
+    pub should_not_exist: bool,
     pub lock_info_pb: LockInfo,
     pub parameters: PessimisticLockParameters,
+    pub hash_for_latch: u64,
+    /// If a request is woken up after waiting for some lock, and it encounters
+    /// another lock again after resuming, this field will carry the token
+    /// that was already allocated before.
+    pub lock_wait_token: LockWaitToken,
 }
 
 impl WriteResultLockInfo {
-    pub fn new(lock_info_pb: LockInfo, parameters: PessimisticLockParameters) -> Self {
+    pub fn new(
+        lock_info_pb: LockInfo,
+        parameters: PessimisticLockParameters,
+        key: Key,
+        should_not_exist: bool,
+    ) -> Self {
         let lock = lock_manager::LockDigest {
             ts: lock_info_pb.get_lock_version().into(),
-            hash: Key::from_raw(lock_info_pb.get_key()).gen_hash(),
+            hash: key.gen_hash(),
         };
-        let key = Key::from_raw(lock_info_pb.get_key());
+        let hash_for_latch = latch::Lock::hash(&key);
         Self {
             lock_digest: lock,
             key,
+            should_not_exist,
             lock_info_pb,
             parameters,
+            hash_for_latch,
+            lock_wait_token: LockWaitToken(None),
         }
     }
 }

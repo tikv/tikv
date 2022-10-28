@@ -123,7 +123,10 @@ use crate::{
         metrics::{CommandKind, *},
         mvcc::{MvccReader, PointGetterBuilder},
         txn::{
-            commands::{RawAtomicStore, RawCompareAndSwap, TypedCommand},
+            commands::{
+                acquire_pessimistic_lock::PessimisticLockCmdInner, RawAtomicStore,
+                RawCompareAndSwap, TypedCommand,
+            },
             flow_controller::{EngineFlowController, FlowController},
             scheduler::Scheduler as TxnScheduler,
             Command, ErrorInner as TxnError,
@@ -1442,16 +1445,28 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 )?;
                 check_key_size!(keys, self.max_key_size, callback);
             }
-            Command::AcquirePessimisticLock(AcquirePessimisticLock { keys, .. }) => {
-                let keys = keys.iter().map(|k| k.0.as_encoded());
-                Self::check_api_version(
-                    self.api_version,
-                    cmd.ctx().api_version,
-                    CommandKind::prewrite,
-                    keys.clone(),
-                )?;
-                check_key_size!(keys, self.max_key_size, callback);
-            }
+            Command::AcquirePessimisticLock(AcquirePessimisticLock { inner, .. }) => match inner {
+                PessimisticLockCmdInner::SingleRequest { keys, .. } => {
+                    let keys = keys.iter().map(|k| k.0.as_encoded());
+                    Self::check_api_version(
+                        self.api_version,
+                        cmd.ctx().api_version,
+                        CommandKind::acquire_pessimistic_lock,
+                        keys.clone(),
+                    )?;
+                    check_key_size!(keys, self.max_key_size, callback);
+                }
+                PessimisticLockCmdInner::BatchResumedRequests { items, .. } => {
+                    let keys = items.iter().map(|item| item.key.as_encoded());
+                    Self::check_api_version(
+                        self.api_version,
+                        cmd.ctx().api_version,
+                        CommandKind::acquire_pessimistic_lock_resumed,
+                        keys.clone(),
+                    )?;
+                    check_key_size!(keys, self.max_key_size, callback);
+                }
+            },
             _ => {}
         }
         with_tls_tracker(|tracker| {
@@ -3335,7 +3350,7 @@ pub mod test_util {
     ) -> PessimisticLockCommand {
         let primary = keys[0].0.clone().to_raw().unwrap();
         let for_update_ts: TimeStamp = for_update_ts.into();
-        commands::AcquirePessimisticLock::new(
+        commands::AcquirePessimisticLock::new_disallow_lock_with_conflict(
             keys,
             primary,
             start_ts.into(),
@@ -8105,7 +8120,7 @@ mod tests {
         // Meet lock-k.
         storage
             .sched_txn_command(
-                commands::AcquirePessimisticLock::new(
+                commands::AcquirePessimisticLock::new_disallow_lock_with_conflict(
                     vec![(Key::from_raw(b"foo"), false), (Key::from_raw(&k), false)],
                     k.clone(),
                     20.into(),
@@ -8197,7 +8212,7 @@ mod tests {
             for k in keys {
                 storage
                     .sched_txn_command(
-                        commands::AcquirePessimisticLock::new(
+                        commands::AcquirePessimisticLock::new_disallow_lock_with_conflict(
                             vec![(k.clone(), false)],
                             k.to_raw().unwrap(),
                             lock_ts.into(),
@@ -8782,7 +8797,7 @@ mod tests {
         // T1 acquires lock on k1, start_ts = 1, for_update_ts = 3
         storage
             .sched_txn_command(
-                commands::AcquirePessimisticLock::new(
+                commands::AcquirePessimisticLock::new_disallow_lock_with_conflict(
                     vec![(key1.clone(), false)],
                     k1.to_vec(),
                     1.into(),
@@ -8805,7 +8820,7 @@ mod tests {
         // T2 acquires lock on k2, start_ts = 10, for_update_ts = 15
         storage
             .sched_txn_command(
-                commands::AcquirePessimisticLock::new(
+                commands::AcquirePessimisticLock::new_disallow_lock_with_conflict(
                     vec![(key2.clone(), false)],
                     k2.to_vec(),
                     10.into(),
@@ -9035,7 +9050,7 @@ mod tests {
                 ExpectedWrite::new().expect_proposed_cb(),
             ],
 
-            command: AcquirePessimisticLock::new(
+            command: AcquirePessimisticLock::new_disallow_lock_with_conflict(
                 keys.iter().map(|&it| (Key::from_raw(it), true)).collect(),
                 keys[0].to_vec(),
                 TimeStamp::new(10),
@@ -9061,7 +9076,7 @@ mod tests {
                 ExpectedWrite::new().expect_no_proposed_cb(),
             ],
 
-            command: AcquirePessimisticLock::new(
+            command: AcquirePessimisticLock::new_disallow_lock_with_conflict(
                 keys.iter().map(|&it| (Key::from_raw(it), true)).collect(),
                 keys[0].to_vec(),
                 TimeStamp::new(10),

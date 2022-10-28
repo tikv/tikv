@@ -123,6 +123,7 @@ pub struct PrewriteResult {
     pub one_pc_commit_ts: TimeStamp,
 }
 
+#[derive(Clone)]
 #[cfg_attr(test, derive(Default))]
 pub struct PessimisticLockParameters {
     pub pb_ctx: kvrpcpb::Context,
@@ -135,6 +136,7 @@ pub struct PessimisticLockParameters {
     pub min_commit_ts: TimeStamp,
     pub check_existence: bool,
     pub is_first_lock: bool,
+    pub lock_only_if_exists: bool,
 
     /// Whether it's allowed for an pessimistic lock request to acquire the lock
     /// even there is write conflict (i.e. the latest version's `commit_ts` is
