@@ -120,8 +120,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let mailbox = store_ctx.router.mailbox(self.region_id()).unwrap();
         let tablet = self.tablet().clone();
         let logger = self.logger.clone();
-        let (apply_scheduler, mut apply_fsm) =
-            ApplyFsm::new(self.peer().clone(), region_state, mailbox, tablet, logger);
+        let (apply_scheduler, mut apply_fsm) = ApplyFsm::new(
+            store_ctx.store_id,
+            self.peer().clone(),
+            region_state,
+            mailbox,
+            tablet,
+            store_ctx.tablet_factory.clone(),
+            logger,
+        );
         store_ctx
             .apply_pool
             .spawn(async move { apply_fsm.handle_all_tasks().await })
@@ -260,6 +267,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 AdminCmdResult::ConfChange(conf_change) => {
                     self.on_apply_res_conf_change(conf_change)
                 }
+                AdminCmdResult::SplitRegion(_) => unimplemented!(),
             }
         }
         self.raft_group_mut()

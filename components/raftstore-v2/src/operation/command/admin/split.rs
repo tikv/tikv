@@ -101,34 +101,34 @@ impl<EK: KvEngine, R> Apply<EK, R> {
                 continue;
             }
 
-            let new_tablet_path = self.tablet_factory().tablet_path_with_prefix(
+            let split_temp_path = self.tablet_factory().tablet_path_with_prefix(
                 SPLIT_PREFIX,
                 new_region_id,
                 RAFT_INIT_LOG_INDEX,
             );
             tablet
-                .create_checkpoint(&new_tablet_path)
+                .create_checkpoint(&split_temp_path)
                 .unwrap_or_else(|e| {
                     panic!(
                         "{:?} fails to create checkpoint with path {:?}: {:?}",
                         self.logger.list(),
-                        new_tablet_path,
+                        split_temp_path,
                         e
                     )
                 });
         }
 
-        let new_tablet_path = self
-            .tablet_factory()
-            .split_tablet_path(region_id, log_index);
+        let derived_temp_path =
+            self.tablet_factory()
+                .tablet_path_with_prefix(SPLIT_PREFIX, region_id, log_index);
         // Change the tablet path by using the new tablet suffix
         tablet
-            .create_checkpoint(&new_tablet_path)
+            .create_checkpoint(&derived_temp_path)
             .unwrap_or_else(|e| {
                 panic!(
                     "{:?} fails to create checkpoint with path {:?}: {:?}",
                     self.logger.list(),
-                    new_tablet_path,
+                    derived_temp_path,
                     e
                 )
             });
@@ -136,13 +136,11 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         // will register it when switching it to the normal version.
         let tablet = self
             .tablet_factory()
-            .open_tablet(
+            .open_tablet_raw(
+                &derived_temp_path,
                 region_id,
-                Some(log_index),
-                OpenOptions::default()
-                    .set_create(true)
-                    .set_split_use(true)
-                    .set_skip_cache(true),
+                log_index,
+                OpenOptions::default(),
             )
             .unwrap();
         self.publish_tablet(tablet);
@@ -274,7 +272,8 @@ mod test {
                 let state = apply.region_state();
                 assert_eq!(state.tablet_index, log_index);
                 assert_eq!(state.get_region(), region);
-                let tablet_path = factory.split_tablet_path(region.id, log_index);
+                let tablet_path =
+                    factory.tablet_path_with_prefix(SPLIT_PREFIX, region.id, log_index);
                 assert!(factory.exists_raw(&tablet_path));
             } else {
                 assert_eq! {
@@ -283,7 +282,8 @@ mod test {
                 }
                 child_idx += 1;
 
-                let tablet_path = factory.split_tablet_path(region.id, RAFT_INIT_LOG_INDEX);
+                let tablet_path =
+                    factory.tablet_path_with_prefix(SPLIT_PREFIX, region.id, RAFT_INIT_LOG_INDEX);
                 assert!(factory.exists_raw(&tablet_path));
             }
         }
