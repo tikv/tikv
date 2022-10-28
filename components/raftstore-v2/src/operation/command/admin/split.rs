@@ -451,7 +451,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 .load_tablet(&split_tablet_path, region_id, tablet_index)
                 .unwrap();
 
-            let ranges_to_delete = get_range_not_in_region(&new_region);
+            let ranges_to_delete = get_range_not_in_region(self.region());
             // todo: async version
             tablet
                 .delete_ranges_cfs(DeleteStrategy::DeleteFiles, &ranges_to_delete)
