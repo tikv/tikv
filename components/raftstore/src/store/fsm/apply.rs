@@ -637,7 +637,7 @@ where
             apply_state: delegate.apply_state.clone(),
             write_seqno: mem::take(&mut delegate.unfinished_write_seqno),
             exec_res: results,
-            metrics: delegate.metrics.clone(),
+            metrics: mem::take(&mut delegate.metrics),
             applied_term: delegate.applied_term,
             bucket_stat: delegate.buckets.clone().map(Box::new),
         });
@@ -3561,7 +3561,6 @@ where
             RAFT_ENTRIES_CACHES_GAUGE.sub(dangle_size as i64);
         }
 
-        self.delegate.metrics = ApplyMetrics::default();
         self.delegate.term = apply.term;
         if let Some(meta) = apply.bucket_meta.clone() {
             let buckets = self
@@ -5635,7 +5634,7 @@ mod tests {
             router.schedule_task(1, Msg::apply(apply(peer_id, 1, 3, entries, vec![])));
         };
 
-        let approximate_eq = |a: u64, b: u64, delta: u64| {
+        fn approximate_eq(a: u64, b: u64, delta: u64) {
             assert!(
                 a >= b - delta && a <= b + delta,
                 "left: {}, right: {}, delta: {}",
@@ -5643,18 +5642,18 @@ mod tests {
                 b,
                 delta
             );
-        };
+        }
 
         // schedule a batch with 512 keys and 64k total size will trigger 2 flush and
         // yield.
         schedule_apply(1, 512, 128);
         let apply_res = fetch_apply_res(&rx);
         approximate_eq(apply_res.metrics.written_bytes, 32768, 2048);
-        approximate_eq(apply_res.metrics.written_keys, 256, 10);
+        approximate_eq(apply_res.metrics.written_keys, 256, 15);
         // the second part, note that resume apply not clean up the metrics
         let apply_res = fetch_apply_res(&rx);
-        approximate_eq(apply_res.metrics.written_bytes, 65536, 4096);
-        approximate_eq(apply_res.metrics.written_keys, 512, 20);
+        approximate_eq(apply_res.metrics.written_bytes, 32768, 2048);
+        approximate_eq(apply_res.metrics.written_keys, 256, 15);
 
         // update apply yeild size to 64kb
         _ = cfg.update(|c| {
