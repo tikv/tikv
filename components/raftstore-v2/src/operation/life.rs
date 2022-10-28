@@ -100,7 +100,7 @@ impl Store {
         ER: RaftEngine,
     {
         let region_id = msg.raft_message.get_region_id();
-        // Create the peer if not created before
+        // It will create the peer if not created before
         self.on_raft_message(ctx, msg.raft_message);
         ctx.router.force_send(
             region_id,

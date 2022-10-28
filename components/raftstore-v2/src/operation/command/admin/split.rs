@@ -451,6 +451,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 .load_tablet(&split_tablet_path, region_id, tablet_index)
                 .unwrap();
 
+            let ranges_to_delete = get_range_not_in_region(&new_region);
+            // todo: async version
+            tablet
+                .delete_ranges_cfs(DeleteStrategy::DeleteFiles, &ranges_to_delete)
+                .unwrap_or_else(|e| {
+                    error!(self.logger,"failed to delete files in range"; "err" => %e);
+                });
+
             self.tablet_mut().set(tablet);
         }
     }
@@ -521,18 +529,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     .insert(enc_end_key(&new_region), new_region_id)
                     .is_none();
                 assert!(not_exist, "[region {}] should not exist", new_region_id);
-
-                // recover the auto_compaction
-                let tablet = self.tablet_mut().latest().unwrap().clone();
-                let ranges_to_delete = get_range_not_in_region(&new_region);
-
-                // todo: async version
-                tablet
-                    .delete_ranges_cfs(DeleteStrategy::DeleteFiles, &ranges_to_delete)
-                    .unwrap_or_else(|e| {
-                        error!(self.logger,"failed to delete files in range"; "err" => %e);
-                    });
-
                 continue;
             }
 
