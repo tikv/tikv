@@ -804,6 +804,7 @@ async fn start<S, R, E>(
     let mut last_wake_time = Instant::now();
     let mut retry_times = 0;
     let backoff_duration = back_end.builder.cfg.value().raft_client_backoff_step.0;
+    let mut addr_channel = None;
     loop {
         maybe_backoff(backoff_duration, &mut last_wake_time, &mut retry_times).await;
         retry_times += 1;
@@ -830,9 +831,15 @@ async fn start<S, R, E>(
                 continue;
             }
         };
-        let channel = back_end.connect(&addr);
+
+        // reuse channel if the address is the same.
+        if addr_channel.as_ref().map_or(true, |(_, prev_addr)| prev_addr != &addr ) {
+            addr_channel = Some((back_end.connect(&addr), addr.clone()));
+        }
+        let channel = addr_channel.as_ref().unwrap().0.clone();
+
         if !channel.wait_for_connected(Duration::from_secs(3)).await {
-            error!("connection fail"; "store_id" => back_end.store_id, "addr" => addr, "err" => "can not establish channel");
+            error!("connection fail"; "store_id" => back_end.store_id, "addr" => addr, "err" => "can not establish connection");
 
             // Clears pending messages to avoid consuming high memory when one node is
             // shutdown.
@@ -880,6 +887,7 @@ async fn start<S, R, E>(
                     .builder
                     .router
                     .broadcast_unreachable(back_end.store_id);
+                addr_channel = None;
             }
             Ok(RaftCallRes::Closed) | Err(_) => {
                 error!("connection close"; "store_id" => back_end.store_id, "addr" => addr);
