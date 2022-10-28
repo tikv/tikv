@@ -69,7 +69,7 @@ impl Default for ServerConfig {
             engine_store_git_hash: String::default(),
             addr: TIFLASH_DEFAULT_LISTENING_ADDR.to_string(),
             status_addr: TIFLASH_DEFAULT_STATUS_ADDR.to_string(),
-            advertise_status_addr: TIFLASH_DEFAULT_STATUS_ADDR.to_string(),
+            advertise_status_addr: TIFLASH_DEFAULT_ADVERTISE_LISTENING_ADDR.to_string(),
             advertise_addr: TIFLASH_DEFAULT_ADVERTISE_LISTENING_ADDR.to_string(),
         }
     }
@@ -317,7 +317,7 @@ pub fn setup_default_tikv_config(default: &mut TikvConfig) {
     default.server.addr = TIFLASH_DEFAULT_LISTENING_ADDR.to_string();
     default.server.advertise_addr = TIFLASH_DEFAULT_ADVERTISE_LISTENING_ADDR.to_string();
     default.server.status_addr = TIFLASH_DEFAULT_STATUS_ADDR.to_string();
-    default.server.advertise_status_addr = TIFLASH_DEFAULT_STATUS_ADDR.to_string();
+    default.server.advertise_status_addr = TIFLASH_DEFAULT_ADVERTISE_LISTENING_ADDR.to_string();
     // Do not add here, try use `address_proxy_config`.
 }
 

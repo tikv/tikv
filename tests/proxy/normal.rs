@@ -30,7 +30,8 @@ use proxy_server::{
     config::{
         address_proxy_config, ensure_no_common_unrecognized_keys, get_last_config,
         memory_limit_for_cf, setup_default_tikv_config, validate_and_persist_config,
-        TIFLASH_DEFAULT_LISTENING_ADDR, TIFLASH_DEFAULT_STATUS_ADDR,
+        TIFLASH_DEFAULT_ADVERTISE_LISTENING_ADDR, TIFLASH_DEFAULT_LISTENING_ADDR,
+        TIFLASH_DEFAULT_STATUS_ADDR,
     },
     proxy::gen_tikv_config,
 };
@@ -331,7 +332,7 @@ mod config {
         assert_eq!(config.server.status_addr, TIFLASH_DEFAULT_STATUS_ADDR);
         assert_eq!(
             config.server.advertise_status_addr,
-            TIFLASH_DEFAULT_STATUS_ADDR
+            TIFLASH_DEFAULT_ADVERTISE_LISTENING_ADDR
         );
         assert_eq!(
             config.raft_store.region_worker_tick_interval.as_millis(),
@@ -371,7 +372,7 @@ mod config {
         assert_eq!(config.server.status_addr, TIFLASH_DEFAULT_STATUS_ADDR);
         assert_eq!(
             config.server.advertise_status_addr,
-            TIFLASH_DEFAULT_STATUS_ADDR
+            TIFLASH_DEFAULT_ADVERTISE_LISTENING_ADDR
         );
         assert_eq!(
             config.raft_store.region_worker_tick_interval.as_millis(),
