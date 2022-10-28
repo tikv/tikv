@@ -65,6 +65,7 @@ raft-store-max-leader-lease = "240ms"
 allow-remove-leader = true
 merge-check-tick-interval = "100ms"
 pd-heartbeat-tick-interval = "20ms"
+max-entry-cache-warmup-duration = "0ms"
 dev-assert = true
 hibernate-regions = true
 store-io-pool-size = 0

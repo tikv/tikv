@@ -1,20 +1,34 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::Duration;
+use std::{
+    fmt::{Debug, Formatter},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
+use collections::HashMap;
+use kvproto::{kvrpcpb::LockInfo, metapb::RegionEpoch};
+use parking_lot::Mutex;
 use tracker::TrackerToken;
-use txn_types::TimeStamp;
+use txn_types::{Key, TimeStamp};
 
 use crate::{
     server::lock_manager::{waiter_manager, waiter_manager::Callback},
-    storage::{txn::ProcessResult, types::StorageCallback},
+    storage::{
+        mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
+        txn::Error as TxnError,
+        Error as StorageError,
+    },
 };
 
 pub mod lock_wait_context;
 pub mod lock_waiting_queue;
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
-pub struct Lock {
+pub struct LockDigest {
     pub ts: TimeStamp,
     pub hash: u64,
 }
@@ -30,6 +44,16 @@ pub struct DiagnosticContext {
     pub resource_group_tag: Vec<u8>,
     /// The tracker is used to track and collect the lock wait details.
     pub tracker: TrackerToken,
+}
+
+impl Debug for DiagnosticContext {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DiagnosticContext")
+            .field("key", &log_wrappers::Value::key(&self.key))
+            // TODO: Perhaps the resource group tag don't need to be a secret
+            .field("resource_group_tag", &log_wrappers::Value::key(&self.resource_group_tag))
+            .finish()
+    }
 }
 
 /// Time to wait for lock released when encountering locks.
@@ -67,9 +91,14 @@ impl From<u64> for WaitTimeout {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct KeyLockWaitInfo {
+    pub key: Key,
+    pub lock_digest: LockDigest,
+    pub lock_info: LockInfo,
+}
+
 /// Uniquely identifies a lock-waiting request in a `LockManager`.
-///
-/// Not used yet, but necessary for implementing `LockWaitQueues`.
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug)]
 pub struct LockWaitToken(pub Option<u64>);
 
@@ -79,10 +108,27 @@ impl LockWaitToken {
     }
 }
 
+#[derive(Debug)]
+pub struct UpdateWaitForEvent {
+    pub token: LockWaitToken,
+    pub start_ts: TimeStamp,
+    pub is_first_lock: bool,
+    pub wait_info: KeyLockWaitInfo,
+    pub diag_ctx: DiagnosticContext,
+}
+
 /// `LockManager` manages transactions waiting for locks held by other
 /// transactions. It has responsibility to handle deadlocks between
 /// transactions.
-pub trait LockManager: Clone + Send + 'static {
+pub trait LockManager: Clone + Send + Sync + 'static {
+    /// Allocates a token for identifying a specific lock-waiting relationship.
+    /// Use this to allocate a token before invoking `wait_for`.
+    ///
+    /// Since some information required by `wait_for` need to be initialized by
+    /// the token, allocating token is therefore separated to a single
+    /// function instead of internally allocated in `wait_for`.
+    fn allocate_token(&self) -> LockWaitToken;
+
     /// Transaction with `start_ts` waits for `lock` released.
     ///
     /// If the lock is released or waiting times out or deadlock occurs, the
@@ -93,24 +139,22 @@ pub trait LockManager: Clone + Send + 'static {
     /// in deadlock.
     fn wait_for(
         &self,
+        token: LockWaitToken,
+        region_id: u64,
+        region_epoch: RegionEpoch,
+        term: u64,
         start_ts: TimeStamp,
-        cb: StorageCallback,
-        pr: ProcessResult,
-        lock: Lock,
+        wait_info: KeyLockWaitInfo,
         is_first_lock: bool,
         timeout: Option<WaitTimeout>,
+        cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
         diag_ctx: DiagnosticContext,
     );
 
-    /// The locks with `lock_ts` and `hashes` are released, tries to wake up
-    /// transactions.
-    fn wake_up(
-        &self,
-        lock_ts: TimeStamp,
-        hashes: Vec<u64>,
-        commit_ts: TimeStamp,
-        is_pessimistic_txn: bool,
-    );
+    fn update_wait_for(&self, updated_items: Vec<UpdateWaitForEvent>);
+
+    /// Remove a waiter specified by token.
+    fn remove_lock_wait(&self, token: LockWaitToken);
 
     /// Returns true if there are waiters in the `LockManager`.
     ///
@@ -124,31 +168,66 @@ pub trait LockManager: Clone + Send + 'static {
 
 // For test
 #[derive(Clone)]
-pub struct DummyLockManager;
+pub struct MockLockManager {
+    allocated_token: Arc<AtomicU64>,
+    waiters:
+        Arc<Mutex<HashMap<LockWaitToken, (KeyLockWaitInfo, Box<dyn FnOnce(StorageError) + Send>)>>>,
+}
 
-impl LockManager for DummyLockManager {
+impl MockLockManager {
+    pub fn new() -> Self {
+        Self {
+            allocated_token: Arc::new(AtomicU64::new(1)),
+            waiters: Arc::new(Mutex::new(HashMap::default())),
+        }
+    }
+}
+
+// Make the linter happy.
+impl Default for MockLockManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LockManager for MockLockManager {
+    fn allocate_token(&self) -> LockWaitToken {
+        LockWaitToken(Some(self.allocated_token.fetch_add(1, Ordering::Relaxed)))
+    }
+
     fn wait_for(
         &self,
+        token: LockWaitToken,
+        _region_id: u64,
+        _region_epoch: RegionEpoch,
+        _term: u64,
         _start_ts: TimeStamp,
-        _cb: StorageCallback,
-        _pr: ProcessResult,
-        _lock: Lock,
+        wait_info: KeyLockWaitInfo,
         _is_first_lock: bool,
-        _wait_timeout: Option<WaitTimeout>,
+        _timeout: Option<WaitTimeout>,
+        cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
         _diag_ctx: DiagnosticContext,
     ) {
+        self.waiters
+            .lock()
+            .insert(token, (wait_info, cancel_callback));
     }
 
-    fn wake_up(
-        &self,
-        _lock_ts: TimeStamp,
-        _hashes: Vec<u64>,
-        _commit_ts: TimeStamp,
-        _is_pessimistic_txn: bool,
-    ) {
-    }
+    fn update_wait_for(&self, _updated_items: Vec<UpdateWaitForEvent>) {}
+
+    fn remove_lock_wait(&self, _token: LockWaitToken) {}
 
     fn dump_wait_for_entries(&self, cb: Callback) {
         cb(vec![])
+    }
+}
+
+impl MockLockManager {
+    pub fn simulate_timeout_all(&self) {
+        let mut map = self.waiters.lock();
+        for (_, (wait_info, cancel_callback)) in map.drain() {
+            let error = MvccError::from(MvccErrorInner::KeyIsLocked(wait_info.lock_info));
+            cancel_callback(StorageError::from(TxnError::from(error)));
+        }
     }
 }

@@ -24,14 +24,14 @@ test-engines-panic = [
 ]
 
 [dependencies]
-collections = { path = "../collections", default-features = false }
-encryption = { path = "../encryption", default-features = false }
-engine_panic = { path = "../engine_panic", default-features = false }
-engine_rocks = { path = "../engine_rocks", default-features = false }
-engine_traits = { path = "../engine_traits", default-features = false }
-file_system = { path = "../file_system", default-features = false }
-raft_log_engine = { path = "../raft_log_engine", default-features = false }
+collections = { workspace = true }
+encryption = { workspace = true }
+engine_panic = { workspace = true }
+engine_rocks = { workspace = true }
+engine_traits = { workspace = true }
+file_system = { workspace = true }
+raft_log_engine = { workspace = true }
 tempfile = "3.0"
-tikv_alloc = { path = "../tikv_alloc" }
+tikv_alloc = { workspace = true }
 # FIXME: Remove this dep from the engine_traits interface
-tikv_util = { path = "../tikv_util", default-features = false }
+tikv_util = { workspace = true }

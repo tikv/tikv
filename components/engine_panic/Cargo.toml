@@ -6,11 +6,11 @@ edition = "2018"
 publish = false
 
 [dependencies]
-engine_traits = { path = "../engine_traits", default-features = false }
+engine_traits = { workspace = true }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
-tikv_alloc = { path = "../tikv_alloc" }
+tikv_alloc = { workspace = true }
 # FIXME: Remove this dep from the engine_traits interface
-tikv_util = { path = "../tikv_util", default-features = false }
-tracker = { path = "../tracker" }
-txn_types = { path = "../txn_types", default-features = false }
+tikv_util = { workspace = true }
+tracker = { workspace = true }
+txn_types = { workspace = true }

@@ -212,15 +212,15 @@ impl KeyLockWaitState {
 
 pub type DelayedNotifyAllFuture = Pin<Box<dyn Future<Output = Option<Box<LockWaitEntry>>> + Send>>;
 
-pub struct LockWaitQueueInner {
+pub struct LockWaitQueueInner<L: LockManager> {
     queue_map: dashmap::DashMap<Key, KeyLockWaitState>,
     id_allocated: AtomicU64,
+    lock_mgr: L,
 }
 
 #[derive(Clone)]
 pub struct LockWaitQueues<L: LockManager> {
-    inner: Arc<LockWaitQueueInner>,
-    lock_mgr: L,
+    inner: Arc<LockWaitQueueInner<L>>,
 }
 
 impl<L: LockManager> LockWaitQueues<L> {
@@ -229,8 +229,8 @@ impl<L: LockManager> LockWaitQueues<L> {
             inner: Arc::new(LockWaitQueueInner {
                 queue_map: dashmap::DashMap::new(),
                 id_allocated: AtomicU64::new(1),
+                lock_mgr,
             }),
-            lock_mgr,
         }
     }
 
@@ -547,7 +547,7 @@ impl<L: LockManager> LockWaitQueues<L> {
 
     #[allow(dead_code)]
     pub(super) fn get_lock_mgr(&self) -> &L {
-        &self.lock_mgr
+        &self.inner.lock_mgr
     }
 
     #[cfg(test)]
@@ -582,7 +582,7 @@ mod tests {
 
     use super::*;
     use crate::storage::{
-        lock_manager::{lock_wait_context::LockWaitContext, DummyLockManager, WaitTimeout},
+        lock_manager::{lock_wait_context::LockWaitContext, MockLockManager, WaitTimeout},
         txn::ErrorInner as TxnErrorInner,
         ErrorInner as StorageErrorInner, StorageCallback,
     };
@@ -639,7 +639,7 @@ mod tests {
             lock_info_pb: kvrpcpb::LockInfo,
         ) -> (Box<LockWaitEntry>, TestLockWaitEntryHandle) {
             let start_ts = start_ts.into();
-            let token = LockWaitToken(Some(self.allocate_internal_id()));
+            let token = self.inner.lock_mgr.allocate_token();
             let dummy_request_cb = StorageCallback::PessimisticLock(Box::new(|_| ()));
             let dummy_ctx = LockWaitContext::new(
                 Key::from_raw(key),
@@ -830,7 +830,7 @@ mod tests {
 
     #[test]
     fn test_simple_push_pop() {
-        let queues = LockWaitQueues::new(DummyLockManager {});
+        let queues = LockWaitQueues::new(MockLockManager::new());
 
         queues.mock_lock_wait(b"k1", 10, 5, false);
         queues.mock_lock_wait(b"k2", 11, 5, false);
@@ -852,7 +852,7 @@ mod tests {
 
     #[test]
     fn test_popping_priority() {
-        let queues = LockWaitQueues::new(DummyLockManager {});
+        let queues = LockWaitQueues::new(MockLockManager::new());
 
         queues.mock_lock_wait(b"k1", 10, 5, false);
         queues.mock_lock_wait(b"k1", 20, 5, false);
@@ -874,7 +874,7 @@ mod tests {
 
     #[test]
     fn test_removing_by_token() {
-        let queues = LockWaitQueues::new(DummyLockManager {});
+        let queues = LockWaitQueues::new(MockLockManager::new());
 
         queues.mock_lock_wait(b"k1", 10, 5, false);
         let token11 = queues.mock_lock_wait(b"k1", 11, 5, false).token;
@@ -915,7 +915,7 @@ mod tests {
 
     #[test]
     fn test_dropping_cancelled_entries() {
-        let queues = LockWaitQueues::new(DummyLockManager {});
+        let queues = LockWaitQueues::new(MockLockManager::new());
 
         let h10 = queues.mock_lock_wait(b"k1", 10, 5, false);
         let h11 = queues.mock_lock_wait(b"k1", 11, 5, false);
@@ -941,7 +941,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delayed_notify_all() {
-        let queues = LockWaitQueues::new(DummyLockManager {});
+        let queues = LockWaitQueues::new(MockLockManager::new());
 
         queues.mock_lock_wait(b"k1", 8, 5, false);
 

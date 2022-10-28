@@ -50,14 +50,13 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Rollback {
         );
 
         let rows = self.keys.len();
-        let mut released_locks = ReleasedLocks::new(self.start_ts, TimeStamp::zero());
+        let mut released_locks = ReleasedLocks::new();
         for k in self.keys {
             // Rollback is called only if the transaction is known to fail. Under the
             // circumstances, the rollback record needn't be protected.
             let released_lock = cleanup(&mut txn, &mut reader, k, TimeStamp::zero(), false)?;
             released_locks.push(released_lock);
         }
-        released_locks.wake_up(context.lock_mgr);
 
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
         write_data.set_allowed_on_disk_almost_full();
@@ -67,6 +66,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Rollback {
             rows,
             pr: ProcessResult::Res,
             lock_info: None,
+            released_locks,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
         })

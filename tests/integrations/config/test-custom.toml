@@ -222,6 +222,7 @@ report-min-resolved-ts-interval = "233ms"
 report-region-buckets-tick-interval = "1234s"
 max-snapshot-file-raw-size = "10GB"
 unreachable-backoff = "111s"
+max-entry-cache-warmup-duration = "2s"
 
 [coprocessor]
 split-region-on-table = false
