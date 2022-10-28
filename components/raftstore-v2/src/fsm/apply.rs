@@ -4,14 +4,15 @@ use std::{
     pin::Pin,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     task::{Context, Poll},
 };
 
 use batch_system::{Fsm, FsmScheduler, Mailbox};
+use collections::HashMap;
 use crossbeam::channel::TryRecvError;
-use engine_traits::KvEngine;
+use engine_traits::{KvEngine, RaftEngine, TabletFactory};
 use futures::{Future, StreamExt};
 use kvproto::{metapb, raft_serverpb::RegionLocalState};
 use slog::Logger;
@@ -57,14 +58,24 @@ pub struct ApplyFsm<EK: KvEngine, R> {
 
 impl<EK: KvEngine, R> ApplyFsm<EK, R> {
     pub fn new(
+        store_id: u64,
         peer: metapb::Peer,
         region_state: RegionLocalState,
         res_reporter: R,
         remote_tablet: CachedTablet<EK>,
+        tablet_factory: Arc<dyn TabletFactory<EK>>,
         logger: Logger,
     ) -> (ApplyScheduler, Self) {
         let (tx, rx) = future::unbounded(WakePolicy::Immediately);
-        let apply = Apply::new(peer, region_state, res_reporter, remote_tablet, logger);
+        let apply = Apply::new(
+            store_id,
+            peer,
+            region_state,
+            res_reporter,
+            remote_tablet,
+            tablet_factory,
+            logger,
+        );
         (
             ApplyScheduler { sender: tx },
             Self {

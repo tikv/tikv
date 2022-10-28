@@ -7,7 +7,7 @@ use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::internal::SelectHandle;
 use engine_traits::{
     CfOptions, DeleteStrategy, KvEngine, MiscExt, OpenOptions, RaftEngine, RaftEngineReadOnly,
-    RaftLogBatch, Range, TabletFactory, CF_DEFAULT, DATA_CFS,
+    RaftLogBatch, Range, TabletFactory, CF_DEFAULT, DATA_CFS, SPLIT_PREFIX,
 };
 use keys::enc_end_key;
 use kvproto::{
@@ -101,9 +101,11 @@ impl<EK: KvEngine, R> Apply<EK, R> {
                 continue;
             }
 
-            let new_tablet_path = self
-                .tablet_factory()
-                .split_tablet_path(new_region_id, RAFT_INIT_LOG_INDEX);
+            let new_tablet_path = self.tablet_factory().tablet_path_with_prefix(
+                SPLIT_PREFIX,
+                new_region_id,
+                RAFT_INIT_LOG_INDEX,
+            );
             tablet
                 .create_checkpoint(&new_tablet_path)
                 .unwrap_or_else(|e| {

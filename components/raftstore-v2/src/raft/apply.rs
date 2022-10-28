@@ -1,8 +1,13 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::mem;
+use std::{
+    collections::VecDeque,
+    mem,
+    sync::{Arc, Mutex},
+};
 
-use engine_traits::{KvEngine, RaftEngine};
+use collections::HashMap;
+use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletFactory, WriteBatch};
 use kvproto::{metapb, raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
 use raftstore::store::fsm::apply::DEFAULT_APPLY_WB_SIZE;
 use slog::Logger;
@@ -17,10 +22,14 @@ use crate::{
 
 /// Apply applies all the committed commands to kv db.
 pub struct Apply<EK: KvEngine, R> {
+    store_id: u64,
+
     peer: metapb::Peer,
     remote_tablet: CachedTablet<EK>,
     tablet: EK,
     write_batch: Option<EK::WriteBatch>,
+
+    tablet_factory: Arc<dyn TabletFactory<EK>>,
 
     callbacks: Vec<(Vec<CmdResChannel>, RaftCmdResponse)>,
 
@@ -40,13 +49,16 @@ pub struct Apply<EK: KvEngine, R> {
 impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn new(
+        store_id: u64,
         peer: metapb::Peer,
         region_state: RegionLocalState,
         res_reporter: R,
         mut remote_tablet: CachedTablet<EK>,
+        tablet_factory: Arc<dyn TabletFactory<EK>>,
         logger: Logger,
     ) -> Self {
         Apply {
+            store_id,
             peer,
             tablet: remote_tablet.latest().unwrap().clone(),
             remote_tablet,
@@ -57,9 +69,20 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             applied_term: 0,
             admin_cmd_result: vec![],
             region_state,
+            tablet_factory,
             res_reporter,
             logger,
         }
+    }
+
+    #[inline]
+    pub fn store_id(&self) -> u64 {
+        self.store_id
+    }
+
+    #[inline]
+    pub fn tablet_factory(&self) -> &Arc<dyn TabletFactory<EK>> {
+        &self.tablet_factory
     }
 
     #[inline]
@@ -73,6 +96,13 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     }
 
     #[inline]
+    pub fn clear_write_batch(&mut self) {
+        if let Some(wb) = self.write_batch.take() {
+            assert!(wb.is_empty());
+        };
+    }
+
+    #[inline]
     pub fn write_batch_mut(&mut self) -> &mut Option<EK::WriteBatch> {
         &mut self.write_batch
     }
@@ -80,6 +110,9 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn write_batch_or_default(&mut self) -> &mut EK::WriteBatch {
         if self.write_batch.is_none() {
+            // Other places (ex: raftstore) may have updated the tablet cache, so we should
+            // update it here.
+            self.tablet = self.remote_tablet.latest().unwrap().clone();
             self.write_batch = Some(self.tablet.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE));
         }
         self.write_batch.as_mut().unwrap()
@@ -104,6 +137,16 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn region_state_mut(&mut self) -> &mut RegionLocalState {
         &mut self.region_state
+    }
+
+    #[inline]
+    pub fn set_region_state(&mut self, region_state: RegionLocalState) {
+        self.region_state = region_state;
+    }
+
+    #[inline]
+    pub fn tablet(&mut self) -> Option<EK> {
+        self.remote_tablet.latest().cloned()
     }
 
     /// Publish the tablet so that it can be used by read worker.
