@@ -551,9 +551,8 @@ where
 
 #[derive(PartialEq)]
 enum RaftCallRes {
-    UnImplemented,
-    Disconnected,
-    Closed,
+    UnImplemented, // the call is not supported, probably due to visiting to older version of TiKV.
+    Disconnected, // the connection is aborted or closed
 }
 
 struct RaftCall<R, M, B, E> {
@@ -574,7 +573,7 @@ where
         if let (Ok(()), Ok(Done { .. })) = res {
             info!("connection close"; "store_id" => self.store_id, "addr" => %self.sender.addr);
             if let Some(tx) = self.lifetime.take() {
-                let _ = tx.send(RaftCallRes::Closed);
+                let _ = tx.send(RaftCallRes::Disconnected);
             }
             return;
         }
@@ -873,7 +872,7 @@ async fn start<S, R, E>(
             Ok(RaftCallRes::UnImplemented) => {
                 error!("connection fail"; "store_id" => back_end.store_id, "addr" => addr, "err" => "require fallback even with legacy API");
             }
-            Ok(RaftCallRes::Disconnected) => {
+            Ok(RaftCallRes::Disconnected) | Err(_) => { // Err(_) should be tx is dropped
                 error!("connection abort"; "store_id" => back_end.store_id, "addr" => addr);
                 if retry_times > 1 {
                     // Clears pending messages to avoid consuming high memory when one node is
@@ -889,10 +888,6 @@ async fn start<S, R, E>(
                     .builder
                     .router
                     .broadcast_unreachable(back_end.store_id);
-                addr_channel = None;
-            }
-            Ok(RaftCallRes::Closed) | Err(_) => {
-                error!("connection close"; "store_id" => back_end.store_id, "addr" => addr);
                 addr_channel = None;
             }
         }
