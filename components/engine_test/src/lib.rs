@@ -92,7 +92,7 @@ pub mod kv {
     };
     use engine_traits::{
         CfOptions, CfOptionsExt, MiscExt, OpenOptions, Result, TabletAccessor, TabletFactory,
-        CF_DEFAULT, MERGE_PREFIX, SPLIT_PREFIX,
+        CF_DEFAULT,
     };
     use tikv_util::box_err;
 
@@ -226,6 +226,7 @@ pub mod kv {
     #[derive(Clone)]
     pub struct TestTabletFactoryV2 {
         inner: TestTabletFactory,
+        // region_id -> (tablet, tablet_suffix)
         registry: Arc<Mutex<HashMap<u64, (KvTestEngine, u64)>>>,
     }
 
@@ -250,37 +251,20 @@ pub mod kv {
             suffix: Option<u64>,
             mut options: OpenOptions,
         ) -> Result<KvTestEngine> {
-            if options.merge_use() && options.split_use() {
-                return Err(box_err!(
-                    "split_use and merge_use cannot be set be true simultaneously"
-                ));
-            }
-
             if options.create_new() || options.create() {
                 options = options.set_cache_only(false);
             }
 
-            if options.split_use() || options.merge_use() {
-                options = options.set_skip_cache(true);
-            }
-
-            let split_or_merge = options.split_use() || options.merge_use();
             let mut reg = self.registry.lock().unwrap();
             if let Some(suffix) = suffix {
-                if let Some((tablet, tablet_suffix)) = reg.get(&id)  && *tablet_suffix == suffix && !split_or_merge {
+                if let Some((cached_tablet, cached_suffix)) = reg.get(&id) && *cached_suffix == suffix {
                     // Target tablet exist in the cache
                     if options.create_new() {
-                        return Err(box_err!("region {} {} already exists", id, tablet.path()));
+                        return Err(box_err!("region {} {} already exists", id, cached_tablet.path()));
                     }
-                    return Ok(tablet.clone());
+                    return Ok(cached_tablet.clone());
                 } else if !options.cache_only() {
-                    let tablet_path = if options.split_use() {
-                        self.tablet_path_with_prefix(id, suffix, SPLIT_PREFIX)
-                    } else if options.merge_use() {
-                        self.tablet_path_with_prefix(id, suffix, MERGE_PREFIX)
-                    } else {
-                        self.tablet_path(id, suffix)
-                    };
+                    let tablet_path = self.tablet_path(id, suffix);
                     let tablet = self.open_tablet_raw(&tablet_path, id, suffix, options.clone())?;
                     if !options.skip_cache() {
                         reg.insert(id, (tablet.clone(), suffix));

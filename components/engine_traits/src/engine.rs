@@ -162,7 +162,7 @@ impl Drop for TabletErrorCollector {
 }
 
 /// OpenOptionsn is used for specifiying the way of opening a tablet.
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone)]
 pub struct OpenOptions {
     // create tablet if non-exist
     create: bool,
@@ -170,8 +170,6 @@ pub struct OpenOptions {
     read_only: bool,
     cache_only: bool,
     skip_cache: bool,
-    split_use: bool,
-    merge_use: bool,
 }
 
 impl OpenOptions {
@@ -205,18 +203,6 @@ impl OpenOptions {
         self
     }
 
-    /// Only used during split where tablet path contains "split_" prefix
-    pub fn set_split_use(mut self, split_use: bool) -> Self {
-        self.split_use = split_use;
-        self
-    }
-
-    /// Only used during merge where tablet path contains "merge_" prefix
-    pub fn set_merge_use(mut self, merge_use: bool) -> Self {
-        self.merge_use = merge_use;
-        self
-    }
-
     pub fn create(&self) -> bool {
         self.create
     }
@@ -235,14 +221,6 @@ impl OpenOptions {
 
     pub fn skip_cache(&self) -> bool {
         self.skip_cache
-    }
-
-    pub fn split_use(&self) -> bool {
-        self.split_use
-    }
-
-    pub fn merge_use(&self) -> bool {
-        self.merge_use
     }
 }
 

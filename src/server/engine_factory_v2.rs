@@ -9,7 +9,7 @@ use collections::HashMap;
 use engine_rocks::RocksEngine;
 use engine_traits::{
     CfOptions, CfOptionsExt, MiscExt, OpenOptions, Result, TabletAccessor, TabletFactory,
-    CF_DEFAULT, MERGE_PREFIX, SPLIT_PREFIX,
+    CF_DEFAULT,
 };
 
 use crate::server::engine_factory::KvEngineFactory;
@@ -44,9 +44,6 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
     /// If options.create is true, open the tablet with id and suffix if it
     /// exists or create it otherwise.
     ///
-    /// If options.split_use or options.merge_use is set be true, bypass the
-    /// cache.
-    ///
     /// If options.skip_cache is true, cache will not be updated.
     ///
     /// Note: options.cache_only and options.create and/or options.create_new
@@ -57,25 +54,13 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
         suffix: Option<u64>,
         mut options: OpenOptions,
     ) -> Result<RocksEngine> {
-        if options.merge_use() && options.split_use() {
-            return Err(box_err!(
-                "split_use and merge_use cannot be set be true simultaneously, {:?}",
-                options
-            ));
-        }
-
         if options.create() || options.create_new() {
             options = options.set_cache_only(false);
         }
 
-        if options.split_use() || options.merge_use() {
-            options = options.set_skip_cache(true);
-        }
-
-        let split_or_merge = options.split_use() || options.merge_use();
         let mut reg = self.registry.lock().unwrap();
         if let Some(suffix) = suffix {
-            if let Some((tablet, tablet_suffix)) = reg.get(&id)  && *tablet_suffix == suffix && !split_or_merge {
+            if let Some((tablet, tablet_suffix)) = reg.get(&id) && *tablet_suffix == suffix {
                 // Target tablet exist in the cache
                 if options.create_new() {
                     return Err(box_err!(
@@ -86,13 +71,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
                 }
                 return Ok(tablet.clone());
             } else if !options.cache_only() {
-                let tablet_path = if options.split_use() {
-                    self.tablet_path_with_prefix(id, suffix, SPLIT_PREFIX)
-                } else if options.merge_use() {
-                    self.tablet_path_with_prefix(id, suffix, MERGE_PREFIX)
-                } else {
-                    self.tablet_path(id, suffix)
-                };
+                let tablet_path = self.tablet_path(id, suffix);
                 let tablet = self.open_tablet_raw(&tablet_path, id, suffix, options.clone())?;
                 if !options.skip_cache() {
                     debug!("Insert a tablet"; "key" => ?(id, suffix));
@@ -378,7 +357,7 @@ mod tests {
             .unwrap();
         assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
 
-        // Both region id and suffix match can get the tablet from the cache.
+        // Only both region id and suffix match can get the tablet from the cache.
         factory
             .open_tablet(1, Some(20), OpenOptions::default().set_cache_only(true))
             .unwrap_err();
@@ -500,52 +479,5 @@ mod tests {
             count += 1;
         });
         assert_eq!(count, 2);
-    }
-
-    #[test]
-    fn test_tablet_path_with_prefix() {
-        let cfg = TEST_CONFIG.clone();
-        assert!(cfg.storage.block_cache.shared);
-        let cache = cfg.storage.block_cache.build_shared_cache();
-        let dir = test_util::temp_dir("test_kvengine_factory_v2", false);
-        let env = cfg.build_shared_rocks_env(None, None).unwrap();
-
-        let mut builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
-        if let Some(cache) = cache {
-            builder = builder.block_cache(cache);
-        }
-
-        let factory = builder.build_v2();
-        // tablet will be registerd in the cache
-        let _ = factory
-            .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
-            .unwrap();
-
-        // We can not open it with split_use being true
-        factory
-            .open_tablet(1, Some(10), OpenOptions::default().set_split_use(true))
-            .unwrap_err();
-
-        // We can not open it with merge_use being true
-        factory
-            .open_tablet(1, Some(10), OpenOptions::default().set_merge_use(true))
-            .unwrap_err();
-
-        let tablet_path = factory.tablet_path(1, 10);
-        let split_path = factory.tablet_path_with_prefix(1, 10, SPLIT_PREFIX);
-        std::fs::rename(tablet_path, split_path.clone()).unwrap();
-        // we can open it now
-        factory
-            .open_tablet(1, Some(10), OpenOptions::default().set_split_use(true))
-            .unwrap();
-
-        let merge_path = factory.tablet_path_with_prefix(1, 10, MERGE_PREFIX);
-        std::fs::rename(split_path, merge_path).unwrap();
-        factory
-            .open_tablet(1, Some(10), OpenOptions::default().set_split_use(true))
-            .unwrap_err();
-        factory
-            .open_tablet(1, Some(10), OpenOptions::default().set_merge_use(true))
-            .unwrap();
     }
 }
