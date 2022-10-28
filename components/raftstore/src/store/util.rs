@@ -9,11 +9,12 @@ use std::{
     option::Option,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
-        Arc, Mutex,
+        Arc, Mutex, MutexGuard,
     },
     u64,
 };
 
+use collections::HashSet;
 use engine_traits::KvEngine;
 use kvproto::{
     kvrpcpb::{self, KeyRange, LeaderInfo},
@@ -24,14 +25,14 @@ use kvproto::{
 use protobuf::{self, Message};
 use raft::{
     eraftpb::{self, ConfChangeType, ConfState, MessageType},
-    INVALID_INDEX,
+    Changer, RawNode, INVALID_INDEX,
 };
 use raft_proto::ConfChangeI;
 use tikv_util::{box_err, debug, info, store::region, time::monotonic_raw_now, Either};
 use time::{Duration, Timespec};
 use txn_types::{TimeStamp, WriteBatchFlags};
 
-use super::peer_storage;
+use super::{metrics::PEER_ADMIN_CMD_COUNTER_VEC, peer_storage, Config};
 use crate::{coprocessor::CoprocessorHost, Error, Result};
 
 const INVALID_TIMESTAMP: u64 = u64::MAX;
@@ -192,8 +193,12 @@ pub fn admin_cmd_epoch_lookup(admin_cmp_type: AdminCmdType) -> AdminCmdEpochStat
         AdminCmdType::RollbackMerge => AdminCmdEpochState::new(true, true, true, false),
         // Transfer leader
         AdminCmdType::TransferLeader => AdminCmdEpochState::new(true, true, false, false),
+        // PrepareFlashback could be committed successfully before a split being applied, so we need
+        // to check the epoch to make sure it's sent to a correct key range.
+        // NOTICE: FinishFlashback will never meet the epoch not match error since any scheduling
+        // before it's forbidden.
         AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => {
-            AdminCmdEpochState::new(false, false, false, false)
+            AdminCmdEpochState::new(true, true, false, false)
         }
     }
 }
@@ -765,7 +770,7 @@ impl<
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 pub enum ConfChangeKind {
     // Only contains one configuration change
     Simple,
@@ -844,6 +849,118 @@ impl<'a> ChangePeerI for &'a ChangePeerV2Request {
         cc.set_changes(changes.into());
         cc.set_context(ctx.into());
         cc
+    }
+}
+
+/// Check if the conf change request is valid.
+///
+/// The function will try to keep operation safe. In some edge cases (or
+/// tests), we may not care about safety. In this case, `ignore_safety`
+/// can be set to true.
+///
+/// Make sure the peer can serve read and write when ignore safety, otherwise
+/// it may produce stale result or cause unavailability.
+pub fn check_conf_change(
+    cfg: &Config,
+    node: &RawNode<impl raft::Storage>,
+    leader: &metapb::Peer,
+    change_peers: &[ChangePeerRequest],
+    cc: &impl ConfChangeI,
+    ignore_safety: bool,
+) -> Result<()> {
+    let current_progress = node.status().progress.unwrap().clone();
+    let mut after_progress = current_progress.clone();
+    let cc_v2 = cc.as_v2();
+    let mut changer = Changer::new(&after_progress);
+    let (conf, changes) = if cc_v2.leave_joint() {
+        changer.leave_joint()?
+    } else if let Some(auto_leave) = cc_v2.enter_joint() {
+        changer.enter_joint(auto_leave, &cc_v2.changes)?
+    } else {
+        changer.simple(&cc_v2.changes)?
+    };
+    after_progress.apply_conf(conf, changes, node.raft.raft_log.last_index());
+
+    // Because the conf change can be applied successfully above, so the current
+    // raft group state must matches the command. For example, won't call leave
+    // joint on a non joint state.
+    let kind = ConfChangeKind::confchange_kind(change_peers.len());
+    if kind == ConfChangeKind::LeaveJoint {
+        if ignore_safety || leader.get_role() != PeerRole::DemotingVoter {
+            return Ok(());
+        }
+        return Err(box_err!("ignore leave joint command that demoting leader"));
+    }
+
+    let mut check_dup = HashSet::default();
+    let mut only_learner_change = true;
+    let current_voter = current_progress.conf().voters().ids();
+    for cp in change_peers {
+        let (change_type, peer) = (cp.get_change_type(), cp.get_peer());
+        match (change_type, peer.get_role()) {
+            (ConfChangeType::RemoveNode, PeerRole::Voter) if kind != ConfChangeKind::Simple => {
+                return Err(box_err!("{:?}: can not remove voter directly", cp));
+            }
+            (ConfChangeType::RemoveNode, _)
+            | (ConfChangeType::AddNode, PeerRole::Voter)
+            | (ConfChangeType::AddLearnerNode, PeerRole::Learner) => {}
+            _ => {
+                return Err(box_err!("{:?}: op not match role", cp));
+            }
+        }
+
+        if !check_dup.insert(peer.get_id()) {
+            return Err(box_err!(
+                "have multiple commands for the same peer {}",
+                peer.get_id()
+            ));
+        }
+
+        if peer.get_id() == leader.get_id()
+            && (change_type == ConfChangeType::RemoveNode
+                // In Joint confchange, the leader is allowed to be DemotingVoter
+                || (kind == ConfChangeKind::Simple
+                && change_type == ConfChangeType::AddLearnerNode))
+            && !cfg.allow_remove_leader()
+        {
+            return Err(box_err!("ignore remove leader or demote leader"));
+        }
+
+        if current_voter.contains(peer.get_id()) || change_type == ConfChangeType::AddNode {
+            only_learner_change = false;
+        }
+    }
+
+    // Multiple changes that only effect learner will not product `IncommingVoter`
+    // or `DemotingVoter` after apply, but raftstore layer and PD rely on these
+    // roles to detect joint state
+    if kind != ConfChangeKind::Simple && only_learner_change {
+        return Err(box_err!("multiple changes that only effect learner"));
+    }
+
+    if !ignore_safety {
+        let promoted_commit_index = after_progress.maximal_committed_index().0;
+        let first_index = node.raft.raft_log.first_index();
+        if current_progress.is_singleton() // It's always safe if there is only one node in the cluster.
+                || promoted_commit_index + 1 >= first_index
+        {
+            return Ok(());
+        }
+
+        PEER_ADMIN_CMD_COUNTER_VEC
+            .with_label_values(&["conf_change", "reject_unsafe"])
+            .inc();
+
+        Err(box_err!(
+            "{:?}: before: {:?}, after: {:?}, first index {}, promoted commit index {}",
+            change_peers,
+            current_progress.conf().to_conf_state(),
+            after_progress.conf().to_conf_state(),
+            first_index,
+            promoted_commit_index
+        ))
+    } else {
+        Ok(())
     }
 }
 
@@ -938,7 +1055,7 @@ impl RegionReadProgressRegistry {
     ) -> Vec<u64> {
         let mut regions = Vec::with_capacity(leaders.len());
         let registry = self.registry.lock().unwrap();
-        for leader_info in leaders {
+        for leader_info in &leaders {
             let region_id = leader_info.get_region_id();
             if let Some(rp) = registry.get(&region_id) {
                 if rp.consume_leader_info(leader_info, coprocessor) {
@@ -947,18 +1064,6 @@ impl RegionReadProgressRegistry {
             }
         }
         regions
-    }
-
-    // Get the `LeaderInfo` of the requested regions
-    pub fn dump_leader_infos(&self, regions: &[u64]) -> HashMap<u64, (Vec<Peer>, LeaderInfo)> {
-        let registry = self.registry.lock().unwrap();
-        let mut info_map = HashMap::with_capacity(regions.len());
-        for region_id in regions {
-            if let Some(rrp) = registry.get(region_id) {
-                info_map.insert(*region_id, rrp.dump_leader_info());
-            }
-        }
-        info_map
     }
 
     /// Invoke the provided callback with the registry, an internal lock will
@@ -1083,14 +1188,14 @@ impl RegionReadProgress {
     // provided `LeaderInfo` is same as ours
     pub fn consume_leader_info<E: KvEngine>(
         &self,
-        mut leader_info: LeaderInfo,
+        leader_info: &LeaderInfo,
         coprocessor: &CoprocessorHost<E>,
     ) -> bool {
         let mut core = self.core.lock().unwrap();
         if leader_info.has_read_state() {
             // It is okay to update `safe_ts` without checking the `LeaderInfo`, the
             // `read_state` is guaranteed to be valid when it is published by the leader
-            let rs = leader_info.take_read_state();
+            let rs = leader_info.get_read_state();
             let (apply_index, ts) = (rs.get_applied_index(), rs.get_safe_ts());
             if apply_index != 0 && ts != 0 && !core.discard {
                 if let Some(ts) = core.update_safe_ts(apply_index, ts) {
@@ -1110,24 +1215,12 @@ impl RegionReadProgress {
     }
 
     // Dump the `LeaderInfo` and the peer list
-    pub fn dump_leader_info(&self) -> (Vec<Peer>, LeaderInfo) {
-        let mut leader_info = LeaderInfo::default();
+    pub fn dump_leader_info(&self) -> (LeaderInfo, Option<u64>) {
         let core = self.core.lock().unwrap();
-        let read_state = {
-            // Get the latest `read_state`
-            let ReadState { idx, ts } = core.pending_items.back().unwrap_or(&core.read_state);
-            let mut rs = kvrpcpb::ReadState::default();
-            rs.set_applied_index(*idx);
-            rs.set_safe_ts(*ts);
-            rs
-        };
-        let li = &core.leader_info;
-        leader_info.set_peer_id(li.leader_id);
-        leader_info.set_term(li.leader_term);
-        leader_info.set_region_id(core.region_id);
-        leader_info.set_region_epoch(li.epoch.clone());
-        leader_info.set_read_state(read_state);
-        (li.peers.clone(), leader_info)
+        (
+            core.get_leader_info(),
+            core.get_local_leader_info().leader_store_id,
+        )
     }
 
     pub fn update_leader_info(&self, peer_id: u64, term: u64, region: &Region) {
@@ -1138,6 +1231,8 @@ impl RegionReadProgress {
             core.leader_info.epoch = region.get_region_epoch().clone();
             core.leader_info.peers = region.get_peers().to_vec();
         }
+        core.leader_info.leader_store_id =
+            find_store_id(&core.leader_info.peers, core.leader_info.leader_id)
     }
 
     /// Reset `safe_ts` to 0 and stop updating it
@@ -1173,10 +1268,15 @@ impl RegionReadProgress {
     pub fn resolved_ts(&self) -> u64 {
         self.safe_ts()
     }
+
+    // Dump the `LeaderInfo` and the peer list
+    pub fn get_core(&self) -> MutexGuard<'_, RegionReadProgressCore> {
+        self.core.lock().unwrap()
+    }
 }
 
 #[derive(Debug)]
-struct RegionReadProgressCore {
+pub struct RegionReadProgressCore {
     tag: String,
     region_id: u64,
     applied_index: u64,
@@ -1210,6 +1310,7 @@ pub struct ReadState {
 pub struct LocalLeaderInfo {
     leader_id: u64,
     leader_term: u64,
+    leader_store_id: Option<u64>,
     epoch: RegionEpoch,
     peers: Vec<Peer>,
 }
@@ -1219,10 +1320,32 @@ impl LocalLeaderInfo {
         LocalLeaderInfo {
             leader_id: raft::INVALID_ID,
             leader_term: 0,
+            leader_store_id: None,
             epoch: region.get_region_epoch().clone(),
             peers: region.get_peers().to_vec(),
         }
     }
+
+    pub fn get_peers(&self) -> &[Peer] {
+        &self.peers
+    }
+
+    pub fn get_leader_id(&self) -> u64 {
+        self.leader_id
+    }
+
+    pub fn get_leader_store_id(&self) -> Option<u64> {
+        self.leader_store_id
+    }
+}
+
+fn find_store_id(peer_list: &[Peer], peer_id: u64) -> Option<u64> {
+    for peer in peer_list {
+        if peer.id == peer_id {
+            return Some(peer.store_id);
+        }
+    }
+    None
 }
 
 impl RegionReadProgressCore {
@@ -1335,6 +1458,31 @@ impl RegionReadProgressCore {
             });
         }
         self.pending_items.push_back(item);
+    }
+
+    pub fn get_leader_info(&self) -> LeaderInfo {
+        let read_state = {
+            // Get the latest `read_state`
+            let ReadState { idx, ts } = self.pending_items.back().unwrap_or(&self.read_state);
+            let mut rs = kvrpcpb::ReadState::default();
+            rs.set_applied_index(*idx);
+            rs.set_safe_ts(*ts);
+            rs
+        };
+        let li = &self.leader_info;
+        LeaderInfo {
+            peer_id: li.leader_id,
+            region_id: self.region_id,
+            term: li.leader_term,
+            region_epoch: protobuf::SingularPtrField::some(li.epoch.clone()),
+            read_state: protobuf::SingularPtrField::some(read_state),
+            unknown_fields: protobuf::UnknownFields::default(),
+            cached_size: protobuf::CachedSize::default(),
+        }
+    }
+
+    pub fn get_local_leader_info(&self) -> &LocalLeaderInfo {
+        &self.leader_info
     }
 }
 

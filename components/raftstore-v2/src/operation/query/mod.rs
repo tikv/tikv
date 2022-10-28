@@ -386,7 +386,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn handle_read_on_apply<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
-        apply_res: ApplyRes,
+        applied_term: u64,
+        applied_index: u64,
         progress_to_be_updated: bool,
     ) {
         // TODO: add is_handling_snapshot check
@@ -401,13 +402,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
         }
         self.pending_reads_mut().gc();
-        self.read_progress_mut()
-            .update_applied_core(apply_res.applied_index);
+        self.read_progress_mut().update_applied_core(applied_index);
 
         // Only leaders need to update applied_term.
         if progress_to_be_updated && self.is_leader() {
             // TODO: add coprocessor_host hook
-            let progress = ReadProgress::applied_term(apply_res.applied_term);
+            let progress = ReadProgress::applied_term(applied_term);
             // TODO: remove it
             self.add_reader_if_necessary(&mut ctx.store_meta);
             let mut meta = ctx.store_meta.lock().unwrap();
