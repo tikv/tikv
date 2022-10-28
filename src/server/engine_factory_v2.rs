@@ -60,16 +60,16 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
 
         let mut reg = self.registry.lock().unwrap();
         if let Some(suffix) = suffix {
-            if let Some((tablet, tablet_suffix)) = reg.get(&id) && *tablet_suffix == suffix {
+            if let Some((cached_tablet, cached_suffix)) = reg.get(&id) && *cached_suffix == suffix {
                 // Target tablet exist in the cache
                 if options.create_new() {
                     return Err(box_err!(
                         "region {} {} already exists",
                         id,
-                        tablet.as_inner().path()
+                        cached_tablet.as_inner().path()
                     ));
                 }
-                return Ok(tablet.clone());
+                return Ok(cached_tablet.clone());
             } else if !options.cache_only() {
                 let tablet_path = self.tablet_path(id, suffix);
                 let tablet = self.open_tablet_raw(&tablet_path, id, suffix, options.clone())?;
