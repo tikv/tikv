@@ -388,7 +388,8 @@ impl LeadershipResolver {
                 .with_label_values(&["all"])
                 .observe(start.saturating_elapsed_secs());
         });
-        for _ in 0..store_count {
+        let rpc_count = check_leader_rpcs.len();
+        for _ in 0..rpc_count {
             // Use `select_all` to avoid the process getting blocked when some
             // TiKVs were down.
             let (res, _, remains) = select_all(check_leader_rpcs).await;
