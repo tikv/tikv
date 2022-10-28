@@ -2,7 +2,10 @@
 
 use std::collections::HashMap;
 
-use kvproto::{metapb::PeerRole, raft_serverpb};
+use kvproto::{
+    metapb::{self, PeerRole},
+    raft_serverpb,
+};
 use raft::{Progress, ProgressState, StateRole, Status};
 use serde::{Deserialize, Serialize};
 
@@ -127,7 +130,7 @@ impl<'a> From<raft::Status<'a>> for RaftStatus {
     }
 }
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize)]
 pub enum RaftPeerRole {
     Voter,
     Learner,
@@ -146,6 +149,24 @@ impl From<PeerRole> for RaftPeerRole {
     }
 }
 
+impl From<RaftPeerRole> for PeerRole {
+    fn from(role: RaftPeerRole) -> Self {
+        match role {
+            RaftPeerRole::Voter => PeerRole::Voter,
+            RaftPeerRole::Learner => PeerRole::Learner,
+            RaftPeerRole::IncomingVoter => PeerRole::IncomingVoter,
+            RaftPeerRole::DemotingVoter => PeerRole::DemotingVoter,
+        }
+    }
+}
+
+impl PartialEq<PeerRole> for RaftPeerRole {
+    fn eq(&self, other: &PeerRole) -> bool {
+        let r: RaftPeerRole = (*other).into();
+        *self == r
+    }
+}
+
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct Epoch {
     pub conf_ver: u64,
@@ -157,6 +178,13 @@ pub struct RegionPeer {
     pub id: u64,
     pub store_id: u64,
     pub role: RaftPeerRole,
+}
+
+impl PartialEq<metapb::Peer> for RegionPeer {
+    #[inline]
+    fn eq(&self, other: &metapb::Peer) -> bool {
+        self.id == other.id && self.store_id == other.store_id && self.role == other.role
+    }
 }
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]

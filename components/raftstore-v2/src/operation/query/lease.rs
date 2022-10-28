@@ -175,38 +175,50 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.maybe_update_read_progress(reader, progress);
         }
         if let Some(progress) = read_progress {
-            let mut meta = store_meta.lock().unwrap();
-            // TODO: remove this block of code when snapshot is done; add the logic into
-            // on_persist_snapshot.
-            let reader = meta.readers.get_mut(&self.region_id());
-            if reader.is_none() {
-                let region = self.region().clone();
-                let region_id = region.get_id();
-                let peer_id = self.peer_id();
-                let delegate = ReadDelegate {
-                    region: Arc::new(region),
-                    peer_id,
-                    term: self.term(),
-                    applied_term: self.entry_storage().applied_term(),
-                    leader_lease: None,
-                    last_valid_ts: Timespec::new(0, 0),
-                    tag: format!("[region {}] {}", region_id, peer_id),
-                    read_progress: self.read_progress().clone(),
-                    pending_remove: false,
-                    bucket_meta: None,
-                    txn_extra_op: Default::default(),
-                    txn_ext: Default::default(),
-                    track_ver: TrackVer::new(),
-                };
-                meta.readers.insert(self.region_id(), delegate);
-            }
+            // TODO: remove it
+            self.add_reader_if_necessary(store_meta);
 
+            let mut meta = store_meta.lock().unwrap();
             let reader = meta.readers.get_mut(&self.region_id()).unwrap();
             self.maybe_update_read_progress(reader, progress);
         }
     }
 
-    fn maybe_update_read_progress(&self, reader: &mut ReadDelegate, progress: ReadProgress) {
+    // TODO: remove this block of code when snapshot is done; add the logic into
+    // on_persist_snapshot.
+    pub(crate) fn add_reader_if_necessary(&mut self, store_meta: &mut Arc<Mutex<StoreMeta<EK>>>) {
+        let mut meta = store_meta.lock().unwrap();
+        // TODO: remove this block of code when snapshot is done; add the logic into
+        // on_persist_snapshot.
+        let reader = meta.readers.get_mut(&self.region_id());
+        if reader.is_none() {
+            let region = self.region().clone();
+            let region_id = region.get_id();
+            let peer_id = self.peer_id();
+            let delegate = ReadDelegate {
+                region: Arc::new(region),
+                peer_id,
+                term: self.term(),
+                applied_term: self.entry_storage().applied_term(),
+                leader_lease: None,
+                last_valid_ts: Timespec::new(0, 0),
+                tag: format!("[region {}] {}", region_id, peer_id),
+                read_progress: self.read_progress().clone(),
+                pending_remove: false,
+                bucket_meta: None,
+                txn_extra_op: Default::default(),
+                txn_ext: Default::default(),
+                track_ver: TrackVer::new(),
+            };
+            meta.readers.insert(self.region_id(), delegate);
+        }
+    }
+
+    pub(crate) fn maybe_update_read_progress(
+        &self,
+        reader: &mut ReadDelegate,
+        progress: ReadProgress,
+    ) {
         debug!(
             self.logger,
             "update read progress";

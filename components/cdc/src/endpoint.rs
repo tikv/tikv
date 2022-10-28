@@ -24,33 +24,30 @@ use kvproto::{
     },
     kvrpcpb::ApiVersion,
     metapb::Region,
-    tikvpb::TikvClient,
 };
 use online_config::{ConfigChange, OnlineConfig};
 use pd_client::{Feature, PdClient};
 use raftstore::{
     coprocessor::{CmdBatch, ObserveId},
     router::RaftStoreRouter,
-    store::{
-        fsm::{ChangeObserver, StoreMeta},
-        msg::{Callback, SignificantMsg},
-        RegionReadProgressRegistry,
-    },
+    store::fsm::{ChangeObserver, StoreMeta},
 };
-use resolved_ts::Resolver;
+use resolved_ts::{LeadershipResolver, Resolver};
 use security::SecurityManager;
 use tikv::{config::CdcConfig, storage::Statistics};
 use tikv_util::{
-    debug, error, impl_display_as_debug, info,
+    debug, defer, error, impl_display_as_debug, info,
+    mpsc::bounded,
+    slow_log,
     sys::thread::ThreadBuildWrapper,
-    time::Limiter,
+    time::{Limiter, SlowTimer},
     timer::SteadyTimer,
     warn,
     worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler},
 };
 use tokio::{
     runtime::{Builder, Runtime},
-    sync::{Mutex, Semaphore},
+    sync::Semaphore,
 };
 use txn_types::{TimeStamp, TxnExtra, TxnExtraScheduler};
 
@@ -65,7 +62,7 @@ use crate::{
 };
 
 const FEATURE_RESOLVED_TS_STORE: Feature = Feature::require(5, 0, 0);
-const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
+const METRICS_FLUSH_INTERVAL: u64 = 1_000; // 1s
 // 10 minutes, it's the default gc life time of TiDB
 // and is long enough for most transactions.
 const WARN_RESOLVED_TS_LAG_THRESHOLD: Duration = Duration::from_secs(600);
@@ -155,7 +152,9 @@ pub enum Task {
         region: Region,
         resolver: Resolver,
     },
-    RegisterMinTsEvent,
+    RegisterMinTsEvent {
+        leader_resolver: LeadershipResolver,
+    },
     // The result of ChangeCmd should be returned from CDC Endpoint to ensure
     // the downstream switches to Normal after the previous commands was sunk.
     InitDownstream {
@@ -223,7 +222,7 @@ impl fmt::Debug for Task {
                 .field("observe_id", &observe_id)
                 .field("region_id", &region.get_id())
                 .finish(),
-            Task::RegisterMinTsEvent => de.field("type", &"register_min_ts").finish(),
+            Task::RegisterMinTsEvent { .. } => de.field("type", &"register_min_ts").finish(),
             Task::InitDownstream {
                 ref region_id,
                 ref downstream_id,
@@ -348,12 +347,6 @@ pub struct Endpoint<T, E> {
     old_value_cache: OldValueCache,
     resolved_region_heap: ResolvedRegionHeap,
 
-    // Check leader
-    // store_id -> client
-    tikv_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
-    env: Arc<Environment>,
-    security_mgr: Arc<SecurityManager>,
-    region_read_progress: RegionReadProgressRegistry,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
 
     // Metrics and logging.
@@ -416,10 +409,17 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let max_scan_batch_size = 1024;
 
         let region_read_progress = store_meta.lock().unwrap().region_read_progress.clone();
-        let ep = Endpoint {
-            cluster_id,
+        let store_resolver_gc_interval = Duration::from_secs(60);
+        let leader_resolver = LeadershipResolver::new(
+            store_meta.lock().unwrap().store_id.unwrap(),
+            pd_client.clone(),
             env,
             security_mgr,
+            region_read_progress,
+            store_resolver_gc_interval,
+        );
+        let ep = Endpoint {
+            cluster_id,
             capture_regions: HashMap::default(),
             connections: HashMap::default(),
             scheduler,
@@ -447,14 +447,13 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             resolved_region_count: 0,
             unresolved_region_count: 0,
             sink_memory_quota,
-            tikv_clients: Arc::new(Mutex::new(HashMap::default())),
-            region_read_progress,
+            // store_resolver,
             // Log the first resolved ts warning.
             warn_resolved_ts_repeat_count: WARN_RESOLVED_TS_COUNT_THRESHOLD,
             current_ts: TimeStamp::zero(),
             causal_ts_provider,
         };
-        ep.register_min_ts_event();
+        ep.register_min_ts_event(leader_resolver);
         ep
     }
 
@@ -997,24 +996,21 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let _ = downstream.sink_event(resolved_ts_event, force_send);
     }
 
-    fn register_min_ts_event(&self) {
+    fn register_min_ts_event(&self, mut leader_resolver: LeadershipResolver) {
         let timeout = self.timer.delay(self.config.min_ts_interval.0);
         let pd_client = self.pd_client.clone();
         let scheduler = self.scheduler.clone();
         let raft_router = self.raft_router.clone();
-        let regions: Vec<(u64, ObserveId)> = self
+        let regions: Vec<u64> = self
             .capture_regions
             .iter()
-            .map(|(region_id, delegate)| (*region_id, delegate.handle.id))
+            .map(|(region_id, _)| *region_id)
             .collect();
         let cm: ConcurrencyManager = self.concurrency_manager.clone();
-        let env = self.env.clone();
-        let security_mgr = self.security_mgr.clone();
-        let store_meta = self.store_meta.clone();
-        let tikv_clients = self.tikv_clients.clone();
         let hibernate_regions_compatible = self.config.hibernate_regions_compatible;
-        let region_read_progress = self.region_read_progress.clone();
         let causal_ts_provider = self.causal_ts_provider.clone();
+        // We use channel to deliver leader_resolver in async block.
+        let (leader_resolver_tx, leader_resolver_rx) = bounded(1);
 
         let fut = async move {
             let _ = timeout.compat().await;
@@ -1043,37 +1039,37 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                 min_ts_min_lock = min_mem_lock_ts;
             }
 
-            match scheduler.schedule(Task::RegisterMinTsEvent) {
-                Ok(_) | Err(ScheduleError::Stopped(_)) => (),
-                // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
-                // advance normally.
-                Err(err) => panic!("failed to regiester min ts event, error: {:?}", err),
-            }
+            let slow_timer = SlowTimer::default();
+            defer!({
+                slow_log!(T slow_timer, "cdc resolve region leadership");
+                if let Ok(leader_resolver) = leader_resolver_rx.try_recv() {
+                    match scheduler.schedule(Task::RegisterMinTsEvent { leader_resolver }) {
+                        Ok(_) | Err(ScheduleError::Stopped(_)) => (),
+                        // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
+                        // advance normally.
+                        Err(err) => panic!("failed to regiester min ts event, error: {:?}", err),
+                    }
+                } else {
+                    // During shutdown, tso runtime drops future immediately,
+                    // leader_resolver may be lost when this future drops before
+                    // delivering leader_resolver.
+                    warn!("cdc leader resolver is lost, are we shutdown?");
+                }
+            });
 
+            // Check region peer leadership, make sure they are leaders.
             let gate = pd_client.feature_gate();
-
             let regions =
                 if hibernate_regions_compatible && gate.can_enable(FEATURE_RESOLVED_TS_STORE) {
                     CDC_RESOLVED_TS_ADVANCE_METHOD.set(1);
-                    let regions = regions
-                        .into_iter()
-                        .map(|(region_id, _)| region_id)
-                        .collect();
-                    resolved_ts::region_resolved_ts_store(
-                        regions,
-                        store_meta,
-                        region_read_progress,
-                        pd_client,
-                        security_mgr,
-                        env,
-                        tikv_clients,
-                        min_ts,
-                    )
-                    .await
+                    leader_resolver.resolve(regions, min_ts).await
                 } else {
                     CDC_RESOLVED_TS_ADVANCE_METHOD.set(0);
-                    Self::region_resolved_ts_raft(regions, &scheduler, raft_router, min_ts).await
+                    leader_resolver
+                        .resolve_by_raft(regions, min_ts, raft_router)
+                        .await
                 };
+            leader_resolver_tx.send(leader_resolver).unwrap();
 
             if !regions.is_empty() {
                 match scheduler.schedule(Task::MinTs {
@@ -1082,7 +1078,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                     current_ts: min_ts_pd,
                 }) {
                     Ok(_) | Err(ScheduleError::Stopped(_)) => (),
-                    // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
+                    // Must schedule `MinTS` event otherwise resolved ts can not
                     // advance normally.
                     Err(err) => panic!("failed to schedule min ts event, error: {:?}", err),
                 }
@@ -1096,54 +1092,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             }
         };
         self.tso_worker.spawn(fut);
-    }
-
-    async fn region_resolved_ts_raft(
-        regions: Vec<(u64, ObserveId)>,
-        scheduler: &Scheduler<Task>,
-        raft_router: T,
-        min_ts: TimeStamp,
-    ) -> Vec<u64> {
-        // TODO: send a message to raftstore would consume too much cpu time,
-        // try to handle it outside raftstore.
-        let regions: Vec<_> = regions
-            .iter()
-            .copied()
-            .map(|(region_id, observe_id)| {
-                let scheduler_clone = scheduler.clone();
-                let raft_router_clone = raft_router.clone();
-                async move {
-                    let (tx, rx) = tokio::sync::oneshot::channel();
-                    if let Err(e) = raft_router_clone.significant_send(
-                        region_id,
-                        SignificantMsg::LeaderCallback(Callback::read(Box::new(move |resp| {
-                            let resp = if resp.response.get_header().has_error() {
-                                None
-                            } else {
-                                Some(region_id)
-                            };
-                            if tx.send(resp).is_err() {
-                                error!("cdc send tso response failed"; "region_id" => region_id);
-                            }
-                        }))),
-                    ) {
-                        warn!("cdc send LeaderCallback failed"; "err" => ?e, "min_ts" => min_ts);
-                        let deregister = Deregister::Delegate {
-                            observe_id,
-                            region_id,
-                            err: Error::request(e.into()),
-                        };
-                        if let Err(e) = scheduler_clone.schedule(Task::Deregister(deregister)) {
-                            error!("cdc schedule cdc task failed"; "error" => ?e);
-                        }
-                        return None;
-                    }
-                    rx.await.unwrap_or(None)
-                }
-            })
-            .collect();
-        let resps = futures::future::join_all(regions).await;
-        resps.into_iter().flatten().collect::<Vec<u64>>()
     }
 
     fn on_open_conn(&mut self, conn: Conn) {
@@ -1180,7 +1128,9 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
                 old_value_cb,
             } => self.on_multi_batch(multi, old_value_cb),
             Task::OpenConn { conn } => self.on_open_conn(conn),
-            Task::RegisterMinTsEvent => self.register_min_ts_event(),
+            Task::RegisterMinTsEvent {
+                leader_resolver: store_resolver,
+            } => self.register_min_ts_event(store_resolver),
             Task::InitDownstream {
                 region_id,
                 downstream_id,
@@ -1246,6 +1196,12 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> RunnableWithTimer for Endpoin
                 self.current_ts
                     .physical()
                     .saturating_sub(self.min_resolved_ts.physical()) as i64,
+            );
+            CDC_RESOLVED_TS_GAP_HISTOGRAM.observe(
+                self.current_ts
+                    .physical()
+                    .saturating_sub(self.min_resolved_ts.physical()) as f64
+                    / 1000f64,
             );
         }
         self.min_resolved_ts = TimeStamp::max();
@@ -1314,6 +1270,7 @@ mod tests {
         raft_router: MockRaftStoreRouter,
         task_rx: ReceiverWrapper<Task>,
         raft_rxs: HashMap<u64, tikv_util::mpsc::Receiver<PeerMsg<RocksEngine>>>,
+        leader_resolver: Option<LeadershipResolver>,
     }
 
     impl TestEndpointSuite {
@@ -1378,11 +1335,26 @@ mod tests {
     ) -> TestEndpointSuite {
         let (task_sched, task_rx) = dummy_scheduler();
         let raft_router = MockRaftStoreRouter::new();
+        let mut store_meta = StoreMeta::new(0);
+        store_meta.store_id = Some(1);
+        let region_read_progress = store_meta.region_read_progress.clone();
+        let pd_client = Arc::new(TestPdClient::new(0, true));
+        let env = Arc::new(Environment::new(1));
+        let security_mgr = Arc::new(SecurityManager::default());
+        let store_resolver_gc_interval = Duration::from_secs(60);
+        let leader_resolver = LeadershipResolver::new(
+            1,
+            pd_client.clone(),
+            env.clone(),
+            security_mgr.clone(),
+            region_read_progress,
+            store_resolver_gc_interval,
+        );
         let ep = Endpoint::new(
             DEFAULT_CLUSTER_ID,
             cfg,
             api_version,
-            Arc::new(TestPdClient::new(0, true)),
+            pd_client,
             task_sched.clone(),
             raft_router.clone(),
             engine.unwrap_or_else(|| {
@@ -1393,10 +1365,10 @@ mod tests {
                     .unwrap()
             }),
             CdcObserver::new(task_sched),
-            Arc::new(StdMutex::new(StoreMeta::new(0))),
+            Arc::new(StdMutex::new(store_meta)),
             ConcurrencyManager::new(1.into()),
-            Arc::new(Environment::new(1)),
-            Arc::new(SecurityManager::default()),
+            env,
+            security_mgr,
             MemoryQuota::new(usize::MAX),
             causal_ts_provider,
         );
@@ -1406,6 +1378,7 @@ mod tests {
             raft_router,
             task_rx,
             raft_rxs: HashMap::default(),
+            leader_resolver: Some(leader_resolver),
         }
     }
 
@@ -1897,7 +1870,8 @@ mod tests {
         let start_ts = block_on(ts_provider.async_get_ts()).unwrap();
         let mut suite =
             mock_endpoint_with_ts_provider(&cfg, None, ApiVersion::V2, Some(ts_provider.clone()));
-        suite.run(Task::RegisterMinTsEvent);
+        let leader_resolver = suite.leader_resolver.take().unwrap();
+        suite.run(Task::RegisterMinTsEvent { leader_resolver });
         suite
             .task_rx
             .recv_timeout(Duration::from_millis(1500))

@@ -31,9 +31,8 @@ use kvproto::{
     metapb::{self, PeerRole},
     pdpb::{self, PeerStats},
     raft_cmdpb::{
-        self, AdminCmdType, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
-        PutRequest, RaftCmdRequest, RaftCmdResponse, Request, TransferLeaderRequest,
-        TransferLeaderResponse,
+        self, AdminCmdType, AdminResponse, CmdType, CommitMergeRequest, PutRequest, RaftCmdRequest,
+        RaftCmdResponse, Request, TransferLeaderRequest, TransferLeaderResponse,
     },
     raft_serverpb::{
         ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
@@ -47,11 +46,10 @@ use pd_client::{BucketStat, INVALID_ID};
 use protobuf::Message;
 use raft::{
     self,
-    eraftpb::{self, ConfChangeType, Entry, EntryType, MessageType},
-    Changer, GetEntriesContext, LightReady, ProgressState, ProgressTracker, RawNode, Ready,
-    SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT,
+    eraftpb::{self, Entry, EntryType, MessageType},
+    GetEntriesContext, LightReady, ProgressState, RawNode, Ready, SnapshotStatus, StateRole,
+    INVALID_INDEX, NO_LIMIT,
 };
-use raft_proto::ConfChangeI;
 use rand::seq::SliceRandom;
 use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
@@ -153,7 +151,7 @@ impl<C: WriteCallback> ProposalQueue<C> {
             })
     }
 
-    fn find_propose_time(&self, term: u64, index: u64) -> Option<Timespec> {
+    pub fn find_propose_time(&self, term: u64, index: u64) -> Option<Timespec> {
         self.queue
             .binary_search_by_key(&(term, index), |p: &Proposal<_>| (p.term, p.index))
             .ok()
@@ -1026,7 +1024,7 @@ where
     /// region buckets.
     pub region_buckets: Option<BucketStat>,
     pub last_region_buckets: Option<BucketStat>,
-    /// lead_transferee if the peer is in a leadership transferring.
+    /// lead_transferee if this peer(leader) is in a leadership transferring.
     pub lead_transferee: u64,
     pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
     // Used as the memory state for Flashback to reject RW/Schedule before proposing.
@@ -2251,6 +2249,8 @@ where
                     self.require_updating_max_ts(&ctx.pd_scheduler);
                     // Init the in-memory pessimistic lock table when the peer becomes leader.
                     self.activate_in_memory_pessimistic_locks();
+                    // Exit entry cache warmup state when the peer becomes leader.
+                    self.mut_store().clear_entry_cache_warmup_state();
 
                     if !ctx.store_disk_usages.is_empty() {
                         self.refill_disk_full_peers(ctx);
@@ -3696,138 +3696,6 @@ where
         self.proposals.push(p);
     }
 
-    // TODO: set higher election priority of voter/incoming voter than demoting
-    // voter
-    /// Validate the `ConfChange` requests and check whether it's safe to
-    /// propose these conf change requests.
-    /// It's safe iff at least the quorum of the Raft group is still healthy
-    /// right after all conf change is applied.
-    /// If 'allow_remove_leader' is false then the peer to be removed should
-    /// not be the leader.
-    fn check_conf_change<T>(
-        &mut self,
-        ctx: &mut PollContext<EK, ER, T>,
-        change_peers: &[ChangePeerRequest],
-        cc: &impl ConfChangeI,
-    ) -> Result<()> {
-        // Check whether current joint state can handle this request
-        let mut after_progress = self.check_joint_state(cc)?;
-        let current_progress = self.raft_group.status().progress.unwrap().clone();
-        let kind = ConfChangeKind::confchange_kind(change_peers.len());
-
-        if kind == ConfChangeKind::LeaveJoint {
-            if self.peer.get_role() == PeerRole::DemotingVoter && !self.is_force_leader() {
-                return Err(box_err!(
-                    "{} ignore leave joint command that demoting leader",
-                    self.tag
-                ));
-            }
-            // Leaving joint state, skip check
-            return Ok(());
-        }
-
-        // Check whether this request is valid
-        let mut check_dup = HashSet::default();
-        let mut only_learner_change = true;
-        let current_voter = current_progress.conf().voters().ids();
-        for cp in change_peers.iter() {
-            let (change_type, peer) = (cp.get_change_type(), cp.get_peer());
-            match (change_type, peer.get_role()) {
-                (ConfChangeType::RemoveNode, PeerRole::Voter) if kind != ConfChangeKind::Simple => {
-                    return Err(box_err!(
-                        "{} invalid conf change request: {:?}, can not remove voter directly",
-                        self.tag,
-                        cp
-                    ));
-                }
-                (ConfChangeType::RemoveNode, _)
-                | (ConfChangeType::AddNode, PeerRole::Voter)
-                | (ConfChangeType::AddLearnerNode, PeerRole::Learner) => {}
-                _ => {
-                    return Err(box_err!(
-                        "{} invalid conf change request: {:?}",
-                        self.tag,
-                        cp
-                    ));
-                }
-            }
-
-            if !check_dup.insert(peer.get_id()) {
-                return Err(box_err!(
-                    "{} invalid conf change request, have multiple commands for the same peer {}",
-                    self.tag,
-                    peer.get_id()
-                ));
-            }
-
-            if peer.get_id() == self.peer_id()
-                && (change_type == ConfChangeType::RemoveNode
-                // In Joint confchange, the leader is allowed to be DemotingVoter
-                || (kind == ConfChangeKind::Simple
-                && change_type == ConfChangeType::AddLearnerNode))
-                && !ctx.cfg.allow_remove_leader()
-            {
-                return Err(box_err!(
-                    "{} ignore remove leader or demote leader",
-                    self.tag
-                ));
-            }
-
-            if current_voter.contains(peer.get_id()) || change_type == ConfChangeType::AddNode {
-                only_learner_change = false;
-            }
-        }
-
-        // Multiple changes that only effect learner will not product `IncommingVoter`
-        // or `DemotingVoter` after apply, but raftstore layer and PD rely on these
-        // roles to detect joint state
-        if kind != ConfChangeKind::Simple && only_learner_change {
-            return Err(box_err!(
-                "{} invalid conf change request, multiple changes that only effect learner",
-                self.tag
-            ));
-        }
-
-        let promoted_commit_index = after_progress.maximal_committed_index().0;
-        if current_progress.is_singleton() // It's always safe if there is only one node in the cluster.
-            || promoted_commit_index >= self.get_store().truncated_index() || self.force_leader.is_some()
-        {
-            return Ok(());
-        }
-
-        PEER_ADMIN_CMD_COUNTER_VEC
-            .with_label_values(&["conf_change", "reject_unsafe"])
-            .inc();
-
-        // Waking it up to replicate logs to candidate.
-        self.should_wake_up = true;
-        Err(box_err!(
-            "{} unsafe to perform conf change {:?}, before: {:?}, after: {:?}, truncated index {}, promoted commit index {}",
-            self.tag,
-            change_peers,
-            current_progress.conf().to_conf_state(),
-            after_progress.conf().to_conf_state(),
-            self.get_store().truncated_index(),
-            promoted_commit_index
-        ))
-    }
-
-    /// Check if current joint state can handle this confchange
-    fn check_joint_state(&mut self, cc: &impl ConfChangeI) -> Result<ProgressTracker> {
-        let cc = &cc.as_v2();
-        let mut prs = self.raft_group.status().progress.unwrap().clone();
-        let mut changer = Changer::new(&prs);
-        let (cfg, changes) = if cc.leave_joint() {
-            changer.leave_joint()?
-        } else if let Some(auto_leave) = cc.enter_joint() {
-            changer.enter_joint(auto_leave, &cc.changes)?
-        } else {
-            changer.simple(&cc.changes)?
-        };
-        prs.apply_conf(cfg, changes, self.raft_group.raft.raft_log.last_index());
-        Ok(prs)
-    }
-
     pub fn transfer_leader(&mut self, peer: &metapb::Peer) {
         info!(
             "transfer leader";
@@ -3855,10 +3723,12 @@ where
         // Broadcast heartbeat to make sure followers commit the entries immediately.
         // It's only necessary to ping the target peer, but ping all for simplicity.
         self.raft_group.ping();
+
         let mut msg = eraftpb::Message::new();
         msg.set_to(peer.get_id());
         msg.set_msg_type(eraftpb::MessageType::MsgTransferLeader);
         msg.set_from(self.peer_id());
+        msg.set_index(self.get_store().entry_cache_first_index().unwrap_or(0));
         // log term here represents the term of last log. For leader, the term of last
         // log is always its current term. Not just set term because raft library
         // forbids setting it for MsgTransferLeader messages.
@@ -4518,33 +4388,95 @@ where
         Ok(Either::Left(propose_index))
     }
 
-    pub fn execute_transfer_leader<T>(
+    pub fn maybe_reject_transfer_leader_msg<T>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
-        from: u64,
+        msg: &eraftpb::Message,
         peer_disk_usage: DiskUsage,
-        reply_cmd: bool, // whether it is a reply to a TransferLeader command
-    ) {
+    ) -> bool {
         let pending_snapshot = self.is_handling_snapshot() || self.has_pending_snapshot();
         if pending_snapshot
-            || from != self.leader_id()
+            || msg.get_from() != self.leader_id()
             // Transfer leader to node with disk full will lead to write availablity downback.
             // But if the current leader is disk full, and send such request, we should allow it,
             // because it may be a read leader balance request.
             || (!matches!(ctx.self_disk_usage, DiskUsage::Normal) &&
-            matches!(peer_disk_usage,DiskUsage::Normal))
+            matches!(peer_disk_usage, DiskUsage::Normal))
         {
             info!(
                 "reject transferring leader";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
-                "from" => from,
+                "from" => msg.get_from(),
                 "pending_snapshot" => pending_snapshot,
                 "disk_usage" => ?ctx.self_disk_usage,
             );
-            return;
+            return true;
+        }
+        false
+    }
+
+    /// Before ack the transfer leader message sent by the leader.
+    /// Currently, it only warms up the entry cache in this stage.
+    ///
+    /// This return whether the msg should be acked. When cache is warmed up
+    /// or the warmup operation is timeout, it is true.
+    pub fn pre_ack_transfer_leader_msg<T>(
+        &mut self,
+        ctx: &mut PollContext<EK, ER, T>,
+        msg: &eraftpb::Message,
+    ) -> bool {
+        if !ctx.cfg.warmup_entry_cache_enabled() {
+            return true;
         }
 
+        // The start index of warmup range. It is leader's entry_cache_first_index,
+        // which in general is equal to the lowest matched index.
+        let mut low = msg.get_index();
+        let last_index = self.get_store().last_index();
+        let mut should_ack_now = false;
+
+        // Need not to warm up when the index is 0.
+        // There are two cases where index can be 0:
+        // 1. During rolling upgrade, old instances may not support warmup.
+        // 2. The leader's entry cache is empty.
+        if low == 0 || low > last_index {
+            // There is little possibility that the warmup_range_start
+            // is larger than the last index. Check the test case
+            // `test_when_warmup_range_start_is_larger_than_last_index`
+            // for details.
+            should_ack_now = true;
+        } else {
+            if low < self.last_compacted_idx {
+                low = self.last_compacted_idx
+            };
+            // Check if the entry cache is already warmed up.
+            if let Some(first_index) = self.get_store().entry_cache_first_index() {
+                if low >= first_index {
+                    fail_point!("entry_cache_already_warmed_up");
+                    should_ack_now = true;
+                }
+            }
+        }
+
+        if should_ack_now {
+            return true;
+        }
+
+        // Check if the warmup operation is timeout if warmup is already started.
+        if let Some(state) = self.mut_store().entry_cache_warmup_state_mut() {
+            // If it is timeout, this peer should ack the message so that
+            // the leadership transfer process can continue.
+            state.check_task_timeout(ctx.cfg.max_entry_cache_warmup_duration.0)
+        } else {
+            self.mut_store().async_warm_up_entry_cache(low).is_none()
+        }
+    }
+
+    pub fn ack_transfer_leader_msg(
+        &mut self,
+        reply_cmd: bool, // whether it is a reply to a TransferLeader command
+    ) {
         let mut msg = eraftpb::Message::new();
         msg.set_from(self.peer_id());
         msg.set_to(self.leader_id());
@@ -4565,10 +4497,23 @@ where
     ///
     /// 1. pre_transfer_leader on leader:
     ///     Leader will send a MsgTransferLeader to follower.
-    /// 2. execute_transfer_leader on follower
-    ///     If follower passes all necessary checks, it will reply an
-    ///     ACK with type MsgTransferLeader and its promised persistent index.
-    /// 3. ready_to_transfer_leader on leader:
+    /// 2. pre_ack_transfer_leader_msg on follower:
+    ///     If follower passes all necessary checks, it will try to warmup
+    ///     the entry cache.
+    /// 3. ack_transfer_leader_msg on follower:
+    ///     When the entry cache has been warmed up or the operator is timeout,
+    ///     the follower reply an ACK with type MsgTransferLeader and
+    ///     its promised persistent index.
+    ///
+    /// Additional steps when there are remaining pessimistic
+    /// locks to propose (detected in function on_transfer_leader_msg).
+    ///    1. Leader firstly proposes pessimistic locks and then proposes a
+    ///       TransferLeader command.
+    ///    2. ack_transfer_leader_msg on follower again:
+    ///        The follower applies the TransferLeader command and replies an
+    ///        ACK with special context TRANSFER_LEADER_COMMAND_REPLY_CTX.
+    ///
+    /// 4. ready_to_transfer_leader on leader:
     ///     Leader checks if it's appropriate to transfer leadership. If it
     ///     does, it calls raft transfer_leader API to do the remaining work.
     ///
@@ -4696,7 +4641,16 @@ where
         let cc = change_peer.to_confchange(data);
         let changes = change_peer.get_change_peers();
 
-        self.check_conf_change(ctx, changes.as_ref(), &cc)?;
+        // Because the group is always woken up when there is log gap, so no need
+        // to wake it up again when command is aborted by log gap.
+        util::check_conf_change(
+            &ctx.cfg,
+            &self.raft_group,
+            &self.peer,
+            changes.as_ref(),
+            &cc,
+            self.is_force_leader(),
+        )?;
 
         ctx.raft_metrics.propose.conf_change.inc();
         // TODO: use local histogram metrics

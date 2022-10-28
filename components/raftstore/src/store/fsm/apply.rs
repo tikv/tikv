@@ -500,7 +500,7 @@ where
     /// `finish_for`.
     pub fn commit(&mut self, delegate: &mut ApplyDelegate<EK>) {
         if delegate.last_flush_applied_index < delegate.apply_state.get_applied_index() {
-            delegate.write_apply_state(self.kv_wb_mut());
+            delegate.maybe_write_apply_state(self);
         }
         self.commit_opt(delegate, true);
     }
@@ -621,7 +621,7 @@ where
     ) {
         if self.host.pre_persist(&delegate.region, true, None) {
             if !delegate.pending_remove {
-                delegate.write_apply_state(self.kv_wb_mut());
+                delegate.maybe_write_apply_state(self);
             }
             self.commit_opt(delegate, false);
         } else {
@@ -1101,6 +1101,13 @@ where
         });
     }
 
+    fn maybe_write_apply_state(&self, apply_ctx: &mut ApplyContext<EK>) {
+        let can_write = apply_ctx.host.pre_write_apply_state(&self.region);
+        if can_write {
+            self.write_apply_state(apply_ctx.kv_wb_mut());
+        }
+    }
+
     fn handle_raft_entry_normal(
         &mut self,
         apply_ctx: &mut ApplyContext<EK>,
@@ -1285,6 +1292,9 @@ where
             .applied_batch
             .push(cmd_cb, cmd, &self.observe_info, self.region_id());
         if should_write {
+            // An observer shall prevent a write_apply_state here by not return true
+            // when `post_exec`.
+            self.write_apply_state(apply_ctx.kv_wb_mut());
             apply_ctx.commit(self);
         }
         exec_result
@@ -1382,7 +1392,7 @@ where
                 ExecResult::CommitMerge { ref region, .. } => (Some(region.clone()), None),
                 ExecResult::RollbackMerge { ref region, .. } => (Some(region.clone()), None),
                 ExecResult::IngestSst { ref ssts } => (None, Some(ssts.clone())),
-                ExecResult::SetFlashbackState { region } => (Some(region.clone()), None),
+                ExecResult::SetFlashbackState { ref region } => (Some(region.clone()), None),
                 _ => (None, None),
             },
             _ => (None, None),
@@ -2819,30 +2829,27 @@ where
         ctx: &mut ApplyContext<EK>,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
-        let region_id = self.region_id();
-        let region_state_key = keys::region_state_key(region_id);
-        let mut old_state = match ctx
-            .engine
-            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
-        {
-            Ok(Some(s)) => s,
-            _ => {
-                return Err(box_err!("failed to get region state of {}", region_id));
-            }
-        };
         let is_in_flashback = req.get_cmd_type() == AdminCmdType::PrepareFlashback;
-        old_state.mut_region().set_is_in_flashback(is_in_flashback);
+        // Modify the region meta in memory.
         let mut region = self.region.clone();
         region.set_is_in_flashback(is_in_flashback);
-        ctx.kv_wb_mut()
-            .put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &old_state)
-            .unwrap_or_else(|e| {
-                error!(
-                    "{} failed to change flashback state to {:?} for region {}: {:?}",
-                    self.tag, req, region_id, e
-                )
-            });
+        // Modify the `RegionLocalState` persisted in disk.
+        write_peer_state(ctx.kv_wb_mut(), &region, PeerState::Normal, None).unwrap_or_else(|e| {
+            panic!(
+                "{} failed to change the flashback state to {} for region {:?}: {:?}",
+                self.tag, is_in_flashback, region, e
+            )
+        });
 
+        match req.get_cmd_type() {
+            AdminCmdType::PrepareFlashback => {
+                PEER_ADMIN_CMD_COUNTER.prepare_flashback.success.inc();
+            }
+            AdminCmdType::FinishFlashback => {
+                PEER_ADMIN_CMD_COUNTER.finish_flashback.success.inc();
+            }
+            _ => unreachable!(),
+        }
         Ok((
             AdminResponse::default(),
             ApplyResult::Res(ExecResult::SetFlashbackState { region }),
@@ -3741,7 +3748,7 @@ where
             if apply_ctx.timer.is_none() {
                 apply_ctx.timer = Some(Instant::now_coarse());
             }
-            self.delegate.write_apply_state(apply_ctx.kv_wb_mut());
+            self.delegate.maybe_write_apply_state(apply_ctx);
             fail_point!(
                 "apply_on_handle_snapshot_1_1",
                 self.delegate.id == 1 && self.delegate.region_id() == 1,

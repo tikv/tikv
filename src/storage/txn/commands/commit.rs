@@ -59,11 +59,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
 
         let rows = self.keys.len();
         // Pessimistic txn needs key_hashes to wake up waiters
-        let mut released_locks = ReleasedLocks::new(self.lock_ts, self.commit_ts);
+        let mut released_locks = ReleasedLocks::new();
         for k in self.keys {
             released_locks.push(commit(&mut txn, &mut reader, k, self.commit_ts)?);
         }
-        released_locks.wake_up(context.lock_mgr);
 
         let pr = ProcessResult::TxnStatus {
             txn_status: TxnStatus::committed(self.commit_ts),
@@ -76,6 +75,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
             rows,
             pr,
             lock_info: None,
+            released_locks,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
         })

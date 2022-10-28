@@ -11,11 +11,12 @@ use crate::storage::{
     txn::{
         acquire_pessimistic_lock,
         commands::{
-            Command, CommandExt, ReaderWithStats, ResponsePolicy, TypedCommand, WriteCommand,
-            WriteContext, WriteResult, WriteResultLockInfo,
+            Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
+            WriteCommand, WriteContext, WriteResult, WriteResultLockInfo,
         },
         Error, ErrorInner, Result,
     },
+    types::PessimisticLockParameters,
     Error as StorageError, ErrorInner as StorageErrorInner, PessimisticLockRes, ProcessResult,
     Result as StorageResult, Snapshot,
 };
@@ -155,12 +156,21 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             let write_data = WriteData::new(txn.into_modifies(), extra);
             (pr, write_data, rows, ctx, None)
         } else {
+            let request_parameters = PessimisticLockParameters {
+                pb_ctx: ctx.clone(),
+                primary: self.primary.clone(),
+                start_ts: self.start_ts,
+                lock_ttl: self.lock_ttl,
+                for_update_ts: self.for_update_ts,
+                wait_timeout: self.wait_timeout,
+                return_values: self.return_values,
+                min_commit_ts: self.min_commit_ts,
+                check_existence: self.check_existence,
+                is_first_lock: self.is_first_lock,
+                allow_lock_with_conflict: false,
+            };
             let lock_info_pb = extract_lock_info_from_result(&res);
-            let lock_info = WriteResultLockInfo::from_lock_info_pb(
-                lock_info_pb,
-                self.is_first_lock,
-                self.wait_timeout,
-            );
+            let lock_info = WriteResultLockInfo::new(lock_info_pb.clone(), request_parameters);
             let pr = ProcessResult::PessimisticLockRes { res };
             // Wait for lock released
             (pr, WriteData::default(), 0, ctx, Some(lock_info))
@@ -171,6 +181,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             rows,
             pr,
             lock_info,
+            released_locks: ReleasedLocks::new(),
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnProposed,
         })
@@ -194,17 +205,21 @@ mod tests {
         info.set_lock_version(ts);
         info.set_lock_ttl(100);
         let case = StorageError::from(StorageErrorInner::Txn(Error::from(ErrorInner::Mvcc(
-            MvccError::from(MvccErrorInner::KeyIsLocked(info)),
+            MvccError::from(MvccErrorInner::KeyIsLocked(info.clone())),
         ))));
-        let lock_info = WriteResultLockInfo::from_lock_info_pb(
-            extract_lock_info_from_result::<()>(&Err(case)),
-            is_first_lock,
-            wait_timeout,
+        let lock_info = WriteResultLockInfo::new(
+            extract_lock_info_from_result::<()>(&Err(case)).clone(),
+            PessimisticLockParameters {
+                is_first_lock,
+                wait_timeout,
+                ..Default::default()
+            },
         );
-        assert_eq!(lock_info.lock.ts, ts.into());
-        assert_eq!(lock_info.lock.hash, key.gen_hash());
-        assert_eq!(lock_info.key, raw_key);
-        assert_eq!(lock_info.is_first_lock, is_first_lock);
-        assert_eq!(lock_info.wait_timeout, wait_timeout);
+        assert_eq!(lock_info.lock_digest.ts, ts.into());
+        assert_eq!(lock_info.lock_digest.hash, key.gen_hash());
+        assert_eq!(lock_info.key.into_raw().unwrap(), raw_key);
+        assert_eq!(lock_info.parameters.is_first_lock, is_first_lock);
+        assert_eq!(lock_info.parameters.wait_timeout, wait_timeout);
+        assert_eq!(lock_info.lock_info_pb, info);
     }
 }
