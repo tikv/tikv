@@ -287,10 +287,9 @@ struct WriteCompactionFilter {
     gc_scheduler: Scheduler<GcTask<RocksEngine>>,
     // A key batch which is going to be sent to the GC worker.
     mvcc_deletions: Vec<Key>,
-    // The count of records covered the current mvcc-deletion mark. The mvcc-deletion
-    // mark will be sent to the GC worker only if `mvcc_deletion_overlaps` is 0. It's
-    // a little optimization to reduce modifications on write CF.
-    mvcc_deletion_overlaps: Option<usize>,
+    // The mvcc-deletion mark will be sent to the GC worker only if `mvcc_del_gc_needed` is
+    // not none. It's a little optimization to reduce modifications on write CF.
+    mvcc_del_gc_needed: Option<bool>,
     regions_provider: (u64, Arc<dyn RegionInfoProvider>),
 
     mvcc_key_prefix: Vec<u8>,
@@ -331,7 +330,7 @@ impl WriteCompactionFilter {
             write_batch,
             gc_scheduler,
             mvcc_deletions: Vec::with_capacity(DEFAULT_DELETE_BATCH_COUNT),
-            mvcc_deletion_overlaps: None,
+            mvcc_del_gc_needed: None,
             regions_provider,
 
             mvcc_key_prefix: vec![],
@@ -378,10 +377,16 @@ impl WriteCompactionFilter {
     }
 
     fn handle_bottommost_delete(&mut self) {
+        if self.mvcc_del_gc_needed.take().is_none() {
+            return;
+        }
         // Valid MVCC records should begin with `DATA_PREFIX`.
         debug_assert_eq!(self.mvcc_key_prefix[0], keys::DATA_PREFIX);
         let key = Key::from_encoded_slice(&self.mvcc_key_prefix[1..]);
         self.mvcc_deletions.push(key);
+        if self.mvcc_deletions.len() >= DEFAULT_DELETE_BATCH_COUNT {
+            self.gc_mvcc_deletions();
+        }
     }
 
     fn gc_mvcc_deletions(&mut self) {
@@ -401,12 +406,7 @@ impl WriteCompactionFilter {
         mvcc_key: &[u8],
         write: WriteRef<'_>,
     ) -> Result<CompactionFilterDecision, String> {
-        if self.mvcc_deletion_overlaps.take() == Some(0) {
-            self.handle_bottommost_delete();
-            if self.mvcc_deletions.len() >= DEFAULT_DELETE_BATCH_COUNT {
-                self.gc_mvcc_deletions();
-            }
-        }
+        self.handle_bottommost_delete();
         self.switch_key_metrics();
         self.mvcc_key_prefix.clear();
         match write.write_type {
@@ -418,7 +418,7 @@ impl WriteCompactionFilter {
             WriteType::Put => {}
             WriteType::Delete => {
                 if self.is_bottommost_level {
-                    self.mvcc_deletion_overlaps = Some(0);
+                    self.mvcc_del_gc_needed = Some(true);
                     GC_COMPACTION_FILTER_MVCC_DELETION_MET
                         .with_label_values(&[STAT_TXN_KEYMODE])
                         .inc();
@@ -448,12 +448,11 @@ impl WriteCompactionFilter {
             return self.do_filter_new_key(mvcc_key_prefix, write);
         }
 
-        if let Some(ref mut overlaps) = self.mvcc_deletion_overlaps {
-            *overlaps += 1;
-        }
+        // if there is any version after WriteType::Delete in bottomost level,
+        // do not gc the current key this time.
+        self.mvcc_del_gc_needed.take();
         self.filtered += 1;
-        self.handle_filtered_write(write)?;
-        self.flush_pending_writes_if_need(false /* force */)?;
+        self.handle_filtered_write(write)?; // remove data from default cf if needed.
 
         // Use `Decision::RemoveAndSkipUntil` instead of `Decision::Remove` to avoid
         // leaving tombstones, which can only be freed at the bottommost level.
@@ -468,6 +467,7 @@ impl WriteCompactionFilter {
             let prefix = Key::from_encoded_slice(&self.mvcc_key_prefix);
             let def_key = prefix.append_ts(write.start_ts).into_encoded();
             self.write_batch.delete(&def_key)?;
+            self.flush_pending_writes_if_need(false /* force */)?;
         }
         Ok(())
     }
@@ -595,9 +595,7 @@ impl Drop for WriteCompactionFilter {
     // NOTE: it's required that `CompactionFilter` is dropped before the compaction
     // result becomes installed into the DB instance.
     fn drop(&mut self) {
-        if self.mvcc_deletion_overlaps.take() == Some(0) {
-            self.handle_bottommost_delete();
-        }
+        self.handle_bottommost_delete();
         self.gc_mvcc_deletions();
 
         if let Err(e) = self.flush_pending_writes_if_need(true) {
