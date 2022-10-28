@@ -226,7 +226,8 @@ pub mod kv {
     #[derive(Clone)]
     pub struct TestTabletFactoryV2 {
         inner: TestTabletFactory,
-        registry: Arc<Mutex<HashMap<(u64, u64), KvTestEngine>>>,
+        // region_id -> (tablet, tablet_suffix)
+        registry: Arc<Mutex<HashMap<u64, (KvTestEngine, u64)>>>,
     }
 
     impl TestTabletFactoryV2 {
@@ -240,17 +241,6 @@ pub mod kv {
                 registry: Arc::default(),
             }
         }
-    }
-
-    // Extract tablet id and tablet suffix from the path.
-    fn get_id_and_suffix_from_path(path: &Path) -> (u64, u64) {
-        let (mut tablet_id, mut tablet_suffix) = (0, 1);
-        if let Some(s) = path.file_name().map(|s| s.to_string_lossy()) {
-            let mut split = s.split('_');
-            tablet_id = split.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-            tablet_suffix = split.next().and_then(|s| s.parse().ok()).unwrap_or(1);
-        }
-        (tablet_id, tablet_suffix)
     }
 
     impl TabletFactory<KvTestEngine> for TestTabletFactoryV2 {
@@ -267,27 +257,22 @@ pub mod kv {
 
             let mut reg = self.registry.lock().unwrap();
             if let Some(suffix) = suffix {
-                if let Some(tablet) = reg.get(&(id, suffix)) {
+                if let Some((cached_tablet, cached_suffix)) = reg.get(&id) && *cached_suffix == suffix {
                     // Target tablet exist in the cache
-
                     if options.create_new() {
-                        return Err(box_err!("region {} {} already exists", id, tablet.path()));
+                        return Err(box_err!("region {} {} already exists", id, cached_tablet.path()));
                     }
-                    return Ok(tablet.clone());
+                    return Ok(cached_tablet.clone());
                 } else if !options.cache_only() {
                     let tablet_path = self.tablet_path(id, suffix);
                     let tablet = self.open_tablet_raw(&tablet_path, id, suffix, options.clone())?;
                     if !options.skip_cache() {
-                        reg.insert((id, suffix), tablet.clone());
+                        reg.insert(id, (tablet.clone(), suffix));
                     }
                     return Ok(tablet);
                 }
-            } else if options.cache_only() {
-                // This branch reads an arbitrary tablet with region id `id`
-
-                if let Some(k) = reg.keys().find(|k| k.0 == id) {
-                    return Ok(reg.get(k).unwrap().clone());
-                }
+            } else if let Some((tablet, _)) = reg.get(&id) {
+                return Ok(tablet.clone());
             }
 
             Err(box_err!(
@@ -344,16 +329,21 @@ pub mod kv {
 
         #[inline]
         fn tablet_path(&self, id: u64, suffix: u64) -> PathBuf {
+            self.tablet_path_with_prefix(id, suffix, "")
+        }
+
+        #[inline]
+        fn tablet_path_with_prefix(&self, id: u64, suffix: u64, prefix: &str) -> PathBuf {
             self.inner
                 .root_path
-                .join(format!("tablets/{}_{}", id, suffix))
+                .join(format!("tablets/{}{}_{}", prefix, id, suffix))
         }
 
         #[inline]
         fn mark_tombstone(&self, region_id: u64, suffix: u64) {
             let path = self.tablet_path(region_id, suffix).join(TOMBSTONE_MARK);
             std::fs::File::create(&path).unwrap();
-            self.registry.lock().unwrap().remove(&(region_id, suffix));
+            self.registry.lock().unwrap().remove(&region_id);
         }
 
         #[inline]
@@ -366,7 +356,7 @@ pub mod kv {
         #[inline]
         fn destroy_tablet(&self, id: u64, suffix: u64) -> engine_traits::Result<()> {
             let path = self.tablet_path(id, suffix);
-            self.registry.lock().unwrap().remove(&(id, suffix));
+            self.registry.lock().unwrap().remove(&id);
             let _ = std::fs::remove_dir_all(path);
             Ok(())
         }
@@ -375,26 +365,20 @@ pub mod kv {
         fn load_tablet(&self, path: &Path, id: u64, suffix: u64) -> Result<KvTestEngine> {
             {
                 let reg = self.registry.lock().unwrap();
-                if let Some(db) = reg.get(&(id, suffix)) {
+                if let Some((db, db_suffix)) = reg.get(&id) && *db_suffix == suffix {
                     return Err(box_err!("region {} {} already exists", id, db.path()));
                 }
             }
 
             let db_path = self.tablet_path(id, suffix);
             std::fs::rename(path, &db_path)?;
-            let new_engine =
-                self.open_tablet(id, Some(suffix), OpenOptions::default().set_create(true));
-            if new_engine.is_ok() {
-                let (old_id, old_suffix) = get_id_and_suffix_from_path(path);
-                self.registry.lock().unwrap().remove(&(old_id, old_suffix));
-            }
-            new_engine
+            self.open_tablet(id, Some(suffix), OpenOptions::default().set_create(true))
         }
 
         fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()> {
             let reg = self.registry.lock().unwrap();
             // pick up any tablet and set the shared block cache capacity
-            if let Some(((_id, _suffix), tablet)) = (*reg).iter().next() {
+            if let Some((_id, (tablet, _suffix))) = (*reg).iter().next() {
                 let opt = tablet.get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
                 opt.set_block_cache_capacity(capacity)?;
             }
@@ -406,7 +390,7 @@ pub mod kv {
         #[inline]
         fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &KvTestEngine)) {
             let reg = self.registry.lock().unwrap();
-            for ((id, suffix), tablet) in &*reg {
+            for (id, (tablet, suffix)) in &*reg {
                 f(*id, *suffix, tablet)
             }
         }
