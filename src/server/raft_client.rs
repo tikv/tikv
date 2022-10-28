@@ -551,8 +551,8 @@ where
 
 #[derive(PartialEq)]
 enum RaftCallRes {
-    UnImplemented, // the call is not supported, probably due to visiting to older version of TiKV.
-    Disconnected, // the connection is aborted or closed
+    UnImplemented, // the call is not supported, probably due to visiting to older TiKV
+    Disconnected,  // the connection is aborted or closed
 }
 
 struct RaftCall<R, M, B, E> {
@@ -872,7 +872,8 @@ async fn start<S, R, E>(
             Ok(RaftCallRes::UnImplemented) => {
                 error!("connection fail"; "store_id" => back_end.store_id, "addr" => addr, "err" => "require fallback even with legacy API");
             }
-            Ok(RaftCallRes::Disconnected) | Err(_) => { // Err(_) should be tx is dropped
+            // Err(_) should be tx is dropped
+            Ok(RaftCallRes::Disconnected) | Err(_) => {
                 error!("connection abort"; "store_id" => back_end.store_id, "addr" => addr);
                 if retry_times > 1 {
                     // Clears pending messages to avoid consuming high memory when one node is
