@@ -189,7 +189,7 @@ pub mod kv {
         }
 
         #[inline]
-        fn tablet_path_with_prefix(&self, _id: u64, _suffix: u64, _prefix: &str) -> PathBuf {
+        fn tablet_path_with_prefix(&self, _prefix: &str, _id: u64, _suffix: u64) -> PathBuf {
             self.root_path.join("db")
         }
 
@@ -334,7 +334,7 @@ pub mod kv {
         }
 
         #[inline]
-        fn tablet_path_with_prefix(&self, id: u64, suffix: u64, prefix: &str) -> PathBuf {
+        fn tablet_path_with_prefix(&self, prefix: &str, id: u64, suffix: u64) -> PathBuf {
             self.inner
                 .root_path
                 .join(format!("tablets/{}{}_{}", prefix, id, suffix))
@@ -343,7 +343,7 @@ pub mod kv {
         #[inline]
         fn mark_tombstone(&self, region_id: u64, suffix: u64) {
             let path = self.tablet_path(region_id, suffix).join(TOMBSTONE_MARK);
-            std::fs::File::create(&path).unwrap();
+            let _ = std::fs::File::create(&path);
             {
                 let mut reg = self.registry.lock().unwrap();
                 if let Some((cached_tablet, cached_suffix)) = reg.remove(&region_id) && cached_suffix != suffix {

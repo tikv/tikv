@@ -145,7 +145,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
     }
 
     #[inline]
-    fn tablet_path_with_prefix(&self, id: u64, suffix: u64, prefix: &str) -> PathBuf {
+    fn tablet_path_with_prefix(&self, prefix: &str, id: u64, suffix: u64) -> PathBuf {
         self.inner
             .store_path()
             .join(format!("tablets/{}{}_{}", prefix, id, suffix))
@@ -154,7 +154,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
     #[inline]
     fn mark_tombstone(&self, region_id: u64, suffix: u64) {
         let path = self.tablet_path(region_id, suffix).join(TOMBSTONE_MARK);
-        std::fs::File::create(&path).unwrap();
+        let _ = std::fs::File::create(&path);
         debug!("tombstone tablet"; "region_id" => region_id, "suffix" => suffix);
         {
             let mut reg = self.registry.lock().unwrap();
@@ -431,6 +431,12 @@ mod tests {
         result.unwrap_err();
 
         assert!(!factory.is_single_engine());
+
+        assert!(
+            factory
+                .tablet_path_with_prefix("split_", 1, 10)
+                .ends_with("split_1_10")
+        );
     }
 
     #[test]
