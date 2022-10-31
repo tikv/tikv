@@ -939,7 +939,22 @@ where
 
                         // Double check in case `witness` change after the first check and before
                         // getting snapshot
-                        self.local_reader.validate_request(&req)?;
+                        if let Err(e) = self.local_reader.validate_request(&req) {
+                            let mut response = cmd_resp::new_error(e);
+                            if let Some(delegate) = self
+                                .local_reader
+                                .delegates
+                                .get(&req.get_header().get_region_id())
+                            {
+                                cmd_resp::bind_term(&mut response, delegate.term);
+                            }
+                            cb.set_result(ReadResponse {
+                                response,
+                                snapshot: None,
+                                txn_extra_op: TxnExtraOp::Noop,
+                            });
+                            return;
+                        }
 
                         // Try renew lease in advance
                         delegate.maybe_renew_lease_advance(&self.router, snapshot_ts);
