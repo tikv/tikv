@@ -473,7 +473,7 @@ mod tests {
         }
 
         fn get_service_safe_point(&self, name: String) -> Option<TimeStamp> {
-            self.safepoint.read().unwrap().get(&name).map(|v| v.clone())
+            self.safepoint.read().unwrap().get(&name).copied()
         }
     }
 
