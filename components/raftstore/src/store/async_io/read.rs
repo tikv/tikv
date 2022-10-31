@@ -15,7 +15,7 @@ use tikv_util::worker::Runnable;
 use crate::store::{RaftlogFetchResult, MAX_INIT_ENTRY_COUNT};
 
 pub enum ReadTask<EK> {
-    PeerStorage {
+    FetchLogs {
         region_id: u64,
         context: GetEntriesContext,
         low: u64,
@@ -40,7 +40,7 @@ pub enum ReadTask<EK> {
 impl<EK> fmt::Display for ReadTask<EK> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ReadTask::PeerStorage {
+            ReadTask::FetchLogs {
                 region_id,
                 context,
                 low,
@@ -102,7 +102,7 @@ where
     type Task = ReadTask<EK>;
     fn run(&mut self, task: ReadTask<EK>) {
         match task {
-            ReadTask::PeerStorage {
+            ReadTask::FetchLogs {
                 region_id,
                 low,
                 high,

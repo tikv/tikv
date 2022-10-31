@@ -6,7 +6,7 @@
 //! generator and apply snapshot works asynchronously. the snap_sate indicates
 //! the curren snapshot state.
 //!
-//! # Porcess Overview
+//! # Process Overview
 //!
 //! generate snapshot:
 //! - Raft call `snapshot` interface to acquire a snapshot, then storage setup

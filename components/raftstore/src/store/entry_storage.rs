@@ -770,7 +770,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
             .borrow_mut()
             .insert(low, RaftlogFetchState::Fetching(Instant::now_coarse()));
         self.read_scheduler
-            .schedule(ReadTask::PeerStorage {
+            .schedule(ReadTask::FetchLogs {
                 region_id,
                 context,
                 low,
