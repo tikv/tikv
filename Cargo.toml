@@ -370,9 +370,9 @@ tracker = { path = "components/tracker" }
 txn_types = { path = "components/txn_types" }
 # External libs
 grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
-engine_store_ffi = { path = "components/engine_store_ffi", default-features = false }
+engine_store_ffi = { path = "engine_store_ffi", default-features = false }
 new-mock-engine-store = { path = "new-mock-engine-store", default-features = false }
-proxy_server = { path = "components/proxy_server", default-features = false }
+proxy_server = { path = "proxy_server", default-features = false }
 
 [profile.dev.package.grpcio-sys]
 debug = false

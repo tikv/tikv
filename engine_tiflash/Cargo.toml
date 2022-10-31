@@ -24,23 +24,23 @@ testexport = []
 nortcheck = []
 
 [dependencies]
-api_version = { path = "../components/api_version", default-features = false }
-case_macros = { path = "../components/case_macros" }
-collections = { path = "../components/collections", default-features = false }
+api_version = { workspace = true, default-features = false }
+case_macros = { workspace = true }
+collections = { workspace = true, default-features = false }
 
 derive_more = "0.99.3"
-encryption = { path = "../components/encryption", default-features = false }
-engine_rocks = { path = "../components/engine_rocks", default-features = false }
-engine_traits = { path = "../components/engine_traits", default-features = false }
+encryption = { workspace = true, default-features = false }
+engine_rocks = { workspace = true, default-features = false }
+engine_traits = { workspace = true, default-features = false }
 fail = "0.5"
-file_system = { path = "../components/file_system", default-features = false }
-keys = { path = "../components/keys", default-features = false }
+file_system = { workspace = true, default-features = false }
+keys = { workspace = true, default-features = false }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 lazy_static = "1.4.0"
 libc = "0.2"
-log_wrappers = { path = "../components/log_wrappers" }
+log_wrappers = { workspace = true }
 num_cpus = "1"
-online_config = { path = "../components/online_config" }
+online_config = { workspace = true }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 protobuf = "2"
@@ -52,12 +52,12 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 slog_derive = "0.2"
 tempfile = "3.0"
-tikv_alloc = { path = "../components/tikv_alloc" }
-tikv_util = { path = "../components/tikv_util", default-features = false }
+tikv_alloc = { workspace = true }
+tikv_util = { workspace = true, default-features = false }
 time = "0.1"
 
-tracker = { path = "../components/tracker" }
-txn_types = { path = "../components/txn_types", default-features = false }
+tracker = { workspace = true }
+txn_types = { workspace = true, default-features = false }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [dependencies.rocksdb]
