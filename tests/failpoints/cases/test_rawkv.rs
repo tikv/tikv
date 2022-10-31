@@ -1,8 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::Arc, time::Duration};
+use std::{sync::Arc, thread, time::Duration};
 
-use causal_ts::CausalTsProvider;
+use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
@@ -101,6 +101,10 @@ impl TestSuite {
                 .async_flush(),
         )
         .unwrap();
+    }
+
+    pub fn get_causal_ts_provider(&mut self, node_id: u64) -> Option<Arc<CausalTsProviderImpl>> {
+        self.cluster.sim.rl().get_causal_ts_provider(node_id)
     }
 
     pub fn must_merge_region_by_key(&mut self, source_key: &[u8], target_key: &[u8]) {
@@ -270,4 +274,46 @@ fn test_region_merge() {
 
     fail::remove(FP_GET_TSO);
     suite.stop();
+}
+
+// Verify the raw key guard correctness in apiv2
+#[test]
+fn test_raw_put_key_guard() {
+    let mut suite = TestSuite::new(3, ApiVersion::V2);
+    let pause_write_fp = "raftkv_async_write";
+
+    let test_key = b"rk3".to_vec();
+    let test_value = b"v3".to_vec();
+
+    let region = suite.cluster.get_region(&test_key);
+    let region_id = region.get_id();
+    let client = suite.get_client(region_id);
+    let ctx = suite.get_context(region_id);
+    let node_id = region.get_peers()[0].get_id();
+    let leader_cm = suite.cluster.sim.rl().get_concurrency_manager(node_id);
+    let ts_provider = suite.get_causal_ts_provider(node_id).unwrap();
+    let ts = block_on(ts_provider.async_get_ts()).unwrap();
+
+    let copy_test_key = test_key.clone();
+    let copy_test_value = test_value.clone();
+    let apply_wait_timeout = 2000; // ms, assume send request and apply can be finished in 2s.
+    fail::cfg(pause_write_fp, "pause").unwrap();
+    let handle = thread::spawn(move || {
+        must_raw_put(&client, ctx, copy_test_key, copy_test_value);
+    });
+    thread::sleep(Duration::from_millis(apply_wait_timeout));
+
+    // Before raw_put finish, min_ts should be the ts of "key guard" of the raw_put
+    // request.
+    assert_eq!(suite.must_raw_get(&test_key), None);
+    let min_ts = leader_cm.global_min_lock_ts();
+    assert_eq!(min_ts.unwrap(), ts.next());
+
+    fail::remove(pause_write_fp);
+    handle.join().unwrap();
+
+    // After raw_put is finished, "key guard" is released.
+    assert_eq!(suite.must_raw_get(&test_key), Some(test_value));
+    let min_ts = leader_cm.global_min_lock_ts();
+    assert!(min_ts.is_none());
 }

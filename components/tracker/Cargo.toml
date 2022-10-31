@@ -5,7 +5,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-collections = { path = "../../components/collections" }
+collections = { workspace = true }
 crossbeam-utils = "0.8"
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 lazy_static = "1"
