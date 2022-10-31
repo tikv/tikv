@@ -122,7 +122,6 @@ fn test_disk_full_leader_behaviors(usage: DiskUsage) {
 }
 
 #[test]
-#[ignore]
 fn test_disk_full_for_region_leader() {
     test_disk_full_leader_behaviors(DiskUsage::AlmostFull);
     test_disk_full_leader_behaviors(DiskUsage::AlreadyFull);
@@ -170,7 +169,6 @@ fn test_disk_full_follower_behaviors(usage: DiskUsage) {
 }
 
 #[test]
-#[ignore]
 fn test_disk_full_for_region_follower() {
     test_disk_full_follower_behaviors(DiskUsage::AlmostFull);
     test_disk_full_follower_behaviors(DiskUsage::AlreadyFull);
@@ -272,13 +270,11 @@ fn test_disk_full_txn_behaviors(usage: DiskUsage) {
 }
 
 #[test]
-#[ignore]
 fn test_disk_full_for_txn_operations() {
     test_disk_full_txn_behaviors(DiskUsage::AlmostFull);
 }
 
 #[test]
-#[ignore]
 fn test_majority_disk_full() {
     let mut cluster = new_node_cluster(0, 3);
     // To ensure the thread has full store disk usage infomation.
@@ -467,7 +463,6 @@ fn test_merge_on_majority_disk_full() {
 }
 
 #[test]
-#[ignore]
 fn test_almost_and_already_full_behavior() {
     let mut cluster = new_server_cluster(0, 5);
     // To ensure the thread has full store disk usage infomation.
@@ -547,7 +542,6 @@ fn wait_down_peers_reported<T: Simulator>(
 }
 
 #[test]
-#[ignore]
 fn test_down_node_when_disk_full() {
     let mut cluster = new_server_cluster(0, 5);
     // To ensure the thread has full store disk usage infomation.

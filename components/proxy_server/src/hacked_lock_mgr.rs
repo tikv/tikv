@@ -1,8 +1,12 @@
+use kvproto::metapb::RegionEpoch;
 use tikv::{
-    server::lock_manager::waiter_manager::Callback,
+    server::lock_manager::{waiter_manager, waiter_manager::Callback},
     storage::{
-        lock_manager::{DiagnosticContext, Lock, LockManager as LockManagerTrait, WaitTimeout},
-        ProcessResult, StorageCallback,
+        lock_manager::{
+            DiagnosticContext, KeyLockWaitInfo, LockManager as LockManagerTrait, LockWaitToken,
+            UpdateWaitForEvent, WaitTimeout,
+        },
+        Error as StorageError, ProcessResult, StorageCallback,
     },
 };
 use txn_types::TimeStamp;
@@ -13,35 +17,40 @@ pub struct HackedLockManager {}
 #[allow(dead_code)]
 #[allow(unused_variables)]
 impl LockManagerTrait for HackedLockManager {
-    fn wait_for(
-        &self,
-        start_ts: TimeStamp,
-        cb: StorageCallback,
-        pr: ProcessResult,
-        lock: Lock,
-        is_first_lock: bool,
-        timeout: Option<WaitTimeout>,
-        diag_ctx: DiagnosticContext,
-    ) {
-        unimplemented!()
+    fn allocate_token(&self) -> LockWaitToken {
+        unimplemented!();
     }
 
-    fn wake_up(
+    fn wait_for(
         &self,
-        lock_ts: TimeStamp,
-        hashes: Vec<u64>,
-        commit_ts: TimeStamp,
-        is_pessimistic_txn: bool,
+        token: LockWaitToken,
+        region_id: u64,
+        region_epoch: RegionEpoch,
+        term: u64,
+        start_ts: TimeStamp,
+        wait_info: KeyLockWaitInfo,
+        is_first_lock: bool,
+        timeout: Option<WaitTimeout>,
+        cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
+        diag_ctx: DiagnosticContext,
     ) {
-        unimplemented!()
+        unimplemented!();
+    }
+
+    fn update_wait_for(&self, updated_items: Vec<UpdateWaitForEvent>) {
+        unimplemented!();
+    }
+
+    fn remove_lock_wait(&self, token: LockWaitToken) {
+        unimplemented!();
     }
 
     fn has_waiter(&self) -> bool {
-        todo!()
+        unimplemented!();
     }
 
-    fn dump_wait_for_entries(&self, cb: Callback) {
-        todo!()
+    fn dump_wait_for_entries(&self, cb: waiter_manager::Callback) {
+        unimplemented!();
     }
 }
 

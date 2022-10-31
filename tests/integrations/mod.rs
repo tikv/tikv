@@ -10,6 +10,9 @@ extern crate test;
 #[macro_use]
 extern crate tikv_util;
 
+mod backup;
+mod config;
+mod coprocessor;
 mod import;
 mod pd;
 mod raftstore;

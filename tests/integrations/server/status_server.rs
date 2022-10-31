@@ -2,7 +2,6 @@
 
 use std::{error::Error, net::SocketAddr, sync::Arc};
 
-use engine_store_ffi::EngineStoreServerHelper;
 use hyper::{body, Client, StatusCode, Uri};
 use raftstore::store::region_meta::RegionMeta;
 use security::SecurityConfig;
@@ -42,18 +41,14 @@ fn test_region_meta_endpoint() {
     let store_id = peer.unwrap().get_store_id();
     let router = cluster.sim.rl().get_router(store_id);
     assert!(router.is_some());
-
-    let mut status_server = unsafe {
-        StatusServer::new(
-            1,
-            ConfigController::default(),
-            Arc::new(SecurityConfig::default()),
-            router.unwrap(),
-            std::env::temp_dir(),
-        )
-        .unwrap()
-    };
-
+    let mut status_server = StatusServer::new(
+        1,
+        ConfigController::default(),
+        Arc::new(SecurityConfig::default()),
+        router.unwrap(),
+        std::env::temp_dir(),
+    )
+    .unwrap();
     let addr = format!("127.0.0.1:{}", test_util::alloc_port());
     status_server.start(addr).unwrap();
     let check_task = check(status_server.listening_addr(), region_id);

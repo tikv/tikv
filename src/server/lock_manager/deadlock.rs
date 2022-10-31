@@ -46,7 +46,7 @@ use super::{
 };
 use crate::{
     server::resolve::StoreAddrResolver,
-    storage::lock_manager::{DiagnosticContext, Lock},
+    storage::lock_manager::{DiagnosticContext, KeyLockWaitInfo, LockDigest},
 };
 
 /// `Locks` is a set of locks belonging to one transaction.
@@ -308,11 +308,11 @@ impl DetectTable {
     }
 
     /// Removes the corresponding wait_for_entry.
-    fn clean_up_wait_for(&mut self, txn_ts: TimeStamp, lock_ts: TimeStamp, lock_hash: u64) {
+    fn clean_up_wait_for(&mut self, txn_ts: TimeStamp, lock_digest: LockDigest) {
         if let Some(wait_for) = self.wait_for_map.get_mut(&txn_ts) {
-            if let Some(locks) = wait_for.get_mut(&lock_ts) {
-                if locks.remove(lock_hash) {
-                    wait_for.remove(&lock_ts);
+            if let Some(locks) = wait_for.get_mut(&lock_digest.ts) {
+                if locks.remove(lock_digest.hash) {
+                    wait_for.remove(&lock_digest.ts);
                     if wait_for.is_empty() {
                         self.wait_for_map.remove(&txn_ts);
                     }
@@ -396,7 +396,7 @@ pub enum Task {
     Detect {
         tp: DetectType,
         txn_ts: TimeStamp,
-        lock: Lock,
+        wait_info: Option<KeyLockWaitInfo>,
         // Only valid when `tp == Detect`.
         diag_ctx: DiagnosticContext,
     },
@@ -424,11 +424,14 @@ impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Task::Detect {
-                tp, txn_ts, lock, ..
+                tp,
+                txn_ts,
+                wait_info,
+                ..
             } => write!(
                 f,
-                "Detect {{ tp: {:?}, txn_ts: {}, lock: {:?} }}",
-                tp, txn_ts, lock
+                "Detect {{ tp: {:?}, txn_ts: {}, wait_info: {:?} }}",
+                tp, txn_ts, wait_info
             ),
             Task::DetectRpc { .. } => write!(f, "Detect Rpc"),
             Task::ChangeRole(role) => write!(f, "ChangeRole {{ role: {:?} }}", role),
@@ -459,20 +462,26 @@ impl Scheduler {
         }
     }
 
-    pub fn detect(&self, txn_ts: TimeStamp, lock: Lock, diag_ctx: DiagnosticContext) {
+    pub fn detect(
+        &self,
+        txn_ts: TimeStamp,
+        wait_info: KeyLockWaitInfo,
+        diag_ctx: DiagnosticContext,
+    ) {
+        // TODO: Support detect many keys in a batch
         self.notify_scheduler(Task::Detect {
             tp: DetectType::Detect,
             txn_ts,
-            lock,
+            wait_info: Some(wait_info),
             diag_ctx,
         });
     }
 
-    pub fn clean_up_wait_for(&self, txn_ts: TimeStamp, lock: Lock) {
+    pub fn clean_up_wait_for(&self, start_ts: TimeStamp, wait_info: KeyLockWaitInfo) {
         self.notify_scheduler(Task::Detect {
             tp: DetectType::CleanUpWaitFor,
-            txn_ts,
-            lock,
+            txn_ts: start_ts,
+            wait_info: Some(wait_info),
             diag_ctx: DiagnosticContext::default(),
         });
     }
@@ -481,7 +490,7 @@ impl Scheduler {
         self.notify_scheduler(Task::Detect {
             tp: DetectType::CleanUp,
             txn_ts,
-            lock: Lock::default(),
+            wait_info: None,
             diag_ctx: DiagnosticContext::default(),
         });
     }
@@ -785,13 +794,14 @@ where
         let (send, recv) = leader_client.register_detect_handler(Box::new(move |mut resp| {
             let entry = resp.take_entry();
             let txn = entry.txn.into();
-            let lock = Lock {
+            let lock = LockDigest {
                 ts: entry.wait_for_txn.into(),
                 hash: entry.key_hash,
             };
             let mut wait_chain: Vec<_> = resp.take_wait_chain().into();
+            let key = entry.get_key().to_vec();
             wait_chain.push(entry);
-            waiter_mgr_scheduler.deadlock(txn, lock, resp.get_deadlock_key_hash(), wait_chain)
+            waiter_mgr_scheduler.deadlock(txn, key, lock, resp.get_deadlock_key_hash(), wait_chain)
         }));
         spawn_local(send.map_err(|e| error!("leader client failed"; "err" => ?e)));
         // No need to log it again.
@@ -810,7 +820,7 @@ where
         &mut self,
         tp: DetectType,
         txn_ts: TimeStamp,
-        lock: Lock,
+        wait_info: &Option<KeyLockWaitInfo>,
         diag_ctx: DiagnosticContext,
     ) -> bool {
         assert!(!self.is_leader() && self.leader_info.is_some());
@@ -826,8 +836,10 @@ where
             };
             let mut entry = WaitForEntry::default();
             entry.set_txn(txn_ts.into_inner());
-            entry.set_wait_for_txn(lock.ts.into_inner());
-            entry.set_key_hash(lock.hash);
+            if let Some(wait_info) = wait_info.as_ref() {
+                entry.set_wait_for_txn(wait_info.lock_digest.ts.into_inner());
+                entry.set_key_hash(wait_info.lock_digest.hash);
+            }
             entry.set_key(diag_ctx.key);
             entry.set_resource_group_tag(diag_ctx.resource_group_tag);
             let mut req = DeadlockRequest::default();
@@ -846,32 +858,38 @@ where
         &self,
         tp: DetectType,
         txn_ts: TimeStamp,
-        lock: Lock,
+        wait_info: Option<KeyLockWaitInfo>,
         diag_ctx: DiagnosticContext,
     ) {
         let detect_table = &mut self.inner.borrow_mut().detect_table;
         match tp {
             DetectType::Detect => {
+                let wait_info = wait_info.unwrap();
                 if let Some((deadlock_key_hash, mut wait_chain)) = detect_table.detect(
                     txn_ts,
-                    lock.ts,
-                    lock.hash,
+                    wait_info.lock_digest.ts,
+                    wait_info.lock_digest.hash,
                     &diag_ctx.key,
                     &diag_ctx.resource_group_tag,
                 ) {
                     let mut last_entry = WaitForEntry::default();
                     last_entry.set_txn(txn_ts.into_inner());
-                    last_entry.set_wait_for_txn(lock.ts.into_inner());
-                    last_entry.set_key_hash(lock.hash);
-                    last_entry.set_key(diag_ctx.key);
+                    last_entry.set_wait_for_txn(wait_info.lock_digest.ts.into_inner());
+                    last_entry.set_key_hash(wait_info.lock_digest.hash);
+                    last_entry.set_key(diag_ctx.key.clone());
                     last_entry.set_resource_group_tag(diag_ctx.resource_group_tag);
                     wait_chain.push(last_entry);
-                    self.waiter_mgr_scheduler
-                        .deadlock(txn_ts, lock, deadlock_key_hash, wait_chain);
+                    self.waiter_mgr_scheduler.deadlock(
+                        txn_ts,
+                        diag_ctx.key.clone(),
+                        wait_info.lock_digest,
+                        deadlock_key_hash,
+                        wait_chain,
+                    );
                 }
             }
             DetectType::CleanUpWaitFor => {
-                detect_table.clean_up_wait_for(txn_ts, lock.ts, lock.hash)
+                detect_table.clean_up_wait_for(txn_ts, wait_info.unwrap().lock_digest)
             }
             DetectType::CleanUp => detect_table.clean_up(txn_ts),
         }
@@ -882,11 +900,11 @@ where
         &mut self,
         tp: DetectType,
         txn_ts: TimeStamp,
-        lock: Lock,
+        wait_info: Option<KeyLockWaitInfo>,
         diag_ctx: DiagnosticContext,
     ) {
         if self.is_leader() {
-            self.handle_detect_locally(tp, txn_ts, lock, diag_ctx);
+            self.handle_detect_locally(tp, txn_ts, wait_info, diag_ctx);
         } else {
             for _ in 0..2 {
                 // TODO: If the leader hasn't been elected, it requests Pd for
@@ -896,7 +914,7 @@ where
                 if self.leader_client.is_none() && !self.refresh_leader_info() {
                     break;
                 }
-                if self.send_request_to_leader(tp, txn_ts, lock, diag_ctx.clone()) {
+                if self.send_request_to_leader(tp, txn_ts, &wait_info, diag_ctx.clone()) {
                     return;
                 }
                 // Because the client is asynchronous, it won't be closed until
@@ -906,7 +924,7 @@ where
             // If a request which causes deadlock is dropped, it leads to the waiter
             // timeout. TiDB will retry to acquire the lock and detect deadlock
             // again.
-            warn!("detect request dropped"; "tp" => ?tp, "txn_ts" => txn_ts, "lock" => ?lock);
+            warn!("detect request dropped"; "tp" => ?tp, "txn_ts" => txn_ts, "wait_info" => ?wait_info);
             ERROR_COUNTER_METRICS.dropped.inc();
         }
     }
@@ -917,6 +935,7 @@ where
         stream: RequestStream<DeadlockRequest>,
         sink: DuplexSink<DeadlockResponse>,
     ) {
+        // TODO: Support batch checking.
         if !self.is_leader() {
             let status = RpcStatus::with_message(
                 RpcStatusCode::FAILED_PRECONDITION,
@@ -963,7 +982,13 @@ where
                     }
                 }
                 DeadlockRequestType::CleanUpWaitFor => {
-                    detect_table.clean_up_wait_for(txn.into(), wait_for_txn.into(), *key_hash);
+                    detect_table.clean_up_wait_for(
+                        txn.into(),
+                        LockDigest {
+                            ts: wait_for_txn.into(),
+                            hash: *key_hash,
+                        },
+                    );
                     None
                 }
                 DeadlockRequestType::CleanUp => {
@@ -1005,10 +1030,10 @@ where
             Task::Detect {
                 tp,
                 txn_ts,
-                lock,
+                wait_info,
                 diag_ctx,
             } => {
-                self.handle_detect(tp, txn_ts, lock, diag_ctx);
+                self.handle_detect(tp, txn_ts, wait_info, diag_ctx);
             }
             Task::DetectRpc { stream, sink } => {
                 self.handle_detect_rpc(stream, sink);
@@ -1180,7 +1205,13 @@ pub mod tests {
         );
 
         // Clean up entries shrinking the map.
-        detect_table.clean_up_wait_for(3.into(), 1.into(), 1);
+        detect_table.clean_up_wait_for(
+            3.into(),
+            LockDigest {
+                ts: 1.into(),
+                hash: 1,
+            },
+        );
         assert_eq!(
             detect_table
                 .wait_for_map
@@ -1192,14 +1223,32 @@ pub mod tests {
                 .len(),
             1
         );
-        detect_table.clean_up_wait_for(3.into(), 1.into(), 2);
+        detect_table.clean_up_wait_for(
+            3.into(),
+            LockDigest {
+                ts: 1.into(),
+                hash: 2,
+            },
+        );
         assert_eq!(detect_table.wait_for_map.get(&3.into()).unwrap().len(), 1);
-        detect_table.clean_up_wait_for(3.into(), 2.into(), 2);
+        detect_table.clean_up_wait_for(
+            3.into(),
+            LockDigest {
+                ts: 2.into(),
+                hash: 2,
+            },
+        );
         assert_eq!(detect_table.wait_for_map.contains_key(&3.into()), false);
 
         // Clean up non-exist entry
         detect_table.clean_up(3.into());
-        detect_table.clean_up_wait_for(3.into(), 1.into(), 1);
+        detect_table.clean_up_wait_for(
+            3.into(),
+            LockDigest {
+                ts: 1.into(),
+                hash: 1,
+            },
+        );
     }
 
     #[test]

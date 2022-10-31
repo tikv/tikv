@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
     sync::{
-        atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering},
         mpsc, Arc, Mutex,
     },
     thread,
@@ -88,7 +88,7 @@ use tikv::{
 };
 use tikv_util::{
     check_environment_variables,
-    config::{ensure_dir_exist, RaftDataStateMachine, VersionTrack},
+    config::{ensure_dir_exist, RaftDataStateMachine, ReadableDuration, VersionTrack},
     math::MovingAvgU32,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
     sys::{disk, register_memory_usage_high_water, SysQuota},
@@ -968,6 +968,9 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         let dummy_dynamic_configs = tikv::storage::DynamicConfigs {
             pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
             in_memory_pessimistic_lock: Arc::new(AtomicBool::new(true)),
+            wake_up_delay_duration_ms: Arc::new(AtomicU64::new(
+                ReadableDuration::millis(20).as_millis(),
+            )),
         };
 
         let storage = create_raft_storage::<_, _, _, F, _>(

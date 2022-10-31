@@ -1275,9 +1275,9 @@ dependencies = [
 
 [[package]]
 name = "dashmap"
-version = "5.1.0"
+version = "5.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0834a35a3fce649144119e18da2a4d8ed12ef3862f47183fd46f625d072d96c"
+checksum = "4c8858831f7781322e539ea39e72449c46b059638250c14344fec8d0aa6e539c"
 dependencies = [
  "cfg-if 1.0.0",
  "num_cpus",
@@ -1750,7 +1750,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f7531096570974c3a9dcf9e4b8e1cede1ec26cf5046219fb3b9d897503b9be59"
 
 [[package]]
-name = "example_plugin"
+name = "example_coprocessor_plugin"
 version = "0.1.0"
 dependencies = [
  "coprocessor_plugin_api",
@@ -2767,7 +2767,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#4c6f1502851ed55b3ed023d180b6b10766446630"
+source = "git+https://github.com/pingcap/kvproto.git#26e28e6a281abb927f91ef992eb8f93b39698ffa"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4321,6 +4321,90 @@ dependencies = [
 ]
 
 [[package]]
+name = "proxy_tests"
+version = "0.0.1"
+dependencies = [
+ "api_version",
+ "arrow",
+ "async-trait",
+ "batch-system",
+ "byteorder",
+ "causal_ts",
+ "cdc",
+ "clap",
+ "collections",
+ "concurrency_manager",
+ "crc64fast",
+ "criterion",
+ "criterion-cpu-time",
+ "criterion-perf-events",
+ "crossbeam",
+ "encryption",
+ "engine_rocks",
+ "engine_rocks_helper",
+ "engine_store_ffi",
+ "engine_test",
+ "engine_traits",
+ "error_code",
+ "external_storage_export",
+ "fail",
+ "file_system",
+ "futures 0.3.15",
+ "grpcio",
+ "grpcio-health",
+ "hyper",
+ "keys",
+ "kvproto",
+ "libc 0.2.132",
+ "log_wrappers",
+ "more-asserts",
+ "new-mock-engine-store",
+ "online_config",
+ "panic_hook",
+ "paste",
+ "pd_client",
+ "perfcnt",
+ "procinfo",
+ "profiler",
+ "protobuf",
+ "proxy_server",
+ "raft",
+ "raft_log_engine",
+ "raftstore",
+ "rand 0.8.3",
+ "rand_xorshift",
+ "resource_metering",
+ "security",
+ "serde_json",
+ "slog",
+ "slog-global",
+ "sst_importer",
+ "tempfile",
+ "test_backup",
+ "test_coprocessor",
+ "test_pd",
+ "test_pd_client",
+ "test_raftstore",
+ "test_sst_importer",
+ "test_storage",
+ "test_util",
+ "tidb_query_aggr",
+ "tidb_query_common",
+ "tidb_query_datatype",
+ "tidb_query_executors",
+ "tidb_query_expr",
+ "tikv",
+ "tikv_util",
+ "time",
+ "tipb",
+ "tipb_helper",
+ "tokio",
+ "toml",
+ "txn_types",
+ "uuid",
+]
+
+[[package]]
 name = "quick-xml"
 version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4356,8 +4440,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67b66e735395b7ff12f3ebbb4794006aecb365c4c9a82141279b58b227ac3a8b"
+source = "git+https://github.com/tikv/raft-engine.git#a0d29980f1448565a6d03f911ebb103c4266f1f4"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -5533,9 +5616,9 @@ dependencies = [
 
 [[package]]
 name = "smallvec"
-version = "1.8.0"
+version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2dd574626839106c320a323308629dcb1acfc96e32a8cba364ddc61ac23ee83"
+checksum = "2fd0db749597d91ff862fd1d55ea87f7855a744a8425a64695b6fca237d1dad1"
 
 [[package]]
 name = "snap_recovery"
@@ -6105,7 +6188,6 @@ dependencies = [
  "byteorder",
  "causal_ts",
  "cdc",
- "clap",
  "collections",
  "concurrency_manager",
  "crc64fast",
@@ -6116,9 +6198,7 @@ dependencies = [
  "encryption",
  "engine_rocks",
  "engine_rocks_helper",
- "engine_store_ffi",
  "engine_test",
- "engine_tiflash",
  "engine_traits",
  "error_code",
  "external_storage_export",
@@ -6133,7 +6213,6 @@ dependencies = [
  "libc 0.2.132",
  "log_wrappers",
  "more-asserts",
- "new-mock-engine-store",
  "online_config",
  "panic_hook",
  "paste",
@@ -6142,7 +6221,6 @@ dependencies = [
  "procinfo",
  "profiler",
  "protobuf",
- "proxy_server",
  "raft",
  "raft_log_engine",
  "raftstore",
@@ -6151,7 +6229,6 @@ dependencies = [
  "resource_metering",
  "security",
  "serde_json",
- "server",
  "slog",
  "slog-global",
  "sst_importer",
@@ -6401,7 +6478,7 @@ dependencies = [
  "engine_traits",
  "engine_traits_tests",
  "error_code",
- "example_plugin",
+ "example_coprocessor_plugin",
  "fail",
  "file_system",
  "flate2",

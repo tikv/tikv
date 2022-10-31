@@ -37,7 +37,7 @@ use engine_rocks::{
     DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{
-    CfOptions as _, CfOptionsExt, DbOptions as _, DbOptionsExt, TabletAccessor,
+    CfOptions as _, CfOptionsExt, DbOptions as _, DbOptionsExt, MiscExt, TabletAccessor,
     TabletErrorCollector, TitanCfOptions as _, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use file_system::IoRateLimiter;
@@ -100,6 +100,7 @@ const LOCKCF_MIN_MEM: usize = 256 * MIB as usize;
 const LOCKCF_MAX_MEM: usize = GIB as usize;
 const RAFT_MIN_MEM: usize = 256 * MIB as usize;
 const RAFT_MAX_MEM: usize = 2 * GIB as usize;
+/// Configs that actually took effect in the last run
 pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
 const TMP_CONFIG_FILE: &str = "tmp_tikv.toml";
 const MAX_BLOCK_SIZE: usize = 32 * MIB as usize;
@@ -1902,9 +1903,12 @@ pub const UNIFIED_READPOOL_MIN_CONCURRENCY: usize = 4;
 // FIXME: Use macros to generate it if yatp is used elsewhere besides readpool.
 impl Default for UnifiedReadPoolConfig {
     fn default() -> UnifiedReadPoolConfig {
+        let cpu_num = SysQuota::cpu_cores_quota();
+        let mut concurrency = (cpu_num * 0.8) as usize;
+        concurrency = cmp::max(UNIFIED_READPOOL_MIN_CONCURRENCY, concurrency);
         Self {
             min_thread_count: 1,
-            max_thread_count: UNIFIED_READPOOL_MIN_CONCURRENCY,
+            max_thread_count: concurrency,
             stack_size: ReadableSize::mb(DEFAULT_READPOOL_STACK_SIZE_MB),
             max_tasks_per_worker: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
             auto_adjust_pool_size: false,
@@ -4100,7 +4104,7 @@ mod tests {
         server::{config::ServerConfigManager, ttl::TtlCheckerTask},
         storage::{
             config_manager::StorageConfigManger,
-            lock_manager::DummyLockManager,
+            lock_manager::MockLockManager,
             txn::flow_controller::{EngineFlowController, FlowController},
             Storage, TestStorageBuilder,
         },
@@ -4490,7 +4494,7 @@ mod tests {
     fn new_engines<F: KvFormat>(
         cfg: TikvConfig,
     ) -> (
-        Storage<RocksDBEngine, DummyLockManager, F>,
+        Storage<RocksDBEngine, MockLockManager, F>,
         ConfigController,
         ReceiverWrapper<TtlCheckerTask>,
         Arc<FlowController>,
@@ -4509,7 +4513,7 @@ mod tests {
         )
         .unwrap();
         let storage =
-            TestStorageBuilder::<_, _, F>::from_engine_and_lock_mgr(engine, DummyLockManager)
+            TestStorageBuilder::<_, _, F>::from_engine_and_lock_mgr(engine, MockLockManager::new())
                 .config(cfg.storage.clone())
                 .build()
                 .unwrap();
@@ -4990,7 +4994,6 @@ mod tests {
         cfg.quota.max_delay_duration = ReadableDuration::millis(50);
         assert_eq!(cfg_controller.get_current(), cfg);
         let mut sample = quota_limiter.new_sample(true);
-
         sample.add_write_bytes(ReadableSize::mb(128).0 as usize);
         let should_delay = block_on(quota_limiter.consume_sample(sample, true));
         assert_eq!(should_delay, Duration::from_millis(50));

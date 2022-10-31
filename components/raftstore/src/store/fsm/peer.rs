@@ -70,6 +70,7 @@ use crate::{
     coprocessor::{RegionChangeEvent, RegionChangeReason},
     store::{
         cmd_resp::{bind_term, new_error},
+        entry_storage::MAX_WARMED_UP_CACHE_KEEP_TIME,
         fsm::{
             apply,
             store::{PollContext, StoreMeta},
@@ -1801,8 +1802,17 @@ where
 
     fn on_raft_log_fetched(&mut self, context: GetEntriesContext, res: Box<RaftlogFetchResult>) {
         let low = res.low;
-        // if the peer is not the leader anymore or being destroyed, ignore the result.
-        if !self.fsm.peer.is_leader() || self.fsm.peer.pending_remove {
+        // If the peer is not the leader anymore and it's not in entry cache warmup
+        // state, or it is being destroyed, ignore the result.
+        if !self.fsm.peer.is_leader()
+            && self
+                .fsm
+                .peer
+                .get_store()
+                .entry_cache_warmup_state()
+                .is_none()
+            || self.fsm.peer.pending_remove
+        {
             self.fsm.peer.mut_store().clean_async_fetch_res(low);
             return;
         }
@@ -1810,6 +1820,19 @@ where
         if self.fsm.peer.term() != res.term {
             // term has changed, the result may be not correct.
             self.fsm.peer.mut_store().clean_async_fetch_res(low);
+        } else if self
+            .fsm
+            .peer
+            .get_store()
+            .entry_cache_warmup_state()
+            .is_some()
+        {
+            if self.fsm.peer.mut_store().maybe_warm_up_entry_cache(*res) {
+                self.fsm.peer.ack_transfer_leader_msg(false);
+                self.fsm.has_ready = true;
+            }
+            self.fsm.peer.mut_store().clean_async_fetch_res(low);
+            return;
         } else {
             self.fsm
                 .peer
@@ -3216,10 +3239,13 @@ where
                     }
                 }
             }
-        } else {
-            self.fsm
-                .peer
-                .execute_transfer_leader(self.ctx, msg.get_from(), peer_disk_usage, false);
+        } else if !self
+            .fsm
+            .peer
+            .maybe_reject_transfer_leader_msg(self.ctx, msg, peer_disk_usage)
+            && self.fsm.peer.pre_ack_transfer_leader_msg(self.ctx, msg)
+        {
+            self.fsm.peer.ack_transfer_leader_msg(false);
         }
     }
 
@@ -3757,6 +3783,14 @@ where
     }
 
     fn on_ready_compact_log(&mut self, first_index: u64, state: RaftTruncatedState) {
+        // Since this peer may be warming up the entry cache, log compaction should be
+        // temporarily skipped. Otherwise, the warmup task may fail.
+        if let Some(state) = self.fsm.peer.mut_store().entry_cache_warmup_state_mut() {
+            if !state.check_stale(MAX_WARMED_UP_CACHE_KEEP_TIME) {
+                return;
+            }
+        }
+
         let total_cnt = self.fsm.peer.last_applying_idx - first_index;
         // the size of current CompactLog command can be ignored.
         let remain_cnt = self.fsm.peer.last_applying_idx - state.get_index() - 1;
@@ -4898,17 +4932,6 @@ where
             return Ok(Some(resp));
         }
 
-        let region_id = self.region_id();
-        // When in the flashback state, we should not allow any other request to be
-        // proposed.
-        if self.fsm.peer.is_in_flashback {
-            self.ctx.raft_metrics.invalid_proposal.flashback.inc();
-            let flags = WriteBatchFlags::from_bits_truncate(msg.get_header().get_flags());
-            if !flags.contains(WriteBatchFlags::FLASHBACK) {
-                return Err(Error::FlashbackInProgress(self.region_id()));
-            }
-        }
-
         // Check whether the store has the right peer to handle the request.
         let leader_id = self.fsm.peer.leader_id();
         let request = msg.get_requests();
@@ -4935,6 +4958,7 @@ where
                 _ => read_only = false,
             }
         }
+        let region_id = self.region_id();
         let allow_replica_read = read_only && msg.get_header().get_replica_read();
         let flags = WriteBatchFlags::from_bits_check(msg.get_header().get_flags());
         let allow_stale_read = read_only && flags.contains(WriteBatchFlags::STALE_READ);
@@ -4996,11 +5020,33 @@ where
                 let requested_version = msg.get_header().get_region_epoch().version;
                 self.collect_sibling_region(requested_version, &mut new_regions);
                 self.ctx.raft_metrics.invalid_proposal.epoch_not_match.inc();
-                Err(Error::EpochNotMatch(m, new_regions))
+                return Err(Error::EpochNotMatch(m, new_regions));
             }
-            Err(e) => Err(e),
-            Ok(()) => Ok(None),
+            Err(e) => return Err(e),
+            _ => {}
+        };
+        // Check whether the region is in the flashback state and the request could be
+        // proposed.
+        if let Err(e) = util::check_flashback_state(self.fsm.peer.is_in_flashback, msg, region_id) {
+            match e {
+                Error::FlashbackInProgress(_) => self
+                    .ctx
+                    .raft_metrics
+                    .invalid_proposal
+                    .flashback_in_progress
+                    .inc(),
+                Error::FlashbackNotPrepared(_) => self
+                    .ctx
+                    .raft_metrics
+                    .invalid_proposal
+                    .flashback_not_prepared
+                    .inc(),
+                _ => unreachable!(),
+            }
+            return Err(e);
         }
+
+        Ok(None)
     }
 
     /// Proposes pending batch raft commands (if any), then proposes the
@@ -6145,14 +6191,7 @@ where
         if term != self.fsm.peer.term() {
             return;
         }
-        // As the leader can propose the TransferLeader request successfully, the disk
-        // of the leader is probably not full.
-        self.fsm.peer.execute_transfer_leader(
-            self.ctx,
-            self.fsm.peer.leader_id(),
-            DiskUsage::Normal,
-            true,
-        );
+        self.fsm.peer.ack_transfer_leader_msg(true);
         self.fsm.has_ready = true;
     }
 

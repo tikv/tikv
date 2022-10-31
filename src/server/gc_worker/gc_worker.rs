@@ -1446,12 +1446,10 @@ where
 
 #[cfg(any(test, feature = "testexport"))]
 pub mod test_gc_worker {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use collections::HashMap;
     use engine_rocks::{RocksEngine, RocksSnapshot};
-    use engine_test::kv::TestTabletFactoryV2;
-    use engine_traits::{KvEngine, OpenOptions, TabletFactory};
     use kvproto::{
         kvrpcpb::Context,
         metapb::{Peer, Region},
@@ -1570,17 +1568,15 @@ pub mod test_gc_worker {
         }
     }
 
-    #[derive(Clone)]
+    #[derive(Clone, Default)]
     pub struct MultiRocksEngine {
-        // Factory is not a normal way to fetch tablet and is just used in test to ease the test.
-        // Note: at most one tablet is allowed to exist for each region in the cache of factory
-        pub factory: Arc<TestTabletFactoryV2>,
+        pub engines: Arc<Mutex<HashMap<u64, PrefixedEngine>>>,
         pub region_info: HashMap<u64, Region>,
     }
 
     impl Engine for MultiRocksEngine {
-        type Snap = RegionSnapshot<RocksSnapshot>;
-        type Local = RocksEngine;
+        type Snap = <PrefixedEngine as Engine>::Snap;
+        type Local = <PrefixedEngine as Engine>::Local;
 
         fn kv_engine(&self) -> Option<Self::Local> {
             None
@@ -1590,36 +1586,10 @@ pub mod test_gc_worker {
             &self,
             region_modifies: HashMap<u64, Vec<Modify>>,
         ) -> kv::Result<()> {
-            for (region_id, mut modifies) in region_modifies {
-                for modify in &mut modifies {
-                    match modify {
-                        Modify::Delete(_, ref mut key) => {
-                            let bytes = keys::data_key(key.as_encoded());
-                            *key = Key::from_encoded(bytes);
-                        }
-                        Modify::Put(_, ref mut key, _) => {
-                            let bytes = keys::data_key(key.as_encoded());
-                            *key = Key::from_encoded(bytes);
-                        }
-                        Modify::PessimisticLock(ref mut key, _) => {
-                            let bytes = keys::data_key(key.as_encoded());
-                            *key = Key::from_encoded(bytes);
-                        }
-                        Modify::DeleteRange(_, ref mut key1, ref mut key2, _) => {
-                            let bytes = keys::data_key(key1.as_encoded());
-                            *key1 = Key::from_encoded(bytes);
-                            let bytes = keys::data_end_key(key2.as_encoded());
-                            *key2 = Key::from_encoded(bytes);
-                        }
-                    }
-                }
-
-                let tablet = self
-                    .factory
-                    .open_tablet(region_id, None, OpenOptions::default().set_cache_only(true))
-                    .unwrap();
-
-                write_modifies(&tablet, modifies)?;
+            for (region_id, modifies) in region_modifies {
+                let mut map = HashMap::default();
+                map.insert(region_id, modifies);
+                self.engines.lock().unwrap()[&region_id].modify_on_kv_engine(map)?;
             }
 
             Ok(())
@@ -1628,35 +1598,10 @@ pub mod test_gc_worker {
         fn async_write(
             &self,
             ctx: &Context,
-            mut batch: WriteData,
+            batch: WriteData,
             callback: EngineCallback<()>,
         ) -> EngineResult<()> {
-            batch.modifies.iter_mut().for_each(|modify| match modify {
-                Modify::Delete(_, ref mut key) => {
-                    *key = Key::from_encoded(keys::data_key(key.as_encoded()));
-                }
-                Modify::Put(_, ref mut key, _) => {
-                    *key = Key::from_encoded(keys::data_key(key.as_encoded()));
-                }
-                Modify::PessimisticLock(ref mut key, _) => {
-                    *key = Key::from_encoded(keys::data_key(key.as_encoded()));
-                }
-                Modify::DeleteRange(_, ref mut start_key, ref mut end_key, _) => {
-                    *start_key = Key::from_encoded(keys::data_key(start_key.as_encoded()));
-                    *end_key = Key::from_encoded(keys::data_end_key(end_key.as_encoded()));
-                }
-            });
-            let tablet = self
-                .factory
-                .open_tablet(
-                    ctx.region_id,
-                    None,
-                    OpenOptions::default().set_cache_only(true),
-                )
-                .unwrap();
-
-            callback(write_modifies(&tablet, batch.modifies));
-            Ok(())
+            self.engines.lock().unwrap()[&ctx.region_id].async_write(ctx, batch, callback)
         }
 
         fn async_snapshot(
@@ -1665,15 +1610,12 @@ pub mod test_gc_worker {
             callback: EngineCallback<Self::Snap>,
         ) -> EngineResult<()> {
             let region_id = ctx.pb_ctx.region_id;
-            let tablet = self
-                .factory
-                .open_tablet(region_id, None, OpenOptions::default().set_cache_only(true))
-                .unwrap();
-            callback(Ok(RegionSnapshot::from_snapshot(
-                Arc::new(tablet.snapshot()),
-                Arc::new(self.region_info.get(&region_id).unwrap().clone()),
-            )));
-            Ok(())
+            self.engines
+                .lock()
+                .unwrap()
+                .get_mut(&region_id)
+                .unwrap()
+                .async_snapshot(ctx, callback)
         }
     }
 }
@@ -1683,6 +1625,7 @@ mod tests {
 
     use std::{
         collections::{BTreeMap, BTreeSet},
+        path::Path,
         sync::mpsc::{self, channel},
         thread,
         time::Duration,
@@ -1690,11 +1633,7 @@ mod tests {
 
     use api_version::{ApiV2, KvFormat, RawValue};
     use engine_rocks::{util::get_cf_handle, RocksEngine};
-    use engine_test::{
-        ctor::{CfOptions, DbOptions},
-        kv::TestTabletFactoryV2,
-    };
-    use engine_traits::{OpenOptions, TabletFactory, ALL_CFS};
+    use engine_traits::Peekable as _;
     use futures::executor::block_on;
     use kvproto::{
         kvrpcpb::{ApiVersion, Op},
@@ -1721,7 +1660,7 @@ mod tests {
         server::gc_worker::{MockSafePointProvider, PrefixedEngine},
         storage::{
             kv::{metrics::GcKeyMode, Modify, TestEngineBuilder, WriteData},
-            lock_manager::DummyLockManager,
+            lock_manager::MockLockManager,
             mvcc::{
                 tests::{must_get_none, must_get_none_on_region, must_get_on_region},
                 MAX_TXN_WRITE_SIZE,
@@ -1799,7 +1738,7 @@ mod tests {
     /// Assert the data in `storage` is the same as `expected_data`. Keys in
     /// `expected_data` should be encoded form without ts.
     fn check_data<E: Engine, F: KvFormat>(
-        storage: &Storage<E, DummyLockManager, F>,
+        storage: &Storage<E, MockLockManager, F>,
         expected_data: &BTreeMap<Vec<u8>, Vec<u8>>,
     ) {
         let scan_res = block_on(storage.scan(
@@ -1834,10 +1773,12 @@ mod tests {
         let store_id = 1;
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let storage =
-            TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine.clone(), DummyLockManager)
-                .build()
-                .unwrap();
+        let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(
+            engine.clone(),
+            MockLockManager::new(),
+        )
+        .build()
+        .unwrap();
         let gate = FeatureGate::default();
         gate.set_version("5.0.0").unwrap();
 
@@ -2021,7 +1962,7 @@ mod tests {
         let prefixed_engine = PrefixedEngine(engine);
         let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(
             prefixed_engine.clone(),
-            DummyLockManager,
+            MockLockManager::new(),
         )
         .build()
         .unwrap();
@@ -2620,47 +2561,55 @@ mod tests {
     //  region 2: includes ("k10", "value-10") to ("k19", "value-19")
     //  region 3: includes ("k20", "value-20") to ("k29", "value-29")
     fn multi_gc_engine_setup(
+        path: &Path,
         store_id: u64,
         put_start_ts: u64,
         delete_start_ts: u64,
         need_deletion: bool,
     ) -> (
-        Arc<TestTabletFactoryV2>,
         MultiRocksEngine,
         Arc<MockRegionInfoProvider>,
         GcRunner<MultiRocksEngine, RaftStoreBlackHole>,
         Vec<Region>,
         mpsc::Receiver<FlowInfo>,
     ) {
-        // Building a tablet factory
-        let ops = DbOptions::default();
-        let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
-        let path = Builder::new().prefix("multi-rocks-gc").tempdir().unwrap();
-        let factory = Arc::new(TestTabletFactoryV2::new(path.path(), ops, cf_opts));
+        let mut engine = MultiRocksEngine::default();
 
         // Note: as the tablet split is not supported yet, we artificially divide the
         // region to: 1 ["", "k10"], 2 ["k10", "k20"], 3["k20", "30"]
         let r1 = init_region(b"", b"k10", 1, Some(store_id));
+        engine.region_info.insert(1, r1.clone());
+        engine.engines.lock().unwrap().insert(
+            1,
+            PrefixedEngine(
+                TestEngineBuilder::new()
+                    .path(path.join("1"))
+                    .build()
+                    .unwrap(),
+            ),
+        );
         let r2 = init_region(b"k10", b"k20", 2, Some(store_id));
+        engine.region_info.insert(2, r2.clone());
+        engine.engines.lock().unwrap().insert(
+            2,
+            PrefixedEngine(
+                TestEngineBuilder::new()
+                    .path(path.join("2"))
+                    .build()
+                    .unwrap(),
+            ),
+        );
         let r3 = init_region(b"k20", b"", 3, Some(store_id));
-        let _ = factory
-            .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
-            .unwrap();
-        let _ = factory
-            .open_tablet(2, Some(10), OpenOptions::default().set_create_new(true))
-            .unwrap();
-        let _ = factory
-            .open_tablet(3, Some(10), OpenOptions::default().set_create_new(true))
-            .unwrap();
-
-        let mut region_info = HashMap::default();
-        region_info.insert(1, r1.clone());
-        region_info.insert(2, r2.clone());
-        region_info.insert(3, r3.clone());
-        let mut engine = MultiRocksEngine {
-            factory: factory.clone(),
-            region_info,
-        };
+        engine.region_info.insert(3, r3.clone());
+        engine.engines.lock().unwrap().insert(
+            3,
+            PrefixedEngine(
+                TestEngineBuilder::new()
+                    .path(path.join("3"))
+                    .build()
+                    .unwrap(),
+            ),
+        );
 
         let (tx, rx) = mpsc::channel();
         let feature_gate = FeatureGate::default();
@@ -2705,36 +2654,29 @@ mod tests {
             }
         }
 
-        (
-            factory,
-            engine,
-            ri_provider,
-            gc_runner,
-            vec![r1, r2, r3],
-            rx,
-        )
+        (engine, ri_provider, gc_runner, vec![r1, r2, r3], rx)
     }
 
     #[test]
     fn test_gc_for_multi_rocksdb() {
+        let dir = Builder::new()
+            .prefix("test_gc_for_multi_rocksdb")
+            .tempdir()
+            .unwrap();
         let store_id = 1;
 
         let put_start_ts = 100;
         let delete_start_ts = 150;
-        let (factory, mut engine, _ri_provider, mut gc_runner, regions, _) =
-            multi_gc_engine_setup(store_id, put_start_ts, delete_start_ts, true);
+        let (mut engine, _ri_provider, mut gc_runner, regions, _) =
+            multi_gc_engine_setup(dir.path(), store_id, put_start_ts, delete_start_ts, true);
 
         gc_runner.gc(regions[0].clone(), 200.into()).unwrap();
         gc_runner.gc(regions[1].clone(), 200.into()).unwrap();
         gc_runner.gc(regions[2].clone(), 200.into()).unwrap();
 
         for region_id in 1..=3 {
-            let db = factory
-                .open_tablet(region_id, None, OpenOptions::default().set_cache_only(true))
-                .unwrap()
-                .as_inner()
-                .clone();
-            let cf = get_cf_handle(&db, CF_WRITE).unwrap();
+            let region_engine = engine.engines.lock().unwrap()[&region_id].clone();
+
             for i in 10 * (region_id - 1)..10 * region_id {
                 let k = format!("k{:02}", i).into_bytes();
 
@@ -2745,19 +2687,30 @@ mod tests {
                 let mut raw_k = vec![b'z'];
                 let suffix = Key::from_raw(&k).append_ts((delete_start_ts + 1).into());
                 raw_k.extend_from_slice(suffix.as_encoded());
-                assert!(db.get_cf(cf, &raw_k).unwrap().is_none());
+                assert!(
+                    region_engine
+                        .kv_engine()
+                        .unwrap()
+                        .get_value_cf(CF_WRITE, &raw_k)
+                        .unwrap()
+                        .is_none()
+                );
             }
         }
     }
 
     #[test]
     fn test_gc_keys_for_multi_rocksdb() {
+        let dir = Builder::new()
+            .prefix("test_gc_keys_for_multi_rocksdb")
+            .tempdir()
+            .unwrap();
         let store_id = 1;
 
         let put_start_ts = 100;
         let delete_start_ts = 150;
-        let (factory, mut engine, ri_provider, mut gc_runner, ..) =
-            multi_gc_engine_setup(store_id, put_start_ts, delete_start_ts, true);
+        let (mut engine, ri_provider, mut gc_runner, ..) =
+            multi_gc_engine_setup(dir.path(), store_id, put_start_ts, delete_start_ts, true);
 
         let mut keys = Vec::new();
         for i in 0..30 {
@@ -2774,12 +2727,8 @@ mod tests {
             .unwrap();
 
         for region_id in 1..=3 {
-            let db = factory
-                .open_tablet(region_id, None, OpenOptions::default().set_cache_only(true))
-                .unwrap()
-                .as_inner()
-                .clone();
-            let cf = get_cf_handle(&db, CF_WRITE).unwrap();
+            let region_engine = engine.engines.lock().unwrap()[&region_id].clone();
+
             for i in 10 * (region_id - 1)..10 * region_id {
                 let k = format!("k{:02}", i).into_bytes();
                 let val = format!("value-{:02}", i).into_bytes();
@@ -2789,10 +2738,24 @@ mod tests {
                 raw_k.extend_from_slice(suffix.as_encoded());
 
                 if i % 2 == 0 {
-                    assert!(db.get_cf(cf, &raw_k).unwrap().is_some());
+                    assert!(
+                        region_engine
+                            .kv_engine()
+                            .unwrap()
+                            .get_value_cf(CF_WRITE, &raw_k)
+                            .unwrap()
+                            .is_some()
+                    );
                     must_get_on_region(&mut engine, region_id, &k, delete_start_ts - 1, &val);
                 } else {
-                    assert!(db.get_cf(cf, &raw_k).unwrap().is_none());
+                    assert!(
+                        region_engine
+                            .kv_engine()
+                            .unwrap()
+                            .get_value_cf(CF_WRITE, &raw_k)
+                            .unwrap()
+                            .is_none()
+                    );
                     must_get_none_on_region(&mut engine, region_id, &k, delete_start_ts - 1);
                 }
             }
@@ -2801,34 +2764,38 @@ mod tests {
 
     #[test]
     fn test_raw_gc_keys_for_multi_rocksdb() {
-        let store_id = 1;
-        // Building a tablet factory
-        let ops = DbOptions::default();
-        let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
-        let path = Builder::new()
-            .prefix("multi-rocks-raw-gc")
+        let dir = Builder::new()
+            .prefix("test_raw_gc_keys_for_multi_rocksdb")
             .tempdir()
             .unwrap();
-        let factory = Arc::new(TestTabletFactoryV2::new(path.path(), ops, cf_opts));
+        let store_id = 1;
+
+        let mut engine = MultiRocksEngine::default();
 
         // Note: as the tablet split is not supported yet, we artificially divide the
         // region to: 1 ["", "k10"], 2 ["k10", ""]
         let r1 = init_region(b"", b"k10", 1, Some(store_id));
+        engine.region_info.insert(1, r1.clone());
+        engine.engines.lock().unwrap().insert(
+            1,
+            PrefixedEngine(
+                TestEngineBuilder::new()
+                    .path(dir.path().join("1"))
+                    .build()
+                    .unwrap(),
+            ),
+        );
         let r2 = init_region(b"k10", b"", 2, Some(store_id));
-        let _ = factory
-            .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
-            .unwrap();
-        let _ = factory
-            .open_tablet(2, Some(10), OpenOptions::default().set_create_new(true))
-            .unwrap();
-
-        let mut region_info = HashMap::default();
-        region_info.insert(1, r1.clone());
-        region_info.insert(2, r2.clone());
-        let mut engine = MultiRocksEngine {
-            factory,
-            region_info,
-        };
+        engine.region_info.insert(2, r2.clone());
+        engine.engines.lock().unwrap().insert(
+            2,
+            PrefixedEngine(
+                TestEngineBuilder::new()
+                    .path(dir.path().join("2"))
+                    .build()
+                    .unwrap(),
+            ),
+        );
 
         let (tx, _rx) = mpsc::channel();
         let ri_provider = Arc::new(MockRegionInfoProvider::new(vec![r1, r2]));
@@ -2945,10 +2912,14 @@ mod tests {
         end_key: &[u8],
         exected_regions: Vec<u64>,
     ) {
+        let dir = Builder::new()
+            .prefix("test_destroy_range_for_multi_rocksdb_impl")
+            .tempdir()
+            .unwrap();
         let store_id = 1;
         let put_start_ts = 100;
-        let (factory, mut engine, ri_provider, gc_runner, _, _rx) =
-            multi_gc_engine_setup(store_id, put_start_ts, 0, false);
+        let (mut engine, ri_provider, gc_runner, _, _rx) =
+            multi_gc_engine_setup(dir.path(), store_id, put_start_ts, 0, false);
 
         let start_key = Key::from_raw(start_key);
         let end_key = Key::from_raw(end_key);
@@ -2960,12 +2931,7 @@ mod tests {
 
         let mut regions = BTreeSet::new();
         for region_id in 1..=3 {
-            let db = factory
-                .open_tablet(region_id, None, OpenOptions::default().set_cache_only(true))
-                .unwrap()
-                .as_inner()
-                .clone();
-            let cf = get_cf_handle(&db, CF_WRITE).unwrap();
+            let region_engine = engine.engines.lock().unwrap()[&region_id].clone();
 
             for i in 10 * (region_id - 1)..10 * region_id {
                 let k = format!("k{:02}", i).into_bytes();
@@ -2978,10 +2944,24 @@ mod tests {
 
                 if start_key <= key && key < end_key {
                     regions.insert(region_id);
-                    assert!(db.get_cf(cf, &raw_k).unwrap().is_none());
+                    assert!(
+                        region_engine
+                            .kv_engine()
+                            .unwrap()
+                            .get_value_cf(CF_WRITE, &raw_k)
+                            .unwrap()
+                            .is_none()
+                    );
                     must_get_none_on_region(&mut engine, region_id, &k, put_start_ts + 10);
                 } else {
-                    assert!(db.get_cf(cf, &raw_k).unwrap().is_some());
+                    assert!(
+                        region_engine
+                            .kv_engine()
+                            .unwrap()
+                            .get_value_cf(CF_WRITE, &raw_k)
+                            .unwrap()
+                            .is_some()
+                    );
                     must_get_on_region(&mut engine, region_id, &k, put_start_ts + 10, &val);
                 }
             }

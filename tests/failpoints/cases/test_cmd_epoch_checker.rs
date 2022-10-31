@@ -345,7 +345,7 @@ fn test_reject_proposal_during_rollback_region_merge() {
     cb_receivers.assert_ok();
 }
 
-// #[test]
+#[test]
 fn test_reject_proposal_during_leader_transfer() {
     let mut cluster = new_node_cluster(0, 2);
     let pd_client = cluster.pd_client.clone();
