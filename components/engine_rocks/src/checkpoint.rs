@@ -1,17 +1,15 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{Checkpoint, Code, Error, Result, Status};
+use engine_traits::{Checkpoint, Result};
 use rocksdb::Checkpointer;
 
-use crate::RocksEngine;
+use crate::{r2e, RocksEngine};
 
 impl Checkpoint for RocksEngine {
     type Checkpointer = Checkpointer;
 
     fn new_checkpointer(&self) -> Result<Self::Checkpointer> {
-        self.as_inner()
-            .new_checkpointer()
-            .map_err(|e| Error::Engine(Status::with_error(Code::IoError, e)))
+        self.as_inner().new_checkpointer().map_err(|e| r2e(e))
     }
 }
 
