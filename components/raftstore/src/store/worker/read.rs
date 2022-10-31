@@ -937,6 +937,10 @@ where
                         let region = Arc::clone(&delegate.region);
                         let response = delegate.execute(&req, &region, None, Some(local_read_ctx));
 
+                        // Double check in case `witness` change after the first check and before
+                        // getting snapshot
+                        self.local_reader.validate_request(&req)?;
+
                         // Try renew lease in advance
                         delegate.maybe_renew_lease_advance(&self.router, snapshot_ts);
                         response

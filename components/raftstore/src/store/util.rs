@@ -20,11 +20,11 @@ use kvproto::{
     kvrpcpb::{self, KeyRange, LeaderInfo},
     metapb::{self, Peer, PeerRole, Region, RegionEpoch},
     raft_cmdpb::{AdminCmdType, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest},
-    raft_serverpb::RaftMessage,
+    raft_serverpb::{RaftMessage, RaftSnapshotData},
 };
 use protobuf::{self, Message};
 use raft::{
-    eraftpb::{self, ConfChangeType, ConfState, MessageType},
+    eraftpb::{self, ConfChangeType, ConfState, MessageType, Snapshot},
     Changer, RawNode, INVALID_INDEX,
 };
 use raft_proto::ConfChangeI;
@@ -33,7 +33,7 @@ use time::{Duration, Timespec};
 use txn_types::{TimeStamp, WriteBatchFlags};
 
 use super::{metrics::PEER_ADMIN_CMD_COUNTER_VEC, peer_storage, Config};
-use crate::{coprocessor::CoprocessorHost, Error, Result};
+use crate::{coprocessor::CoprocessorHost, store::snap::SNAPSHOT_VERSION, Error, Result};
 
 const INVALID_TIMESTAMP: u64 = u64::MAX;
 
@@ -123,6 +123,29 @@ pub fn is_initial_msg(msg: &eraftpb::Message) -> bool {
         || msg_type == MessageType::MsgRequestPreVote
         // the peer has not been known to this leader, it may exist or not.
         || (msg_type == MessageType::MsgHeartbeat && msg.get_commit() == INVALID_INDEX)
+}
+
+pub fn new_empty_snapshot(
+    region: Region,
+    applied_index: u64,
+    applied_term: u64,
+    for_witness: bool,
+) -> Snapshot {
+    let mut snapshot = Snapshot::default();
+    snapshot.mut_metadata().set_index(applied_index);
+    snapshot.mut_metadata().set_term(applied_term);
+    snapshot
+        .mut_metadata()
+        .set_conf_state(conf_state_from_region(&region));
+    snapshot.set_data({
+        let mut snap_data = RaftSnapshotData::default();
+        snap_data.set_region(region);
+        snap_data.set_file_size(0);
+        snap_data.set_version(SNAPSHOT_VERSION);
+        snap_data.mut_meta().set_for_witness(for_witness);
+        snap_data.write_to_bytes().unwrap().into()
+    });
+    snapshot
 }
 
 const STR_CONF_CHANGE_ADD_NODE: &str = "AddNode";
@@ -904,14 +927,12 @@ pub fn check_conf_change(
             (ConfChangeType::RemoveNode, _) => {}
             (ConfChangeType::AddNode, PeerRole::Voter)
             | (ConfChangeType::AddLearnerNode, PeerRole::Learner) => {
-                if peer.get_id() == self.peer_id()
-                    && !self.is_witness()
+                if peer.get_id() == leader.get_id()
+                    && !leader.get_is_witness()
                     && peer.get_is_witness()
-                    && self.is_leader()
                 {
                     return Err(box_err!(
-                        "{} invalid conf change request: {:?}, can not change leader to witness",
-                        self.tag,
+                        "invalid conf change request: {:?}, can not change leader to witness",
                         cp
                     ));
                 }

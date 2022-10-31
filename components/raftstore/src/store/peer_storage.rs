@@ -38,7 +38,7 @@ use super::{metrics::*, worker::RegionTask, SnapEntry, SnapKey, SnapManager};
 use crate::{
     store::{
         async_io::write::WriteTask, entry_storage::EntryStorage, fsm::GenSnapTask,
-        peer::PersistSnapshotResult, snap::SNAPSHOT_VERSION, util, worker::RaftlogFetchTask,
+        peer::PersistSnapshotResult, util, worker::RaftlogFetchTask,
     },
     Error, Result,
 };
@@ -454,21 +454,12 @@ where
         let for_witness = find_peer_by_id(&self.region, to).unwrap().is_witness;
         if for_witness {
             // generate an empty snapshot for witness directly
-            let mut snapshot = Snapshot::default();
-            snapshot.mut_metadata().set_index(self.applied_index());
-            snapshot.mut_metadata().set_term(self.applied_term());
-            snapshot
-                .mut_metadata()
-                .set_conf_state(util::conf_state_from_region(&self.region));
-            snapshot.set_data({
-                let mut snap_data = RaftSnapshotData::default();
-                snap_data.set_region(self.region.clone());
-                snap_data.set_file_size(0);
-                snap_data.set_version(SNAPSHOT_VERSION);
-                snap_data.mut_meta().set_for_witness(true);
-                snap_data.write_to_bytes()?.into()
-            });
-            return Ok(snapshot);
+            return Ok(util::new_empty_snapshot(
+                self.region.clone(),
+                self.applied_index(),
+                self.applied_term(),
+                true, // for witness
+            ));
         }
 
         let mut snap_state = self.snap_state.borrow_mut();
@@ -580,9 +571,8 @@ where
         &mut self,
         snap: &Snapshot,
         task: &mut WriteTask<EK, ER>,
-        destroy_regions: Vec<metapb::Region>,
-        persisted_messages: Vec<eraftpb::Message>,
-    ) -> Result<HandleReadyResult> {
+        destroy_regions: &[metapb::Region],
+    ) -> Result<(metapb::Region, bool)> {
         info!(
             "begin to apply snapshot";
             "region_id" => self.region.get_id(),
@@ -593,7 +583,6 @@ where
         snap_data.merge_from_bytes(snap.get_data())?;
 
         let for_witness = snap_data.get_meta().get_for_witness();
-        let last_first_index = self.first_index().unwrap();
 
         let region_id = self.get_region_id();
         let region = snap_data.take_region();
@@ -627,7 +616,7 @@ where
             self.clear_meta(first_index, kv_wb, raft_wb)?;
         }
         // Write its source peers' `RegionLocalState` together with itself for atomicity
-        for r in &destroy_regions {
+        for r in destroy_regions {
             write_peer_state(kv_wb, r, PeerState::Tombstone, None)?;
         }
 
@@ -672,15 +661,7 @@ where
             "state" => ?self.apply_state(),
         );
 
-        Ok(HandleReadyResult::Snapshot(Box::new(
-            HandleSnapshotResult {
-                msgs: persisted_messages,
-                snap_region: region,
-                destroy_regions,
-                last_first_index,
-                for_witness,
-            },
-        )))
+        Ok((region, for_witness))
     }
 
     /// Delete all meta belong to the region. Results are stored in `wb`.
@@ -905,9 +886,20 @@ where
         let mut res = if ready.snapshot().is_empty() {
             HandleReadyResult::SendIoTask
         } else {
-            let msgs = ready.take_persisted_messages();
-            // returns HandleReadyResult::Snapshot
-            self.apply_snapshot(ready.snapshot(), &mut write_task, destroy_regions, msgs)?
+            fail_point!("raft_before_apply_snap");
+            let last_first_index = self.first_index().unwrap();
+            let (snap_region, for_witness) =
+                self.apply_snapshot(ready.snapshot(), &mut write_task, &destroy_regions)?;
+
+            let res = HandleReadyResult::Snapshot(Box::new(HandleSnapshotResult {
+                msgs: ready.take_persisted_messages(),
+                snap_region,
+                destroy_regions,
+                last_first_index,
+                for_witness,
+            }));
+            fail_point!("raft_after_apply_snap");
+            res
         };
 
         if !ready.entries().is_empty() {
