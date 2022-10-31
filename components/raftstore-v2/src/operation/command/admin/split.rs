@@ -19,9 +19,7 @@ use raft::{eraftpb::Message, prelude::MessageType, RawNode};
 use raftstore::{
     coprocessor::RegionChangeReason,
     store::{
-        fsm::apply::{
-            self, init_split_regions, validate_and_get_split_keys, ApplyResult, NewSplitPeer,
-        },
+        fsm::apply::{self, validate_and_get_split_keys, ApplyResult, NewSplitPeer},
         metrics::PEER_ADMIN_CMD_COUNTER,
         util::{self, KeysInfoFormatter},
         InspectedRaftMessage, PdTask, PeerPessimisticLocks, PeerStat, ReadDelegate, ReadProgress,
@@ -73,8 +71,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         let mut derived = self.region_state().get_region().clone();
         let region_id = derived.id;
 
-        let mut split_keys =
-            validate_and_get_split_keys(split_reqs, self.region_state().get_region())?;
+        let mut keys = validate_and_get_split_keys(split_reqs, self.region_state().get_region())?;
 
         info!(
             self.logger,
@@ -82,11 +79,51 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             "region_id" => region_id,
             "peer_id" => self.peer().id,
             "region" => ?derived,
-            "keys" => %KeysInfoFormatter(split_keys.iter()),
+            "keys" => %KeysInfoFormatter(keys.iter()),
         );
 
-        let (regions, _) =
-            init_split_regions(self.store_id(), split_reqs, &mut derived, &mut split_keys);
+        let new_region_cnt = split_reqs.get_requests().len();
+        let new_version = derived.get_region_epoch().get_version() + new_region_cnt as u64;
+        derived.mut_region_epoch().set_version(new_version);
+
+        let right_derive = split_reqs.get_right_derive();
+        let mut regions = Vec::with_capacity(new_region_cnt + 1);
+        // Note that the split requests only contain ids for new regions, so we need
+        // to handle new regions and old region separately.
+        if right_derive {
+            // So the range of new regions is [old_start_key, split_key1, ...,
+            // last_split_key].
+            keys.push_front(derived.get_start_key().to_vec());
+        } else {
+            // So the range of new regions is [split_key1, ..., last_split_key,
+            // old_end_key].
+            keys.push_back(derived.get_end_key().to_vec());
+            derived.set_end_key(keys.front().unwrap().to_vec());
+            regions.push(derived.clone());
+        }
+
+        // Init split regions' meta info
+        for req in split_reqs.get_requests() {
+            let mut new_region = Region::default();
+            new_region.set_id(req.get_new_region_id());
+            new_region.set_region_epoch(derived.get_region_epoch().to_owned());
+            new_region.set_start_key(keys.pop_front().unwrap());
+            new_region.set_end_key(keys.front().unwrap().to_vec());
+            new_region.set_peers(derived.get_peers().to_vec().into());
+            for (peer, peer_id) in new_region
+                .mut_peers()
+                .iter_mut()
+                .zip(req.get_new_peer_ids())
+            {
+                peer.set_id(*peer_id);
+            }
+            regions.push(new_region);
+        }
+
+        if right_derive {
+            derived.set_start_key(keys.pop_front().unwrap());
+            regions.push(derived.clone());
+        }
 
         // todo(SpadeA): Here: we use a temporary solution that we use checkpoint API to
         // clone new tablets. It may cause large jitter as we need to flush the

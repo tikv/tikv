@@ -1935,65 +1935,6 @@ pub fn validate_and_get_split_keys(
     Ok(keys)
 }
 
-pub fn init_split_regions(
-    store_id: u64,
-    split_reqs: &BatchSplitRequest,
-    derived: &mut Region,
-    keys: &mut VecDeque<Vec<u8>>,
-) -> (Vec<Region>, HashMap<u64, NewSplitPeer>) {
-    let new_region_cnt = split_reqs.get_requests().len();
-    let new_version = derived.get_region_epoch().get_version() + new_region_cnt as u64;
-    derived.mut_region_epoch().set_version(new_version);
-
-    let mut regions = Vec::with_capacity(new_region_cnt + 1);
-    let right_derive = split_reqs.get_right_derive();
-    // Note that the split requests only contain ids for new regions, so we need
-    // to handle new regions and old region separately.
-    if right_derive {
-        // So the range of new regions is [old_start_key, split_key1, ...,
-        // last_split_key].
-        keys.push_front(derived.get_start_key().to_vec());
-    } else {
-        // So the range of new regions is [split_key1, ..., last_split_key,
-        // old_end_key].
-        keys.push_back(derived.get_end_key().to_vec());
-        derived.set_end_key(keys.front().unwrap().to_vec());
-        regions.push(derived.clone());
-    }
-
-    let mut new_split_regions: HashMap<u64, NewSplitPeer> = HashMap::default();
-    for req in split_reqs.get_requests() {
-        let mut new_region = Region::default();
-        new_region.set_id(req.get_new_region_id());
-        new_region.set_region_epoch(derived.get_region_epoch().to_owned());
-        new_region.set_start_key(keys.pop_front().unwrap());
-        new_region.set_end_key(keys.front().unwrap().to_vec());
-        new_region.set_peers(derived.get_peers().to_vec().into());
-        for (peer, peer_id) in new_region
-            .mut_peers()
-            .iter_mut()
-            .zip(req.get_new_peer_ids())
-        {
-            peer.set_id(*peer_id);
-        }
-        new_split_regions.insert(
-            new_region.get_id(),
-            NewSplitPeer {
-                peer_id: find_peer(&new_region, store_id).unwrap().get_id(),
-                result: None,
-            },
-        );
-        regions.push(new_region);
-    }
-
-    if right_derive {
-        derived.set_start_key(keys.pop_front().unwrap());
-        regions.push(derived.clone());
-    }
-
-    (regions, new_split_regions)
-}
-
 // Admin commands related.
 impl<EK> ApplyDelegate<EK>
 where
@@ -2463,21 +2404,73 @@ where
         PEER_ADMIN_CMD_COUNTER.batch_split.all.inc();
 
         let split_reqs = req.get_splits();
+        let mut keys = validate_and_get_split_keys(split_reqs, &self.region)?;
         let mut derived = self.region.clone();
-
-        let mut split_keys = validate_and_get_split_keys(split_reqs, &self.region)?;
 
         info!(
             "split region";
             "region_id" => self.region_id(),
             "peer_id" => self.id(),
             "region" => ?derived,
-            "keys" => %KeysInfoFormatter(split_keys.iter()),
+            "keys" => %KeysInfoFormatter(keys.iter()),
         );
 
-        let (regions, mut new_split_regions) =
-            init_split_regions(ctx.store_id, split_reqs, &mut derived, &mut split_keys);
+        let new_region_cnt = split_reqs.get_requests().len();
+        let new_version = derived.get_region_epoch().get_version() + new_region_cnt as u64;
+        derived.mut_region_epoch().set_version(new_version);
 
+        let right_derive = split_reqs.get_right_derive();
+        let mut regions = Vec::with_capacity(new_region_cnt + 1);
+        // Note that the split requests only contain ids for new regions, so we need
+        // to handle new regions and old region separately.
+        if right_derive {
+            // So the range of new regions is [old_start_key, split_key1, ...,
+            // last_split_key].
+            keys.push_front(derived.get_start_key().to_vec());
+        } else {
+            // So the range of new regions is [split_key1, ..., last_split_key,
+            // old_end_key].
+            keys.push_back(derived.get_end_key().to_vec());
+            derived.set_end_key(keys.front().unwrap().to_vec());
+            regions.push(derived.clone());
+        }
+
+        // Init split regions' meta info
+        let mut new_split_regions: HashMap<u64, NewSplitPeer> = HashMap::default();
+        for req in split_reqs.get_requests() {
+            let mut new_region = Region::default();
+            new_region.set_id(req.get_new_region_id());
+            new_region.set_region_epoch(derived.get_region_epoch().to_owned());
+            new_region.set_start_key(keys.pop_front().unwrap());
+            new_region.set_end_key(keys.front().unwrap().to_vec());
+            new_region.set_peers(derived.get_peers().to_vec().into());
+            for (peer, peer_id) in new_region
+                .mut_peers()
+                .iter_mut()
+                .zip(req.get_new_peer_ids())
+            {
+                peer.set_id(*peer_id);
+            }
+            new_split_regions.insert(
+                new_region.get_id(),
+                NewSplitPeer {
+                    peer_id: find_peer(&new_region, ctx.store_id).unwrap().get_id(),
+                    result: None,
+                },
+            );
+            regions.push(new_region);
+        }
+
+        if right_derive {
+            derived.set_start_key(keys.pop_front().unwrap());
+            regions.push(derived.clone());
+        }
+
+        // Generally, a peer is created in pending_create_peers when it is
+        // created by raft_message (or by split here) and removed from
+        // pending_create_peers when it has applied the snapshot. So, if the
+        // peer of the split region is already created by raft_message in
+        // pending_create_peers ,we decide to replace it.
         let mut replace_regions = HashSet::default();
         {
             let mut pending_create_peers = ctx.pending_create_peers.lock().unwrap();
@@ -2523,6 +2516,9 @@ where
                             self.tag, region_id, new_split_peer.peer_id, state
                         )
                     }
+                    // If the peer's state is already persisted, add some info in
+                    // new_split_peer.result so that we will skip this region in later
+                    // executions.
                     already_exist_regions.push((*region_id, new_split_peer.peer_id));
                     new_split_peer.result = Some(format!("state {:?} exist in kv engine", state));
                 }
