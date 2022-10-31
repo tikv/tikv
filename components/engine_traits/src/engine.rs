@@ -40,6 +40,7 @@ pub trait KvEngine:
     + Clone
     + Debug
     + Unpin
+    + Checkpointable
     + 'static
 {
     /// A consistent read-only snapshot of the database
@@ -264,9 +265,6 @@ pub trait TabletFactory<EK>: TabletAccessor<EK> + Send + Sync {
     fn exists_raw(&self, path: &Path) -> bool;
 
     /// Get the tablet path by id and suffix
-    ///
-    /// Prefix is used in special situations.
-    /// Ex: split/merge.
     fn tablet_path(&self, id: u64, suffix: u64) -> PathBuf {
         self.tablet_path_with_prefix("", id, suffix)
     }

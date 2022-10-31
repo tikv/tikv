@@ -1900,7 +1900,7 @@ mod confchange_cmd_metric {
 }
 
 // Validate the request and the split keys
-pub fn validate_and_get_split_keys(
+pub fn extract_split_keys(
     split_reqs: &BatchSplitRequest,
     region_to_split: &Region,
 ) -> Result<VecDeque<Vec<u8>>> {
@@ -1930,7 +1930,7 @@ pub fn validate_and_get_split_keys(
         keys.push_back(split_key.to_vec());
     }
 
-    util::check_key_in_region(keys.back().unwrap(), region_to_split)?;
+    util::check_key_in_region_exclusive(keys.back().unwrap(), region_to_split)?;
 
     Ok(keys)
 }
@@ -2404,7 +2404,7 @@ where
         PEER_ADMIN_CMD_COUNTER.batch_split.all.inc();
 
         let split_reqs = req.get_splits();
-        let mut keys = validate_and_get_split_keys(split_reqs, &self.region)?;
+        let mut keys = extract_split_keys(split_reqs, &self.region)?;
         let mut derived = self.region.clone();
 
         info!(

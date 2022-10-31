@@ -343,6 +343,8 @@ pub mod kv {
         #[inline]
         fn mark_tombstone(&self, region_id: u64, suffix: u64) {
             let path = self.tablet_path(region_id, suffix).join(TOMBSTONE_MARK);
+            // When the full directory path does not exsit, create will return error and in
+            // this case, we just ignore it.
             let _ = std::fs::File::create(&path);
             {
                 let mut reg = self.registry.lock().unwrap();

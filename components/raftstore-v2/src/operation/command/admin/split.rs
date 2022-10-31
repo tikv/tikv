@@ -19,7 +19,7 @@ use raft::{eraftpb::Message, prelude::MessageType, RawNode};
 use raftstore::{
     coprocessor::RegionChangeReason,
     store::{
-        fsm::apply::{self, validate_and_get_split_keys, ApplyResult, NewSplitPeer},
+        fsm::apply::{self, extract_split_keys, ApplyResult, NewSplitPeer},
         metrics::PEER_ADMIN_CMD_COUNTER,
         util::{self, KeysInfoFormatter},
         InspectedRaftMessage, PdTask, PeerPessimisticLocks, PeerStat, ReadDelegate, ReadProgress,
@@ -71,7 +71,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         let mut derived = self.region_state().get_region().clone();
         let region_id = derived.id;
 
-        let mut keys = validate_and_get_split_keys(split_reqs, self.region_state().get_region())?;
+        let mut keys = extract_split_keys(split_reqs, self.region_state().get_region())?;
 
         info!(
             self.logger,

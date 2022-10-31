@@ -154,6 +154,8 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
     #[inline]
     fn mark_tombstone(&self, region_id: u64, suffix: u64) {
         let path = self.tablet_path(region_id, suffix).join(TOMBSTONE_MARK);
+        // When the full directory path does not exsit, create will return error and in
+        // this case, we just ignore it.
         let _ = std::fs::File::create(&path);
         debug!("tombstone tablet"; "region_id" => region_id, "suffix" => suffix);
         {
@@ -235,7 +237,7 @@ impl TabletAccessor<RocksEngine> for KvEngineFactoryV2 {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::{OpenOptions, TabletFactory, CF_WRITE};
+    use engine_traits::{OpenOptions, TabletFactory, CF_WRITE, SPLIT_PREFIX};
 
     use super::*;
     use crate::{config::TikvConfig, server::KvEngineFactoryBuilder};
@@ -434,7 +436,7 @@ mod tests {
 
         assert!(
             factory
-                .tablet_path_with_prefix("split_", 1, 10)
+                .tablet_path_with_prefix(SPLIT_PREFIX, 1, 10)
                 .ends_with("split_1_10")
         );
     }
