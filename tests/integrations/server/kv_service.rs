@@ -603,8 +603,8 @@ fn test_mvcc_flashback_failed_in_first_batch() {
     let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
     let mut ts = 0;
     for i in 0..2000 {
-        let v = format!("value@{}", i).into_bytes();
         let k = format!("key@{}", i % 1000).into_bytes();
+        let v = format!("value@{}", i).into_bytes();
         // Prewrite
         ts += 1;
         let prewrite_start_version = ts;
@@ -642,22 +642,38 @@ fn test_mvcc_flashback_failed_in_first_batch() {
     fail::cfg("flashback_failed_in_first_batch", "return").unwrap();
     must_flashback_to_version(&client, ctx.clone(), 5, ts + 1, ts + 2);
     fail::remove("flashback_failed_in_first_batch");
+    // The first batch of writes are deleted.
+    must_kv_read_equal(
+        &client,
+        ctx.clone(),
+        b"key@1".to_vec(),
+        b"value@1".to_vec(),
+        ts + 2,
+    );
     // Subsequent batches of writes are not deleted.
     must_kv_read_equal(
         &client,
         ctx.clone(),
-        b"key@500".to_vec(),
-        b"value@1500".to_vec(),
-        ts,
+        b"key@999".to_vec(),
+        b"value@1999".to_vec(),
+        ts + 2,
     );
     // Flashback needs to be continued.
     must_flashback_to_version(&client, ctx.clone(), 5, ts + 1, ts + 2);
     // Flashback again to check if any error occurs:)
     must_flashback_to_version(&client, ctx.clone(), 5, ts + 1, ts + 2);
     ts += 2;
+    // The first batch of writes are deleted.
+    must_kv_read_equal(
+        &client,
+        ctx.clone(),
+        b"key@1".to_vec(),
+        b"value@1".to_vec(),
+        ts,
+    );
     // Subsequent batches of writes are deleted.
     assert_eq!(
-        kv_read(&client, ctx, b"key@500".to_vec(), ts).value,
+        kv_read(&client, ctx, b"key@999".to_vec(), ts).value,
         b"".to_vec()
     );
 }
