@@ -6,8 +6,8 @@ use batch_system::BasicMailbox;
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::internal::SelectHandle;
 use engine_traits::{
-    CfOptions, DeleteStrategy, KvEngine, MiscExt, OpenOptions, RaftEngine, RaftEngineReadOnly,
-    RaftLogBatch, Range, TabletFactory, CF_DEFAULT, DATA_CFS, SPLIT_PREFIX,
+    CfOptions, Checkpointer, DeleteStrategy, KvEngine, MiscExt, OpenOptions, RaftEngine,
+    RaftEngineReadOnly, RaftLogBatch, Range, TabletFactory, CF_DEFAULT, DATA_CFS, SPLIT_PREFIX,
 };
 use keys::enc_end_key;
 use kvproto::{
@@ -131,6 +131,13 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         // following PR.
         let region_id = derived.get_id();
         let tablet = self.tablet().unwrap();
+        let mut checkpointer = tablet.new_checkpointer().unwrap_or_else(|e| {
+            panic!(
+                "{:?} fails to create checkpoint object: {:?}",
+                self.logger.list(),
+                e
+            )
+        });
 
         for new_region in &regions {
             let new_region_id = new_region.id;
@@ -143,8 +150,8 @@ impl<EK: KvEngine, R> Apply<EK, R> {
                 new_region_id,
                 RAFT_INIT_LOG_INDEX,
             );
-            tablet
-                .create_checkpoint(&split_temp_path)
+            checkpointer
+                .create_at(&split_temp_path, None, 0)
                 .unwrap_or_else(|e| {
                     panic!(
                         "{:?} fails to create checkpoint with path {:?}: {:?}",
@@ -158,9 +165,8 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         let derived_temp_path =
             self.tablet_factory()
                 .tablet_path_with_prefix(SPLIT_PREFIX, region_id, log_index);
-        // Change the tablet path by using the new tablet suffix
-        tablet
-            .create_checkpoint(&derived_temp_path)
+        checkpointer
+            .create_at(&derived_temp_path, None, 0)
             .unwrap_or_else(|e| {
                 panic!(
                     "{:?} fails to create checkpoint with path {:?}: {:?}",

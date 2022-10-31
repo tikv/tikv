@@ -1,7 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{path::Path, result};
-
 use engine_traits::{
     CfNamesExt, DeleteStrategy, ImportExt, IterOptions, Iterable, Iterator, MiscExt, Mutable,
     Range, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt, ALL_CFS,
@@ -327,12 +325,6 @@ impl MiscExt for RocksEngine {
                 .get_property_int(ROCKSDB_IS_WRITE_STOPPED)
                 .unwrap_or_default()
                 != 0
-    }
-
-    fn create_checkpoint(&self, basedb_out_dir: &Path) -> result::Result<(), String> {
-        self.as_inner()
-            .new_checkpointer()?
-            .create_at(basedb_out_dir, None, 0)
     }
 }
 

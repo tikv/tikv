@@ -1,7 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{path::Path, result};
-
 use engine_traits::{DeleteStrategy, MiscExt, Range, Result};
 
 use crate::engine::PanicEngine;
@@ -74,10 +72,6 @@ impl MiscExt for PanicEngine {
     }
 
     fn is_stalled_or_stopped(&self) -> bool {
-        panic!()
-    }
-
-    fn create_checkpoint(&self, basedb_out_dir: &Path) -> result::Result<(), String> {
         panic!()
     }
 }
