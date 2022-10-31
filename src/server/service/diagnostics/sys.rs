@@ -312,6 +312,7 @@ fn cpu_hardware_info(collector: &mut Vec<ServerInfoItem>) {
         "aarch64" => "arm64",
         "powerpc" => "ppc",
         "powerpc64" => "ppc64",
+        "loongarch64" => "loongarch64",
         _ => std::env::consts::ARCH,
     };
     infos.push(("cpu-arch", arch.to_string()));
