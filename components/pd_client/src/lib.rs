@@ -3,6 +3,7 @@
 extern crate tikv_alloc;
 
 mod client;
+mod client_v2;
 mod feature_gate;
 pub mod metrics;
 mod tso;

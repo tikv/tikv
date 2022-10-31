@@ -34,9 +34,9 @@ const MAX_BATCH_SIZE: usize = 64;
 
 const MAX_PENDING_COUNT: usize = 1 << 16;
 
-struct TimestampRequest {
-    sender: oneshot::Sender<TimeStamp>,
-    count: u32,
+pub struct TimestampRequest {
+    pub sender: oneshot::Sender<TimeStamp>,
+    pub count: u32,
 }
 
 /// The timestamp oracle (TSO) which provides monotonically increasing
@@ -162,16 +162,16 @@ async fn run_tso(
     info!("TSO worker terminated"; "sender_cause" => ?send_res.err(), "receiver_cause" => ?recv_res.err());
 }
 
-struct RequestGroup {
+pub struct RequestGroup {
     tso_request: TsoRequest,
     requests: Vec<TimestampRequest>,
 }
 
-struct TsoRequestStream<'a> {
-    cluster_id: u64,
-    request_rx: &'a mut mpsc::Receiver<TimestampRequest>,
-    pending_requests: Rc<RefCell<VecDeque<RequestGroup>>>,
-    self_waker: Rc<AtomicWaker>,
+pub struct TsoRequestStream<'a> {
+    pub cluster_id: u64,
+    pub request_rx: &'a mut mpsc::Receiver<TimestampRequest>,
+    pub pending_requests: Rc<RefCell<VecDeque<RequestGroup>>>,
+    pub self_waker: Rc<AtomicWaker>,
 }
 
 impl<'a> Stream for TsoRequestStream<'a> {
@@ -180,21 +180,20 @@ impl<'a> Stream for TsoRequestStream<'a> {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let pending_requests = self.pending_requests.clone();
         let mut pending_requests = pending_requests.borrow_mut();
-        let mut requests = Vec::new();
 
-        while requests.len() < MAX_BATCH_SIZE && pending_requests.len() < MAX_PENDING_COUNT {
-            match self.request_rx.poll_recv(cx) {
-                Poll::Ready(Some(sender)) => {
-                    requests.push(sender);
+        if pending_requests.len() < MAX_PENDING_COUNT {
+            let mut requests = Vec::new();
+            while requests.len() < MAX_BATCH_SIZE {
+                match self.request_rx.poll_recv(cx) {
+                    Poll::Ready(Some(sender)) => {
+                        requests.push(sender);
+                    }
+                    Poll::Ready(None) if requests.is_empty() => {
+                        return Poll::Ready(None);
+                    }
+                    _ => break,
                 }
-                Poll::Ready(None) if requests.is_empty() => {
-                    return Poll::Ready(None);
-                }
-                _ => break,
             }
-        }
-
-        if !requests.is_empty() {
             let mut req = TsoRequest::default();
             req.mut_header().cluster_id = self.cluster_id;
             req.count = requests.iter().map(|r| r.count).sum();
@@ -207,13 +206,13 @@ impl<'a> Stream for TsoRequestStream<'a> {
             PD_PENDING_TSO_REQUEST_GAUGE.set(pending_requests.len() as i64);
 
             let write_flags = WriteFlags::default().buffer_hint(false);
-            Poll::Ready(Some((req, write_flags)))
-        } else {
-            // Set the waker to the context, then the stream can be waked up after the
-            // pending queue is no longer full.
-            self.self_waker.register(cx.waker());
-            Poll::Pending
+            return Poll::Ready(Some((req, write_flags)));
         }
+
+        // Set the waker to the context, then the stream can be waked up after the
+        // pending queue is no longer full.
+        self.self_waker.register(cx.waker());
+        Poll::Pending
     }
 }
 

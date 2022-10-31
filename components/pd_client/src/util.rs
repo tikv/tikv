@@ -51,6 +51,7 @@ const MAX_RETRY_DURATION: Duration = Duration::from_secs(10);
 const GLOBAL_RECONNECT_INTERVAL: Duration = Duration::from_millis(100); // 0.1s
 pub const REQUEST_RECONNECT_INTERVAL: Duration = Duration::from_secs(1); // 1s
 
+#[derive(Clone)]
 pub struct TargetInfo {
     target_url: String,
     via: String,
@@ -524,6 +525,7 @@ pub type StubTuple = (
     TimestampOracle,
 );
 
+#[derive(Clone)]
 pub struct PdConnector {
     env: Arc<Environment>,
     security_mgr: Arc<SecurityManager>,
@@ -680,7 +682,7 @@ impl PdConnector {
     // not empty and it can connect the leader now which represents the network
     // partition problem to leader may be recovered 3. the member information of
     // PD has been changed
-    async fn reconnect_pd(
+    pub async fn reconnect_pd(
         &self,
         members_resp: GetMembersResponse,
         direct_connected: bool,
