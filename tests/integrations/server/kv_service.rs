@@ -599,7 +599,7 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
 
 #[test]
 #[cfg(feature = "failpoints")]
-fn test_mvcc_flashback_panic_in_first_batch() {
+fn test_mvcc_flashback_failed_in_first_batch() {
     let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
     let mut ts = 0;
     for i in 0..2000 {
@@ -635,9 +635,9 @@ fn test_mvcc_flashback_panic_in_first_batch() {
         must_kv_read_equal(&client, ctx.clone(), k.clone(), v.clone(), ts)
     }
     // Flashback
-    fail::cfg("flashback_panic_in_first_batch", "return").unwrap();
+    fail::cfg("flashback_failed_in_first_batch", "return").unwrap();
     must_flashback_to_version(&client, ctx.clone(), 5, ts + 1, ts + 2);
-    fail::remove("flashback_panic_in_first_batch");
+    fail::remove("flashback_failed_in_first_batch");
     // Flashback needs to be continued.
     must_flashback_to_version(&client, ctx.clone(), 5, ts + 1, ts + 2);
     ts += 2;

@@ -1785,6 +1785,7 @@ fn future_flashback_to_version<
         } else if let Err(e) = v {
             resp.set_error(format!("{}", e));
         } else {
+            // Only finish flashback when Flashback executed successfully.
             fail_point!("skip_finish_flashback_to_version", |_| {
                 Ok(FlashbackToVersionResponse::default())
             });

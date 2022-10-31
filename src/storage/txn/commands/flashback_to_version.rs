@@ -84,7 +84,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
         write_data.extra.for_flashback = true;
         let ctx = self.ctx.clone();
         let pr = (|s: FlashbackToVersion| {
-            fail_point!("flashback_panic_in_first_batch", |_| { ProcessResult::Res });
+            fail_point!("flashback_failed_in_first_batch", |_| {
+                ProcessResult::Res
+            });
             if next_lock_key.is_none() && next_write_key.is_none() {
                 ProcessResult::Res
             } else {

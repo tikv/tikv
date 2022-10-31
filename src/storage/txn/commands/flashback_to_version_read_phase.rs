@@ -60,7 +60,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
         }
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &self.ctx);
         // Scan the locks.
-        let (key_locks, has_remain_locks) = flashback_to_version_read_lock(
+        let (mut key_locks, has_remain_locks) = flashback_to_version_read_lock(
             &mut reader,
             &self.next_lock_key,
             &self.end_key,
@@ -86,7 +86,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
             Ok(ProcessResult::Res)
         } else {
             let next_lock_key = if has_remain_locks {
-                key_locks.last().map(|(key, _)| key.clone())
+                key_locks.pop().map(|(key, _)| key.clone())
             } else {
                 None
             };
