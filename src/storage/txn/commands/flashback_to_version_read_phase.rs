@@ -99,21 +99,37 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
             } else {
                 None
             };
-            let next_cmd = FlashbackToVersion {
-                ctx: self.ctx,
-                deadline: self.deadline,
-                start_ts: self.start_ts,
-                commit_ts: self.commit_ts,
-                version: self.version,
-                end_key: self.end_key,
-                key_locks,
-                key_old_writes,
-                next_lock_key,
-                next_write_key,
-            };
-            Ok(ProcessResult::NextCommand {
-                cmd: Command::FlashbackToVersion(next_cmd),
-            })
+            if key_old_writes.is_empty() && key_locks.is_empty() {
+                let next_cmd = FlashbackToVersionReadPhase {
+                    ctx: self.ctx,
+                    deadline: self.deadline,
+                    start_ts: self.start_ts,
+                    commit_ts: self.commit_ts,
+                    version: self.version,
+                    end_key: self.end_key,
+                    next_lock_key,
+                    next_write_key,
+                };
+                Ok(ProcessResult::NextCommand {
+                    cmd: Command::FlashbackToVersionReadPhase(next_cmd),
+                })
+            } else {
+                let next_cmd = FlashbackToVersion {
+                    ctx: self.ctx,
+                    deadline: self.deadline,
+                    start_ts: self.start_ts,
+                    commit_ts: self.commit_ts,
+                    version: self.version,
+                    end_key: self.end_key,
+                    key_locks,
+                    key_old_writes,
+                    next_lock_key,
+                    next_write_key,
+                };
+                Ok(ProcessResult::NextCommand {
+                    cmd: Command::FlashbackToVersion(next_cmd),
+                })
+            }
         }
     }
 }

@@ -1224,7 +1224,7 @@ pub fn must_flashback_to_version(
     version: u64,
     start_ts: u64,
     commit_ts: u64,
-) -> FlashbackToVersionResponse {
+) {
     let mut prepare_req = PrepareFlashbackToVersionRequest::default();
     prepare_req.set_context(ctx.clone());
     client
@@ -1237,7 +1237,9 @@ pub fn must_flashback_to_version(
     req.version = version;
     req.start_key = b"a".to_vec();
     req.end_key = b"z".to_vec();
-    client.kv_flashback_to_version(&req).unwrap()
+    let resp = client.kv_flashback_to_version(&req).unwrap();
+    assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+    assert!(resp.get_error().is_empty(), "{:?}", resp.get_error());
 }
 
 // A helpful wrapper to make the test logic clear

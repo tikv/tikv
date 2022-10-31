@@ -2005,7 +2005,7 @@ pub mod tests {
                 ],
                 expect_is_remain: true,
             },
-            // k1 and k2 have old version writes at version 8.
+            // k1 and k2 have old version writes at version 3.
             Case {
                 start_key: None,
                 end_key: None,

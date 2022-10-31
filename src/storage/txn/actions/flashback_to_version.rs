@@ -62,21 +62,29 @@ pub fn flashback_to_version_read_write<S: Snapshot>(
     let mut key_old_writes = Vec::with_capacity(FLASHBACK_BATCH_SIZE - key_locks_len);
     // Check the latest commit ts to make sure there is no commit change during the
     // flashback, otherwise, we need to abort the flashback.
-    for (key, commit_ts, old_write) in key_ts_old_writes {
+    for (key, commit_ts, old_write) in key_ts_old_writes.clone() {
         if commit_ts > flashback_commit_ts {
             return Err(Error::from(ErrorInner::InvalidTxnTso {
                 start_ts: flashback_start_ts,
                 commit_ts: flashback_commit_ts,
             }));
         }
-        // Since the first flashback preparation phase make sure there will be no writes
-        // other than flashback after it, so we need to check if there is already a
-        // successful flashback result, and if so, just finish the flashback ASAP.
+        // Although the first flashback preparation phase make sure there will be no
+        // writes other than flashback after it, we can't return it ASAP.
+        // Suppose the second phase procedure contains two batches to flashback. After
+        // the first batch is committed, if the region is down, client will retry the
+        // flashback from the very first beginning, because the data in the first batch
+        // has been written the flashbacked data with the same commit_ts, So we need to
+        // skip it to make sure to keep writing the data that is needed.
         if commit_ts == flashback_commit_ts {
-            key_old_writes.clear();
-            return Ok((key_old_writes, false));
+            continue;
         }
         key_old_writes.push((key, old_write));
+    }
+    if key_old_writes.is_empty() {
+        if let Some(last_write) = key_ts_old_writes.last() {
+            key_old_writes.push((last_write.0.clone(), last_write.2.clone()));
+        }
     }
     Ok((key_old_writes, has_remain_writes))
 }
@@ -191,7 +199,7 @@ pub mod tests {
         assert!(!has_remain_locks);
         let (key_old_writes, has_remain_writes) = flashback_to_version_read_write(
             &mut reader,
-            0,
+            key_locks.len(),
             &Some(key.clone()),
             &None,
             version,
