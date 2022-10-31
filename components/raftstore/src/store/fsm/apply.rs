@@ -1392,7 +1392,7 @@ where
                 ExecResult::CommitMerge { ref region, .. } => (Some(region.clone()), None),
                 ExecResult::RollbackMerge { ref region, .. } => (Some(region.clone()), None),
                 ExecResult::IngestSst { ref ssts } => (None, Some(ssts.clone())),
-                ExecResult::SetFlashbackState { region } => (Some(region.clone()), None),
+                ExecResult::SetFlashbackState { ref region } => (Some(region.clone()), None),
                 _ => (None, None),
             },
             _ => (None, None),
@@ -2829,30 +2829,27 @@ where
         ctx: &mut ApplyContext<EK>,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
-        let region_id = self.region_id();
-        let region_state_key = keys::region_state_key(region_id);
-        let mut old_state = match ctx
-            .engine
-            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
-        {
-            Ok(Some(s)) => s,
-            _ => {
-                return Err(box_err!("failed to get region state of {}", region_id));
-            }
-        };
         let is_in_flashback = req.get_cmd_type() == AdminCmdType::PrepareFlashback;
-        old_state.mut_region().set_is_in_flashback(is_in_flashback);
+        // Modify the region meta in memory.
         let mut region = self.region.clone();
         region.set_is_in_flashback(is_in_flashback);
-        ctx.kv_wb_mut()
-            .put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &old_state)
-            .unwrap_or_else(|e| {
-                error!(
-                    "{} failed to change flashback state to {:?} for region {}: {:?}",
-                    self.tag, req, region_id, e
-                )
-            });
+        // Modify the `RegionLocalState` persisted in disk.
+        write_peer_state(ctx.kv_wb_mut(), &region, PeerState::Normal, None).unwrap_or_else(|e| {
+            panic!(
+                "{} failed to change the flashback state to {} for region {:?}: {:?}",
+                self.tag, is_in_flashback, region, e
+            )
+        });
 
+        match req.get_cmd_type() {
+            AdminCmdType::PrepareFlashback => {
+                PEER_ADMIN_CMD_COUNTER.prepare_flashback.success.inc();
+            }
+            AdminCmdType::FinishFlashback => {
+                PEER_ADMIN_CMD_COUNTER.finish_flashback.success.inc();
+            }
+            _ => unreachable!(),
+        }
         Ok((
             AdminResponse::default(),
             ApplyResult::Res(ExecResult::SetFlashbackState { region }),
