@@ -83,7 +83,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
         );
         // Check next key firstly.
         let next_lock_key = if has_remain_locks {
-            key_locks.pop().map(|(key, _)| key.clone())
+            key_locks.pop().map(|(key, _)| key)
         } else {
             None
         };
@@ -97,7 +97,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
             None
         };
         if key_locks.is_empty() && key_old_writes.is_empty() {
-            if next_write_key.is_none() || next_lock_key.is_none() {
+            if next_write_key.is_some() || next_lock_key.is_some() {
                 // When there are no keys that need to be flashbacked in this batch, but since
                 // the next key is not none, we have to continue reading the
                 // next batch.
