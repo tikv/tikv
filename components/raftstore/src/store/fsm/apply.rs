@@ -468,7 +468,7 @@ where
             use_delete_range: cfg.use_delete_range,
             perf_context: engine.get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply),
             yield_duration: cfg.apply_yield_duration.0,
-            yield_msg_size: cfg.apply_yield_msg_size.0,
+            yield_msg_size: cfg.apply_yield_write_size.0,
             delete_ssts: vec![],
             pending_delete_ssts: vec![],
             store_id,
@@ -4080,7 +4080,7 @@ where
                 }
                 _ => {}
             }
-            self.apply_ctx.yield_msg_size = incoming.apply_yield_msg_size.0;
+            self.apply_ctx.yield_msg_size = incoming.apply_yield_write_size.0;
             update_cfg(&incoming.apply_batch_system);
         }
     }
@@ -5657,7 +5657,7 @@ mod tests {
 
         // update apply yeild size to 64kb
         _ = cfg.update(|c| {
-            c.apply_yield_msg_size = ReadableSize::kb(64);
+            c.apply_yield_write_size = ReadableSize::kb(64);
             Ok::<(), ()>(())
         });
         // only trigger one time of
