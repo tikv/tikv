@@ -1930,7 +1930,7 @@ pub fn extract_split_keys(
         keys.push_back(split_key.to_vec());
     }
 
-    util::check_key_in_region(keys.back().unwrap(), region_to_split)?;
+    util::check_key_in_region_exclusive(keys.back().unwrap(), region_to_split)?;
 
     Ok(keys)
 }
