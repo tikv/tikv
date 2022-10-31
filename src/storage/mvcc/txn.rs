@@ -37,16 +37,19 @@ impl GcInfo {
 /// waiting for locks.
 #[derive(Debug, PartialEq)]
 pub struct ReleasedLock {
-    /// The hash value of the lock.
-    pub hash: u64,
+    pub start_ts: TimeStamp,
+    pub commit_ts: TimeStamp,
+    pub key: Key,
     /// Whether it is a pessimistic lock.
     pub pessimistic: bool,
 }
 
 impl ReleasedLock {
-    fn new(key: &Key, pessimistic: bool) -> Self {
+    pub fn new(start_ts: TimeStamp, commit_ts: TimeStamp, key: Key, pessimistic: bool) -> Self {
         Self {
-            hash: key.gen_hash(),
+            start_ts,
+            commit_ts,
+            key,
             pessimistic,
         }
     }
@@ -114,8 +117,17 @@ impl MvccTxn {
         self.modifies.push(Modify::PessimisticLock(key, lock))
     }
 
-    pub(crate) fn unlock_key(&mut self, key: Key, pessimistic: bool) -> Option<ReleasedLock> {
-        let released = ReleasedLock::new(&key, pessimistic);
+    /// Append a modify that unlocks the key. If the lock is removed due to
+    /// committing, a non-zero `commit_ts` needs to be provided; otherwise if
+    /// the lock is removed due to rolling back, `commit_ts` must be set to
+    /// zero.
+    pub(crate) fn unlock_key(
+        &mut self,
+        key: Key,
+        pessimistic: bool,
+        commit_ts: TimeStamp,
+    ) -> Option<ReleasedLock> {
+        let released = ReleasedLock::new(self.start_ts, commit_ts, key.clone(), pessimistic);
         let write = Modify::Delete(CF_LOCK, key);
         self.write_size += write.size();
         self.modifies.push(write);

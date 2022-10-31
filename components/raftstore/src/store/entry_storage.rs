@@ -11,6 +11,7 @@ use std::{
     mem,
     ops::Range,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use collections::HashMap;
@@ -21,9 +22,9 @@ use kvproto::{
     raft_serverpb::{RaftApplyState, RaftLocalState},
 };
 use protobuf::Message;
-use raft::{prelude::*, util::limit_size, GetEntriesContext, StorageError};
+use raft::{prelude::*, util::limit_size, GetEntriesContext, StorageError, INVALID_INDEX};
 use tikv_alloc::TraceEvent;
-use tikv_util::{box_err, debug, info, time::Instant, warn, worker::Scheduler};
+use tikv_util::{box_err, debug, error, info, time::Instant, warn, worker::Scheduler};
 
 use super::{
     metrics::*, peer_storage::storage_error, WriteTask, MEMTRACE_ENTRY_CACHE, RAFT_INIT_LOG_INDEX,
@@ -35,6 +36,7 @@ const MAX_ASYNC_FETCH_TRY_CNT: usize = 3;
 const SHRINK_CACHE_CAPACITY: usize = 64;
 const ENTRY_MEM_SIZE: usize = mem::size_of::<Entry>();
 
+pub const MAX_WARMED_UP_CACHE_KEEP_TIME: Duration = Duration::from_secs(10);
 pub const MAX_INIT_ENTRY_COUNT: usize = 1024;
 
 #[inline]
@@ -145,6 +147,25 @@ impl EntryCache {
             mem_size_change += self.shrink_if_necessary();
             self.flush_mem_size_change(mem_size_change);
         }
+    }
+
+    /// Push entries to the left of the cache.
+    ///
+    /// When cache is not empty, the index of the last entry in entries
+    /// should be equal to `cache first index - 1`. When cache is
+    /// empty, it should be equal to the store's last index. Otherwise,
+    /// append new entries may fail due to unexpected hole.
+    fn prepend(&mut self, entries: Vec<Entry>) {
+        let mut mem_size_change = 0;
+        let old_capacity = self.cache.capacity();
+        for e in entries.into_iter().rev() {
+            mem_size_change += (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64;
+            self.cache.push_front(e);
+        }
+        let new_capacity = self.cache.capacity();
+        mem_size_change += Self::cache_vec_mem_size_change(new_capacity, old_capacity);
+        mem_size_change += self.shrink_if_necessary();
+        self.flush_mem_size_change(mem_size_change);
     }
 
     fn append_impl(&mut self, region_id: u64, peer_id: u64, entries: &[Entry]) -> i64 {
@@ -530,6 +551,76 @@ pub fn init_applied_term<ER: RaftEngine>(
     }
 }
 
+/// When a peer(follower) receives a TransferLeaderMsg, it enters the
+/// CacheWarmupState. When the peer becomes leader or it doesn't
+/// become leader before a deadline, it exits the state.
+#[derive(Clone, Debug)]
+pub struct CacheWarmupState {
+    range: (u64, u64),
+    is_task_timeout: bool,
+    is_stale: bool,
+    started_at: Instant,
+}
+
+impl CacheWarmupState {
+    pub fn new() -> Self {
+        CacheWarmupState::new_with_range(INVALID_INDEX, INVALID_INDEX)
+    }
+
+    pub fn new_with_range(low: u64, high: u64) -> Self {
+        CacheWarmupState {
+            range: (low, high),
+            is_task_timeout: false,
+            is_stale: false,
+            started_at: Instant::now(),
+        }
+    }
+
+    pub fn range(&self) -> (u64, u64) {
+        self.range
+    }
+
+    /// How long has it been in this state.
+    pub fn elapsed(&self) -> Duration {
+        self.started_at.saturating_elapsed()
+    }
+
+    /// Whether the warmup task is already timeout.
+    pub fn is_task_timeout(&self) -> bool {
+        self.is_task_timeout
+    }
+
+    /// Check whether the task is timeout.
+    pub fn check_task_timeout(&mut self, duration: Duration) -> bool {
+        if self.is_task_timeout {
+            return true;
+        }
+        if self.elapsed() > duration {
+            WARM_UP_ENTRY_CACHE_COUNTER.timeout.inc();
+            self.is_task_timeout = true;
+        }
+        self.is_task_timeout
+    }
+
+    /// Check whether this state is stale.
+    pub fn check_stale(&mut self, duration: Duration) -> bool {
+        fail_point!("entry_cache_warmed_up_state_is_stale", |_| true);
+        if self.is_stale {
+            return true;
+        }
+        if self.elapsed() > duration {
+            self.is_stale = true;
+        }
+        self.is_stale
+    }
+}
+
+impl Default for CacheWarmupState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// A subset of `PeerStorage` that focus on accessing log entries.
 pub struct EntryStorage<ER> {
     region_id: u64,
@@ -543,6 +634,7 @@ pub struct EntryStorage<ER> {
     raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
     raftlog_fetch_stats: AsyncFetchStats,
     async_fetch_results: RefCell<HashMap<u64, RaftlogFetchState>>,
+    cache_warmup_state: Option<CacheWarmupState>,
 }
 
 impl<ER: RaftEngine> EntryStorage<ER> {
@@ -576,6 +668,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
             raftlog_fetch_scheduler,
             raftlog_fetch_stats: AsyncFetchStats::default(),
             async_fetch_results: RefCell::new(HashMap::default()),
+            cache_warmup_state: None,
         })
     }
 
@@ -980,8 +1073,129 @@ impl<ER: RaftEngine> EntryStorage<ER> {
         self.last_term = last_term;
     }
 
+    pub fn entry_cache_warmup_state(&self) -> &Option<CacheWarmupState> {
+        &self.cache_warmup_state
+    }
+
+    pub fn entry_cache_warmup_state_mut(&mut self) -> &mut Option<CacheWarmupState> {
+        &mut self.cache_warmup_state
+    }
+
+    pub fn clear_entry_cache_warmup_state(&mut self) {
+        self.cache_warmup_state = None;
+    }
+
+    /// Trigger a task to warm up the entry cache.
+    ///
+    /// This will ensure the range [low..=last_index] are loaded into
+    /// cache. Return the high index of the warmup range if a task is
+    /// successfully triggered.
+    pub fn async_warm_up_entry_cache(&mut self, low: u64) -> Option<u64> {
+        let high = if let Some(first_index) = self.entry_cache_first_index() {
+            if low >= first_index {
+                // Already warmed up.
+                self.cache_warmup_state = Some(CacheWarmupState::new());
+                return None;
+            }
+            // Partially warmed up.
+            first_index
+        } else {
+            self.last_index() + 1
+        };
+
+        // Fetch entries [low, high) to trigger an async fetch task in background.
+        self.cache_warmup_state = Some(CacheWarmupState::new_with_range(low, high));
+        match self.entries(low, high, u64::MAX, GetEntriesContext::empty(true)) {
+            Ok(_) => {
+                // This should not happen, but it's OK :)
+                debug_assert!(false, "entries should not have been fetched");
+                error!("entries are fetched unexpectedly during warming up");
+                None
+            }
+            Err(raft::Error::Store(raft::StorageError::LogTemporarilyUnavailable)) => {
+                WARM_UP_ENTRY_CACHE_COUNTER.started.inc();
+                Some(high)
+            }
+            Err(e) => {
+                error!(
+                    "fetching entries met unexpected error during warming up";
+                    "err" => ?e,
+                );
+                None
+            }
+        }
+    }
+
+    /// Warm up entry cache if the result is valid.
+    ///
+    /// Return true when the warmup operation succeed within the timeout.
+    pub fn maybe_warm_up_entry_cache(&mut self, res: RaftlogFetchResult) -> bool {
+        let low = res.low;
+        // Warm up the entry cache if the low and high index are
+        // exactly the same as the warmup range.
+        let state = self.entry_cache_warmup_state().as_ref().unwrap();
+        let range = state.range();
+        let is_task_timeout = state.is_task_timeout();
+
+        if range.0 != low {
+            return false;
+        }
+
+        match res.ents {
+            Ok(mut entries) => {
+                let last_entry_index = entries.last().map(|e| e.index);
+                if let Some(index) = last_entry_index {
+                    // Generally speaking, when the res.low is the same as the warmup
+                    // range start, the fetch result is exactly used for warmup.
+                    // As the low index of each async_fetch task is different.
+                    // There should exist only one exception. A async fetch task
+                    // with same low index is triggered before the warmup task.
+                    if index + 1 >= range.1 {
+                        let is_valid = if let Some(first_index) = self.entry_cache_first_index() {
+                            range.1 == first_index
+                        } else {
+                            range.1 == self.last_index() + 1
+                        };
+                        assert!(is_valid, "the warmup range should still be valid");
+                        entries.truncate((range.1 - range.0) as usize);
+                        self.cache.prepend(entries);
+                        WARM_UP_ENTRY_CACHE_COUNTER.finished.inc();
+                        fail_point!("on_entry_cache_warmed_up");
+                        return !is_task_timeout;
+                    }
+                }
+                warn!(
+                    "warm up the entry cache failed";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer_id,
+                    "last_entry_index" => last_entry_index.unwrap_or(0),
+                    "expected_high" => range.1,
+                );
+            }
+            Err(e) => {
+                warn!(
+                    "warm up the entry cache failed";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer_id,
+                    "err" => ?e,
+                );
+            }
+        }
+        false
+    }
+
     pub fn compact_entry_cache(&mut self, idx: u64) {
-        self.cache.compact_to(idx);
+        let mut can_compact = true;
+        if let Some(state) = self.entry_cache_warmup_state_mut() {
+            if state.check_stale(MAX_WARMED_UP_CACHE_KEEP_TIME) {
+                self.clear_entry_cache_warmup_state();
+            } else {
+                can_compact = false;
+            }
+        }
+        if can_compact {
+            self.cache.compact_to(idx);
+        }
     }
 
     #[inline]
@@ -1090,6 +1304,12 @@ pub mod tests {
             &[new_padded_entry(101, 1, 1), new_padded_entry(102, 1, 2)],
         );
         assert_eq!(rx.try_recv().unwrap(), 3);
+
+        cache.prepend(vec![new_padded_entry(100, 1, 1)]);
+        assert_eq!(rx.try_recv().unwrap(), 1);
+        cache.persisted = 100;
+        cache.compact_to(101);
+        assert_eq!(rx.try_recv().unwrap(), -1);
 
         // Test size change for one overlapped entry.
         cache.append(0, 0, &[new_padded_entry(102, 2, 3)]);
@@ -1522,6 +1742,7 @@ pub mod tests {
         entries = vec![new_entry(6, 6), new_entry(7, 6)];
         append_ents(&mut store, &entries);
         validate_cache(&store, &entries);
+        store.cache.prepend(vec![new_entry(6, 5)]);
 
         // rewrite old entry
         entries = vec![new_entry(5, 6), new_entry(6, 6)];
@@ -1563,5 +1784,54 @@ pub mod tests {
         validate_cache(&store, &[]);
         // invalid compaction should be ignored.
         store.compact_entry_cache(6);
+    }
+
+    #[test]
+    fn test_async_warm_up_entry_cache() {
+        let ents = vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)];
+
+        let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
+        let region_worker = Worker::new("snap-manager").lazy_build("snap-manager");
+        let region_scheduler = region_worker.scheduler();
+        let (dummy_scheduler, _rx) = dummy_scheduler();
+
+        let mut store = new_storage_from_ents(region_scheduler, dummy_scheduler, &td, &ents);
+        store.cache.compact_to(6);
+        assert_eq!(store.entry_cache_first_index().unwrap(), 6);
+
+        // The return value should be None when it is already warmed up.
+        assert!(store.async_warm_up_entry_cache(6).is_none());
+
+        // The high index should be equal to the entry_cache_first_index.
+        assert_eq!(store.async_warm_up_entry_cache(5).unwrap(), 6);
+
+        store.cache.compact_to(7); // Clean cache.
+        // The high index should be equal to the last_index + 1.
+        assert_eq!(store.async_warm_up_entry_cache(5).unwrap(), 7);
+    }
+
+    #[test]
+    fn test_warmup_entry_cache() {
+        let ents = vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)];
+
+        let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
+        let region_worker = Worker::new("snap-manager").lazy_build("snap-manager");
+        let region_scheduler = region_worker.scheduler();
+        let (dummy_scheduler, _rx) = dummy_scheduler();
+        let mut store = new_storage_from_ents(region_scheduler, dummy_scheduler, &td, &ents);
+        store.cache.compact_to(6);
+        store.cache_warmup_state = Some(CacheWarmupState::new_with_range(5, 6));
+
+        let res = RaftlogFetchResult {
+            ents: Ok(ents[1..3].to_vec()),
+            low: 5,
+            max_size: u64::MAX,
+            hit_size_limit: false,
+            tried_cnt: MAX_ASYNC_FETCH_TRY_CNT,
+            term: 1,
+        };
+        store.maybe_warm_up_entry_cache(res);
+        // Cache should be warmed up.
+        assert_eq!(store.entry_cache_first_index().unwrap(), 5);
     }
 }

@@ -8,8 +8,8 @@ use crate::storage::{
     lock_manager::LockManager,
     txn::{
         commands::{
-            Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
-            WriteResult,
+            Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand,
+            WriteContext, WriteResult,
         },
         Result,
     },
@@ -59,6 +59,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
             rows,
             pr: ProcessResult::Res,
             lock_info: None,
+            released_locks: ReleasedLocks::new(),
             lock_guards: raw_ext.into_iter().map(|r| r.key_guard).collect(),
             response_policy: ResponsePolicy::OnApplied,
         })
@@ -75,7 +76,7 @@ mod tests {
 
     use super::*;
     use crate::storage::{
-        lock_manager::DummyLockManager, txn::scheduler::get_raw_ext, Statistics, TestEngineBuilder,
+        lock_manager::MockLockManager, txn::scheduler::get_raw_ext, Statistics, TestEngineBuilder,
     };
 
     #[test]
@@ -108,7 +109,7 @@ mod tests {
         let snap = engine.snapshot(Default::default()).unwrap();
         let raw_ext = block_on(get_raw_ext(ts_provider, cm.clone(), true, &cmd.cmd)).unwrap();
         let context = WriteContext {
-            lock_mgr: &DummyLockManager {},
+            lock_mgr: &MockLockManager::new(),
             concurrency_manager: cm,
             extra_op: kvproto::kvrpcpb::ExtraOp::Noop,
             statistics: &mut statistic,
