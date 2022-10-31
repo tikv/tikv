@@ -329,17 +329,19 @@ pub fn address_proxy_config(config: &mut TikvConfig, proxy_config: &ProxyConfig)
         let total_mem = SysQuota::memory_limit_in_bytes();
         info!("quota: cpu {} mem in bytes {}", cpu_num, total_mem);
     }
+
+    // If label is not setup in run_proxy(), we use 'ENGINE_LABEL_VALUE'.
     pub const DEFAULT_ENGINE_LABEL_KEY: &str = "engine";
-    let engine_name = match option_env!("ENGINE_LABEL_VALUE") {
-        None => {
-            fatal!("should set engine name with env variable `ENGINE_LABEL_VALUE`");
-        }
-        Some(name) => name.to_owned(),
-    };
     config
         .server
         .labels
-        .insert(DEFAULT_ENGINE_LABEL_KEY.to_owned(), engine_name);
+        .entry(DEFAULT_ENGINE_LABEL_KEY.to_owned())
+        .or_insert(String::from(option_env!("ENGINE_LABEL_VALUE").unwrap()));
+    info!(
+        "config.server.labels after address: {:?}",
+        config.server.labels
+    );
+
     config.raft_store.region_worker_tick_interval =
         proxy_config.raft_store.region_worker_tick_interval;
     let clean_stale_ranges_tick =

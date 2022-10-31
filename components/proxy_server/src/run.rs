@@ -608,7 +608,6 @@ impl<ER: RaftEngine> TiKvServer<ER> {
     /// - If the max open file descriptor limit is not high enough to support
     ///   the main database and the raft database.
     fn init_config(mut config: TikvConfig, proxy_config: &ProxyConfig) -> ConfigController {
-        // Add {label: {"engine": "tiflash"}} to Config
         crate::config::address_proxy_config(&mut config, proxy_config);
         crate::config::validate_and_persist_config(&mut config, true);
         info!("after address config"; "config" => ?config);

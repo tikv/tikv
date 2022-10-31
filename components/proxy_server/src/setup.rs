@@ -127,4 +127,19 @@ pub fn overwrite_config_with_cmd_args(
     if matches.value_of("metrics-addr").is_some() {
         warn!("metrics push is not supported any more.");
     }
+
+    // User can specify engine label, because we need to distinguish TiFlash role
+    // (tiflash-compute or tiflash-storage) in the disaggregated architecture.
+    // If no engine label is specified, we use 'ENGINE_LABEL_VALUE'(env variable
+    // specified at compile time).
+    const DEFAULT_ENGINE_LABEL_KEY: &str = "engine";
+    config.server.labels.insert(
+        DEFAULT_ENGINE_LABEL_KEY.to_owned(),
+        String::from(
+            matches
+                .value_of("engine-label")
+                .or(option_env!("ENGINE_LABEL_VALUE"))
+                .unwrap(),
+        ),
+    );
 }

@@ -403,6 +403,53 @@ mod config {
         assert_eq!(config.storage.reserve_space, ReadableSize::gb(1));
     }
 
+    /// We test if the engine-label is set properly.
+    #[test]
+    fn test_config_proxy_engine_label() {
+        // case-1: If engine-label not specified in arguments, use default value.
+        let args: Vec<&str> = vec![];
+        let matches = App::new("RaftStore Proxy").get_matches_from(args);
+        let mut v: Vec<String> = vec![];
+        let mut config = gen_tikv_config(&None, false, &mut v);
+        let mut proxy_config = gen_proxy_config(&None, false, &mut v);
+        overwrite_config_with_cmd_args(&mut config, &mut proxy_config, &matches);
+        address_proxy_config(&mut config, &proxy_config);
+        const DEFAULT_ENGINE_LABEL_KEY: &str = "engine";
+
+        assert_eq!(
+            config
+                .server
+                .labels
+                .get(DEFAULT_ENGINE_LABEL_KEY)
+                .unwrap()
+                .as_str(),
+            option_env!("ENGINE_LABEL_VALUE").unwrap()
+        );
+
+        // case-2: If engine-label specified in arguments, use it as engine-label.
+        const EXPECTED_ENGINE_LABEL: &str = "tiflash_compute";
+        let args = vec![
+            "test_config_proxy_default1",
+            "--engine-label",
+            EXPECTED_ENGINE_LABEL,
+        ];
+        let matches = App::new("RaftStore Proxy")
+            .arg(
+                Arg::with_name("engine-label")
+                    .long("engine-label")
+                    .help("Set engine label")
+                    .required(true)
+                    .takes_value(true),
+            )
+            .get_matches_from(args);
+        overwrite_config_with_cmd_args(&mut config, &mut proxy_config, &matches);
+        address_proxy_config(&mut config, &proxy_config);
+        assert_eq!(
+            config.server.labels.get(DEFAULT_ENGINE_LABEL_KEY).unwrap(),
+            EXPECTED_ENGINE_LABEL
+        );
+    }
+
     #[test]
     fn test_config_proxy_overwrite() {
         let mut file = tempfile::NamedTempFile::new().unwrap();
