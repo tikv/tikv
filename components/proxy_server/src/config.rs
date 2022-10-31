@@ -59,10 +59,14 @@ pub struct ServerConfig {
     pub status_addr: String,
     pub advertise_status_addr: String,
     pub advertise_addr: String,
+    #[online_config(skip)]
+    pub background_thread_count: usize,
 }
 
 impl Default for ServerConfig {
     fn default() -> Self {
+        let cpu_num = SysQuota::cpu_cores_quota();
+        let background_thread_count = std::cmp::min(4, cpu_num as usize);
         ServerConfig {
             engine_addr: DEFAULT_ENGINE_ADDR.to_string(),
             engine_store_version: String::default(),
@@ -71,6 +75,7 @@ impl Default for ServerConfig {
             status_addr: TIFLASH_DEFAULT_STATUS_ADDR.to_string(),
             advertise_status_addr: TIFLASH_DEFAULT_ADVERTISE_LISTENING_ADDR.to_string(),
             advertise_addr: TIFLASH_DEFAULT_ADVERTISE_LISTENING_ADDR.to_string(),
+            background_thread_count,
         }
     }
 }
@@ -212,6 +217,19 @@ pub struct ReadPoolConfig {
     pub unified: UnifiedReadPoolConfig,
 }
 
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct ImportConfig {
+    pub num_threads: usize,
+}
+
+impl Default for ImportConfig {
+    fn default() -> ImportConfig {
+        ImportConfig { num_threads: 4 }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -238,6 +256,9 @@ pub struct ProxyConfig {
 
     #[online_config(submodule)]
     pub readpool: ReadPoolConfig,
+
+    #[online_config(skip)]
+    pub import: ImportConfig,
 }
 
 impl Default for ProxyConfig {
@@ -250,6 +271,7 @@ impl Default for ProxyConfig {
             storage: StorageConfig::default(),
             enable_io_snoop: false,
             readpool: ReadPoolConfig::default(),
+            import: ImportConfig::default(),
         }
     }
 }
@@ -322,6 +344,8 @@ pub fn setup_default_tikv_config(default: &mut TikvConfig) {
 }
 
 /// This function changes TiKV's config according to ProxyConfig.
+/// Add a case in `test_config_proxy_default_no_config_item` to guard this
+/// logic.
 pub fn address_proxy_config(config: &mut TikvConfig, proxy_config: &ProxyConfig) {
     // We must add engine label to our TiFlash config
     {
@@ -365,6 +389,9 @@ pub fn address_proxy_config(config: &mut TikvConfig, proxy_config: &ProxyConfig)
     // TiKV now pose a quota limitation on unified_readpool.
     // However, we still want to limit max_thread_count.
     config.readpool.unified.max_thread_count = proxy_config.readpool.unified.max_thread_count;
+
+    config.server.background_thread_count = proxy_config.server.background_thread_count;
+    config.import.num_threads = proxy_config.import.num_threads;
 }
 
 pub fn validate_and_persist_config(config: &mut TikvConfig, persist: bool) {

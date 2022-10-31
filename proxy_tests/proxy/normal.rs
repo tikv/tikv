@@ -224,12 +224,11 @@ mod region {
 }
 
 mod config {
-    use futures::io::Read;
     use proxy_server::{proxy::gen_proxy_config, setup::overwrite_config_with_cmd_args};
-    use tikv::server::DEFAULT_LISTENING_ADDR;
 
     use super::*;
 
+    /// Test for double read into both ProxyConfig and TikvConfig.
     #[test]
     fn test_config() {
         // Test double read.
@@ -285,6 +284,7 @@ mod config {
         assert_eq!(proxy_config_new.raft_store.snap_handle_pool_size, 4);
     }
 
+    /// Test for basic address_proxy_config.
     #[test]
     fn test_validate_config() {
         let mut file = tempfile::NamedTempFile::new().unwrap();
@@ -309,8 +309,10 @@ mod config {
     }
 
     /// We test here if we can use proxy's default value without given file.
+    /// Normally, we only need to add config tests in
+    /// `test_config_proxy_default_no_config_item`.
     #[test]
-    fn test_config_proxy_default1() {
+    fn test_config_proxy_default_no_config_file() {
         let args: Vec<&str> = vec![];
         let matches = App::new("RaftStore Proxy")
             .arg(
@@ -342,8 +344,10 @@ mod config {
 
     /// We test here if we can use proxy's default value with given file,
     /// but without given field.
+    /// Add assertion in this function, if we add some new items in
+    /// `ProxyConfig`.
     #[test]
-    fn test_config_proxy_default2() {
+    fn test_config_proxy_default_no_config_item() {
         let mut file = tempfile::NamedTempFile::new().unwrap();
         let text = "z=4\n[rocksdb]\nmax-open-files=56\n";
         write!(file, "{}", text).unwrap();
@@ -367,6 +371,7 @@ mod config {
         address_proxy_config(&mut config, &proxy_config);
 
         let total_mem = SysQuota::memory_limit_in_bytes();
+        let cpu_num = SysQuota::cpu_cores_quota();
         assert_eq!(config.rocksdb.max_open_files, 56);
         assert_eq!(config.server.addr, TIFLASH_DEFAULT_LISTENING_ADDR);
         assert_eq!(config.server.status_addr, TIFLASH_DEFAULT_STATUS_ADDR);
@@ -401,6 +406,14 @@ mod config {
             memory_limit_for_cf(false, CF_LOCK, total_mem)
         );
         assert_eq!(config.storage.reserve_space, ReadableSize::gb(1));
+
+        let background_thread_count = std::cmp::min(4, cpu_num as usize);
+        assert_eq!(
+            config.server.background_thread_count,
+            background_thread_count
+        );
+
+        assert_eq!(config.import.num_threads, 4);
     }
 
     /// We test if the engine-label is set properly.
@@ -450,6 +463,9 @@ mod config {
         );
     }
 
+    // We test whether Proxy will overwrite TiKV's value,
+    // when a config item which is both defined by ProxyConfig and TikvConfig.
+    // We only nned to add tests to this function when the logic is different.
     #[test]
     fn test_config_proxy_overwrite() {
         let mut file = tempfile::NamedTempFile::new().unwrap();

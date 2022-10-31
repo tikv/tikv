@@ -153,6 +153,8 @@ mod persist {
         if !do_persist {
             fail::remove("no_persist_flashback");
         }
+
+        cluster.shutdown();
     }
 
     #[test]

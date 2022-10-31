@@ -19,7 +19,6 @@ pub use crate::storage::config::Config as StorageConfig;
 
 pub const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20160";
-
 const DEFAULT_ADVERTISE_LISTENING_ADDR: &str = "";
 const DEFAULT_STATUS_ADDR: &str = "127.0.0.1:20180";
 const DEFAULT_GRPC_CONCURRENCY: usize = 5;
@@ -207,7 +206,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         let cpu_num = SysQuota::cpu_cores_quota();
-        let background_thread_count = std::cmp::min(4, cpu_num as usize);
+        let background_thread_count = if cpu_num > 16.0 { 3 } else { 2 };
         Config {
             cluster_id: DEFAULT_CLUSTER_ID,
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
@@ -367,8 +366,6 @@ impl Config {
                 "server.grpc-stream-initial-window-size is too large."
             ));
         }
-
-        // Check for `DEFAULT_ENGINE_LABEL_KEY` is moved to `address_proxy_config`.
 
         for (k, v) in &self.labels {
             validate_label_key(k)?;
