@@ -448,7 +448,7 @@
 # apply-pool-size = 2
 
 ## Use how many threads to handle raft messages
-# store-pool-size = 2
+# store-pool-size = 1
 
 ## Use how many threads to handle raft io tasks
 ## If it is 0, it means io tasks are handled in store threads.
