@@ -20,7 +20,7 @@ impl Checkpointable for PanicEngine {
 impl Checkpointer for PanicCheckpointer {
     fn create_at(
         &mut self,
-        basedb_out_dir: &Path,
+        db_out_dir: &Path,
         titan_out_dir: Option<&Path>,
         log_size_for_flush: u64,
     ) -> Result<()> {
