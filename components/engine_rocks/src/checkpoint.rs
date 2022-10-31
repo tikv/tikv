@@ -1,21 +1,40 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{Checkpoint, Result};
-use rocksdb::Checkpointer;
+use std::path::Path;
+
+use engine_traits::{Checkpointable, Checkpointer, Result};
 
 use crate::{r2e, RocksEngine};
 
-impl Checkpoint for RocksEngine {
-    type Checkpointer = Checkpointer;
+impl Checkpointable for RocksEngine {
+    type Checkpointer = RocksEngineCheckpointer;
 
     fn new_checkpointer(&self) -> Result<Self::Checkpointer> {
-        self.as_inner().new_checkpointer().map_err(|e| r2e(e))
+        match self.as_inner().new_checkpointer() {
+            Ok(pointer) => Ok(RocksEngineCheckpointer(pointer)),
+            Err(e) => Err(r2e(e)),
+        }
+    }
+}
+
+pub struct RocksEngineCheckpointer(rocksdb::Checkpointer);
+
+impl Checkpointer for RocksEngineCheckpointer {
+    fn create_at(
+        &mut self,
+        basedb_out_dir: &Path,
+        titan_out_dir: Option<&Path>,
+        log_size_for_flush: u64,
+    ) -> Result<()> {
+        self.0
+            .create_at(basedb_out_dir, titan_out_dir, log_size_for_flush)
+            .map_err(|e| r2e(e))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::{Checkpoint, Peekable, SyncMutable, ALL_CFS};
+    use engine_traits::{Checkpointable, Checkpointer, Peekable, SyncMutable, ALL_CFS};
     use tempfile::tempdir;
 
     use crate::util::new_engine;
