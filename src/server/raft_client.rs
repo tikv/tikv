@@ -551,8 +551,10 @@ where
 
 #[derive(PartialEq)]
 enum RaftCallRes {
-    UnImplemented, // the call is not supported, probably due to visiting to older TiKV
-    Disconnected,  // the connection is aborted or closed
+    // the call is not supported, probably due to visiting to older version TiKV
+    Fallback,
+    // the connection is aborted or closed
+    Disconnected,  
 }
 
 struct RaftCall<R, M, B, E> {
@@ -587,7 +589,7 @@ where
 
             let res = if should_fallback {
                 // Asks backend to fallback.
-                RaftCallRes::UnImplemented
+                RaftCallRes::Fallback
             } else {
                 RaftCallRes::Disconnected
             };
@@ -835,7 +837,7 @@ async fn start<S, R, E>(
         let channel = addr_channel.as_ref().unwrap().0.clone();
 
         if !channel.wait_for_connected(backoff_duration).await {
-            error!("connection fail"; "store_id" => back_end.store_id, "addr" => addr, "err" => "can not establish connection");
+            error!("wait connect timeout"; "store_id" => back_end.store_id, "addr" => addr);
 
             // Clears pending messages to avoid consuming high memory when one node is
             // shutdown.
@@ -856,7 +858,7 @@ async fn start<S, R, E>(
         let client = TikvClient::new(channel);
         let f = back_end.batch_call(&client, addr.clone());
         let mut res = f.await; // block here until the stream call is closed or aborted.
-        if res == Ok(RaftCallRes::UnImplemented) {
+        if res == Ok(RaftCallRes::Fallback) {
             // If the call is setup successfully, it will never finish. Returning
             // `UnImplemented` means the batch_call is not supported, we are probably
             // connect to an old version of TiKV. So we need to fallback to use
@@ -865,7 +867,7 @@ async fn start<S, R, E>(
             res = f.await;
         }
         match res {
-            Ok(RaftCallRes::UnImplemented) => {
+            Ok(RaftCallRes::Fallback) => {
                 error!("connection fail"; "store_id" => back_end.store_id, "addr" => addr, "err" => "require fallback even with legacy API");
             }
             // Err(_) should be tx is dropped

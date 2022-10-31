@@ -92,6 +92,8 @@ pub struct Config {
     pub raft_client_grpc_send_msg_buffer: usize,
     #[online_config(skip)]
     pub raft_client_queue_size: usize,
+    // Test only
+    #[doc(hidden)]
     #[serde(skip_serializing)]
     #[online_config(skip)]
     pub raft_client_max_backoff: ReadableDuration,
