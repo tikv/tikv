@@ -1238,8 +1238,8 @@ pub fn must_flashback_to_version(
     req.start_key = b"a".to_vec();
     req.end_key = b"z".to_vec();
     let resp = client.kv_flashback_to_version(&req).unwrap();
-    assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
-    assert!(resp.get_error().is_empty(), "{:?}", resp.get_error());
+    assert!(!resp.has_region_error());
+    assert!(resp.get_error().is_empty());
 }
 
 // A helpful wrapper to make the test logic clear
