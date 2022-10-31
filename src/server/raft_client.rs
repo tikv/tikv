@@ -554,7 +554,7 @@ enum RaftCallRes {
     // the call is not supported, probably due to visiting to older version TiKV
     Fallback,
     // the connection is aborted or closed
-    Disconnected,  
+    Disconnected,
 }
 
 struct RaftCall<R, M, B, E> {
