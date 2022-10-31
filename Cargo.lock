@@ -5193,6 +5193,7 @@ dependencies = [
  "tikv_util",
  "tokio",
  "toml",
+ "tracker",
  "txn_types",
  "yatp",
 ]

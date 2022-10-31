@@ -122,6 +122,7 @@ use tikv_util::{
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
 };
 use tokio::runtime::Builder;
+use tracker::GLOBAL_TRACKERS;
 
 use crate::{
     memory::*, raft_engine_switch::*, setup::*, signal_handler,
@@ -331,6 +332,8 @@ where
         // Initialize concurrency manager
         let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
         let concurrency_manager = ConcurrencyManager::new(latest_ts);
+
+        GLOBAL_TRACKERS.init(16);
 
         // use different quota for front-end and back-end requests
         let quota_limiter = Arc::new(QuotaLimiter::new(

@@ -29,12 +29,12 @@ pub fn get_tls_tracker_token() -> TrackerToken {
     TLS_TRACKER_TOKEN.with(|c| c.get())
 }
 
-pub fn with_tls_tracker<F>(mut f: F)
+pub fn with_tls_tracker<F>(f: F)
 where
-    F: FnMut(&mut Tracker),
+    F: FnMut(&Tracker),
 {
     TLS_TRACKER_TOKEN.with(|c| {
-        GLOBAL_TRACKERS.with_tracker(c.get(), &mut f);
+        GLOBAL_TRACKERS.with_tracker(c.get(), f);
     });
 }
 
@@ -46,6 +46,7 @@ pub struct TrackedFuture<F> {
 }
 
 impl<F> TrackedFuture<F> {
+    #[inline(always)]
     pub fn new(future: F) -> TrackedFuture<F> {
         TrackedFuture {
             future,

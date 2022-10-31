@@ -207,8 +207,9 @@ impl<E: Engine> Endpoint<E> {
                     self.perf_level,
                 );
                 with_tls_tracker(|tracker| {
-                    tracker.req_info.request_type = RequestType::CoprocessorDag;
-                    tracker.req_info.start_ts = start_ts;
+                    let mut req_info = tracker.req_info.lock();
+                    req_info.request_type = RequestType::CoprocessorDag;
+                    req_info.start_ts = start_ts;
                 });
 
                 self.check_memory_locks(&req_ctx)?;
@@ -270,8 +271,9 @@ impl<E: Engine> Endpoint<E> {
                     self.perf_level,
                 );
                 with_tls_tracker(|tracker| {
-                    tracker.req_info.request_type = RequestType::CoprocessorAnalyze;
-                    tracker.req_info.start_ts = start_ts;
+                    let mut req_info = tracker.req_info.lock();
+                    req_info.request_type = RequestType::CoprocessorAnalyze;
+                    req_info.start_ts = start_ts;
                 });
 
                 self.check_memory_locks(&req_ctx)?;
@@ -315,8 +317,9 @@ impl<E: Engine> Endpoint<E> {
                     self.perf_level,
                 );
                 with_tls_tracker(|tracker| {
-                    tracker.req_info.request_type = RequestType::CoprocessorChecksum;
-                    tracker.req_info.start_ts = start_ts;
+                    let mut req_info = tracker.req_info.lock();
+                    req_info.request_type = RequestType::CoprocessorChecksum;
+                    req_info.start_ts = start_ts;
                 });
 
                 self.check_memory_locks(&req_ctx)?;
@@ -488,11 +491,11 @@ impl<E: Engine> Endpoint<E> {
         req: coppb::Request,
         peer: Option<String>,
     ) -> impl Future<Output = MemoryTraceGuard<coppb::Response>> {
-        let tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo::new(
-            req.get_context(),
-            RequestType::Unknown,
-            req.start_ts,
-        )));
+        let tracker = GLOBAL_TRACKERS.allocate();
+        GLOBAL_TRACKERS.with_tracker(tracker, |t| {
+            *t.req_info.lock() =
+                RequestInfo::new(req.get_context(), RequestType::Unknown, req.start_ts)
+        });
         set_tls_tracker_token(tracker);
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)

@@ -3,7 +3,7 @@
 // #[PerformanceCriticalPath]
 #[cfg(any(test, feature = "testexport"))]
 use std::sync::Arc;
-use std::{borrow::Cow, fmt};
+use std::{borrow::Cow, fmt, sync::atomic::Ordering};
 
 use collections::HashSet;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
@@ -24,7 +24,9 @@ use pd_client::BucketMeta;
 use raft::SnapshotStatus;
 use smallvec::{smallvec, SmallVec};
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
-use tracker::{get_tls_tracker_token, TrackerToken, GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN};
+use tracker::{
+    get_tls_tracker_token, ns_since_anchor, TrackerToken, GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN,
+};
 
 use super::{local_metrics::TimeTracker, region_meta::RegionMeta, FetchedLogs, RegionSnapshot};
 use crate::store::{
@@ -143,7 +145,10 @@ where
             TimeTracker::Instant(now)
         } else {
             GLOBAL_TRACKERS.with_tracker(tracker_token, |tracker| {
-                tracker.metrics.write_instant = Some(now);
+                tracker
+                    .metrics
+                    .write_instant
+                    .store(ns_since_anchor(now), Ordering::Release);
             });
             TimeTracker::Tracker(tracker_token)
         };

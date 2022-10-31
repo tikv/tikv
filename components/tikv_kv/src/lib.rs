@@ -26,7 +26,7 @@ use std::{
     error,
     num::NonZeroU64,
     ptr, result,
-    sync::Arc,
+    sync::{atomic::Ordering, Arc},
     time::{Duration, Instant},
 };
 
@@ -597,7 +597,10 @@ pub fn snapshot<E: Engine>(
             .map_err(|cancel| Error::from(ErrorInner::Other(box_err!(cancel))))
             .await?;
         with_tls_tracker(|tracker| {
-            tracker.metrics.get_snapshot_nanos += begin.elapsed().as_nanos() as u64;
+            tracker
+                .metrics
+                .get_snapshot_nanos
+                .fetch_add(begin.elapsed().as_nanos() as u64, Ordering::Release);
         });
         fail_point!("after-snapshot");
         result

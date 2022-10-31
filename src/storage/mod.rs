@@ -65,7 +65,7 @@ use std::{
     iter,
     marker::PhantomData,
     sync::{
-        atomic::{self, AtomicBool, AtomicU64},
+        atomic::{self, AtomicBool, AtomicU64, Ordering},
         Arc,
     },
 };
@@ -708,8 +708,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         process_wall_time_ms: duration_to_ms(process_wall_time),
                     };
                     with_tls_tracker(|tracker| {
-                        tracker.metrics.read_pool_schedule_wait_nanos =
-                            schedule_wait_time.as_nanos() as u64;
+                        tracker.metrics.read_pool_schedule_wait_nanos.store(
+                            schedule_wait_time.as_nanos() as u64,
+                            atomic::Ordering::Release,
+                        );
                     });
                     Ok((
                         result?,
@@ -1057,8 +1059,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let process_wall_time =
                         stage_finished_ts.saturating_duration_since(stage_snap_recv_ts);
                     with_tls_tracker(|tracker| {
-                        tracker.metrics.read_pool_schedule_wait_nanos =
-                            schedule_wait_time.as_nanos() as u64;
+                        tracker
+                            .metrics
+                            .read_pool_schedule_wait_nanos
+                            .store(schedule_wait_time.as_nanos() as u64, Ordering::Release);
                     });
                     let latency_stats = StageLatencyStats {
                         schedule_wait_time_ms: duration_to_ms(schedule_wait_time),
@@ -1455,8 +1459,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             _ => {}
         }
         with_tls_tracker(|tracker| {
-            tracker.req_info.start_ts = cmd.ts().into_inner();
-            tracker.req_info.request_type = cmd.request_type();
+            let mut req_info = tracker.req_info.lock();
+            req_info.start_ts = cmd.ts().into_inner();
+            req_info.request_type = cmd.request_type();
         });
 
         fail_point!("storage_drop_message", |_| Ok(()));

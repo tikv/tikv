@@ -1,13 +1,16 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex,
+};
 
 use collections::HashSet;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::MessageType;
 use tikv_util::time::{Duration, Instant};
-use tracker::{Tracker, TrackerToken, GLOBAL_TRACKERS};
+use tracker::{ns_since_anchor, Tracker, TrackerToken, GLOBAL_TRACKERS};
 
 use super::metrics::*;
 
@@ -225,20 +228,25 @@ impl TimeTracker {
         &self,
         now: std::time::Instant,
         local_metric: &LocalHistogram,
-        tracker_metric: impl FnOnce(&mut Tracker) -> &mut u64,
+        tracker_metric: impl FnOnce(&Tracker) -> &AtomicU64,
     ) {
         match self {
             TimeTracker::Tracker(t) => {
                 if let Some(dur) = GLOBAL_TRACKERS
                     .with_tracker(*t, |tracker| {
-                        tracker.metrics.write_instant.map(|write_instant| {
-                            let dur = now.saturating_duration_since(write_instant);
-                            let metric = tracker_metric(tracker);
-                            if *metric == 0 {
-                                *metric = dur.as_nanos() as u64;
-                            }
-                            dur
-                        })
+                        let write_instant = tracker.metrics.write_instant.load(Ordering::Acquire);
+                        if write_instant != 0 {
+                            let dur = ns_since_anchor(now).saturating_sub(write_instant);
+                            let _ = tracker_metric(tracker).compare_exchange(
+                                0,
+                                dur,
+                                Ordering::AcqRel,
+                                Ordering::Relaxed,
+                            );
+                            Some(Duration::from_nanos(dur))
+                        } else {
+                            None
+                        }
                     })
                     .flatten()
                 {

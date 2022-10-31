@@ -1,5 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::atomic::Ordering;
+
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::{self, RaftCmdRequest, RaftCmdResponse};
 use pd_client::INVALID_ID;
@@ -77,11 +79,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         for (req, ch, mut read_index) in read_index_req.take_cmds().drain(..) {
             ch.read_tracker().map(|tracker| {
                 GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
-                    t.metrics.read_index_confirm_wait_nanos = (time - read_index_req.propose_time)
-                        .to_std()
-                        .unwrap()
-                        .as_nanos()
-                        as u64;
+                    t.metrics.read_index_confirm_wait_nanos.store(
+                        (time - read_index_req.propose_time)
+                            .to_std()
+                            .unwrap()
+                            .as_nanos() as u64,
+                        Ordering::Release,
+                    );
                 })
             });
 

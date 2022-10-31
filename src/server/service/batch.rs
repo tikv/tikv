@@ -60,11 +60,14 @@ impl ReqBatcher {
     }
 
     pub fn add_get_request(&mut self, req: GetRequest, id: u64) {
-        let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
-            req.get_context(),
-            RequestType::KvBatchGetCommand,
-            req.get_version(),
-        )));
+        let tracker = GLOBAL_TRACKERS.allocate();
+        GLOBAL_TRACKERS.with_tracker(tracker, |t| {
+            *t.req_info.lock() = RequestInfo::new(
+                req.get_context(),
+                RequestType::KvBatchGetCommand,
+                req.get_version(),
+            )
+        });
         self.gets.push(req);
         self.get_ids.push(id);
         self.get_trackers.push(tracker);

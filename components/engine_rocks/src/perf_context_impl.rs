@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fmt::Debug, marker::PhantomData, mem, ops::Sub, time::Duration};
+use std::{fmt::Debug, marker::PhantomData, mem, ops::Sub, sync::atomic::Ordering, time::Duration};
 
 use derive_more::{Add, AddAssign, Sub, SubAssign};
 use engine_traits::{PerfContextKind, PerfLevel};
@@ -135,13 +135,31 @@ pub struct ReadPerfContext {
 }
 
 impl ReadPerfContext {
-    fn report_to_tracker(&self, tracker: &mut Tracker) {
-        tracker.metrics.block_cache_hit_count += self.block_cache_hit_count;
-        tracker.metrics.block_read_byte += self.block_read_byte;
-        tracker.metrics.block_read_count += self.block_read_count;
-        tracker.metrics.block_read_nanos += self.block_read_time;
-        tracker.metrics.deleted_key_skipped_count += self.internal_delete_skipped_count;
-        tracker.metrics.internal_key_skipped_count += self.internal_key_skipped_count;
+    fn report_to_tracker(&self, tracker: &Tracker) {
+        tracker
+            .metrics
+            .block_cache_hit_count
+            .fetch_add(self.block_cache_hit_count, Ordering::Release);
+        tracker
+            .metrics
+            .block_read_byte
+            .fetch_add(self.block_read_byte, Ordering::Release);
+        tracker
+            .metrics
+            .block_read_count
+            .fetch_add(self.block_read_count, Ordering::Release);
+        tracker
+            .metrics
+            .block_read_nanos
+            .fetch_add(self.block_read_time, Ordering::Release);
+        tracker
+            .metrics
+            .deleted_key_skipped_count
+            .fetch_add(self.internal_delete_skipped_count, Ordering::Release);
+        tracker
+            .metrics
+            .internal_key_skipped_count
+            .fetch_add(self.internal_key_skipped_count, Ordering::Release);
     }
 }
 
@@ -211,10 +229,18 @@ impl PerfContextStatistics {
                 report_write_perf_context!(self, APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC);
                 for token in trackers {
                     GLOBAL_TRACKERS.with_tracker(*token, |t| {
-                        t.metrics.apply_mutex_lock_nanos = self.write.db_mutex_lock_nanos;
-                        t.metrics.apply_thread_wait_nanos = self.write.write_thread_wait;
-                        t.metrics.apply_write_wal_nanos = self.write.write_wal_time;
-                        t.metrics.apply_write_memtable_nanos = self.write.write_memtable_time;
+                        t.metrics
+                            .apply_mutex_lock_nanos
+                            .store(self.write.db_mutex_lock_nanos, Ordering::Release);
+                        t.metrics
+                            .apply_thread_wait_nanos
+                            .store(self.write.write_thread_wait, Ordering::Release);
+                        t.metrics
+                            .apply_write_wal_nanos
+                            .store(self.write.write_wal_time, Ordering::Release);
+                        t.metrics
+                            .apply_write_memtable_nanos
+                            .store(self.write.write_memtable_time, Ordering::Release);
                     });
                 }
             }
@@ -222,10 +248,18 @@ impl PerfContextStatistics {
                 report_write_perf_context!(self, STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC);
                 for token in trackers {
                     GLOBAL_TRACKERS.with_tracker(*token, |t| {
-                        t.metrics.store_mutex_lock_nanos = self.write.db_mutex_lock_nanos;
-                        t.metrics.store_thread_wait_nanos = self.write.write_thread_wait;
-                        t.metrics.store_write_wal_nanos = self.write.write_wal_time;
-                        t.metrics.store_write_memtable_nanos = self.write.write_memtable_time;
+                        t.metrics
+                            .store_mutex_lock_nanos
+                            .store(self.write.db_mutex_lock_nanos, Ordering::Release);
+                        t.metrics
+                            .store_thread_wait_nanos
+                            .store(self.write.write_thread_wait, Ordering::Release);
+                        t.metrics
+                            .store_write_wal_nanos
+                            .store(self.write.write_wal_time, Ordering::Release);
+                        t.metrics
+                            .store_write_memtable_nanos
+                            .store(self.write.write_memtable_time, Ordering::Release);
                     });
                 }
             }
