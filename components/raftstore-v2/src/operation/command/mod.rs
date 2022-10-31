@@ -39,7 +39,8 @@ use raftstore::{
         local_metrics::RaftMetrics,
         metrics::*,
         msg::ErrorCallback,
-        util, WriteCallback,
+        util::{self, admin_cmd_epoch_lookup},
+        WriteCallback,
     },
     Error, Result,
 };
@@ -402,10 +403,12 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         util::check_region_epoch(&req, self.region_state().get_region(), true)?;
         if req.has_admin_request() {
             let admin_req = req.get_admin_request();
-            let (admin_resp, admin_result) = match req.get_admin_request().get_cmd_type() {
+            let origin_epoch = self.region_state().get_region().get_region_epoch().clone();
+            let cmd_type = req.get_admin_request().get_cmd_type();
+            let (admin_resp, admin_result) = match cmd_type {
                 AdminCmdType::CompactLog => unimplemented!(),
-                AdminCmdType::Split => unimplemented!(),
-                AdminCmdType::BatchSplit => unimplemented!(),
+                AdminCmdType::Split => self.exec_split(admin_req, entry.index)?,
+                AdminCmdType::BatchSplit => self.exec_batch_split(admin_req, entry.index)?,
                 AdminCmdType::PrepareMerge => unimplemented!(),
                 AdminCmdType::CommitMerge => unimplemented!(),
                 AdminCmdType::RollbackMerge => unimplemented!(),
@@ -424,6 +427,25 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     return Err(box_err!("invalid admin command type"));
                 }
             };
+            // Check if the region epoch changes as expected
+            let epoch_state = admin_cmd_epoch_lookup(cmd_type);
+            let cur_epoch = self.region_state().get_region().get_region_epoch();
+            // The change-epoch behavior **MUST BE** equal to the settings in
+            // `admin_cmd_epoch_lookup`
+            if (epoch_state.change_ver && origin_epoch.get_version() == cur_epoch.get_version())
+                || (epoch_state.change_conf_ver
+                    && origin_epoch.get_conf_ver() == cur_epoch.get_conf_ver())
+            {
+                panic!(
+                    "{:?} apply admin cmd {:?} but epoch change is not expected, epoch state {:?}, before {:?}, after {:?}",
+                    self.logger.list(),
+                    req,
+                    epoch_state,
+                    epoch_state,
+                    cur_epoch,
+                );
+            }
+
             self.push_admin_result(admin_result);
             let mut resp = new_response(req.get_header());
             resp.set_admin_response(admin_resp);

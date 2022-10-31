@@ -60,6 +60,29 @@ pub struct SplitResult {
 }
 
 impl<EK: KvEngine, R> Apply<EK, R> {
+    pub fn exec_split(
+        &mut self,
+        req: &AdminRequest,
+        log_index: u64,
+    ) -> Result<(AdminResponse, AdminCmdResult)> {
+        info!(
+            self.logger,
+            "split is deprecated, redirect to use batch split";
+            "region_id" => self.region_state().get_region().id,
+            "peer_id" => self.peer().id,
+        );
+        let split = req.get_split().to_owned();
+        let mut admin_req = AdminRequest::default();
+        admin_req
+            .mut_splits()
+            .set_right_derive(split.get_right_derive());
+        admin_req.mut_splits().mut_requests().push(split);
+        // This method is executed only when there are unapplied entries after being
+        // restarted. So there will be no callback, it's OK to return a response
+        // that does not matched with its request.
+        self.exec_batch_split(req, log_index)
+    }
+
     pub fn exec_batch_split(
         &mut self,
         req: &AdminRequest,
