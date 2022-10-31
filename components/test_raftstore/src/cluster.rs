@@ -22,7 +22,7 @@ use file_system::IoRateLimiter;
 use futures::{self, channel::oneshot, executor::block_on};
 use kvproto::{
     errorpb::Error as PbError,
-    kvrpcpb::{ApiVersion, Context},
+    kvrpcpb::{ApiVersion, Context, DiskFullOpt},
     metapb::{self, Buckets, PeerRole, RegionEpoch, StoreLabel},
     pdpb::{self, CheckPolicy, StoreReport},
     raft_cmdpb::*,
@@ -34,6 +34,7 @@ use kvproto::{
 use pd_client::{BucketStat, PdClient};
 use raft::eraftpb::ConfChangeType;
 use raftstore::{
+    router::RaftStoreRouter,
     store::{
         fsm::{
             create_raft_batch_system,
@@ -54,6 +55,7 @@ use tikv_util::{
     worker::LazyWorker,
     HandyRwLock,
 };
+use txn_types::WriteBatchFlags;
 
 use super::*;
 use crate::Config;
@@ -1137,6 +1139,23 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn wait_applied_index(&mut self, region_id: u64, store_id: u64, index: u64) {
+        let timer = Instant::now();
+        loop {
+            let applied_index = self.apply_state(region_id, store_id).applied_index;
+            if applied_index >= index {
+                return;
+            }
+            if timer.saturating_elapsed() >= Duration::from_secs(5) {
+                panic!(
+                    "[region {}] log is still not applied to {}: {} on store {}",
+                    region_id, index, applied_index, store_id,
+                );
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     pub fn wait_tombstone(&self, region_id: u64, peer: metapb::Peer, check_exist: bool) {
         let timer = Instant::now();
         let mut state;
@@ -1419,26 +1438,80 @@ impl<T: Simulator> Cluster<T> {
             .unwrap();
     }
 
-    pub async fn call_and_wait_prepare_flashback(&mut self, region_id: u64, store_id: u64) {
+    pub fn must_send_flashback_msg(
+        &mut self,
+        region_id: u64,
+        cmd_type: AdminCmdType,
+        cb: Callback<RocksSnapshot>,
+    ) {
+        let leader = self.leader_of_region(region_id).unwrap();
+        let store_id = leader.get_store_id();
+        let region_epoch = self.get_region_epoch(region_id);
+        let mut admin = AdminRequest::default();
+        admin.set_cmd_type(cmd_type);
+        let mut req = RaftCmdRequest::default();
+        req.mut_header().set_region_id(region_id);
+        req.mut_header().set_region_epoch(region_epoch);
+        req.mut_header().set_peer(leader);
+        req.set_admin_request(admin);
+        req.mut_header()
+            .set_flags(WriteBatchFlags::FLASHBACK.bits());
         let router = self.sim.rl().get_router(store_id).unwrap();
-        let (tx, rx) = oneshot::channel();
-
-        router
-            .significant_send(region_id, SignificantMsg::PrepareFlashback(tx))
-            .unwrap();
-
-        let prepared = rx.await.unwrap();
-        if !prepared {
-            panic!("prepare flashback failed");
+        if let Err(e) = router.send_command(
+            req,
+            cb,
+            RaftCmdExtraOpts {
+                deadline: None,
+                disk_full_opt: DiskFullOpt::AllowedOnAlmostFull,
+            },
+        ) {
+            panic!(
+                "router send flashback msg {:?} failed, error: {}",
+                cmd_type, e
+            );
         }
     }
 
-    pub fn call_finish_flashback(&mut self, region_id: u64, store_id: u64) {
-        let router = self.sim.rl().get_router(store_id).unwrap();
+    pub fn must_send_wait_flashback_msg(&mut self, region_id: u64, cmd_type: AdminCmdType) {
+        self.wait_applied_to_current_term(region_id, Duration::from_secs(3));
+        let (result_tx, result_rx) = oneshot::channel();
+        self.must_send_flashback_msg(
+            region_id,
+            cmd_type,
+            Callback::write(Box::new(move |resp| {
+                if resp.response.get_header().has_error() {
+                    result_tx
+                        .send(Some(resp.response.get_header().get_error().clone()))
+                        .unwrap();
+                    return;
+                }
+                result_tx.send(None).unwrap();
+            })),
+        );
+        if let Some(e) = block_on(result_rx).unwrap() {
+            panic!("call flashback msg {:?} failed, error: {:?}", cmd_type, e);
+        }
+    }
 
-        router
-            .significant_send(region_id, SignificantMsg::FinishFlashback)
-            .unwrap();
+    pub fn wait_applied_to_current_term(&mut self, region_id: u64, timeout: Duration) {
+        let mut now = Instant::now();
+        let deadline = now + timeout;
+        while now < deadline {
+            if let Some(leader) = self.leader_of_region(region_id) {
+                let raft_apply_state = self.apply_state(region_id, leader.get_store_id());
+                let raft_local_state = self.raft_local_state(region_id, leader.get_store_id());
+                // If term matches and apply to commit index, then it must apply to current
+                // term.
+                if raft_apply_state.applied_index == raft_apply_state.commit_index
+                    && raft_apply_state.commit_term == raft_local_state.get_hard_state().get_term()
+                {
+                    return;
+                }
+            }
+            thread::sleep(Duration::from_millis(10));
+            now = Instant::now();
+        }
+        panic!("region {} is not applied to current term", region_id,);
     }
 
     pub fn must_split(&mut self, region: &metapb::Region, split_key: &[u8]) {

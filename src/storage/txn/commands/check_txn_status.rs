@@ -121,13 +121,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
             ),
         };
 
-        let mut released_locks = ReleasedLocks::new(self.lock_ts, TimeStamp::zero());
+        let mut released_locks = ReleasedLocks::new();
         released_locks.push(released);
-        // The lock is released here only when the `check_txn_status` returns
-        // `TtlExpire`.
-        if let TxnStatus::TtlExpire = txn_status {
-            released_locks.wake_up(context.lock_mgr);
-        }
 
         let pr = ProcessResult::TxnStatus { txn_status };
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
@@ -138,6 +133,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
             rows: 1,
             pr,
             lock_info: None,
+            released_locks,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
         })
@@ -154,7 +150,7 @@ pub mod tests {
     use super::{TxnStatus::*, *};
     use crate::storage::{
         kv::Engine,
-        lock_manager::DummyLockManager,
+        lock_manager::MockLockManager,
         mvcc::tests::*,
         txn::{
             commands::{pessimistic_rollback, WriteCommand, WriteContext},
@@ -196,7 +192,7 @@ pub mod tests {
             .process_write(
                 snapshot,
                 WriteContext {
-                    lock_mgr: &DummyLockManager,
+                    lock_mgr: &MockLockManager::new(),
                     concurrency_manager: cm,
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
@@ -244,7 +240,7 @@ pub mod tests {
                 .process_write(
                     snapshot,
                     WriteContext {
-                        lock_mgr: &DummyLockManager,
+                        lock_mgr: &MockLockManager::new(),
                         concurrency_manager: cm,
                         extra_op: Default::default(),
                         statistics: &mut Default::default(),
