@@ -82,34 +82,32 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
         )?;
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
         write_data.extra.for_flashback = true;
-        let ctx = self.ctx.clone();
-        let pr = (|s: FlashbackToVersion| {
-            fail_point!("flashback_failed_in_first_batch", |_| {
-                ProcessResult::Res
-            });
-            if next_lock_key.is_none() && next_write_key.is_none() {
-                ProcessResult::Res
-            } else {
-                let next_cmd = FlashbackToVersionReadPhase {
-                    ctx: s.ctx,
-                    deadline: s.deadline,
-                    start_ts: s.start_ts,
-                    commit_ts: s.commit_ts,
-                    version: s.version,
-                    end_key: s.end_key,
-                    next_lock_key,
-                    next_write_key,
-                };
-                ProcessResult::NextCommand {
-                    cmd: Command::FlashbackToVersionReadPhase(next_cmd),
-                }
-            }
-        })(self);
         Ok(WriteResult {
-            ctx,
+            ctx: self.ctx.clone(),
             to_be_write: write_data,
             rows,
-            pr,
+            pr: (move || {
+                fail_point!("flashback_failed_in_first_batch", |_| {
+                    ProcessResult::Res
+                });
+                if next_lock_key.is_none() && next_write_key.is_none() {
+                    ProcessResult::Res
+                } else {
+                    let next_cmd = FlashbackToVersionReadPhase {
+                        ctx: self.ctx,
+                        deadline: self.deadline,
+                        start_ts: self.start_ts,
+                        commit_ts: self.commit_ts,
+                        version: self.version,
+                        end_key: self.end_key,
+                        next_lock_key,
+                        next_write_key,
+                    };
+                    ProcessResult::NextCommand {
+                        cmd: Command::FlashbackToVersionReadPhase(next_cmd),
+                    }
+                }
+            })(),
             lock_info: None,
             released_locks: ReleasedLocks::new(),
             lock_guards: vec![],

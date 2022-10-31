@@ -638,7 +638,21 @@ fn test_mvcc_flashback_failed_in_first_batch() {
     fail::cfg("flashback_failed_in_first_batch", "return").unwrap();
     must_flashback_to_version(&client, ctx.clone(), 5, ts + 1, ts + 2);
     fail::remove("flashback_failed_in_first_batch");
+    // Flashback again to check if any error occurs:)
+    fail::cfg("flashback_failed_in_first_batch", "return").unwrap();
+    must_flashback_to_version(&client, ctx.clone(), 5, ts + 1, ts + 2);
+    fail::remove("flashback_failed_in_first_batch");
+    // Subsequent batches of writes are not deleted.
+    must_kv_read_equal(
+        &client,
+        ctx.clone(),
+        b"key@500".to_vec(),
+        b"value@1500".to_vec(),
+        ts,
+    );
     // Flashback needs to be continued.
+    must_flashback_to_version(&client, ctx.clone(), 5, ts + 1, ts + 2);
+    // Flashback again to check if any error occurs:)
     must_flashback_to_version(&client, ctx.clone(), 5, ts + 1, ts + 2);
     ts += 2;
     // Subsequent batches of writes are deleted.
@@ -652,7 +666,6 @@ fn test_mvcc_flashback_failed_in_first_batch() {
 fn test_mvcc_flashback() {
     let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
     let mut ts = 0;
-    let k = b"key@1".to_vec();
     // Need to write many batches.
     for i in 0..2000 {
         let v = format!("value@{}", i).into_bytes();
@@ -687,6 +700,7 @@ fn test_mvcc_flashback() {
         must_kv_read_equal(&client, ctx.clone(), k.clone(), v.clone(), ts)
     }
     // Prewrite to leave a lock.
+    let k = b"key@1".to_vec();
     ts += 1;
     let prewrite_start_version = ts;
     let mut mutation = Mutation::default();

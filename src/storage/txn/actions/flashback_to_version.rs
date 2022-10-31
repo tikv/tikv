@@ -62,8 +62,8 @@ pub fn flashback_to_version_read_write<S: Snapshot>(
     let mut key_old_writes = Vec::with_capacity(FLASHBACK_BATCH_SIZE - key_locks_len);
     // Check the latest commit ts to make sure there is no commit change during the
     // flashback, otherwise, we need to abort the flashback.
-    for (key, commit_ts, old_write) in key_ts_old_writes.clone() {
-        if commit_ts > flashback_commit_ts {
+    for (key, commit_ts, old_write) in key_ts_old_writes.iter() {
+        if *commit_ts > flashback_commit_ts {
             return Err(Error::from(ErrorInner::InvalidTxnTso {
                 start_ts: flashback_start_ts,
                 commit_ts: flashback_commit_ts,
@@ -76,10 +76,10 @@ pub fn flashback_to_version_read_write<S: Snapshot>(
         // flashback from the very first beginning, because the data in the first batch
         // has been written the flashbacked data with the same commit_ts, So we need to
         // skip it to make sure to keep writing the data that is needed.
-        if commit_ts == flashback_commit_ts {
+        if *commit_ts == flashback_commit_ts {
             continue;
         }
-        key_old_writes.push((key, old_write));
+        key_old_writes.push((key.clone(), old_write.clone()));
     }
     if key_old_writes.is_empty() {
         if let Some(last_write) = key_ts_old_writes.last() {

@@ -81,25 +81,26 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
             self.tag().get_str(),
             (key_locks.len() + key_old_writes.len()) as f64,
         );
-
-        if key_locks.is_empty() && key_old_writes.is_empty() {
-            Ok(ProcessResult::Res)
+        // Check next key firstly.
+        let next_lock_key = if has_remain_locks {
+            key_locks.pop().map(|(key, _)| key.clone())
         } else {
-            let next_lock_key = if has_remain_locks {
-                key_locks.pop().map(|(key, _)| key.clone())
-            } else {
-                None
-            };
-            let next_write_key = if has_remain_writes && !key_old_writes.is_empty() {
-                key_old_writes.pop().map(|(key, _)| key)
-            } else if has_remain_writes && key_old_writes.is_empty() {
-                // We haven't read any write yet, so we need to read the writes in the next
-                // batch later.
-                self.next_write_key
-            } else {
-                None
-            };
-            if key_old_writes.is_empty() && key_locks.is_empty() {
+            None
+        };
+        let next_write_key = if has_remain_writes && !key_old_writes.is_empty() {
+            key_old_writes.pop().map(|(key, _)| key)
+        } else if has_remain_writes && key_old_writes.is_empty() {
+            // We haven't read any write yet, so we need to read the writes in the next
+            // batch later.
+            self.next_write_key
+        } else {
+            None
+        };
+        if key_locks.is_empty() && key_old_writes.is_empty() {
+            if next_write_key.is_none() || next_lock_key.is_none() {
+                // When there are no keys that need to be flashbacked in this batch, but since
+                // the next key is not none, we have to continue reading the
+                // next batch.
                 let next_cmd = FlashbackToVersionReadPhase {
                     ctx: self.ctx,
                     deadline: self.deadline,
@@ -110,26 +111,27 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     next_lock_key,
                     next_write_key,
                 };
-                Ok(ProcessResult::NextCommand {
+                return Ok(ProcessResult::NextCommand {
                     cmd: Command::FlashbackToVersionReadPhase(next_cmd),
-                })
-            } else {
-                let next_cmd = FlashbackToVersion {
-                    ctx: self.ctx,
-                    deadline: self.deadline,
-                    start_ts: self.start_ts,
-                    commit_ts: self.commit_ts,
-                    version: self.version,
-                    end_key: self.end_key,
-                    key_locks,
-                    key_old_writes,
-                    next_lock_key,
-                    next_write_key,
-                };
-                Ok(ProcessResult::NextCommand {
-                    cmd: Command::FlashbackToVersion(next_cmd),
-                })
+                });
             }
+            Ok(ProcessResult::Res)
+        } else {
+            let next_cmd = FlashbackToVersion {
+                ctx: self.ctx,
+                deadline: self.deadline,
+                start_ts: self.start_ts,
+                commit_ts: self.commit_ts,
+                version: self.version,
+                end_key: self.end_key,
+                key_locks,
+                key_old_writes,
+                next_lock_key,
+                next_write_key,
+            };
+            Ok(ProcessResult::NextCommand {
+                cmd: Command::FlashbackToVersion(next_cmd),
+            })
         }
     }
 }
