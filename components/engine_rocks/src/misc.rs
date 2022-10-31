@@ -329,10 +329,17 @@ impl MiscExt for RocksEngine {
                 != 0
     }
 
-    fn create_checkpoint(&self, basedb_out_dir: &Path) -> result::Result<(), String> {
-        self.as_inner()
-            .new_checkpointer()?
-            .create_at(basedb_out_dir, None, 0)
+    fn create_checkpoint(
+        &self,
+        basedb_out_dir: &Path,
+        titan_out_dir: Option<&Path>,
+        log_size_for_flush: u64,
+    ) -> result::Result<(), String> {
+        self.as_inner().new_checkpointer()?.create_at(
+            basedb_out_dir,
+            titan_out_dir,
+            log_size_for_flush,
+        )
     }
 }
 

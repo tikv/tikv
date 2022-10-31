@@ -77,7 +77,12 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
-    fn create_checkpoint(&self, basedb_out_dir: &Path) -> result::Result<(), String> {
+    fn create_checkpoint(
+        &self,
+        basedb_out_dir: &Path,
+        titan_out_dir: Option<&Path>,
+        log_size_for_flush: u64,
+    ) -> result::Result<(), String> {
         panic!()
     }
 }
