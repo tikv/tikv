@@ -48,6 +48,7 @@ make_auto_flush_static_metric! {
         stale,
         decode,
         epoch,
+        cancel,
     }
 
     pub label_enum RegionHashType {
