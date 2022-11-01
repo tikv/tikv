@@ -69,13 +69,17 @@ pub fn flashback_to_version_read_write<S: Snapshot>(
                 commit_ts: flashback_commit_ts,
             }));
         }
-        // Although the first flashback preparation phase make sure there will be no
-        // writes other than flashback after it, we can't return it ASAP.
+        // Although the first flashback preparation phase makes sure there will be no
+        // writes other than flashback after it, we CAN NOT return directly here.
         // Suppose the second phase procedure contains two batches to flashback. After
-        // the first batch is committed, if the region is down, client will retry the
-        // flashback from the very first beginning, because the data in the first batch
-        // has been written the flashbacked data with the same commit_ts, So we need to
-        // skip it to make sure to keep writing the data that is needed.
+        // the first batch is committed, if the region is down, the client will retry
+        // the flashback from the very first beginning, because the data in the
+        // first batch has been written the flashbacked data with the same
+        // `commit_ts`, So we need to skip it to ensure the following data will
+        // be flashbacked continuously.
+        // And some large key modifications will exceed the max txn size limit
+        // through the execution, the write will forcibly finish the batch of data.
+        // So it may happen that part of the keys in a batch may be flashbacked.
         if *commit_ts == flashback_commit_ts {
             continue;
         }
