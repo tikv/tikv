@@ -33,6 +33,8 @@ test-engines-panic = [
 nortcheck = ["proxy_server/nortcheck"]
 backup-stream-debug = ["proxy_server/backup-stream-debug"]
 
+pprof-fp = ["proxy_server/pprof-fp"]
+
 [lib]
 name = "raftstore_proxy"
 crate-type = ["cdylib"]

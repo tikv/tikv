@@ -33,6 +33,8 @@ test-engines-panic = [
 nortcheck = ["engine_rocks/nortcheck"]
 backup-stream-debug = ["backup-stream/backup-stream-debug"]
 
+pprof-fp = ["tikv/pprof-fp"]
+
 [dependencies]
 api_version = { workspace = true }
 async-stream = "0.2"
