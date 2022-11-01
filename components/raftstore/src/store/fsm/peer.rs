@@ -1391,7 +1391,7 @@ where
             SignificantMsg::CatchUpLogs(catch_up_logs) => {
                 self.on_catch_up_logs_for_merge(catch_up_logs);
             }
-            SignificantMsg::StoreResolved { group_id, .. } => {
+            SignificantMsg::StoreResolved { group_id, store_id } => {
                 let state = self.ctx.global_replication_state.lock().unwrap();
                 if state.status().get_mode() != ReplicationMode::DrAutoSync {
                     return;
@@ -1400,11 +1400,13 @@ where
                     return;
                 }
                 drop(state);
-                self.fsm
-                    .peer
-                    .raft_group
-                    .raft
-                    .assign_commit_groups(&[(self.fsm.peer_id(), group_id)]);
+                if let Some(peer_id) = find_peer(self.region(), store_id).map(|p| p.get_id()) {
+                    self.fsm
+                        .peer
+                        .raft_group
+                        .raft
+                        .assign_commit_groups(&[(peer_id, group_id)]);
+                }
             }
             SignificantMsg::CaptureChange {
                 cmd,
