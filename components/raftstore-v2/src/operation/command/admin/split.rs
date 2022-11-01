@@ -12,7 +12,7 @@ use engine_traits::{
 use keys::enc_end_key;
 use kvproto::{
     metapb::{self, Region},
-    raft_cmdpb::{AdminRequest, AdminResponse},
+    raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest},
     raft_serverpb::{RaftMessage, RegionLocalState},
 };
 use raft::{eraftpb::Message, prelude::MessageType, RawNode};
@@ -22,8 +22,8 @@ use raftstore::{
         fsm::apply::{self, extract_split_keys, ApplyResult, NewSplitPeer},
         metrics::PEER_ADMIN_CMD_COUNTER,
         util::{self, KeysInfoFormatter},
-        InspectedRaftMessage, PdTask, PeerPessimisticLocks, PeerStat, ReadDelegate, ReadProgress,
-        TrackVer, Transport, RAFT_INIT_LOG_INDEX,
+        InspectedRaftMessage, PdTask, PeerPessimisticLocks, PeerStat, ProposalContext,
+        ReadDelegate, ReadProgress, TrackVer, Transport, RAFT_INIT_LOG_INDEX,
     },
     Result,
 };
@@ -210,6 +210,21 @@ impl<EK: KvEngine, R> Apply<EK, R> {
                 tablet_index: log_index,
             }),
         ))
+    }
+}
+
+impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    pub fn propose_split<T>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        req: RaftCmdRequest,
+    ) -> Result<u64> {
+        let mut proposal_ctx = ProposalContext::empty();
+        proposal_ctx.insert(ProposalContext::SYNC_LOG);
+        proposal_ctx.insert(ProposalContext::SPLIT);
+
+        let data = req.write_to_bytes().unwrap();
+        self.propose_with_proposal_ctx(store_ctx, data, proposal_ctx.to_vec())
     }
 }
 

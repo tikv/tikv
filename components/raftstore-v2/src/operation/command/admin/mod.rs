@@ -5,7 +5,7 @@ mod split;
 
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
-    raft_cmdpb::{AdminRequest, RaftCmdRequest},
+    raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest},
     raft_serverpb::PeerState,
 };
 use protobuf::Message;
@@ -75,7 +75,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.propose_conf_change(ctx, req)
         } else {
             // propose other admin command.
-            self.propose_command(ctx, req)
+            match cmd_type {
+                AdminCmdType::Split | AdminCmdType::BatchSplit => self.propose_split(ctx, req),
+                _ => unimplemented!(),
+            }
         };
         if let Err(e) = &res {
             info!(

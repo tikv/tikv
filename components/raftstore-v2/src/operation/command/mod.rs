@@ -182,16 +182,26 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     #[inline]
     fn propose<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>, data: Vec<u8>) -> Result<u64> {
-        ctx.raft_metrics.propose.normal.inc();
+        self.propose_with_proposal_ctx(ctx, data, vec![])
+    }
+
+    #[inline]
+    fn propose_with_proposal_ctx<T>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        data: Vec<u8>,
+        proposal_ctx: Vec<u8>,
+    ) -> Result<u64> {
+        store_ctx.raft_metrics.propose.normal.inc();
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
-        if data.len() as u64 > ctx.cfg.raft_entry_max_size.0 {
+        if data.len() as u64 > store_ctx.cfg.raft_entry_max_size.0 {
             return Err(Error::RaftEntryTooLarge {
                 region_id: self.region_id(),
                 entry_size: data.len() as u64,
             });
         }
         let last_index = self.raft_group().raft.raft_log.last_index();
-        self.raft_group_mut().propose(vec![], data)?;
+        self.raft_group_mut().propose(proposal_ctx, data)?;
         if self.raft_group().raft.raft_log.last_index() == last_index {
             // The message is dropped silently, this usually due to leader absence
             // or transferring leader. Both cases can be considered as NotLeader error.
