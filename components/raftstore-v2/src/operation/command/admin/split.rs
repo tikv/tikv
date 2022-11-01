@@ -42,49 +42,28 @@ pub fn validate_batch_split(
     req: &mut AdminRequest,
     region: &Region,
 ) -> Result<()> {
-    if !req.has_splits() {
+    if !req.has_splits() || req.get_splits().get_requests().is_empty() {
         return Err(box_err!(
             "cmd_type is BatchSplit but it doesn't have splits request, message maybe \
              corrupted!"
                 .to_owned()
         ));
     }
-    let mut split_reqs: Vec<SplitRequest> = req.mut_splits().take_requests().into();
-    let split_reqs = split_reqs
-        .into_iter()
-        .enumerate()
-        .filter_map(|(i, mut split)| {
-            let key = split.take_split_key();
-            let key = strip_timestamp_if_exists(key);
-            if is_valid_split_key(&key, i, region) {
-                split.split_key = key;
-                Some(split)
-            } else {
-                None
-            }
-        })
-        .coalesce(|prev, curr| {
-            // Make sure that the split keys are sorted and unique.
-            if prev.split_key < curr.split_key {
-                Err((prev, curr))
-            } else {
-                warn!(
-                    logger,
-                    "skip invalid split key: key should not be larger than the previous.";
-                    "key" => log_wrappers::Value::key(&curr.split_key),
-                    "previous" => log_wrappers::Value::key(&prev.split_key),
-                );
-                Ok(prev)
-            }
-        })
-        .collect::<Vec<_>>();
-
-    if split_reqs.is_empty() {
-        Err(box_err!("no valid key found for split.".to_owned()))
-    } else {
-        req.mut_splits().set_requests(split_reqs.into());
-        Ok(())
+    let split_reqs: &[SplitRequest] = req.mut_splits().get_requests();
+    let count = split_reqs.len();
+    for i in 1..count {
+        if split_reqs[i - 1].get_split_key() >= split_reqs[i].get_split_key() {
+            return Err(box_err!(format!(
+                "Split keys in the request are not in ascending order: {:?}",
+                req
+            )));
+        }
     }
+
+    util::check_key_in_region_exclusive(split_reqs[0].get_split_key(), region)?;
+    util::check_key_in_region_exclusive(split_reqs[count - 1].get_split_key(), region)?;
+
+    Ok(())
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -277,7 +256,7 @@ mod test {
         codec::bytes::encode_bytes,
         config::VersionTrack,
         store::{new_learner_peer, new_peer},
-        worker::{dummy_future_scheduler, FutureScheduler, Scheduler, Worker, dummy_scheduler},
+        worker::{dummy_future_scheduler, dummy_scheduler, FutureScheduler, Scheduler, Worker},
     };
 
     use super::*;
@@ -566,24 +545,6 @@ mod test {
         assert_eq!(apply.tablet().get_value(b"k04").unwrap().unwrap(), b"v4");
     }
 
-    fn new_row_key(table_id: i64, row_id: i64, version_id: u64) -> Vec<u8> {
-        let mut key = table::encode_row_key(table_id, row_id);
-        key = encode_bytes(&key);
-        key.write_u64::<BigEndian>(version_id).unwrap();
-        key
-    }
-
-    fn new_index_key(table_id: i64, idx_id: i64, datums: &[Datum], version_id: u64) -> Vec<u8> {
-        let mut key = table::encode_index_seek_key(
-            table_id,
-            idx_id,
-            &datum::encode_key(&mut EvalContext::default(), datums).unwrap(),
-        );
-        key = encode_bytes(&key);
-        key.write_u64::<BigEndian>(version_id).unwrap();
-        key
-    }
-
     fn new_batch_split_request(keys: Vec<Vec<u8>>) -> AdminRequest {
         let mut req = AdminRequest::default();
         req.set_cmd_type(AdminCmdType::BatchSplit);
@@ -598,8 +559,9 @@ mod test {
     #[test]
     fn test_validate_batch_split() {
         let mut region = Region::default();
-        let start_key = new_row_key(1, 1, 1);
-        region.set_start_key(start_key.clone());
+        let start_key = b"k05";
+        region.set_start_key(b"k05".to_vec());
+        region.set_end_key(b"k10".to_vec());
         let logger = slog_global::borrow_global().new(o!());
 
         let mut req = AdminRequest::default();
@@ -613,7 +575,7 @@ mod test {
 
         req.set_cmd_type(AdminCmdType::Split);
         let mut split_req = SplitRequest::default();
-        split_req.set_split_key(new_row_key(1, 2, 0));
+        split_req.set_split_key(b"k06".to_vec());
         req.set_split(split_req);
         // Split is deprecated
         assert!(
@@ -623,79 +585,40 @@ mod test {
                 .contains("cmd_type is BatchSplit but it doesn't have splits request")
         );
 
-        // Empty key should be skipped.
-        let mut split_keys = vec![vec![]];
-        // Start key should be skipped.
-        split_keys.push(start_key);
-
-        req = new_batch_split_request(split_keys.clone());
-        // Although invalid keys should be skipped, but if all keys are
-        // invalid, errors should be reported.
+        req = new_batch_split_request(vec![vec![]]);
+        req.mut_splits().mut_requests().clear();
         assert!(
             validate_batch_split(&logger, &mut req, &region)
                 .unwrap_err()
                 .to_string()
-                .contains("no valid key found for split")
+                .contains("cmd_type is BatchSplit but it doesn't have splits request")
         );
 
-        let mut key = new_row_key(1, 2, 0);
-        let mut expected_key = key[..key.len() - 8].to_vec();
-        split_keys.push(key);
-        let mut expected_keys = vec![expected_key.clone()];
+        req = new_batch_split_request(vec![b"k07".to_vec(), b"k08".to_vec(), b"k06".to_vec()]);
+        assert!(
+            validate_batch_split(&logger, &mut req, &region)
+                .unwrap_err()
+                .to_string()
+                .contains("Split keys in the request are not in ascending order")
+        );
 
-        // Extra version of same key will be ignored.
-        key = new_row_key(1, 2, 1);
-        split_keys.push(key);
+        req = new_batch_split_request(vec![b"k04".to_vec(), b"k07".to_vec(), b"k08".to_vec()]);
+        assert!(
+            validate_batch_split(&logger, &mut req, &region)
+                .unwrap_err()
+                .to_string()
+                .contains("not in region")
+        );
 
-        key = new_index_key(2, 2, &[Datum::I64(1), Datum::Bytes(b"brgege".to_vec())], 0);
-        expected_key = key[..key.len() - 8].to_vec();
-        split_keys.push(key);
-        expected_keys.push(expected_key.clone());
+        req = new_batch_split_request(vec![b"k06".to_vec(), b"k07".to_vec(), b"k11".to_vec()]);
+        assert!(
+            validate_batch_split(&logger, &mut req, &region)
+                .unwrap_err()
+                .to_string()
+                .contains("not in region")
+        );
 
-        // Extra version of same key will be ignored.
-        key = new_index_key(2, 2, &[Datum::I64(1), Datum::Bytes(b"brgege".to_vec())], 5);
-        split_keys.push(key);
-
-        expected_key =
-            encode_bytes(b"t\x80\x00\x00\x00\x00\x00\x00\xea_r\x80\x00\x00\x00\x00\x05\x82\x7f");
-        key = expected_key.clone();
-        key.extend_from_slice(b"\x80\x00\x00\x00\x00\x00\x00\xd3");
-        split_keys.push(key);
-        expected_keys.push(expected_key.clone());
-
-        // Split at table prefix.
-        key = encode_bytes(b"t\x80\x00\x00\x00\x00\x00\x00\xee");
-        split_keys.push(key.clone());
-        expected_keys.push(key);
-
-        // Raw key should be preserved.
-        split_keys.push(b"xyz".to_vec());
-        expected_keys.push(b"xyz".to_vec());
-
-        key = encode_bytes(b"xyz:1");
-        key.write_u64::<BigEndian>(0).unwrap();
-        split_keys.push(key);
-        expected_key = encode_bytes(b"xyz:1");
-        expected_keys.push(expected_key);
-
-        req = new_batch_split_request(split_keys);
-        req.mut_splits().set_right_derive(true);
+        req = new_batch_split_request(vec![b"k06".to_vec(), b"k07".to_vec(), b"k08".to_vec()]);
         validate_batch_split(&logger, &mut req, &region).unwrap();
-        assert!(req.get_splits().get_right_derive());
-        assert_eq!(req.get_splits().get_requests().len(), expected_keys.len());
-        for (i, (req, expected_key)) in req
-            .get_splits()
-            .get_requests()
-            .iter()
-            .zip(expected_keys)
-            .enumerate()
-        {
-            assert_eq!(
-                req.get_split_key(),
-                expected_key.as_slice(),
-                "case {}",
-                i + 1
-            );
-        }
     }
 }
