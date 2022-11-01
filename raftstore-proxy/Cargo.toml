@@ -5,6 +5,34 @@ license = "Apache-2.0"
 edition = "2018"
 publish = false
 
+[features]
+tcmalloc = ["proxy_server/tcmalloc"]
+jemalloc = ["proxy_server/jemalloc"]
+mimalloc = ["proxy_server/mimalloc"]
+snmalloc = ["proxy_server/snmalloc"]
+portable = ["proxy_server/portable"]
+sse = ["proxy_server/sse"]
+mem-profiling = ["proxy_server/mem-profiling"]
+failpoints = ["proxy_server/failpoints"]
+
+cloud-aws = ["proxy_server/cloud-aws"]
+cloud-gcp = ["proxy_server/cloud-gcp"]
+cloud-azure = ["proxy_server/cloud-azure"]
+test-engine-kv-rocksdb = [
+  "proxy_server/test-engine-kv-rocksdb"
+]
+test-engine-raft-raft-engine = [
+  "proxy_server/test-engine-raft-raft-engine"
+]
+test-engines-rocksdb = [
+  "proxy_server/test-engines-rocksdb",
+]
+test-engines-panic = [
+  "proxy_server/test-engines-panic",
+]
+nortcheck = ["proxy_server/nortcheck"]
+backup-stream-debug = ["proxy_server/backup-stream-debug"]
+
 [lib]
 name = "raftstore_proxy"
 crate-type = ["cdylib"]
