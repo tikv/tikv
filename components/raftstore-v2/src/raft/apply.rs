@@ -22,8 +22,6 @@ use crate::{
 
 /// Apply applies all the committed commands to kv db.
 pub struct Apply<EK: KvEngine, R> {
-    store_id: u64,
-
     peer: metapb::Peer,
     /// publish the update of the tablet
     remote_tablet: CachedTablet<EK>,
@@ -50,7 +48,6 @@ pub struct Apply<EK: KvEngine, R> {
 impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn new(
-        store_id: u64,
         peer: metapb::Peer,
         region_state: RegionLocalState,
         res_reporter: R,
@@ -59,7 +56,6 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         logger: Logger,
     ) -> Self {
         Apply {
-            store_id,
             peer,
             tablet: remote_tablet.latest().unwrap().clone(),
             remote_tablet,
@@ -74,11 +70,6 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             res_reporter,
             logger,
         }
-    }
-
-    #[inline]
-    pub fn store_id(&self) -> u64 {
-        self.store_id
     }
 
     #[inline]
@@ -128,11 +119,6 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn region_state_mut(&mut self) -> &mut RegionLocalState {
         &mut self.region_state
-    }
-
-    #[inline]
-    pub fn set_region_state(&mut self, region_state: RegionLocalState) {
-        self.region_state = region_state;
     }
 
     #[inline]

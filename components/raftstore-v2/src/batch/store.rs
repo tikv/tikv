@@ -47,7 +47,6 @@ use crate::{
 
 /// A per-thread context shared by the [`StoreFsm`] and multiple [`PeerFsm`]s.
 pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
-    pub store_id: u64,
     /// A logger without any KV. It's clean for creating new PeerFSM.
     pub logger: Logger,
     /// The transport for sending messages to peers on other stores.
@@ -311,7 +310,6 @@ where
     fn build(&mut self, priority: batch_system::Priority) -> Self::Handler {
         let cfg = self.cfg.value().clone();
         let poll_ctx = StoreContext {
-            store_id: self.store_id,
             logger: self.logger.clone(),
             trans: self.trans.clone(),
             current_time: None,

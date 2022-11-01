@@ -76,7 +76,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         } else {
             // propose other admin command.
             match cmd_type {
-                AdminCmdType::Split | AdminCmdType::BatchSplit => self.propose_split(ctx, req),
+                AdminCmdType::Split => Err(box_err!(
+                    "Split is deprecated. Please use BatchSplit instead."
+                )),
+                AdminCmdType::BatchSplit => self.propose_split(ctx, req),
                 _ => unimplemented!(),
             }
         };

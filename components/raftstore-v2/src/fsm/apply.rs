@@ -58,7 +58,6 @@ pub struct ApplyFsm<EK: KvEngine, R> {
 
 impl<EK: KvEngine, R> ApplyFsm<EK, R> {
     pub fn new(
-        store_id: u64,
         peer: metapb::Peer,
         region_state: RegionLocalState,
         res_reporter: R,
@@ -68,7 +67,6 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
     ) -> (ApplyScheduler, Self) {
         let (tx, rx) = future::unbounded(WakePolicy::Immediately);
         let apply = Apply::new(
-            store_id,
             peer,
             region_state,
             res_reporter,

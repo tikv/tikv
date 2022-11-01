@@ -37,6 +37,7 @@ error_code = { workspace = true }
 fail = "0.5"
 file_system = { workspace = true }
 futures = { version = "0.3", features = ["compat"] }
+itertools = "0.10"
 keys = { workspace = true }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 log_wrappers = { workspace = true }
@@ -53,11 +54,13 @@ tracker = { workspace = true }
 txn_types = { workspace = true }
 
 [dev-dependencies]
+byteorder = "1.2"
 engine_test = { workspace = true }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tempfile = "3.0"
 test_pd = { workspace = true }
 test_util = { workspace = true }
+tidb_query_datatype = { workspace = true }
 
 [[test]]
 name = "raftstore-v2-failpoints"

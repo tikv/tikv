@@ -3,13 +3,15 @@
 use engine_traits::{
     Checkpointer, KvEngine, OpenOptions, RaftEngine, TabletFactory, CF_DEFAULT, SPLIT_PREFIX,
 };
+use itertools::Itertools;
 use kvproto::{
     metapb::Region,
-    raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest},
+    raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, SplitRequest},
     raft_serverpb::RegionLocalState,
 };
 use protobuf::Message;
 use raftstore::{
+    coprocessor::split_observer::{is_valid_split_key, strip_timestamp_if_exists},
     store::{
         fsm::apply::extract_split_keys,
         metrics::PEER_ADMIN_CMD_COUNTER,
@@ -18,7 +20,8 @@ use raftstore::{
     },
     Result,
 };
-use slog::{info, warn};
+use slog::{info, warn, Logger};
+use tikv_util::box_err;
 
 use crate::{
     batch::StoreContext,
@@ -34,28 +37,73 @@ pub struct SplitResult {
     pub tablet_index: u64,
 }
 
-impl<EK: KvEngine, R> Apply<EK, R> {
-    pub fn exec_split(
-        &mut self,
-        req: &AdminRequest,
-        log_index: u64,
-    ) -> Result<(AdminResponse, AdminCmdResult)> {
-        info!(
-            self.logger,
-            "split is deprecated, redirect to use batch split";
-        );
-        let split = req.get_split().to_owned();
-        let mut admin_req = AdminRequest::default();
-        admin_req
-            .mut_splits()
-            .set_right_derive(split.get_right_derive());
-        admin_req.mut_splits().mut_requests().push(split);
-        // This method is executed only when there are unapplied entries after being
-        // restarted. So there will be no callback, it's OK to return a response
-        // that does not matched with its request.
-        self.exec_batch_split(req, log_index)
+pub fn validate_batch_split(
+    logger: &Logger,
+    req: &mut AdminRequest,
+    region: &Region,
+) -> Result<()> {
+    if !req.has_splits() {
+        return Err(box_err!(
+            "cmd_type is BatchSplit but it doesn't have splits request, message maybe \
+             corrupted!"
+                .to_owned()
+        ));
     }
+    let mut split_reqs: Vec<SplitRequest> = req.mut_splits().take_requests().into();
+    let split_reqs = split_reqs
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, mut split)| {
+            let key = split.take_split_key();
+            let key = strip_timestamp_if_exists(key);
+            if is_valid_split_key(&key, i, region) {
+                split.split_key = key;
+                Some(split)
+            } else {
+                None
+            }
+        })
+        .coalesce(|prev, curr| {
+            // Make sure that the split keys are sorted and unique.
+            if prev.split_key < curr.split_key {
+                Err((prev, curr))
+            } else {
+                warn!(
+                    logger,
+                    "skip invalid split key: key should not be larger than the previous.";
+                    "key" => log_wrappers::Value::key(&curr.split_key),
+                    "previous" => log_wrappers::Value::key(&prev.split_key),
+                );
+                Ok(prev)
+            }
+        })
+        .collect::<Vec<_>>();
 
+    if split_reqs.is_empty() {
+        Err(box_err!("no valid key found for split.".to_owned()))
+    } else {
+        req.mut_splits().set_requests(split_reqs.into());
+        Ok(())
+    }
+}
+
+impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    pub fn propose_split<T>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        mut req: RaftCmdRequest,
+    ) -> Result<u64> {
+        validate_batch_split(&self.logger, req.mut_admin_request(), self.region())?;
+        let mut proposal_ctx = ProposalContext::empty();
+        proposal_ctx.insert(ProposalContext::SYNC_LOG);
+        proposal_ctx.insert(ProposalContext::SPLIT);
+
+        let data = req.write_to_bytes().unwrap();
+        self.propose_with_proposal_ctx(store_ctx, data, proposal_ctx.to_vec())
+    }
+}
+
+impl<EK: KvEngine, R> Apply<EK, R> {
     pub fn exec_batch_split(
         &mut self,
         req: &AdminRequest,
@@ -172,11 +220,9 @@ impl<EK: KvEngine, R> Apply<EK, R> {
                     e
                 )
             });
-        // Here, we open the tablet without registering as it is the split version. We
-        // will register it when switching it to the normal version.
         let tablet = self
             .tablet_factory()
-            .open_tablet_raw(&derived_path, region_id, log_index, OpenOptions::default())
+            .open_tablet(region_id, Some(log_index), OpenOptions::default())
             .unwrap();
         self.publish_tablet(tablet);
 
@@ -200,21 +246,6 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     }
 }
 
-impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
-    pub fn propose_split<T>(
-        &mut self,
-        store_ctx: &mut StoreContext<EK, ER, T>,
-        req: RaftCmdRequest,
-    ) -> Result<u64> {
-        let mut proposal_ctx = ProposalContext::empty();
-        proposal_ctx.insert(ProposalContext::SYNC_LOG);
-        proposal_ctx.insert(ProposalContext::SPLIT);
-
-        let data = req.write_to_bytes().unwrap();
-        self.propose_with_proposal_ctx(store_ctx, data, proposal_ctx.to_vec())
-    }
-}
-
 #[cfg(test)]
 mod test {
     use std::sync::{
@@ -222,6 +253,7 @@ mod test {
         Arc,
     };
 
+    use byteorder::{BigEndian, WriteBytesExt};
     use collections::HashMap;
     use engine_test::{
         ctor::{CfOptions, DbOptions},
@@ -231,13 +263,18 @@ mod test {
     use engine_traits::{CfOptionsExt, Peekable, WriteBatch, ALL_CFS};
     use futures::channel::mpsc::unbounded;
     use kvproto::{
-        raft_cmdpb::{BatchSplitRequest, PutRequest, RaftCmdResponse, SplitRequest},
+        raft_cmdpb::{AdminCmdType, BatchSplitRequest, PutRequest, RaftCmdResponse, SplitRequest},
         raft_serverpb::{PeerState, RaftApplyState, RegionLocalState},
     };
     use raftstore::store::{cmd_resp::new_error, Config};
     use slog::o;
     use tempfile::TempDir;
+    use tidb_query_datatype::{
+        codec::{datum, table, Datum},
+        expr::EvalContext,
+    };
     use tikv_util::{
+        codec::bytes::encode_bytes,
         config::VersionTrack,
         store::{new_learner_peer, new_peer},
         worker::{FutureScheduler, Scheduler},
@@ -383,7 +420,6 @@ mod test {
 
         let (reporter, _) = MockReporter::new();
         let mut apply = Apply::new(
-            store_id,
             region
                 .get_peers()
                 .iter()
@@ -526,5 +562,138 @@ mod test {
         apply.exec_batch_split(&req, 50).unwrap();
         assert!(apply.write_batch_mut().is_none());
         assert_eq!(apply.tablet().get_value(b"k04").unwrap().unwrap(), b"v4");
+    }
+
+    fn new_row_key(table_id: i64, row_id: i64, version_id: u64) -> Vec<u8> {
+        let mut key = table::encode_row_key(table_id, row_id);
+        key = encode_bytes(&key);
+        key.write_u64::<BigEndian>(version_id).unwrap();
+        key
+    }
+
+    fn new_index_key(table_id: i64, idx_id: i64, datums: &[Datum], version_id: u64) -> Vec<u8> {
+        let mut key = table::encode_index_seek_key(
+            table_id,
+            idx_id,
+            &datum::encode_key(&mut EvalContext::default(), datums).unwrap(),
+        );
+        key = encode_bytes(&key);
+        key.write_u64::<BigEndian>(version_id).unwrap();
+        key
+    }
+
+    fn new_batch_split_request(keys: Vec<Vec<u8>>) -> AdminRequest {
+        let mut req = AdminRequest::default();
+        req.set_cmd_type(AdminCmdType::BatchSplit);
+        for key in keys {
+            let mut split_req = SplitRequest::default();
+            split_req.set_split_key(key);
+            req.mut_splits().mut_requests().push(split_req);
+        }
+        req
+    }
+
+    #[test]
+    fn test_validate_batch_split() {
+        let mut region = Region::default();
+        let start_key = new_row_key(1, 1, 1);
+        region.set_start_key(start_key.clone());
+        let logger = slog_global::borrow_global().new(o!());
+
+        let mut req = AdminRequest::default();
+        // default admin request should be rejected
+        assert!(
+            validate_batch_split(&logger, &mut req, &region)
+                .unwrap_err()
+                .to_string()
+                .contains("cmd_type is BatchSplit but it doesn't have splits request")
+        );
+
+        req.set_cmd_type(AdminCmdType::Split);
+        let mut split_req = SplitRequest::default();
+        split_req.set_split_key(new_row_key(1, 2, 0));
+        req.set_split(split_req);
+        // Split is deprecated
+        assert!(
+            validate_batch_split(&logger, &mut req, &region)
+                .unwrap_err()
+                .to_string()
+                .contains("cmd_type is BatchSplit but it doesn't have splits request")
+        );
+
+        // Empty key should be skipped.
+        let mut split_keys = vec![vec![]];
+        // Start key should be skipped.
+        split_keys.push(start_key);
+
+        req = new_batch_split_request(split_keys.clone());
+        // Although invalid keys should be skipped, but if all keys are
+        // invalid, errors should be reported.
+        assert!(
+            validate_batch_split(&logger, &mut req, &region)
+                .unwrap_err()
+                .to_string()
+                .contains("no valid key found for split")
+        );
+
+        let mut key = new_row_key(1, 2, 0);
+        let mut expected_key = key[..key.len() - 8].to_vec();
+        split_keys.push(key);
+        let mut expected_keys = vec![expected_key.clone()];
+
+        // Extra version of same key will be ignored.
+        key = new_row_key(1, 2, 1);
+        split_keys.push(key);
+
+        key = new_index_key(2, 2, &[Datum::I64(1), Datum::Bytes(b"brgege".to_vec())], 0);
+        expected_key = key[..key.len() - 8].to_vec();
+        split_keys.push(key);
+        expected_keys.push(expected_key.clone());
+
+        // Extra version of same key will be ignored.
+        key = new_index_key(2, 2, &[Datum::I64(1), Datum::Bytes(b"brgege".to_vec())], 5);
+        split_keys.push(key);
+
+        expected_key =
+            encode_bytes(b"t\x80\x00\x00\x00\x00\x00\x00\xea_r\x80\x00\x00\x00\x00\x05\x82\x7f");
+        key = expected_key.clone();
+        key.extend_from_slice(b"\x80\x00\x00\x00\x00\x00\x00\xd3");
+        split_keys.push(key);
+        expected_keys.push(expected_key.clone());
+
+        // Split at table prefix.
+        key = encode_bytes(b"t\x80\x00\x00\x00\x00\x00\x00\xee");
+        split_keys.push(key.clone());
+        expected_keys.push(key);
+
+        // Raw key should be preserved.
+        split_keys.push(b"xyz".to_vec());
+        expected_keys.push(b"xyz".to_vec());
+
+        key = encode_bytes(b"xyz:1");
+        key.write_u64::<BigEndian>(0).unwrap();
+        split_keys.push(key);
+        expected_key = encode_bytes(b"xyz:1");
+        expected_keys.push(expected_key);
+
+        req = new_batch_split_request(split_keys);
+        req.mut_splits().set_right_derive(true);
+        validate_batch_split(&logger, &mut req, &region).unwrap();
+        assert!(req.get_splits().get_right_derive());
+        assert_eq!(req.get_splits().get_requests().len(), expected_keys.len());
+        for (i, (req, expected_key)) in req
+            .get_splits()
+            .get_requests()
+            .iter()
+            .zip(expected_keys)
+            .enumerate()
+        {
+            assert_eq!(
+                req.get_split_key(),
+                expected_key.as_slice(),
+                "case {}",
+                i + 1
+            );
+        }
     }
 }

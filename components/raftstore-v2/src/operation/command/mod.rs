@@ -122,7 +122,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let tablet = self.tablet().clone();
         let logger = self.logger.clone();
         let (apply_scheduler, mut apply_fsm) = ApplyFsm::new(
-            store_ctx.store_id,
             self.peer().clone(),
             region_state,
             mailbox,
@@ -417,7 +416,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             let cmd_type = req.get_admin_request().get_cmd_type();
             let (admin_resp, admin_result) = match cmd_type {
                 AdminCmdType::CompactLog => unimplemented!(),
-                AdminCmdType::Split => self.exec_split(admin_req, entry.index)?,
+                AdminCmdType::Split => {
+                    return Err(box_err!(
+                        "Split is deprecated. Please use BatchSplit instead."
+                    ));
+                }
                 AdminCmdType::BatchSplit => self.exec_batch_split(admin_req, entry.index)?,
                 AdminCmdType::PrepareMerge => unimplemented!(),
                 AdminCmdType::CommitMerge => unimplemented!(),
