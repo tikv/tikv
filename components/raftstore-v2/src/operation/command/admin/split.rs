@@ -320,8 +320,7 @@ mod test {
                 let state = apply.region_state();
                 assert_eq!(state.tablet_index, log_index);
                 assert_eq!(state.get_region(), region);
-                let tablet_path =
-                    factory.tablet_path_with_prefix(SPLIT_PREFIX, region.id, log_index);
+                let tablet_path = factory.tablet_path(region.id, log_index);
                 assert!(factory.exists_raw(&tablet_path));
             } else {
                 assert_eq! {
