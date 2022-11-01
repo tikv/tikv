@@ -1,42 +1,34 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::VecDeque, io, sync::Arc};
+use std::{io, sync::Arc};
 
-use batch_system::BasicMailbox;
-use collections::{HashMap, HashMapEntry, HashSet};
-use crossbeam::channel::internal::SelectHandle;
+use collections::HashMap;
 use engine_traits::{
-    CfOptions, Checkpointer, DeleteStrategy, KvEngine, MiscExt, OpenOptions, RaftEngine,
-    RaftEngineReadOnly, RaftLogBatch, Range, TabletFactory, CF_DEFAULT, DATA_CFS, SPLIT_PREFIX,
+    CfOptions, Checkpointer, KvEngine, OpenOptions, RaftEngine, Range, TabletFactory, CF_DEFAULT,
+    SPLIT_PREFIX,
 };
-use keys::enc_end_key;
 use kvproto::{
     metapb::{self, Region},
     raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest},
-    raft_serverpb::{RaftMessage, RegionLocalState},
+    raft_serverpb::RegionLocalState,
 };
-use raft::{eraftpb::Message, prelude::MessageType, RawNode};
+use protobuf::Message;
 use raftstore::{
-    coprocessor::RegionChangeReason,
     store::{
-        fsm::apply::{self, extract_split_keys, ApplyResult, NewSplitPeer},
+        fsm::apply::{self, extract_split_keys},
         metrics::PEER_ADMIN_CMD_COUNTER,
         util::{self, KeysInfoFormatter},
-        InspectedRaftMessage, PdTask, PeerPessimisticLocks, PeerStat, ProposalContext,
-        ReadDelegate, ReadProgress, TrackVer, Transport, RAFT_INIT_LOG_INDEX,
+        PeerStat, ProposalContext, RAFT_INIT_LOG_INDEX,
     },
     Result,
 };
 use slog::{error, info, warn};
-use tikv_util::box_err;
-use time::Timespec;
 
 use crate::{
     batch::StoreContext,
-    fsm::{PeerFsm, PeerFsmDelegate},
     operation::AdminCmdResult,
-    raft::{write_initial_states, Apply, Peer, Storage},
-    router::{ApplyRes, PeerMsg, StoreMsg},
+    raft::{Apply, Peer},
+    router::ApplyRes,
 };
 
 #[derive(Debug)]
@@ -237,7 +229,7 @@ mod test {
         kv::TestTabletFactoryV2,
         raft,
     };
-    use engine_traits::{CfOptionsExt, Peekable, ALL_CFS};
+    use engine_traits::{CfOptionsExt, Peekable, WriteBatch, ALL_CFS};
     use futures::channel::mpsc::unbounded;
     use kvproto::{
         raft_cmdpb::{BatchSplitRequest, PutRequest, RaftCmdResponse, SplitRequest},
