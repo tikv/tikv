@@ -859,6 +859,7 @@ async fn start<S, R, E>(
             continue;
         } else {
             debug!("connection established"; "store_id" => back_end.store_id, "addr" => %addr);
+            first_time = false;
         }
 
         let client = TikvClient::new(channel);
