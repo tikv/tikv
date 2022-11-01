@@ -199,7 +199,7 @@ impl<PD: PdClient + 'static> FlushObserver for BasicFlushObserver<PD> {
             .pd_cli
             .update_service_safe_point(
                 format!("backup-stream-{}-{}", task, self.store_id),
-                TimeStamp::new(rts),
+                TimeStamp::new(rts - 1),
                 // Add a service safe point for 30 mins (6x the default flush interval).
                 // It would probably be safe.
                 Duration::from_secs(1800),
@@ -299,12 +299,19 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::assert_matches;
+    use std::{
+        assert_matches,
+        collections::HashMap,
+        sync::{Arc, RwLock},
+        time::Duration,
+    };
 
+    use futures::future::ok;
     use kvproto::metapb::*;
+    use pd_client::{PdClient, PdFuture};
     use txn_types::TimeStamp;
 
-    use super::RegionIdWithVersion;
+    use super::{BasicFlushObserver, FlushObserver, RegionIdWithVersion};
     use crate::GetCheckpointResult;
 
     fn region(id: u64, version: u64, conf_version: u64) -> Region {
@@ -341,5 +348,51 @@ mod tests {
         mgr.update_region_checkpoint(&region(1, 33, 8), TimeStamp::new(24));
         let r = mgr.get_from_region(RegionIdWithVersion::new(1, 33));
         assert_matches::assert_matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 24);
+    }
+
+    struct MockPdClient {
+        safepoint: RwLock<HashMap<String, TimeStamp>>,
+    }
+
+    impl PdClient for MockPdClient {
+        fn update_service_safe_point(
+            &self,
+            name: String,
+            safepoint: TimeStamp,
+            _ttl: Duration,
+        ) -> PdFuture<()> {
+            // let _ = self.safepoint.insert(name, safepoint);
+            self.safepoint.write().unwrap().insert(name, safepoint);
+
+            Box::pin(ok(()))
+        }
+    }
+
+    impl MockPdClient {
+        fn new() -> Self {
+            Self {
+                safepoint: RwLock::new(HashMap::default()),
+            }
+        }
+
+        fn get_service_safe_point(&self, name: String) -> Option<TimeStamp> {
+            self.safepoint.read().unwrap().get(&name).copied()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_after() {
+        let store_id = 1;
+        let pd_cli = Arc::new(MockPdClient::new());
+        let mut flush_observer = BasicFlushObserver::new(pd_cli.clone(), store_id);
+        let task = String::from("test");
+        let rts = 12345;
+
+        let r = flush_observer.after(&task, rts).await;
+        assert_eq!(r.is_ok(), true);
+
+        let serivce_id = format!("backup-stream-{}-{}", task, store_id);
+        let r = pd_cli.get_service_safe_point(serivce_id).unwrap();
+        assert_eq!(r.into_inner(), rts - 1);
     }
 }
