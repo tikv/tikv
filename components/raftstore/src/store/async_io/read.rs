@@ -1,16 +1,21 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt;
+use std::{
+    fmt,
+    marker::PhantomData,
+    sync::{atomic::AtomicBool, Arc},
+};
 
-use engine_traits::RaftEngine;
+use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
-use raft::GetEntriesContext;
+use kvproto::raft_serverpb::RegionLocalState;
+use raft::{eraftpb::Snapshot as RaftSnapshot, GetEntriesContext};
 use tikv_util::worker::Runnable;
 
 use crate::store::{RaftlogFetchResult, MAX_INIT_ENTRY_COUNT};
 
-pub enum Task {
-    PeerStorage {
+pub enum ReadTask<EK> {
+    FetchLogs {
         region_id: u64,
         context: GetEntriesContext,
         low: u64,
@@ -19,13 +24,23 @@ pub enum Task {
         tried_cnt: usize,
         term: u64,
     },
-    // More to support, suck as fetch entries ayschronously when apply and schedule merge
+
+    // GenTabletSnapshot is used to generate tablet snapshot.
+    GenTabletSnapshot {
+        region_id: u64,
+        tablet: EK,
+        region_state: RegionLocalState,
+        last_applied_term: u64,
+        last_applied_index: u64,
+        canceled: Arc<AtomicBool>,
+        for_balance: bool,
+    },
 }
 
-impl fmt::Display for Task {
+impl<EK> fmt::Display for ReadTask<EK> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Task::PeerStorage {
+            ReadTask::FetchLogs {
                 region_id,
                 context,
                 low,
@@ -38,6 +53,9 @@ impl fmt::Display for Task {
                 "Fetch Raft Logs [region: {}, low: {}, high: {}, max_size: {}] for sending with context {:?}, tried: {}, term: {}",
                 region_id, low, high, max_size, context, tried_cnt, term,
             ),
+            ReadTask::GenTabletSnapshot { region_id, .. } => {
+                write!(f, "Snapshot gen for {}", region_id)
+            }
         }
     }
 }
@@ -49,38 +67,42 @@ pub struct FetchedLogs {
 }
 
 /// A router for receiving fetched result.
-pub trait LogFetchedNotifier: Send {
-    fn notify(&self, region_id: u64, fetched: FetchedLogs);
+pub trait AsyncReadNotifier: Send {
+    fn notify_logs_fetched(&self, region_id: u64, fetched: FetchedLogs);
+    fn notify_snapshot_generated(&self, region_id: u64, snapshot: Box<RaftSnapshot>);
 }
 
-pub struct Runner<ER, N>
+pub struct ReadRunner<EK, ER, N>
 where
+    EK: KvEngine,
     ER: RaftEngine,
-    N: LogFetchedNotifier,
+    N: AsyncReadNotifier,
 {
     notifier: N,
     raft_engine: ER,
+    _phantom: PhantomData<EK>,
 }
 
-impl<ER: RaftEngine, N: LogFetchedNotifier> Runner<ER, N> {
-    pub fn new(notifier: N, raft_engine: ER) -> Runner<ER, N> {
-        Runner {
+impl<EK: KvEngine, ER: RaftEngine, N: AsyncReadNotifier> ReadRunner<EK, ER, N> {
+    pub fn new(notifier: N, raft_engine: ER) -> ReadRunner<EK, ER, N> {
+        ReadRunner {
             notifier,
             raft_engine,
+            _phantom: PhantomData,
         }
     }
 }
 
-impl<ER, N> Runnable for Runner<ER, N>
+impl<EK, ER, N> Runnable for ReadRunner<EK, ER, N>
 where
+    EK: KvEngine,
     ER: RaftEngine,
-    N: LogFetchedNotifier,
+    N: AsyncReadNotifier,
 {
-    type Task = Task;
-
-    fn run(&mut self, task: Task) {
+    type Task = ReadTask<EK>;
+    fn run(&mut self, task: ReadTask<EK>) {
         match task {
-            Task::PeerStorage {
+            ReadTask::FetchLogs {
                 region_id,
                 low,
                 high,
@@ -104,7 +126,7 @@ where
                     .map(|c| (*c as u64) != high - low)
                     .unwrap_or(false);
                 fail_point!("worker_async_fetch_raft_log");
-                self.notifier.notify(
+                self.notifier.notify_logs_fetched(
                     region_id,
                     FetchedLogs {
                         context,
@@ -118,6 +140,11 @@ where
                         }),
                     },
                 );
+            }
+            ReadTask::GenTabletSnapshot { region_id, .. } => {
+                // TODO: implement generate tablet snapshot for raftstore v2
+                self.notifier
+                    .notify_snapshot_generated(region_id, Box::new(RaftSnapshot::default()));
             }
         }
     }
