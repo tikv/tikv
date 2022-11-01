@@ -839,7 +839,7 @@ async fn start<S, R, E>(
         }
         let channel = addr_channel.as_ref().unwrap().0.clone();
 
-        info!("connecting to store"; "store_id" => back_end.store_id, "addr" => %addr);
+        debug!("connecting to store"; "store_id" => back_end.store_id, "addr" => %addr);
         if !channel.wait_for_connected(backoff_duration).await {
             error!("wait connect timeout"; "store_id" => back_end.store_id, "addr" => addr);
 
@@ -858,7 +858,7 @@ async fn start<S, R, E>(
             }
             continue;
         } else {
-            info!("connection established"; "store_id" => back_end.store_id, "addr" => %addr);
+            debug!("connection established"; "store_id" => back_end.store_id, "addr" => %addr);
         }
 
         let client = TikvClient::new(channel);
