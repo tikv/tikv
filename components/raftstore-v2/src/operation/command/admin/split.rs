@@ -55,8 +55,6 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         info!(
             self.logger,
             "split is deprecated, redirect to use batch split";
-            "region_id" => self.region_state().get_region().id,
-            "peer_id" => self.peer().id,
         );
         let split = req.get_split().to_owned();
         let mut admin_req = AdminRequest::default();
@@ -86,8 +84,6 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         info!(
             self.logger,
             "split region";
-            "region_id" => region_id,
-            "peer_id" => self.peer().id,
             "region" => ?derived,
             "keys" => %KeysInfoFormatter(keys.iter()),
         );
@@ -135,8 +131,9 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             regions.push(derived.clone());
         }
 
-        // flush the writes before the split and remove the write batch of the old
-        // tablet
+        // We will create checkpoint of the current tablet for both derived region and
+        // split regions. Before the creation, we should flush the writes and remove the
+        // write batch
         self.flush_write();
         self.write_batch_mut().take();
 
