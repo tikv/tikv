@@ -565,7 +565,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
     StoreFsmDelegate<'a, EK, ER, T>
 {
     fn on_tick(&mut self, tick: StoreTick) {
-        let t = TiInstant::now_coarse();
+        let timer = TiInstant::now_coarse();
         match tick {
             StoreTick::PdStoreHeartbeat => self.on_pd_store_heartbeat_tick(),
             StoreTick::SnapGc => self.on_snap_mgr_gc(),
@@ -575,8 +575,10 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             StoreTick::CleanupImportSST => self.on_cleanup_import_sst_tick(),
             StoreTick::RaftEnginePurge => self.on_raft_engine_purge_tick(),
         }
-        let elapsed = t.saturating_elapsed();
-        RAFT_EVENT_DURATION
+        let elapsed = timer.saturating_elapsed();
+        self.ctx
+            .raft_metrics
+            .event_time
             .get(tick.tag())
             .observe(duration_to_sec(elapsed) as f64);
         slow_log!(
@@ -588,6 +590,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
     }
 
     fn handle_msgs(&mut self, msgs: &mut Vec<StoreMsg<EK>>) {
+        let timer = TiInstant::now_coarse();
         for m in msgs.drain(..) {
             match m {
                 StoreMsg::Tick(tick) => self.on_tick(tick),
@@ -623,6 +626,11 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 StoreMsg::CreatePeer(region) => self.on_create_peer(region),
             }
         }
+        self.ctx
+            .raft_metrics
+            .event_time
+            .store_msg
+            .observe(duration_to_sec(timer.saturating_elapsed()) as f64);
     }
 
     fn start(&mut self, store: metapb::Store) {

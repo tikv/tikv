@@ -37,6 +37,7 @@ use raft::eraftpb::{self, ConfChangeType, MessageType};
 use raft::{self, Progress, ReadState, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT};
 use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
+<<<<<<< HEAD
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::sys::disk::DiskUsage;
 use tikv_util::sys::memory_usage_reaches_high_water;
@@ -44,6 +45,19 @@ use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::worker::{ScheduleError, Scheduler};
 use tikv_util::{box_err, debug, defer, error, info, trace, warn};
 use tikv_util::{escape, is_zero_duration, Either};
+=======
+use tikv_util::{
+    box_err, debug, defer, error, escape, info, is_zero_duration,
+    mpsc::{self, LooseBoundedSender, Receiver},
+    store::{find_peer, is_learner, region_on_same_stores},
+    sys::{disk::DiskUsage, memory_usage_reaches_high_water},
+    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant},
+    trace, warn,
+    worker::{ScheduleError, Scheduler},
+    Either,
+};
+use tracker::GLOBAL_TRACKERS;
+>>>>>>> 497ae1b0a1 (raft_client: Report store unreachable once until being connected again (#13677))
 use txn_types::WriteBatchFlags;
 
 use self::memtrace::*;
@@ -564,6 +578,8 @@ where
     }
 
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK>>) {
+        let timer = TiInstant::now_coarse();
+        let count = msgs.len();
         for m in msgs.drain(..) {
             match m {
                 PeerMsg::RaftMessage(msg) => {
@@ -641,6 +657,32 @@ where
                 }
             }
         }
+<<<<<<< HEAD
+=======
+        self.on_loop_finished();
+        self.ctx.raft_metrics.peer_msg_len.observe(count as f64);
+        self.ctx
+            .raft_metrics
+            .event_time
+            .peer_msg
+            .observe(duration_to_sec(timer.saturating_elapsed()) as f64);
+    }
+
+    #[inline]
+    fn on_loop_finished(&mut self) {
+        let ready_concurrency = self.ctx.cfg.cmd_batch_concurrent_ready_max_count;
+        let should_propose = self.ctx.sync_write_worker.is_some()
+            || ready_concurrency == 0
+            || self.fsm.peer.unpersisted_ready_len() < ready_concurrency;
+        let force_delay_fp = || {
+            fail_point!(
+                "force_delay_propose_batch_raft_command",
+                self.ctx.sync_write_worker.is_none(),
+                |_| true
+            );
+            false
+        };
+>>>>>>> 497ae1b0a1 (raft_client: Report store unreachable once until being connected again (#13677))
         // Propose batch request which may be still waiting for more raft-command
         if self.ctx.sync_write_worker.is_some() {
             self.propose_batch_raft_command(true);
@@ -1091,6 +1133,336 @@ where
                 )
             })),
             DiskFullOpt::NotAllowedOnFull,
+<<<<<<< HEAD
+=======
+        );
+    }
+
+    fn on_significant_msg(&mut self, msg: SignificantMsg<EK::Snapshot>) {
+        match msg {
+            SignificantMsg::SnapshotStatus {
+                to_peer_id, status, ..
+            } => {
+                // Report snapshot status to the corresponding peer.
+                self.report_snapshot_status(to_peer_id, status);
+            }
+            SignificantMsg::Unreachable { to_peer_id, .. } => {
+                if self.fsm.peer.is_leader() {
+                    self.fsm.peer.raft_group.report_unreachable(to_peer_id);
+                } else if to_peer_id == self.fsm.peer.leader_id() {
+                    self.fsm.reset_hibernate_state(GroupState::Chaos);
+                    self.register_raft_base_tick();
+                }
+            }
+            SignificantMsg::StoreUnreachable { store_id } => {
+                if let Some(peer_id) = find_peer(self.region(), store_id).map(|p| p.get_id()) {
+                    if self.fsm.peer.is_leader() {
+                        self.fsm.peer.raft_group.report_unreachable(peer_id);
+                    } else if peer_id == self.fsm.peer.leader_id() {
+                        self.fsm.reset_hibernate_state(GroupState::Chaos);
+                        self.register_raft_base_tick();
+                    }
+                }
+            }
+            SignificantMsg::MergeResult {
+                target_region_id,
+                target,
+                result,
+            } => {
+                self.on_merge_result(target_region_id, target, result);
+            }
+            SignificantMsg::CatchUpLogs(catch_up_logs) => {
+                self.on_catch_up_logs_for_merge(catch_up_logs);
+            }
+            SignificantMsg::StoreResolved { group_id, store_id } => {
+                let state = self.ctx.global_replication_state.lock().unwrap();
+                if state.status().get_mode() != ReplicationMode::DrAutoSync {
+                    return;
+                }
+                if state.status().get_dr_auto_sync().get_state() == DrAutoSyncState::Async {
+                    return;
+                }
+                drop(state);
+                if let Some(peer_id) = find_peer(self.region(), store_id).map(|p| p.get_id()) {
+                    self.fsm
+                        .peer
+                        .raft_group
+                        .raft
+                        .assign_commit_groups(&[(peer_id, group_id)]);
+                }
+            }
+            SignificantMsg::CaptureChange {
+                cmd,
+                region_epoch,
+                callback,
+            } => self.on_capture_change(cmd, region_epoch, callback),
+            SignificantMsg::LeaderCallback(cb) => {
+                self.on_leader_callback(cb);
+            }
+            SignificantMsg::RaftLogGcFlushed => {
+                self.on_raft_log_gc_flushed();
+            }
+            SignificantMsg::RaftlogFetched(fetched_logs) => {
+                self.on_raft_log_fetched(fetched_logs.context, fetched_logs.logs);
+            }
+            SignificantMsg::EnterForceLeaderState {
+                syncer,
+                failed_stores,
+            } => {
+                self.on_enter_pre_force_leader(syncer, failed_stores);
+            }
+            SignificantMsg::ExitForceLeaderState => self.on_exit_force_leader(),
+            SignificantMsg::UnsafeRecoveryDemoteFailedVoters {
+                syncer,
+                failed_voters,
+            } => self.on_unsafe_recovery_pre_demote_failed_voters(syncer, failed_voters),
+            SignificantMsg::UnsafeRecoveryDestroy(syncer) => {
+                self.on_unsafe_recovery_destroy(syncer)
+            }
+            SignificantMsg::UnsafeRecoveryWaitApply(syncer) => {
+                self.on_unsafe_recovery_wait_apply(syncer)
+            }
+            SignificantMsg::UnsafeRecoveryFillOutReport(syncer) => {
+                self.on_unsafe_recovery_fill_out_report(syncer)
+            }
+            // for snapshot recovery (safe recovery)
+            SignificantMsg::SnapshotRecoveryWaitApply(syncer) => {
+                self.on_snapshot_recovery_wait_apply(syncer)
+            }
+            SignificantMsg::CheckPendingAdmin(ch) => self.on_check_pending_admin(ch),
+        }
+    }
+
+    fn on_enter_pre_force_leader(
+        &mut self,
+        syncer: UnsafeRecoveryForceLeaderSyncer,
+        failed_stores: HashSet<u64>,
+    ) {
+        match self.fsm.peer.force_leader {
+            Some(ForceLeaderState::PreForceLeader { .. }) => {
+                self.on_force_leader_fail();
+            }
+            Some(ForceLeaderState::ForceLeader { .. }) => {
+                // already is a force leader, do nothing
+                return;
+            }
+            Some(ForceLeaderState::WaitTicks { .. }) => {
+                self.fsm.peer.force_leader = None;
+            }
+            None => {}
+        }
+
+        if !self.fsm.peer.is_initialized() {
+            warn!(
+                "Unsafe recovery, cannot force leader since this peer is not initialized";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+            );
+            return;
+        }
+
+        let ticks = if self.fsm.peer.is_leader() {
+            if self.fsm.hibernate_state.group_state() == GroupState::Ordered {
+                warn!(
+                    "Unsafe recovery, reject pre force leader due to already being leader";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                );
+                return;
+            }
+            // wait two rounds of election timeout to trigger check quorum to step down the
+            // leader note: check quorum is triggered every `election_timeout` instead of
+            // `randomized_election_timeout`
+            Some(
+                self.fsm.peer.raft_group.raft.election_timeout() * 2
+                    - self.fsm.peer.raft_group.raft.election_elapsed,
+            )
+        // When election timeout is triggered, leader_id is set to INVALID_ID.
+        // But learner(not promotable) is a exception here as it wouldn't tick
+        // election.
+        } else if self.fsm.peer.raft_group.raft.promotable()
+            && self.fsm.peer.leader_id() != raft::INVALID_ID
+        {
+            if self.fsm.hibernate_state.group_state() == GroupState::Ordered
+                || self.fsm.hibernate_state.group_state() == GroupState::Chaos
+            {
+                warn!(
+                    "Unsafe recovery, reject pre force leader due to leader lease may not expired";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                );
+                return;
+            }
+            // wait one round of election timeout to make sure leader_id is invalid
+            Some(
+                self.fsm.peer.raft_group.raft.randomized_election_timeout()
+                    - self.fsm.peer.raft_group.raft.election_elapsed,
+            )
+        } else {
+            None
+        };
+
+        if let Some(ticks) = ticks {
+            info!(
+                "Unsafe recovery, enter wait ticks";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "ticks" => ticks,
+            );
+            self.fsm.peer.force_leader = Some(ForceLeaderState::WaitTicks {
+                syncer,
+                failed_stores,
+                ticks,
+            });
+            self.reset_raft_tick(if self.fsm.peer.is_leader() {
+                GroupState::Ordered
+            } else {
+                GroupState::Chaos
+            });
+            self.fsm.has_ready = true;
+            return;
+        }
+
+        let expected_alive_voter = self.get_force_leader_expected_alive_voter(&failed_stores);
+        if !expected_alive_voter.is_empty()
+            && self
+                .fsm
+                .peer
+                .raft_group
+                .raft
+                .prs()
+                .has_quorum(&expected_alive_voter)
+        {
+            warn!(
+                "Unsafe recovery, reject pre force leader due to has quorum";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+            );
+            return;
+        }
+
+        info!(
+            "Unsafe recovery, enter pre force leader state";
+            "region_id" => self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+            "alive_voter" => ?expected_alive_voter,
+        );
+
+        // Do not use prevote as prevote won't set `vote` to itself.
+        // When PD issues force leader on two different peer, it may cause
+        // two force leader in same term.
+        self.fsm.peer.raft_group.raft.pre_vote = false;
+        // trigger vote request to all voters, will check the vote result in
+        // `check_force_leader`
+        if let Err(e) = self.fsm.peer.raft_group.campaign() {
+            warn!(
+                "Unsafe recovery, campaign failed";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "err" => ?e,
+            );
+        }
+        assert_eq!(self.fsm.peer.get_role(), StateRole::Candidate);
+        if !self
+            .fsm
+            .peer
+            .raft_group
+            .raft
+            .prs()
+            .votes()
+            .get(&self.fsm.peer.peer_id())
+            .unwrap()
+        {
+            warn!(
+                "Unsafe recovery, pre force leader failed to campaign";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+            );
+            self.on_force_leader_fail();
+            return;
+        }
+
+        self.fsm.peer.force_leader = Some(ForceLeaderState::PreForceLeader {
+            syncer,
+            failed_stores,
+        });
+        self.fsm.has_ready = true;
+    }
+
+    fn on_force_leader_fail(&mut self) {
+        self.fsm.peer.raft_group.raft.pre_vote = true;
+        self.fsm.peer.raft_group.raft.set_check_quorum(true);
+        self.fsm.peer.force_leader = None;
+    }
+
+    fn on_enter_force_leader(&mut self) {
+        info!(
+            "Unsafe recovery, enter force leader state";
+            "region_id" => self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+        );
+        assert_eq!(self.fsm.peer.get_role(), StateRole::Candidate);
+
+        let failed_stores = match self.fsm.peer.force_leader.take() {
+            Some(ForceLeaderState::PreForceLeader { failed_stores, .. }) => failed_stores,
+            _ => unreachable!(),
+        };
+
+        let peer_ids: Vec<_> = self.fsm.peer.voters().iter().collect();
+        for peer_id in peer_ids {
+            let store_id = self
+                .region()
+                .get_peers()
+                .iter()
+                .find(|p| p.get_id() == peer_id)
+                .unwrap()
+                .get_store_id();
+            if !failed_stores.contains(&store_id) {
+                continue;
+            }
+
+            // make fake vote response
+            let mut msg = raft::eraftpb::Message::new();
+            msg.msg_type = MessageType::MsgRequestVoteResponse;
+            msg.reject = false;
+            msg.term = self.fsm.peer.term();
+            msg.from = peer_id;
+            msg.to = self.fsm.peer.peer_id();
+            self.fsm.peer.raft_group.step(msg).unwrap();
+        }
+
+        // after receiving all votes, should become leader
+        assert!(self.fsm.peer.is_leader());
+        self.fsm.peer.raft_group.raft.set_check_quorum(false);
+
+        // make sure it's not hibernated
+        self.reset_raft_tick(GroupState::Ordered);
+
+        self.fsm.peer.force_leader = Some(ForceLeaderState::ForceLeader {
+            time: TiInstant::now_coarse(),
+            failed_stores,
+        });
+        self.fsm.has_ready = true;
+    }
+
+    fn on_exit_force_leader(&mut self) {
+        if self.fsm.peer.force_leader.is_none() {
+            return;
+        }
+
+        info!(
+            "exit force leader state";
+            "region_id" => self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+        );
+        self.fsm.peer.force_leader = None;
+        // make sure it's not hibernated
+        assert_eq!(self.fsm.hibernate_state.group_state(), GroupState::Ordered);
+        // leader lease shouldn't be renewed in force leader state.
+        assert_eq!(
+            self.fsm.peer.leader_lease().inspect(None),
+            LeaseState::Expired
+>>>>>>> 497ae1b0a1 (raft_client: Report store unreachable once until being connected again (#13677))
         );
     }
 
