@@ -27,6 +27,7 @@
 #![feature(deadline_api)]
 #![feature(generic_associated_types)]
 #![feature(let_else)]
+#![feature(async_closure)]
 
 #[macro_use(fail_point)]
 extern crate fail;

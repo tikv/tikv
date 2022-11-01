@@ -918,6 +918,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         mut ctx: Context,
         keys: Vec<Key>,
         start_ts: TimeStamp,
+        batch_size: usize,
     ) -> impl Future<Output = Result<(Vec<Result<KvPair>>, KvGetStatistics)>> {
         let stage_begin_ts = Instant::now();
         const CMD: CommandKind = CommandKind::batch_get;
@@ -934,6 +935,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let api_version = self.api_version;
         let quota_limiter = self.quota_limiter.clone();
         let mut sample = quota_limiter.new_sample(true);
+        let read_pool = self.read_pool.clone();
         let res = self.read_pool.spawn_handle(
             async move {
                 let stage_scheduled_ts = Instant::now();
@@ -981,9 +983,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let stage_snap_recv_ts = begin_instant;
                     let mut statistics = Vec::with_capacity(keys.len());
                     let buckets = snapshot.ext().get_buckets();
-                    let (result, stats) = Self::with_perf_context(CMD, || {
-                        let _guard = sample.observe_cpu();
-                        let snap_store = SnapshotStore::new(
+                    let (result, stats) = {
+                        let mut snap_store = SnapshotStore::new(
                             snapshot,
                             start_ts,
                             ctx.get_isolation_level(),
@@ -992,9 +993,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             access_locks,
                             false,
                         );
+                        snap_store.set_read_pool(read_pool.clone());
+                        snap_store.set_priority(priority);
+                        snap_store.set_batch_size(batch_size);
                         let mut stats = Statistics::default();
                         let result = snap_store
                             .batch_get(&keys, &mut statistics)
+                            .await
                             .map_err(Error::from)
                             .map(|v| {
                                 let kv_pairs: Vec<_> = v
@@ -1024,7 +1029,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                 kv_pairs
                             });
                         (result, stats)
-                    });
+                    };
                     metrics::tls_collect_scan_details(CMD, &stats);
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
                         .get(CMD)
