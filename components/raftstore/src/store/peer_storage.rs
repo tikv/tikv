@@ -437,7 +437,7 @@ where
     }
 
     /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no
-    /// unavailable snapshot.
+    /// available snapshot.
     pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
         let mut snap_state = self.snap_state.borrow_mut();
         let mut tried_cnt = self.snap_tried_cnt.borrow_mut();
