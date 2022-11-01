@@ -1649,8 +1649,8 @@ pub mod tests {
                 }
                 let task = Task {
                     request: Request {
-                        start_key: b"".to_vec(),
-                        end_key: b"".to_vec(),
+                        start_key: b"1".to_vec(),
+                        end_key: b"2".to_vec(),
                         sub_ranges: ranges,
                         start_ts: 1.into(),
                         end_ts: 1.into(),
@@ -1681,22 +1681,41 @@ pub mod tests {
                 assert_eq!(resps.len(), expect.len());
             };
 
-            // Backup range from case.0 to case.1,
+        // Backup range from case.0 to case.1,
         // the case.2 is the expected results.
         type Case<'a> = (Vec<(&'a [u8], &'a [u8])>, Vec<(&'a [u8], &'a [u8])>);
 
         let case: Vec<Case<'_>> = vec![
-            (vec![(b"", b"1"), (b"1", b"2")], vec![(b"", b"1"), (b"1", b"2")]),
-            (vec![(b"", b"2"), (b"3", b"4")], vec![(b"", b"1"), (b"1", b"2"), (b"3", b"4")]),
-            (vec![(b"7", b"8"), (b"8", b"9")], vec![(b"7", b"8"), (b"8", b"9")]),
-            (vec![(b"8", b"9"), (b"6", b"8")], vec![(b"8", b"9"), (b"7", b"8")]),
+            (
+                vec![(b"", b"1"), (b"1", b"2")],
+                vec![(b"", b"1"), (b"1", b"2")],
+            ),
+            (
+                vec![(b"", b"2"), (b"3", b"4")],
+                vec![(b"", b"1"), (b"1", b"2"), (b"3", b"4")],
+            ),
+            (
+                vec![(b"7", b"8"), (b"8", b"9")],
+                vec![(b"7", b"8"), (b"8", b"9")],
+            ),
+            (
+                vec![(b"8", b"9"), (b"6", b"8")],
+                vec![(b"8", b"9"), (b"7", b"8")],
+            ),
             (
                 vec![(b"8", b"85"), (b"88", b"89"), (b"7", b"8")],
                 vec![(b"8", b"85"), (b"88", b"89"), (b"7", b"8")],
             ),
             (
                 vec![(b"8", b"85"), (b"", b"35"), (b"88", b"89"), (b"7", b"8")],
-                vec![(b"8", b"85"), (b"", b"1"), (b"1", b"2"), (b"3", b"35"), (b"88", b"89"), (b"7", b"8")],
+                vec![
+                    (b"8", b"85"),
+                    (b"", b"1"),
+                    (b"1", b"2"),
+                    (b"3", b"35"),
+                    (b"88", b"89"),
+                    (b"7", b"8"),
+                ],
             ),
             (vec![(b"", b"1")], vec![(b"", b"1")]),
             (vec![(b"", b"2")], vec![(b"", b"1"), (b"1", b"2")]),
@@ -1709,7 +1728,10 @@ pub mod tests {
             (vec![(b"2", b"3"), (b"4", b"6"), (b"6", b"7")], vec![]),
             (vec![(b"2", b"7")], vec![(b"3", b"4")]),
             (vec![(b"7", b"8")], vec![(b"7", b"8")]),
-            (vec![(b"3", b"")], vec![(b"3", b"4"), (b"7", b"9"), (b"9", b"")]),
+            (
+                vec![(b"3", b"")],
+                vec![(b"3", b"4"), (b"7", b"9"), (b"9", b"")],
+            ),
             (vec![(b"5", b"")], vec![(b"7", b"9"), (b"9", b"")]),
             (vec![(b"7", b"")], vec![(b"7", b"9"), (b"9", b"")]),
             (vec![(b"8", b"91")], vec![(b"8", b"9"), (b"9", b"91")]),
