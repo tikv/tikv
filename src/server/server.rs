@@ -329,18 +329,17 @@ pub mod test_router {
     use raftstore::Result as RaftStoreResult;
 
     use engine_rocks::{RocksEngine, RocksSnapshot};
-    use engine_traits::{KvEngine, Snapshot};
     use kvproto::raft_serverpb::RaftMessage;
 
     #[derive(Clone)]
     pub struct TestRaftStoreRouter {
-        tx: Sender<usize>,
+        tx: Sender<Either<PeerMsg<RocksEngine>, StoreMsg<RocksEngine>>>,
         significant_msg_sender: Sender<SignificantMsg<RocksSnapshot>>,
     }
 
     impl TestRaftStoreRouter {
         pub fn new(
-            tx: Sender<usize>,
+            tx: Sender<Either<PeerMsg<RocksEngine>, StoreMsg<RocksEngine>>>,
             significant_msg_sender: Sender<SignificantMsg<RocksSnapshot>>,
         ) -> TestRaftStoreRouter {
             TestRaftStoreRouter {
@@ -351,32 +350,38 @@ pub mod test_router {
     }
 
     impl StoreRouter<RocksEngine> for TestRaftStoreRouter {
-        fn send(&self, _: StoreMsg<RocksEngine>) -> RaftStoreResult<()> {
-            let _ = self.tx.send(1);
+        fn send(&self, msg: StoreMsg<RocksEngine>) -> RaftStoreResult<()> {
+            let _ = self.tx.send(Either::Right(msg));
             Ok(())
         }
     }
 
-    impl<S: Snapshot> ProposalRouter<S> for TestRaftStoreRouter {
+    impl ProposalRouter<RocksSnapshot> for TestRaftStoreRouter {
         fn send(
             &self,
-            _: RaftCommand<S>,
-        ) -> std::result::Result<(), crossbeam::channel::TrySendError<RaftCommand<S>>> {
-            let _ = self.tx.send(1);
+            cmd: RaftCommand<RocksSnapshot>,
+        ) -> std::result::Result<(), crossbeam::channel::TrySendError<RaftCommand<RocksSnapshot>>>
+        {
+            let _ = self.tx.send(Either::Left(PeerMsg::RaftCommand(cmd)));
             Ok(())
         }
     }
 
-    impl<EK: KvEngine> CasualRouter<EK> for TestRaftStoreRouter {
-        fn send(&self, _: u64, _: CasualMessage<EK>) -> RaftStoreResult<()> {
-            let _ = self.tx.send(1);
+    impl CasualRouter<RocksEngine> for TestRaftStoreRouter {
+        fn send(&self, _: u64, msg: CasualMessage<RocksEngine>) -> RaftStoreResult<()> {
+            let _ = self.tx.send(Either::Left(PeerMsg::CasualMessage(msg)));
             Ok(())
         }
     }
 
     impl RaftStoreRouter<RocksEngine> for TestRaftStoreRouter {
-        fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
-            let _ = self.tx.send(1);
+        fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
+            let _ = self
+                .tx
+                .send(Either::Left(PeerMsg::RaftMessage(InspectedRaftMessage {
+                    heap_size: 0,
+                    msg,
+                })));
             Ok(())
         }
 
@@ -389,8 +394,8 @@ pub mod test_router {
             Ok(())
         }
 
-        fn broadcast_normal(&self, _: impl FnMut() -> PeerMsg<RocksEngine>) {
-            let _ = self.tx.send(1);
+        fn broadcast_normal(&self, mut f: impl FnMut() -> PeerMsg<RocksEngine>) {
+            let _ = self.tx.send(Either::Left(f()));
         }
     }
 }
@@ -419,6 +424,7 @@ mod tests {
     use kvproto::raft_serverpb::RaftMessage;
     use resource_metering::ResourceTagFactory;
     use security::SecurityConfig;
+    use tikv_util::config::ReadableDuration;
     use tokio::runtime::Builder as TokioBuilder;
 
     #[derive(Clone)]
@@ -462,6 +468,8 @@ mod tests {
     fn test_peer_resolve() {
         let cfg = Config {
             addr: "127.0.0.1:0".to_owned(),
+            raft_client_max_backoff: ReadableDuration::millis(100),
+            raft_client_initial_reconnect_backoff: ReadableDuration::millis(100),
             ..Default::default()
         };
 

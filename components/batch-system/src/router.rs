@@ -1,18 +1,24 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::fsm::{Fsm, FsmScheduler, FsmState};
-use crate::mailbox::{BasicMailbox, Mailbox};
-use crate::metrics::CHANNEL_FULL_COUNTER_VEC;
 use collections::HashMap;
 use crossbeam::channel::{SendError, TrySendError};
 use std::cell::Cell;
 use std::mem;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use tikv_util::lru::LruCache;
-use tikv_util::Either;
-use tikv_util::{debug, info};
+use tikv_util::{
+    debug, info,
+    lru::LruCache,
+    time::{duration_to_sec, Instant},
+    Either,
+};
+
+use crate::{
+    fsm::{Fsm, FsmScheduler, FsmState},
+    mailbox::{BasicMailbox, Mailbox},
+    metrics::*,
+};
 
 /// A struct that traces the approximate memory usage of router.
 #[derive(Default)]
@@ -280,10 +286,12 @@ where
 
     /// Try to notify all normal fsm a message.
     pub fn broadcast_normal(&self, mut msg_gen: impl FnMut() -> N::Message) {
+        let timer = Instant::now_coarse();
         let mailboxes = self.normals.lock().unwrap();
         for mailbox in mailboxes.map.values() {
             let _ = mailbox.force_send(msg_gen(), &self.normal_scheduler);
         }
+        BROADCAST_NORMAL_DURATION.observe(duration_to_sec(timer.saturating_elapsed()) as f64);
     }
 
     /// Try to notify all fsm that the cluster is being shutdown.
