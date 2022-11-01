@@ -25,6 +25,7 @@ pub struct Apply<EK: KvEngine, R> {
     store_id: u64,
 
     peer: metapb::Peer,
+    /// publish the update of the tablet
     remote_tablet: CachedTablet<EK>,
     tablet: EK,
     write_batch: Option<EK::WriteBatch>,
@@ -103,9 +104,6 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn write_batch_or_default(&mut self) -> &mut EK::WriteBatch {
         if self.write_batch.is_none() {
-            // Other places (ex: raftstore) may have updated the tablet cache, so we should
-            // update it here.
-            self.tablet = self.remote_tablet.latest().unwrap().clone();
             self.write_batch = Some(self.tablet.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE));
         }
         self.write_batch.as_mut().unwrap()
@@ -138,8 +136,8 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     }
 
     #[inline]
-    pub fn tablet(&mut self) -> Option<EK> {
-        self.remote_tablet.latest().cloned()
+    pub fn tablet(&self) -> &EK {
+        &self.tablet
     }
 
     /// Publish the tablet so that it can be used by read worker.

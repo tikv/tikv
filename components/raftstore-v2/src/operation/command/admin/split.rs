@@ -145,7 +145,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         // memtable. We will freeze the memtable rather than flush it in the
         // following PR.
         let region_id = derived.get_id();
-        let tablet = self.tablet().unwrap();
+        let tablet = self.tablet().clone();
         let mut checkpointer = tablet.new_checkpointer().unwrap_or_else(|e| {
             panic!(
                 "{:?} fails to create checkpoint object: {:?}",
@@ -177,16 +177,14 @@ impl<EK: KvEngine, R> Apply<EK, R> {
                 });
         }
 
-        let derived_temp_path =
-            self.tablet_factory()
-                .tablet_path_with_prefix(SPLIT_PREFIX, region_id, log_index);
+        let derived_path = self.tablet_factory().tablet_path(region_id, log_index);
         checkpointer
-            .create_at(&derived_temp_path, None, 0)
+            .create_at(&derived_path, None, 0)
             .unwrap_or_else(|e| {
                 panic!(
                     "{:?} fails to create checkpoint with path {:?}: {:?}",
                     self.logger.list(),
-                    derived_temp_path,
+                    derived_path,
                     e
                 )
             });
@@ -194,12 +192,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         // will register it when switching it to the normal version.
         let tablet = self
             .tablet_factory()
-            .open_tablet_raw(
-                &derived_temp_path,
-                region_id,
-                log_index,
-                OpenOptions::default(),
-            )
+            .open_tablet_raw(&derived_path, region_id, log_index, OpenOptions::default())
             .unwrap();
         self.publish_tablet(tablet);
 
@@ -530,9 +523,6 @@ mod test {
         req.set_splits(splits);
         apply.exec_batch_split(&req, 50).unwrap();
         assert!(apply.write_batch_mut().is_none());
-        assert_eq!(
-            apply.tablet().unwrap().get_value(b"k04").unwrap().unwrap(),
-            b"v4"
-        );
+        assert_eq!(apply.tablet().get_value(b"k04").unwrap().unwrap(), b"v4");
     }
 }
