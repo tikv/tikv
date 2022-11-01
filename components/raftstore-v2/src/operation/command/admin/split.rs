@@ -266,7 +266,7 @@ mod test {
         raft_cmdpb::{AdminCmdType, BatchSplitRequest, PutRequest, RaftCmdResponse, SplitRequest},
         raft_serverpb::{PeerState, RaftApplyState, RegionLocalState},
     };
-    use raftstore::store::{cmd_resp::new_error, Config};
+    use raftstore::store::{cmd_resp::new_error, Config, ReadRunner};
     use slog::o;
     use tempfile::TempDir;
     use tidb_query_datatype::{
@@ -277,7 +277,7 @@ mod test {
         codec::bytes::encode_bytes,
         config::VersionTrack,
         store::{new_learner_peer, new_peer},
-        worker::{FutureScheduler, Scheduler},
+        worker::{dummy_future_scheduler, FutureScheduler, Scheduler, Worker, dummy_scheduler},
     };
 
     use super::*;
@@ -418,6 +418,7 @@ mod test {
         region_state.set_region(region.clone());
         region_state.set_tablet_index(5);
 
+        let (read_scheduler, rx) = dummy_scheduler();
         let (reporter, _) = MockReporter::new();
         let mut apply = Apply::new(
             region
@@ -430,6 +431,7 @@ mod test {
             reporter,
             CachedTablet::new(Some(tablet)),
             factory.clone(),
+            read_scheduler,
             logger.clone(),
         );
 
