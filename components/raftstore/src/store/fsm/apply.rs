@@ -38,8 +38,8 @@ use kvproto::{
     kvrpcpb::ExtraOp as TxnExtraOp,
     metapb::{PeerRole, Region, RegionEpoch},
     raft_cmdpb::{
-        AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
-        RaftCmdRequest, RaftCmdResponse, Request,
+        AdminCmdType, AdminRequest, AdminResponse, BatchSplitRequest, ChangePeerRequest, CmdType,
+        CommitMergeRequest, RaftCmdRequest, RaftCmdResponse, Request,
     },
     raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState},
 };
@@ -1899,6 +1899,42 @@ mod confchange_cmd_metric {
     }
 }
 
+// Validate the request and the split keys
+pub fn extract_split_keys(
+    split_reqs: &BatchSplitRequest,
+    region_to_split: &Region,
+) -> Result<VecDeque<Vec<u8>>> {
+    if split_reqs.get_requests().is_empty() {
+        return Err(box_err!("missing split requests"));
+    }
+    let mut keys: VecDeque<Vec<u8>> = VecDeque::with_capacity(split_reqs.get_requests().len() + 1);
+    for req in split_reqs.get_requests() {
+        let split_key = req.get_split_key();
+        if split_key.is_empty() {
+            return Err(box_err!("missing split key"));
+        }
+        if split_key
+            <= keys
+                .back()
+                .map_or_else(|| region_to_split.get_start_key(), Vec::as_slice)
+        {
+            return Err(box_err!("invalid split request: {:?}", split_reqs));
+        }
+        if req.get_new_peer_ids().len() != region_to_split.get_peers().len() {
+            return Err(box_err!(
+                "invalid new peer id count, need {:?}, but got {:?}",
+                region_to_split.get_peers(),
+                req.get_new_peer_ids()
+            ));
+        }
+        keys.push_back(split_key.to_vec());
+    }
+
+    util::check_key_in_region_exclusive(keys.back().unwrap(), region_to_split)?;
+
+    Ok(keys)
+}
+
 // Admin commands related.
 impl<EK> ApplyDelegate<EK>
 where
@@ -2368,37 +2404,8 @@ where
         PEER_ADMIN_CMD_COUNTER.batch_split.all.inc();
 
         let split_reqs = req.get_splits();
-        let right_derive = split_reqs.get_right_derive();
-        if split_reqs.get_requests().is_empty() {
-            return Err(box_err!("missing split requests"));
-        }
+        let mut keys = extract_split_keys(split_reqs, &self.region)?;
         let mut derived = self.region.clone();
-        let new_region_cnt = split_reqs.get_requests().len();
-        let mut regions = Vec::with_capacity(new_region_cnt + 1);
-        let mut keys: VecDeque<Vec<u8>> = VecDeque::with_capacity(new_region_cnt + 1);
-        for req in split_reqs.get_requests() {
-            let split_key = req.get_split_key();
-            if split_key.is_empty() {
-                return Err(box_err!("missing split key"));
-            }
-            if split_key
-                <= keys
-                    .back()
-                    .map_or_else(|| derived.get_start_key(), Vec::as_slice)
-            {
-                return Err(box_err!("invalid split request: {:?}", split_reqs));
-            }
-            if req.get_new_peer_ids().len() != derived.get_peers().len() {
-                return Err(box_err!(
-                    "invalid new peer id count, need {:?}, but got {:?}",
-                    derived.get_peers(),
-                    req.get_new_peer_ids()
-                ));
-            }
-            keys.push_back(split_key.to_vec());
-        }
-
-        util::check_key_in_region(keys.back().unwrap(), &self.region)?;
 
         info!(
             "split region";
@@ -2407,8 +2414,13 @@ where
             "region" => ?derived,
             "keys" => %KeysInfoFormatter(keys.iter()),
         );
+
+        let new_region_cnt = split_reqs.get_requests().len();
         let new_version = derived.get_region_epoch().get_version() + new_region_cnt as u64;
         derived.mut_region_epoch().set_version(new_version);
+
+        let right_derive = split_reqs.get_right_derive();
+        let mut regions = Vec::with_capacity(new_region_cnt + 1);
         // Note that the split requests only contain ids for new regions, so we need
         // to handle new regions and old region separately.
         if right_derive {
@@ -2423,6 +2435,7 @@ where
             regions.push(derived.clone());
         }
 
+        // Init split regions' meta info
         let mut new_split_regions: HashMap<u64, NewSplitPeer> = HashMap::default();
         for req in split_reqs.get_requests() {
             let mut new_region = Region::default();
@@ -2453,6 +2466,11 @@ where
             regions.push(derived.clone());
         }
 
+        // Generally, a peer is created in pending_create_peers when it is
+        // created by raft_message (or by split here) and removed from
+        // pending_create_peers when it has applied the snapshot. So, if the
+        // peer of the split region is already created by raft_message in
+        // pending_create_peers ,we decide to replace it.
         let mut replace_regions = HashSet::default();
         {
             let mut pending_create_peers = ctx.pending_create_peers.lock().unwrap();
@@ -2498,6 +2516,9 @@ where
                             self.tag, region_id, new_split_peer.peer_id, state
                         )
                     }
+                    // If the peer's state is already persisted, add some info in
+                    // new_split_peer.result so that we will skip this region in later
+                    // executions.
                     already_exist_regions.push((*region_id, new_split_peer.peer_id));
                     new_split_peer.result = Some(format!("state {:?} exist in kv engine", state));
                 }
