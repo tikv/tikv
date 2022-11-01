@@ -54,10 +54,9 @@ where
     T: StoreAddrResolver + 'static,
 {
     let env = Arc::new(Environment::new(2));
-    let mut config = Config::default();
+    let mut cfg = Config::default();
     config.raft_client_max_backoff = ReadableDuration::millis(100);
     config.raft_client_initial_reconnect_backoff = ReadableDuration::millis(100);
-    let cfg = Arc::new(VersionTrack::new(config));
     let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let worker = LazyWorker::new("test-raftclient");
     let loads = Arc::new(ThreadLoadPool::with_threshold(1000));
