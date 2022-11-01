@@ -766,17 +766,23 @@ where
     }
 }
 
-async fn maybe_backoff(backoff: Duration, last_wake_time: &mut Instant) {
+async fn maybe_backoff(backoff: Duration, last_wake_time: &mut Option<Instant>) {
     let now = Instant::now();
-    if *last_wake_time + backoff < now {
-        // We have spent long enough time in last retry, no need to backoff again.
-        *last_wake_time = now;
+    if let Some(last) = *last_wake_time {
+        if last + backoff < now {
+            // We have spent long enough time in last retry, no need to backoff again.
+            *last_wake_time = Some(now);
+            return;
+        }
+    } else {
+        *last_wake_time = Some(now);
         return;
     }
+
     if let Err(e) = GLOBAL_TIMER_HANDLE.delay(now + backoff).compat().await {
         error_unknown!(?e; "failed to backoff");
     }
-    *last_wake_time = Instant::now();
+    *last_wake_time = Some(Instant::now());
 }
 
 /// A future that drives the life cycle of a connection.
@@ -798,14 +804,12 @@ async fn start<S, R, E>(
     R: RaftStoreRouter<E> + Unpin + Send + 'static,
     E: KvEngine,
 {
-    let mut last_wake_time = Instant::now();
+    let mut last_wake_time = None;
     let mut first_time = true;
     let backoff_duration = back_end.builder.cfg.value().raft_client_max_backoff.0;
     let mut addr_channel = None;
     loop {
-        if !first_time {
-            maybe_backoff(backoff_duration, &mut last_wake_time).await;
-        }
+        maybe_backoff(backoff_duration, &mut last_wake_time).await;
         let f = back_end.resolve();
         let addr = match f.await {
             Ok(addr) => {
@@ -859,7 +863,6 @@ async fn start<S, R, E>(
             continue;
         } else {
             debug!("connection established"; "store_id" => back_end.store_id, "addr" => %addr);
-            first_time = false;
         }
 
         let client = TikvClient::new(channel);
@@ -888,6 +891,7 @@ async fn start<S, R, E>(
                     .router
                     .broadcast_unreachable(back_end.store_id);
                 addr_channel = None;
+                first_time = false;
             }
         }
     }
