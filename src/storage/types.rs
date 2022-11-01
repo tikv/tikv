@@ -159,7 +159,7 @@ pub enum PessimisticLockKeyResult {
     /// The lock is acquired successfully, and also checked if the key exists
     /// previously.
     Existence(bool),
-    /// There is a write conflict, but the lock is acquired ingoring the write
+    /// There is a write conflict, but the lock is acquired ignoring the write
     /// conflict.
     LockedWithConflict {
         /// The previous value of the key.

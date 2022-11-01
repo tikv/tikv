@@ -3268,15 +3268,11 @@ pub mod test_util {
         ) -> bool {
             match (lhs, rhs) {
                 (PessimisticLockKeyResult::Empty, PessimisticLockKeyResult::Empty) => true,
-                (PessimisticLockKeyResult::Value(l), PessimisticLockKeyResult::Value(r))
-                    if l == r =>
-                {
-                    true
-                }
+                (PessimisticLockKeyResult::Value(l), PessimisticLockKeyResult::Value(r)) => l == r,
                 (
                     PessimisticLockKeyResult::Existence(l),
                     PessimisticLockKeyResult::Existence(r),
-                ) if l == r => true,
+                ) => l == r,
                 (
                     PessimisticLockKeyResult::LockedWithConflict {
                         value: value1,
@@ -3286,9 +3282,9 @@ pub mod test_util {
                         value: value2,
                         conflict_ts: ts2,
                     },
-                ) if value1 == value2 && ts1 == ts2 => true,
+                ) => value1 == value2 && ts1 == ts2,
                 (PessimisticLockKeyResult::Waiting, PessimisticLockKeyResult::Waiting) => true,
-                (PessimisticLockKeyResult::Failed(_), PessimisticLockKeyResult::Failed(_)) => true,
+                (PessimisticLockKeyResult::Failed(_), PessimisticLockKeyResult::Failed(_)) => false,
                 _ => false,
             }
         }
