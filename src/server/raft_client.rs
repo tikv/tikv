@@ -707,6 +707,7 @@ where
             .default_gzip_compression_level(cfg.grpc_gzip_compression_level)
             .default_grpc_min_message_size_to_compress(cfg.grpc_min_message_size_to_compress)
             .max_reconnect_backoff(cfg.raft_client_max_backoff.0)
+            .initial_reconnect_backoff(cfg.raft_client_initial_reconnect_backoff.0)
             // hack: so it's different args, grpc will always create a new connection.
             .raw_cfg_int(
                 CString::new("random id").unwrap(),
@@ -802,7 +803,9 @@ async fn start<S, R, E>(
     let backoff_duration = back_end.builder.cfg.value().raft_client_max_backoff.0;
     let mut addr_channel = None;
     loop {
-        maybe_backoff(backoff_duration, &mut last_wake_time).await;
+        if !first_time {
+            maybe_backoff(backoff_duration, &mut last_wake_time).await;
+        }
         let f = back_end.resolve();
         let addr = match f.await {
             Ok(addr) => {
@@ -836,6 +839,7 @@ async fn start<S, R, E>(
         }
         let channel = addr_channel.as_ref().unwrap().0.clone();
 
+        info!("connecting to store"; "store_id" => back_end.store_id, "addr" => %addr);
         if !channel.wait_for_connected(backoff_duration).await {
             error!("wait connect timeout"; "store_id" => back_end.store_id, "addr" => addr);
 
@@ -853,6 +857,8 @@ async fn start<S, R, E>(
                     .broadcast_unreachable(back_end.store_id);
             }
             continue;
+        } else {
+            info!("connection established"; "store_id" => back_end.store_id, "addr" => %addr);
         }
 
         let client = TikvClient::new(channel);

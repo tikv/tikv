@@ -97,6 +97,11 @@ pub struct Config {
     #[serde(skip_serializing)]
     #[online_config(skip)]
     pub raft_client_max_backoff: ReadableDuration,
+    // Test only
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(skip)]
+    pub raft_client_initial_reconnect_backoff: ReadableDuration,
 
     pub raft_msg_max_batch_size: usize,
 
@@ -217,6 +222,7 @@ impl Default for Config {
             raft_client_grpc_send_msg_buffer: 512 * 1024,
             raft_client_queue_size: 8192,
             raft_client_max_backoff: ReadableDuration::secs(5),
+            raft_client_initial_reconnect_backoff: ReadableDuration::secs(1),
             raft_msg_max_batch_size: 128,
             grpc_compression_type: GrpcCompressionType::None,
             grpc_gzip_compression_level: DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL,

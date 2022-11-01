@@ -25,6 +25,7 @@ grpc-raft-conn-num = 1
 # disable it to save CPU for real tests.
 stats-concurrency = 0
 raft-client-max-backoff = "100ms"
+raft-client-initial-reconnect-backoff = "100ms"
 
 [server.labels]
 

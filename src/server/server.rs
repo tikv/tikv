@@ -493,6 +493,7 @@ mod tests {
         let cfg = Config {
             addr: "127.0.0.1:0".to_owned(),
             raft_client_max_backoff: ReadableDuration::millis(100),
+            raft_client_initial_reconnect_backoff: ReadableDuration::millis(100),
             ..Default::default()
         };
 

@@ -89,6 +89,7 @@ fn test_serde_custom_tikv_config() {
         raft_client_grpc_send_msg_buffer: 1234 * 1024,
         raft_client_queue_size: 1234,
         raft_client_max_backoff: ReadableDuration::secs(5),
+        raft_client_initial_reconnect_backoff: ReadableDuration::secs(1),
         raft_msg_max_batch_size: 123,
         concurrent_send_snap_limit: 4,
         concurrent_recv_snap_limit: 4,
