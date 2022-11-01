@@ -6,9 +6,7 @@ use txn_types::{Key, TimeStamp};
 use crate::storage::{
     mvcc::MvccReader,
     txn::{
-        commands::{
-            Command, CommandExt, FlashbackToVersion, ProcessResult, ReadCommand, TypedCommand,
-        },
+        commands::{Command, CommandExt, FlashbackToVersion, ProcessResult, ReadCommand},
         flashback_to_version_read_lock, flashback_to_version_read_write,
         sched_pool::tls_collect_keyread_histogram_vec,
         Error, ErrorInner, Result,

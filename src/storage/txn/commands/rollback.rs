@@ -10,8 +10,8 @@ use crate::storage::{
     txn::{
         cleanup,
         commands::{
-            Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
-            WriteCommand, WriteContext, WriteResult,
+            CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, WriteCommand, WriteContext,
+            WriteResult,
         },
         Result,
     },
@@ -65,8 +65,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Rollback {
             to_be_write: write_data,
             rows,
             pr: ProcessResult::Res,
-            lock_info: None,
+            lock_info: vec![],
             released_locks,
+            new_acquired_locks: vec![],
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
         })

@@ -1,7 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::fmt;
+use std::{
+    collections::hash_map::DefaultHasher,
+    fmt,
+    hash::{Hash, Hasher},
+};
 
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
@@ -40,16 +44,25 @@ pub struct ReleasedLock {
     pub start_ts: TimeStamp,
     pub commit_ts: TimeStamp,
     pub key: Key,
+    /// The hash value of the lock.
+    pub hash: u64,
+    pub hash_for_latch: u64,
     /// Whether it is a pessimistic lock.
     pub pessimistic: bool,
 }
 
 impl ReleasedLock {
     pub fn new(start_ts: TimeStamp, commit_ts: TimeStamp, key: Key, pessimistic: bool) -> Self {
+        let hash = key.gen_hash();
+        let mut hasher = DefaultHasher::new();
+        key.hash(&mut hasher);
+        let hash_for_latch = hasher.finish();
         Self {
             start_ts,
             commit_ts,
             key,
+            hash,
+            hash_for_latch,
             pessimistic,
         }
     }
@@ -101,6 +114,10 @@ impl MvccTxn {
 
     pub fn write_size(&self) -> usize {
         self.write_size
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.modifies.len() == 0 && self.locks_for_1pc.len() == 0
     }
 
     pub(crate) fn put_lock(&mut self, key: Key, lock: &Lock) {

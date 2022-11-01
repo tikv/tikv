@@ -11,8 +11,8 @@ use crate::storage::{
     mvcc::{MvccTxn, Result as MvccResult, SnapshotReader},
     txn::{
         commands::{
-            Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
-            WriteCommand, WriteContext, WriteResult,
+            CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, WriteCommand, WriteContext,
+            WriteResult,
         },
         Result,
     },
@@ -90,8 +90,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
             to_be_write: write_data,
             rows,
             pr: ProcessResult::MultiRes { results: vec![] },
-            lock_info: None,
+            lock_info: vec![],
             released_locks,
+            new_acquired_locks: vec![],
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
         })

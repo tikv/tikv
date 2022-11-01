@@ -126,6 +126,7 @@ make_auto_flush_static_metric! {
         batch_get_command,
         prewrite,
         acquire_pessimistic_lock,
+        acquire_pessimistic_lock_resumed,
         commit,
         cleanup,
         rollback,
@@ -154,6 +155,7 @@ make_auto_flush_static_metric! {
         raw_compare_and_swap,
         raw_atomic_store,
         raw_checksum,
+        wake_up_legacy_pessimistic_lock_wait,
     }
 
     pub label_enum CommandStageKind {
@@ -216,6 +218,14 @@ make_auto_flush_static_metric! {
         full,
     }
 
+    pub label_enum KeyWisePessimisticLockPhase {
+        convert_from_normal,
+        tidy_up_result,
+        finish_request,
+        schedule,
+        schedule_secondaries,
+    }
+
     pub struct CommandScanDetails: LocalIntCounter {
         "req" => CommandKind,
         "cf" => GcKeysCF,
@@ -270,6 +280,14 @@ make_auto_flush_static_metric! {
 
     pub struct InMemoryPessimisticLockingCounter: LocalIntCounter {
         "result" => InMemoryPessimisticLockingResult,
+    }
+
+    pub struct SchedulerReleaseLatchTimeHistogramVec: LocalHistogram {
+        "type" => CommandKind,
+    }
+
+    pub struct KeywisePessimisticLockDurationHistogramVec: LocalHistogram {
+        "type" => KeyWisePessimisticLockPhase,
     }
 }
 
@@ -599,4 +617,24 @@ lazy_static! {
         exponential_buckets(1.0, 2.0, 16).unwrap()
     )
     .unwrap();
+
+    pub static ref STORAGE_RELEASE_LATCH_DURATION_HISTOGRAM: HistogramVec = register_histogram_vec!(
+        "tikv_storage_release_latch_duration",
+        "Histogram of the duration of releasing latch",
+        &["type"],
+        exponential_buckets(1e-6f64, 4f64, 10).unwrap() // 1us ~ 262ms
+    )
+    .unwrap();
+    pub static ref STORAGE_RELEASE_LATCH_DURATION_HISTOGRAM_STATIC: SchedulerReleaseLatchTimeHistogramVec =
+        auto_flush_from!(STORAGE_RELEASE_LATCH_DURATION_HISTOGRAM, SchedulerReleaseLatchTimeHistogramVec);
+
+    pub static ref STORAGE_KEYWISE_PESSIMISTIC_LOCK_HANDLE_DURATION_HISTOGRAM: HistogramVec = register_histogram_vec!(
+        "tikv_storage_keywise_pessimistic_lock_handle_duration",
+        "Histogram of durations of heavy parts of keywise pessimistic lock",
+        &["type"],
+        exponential_buckets(1e-6f64, 4f64, 10).unwrap() // 1us ~ 262ms
+    )
+    .unwrap();
+    pub static ref STORAGE_KEYWISE_PESSIMISTIC_LOCK_HANDLE_DURATION_HISTOGRAM_STATIC: KeywisePessimisticLockDurationHistogramVec =
+        auto_flush_from!(STORAGE_KEYWISE_PESSIMISTIC_LOCK_HANDLE_DURATION_HISTOGRAM, KeywisePessimisticLockDurationHistogramVec);
 }

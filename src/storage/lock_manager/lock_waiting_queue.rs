@@ -80,12 +80,12 @@ use crate::storage::{
     metrics::*,
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
     txn::Error as TxnError,
-    types::{PessimisticLockParameters, PessimisticLockRes},
+    types::{PessimisticLockKeyResult, PessimisticLockParameters},
     Error as StorageError,
 };
 
 pub type CallbackWithSharedError<T> = Box<dyn FnOnce(Result<T, SharedError>) + Send + 'static>;
-pub type PessimisticLockKeyCallback = CallbackWithSharedError<PessimisticLockRes>;
+pub type PessimisticLockKeyCallback = CallbackWithSharedError<PessimisticLockKeyResult>;
 
 /// Represents an `AcquirePessimisticLock` request that's waiting for a lock,
 /// and contains the request's parameters.
@@ -93,6 +93,9 @@ pub struct LockWaitEntry {
     pub key: Key,
     pub lock_hash: u64,
     pub parameters: PessimisticLockParameters,
+    // `parameters` provides parameter for a request, but `should_not_exist` is specified key-wise.
+    // Put it in a separated
+    pub should_not_exist: bool,
     pub lock_wait_token: LockWaitToken,
     pub legacy_wake_up_index: Option<usize>,
     pub key_cb: Option<SyncWrapper<PessimisticLockKeyCallback>>,
@@ -589,7 +592,7 @@ mod tests {
 
     struct TestLockWaitEntryHandle {
         token: LockWaitToken,
-        wake_up_rx: Receiver<Result<PessimisticLockRes, SharedError>>,
+        wake_up_rx: Receiver<Result<PessimisticLockKeyResult, SharedError>>,
         cancel_cb: Box<dyn FnOnce()>,
     }
 
@@ -597,7 +600,7 @@ mod tests {
         fn wait_for_result_timeout(
             &self,
             timeout: Duration,
-        ) -> Option<Result<PessimisticLockRes, SharedError>> {
+        ) -> Option<Result<PessimisticLockKeyResult, SharedError>> {
             match self.wake_up_rx.recv_timeout(timeout) {
                 Ok(res) => Some(res),
                 Err(RecvTimeoutError::Timeout) => None,
@@ -608,7 +611,7 @@ mod tests {
             }
         }
 
-        fn wait_for_result(self) -> Result<PessimisticLockRes, SharedError> {
+        fn wait_for_result(self) -> Result<PessimisticLockKeyResult, SharedError> {
             self.wake_up_rx
                 .recv_timeout(Duration::from_secs(10))
                 .unwrap()
@@ -660,6 +663,7 @@ mod tests {
                 min_commit_ts: 0.into(),
                 check_existence: false,
                 is_first_lock: false,
+                lock_only_if_exists: false,
                 allow_lock_with_conflict: false,
             };
 
@@ -670,6 +674,7 @@ mod tests {
                 key,
                 lock_hash,
                 parameters,
+                should_not_exist: false,
                 lock_wait_token: token,
                 legacy_wake_up_index: None,
                 key_cb: Some(SyncWrapper::new(Box::new(move |res| tx.send(res).unwrap()))),
@@ -979,7 +984,7 @@ mod tests {
         assert!(queues.get_delayed_notify_id(b"k1").is_none());
         handles1
             .into_iter()
-            .for_each(|h| expect_write_conflict(&h.wait_for_result().unwrap_err().0, 5, 6));
+            .for_each(|h| expect_write_conflict(h.wait_for_result().unwrap_err().inner(), 5, 6));
         // 14 is not woken up.
         assert!(
             handles2[0]
@@ -1015,7 +1020,11 @@ mod tests {
 
         let mut it = handles2.into_iter();
         // Receive 14.
-        expect_write_conflict(&it.next().unwrap().wait_for_result().unwrap_err().0, 7, 8);
+        expect_write_conflict(
+            it.next().unwrap().wait_for_result().unwrap_err().inner(),
+            7,
+            8,
+        );
         // 15 is not woken up.
         assert!(
             it.next()
@@ -1076,7 +1085,7 @@ mod tests {
         // Current queue: [18*, 19]
         assert!(delayed_wake_up_future.await.is_none());
         // 18 will be cancelled with ts of the latest wake-up event.
-        expect_write_conflict(&handle18.wait_for_result().unwrap_err().0, 9, 10);
+        expect_write_conflict(handle18.wait_for_result().unwrap_err().inner(), 9, 10);
         // Current queue: [19]
 
         // Don't need to create new future if the queue is cleared.

@@ -15,7 +15,7 @@ use crate::storage::{
         cleanup,
         commands::{
             Command, CommandExt, ReaderWithStats, ReleasedLocks, ResolveLockReadPhase,
-            ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
+            ResponsePolicy, WriteCommand, WriteContext, WriteResult,
         },
         commit, Error, ErrorInner, Result,
     },
@@ -145,8 +145,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
             to_be_write: write_data,
             rows,
             pr,
-            lock_info: None,
+            lock_info: vec![],
             released_locks,
+            new_acquired_locks: vec![],
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
         })

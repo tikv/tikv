@@ -7,7 +7,7 @@ use txn_types::{Key, TimeStamp};
 use crate::storage::{
     mvcc::MvccReader,
     txn::{
-        commands::{Command, CommandExt, ReadCommand, ResolveLock, TypedCommand},
+        commands::{Command, CommandExt, ReadCommand, ResolveLock},
         sched_pool::tls_collect_keyread_histogram_vec,
         ProcessResult, Result, RESOLVE_LOCK_BATCH_SIZE,
     },

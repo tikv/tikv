@@ -10,7 +10,7 @@ use crate::storage::{
     txn::{
         commands::{
             Command, CommandExt, FlashbackToVersionReadPhase, ReaderWithStats, ReleasedLocks,
-            ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
+            ResponsePolicy, WriteCommand, WriteContext, WriteResult,
         },
         flashback_to_version, latch, Result,
     },
@@ -103,8 +103,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
                     cmd: Command::FlashbackToVersionReadPhase(next_cmd),
                 }
             },
-            lock_info: None,
+            lock_info: vec![],
             released_locks: ReleasedLocks::new(),
+            new_acquired_locks: vec![],
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
         })

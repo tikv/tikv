@@ -14,8 +14,7 @@ use crate::storage::{
     raw,
     txn::{
         commands::{
-            Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand,
-            WriteContext, WriteResult,
+            CommandExt, ReleasedLocks, ResponsePolicy, WriteCommand, WriteContext, WriteResult,
         },
         Result,
     },
@@ -112,8 +111,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
             to_be_write,
             rows,
             pr,
-            lock_info: None,
+            lock_info: vec![],
             released_locks: ReleasedLocks::new(),
+            new_acquired_locks: vec![],
             lock_guards,
             response_policy: ResponsePolicy::OnApplied,
         })
@@ -133,8 +133,9 @@ mod tests {
 
     use super::*;
     use crate::storage::{
-        lock_manager::MockLockManager, txn::scheduler::get_raw_ext, Engine, Statistics,
-        TestEngineBuilder,
+        lock_manager::MockLockManager,
+        txn::{commands::TypedCommand, scheduler::get_raw_ext, Command},
+        Engine, Statistics, TestEngineBuilder,
     };
 
     #[test]

@@ -6,7 +6,7 @@ use txn_types::{Key, TimeStamp};
 use crate::storage::{
     mvcc::MvccReader,
     txn::{
-        commands::{find_mvcc_infos_by_key, Command, CommandExt, ReadCommand, TypedCommand},
+        commands::{find_mvcc_infos_by_key, CommandExt, ReadCommand},
         ProcessResult, Result,
     },
     types::MvccInfo,
