@@ -1,28 +1,24 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{io, sync::Arc};
-
-use collections::HashMap;
 use engine_traits::{
-    CfOptions, Checkpointer, KvEngine, OpenOptions, RaftEngine, Range, TabletFactory, CF_DEFAULT,
-    SPLIT_PREFIX,
+    Checkpointer, KvEngine, OpenOptions, RaftEngine, TabletFactory, CF_DEFAULT, SPLIT_PREFIX,
 };
 use kvproto::{
-    metapb::{self, Region},
+    metapb::Region,
     raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest},
     raft_serverpb::RegionLocalState,
 };
 use protobuf::Message;
 use raftstore::{
     store::{
-        fsm::apply::{self, extract_split_keys},
+        fsm::apply::extract_split_keys,
         metrics::PEER_ADMIN_CMD_COUNTER,
         util::{self, KeysInfoFormatter},
         PeerStat, ProposalContext, RAFT_INIT_LOG_INDEX,
     },
     Result,
 };
-use slog::{error, info, warn};
+use slog::{info, warn};
 
 use crate::{
     batch::StoreContext,
@@ -69,7 +65,6 @@ impl<EK: KvEngine, R> Apply<EK, R> {
 
         let split_reqs = req.get_splits();
         let mut derived = self.region_state().get_region().clone();
-        let region_id = derived.id;
 
         let mut keys = extract_split_keys(split_reqs, self.region_state().get_region())?;
 
@@ -222,8 +217,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
 #[cfg(test)]
 mod test {
-    use std::sync::mpsc::{channel, Receiver, Sender};
+    use std::sync::{
+        mpsc::{channel, Receiver, Sender},
+        Arc,
+    };
 
+    use collections::HashMap;
     use engine_test::{
         ctor::{CfOptions, DbOptions},
         kv::TestTabletFactoryV2,
