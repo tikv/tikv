@@ -96,13 +96,6 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     }
 
     #[inline]
-    pub fn clear_write_batch(&mut self) {
-        if let Some(wb) = self.write_batch.take() {
-            assert!(wb.is_empty());
-        };
-    }
-
-    #[inline]
     pub fn write_batch_mut(&mut self) -> &mut Option<EK::WriteBatch> {
         &mut self.write_batch
     }

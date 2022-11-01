@@ -39,19 +39,6 @@ use crate::{
     router::{ApplyRes, PeerMsg, StoreMsg},
 };
 
-fn create_checkpoint(
-    src_tablet_dir: &std::path::Path,
-    target_tablet_dir: &std::path::Path,
-) -> io::Result<()> {
-    std::fs::create_dir_all(target_tablet_dir)?;
-    for file in std::fs::read_dir(src_tablet_dir)? {
-        let file = file?;
-        std::fs::hard_link(file.path(), target_tablet_dir.join(file.file_name()))?;
-    }
-
-    Ok(())
-}
-
 #[derive(Debug)]
 pub struct SplitResult {
     pub regions: Vec<Region>,
@@ -148,6 +135,11 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             regions.push(derived.clone());
         }
 
+        // flush the writes before the split and remove the write batch of the old
+        // tablet
+        self.flush_write();
+        self.write_batch_mut().take();
+
         // todo(SpadeA): Here: we use a temporary solution that we use checkpoint API to
         // clone new tablets. It may cause large jitter as we need to flush the
         // memtable. We will freeze the memtable rather than flush it in the
@@ -211,9 +203,6 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             .unwrap();
         self.publish_tablet(tablet);
 
-        // Clear the write batch belonging to the old tablet
-        self.clear_write_batch();
-
         self.region_state_mut().set_region(derived.clone());
         self.region_state_mut().set_tablet_index(log_index);
         // self.metrics.size_diff_hint = 0;
@@ -243,10 +232,10 @@ mod test {
         kv::TestTabletFactoryV2,
         raft,
     };
-    use engine_traits::{CfOptionsExt, ALL_CFS};
+    use engine_traits::{CfOptionsExt, Peekable, ALL_CFS};
     use futures::channel::mpsc::unbounded;
     use kvproto::{
-        raft_cmdpb::{BatchSplitRequest, RaftCmdResponse, SplitRequest},
+        raft_cmdpb::{BatchSplitRequest, PutRequest, RaftCmdResponse, SplitRequest},
         raft_serverpb::{PeerState, RaftApplyState, RegionLocalState},
     };
     use raftstore::store::{cmd_resp::new_error, Config};
@@ -516,8 +505,8 @@ mod test {
             log_index,
         );
 
-        // After split: region 50 ["k07", "k08"], region 60 ["k08", "k09"],
-        //              region 1 ["k03", "k07"]
+        // After split: region 1 ["k03", "k07"], region 50 ["k07", "k08"],
+        //              region 60["k08", "k09"]
         log_index = 40;
         let regions = assert_split(
             &mut apply,
@@ -528,6 +517,22 @@ mod test {
             vec![b"k07".to_vec(), b"k08".to_vec()],
             vec![vec![51, 52, 53], vec![61, 62, 63]],
             log_index,
+        );
+
+        // Split will checkpoint tablet, so if there are some writes before split, they
+        // should be flushed immediately.
+        apply.apply_put(CF_DEFAULT, b"k04", b"v4").unwrap();
+        assert!(!apply.write_batch_mut().as_ref().unwrap().is_empty());
+        splits.mut_requests().clear();
+        splits
+            .mut_requests()
+            .push(new_split_req(b"k05", 70, vec![71, 72, 73]));
+        req.set_splits(splits);
+        apply.exec_batch_split(&req, 50).unwrap();
+        assert!(apply.write_batch_mut().is_none());
+        assert_eq!(
+            apply.tablet().unwrap().get_value(b"k04").unwrap().unwrap(),
+            b"v4"
         );
     }
 }
