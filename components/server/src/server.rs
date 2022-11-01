@@ -894,6 +894,7 @@ where
             self.state.clone(),
             self.background_worker.clone(),
             Some(health_service.clone()),
+            String::from("zone"),
             None,
         );
         node.try_bootstrap_store(engines.engines.clone())

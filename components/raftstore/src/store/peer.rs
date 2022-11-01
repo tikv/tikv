@@ -76,8 +76,8 @@ use super::{
     read_queue::{ReadIndexQueue, ReadIndexRequest},
     transport::Transport,
     util::{
-        self, check_region_epoch, is_initial_msg, AdminCmdEpochState, ChangePeerI, ConfChangeKind,
-        Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
+        self, check_region_epoch, is_initial_msg, message_size, AdminCmdEpochState, ChangePeerI,
+        ConfChangeKind, Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
     },
     DestroyPeerJob, LocalReadContext,
 };
@@ -1075,6 +1075,7 @@ where
             check_quorum: true,
             skip_bcast_commit: true,
             pre_vote: cfg.prevote,
+            follower_replication: cfg.follower_replication,
             max_committed_size_per_ready: MAX_COMMITTED_SIZE_PER_READY,
             ..Default::default()
         };
@@ -1175,13 +1176,16 @@ where
         Ok(peer)
     }
 
-    /// Sets commit group to the peer.
+    /// Sets commit and broadcast group to the peer.
     pub fn init_replication_mode(&mut self, state: &mut GlobalReplicationState) {
         debug!("init commit group"; "state" => ?state, "region_id" => self.region_id, "peer_id" => self.peer.id);
         if self.is_initialized() {
             let version = state.status().get_dr_auto_sync().state_id;
             let gb = state.calculate_commit_group(version, self.get_store().region().get_peers());
             self.raft_group.raft.assign_commit_groups(gb);
+            let zgb =
+                state.calculate_availability_zone_group(self.get_store().region().get_peers());
+            self.raft_group.raft.assign_broadcast_groups(zgb);
         }
         self.replication_sync = false;
         if state.status().get_mode() == ReplicationMode::Majority {
@@ -1757,6 +1761,7 @@ where
     ) {
         let mut now = None;
         let std_now = Instant::now();
+        let local_peer_id = self.peer_id();
         for msg in msgs {
             let msg_type = msg.get_message().get_msg_type();
             if msg_type == MessageType::MsgSnapshot {
@@ -1808,6 +1813,16 @@ where
                         }
                     }
                 }
+            }
+
+            // Metrics for cross-AZ data traffic roughly.
+            let is_same_az: bool = self
+                .raft_group
+                .raft
+                .is_in_same_broadcast_group(local_peer_id, to_peer_id);
+            if !is_same_az {
+                let len = message_size(&msg) as u64;
+                RAFT_CROSS_AZ_TRAFFIC_COUNTER.inc_by(len);
             }
 
             if let Err(e) = ctx.trans.send(msg) {

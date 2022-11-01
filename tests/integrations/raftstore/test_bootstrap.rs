@@ -62,6 +62,7 @@ fn test_node_bootstrap_with_prepared_data() {
         Arc::default(),
         bg_worker,
         None,
+        String::from("zone"),
         None,
     );
     let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap());

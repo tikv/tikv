@@ -398,9 +398,13 @@ where
     }
 
     /// Broadcasts resolved result to all regions.
-    pub fn report_resolved(&self, store_id: u64, group_id: u64) {
+    pub fn report_resolved(&self, store_id: u64, group_id: Option<u64>, zone_id: Option<u64>) {
         self.broadcast_normal(|| {
-            PeerMsg::SignificantMsg(SignificantMsg::StoreResolved { store_id, group_id })
+            PeerMsg::SignificantMsg(SignificantMsg::StoreResolved {
+                store_id,
+                group_id,
+                zone_id,
+            })
         })
     }
 

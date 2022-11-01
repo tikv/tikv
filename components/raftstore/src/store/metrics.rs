@@ -161,6 +161,8 @@ make_static_metric! {
     pub label_enum RaftSentMessageCounterType {
         append,
         append_resp,
+        group_broadcast,
+        group_broadcast_resp,
         prevote,
         prevote_resp,
         vote,
@@ -770,6 +772,12 @@ lazy_static! {
         "tikv_raftstore_raft_log_gc_skipped",
         "Total number of skipped raft log gc.",
         &["reason"]
+    )
+    .unwrap();
+
+    pub static ref RAFT_CROSS_AZ_TRAFFIC_COUNTER: IntCounter = register_int_counter!(
+        "raft_cross_az_data_traffic",
+        "Count for Raft cross-AZ data traffic size"
     )
     .unwrap();
 

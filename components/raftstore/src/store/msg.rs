@@ -491,7 +491,8 @@ where
     },
     StoreResolved {
         store_id: u64,
-        group_id: u64,
+        group_id: Option<u64>,
+        zone_id: Option<u64>,
     },
     /// Capture the changes of the region.
     CaptureChange {

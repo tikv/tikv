@@ -511,6 +511,7 @@ impl ServerCluster {
             state,
             bg_worker.clone(),
             Some(health_service.clone()),
+            String::from("zone"),
             None,
         );
         node.try_bootstrap_store(engines.clone())?;

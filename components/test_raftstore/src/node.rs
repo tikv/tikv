@@ -252,6 +252,7 @@ impl Simulator for NodeCluster {
             Arc::default(),
             bg_worker.clone(),
             None,
+            String::from("zone"),
             None,
         );
 
