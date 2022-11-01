@@ -30,6 +30,7 @@ mod worker;
 pub use self::msg::PeerInternalStat;
 pub use self::{
     async_io::{
+        read::{AsyncReadNotifier, FetchedLogs, ReadRunner, ReadTask},
         write::{
             ExtraStates, PersistedNotifier, StoreWriters, Worker as WriteWorker, WriteMsg,
             WriteTask,
@@ -76,9 +77,8 @@ pub use self::{
     util::{RegionReadProgress, RegionReadProgressRegistry},
     worker::{
         AutoSplitController, Bucket, BucketRange, CachedReadDelegate, CheckLeaderRunner,
-        CheckLeaderTask, FetchedLogs, FlowStatistics, FlowStatsReporter, KeyEntry,
-        LocalReadContext, LocalReader, LocalReaderCore, LogFetchedNotifier, PdTask,
-        RaftlogFetchRunner, RaftlogFetchTask, ReadDelegate, ReadExecutor, ReadExecutorProvider,
+        CheckLeaderTask, FlowStatistics, FlowStatsReporter, KeyEntry, LocalReadContext,
+        LocalReader, LocalReaderCore, PdTask, ReadDelegate, ReadExecutor, ReadExecutorProvider,
         ReadProgress, ReadStats, RefreshConfigTask, RegionTask, SplitCheckRunner, SplitCheckTask,
         SplitConfig, SplitConfigManager, StoreMetaDelegate, TrackVer, WriteStats,
         TLS_LOCAL_READ_METRICS,
