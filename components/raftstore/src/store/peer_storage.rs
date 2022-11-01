@@ -451,8 +451,7 @@ where
             ));
         }
 
-        let for_witness = find_peer_by_id(&self.region, to).unwrap().is_witness;
-        if for_witness {
+        if find_peer_by_id(&self.region, to).map_or(false, |p| p.is_witness) {
             // generate an empty snapshot for witness directly
             return Ok(util::new_empty_snapshot(
                 self.region.clone(),

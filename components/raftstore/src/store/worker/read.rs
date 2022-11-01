@@ -939,21 +939,26 @@ where
 
                         // Double check in case `witness` change after the first check and before
                         // getting snapshot
-                        if let Err(e) = self.local_reader.validate_request(&req) {
-                            let mut response = cmd_resp::new_error(e);
-                            if let Some(delegate) = self
-                                .local_reader
-                                .delegates
-                                .get(&req.get_header().get_region_id())
+                        if let Some(delegate) =
+                            self.local_reader.get_delegate(delegate.region.get_id())
+                        {
+                            if find_peer_by_id(&delegate.region, delegate.peer_id)
+                                .unwrap()
+                                .is_witness
                             {
+                                TLS_LOCAL_READ_METRICS
+                                    .with(|m| m.borrow_mut().reject_reason.witness.inc());
+                                let mut response = cmd_resp::new_error(Error::RecoveryInProgress(
+                                    delegate.region.get_id(),
+                                ));
                                 cmd_resp::bind_term(&mut response, delegate.term);
+                                cb.set_result(ReadResponse {
+                                    response,
+                                    snapshot: None,
+                                    txn_extra_op: TxnExtraOp::Noop,
+                                });
+                                return;
                             }
-                            cb.set_result(ReadResponse {
-                                response,
-                                snapshot: None,
-                                txn_extra_op: TxnExtraOp::Noop,
-                            });
-                            return;
                         }
 
                         // Try renew lease in advance
