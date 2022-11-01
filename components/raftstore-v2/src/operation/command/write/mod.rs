@@ -102,17 +102,19 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn apply_put(&mut self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         util::check_key_in_region(key, self.region_state().get_region())?;
+        // to be removed(SpadeA): tmp use for test
+        let key = keys::data_key(key);
         let res = if cf.is_empty() || cf == CF_DEFAULT {
             // TODO: use write_vector
-            self.write_batch_or_default().put(key, value)
+            self.write_batch_or_default().put(&key, value)
         } else {
-            self.write_batch_or_default().put_cf(cf, key, value)
+            self.write_batch_or_default().put_cf(cf, &key, value)
         };
         res.unwrap_or_else(|e| {
             panic!(
                 "{:?} failed to write ({}, {}) {}: {:?}",
                 self.logger.list(),
-                log_wrappers::Value::key(key),
+                log_wrappers::Value::key(&key),
                 log_wrappers::Value::value(value),
                 cf,
                 e
@@ -127,17 +129,19 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn apply_delete(&mut self, cf: &str, key: &[u8]) -> Result<()> {
         util::check_key_in_region(key, self.region_state().get_region())?;
+        // to be removed(SpadeA): tmp use for test
+        let key = keys::data_key(key);
         let res = if cf.is_empty() || cf == CF_DEFAULT {
             // TODO: use write_vector
-            self.write_batch_or_default().delete(key)
+            self.write_batch_or_default().delete(&key)
         } else {
-            self.write_batch_or_default().delete_cf(cf, key)
+            self.write_batch_or_default().delete_cf(cf, &key)
         };
         res.unwrap_or_else(|e| {
             panic!(
                 "{:?} failed to delete {} {}: {:?}",
                 self.logger.list(),
-                log_wrappers::Value::key(key),
+                log_wrappers::Value::key(&key),
                 cf,
                 e
             );

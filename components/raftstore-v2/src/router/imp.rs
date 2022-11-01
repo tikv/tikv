@@ -45,7 +45,7 @@ where
 
 impl<EK: KvEngine, ER: RaftEngine> RaftRouter<EK, ER> {
     pub fn new(store_id: u64, router: StoreRouter<EK, ER>) -> Self {
-        let mut store_meta = StoreMeta::new();
+        let mut store_meta = StoreMeta::default();
         store_meta.store_id = Some(store_id);
         let store_meta = Arc::new(Mutex::new(store_meta));
 

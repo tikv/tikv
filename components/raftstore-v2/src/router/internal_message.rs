@@ -1,7 +1,10 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::raft_serverpb::RegionLocalState;
-use raftstore::store::fsm::ChangePeer;
+use std::collections::VecDeque;
+
+use collections::HashMap;
+use kvproto::{metapb::Region, raft_serverpb::RegionLocalState};
+use raftstore::store::fsm::{apply::NewSplitPeer, ChangePeer};
 
 use crate::operation::{AdminCmdResult, CommittedEntries};
 

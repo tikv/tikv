@@ -57,9 +57,10 @@ use crate::{
 mod admin;
 mod write;
 
-pub use admin::AdminCmdResult;
+pub use admin::{AcrossPeerMsg, AdminCmdResult, SplitResult};
 pub use write::{SimpleWriteDecoder, SimpleWriteEncoder};
 
+pub use self::admin::SplitRegionInitInfo;
 use self::write::SimpleWrite;
 
 fn parse_at<M: Message + Default>(logger: &slog::Logger, buf: &[u8], index: u64, term: u64) -> M {
@@ -273,14 +274,20 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // region.
             return;
         }
+
         for admin_res in apply_res.admin_result {
             match admin_res {
                 AdminCmdResult::ConfChange(conf_change) => {
                     self.on_apply_res_conf_change(conf_change)
                 }
-                AdminCmdResult::SplitRegion(_) => unimplemented!(),
+                AdminCmdResult::SplitRegion(SplitResult {
+                    regions,
+                    derived,
+                    tablet_index,
+                }) => self.on_ready_split_region(ctx, derived, tablet_index, regions),
             }
         }
+
         self.raft_group_mut()
             .advance_apply_to(apply_res.applied_index);
         let is_leader = self.is_leader();

@@ -61,7 +61,7 @@ fn test_write_batch_rollback() {
     let resp = block_on(sub1.result()).unwrap();
     assert!(!resp.get_header().has_error(), "{:?}", resp);
     assert_matches!(tablet.get_value(b"key"), Ok(None));
-    assert_eq!(tablet.get_value(b"key1").unwrap().unwrap(), b"value");
+    assert_eq!(tablet.get_value(b"zkey1").unwrap().unwrap(), b"value");
 
     fail::cfg("APPLY_COMMITTED_ENTRIES", "pause").unwrap();
 
@@ -94,5 +94,5 @@ fn test_write_batch_rollback() {
     let resp = block_on(sub1.result()).unwrap();
     assert!(!resp.get_header().has_error(), "{:?}", resp);
     assert_matches!(tablet.get_value(b"key2"), Ok(None));
-    assert_eq!(tablet.get_value(b"key3").unwrap().unwrap(), b"value");
+    assert_eq!(tablet.get_value(b"zkey3").unwrap().unwrap(), b"value");
 }

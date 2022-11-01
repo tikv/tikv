@@ -23,6 +23,7 @@
 
 #![allow(unused)]
 #![feature(let_else)]
+#![feature(box_into_inner)]
 
 mod batch;
 mod bootstrap;

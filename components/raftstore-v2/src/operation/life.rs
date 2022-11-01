@@ -23,11 +23,12 @@ use raftstore::store::{util, ExtraStates, WriteTask};
 use slog::{debug, error, info};
 use tikv_util::store::find_peer;
 
+use super::AcrossPeerMsg;
 use crate::{
     batch::StoreContext,
     fsm::{PeerFsm, Store},
     raft::{Peer, Storage},
-    router::PeerMsg,
+    router::{message::PeerCreation, PeerMsg},
 };
 
 /// When a peer is about to destroy, it becomes `WaitReady` first. If there is
@@ -89,6 +90,24 @@ impl DestroyProgress {
 }
 
 impl Store {
+    #[inline]
+    pub fn on_peer_creation<EK, ER, T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        msg: PeerCreation,
+    ) where
+        EK: KvEngine,
+        ER: RaftEngine,
+    {
+        let region_id = msg.raft_message.get_region_id();
+        // It will create the peer if not created before
+        self.on_raft_message(ctx, msg.raft_message);
+        ctx.router.force_send(
+            region_id,
+            PeerMsg::AcrossPeerMsg(AcrossPeerMsg::SplitRegionInit(msg.split_region_info)),
+        );
+    }
+
     /// When a message's recipient doesn't exist, it will be redirected to
     /// store. Store is responsible for checking if it's neccessary to create
     /// a peer to handle the message.
@@ -175,7 +194,12 @@ impl Store {
         region.set_id(region_id);
         region.set_region_epoch(from_epoch.clone());
         // Peer list doesn't have to be complete, as it's uninitialized.
-        region.mut_peers().push(from_peer.clone());
+        // If the store_id of from_peer and to_peer being the same means the from_peer
+        // if the parent peer in the split process in which case we do not add it into
+        // the region.
+        if from_peer.store_id != to_peer.store_id {
+            region.mut_peers().push(from_peer.clone());
+        }
         region.mut_peers().push(to_peer.clone());
         // We don't set the region range here as we allow range conflict.
         let (tx, fsm) = match Storage::uninit(
