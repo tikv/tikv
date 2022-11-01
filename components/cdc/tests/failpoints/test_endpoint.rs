@@ -501,7 +501,20 @@ fn test_cdc_rawkv_resolved_ts() {
     sleep_ms(100);
 
     let event = receive_event(true).resolved_ts.unwrap();
-    assert_eq!(ts.next(), TimeStamp::from(event.ts));
+    assert!(
+        ts.next() >= TimeStamp::from(event.ts),
+        "{} {}",
+        ts,
+        TimeStamp::from(event.ts)
+    );
+    // Receive again to make sure resolved ts <= ongoing request's ts.
+    let event = receive_event(true).resolved_ts.unwrap();
+    assert!(
+        ts.next() >= TimeStamp::from(event.ts),
+        "{} {}",
+        ts,
+        TimeStamp::from(event.ts)
+    );
 
     fail::remove(pause_write_fp);
     handle.join().unwrap();
