@@ -25,7 +25,7 @@ use tikv::server::{
     RaftClient, StoreAddrResolver, TestRaftStoreRouter,
 };
 use tikv_util::{
-    config::{ReadableDuration, VersionTrack},
+    config::ReadableDuration,
     worker::{Builder as WorkerBuilder, LazyWorker},
     Either,
 };
@@ -55,14 +55,14 @@ where
 {
     let env = Arc::new(Environment::new(2));
     let mut cfg = Config::default();
-    config.raft_client_max_backoff = ReadableDuration::millis(100);
-    config.raft_client_initial_reconnect_backoff = ReadableDuration::millis(100);
+    cfg.raft_client_max_backoff = ReadableDuration::millis(100);
+    cfg.raft_client_initial_reconnect_backoff = ReadableDuration::millis(100);
     let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let worker = LazyWorker::new("test-raftclient");
     let loads = Arc::new(ThreadLoadPool::with_threshold(1000));
     let builder = ConnectionBuilder::new(
         env,
-        cfg,
+        Arc::new(cfg),
         security_mgr,
         resolver,
         router,
