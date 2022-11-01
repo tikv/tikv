@@ -365,10 +365,7 @@ impl Lock {
         info.set_use_async_commit(self.use_async_commit);
         info.set_min_commit_ts(self.min_commit_ts.into_inner());
         info.set_secondaries(self.secondaries.into());
-        if !self.last_change_ts.is_zero() {
-            info.set_last_change_ts(self.last_change_ts.into_inner());
-            info.set_versions_to_last_change(self.versions_to_last_change);
-        }
+        // The client does not care about last_change_ts and versions_to_last_version.
         info
     }
 
