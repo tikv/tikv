@@ -378,6 +378,7 @@ where
     perf_context: EK::PerfContext,
 
     yield_duration: Duration,
+    yield_msg_size: u64,
 
     store_id: u64,
     /// region_id -> (peer_id, is_splitting)
@@ -467,6 +468,7 @@ where
             use_delete_range: cfg.use_delete_range,
             perf_context: engine.get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply),
             yield_duration: cfg.apply_yield_duration.0,
+            yield_msg_size: cfg.apply_yield_write_size.0,
             delete_ssts: vec![],
             pending_delete_ssts: vec![],
             store_id,
@@ -635,7 +637,7 @@ where
             apply_state: delegate.apply_state.clone(),
             write_seqno: mem::take(&mut delegate.unfinished_write_seqno),
             exec_res: results,
-            metrics: delegate.metrics.clone(),
+            metrics: mem::take(&mut delegate.metrics),
             applied_term: delegate.applied_term,
             bucket_stat: delegate.buckets.clone().map(Box::new),
         });
@@ -1136,10 +1138,14 @@ where
                 && apply_ctx.host.pre_persist(&self.region, false, Some(&cmd))
             {
                 apply_ctx.commit(self);
-                if let Some(start) = self.handle_start.as_ref() {
-                    if start.saturating_elapsed() >= apply_ctx.yield_duration {
-                        return ApplyResult::Yield;
-                    }
+                if self.metrics.written_bytes >= apply_ctx.yield_msg_size
+                    || self
+                        .handle_start
+                        .as_ref()
+                        .map_or(Duration::ZERO, Instant::saturating_elapsed)
+                        >= apply_ctx.yield_duration
+                {
+                    return ApplyResult::Yield;
                 }
                 has_unflushed_data = false;
             }
@@ -3576,7 +3582,6 @@ where
             RAFT_ENTRIES_CACHES_GAUGE.sub(dangle_size as i64);
         }
 
-        self.delegate.metrics = ApplyMetrics::default();
         self.delegate.term = apply.term;
         if let Some(meta) = apply.bucket_meta.clone() {
             let buckets = self
@@ -4096,6 +4101,7 @@ where
                 }
                 _ => {}
             }
+            self.apply_ctx.yield_msg_size = incoming.apply_yield_write_size.0;
             update_cfg(&incoming.apply_batch_system);
         }
     }
@@ -4535,7 +4541,7 @@ mod tests {
     use tempfile::{Builder, TempDir};
     use test_sst_importer::*;
     use tikv_util::{
-        config::VersionTrack,
+        config::{ReadableSize, VersionTrack},
         store::{new_learner_peer, new_peer},
         worker::dummy_scheduler,
     };
@@ -5594,6 +5600,92 @@ mod tests {
         assert_eq!(obs.post_query_count.load(Ordering::SeqCst), index);
 
         system.shutdown();
+    }
+
+    #[test]
+    fn test_apply_yield_with_msg_size() {
+        let (_path, engine) = create_tmp_engine("test-apply-yield");
+        let (_import_dir, importer) = create_tmp_importer("test-apply-yield");
+        let obs = ApplyObserver::default();
+        let mut host = CoprocessorHost::<KvTestEngine>::default();
+        host.registry
+            .register_query_observer(1, BoxQueryObserver::new(obs));
+
+        let (tx, rx) = mpsc::channel();
+        let (region_scheduler, _) = dummy_scheduler();
+        let sender = Box::new(TestNotifier { tx });
+        let cfg = Arc::new(VersionTrack::new(Config::default()));
+        let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
+        let builder = super::Builder::<KvTestEngine> {
+            tag: "test-store".to_owned(),
+            cfg: cfg.clone(),
+            sender,
+            region_scheduler,
+            coprocessor_host: host,
+            importer,
+            engine,
+            router: router.clone(),
+            store_id: 1,
+            pending_create_peers,
+        };
+        system.spawn("test-handle-raft".to_owned(), builder);
+
+        let peer_id = 3;
+        let mut reg = Registration {
+            id: peer_id,
+            ..Default::default()
+        };
+        reg.region.set_id(1);
+        reg.region.mut_peers().push(new_peer(2, 3));
+        reg.region.set_end_key(b"k5".to_vec());
+        reg.region.mut_region_epoch().set_conf_ver(1);
+        reg.region.mut_region_epoch().set_version(3);
+        router.schedule_task(1, Msg::Registration(reg));
+
+        let schedule_apply = |idx: u64, count: usize, size: usize| {
+            let mut entries = Vec::with_capacity(count);
+            for i in 0..count {
+                let put_entry = EntryBuilder::new(idx + i as u64, 3)
+                    .put(format!("k{:03}", i).as_ref(), &vec![0; size - 4])
+                    .epoch(1, 3)
+                    .build();
+                entries.push(put_entry);
+            }
+            router.schedule_task(1, Msg::apply(apply(peer_id, 1, 3, entries, vec![])));
+        };
+
+        fn approximate_eq(a: u64, b: u64, delta: u64) {
+            assert!(
+                a >= b - delta && a <= b + delta,
+                "left: {}, right: {}, delta: {}",
+                a,
+                b,
+                delta
+            );
+        }
+
+        // schedule a batch with 512 keys and 64k total size will trigger 2 flush and
+        // yield.
+        schedule_apply(1, 512, 128);
+        let apply_res = fetch_apply_res(&rx);
+        approximate_eq(apply_res.metrics.written_bytes, 32768, 2048);
+        approximate_eq(apply_res.metrics.written_keys, 256, 15);
+        // the second part, note that resume apply not clean up the metrics
+        let apply_res = fetch_apply_res(&rx);
+        approximate_eq(apply_res.metrics.written_bytes, 32768, 2048);
+        approximate_eq(apply_res.metrics.written_keys, 256, 15);
+
+        // update apply yeild size to 64kb
+        _ = cfg.update(|c| {
+            c.apply_yield_write_size = ReadableSize::kb(64);
+            Ok::<(), ()>(())
+        });
+        // only trigger one time of
+        schedule_apply(513, 512, 128);
+        let apply_res = fetch_apply_res(&rx);
+        approximate_eq(apply_res.metrics.written_bytes, 65536, 4096);
+        approximate_eq(apply_res.metrics.written_keys, 512, 20);
     }
 
     #[test]
