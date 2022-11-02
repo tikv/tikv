@@ -21,7 +21,7 @@ use crate::storage::{
 /// `PessimisticLockKeyResult::Value`. When `need_value` is not set but
 /// `need_check_existence` is set, the first return value will be
 /// `PessimisticLockKeyResult::Existence`. If neither `need_value` nor
-/// `need_check_existence` is  set, the first return value will be
+/// `need_check_existence` is set, the first return value will be
 /// `PessimisticLockKeyResult::Empty`.
 ///
 /// If `allow_lock_with_conflict` is set, and the lock is acquired successfully

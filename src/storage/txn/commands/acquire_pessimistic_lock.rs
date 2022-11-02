@@ -88,8 +88,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         );
 
         let rows = keys.len();
-        let total_keys = keys.len();
-        let mut res = Ok(PessimisticLockResults::with_capacity(total_keys));
+        let mut res = Ok(PessimisticLockResults::with_capacity(rows));
         let need_old_value = context.extra_op == ExtraOp::ReadOldValue;
         for (k, should_not_exist) in keys {
             match acquire_pessimistic_lock(
