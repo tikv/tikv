@@ -7,6 +7,6 @@ mod ready;
 
 pub use command::{AdminCmdResult, CommittedEntries, SimpleWriteDecoder, SimpleWriteEncoder};
 pub use life::DestroyProgress;
-pub use ready::AsyncWriter;
+pub use ready::{AsyncWriter, GenSnapTask, SnapState};
 
 pub(crate) use self::query::LocalReader;
