@@ -87,20 +87,17 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
         } else {
             None
         };
-        let next_write_key = if has_remain_writes && !key_old_writes.is_empty() {
-            key_old_writes.pop().map(|(key, _)| key)
-        } else if has_remain_writes && key_old_writes.is_empty() {
+        let next_write_key = match (has_remain_writes, key_old_writes.is_empty()) {
+            (true, false) => key_old_writes.pop().map(|(key, _)| key),
             // We haven't read any write yet, so we need to read the writes in the next
             // batch later.
-            self.next_write_key
-        } else {
-            None
+            (true, true) => self.next_write_key,
+            (..) => None,
         };
         if key_locks.is_empty() && key_old_writes.is_empty() {
             if next_write_key.is_some() || next_lock_key.is_some() {
-                // When there are no keys that need to be flashbacked in this batch, but since
-                // the next key is not none, we have to continue reading the
-                // next batch.
+                // Although there is no key left in this batch, keep processing the next batch
+                // since next key(write or lock) exist.
                 let next_cmd = FlashbackToVersionReadPhase {
                     ctx: self.ctx,
                     deadline: self.deadline,
