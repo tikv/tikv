@@ -40,6 +40,7 @@ pub trait KvEngine:
     + Clone
     + Debug
     + Unpin
+    + Checkpointable
     + 'static
 {
     /// A consistent read-only snapshot of the database
