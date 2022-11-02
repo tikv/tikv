@@ -418,7 +418,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             let (admin_resp, admin_result) = match req.get_admin_request().get_cmd_type() {
                 AdminCmdType::CompactLog => unimplemented!(),
                 // The proposal the Split will be rejected.
-                AdminCmdType::Split => unreachable!(),
+                AdminCmdType::Split => self.exec_split(admin_req, entry.index)?,
                 AdminCmdType::BatchSplit => self.exec_batch_split(admin_req, entry.index)?,
                 AdminCmdType::PrepareMerge => unimplemented!(),
                 AdminCmdType::CommitMerge => unimplemented!(),

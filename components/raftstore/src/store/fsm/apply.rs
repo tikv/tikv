@@ -1900,7 +1900,7 @@ mod confchange_cmd_metric {
 }
 
 pub fn validate_batch_split(req: &AdminRequest, region: &Region) -> Result<()> {
-    if !req.has_splits() || req.get_splits().get_requests().is_empty() {
+    if req.get_splits().get_requests().is_empty() {
         return Err(box_err!("missing split requests"));
     }
 
@@ -6785,6 +6785,22 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("not in region")
+        );
+
+        req = new_batch_split_request(vec![b"k09".to_vec(), b"k07".to_vec()]);
+        assert!(
+            validate_batch_split(&req, &region)
+                .unwrap_err()
+                .to_string()
+                .contains("invalid split request")
+        );
+
+        req = new_batch_split_request(vec![b"k06".to_vec(), b"k06".to_vec()]);
+        assert!(
+            validate_batch_split(&req, &region)
+                .unwrap_err()
+                .to_string()
+                .contains("invalid split request")
         );
 
         req = new_batch_split_request(vec![b"k06".to_vec(), b"k07".to_vec(), b"k08".to_vec()]);
