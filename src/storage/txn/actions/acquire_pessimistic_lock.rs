@@ -63,8 +63,9 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         }
         .into());
     }
-    // Update max_ts for Insert operation to guarantee linearizability and snapshot
-    // isolation
+    // If any of `should_not_exist`, `need_value`, `need_check_existence` is set,
+    // it infers a read to the value, in which case max_ts need to be updated to
+    // guarantee the linearizability and snapshot isolation.
     if should_not_exist || need_value || need_check_existence {
         txn.concurrency_manager.update_max_ts(for_update_ts);
     }
