@@ -2454,10 +2454,10 @@ mod delta_entry_tests {
                         let last_write = writes.last();
                         let max_commit_ts =
                             last_write.map(|(_, commit_ts, ..)| *commit_ts).unwrap_or(0);
-                        let (mut last_change_ts, mut versions_to_last_change) = (0,0);
-                        // TODO: Remove `*lock_type == LockType::Pessimistic` after calculating last_change_ts for prewrite.
-                        if *lock_type == LockType::Pessimistic &&
-                            let Some((_, commit_ts, WriteType::Put | WriteType::Delete, _)) = last_write {
+                        let (mut last_change_ts, mut versions_to_last_change) = (0, 0);
+                        if let Some((_, commit_ts, WriteType::Put | WriteType::Delete, _)) =
+                            last_write
+                        {
                             (last_change_ts, versions_to_last_change) = (*commit_ts, 1);
                         }
                         let for_update_ts = std::cmp::max(*ts, max_commit_ts + 1);
