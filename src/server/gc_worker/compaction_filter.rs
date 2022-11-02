@@ -289,7 +289,7 @@ struct WriteCompactionFilter {
     mvcc_deletions: Vec<Key>,
     // The mvcc-deletion mark will be sent to the GC worker only if `mvcc_del_gc_needed` is
     // not none. It's a little optimization to reduce modifications on write CF.
-    mvcc_del_gc_needed: Option<bool>,
+    mvcc_del_gc_needed: Option<()>,
     regions_provider: (u64, Arc<dyn RegionInfoProvider>),
 
     mvcc_key_prefix: Vec<u8>,
@@ -418,7 +418,7 @@ impl WriteCompactionFilter {
             WriteType::Put => {}
             WriteType::Delete => {
                 if self.is_bottommost_level {
-                    self.mvcc_del_gc_needed = Some(true);
+                    self.mvcc_del_gc_needed = Some(());
                     GC_COMPACTION_FILTER_MVCC_DELETION_MET
                         .with_label_values(&[STAT_TXN_KEYMODE])
                         .inc();
