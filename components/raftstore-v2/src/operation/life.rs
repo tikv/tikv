@@ -182,7 +182,7 @@ impl Store {
             self.store_id(),
             region,
             ctx.engine.clone(),
-            ctx.log_fetch_scheduler.clone(),
+            ctx.read_scheduler.clone(),
             &ctx.logger,
         )
         .and_then(|s| PeerFsm::new(&ctx.cfg, &*ctx.tablet_factory, s))

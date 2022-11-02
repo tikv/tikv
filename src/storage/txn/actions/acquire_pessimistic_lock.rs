@@ -142,6 +142,8 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 ttl: lock_ttl,
                 for_update_ts,
                 min_commit_ts,
+                last_change_ts: lock.last_change_ts,
+                versions_to_last_change: lock.versions_to_last_change,
             };
             txn.put_pessimistic_lock(key, lock);
         } else {
@@ -256,6 +258,9 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         ttl: lock_ttl,
         for_update_ts,
         min_commit_ts,
+        // TODO: calculate the two fields below from the latest write record
+        last_change_ts: TimeStamp::zero(),
+        versions_to_last_change: 0,
     };
 
     // When lock_only_if_exists is false, always accquire pessimitic lock, otherwise
