@@ -28,7 +28,7 @@ const REGION_READ_PROGRESS_CAP: usize = 128;
 
 /// A peer that delegates commands between state machine and raft.
 pub struct Peer<EK: KvEngine, ER: RaftEngine> {
-    raft_group: RawNode<Storage<ER>>,
+    raft_group: RawNode<Storage<EK, ER>>,
     tablet: CachedTablet<EK>,
     /// We use a cache for looking up peers. Not all peers exist in region's
     /// peer list, for example, an isolated peer may need to send/receive
@@ -67,7 +67,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn new(
         cfg: &Config,
         tablet_factory: &dyn TabletFactory<EK>,
-        storage: Storage<ER>,
+        storage: Storage<EK, ER>,
     ) -> Result<Self> {
         let logger = storage.logger().clone();
 
@@ -178,13 +178,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn storage(&self) -> &Storage<ER> {
+    pub fn storage(&self) -> &Storage<EK, ER> {
         self.raft_group.store()
     }
 
     #[inline]
     pub fn read_progress(&self) -> &Arc<RegionReadProgress> {
         &self.read_progress
+    }
+
+    #[inline]
+    pub fn read_progress_mut(&mut self) -> &mut Arc<RegionReadProgress> {
+        &mut self.read_progress
     }
 
     #[inline]
@@ -198,7 +203,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn storage_mut(&mut self) -> &mut Storage<ER> {
+    pub fn storage_mut(&mut self) -> &mut Storage<EK, ER> {
         self.raft_group.mut_store()
     }
 
@@ -213,12 +218,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn entry_storage(&self) -> &EntryStorage<ER> {
+    pub fn entry_storage(&self) -> &EntryStorage<EK, ER> {
         self.raft_group.store().entry_storage()
     }
 
     #[inline]
-    pub fn entry_storage_mut(&mut self) -> &mut EntryStorage<ER> {
+    pub fn entry_storage_mut(&mut self) -> &mut EntryStorage<EK, ER> {
         self.raft_group.mut_store().entry_storage_mut()
     }
 
@@ -233,12 +238,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn raft_group(&self) -> &RawNode<Storage<ER>> {
+    pub fn raft_group(&self) -> &RawNode<Storage<EK, ER>> {
         &self.raft_group
     }
 
     #[inline]
-    pub fn raft_group_mut(&mut self) -> &mut RawNode<Storage<ER>> {
+    pub fn raft_group_mut(&mut self) -> &mut RawNode<Storage<EK, ER>> {
         &mut self.raft_group
     }
 
@@ -382,6 +387,28 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
+    pub fn proposals(&self) -> &ProposalQueue<Vec<CmdResChannel>> {
+        &self.proposals
+    }
+
+    #[inline]
+    pub fn ready_to_handle_read(&self) -> bool {
+        // TODO: It may cause read index to wait a long time.
+
+        // There may be some values that are not applied by this leader yet but the old
+        // leader, if applied_term isn't equal to current term.
+        self.applied_to_current_term()
+            // There may be stale read if the old leader splits really slow,
+            // the new region may already elected a new leader while
+            // the old leader still think it owns the split range.
+            && !self.is_splitting()
+            // There may be stale read if a target leader is in another store and
+            // applied commit merge, written new values, but the sibling peer in
+            // this store does not apply commit merge, so the leader is not ready
+            // to read, until the merge is rollbacked.
+            && !self.is_merging()
+    }
+
     pub fn apply_scheduler(&self) -> &ApplyScheduler {
         self.apply_scheduler.as_ref().unwrap()
     }

@@ -19,7 +19,12 @@ fn test_basic_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
     let reserved_time = Duration::from_millis(
         cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
-            * cluster.cfg.raft_store.raft_heartbeat_ticks as u64,
+            * cluster.cfg.raft_store.raft_heartbeat_ticks as u64
+            + cluster
+                .cfg
+                .raft_store
+                .max_entry_cache_warmup_duration
+                .as_millis(),
     );
     cluster.run();
 

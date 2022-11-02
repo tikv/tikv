@@ -8,7 +8,6 @@ mod compact;
 mod consistency_check;
 mod metrics;
 mod pd;
-mod raftlog_fetch;
 mod raftlog_gc;
 mod read;
 mod refresh_config;
@@ -30,9 +29,6 @@ pub use self::{
     pd::{
         new_change_peer_v2_request, FlowStatistics, FlowStatsReporter, HeartbeatTask,
         Runner as PdRunner, Task as PdTask,
-    },
-    raftlog_fetch::{
-        FetchedLogs, LogFetchedNotifier, Runner as RaftlogFetchRunner, Task as RaftlogFetchTask,
     },
     raftlog_gc::{Runner as RaftlogGcRunner, Task as RaftlogGcTask},
     read::{

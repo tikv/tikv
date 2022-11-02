@@ -58,7 +58,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
         let keys = mem::take(&mut self.keys);
 
         let rows = keys.len();
-        let mut released_locks = ReleasedLocks::new(self.start_ts, TimeStamp::zero());
+        let mut released_locks = ReleasedLocks::new();
         for key in keys {
             fail_point!("pessimistic_rollback", |err| Err(
                 crate::storage::mvcc::Error::from(crate::storage::mvcc::txn::make_txn_error(
@@ -73,7 +73,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
                     && lock.ts == self.start_ts
                     && lock.for_update_ts <= self.for_update_ts
                 {
-                    Ok(txn.unlock_key(key, true))
+                    Ok(txn.unlock_key(key, true, TimeStamp::zero()))
                 } else {
                     Ok(None)
                 }
@@ -82,7 +82,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
             };
             released_locks.push(released_lock?);
         }
-        released_locks.wake_up(context.lock_mgr);
 
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
         write_data.set_allowed_on_disk_almost_full();
@@ -92,6 +91,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
             rows,
             pr: ProcessResult::MultiRes { results: vec![] },
             lock_info: None,
+            released_locks,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
         })
@@ -108,7 +108,7 @@ pub mod tests {
     use super::*;
     use crate::storage::{
         kv::Engine,
-        lock_manager::DummyLockManager,
+        lock_manager::MockLockManager,
         mvcc::tests::*,
         txn::{
             commands::{WriteCommand, WriteContext},
@@ -136,7 +136,7 @@ pub mod tests {
             for_update_ts,
             deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
         };
-        let lock_mgr = DummyLockManager;
+        let lock_mgr = MockLockManager::new();
         let write_context = WriteContext {
             lock_mgr: &lock_mgr,
             concurrency_manager: cm,

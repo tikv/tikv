@@ -299,6 +299,10 @@ pub struct Config {
     #[doc(hidden)]
     pub long_uncommitted_base_threshold: ReadableDuration,
 
+    /// Max duration for the entry cache to be warmed up.
+    /// Set it to 0 to disable warmup.
+    pub max_entry_cache_warmup_duration: ReadableDuration,
+
     #[doc(hidden)]
     pub max_snapshot_file_raw_size: ReadableSize,
 
@@ -401,6 +405,7 @@ impl Default for Config {
             /// the log commit duration is less than 1s. Feel free to adjust
             /// this config :)
             long_uncommitted_base_threshold: ReadableDuration::secs(20),
+            max_entry_cache_warmup_duration: ReadableDuration::secs(1),
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
@@ -450,6 +455,11 @@ impl Config {
 
     pub fn raft_log_gc_size_limit(&self) -> ReadableSize {
         self.raft_log_gc_size_limit.unwrap()
+    }
+
+    #[inline]
+    pub fn warmup_entry_cache_enabled(&self) -> bool {
+        self.max_entry_cache_warmup_duration.0 != Duration::from_secs(0)
     }
 
     pub fn region_split_check_diff(&self) -> ReadableSize {
