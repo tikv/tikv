@@ -2,8 +2,11 @@
 
 use std::collections::HashSet;
 
-use grpcio::RpcContext;
-use kvproto::{logbackuppb::*, metapb::Region};
+use grpcio::{RpcContext, ServerStreamingSink};
+use kvproto::{
+    logbackuppb::{FlushEvent, SubscribeFlushEventRequest, *},
+    metapb::Region,
+};
 use tikv_util::{warn, worker::Scheduler};
 
 use crate::{
@@ -88,5 +91,17 @@ impl LogBackup for Service {
             }),
         ));
         try_send!(self.endpoint, t);
+    }
+
+    fn subscribe_flush_event(
+        &mut self,
+        _ctx: grpcio::RpcContext,
+        _req: kvproto::logbackuppb::SubscribeFlushEventRequest,
+        sink: grpcio::ServerStreamingSink<kvproto::logbackuppb::SubscribeFlushEventResponse>,
+    ) {
+        try_send!(
+            self.endpoint,
+            Task::RegionCheckpointsOp(RegionCheckpointOperation::Subscribe(sink))
+        );
     }
 }

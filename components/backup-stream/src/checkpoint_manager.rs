@@ -1,17 +1,31 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    iter,
+    sync::Arc,
+    time::Duration,
+};
 
+use futures::{
+    channel::mpsc::{self as async_mpsc, Receiver, Sender},
+    SinkExt,
+};
+use grpcio::{RpcStatus, RpcStatusCode, ServerStreamingSink, WriteFlags};
 use kvproto::{
     errorpb::{Error as PbError, *},
+    logbackuppb::{FlushEvent, SubscribeFlushEventResponse},
     metapb::Region,
 };
 use pd_client::PdClient;
-use tikv_util::{info, worker::Scheduler};
+use tikv_util::{box_err, info, warn, worker::Scheduler};
 use txn_types::TimeStamp;
+use uuid::Uuid;
 
 use crate::{
+    annotate,
     errors::{Error, Result},
+    future,
     metadata::{store::MetaStore, Checkpoint, CheckpointProvider, MetadataClient},
     metrics, try_send, RegionCheckpointOperation, Task,
 };
@@ -20,10 +34,76 @@ use crate::{
 /// This information is provided for the `advancer` in checkpoint V3,
 /// which involved a central node (typically TiDB) for collecting all regions'
 /// checkpoint then advancing the global checkpoint.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct CheckpointManager {
     items: HashMap<u64, LastFlushTsOfRegion>,
+    manager_handle: Option<Sender<SubscriptionOp>>,
 }
+
+impl std::fmt::Debug for CheckpointManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CheckpointManager")
+            .field("items", &self.items)
+            .finish()
+    }
+}
+
+enum SubscriptionOp {
+    Add(Subscription),
+    Emit(Box<[FlushEvent]>),
+}
+
+struct SubscriptionManager {
+    subscribers: HashMap<Uuid, Subscription>,
+    input: Receiver<SubscriptionOp>,
+}
+
+impl SubscriptionManager {
+    pub async fn main_loop(mut self) {
+        while let Ok(Some(msg)) = self.input.try_next() {
+            match msg {
+                SubscriptionOp::Add(sub) => {
+                    self.subscribers.insert(Uuid::new_v4(), sub);
+                }
+                SubscriptionOp::Emit(events) => {
+                    let mut canceled = vec![];
+                    'outer: for (id, sub) in &mut self.subscribers {
+                        for es in events.chunks(1024) {
+                            let mut resp = SubscribeFlushEventResponse::new();
+                            resp.set_events(es.to_vec().into());
+                            let r = sub.feed((resp, WriteFlags::default())).await;
+                            if let Err(grpcio::Error::RemoteStopped) = r {
+                                canceled.push(*id);
+                                break 'outer;
+                            }
+                        }
+                    }
+                    for c in canceled {
+                        match self.subscribers.remove(&c) {
+                            Some(mut sub) => {
+                                let r = async {
+                                    sub.flush().await?;
+                                    sub.close().await
+                                }
+                                .await;
+                                if let Err(err) = r {
+                                    annotate!(err, "failed to flush and close stream {}", c)
+                                        .report("when detected client gone");
+                                }
+                            }
+                            None => {
+                                warn!("BUG: the subscriber has been removed before we are going to remove it."; "uuid" => %c);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Note: can we make it more generic...?
+pub type Subscription = ServerStreamingSink<kvproto::logbackuppb::SubscribeFlushEventResponse>;
 
 /// The result of getting a checkpoint.
 /// The possibility of failed to getting checkpoint is pretty high:
@@ -76,8 +156,81 @@ impl CheckpointManager {
         self.items.clear();
     }
 
+    pub fn spawn_subscription_mgr(&mut self) -> future![()] {
+        let (tx, rx) = async_mpsc::channel(1024);
+        let sub = SubscriptionManager {
+            subscribers: Default::default(),
+            input: rx,
+        };
+        self.manager_handle = Some(tx);
+        sub.main_loop()
+    }
+
+    pub fn update_region_checkpoints(&mut self, region_and_checkpoint: Vec<(Region, TimeStamp)>) {
+        for (region, checkpoint) in &region_and_checkpoint {
+            self.do_update(region, *checkpoint);
+        }
+
+        self.notify(region_and_checkpoint.into_iter());
+    }
+
     /// update a region checkpoint in need.
+    #[cfg(test)]
     pub fn update_region_checkpoint(&mut self, region: &Region, checkpoint: TimeStamp) {
+        self.do_update(region, checkpoint);
+        self.notify(iter::once((region.clone(), checkpoint)));
+    }
+
+    pub fn add_subscriber(&mut self, sub: Subscription) -> future![Result<()>] {
+        let mgr = self.manager_handle.as_ref().cloned();
+
+        // NOTE: we cannot send the real error into the client directly because once
+        // we send the subscription into the sink, we cannot fetch it again :(
+        async move {
+            let mgr = mgr.ok_or(Error::Other(box_err!("subscription manager not get ready")));
+            let mut mgr = match mgr {
+                Ok(mgr) => mgr,
+                Err(err) => {
+                    sub.fail(RpcStatus::with_message(
+                        RpcStatusCode::UNAVAILABLE,
+                        "subscription manager not get ready.".to_owned(),
+                    ))
+                    .await
+                    .map_err(|err| {
+                        annotate!(err, "failed to send request to subscriber manager")
+                    })?;
+                    return Err(err);
+                }
+            };
+            mgr.send(SubscriptionOp::Add(sub))
+                .await
+                .map_err(|err| annotate!(err, "failed to send request to subscriber manager"))?;
+            Ok(())
+        }
+    }
+
+    fn notify(&mut self, items: impl Iterator<Item = (Region, TimeStamp)>) {
+        if let Some(mgr) = self.manager_handle.as_mut() {
+            let r = items
+                .map(|(r, ts)| {
+                    let mut f = FlushEvent::new();
+                    f.set_checkpoint(ts.into_inner());
+                    f.set_start_key(r.start_key);
+                    f.set_end_key(r.end_key);
+                    f
+                })
+                .collect::<Box<[_]>>();
+            let event_size = r.len();
+            let res = mgr.try_send(SubscriptionOp::Emit(r));
+            // Note: perhaps don't batch in the channel but batch in the receiver side?
+            // If so, we can control the memory usage better.
+            if let Err(err) = res {
+                warn!("the channel is full, dropping some events."; "length" => %event_size, "err" => %err);
+            }
+        }
+    }
+
+    fn do_update(&mut self, region: &Region, checkpoint: TimeStamp) {
         let e = self.items.entry(region.get_id());
         e.and_modify(|old_cp| {
             if old_cp.checkpoint < checkpoint
