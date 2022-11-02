@@ -1,11 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    collections::{HashMap, HashSet},
-    iter,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use futures::{
     channel::mpsc::{self as async_mpsc, Receiver, Sender},
@@ -24,7 +19,7 @@ use uuid::Uuid;
 
 use crate::{
     annotate,
-    errors::{Error, Result},
+    errors::{Error, ReportableResult, Result},
     future,
     metadata::{store::MetaStore, Checkpoint, CheckpointProvider, MetadataClient},
     metrics, try_send, RegionCheckpointOperation, Task,
@@ -72,9 +67,15 @@ impl SubscriptionManager {
                             let mut resp = SubscribeFlushEventResponse::new();
                             resp.set_events(es.to_vec().into());
                             let r = sub.feed((resp, WriteFlags::default())).await;
-                            if let Err(grpcio::Error::RemoteStopped) = r {
-                                canceled.push(*id);
-                                break 'outer;
+                            match r {
+                                Err(grpcio::Error::RemoteStopped) => {
+                                    canceled.push(*id);
+                                    break 'outer;
+                                }
+                                Err(err) => {
+                                    Error::from(err).report("sending subscription");
+                                }
+                                _ => {}
                             }
                         }
                     }
@@ -86,10 +87,7 @@ impl SubscriptionManager {
                                     sub.close().await
                                 }
                                 .await;
-                                if let Err(err) = r {
-                                    annotate!(err, "failed to flush and close stream {}", c)
-                                        .report("when detected client gone");
-                                }
+                                r.report_if_err(format_args!("during removing subscription {}", c))
                             }
                             None => {
                                 warn!("BUG: the subscriber has been removed before we are going to remove it."; "uuid" => %c);
@@ -178,7 +176,7 @@ impl CheckpointManager {
     #[cfg(test)]
     pub fn update_region_checkpoint(&mut self, region: &Region, checkpoint: TimeStamp) {
         self.do_update(region, checkpoint);
-        self.notify(iter::once((region.clone(), checkpoint)));
+        self.notify(std::iter::once((region.clone(), checkpoint)));
     }
 
     pub fn add_subscriber(&mut self, sub: Subscription) -> future![Result<()>] {

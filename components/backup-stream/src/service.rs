@@ -2,9 +2,9 @@
 
 use std::collections::HashSet;
 
-use grpcio::{RpcContext, ServerStreamingSink};
+use grpcio::{RpcContext};
 use kvproto::{
-    logbackuppb::{FlushEvent, SubscribeFlushEventRequest, *},
+    logbackuppb::{*},
     metapb::Region,
 };
 use tikv_util::{warn, worker::Scheduler};
