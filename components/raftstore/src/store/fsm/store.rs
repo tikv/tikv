@@ -72,6 +72,7 @@ use crate::{
     },
     store::{
         async_io::{
+            read::{ReadRunner, ReadTask},
             write::{StoreWriters, Worker as WriteWorker, WriteMsg},
             write_router::WriteSenders,
         },
@@ -95,9 +96,9 @@ use crate::{
         worker::{
             AutoSplitController, CleanupRunner, CleanupSstRunner, CleanupSstTask, CleanupTask,
             CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
-            GcSnapshotRunner, GcSnapshotTask, PdRunner, RaftlogFetchRunner, RaftlogFetchTask,
-            RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RefreshConfigRunner, RefreshConfigTask,
-            RegionRunner, RegionTask, SplitCheckTask,
+            GcSnapshotRunner, GcSnapshotTask, PdRunner, RaftlogGcRunner, RaftlogGcTask,
+            ReadDelegate, RefreshConfigRunner, RefreshConfigTask, RegionRunner, RegionTask,
+            SplitCheckTask,
         },
         Callback, CasualMessage, GlobalReplicationState, InspectedRaftMessage, MergeResultKind,
         PdTask, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapManager, StoreMsg, StoreTick,
@@ -474,7 +475,7 @@ where
     // handle Compact, CleanupSst task
     pub cleanup_scheduler: Scheduler<CleanupTask>,
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
-    pub raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+    pub raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     pub apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
@@ -684,7 +685,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
     StoreFsmDelegate<'a, EK, ER, T>
 {
     fn on_tick(&mut self, tick: StoreTick) {
-        let t = TiInstant::now_coarse();
+        let timer = TiInstant::now_coarse();
         match tick {
             StoreTick::PdStoreHeartbeat => self.on_pd_store_heartbeat_tick(),
             StoreTick::SnapGc => self.on_snap_mgr_gc(),
@@ -693,8 +694,10 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             StoreTick::ConsistencyCheck => self.on_consistency_check_tick(),
             StoreTick::CleanupImportSst => self.on_cleanup_import_sst_tick(),
         }
-        let elapsed = t.saturating_elapsed();
-        RAFT_EVENT_DURATION
+        let elapsed = timer.saturating_elapsed();
+        self.ctx
+            .raft_metrics
+            .event_time
             .get(tick.tag())
             .observe(duration_to_sec(elapsed) as f64);
         slow_log!(
@@ -706,6 +709,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
     }
 
     fn handle_msgs(&mut self, msgs: &mut Vec<StoreMsg<EK>>) {
+        let timer = TiInstant::now_coarse();
         for m in msgs.drain(..) {
             match m {
                 StoreMsg::Tick(tick) => self.on_tick(tick),
@@ -756,6 +760,11 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 StoreMsg::GcSnapshotFinish => self.register_snap_mgr_gc_tick(),
             }
         }
+        self.ctx
+            .raft_metrics
+            .event_time
+            .store_msg
+            .observe(duration_to_sec(timer.saturating_elapsed()) as f64);
     }
 
     fn start(&mut self, store: metapb::Store) {
@@ -1081,7 +1090,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     split_check_scheduler: Scheduler<SplitCheckTask>,
     cleanup_scheduler: Scheduler<CleanupTask>,
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
-    raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+    raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
@@ -1531,7 +1540,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
 
         let raftlog_fetch_scheduler = workers.raftlog_fetch_worker.start(
             "raftlog-fetch-worker",
-            RaftlogFetchRunner::new(self.router.clone(), engines.raft.clone()),
+            ReadRunner::new(self.router.clone(), engines.raft.clone()),
         );
 
         let compact_runner = CompactRunner::new(engines.kv.clone());

@@ -18,6 +18,7 @@
 //! There two steps can be processed concurrently.
 
 mod async_writer;
+mod snapshot;
 
 use std::cmp;
 
@@ -30,12 +31,15 @@ use raftstore::store::{util, ExtraStates, FetchedLogs, Transport, WriteTask};
 use slog::{debug, error, trace, warn};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 
-pub use self::async_writer::AsyncWriter;
+pub use self::{
+    async_writer::AsyncWriter,
+    snapshot::{GenSnapTask, SnapState},
+};
 use crate::{
     batch::StoreContext,
     fsm::PeerFsmDelegate,
     raft::{Peer, Storage},
-    router::PeerTick,
+    router::{ApplyTask, PeerTick},
 };
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
     /// Raft relies on periodic ticks to keep the state machine sync with other
@@ -115,7 +119,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     /// Callback for fetching logs asynchronously.
-    pub fn on_fetched_logs(&mut self, fetched_logs: FetchedLogs) {
+    pub fn on_logs_fetched(&mut self, fetched_logs: FetchedLogs) {
         let FetchedLogs { context, logs } = fetched_logs;
         let low = logs.low;
         if !self.is_leader() {
@@ -298,6 +302,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.handle_raft_committed_entries(ctx, ready.take_committed_entries());
         }
 
+        // Check whether there is a pending generate snapshot task, the task
+        // needs to be sent to the apply system.
+        // Always sending snapshot task after apply task, so it gets latest
+        // snapshot.
+        if let Some(gen_task) = self.storage_mut().take_gen_snap_task() {
+            self.apply_scheduler().send(ApplyTask::Snapshot(gen_task));
+        }
+
         let ready_number = ready.number();
         let mut write_task = WriteTask::new(self.region_id(), self.peer_id(), ready_number);
         self.storage_mut()
@@ -385,14 +397,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 }
 
-impl<ER: RaftEngine> Storage<ER> {
+impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     /// Apply the ready to the storage. If there is any states need to be
     /// persisted, it will be written to `write_task`.
-    fn handle_raft_ready<EK: KvEngine>(
-        &mut self,
-        ready: &mut Ready,
-        write_task: &mut WriteTask<EK, ER>,
-    ) {
+    fn handle_raft_ready(&mut self, ready: &mut Ready, write_task: &mut WriteTask<EK, ER>) {
         let prev_raft_state = self.entry_storage().raft_state().clone();
         let ever_persisted = self.ever_persisted();
 

@@ -48,6 +48,7 @@ use parking_lot::{Mutex, MutexGuard, RwLockWriteGuard};
 use pd_client::{Feature, FeatureGate};
 use raftstore::store::TxnExt;
 use resource_metering::{FutureExt, ResourceTagFactory};
+use smallvec::SmallVec;
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData};
 use tikv_util::{
     deadline::Deadline, quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE,
@@ -790,8 +791,17 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     }
 
     fn on_release_locks(&self, released_locks: ReleasedLocks) {
-        let mut legacy_wake_up_list = vec![];
-        let mut delay_wake_up_futures = vec![];
+        // This function is always called when holding the latch of the involved keys.
+        // So if we found the lock waiting queues are empty, there's no chance
+        // that other threads/commands adds new lock-wait entries to the keys
+        // concurrently. Therefore it's safe to skip waking up when we found the
+        // lock waiting queues are empty.
+        if self.inner.lock_wait_queues.is_empty() {
+            return;
+        }
+
+        let mut legacy_wake_up_list = SmallVec::<[_; 4]>::new();
+        let mut delay_wake_up_futures = SmallVec::<[_; 4]>::new();
         let wake_up_delay_duration_ms = self
             .inner
             .pessimistic_lock_wake_up_delay_duration_ms
@@ -817,13 +827,19 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             }
         });
 
+        if legacy_wake_up_list.is_empty() && delay_wake_up_futures.is_empty() {
+            return;
+        }
+
         self.wake_up_legacy_pessimistic_locks(legacy_wake_up_list, delay_wake_up_futures);
     }
 
     fn wake_up_legacy_pessimistic_locks(
         &self,
-        legacy_wake_up_list: Vec<(Box<LockWaitEntry>, ReleasedLock)>,
-        delayed_wake_up_futures: Vec<DelayedNotifyAllFuture>,
+        legacy_wake_up_list: impl IntoIterator<Item = (Box<LockWaitEntry>, ReleasedLock)>
+        + Send
+        + 'static,
+        delayed_wake_up_futures: impl IntoIterator<Item = DelayedNotifyAllFuture> + Send + 'static,
     ) {
         let self1 = self.clone();
         self.get_sched_pool(CommandPri::High)
