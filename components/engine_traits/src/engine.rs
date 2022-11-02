@@ -40,6 +40,7 @@ pub trait KvEngine:
     + Clone
     + Debug
     + Unpin
+    + Checkpointable
     + 'static
 {
     /// A consistent read-only snapshot of the database
@@ -224,6 +225,9 @@ impl OpenOptions {
     }
 }
 
+pub const SPLIT_PREFIX: &str = "split_";
+pub const MERGE_PREFIX: &str = "merge_";
+
 /// A factory trait to create new engine.
 // It should be named as `EngineFactory` for consistency, but we are about to
 // rename engine to tablet, so always use tablet for new traits/types.
@@ -261,7 +265,15 @@ pub trait TabletFactory<EK>: TabletAccessor<EK> + Send + Sync {
     fn exists_raw(&self, path: &Path) -> bool;
 
     /// Get the tablet path by id and suffix
-    fn tablet_path(&self, id: u64, suffix: u64) -> PathBuf;
+    fn tablet_path(&self, id: u64, suffix: u64) -> PathBuf {
+        self.tablet_path_with_prefix("", id, suffix)
+    }
+
+    /// Get the tablet path by id and suffix
+    ///
+    /// Used in special situations
+    /// Ex: split/merge.
+    fn tablet_path_with_prefix(&self, prefix: &str, id: u64, suffix: u64) -> PathBuf;
 
     /// Tablets root path
     fn tablets_path(&self) -> PathBuf;
@@ -323,7 +335,7 @@ where
         true
     }
 
-    fn tablet_path(&self, _id: u64, _suffix: u64) -> PathBuf {
+    fn tablet_path_with_prefix(&self, _prefix: &str, _id: u64, _suffix: u64) -> PathBuf {
         PathBuf::from(&self.root_path)
     }
 

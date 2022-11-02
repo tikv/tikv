@@ -36,8 +36,11 @@ use tikv_util::{
 use super::{metrics::*, worker::RegionTask, SnapEntry, SnapKey, SnapManager};
 use crate::{
     store::{
-        async_io::write::WriteTask, entry_storage::EntryStorage, fsm::GenSnapTask,
-        peer::PersistSnapshotResult, util, worker::RaftlogFetchTask,
+        async_io::{read::ReadTask, write::WriteTask},
+        entry_storage::EntryStorage,
+        fsm::GenSnapTask,
+        peer::PersistSnapshotResult,
+        util,
     },
     Error, Result,
 };
@@ -218,13 +221,13 @@ where
     region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     snap_tried_cnt: RefCell<usize>,
 
-    entry_storage: EntryStorage<ER>,
+    entry_storage: EntryStorage<EK, ER>,
 
     pub tag: String,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Deref for PeerStorage<EK, ER> {
-    type Target = EntryStorage<ER>;
+    type Target = EntryStorage<EK, ER>;
 
     #[inline]
     fn deref(&self) -> &Self::Target {
@@ -286,7 +289,7 @@ where
         engines: Engines<EK, ER>,
         region: &metapb::Region,
         region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
-        raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+        raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
         peer_id: u64,
         tag: String,
     ) -> Result<PeerStorage<EK, ER>> {
@@ -434,7 +437,7 @@ where
     }
 
     /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no
-    /// unavailable snapshot.
+    /// available snapshot.
     pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
         let mut snap_state = self.snap_state.borrow_mut();
         let mut tried_cnt = self.snap_tried_cnt.borrow_mut();
@@ -1136,21 +1139,19 @@ pub mod tests {
     use crate::{
         coprocessor::CoprocessorHost,
         store::{
-            async_io::write::write_to_db_for_test,
+            async_io::{read::ReadRunner, write::write_to_db_for_test},
             bootstrap_store,
             entry_storage::tests::validate_cache,
             fsm::apply::compact_raft_log,
             initial_region, prepare_bootstrap_cluster,
-            worker::{
-                make_region_worker_raftstore_cfg, FetchedLogs, LogFetchedNotifier,
-                RaftlogFetchRunner, RegionRunner, RegionTask,
-            },
+            worker::{make_region_worker_raftstore_cfg, RegionRunner, RegionTask},
+            AsyncReadNotifier, FetchedLogs,
         },
     };
 
     fn new_storage(
         region_scheduler: Scheduler<RegionTask<KvTestSnapshot>>,
-        raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+        raftlog_fetch_scheduler: Scheduler<ReadTask<KvTestEngine>>,
         path: &TempDir,
     ) -> PeerStorage<KvTestEngine, RaftTestEngine> {
         let kv_db = engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
@@ -1183,7 +1184,7 @@ pub mod tests {
 
     pub fn new_storage_from_ents(
         region_scheduler: Scheduler<RegionTask<KvTestSnapshot>>,
-        raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+        raftlog_fetch_scheduler: Scheduler<ReadTask<KvTestEngine>>,
         path: &TempDir,
         ents: &[Entry],
     ) -> PeerStorage<KvTestEngine, RaftTestEngine> {
@@ -1378,9 +1379,13 @@ pub mod tests {
         }
     }
 
-    impl LogFetchedNotifier for TestRouter {
-        fn notify(&self, _region_id: u64, fetched_logs: FetchedLogs) {
+    impl AsyncReadNotifier for TestRouter {
+        fn notify_logs_fetched(&self, _region_id: u64, fetched_logs: FetchedLogs) {
             self.ch.send(fetched_logs).unwrap();
+        }
+
+        fn notify_snapshot_generated(&self, _region_id: u64, _snapshot: Box<Snapshot>) {
+            unreachable!();
         }
     }
 
@@ -1455,7 +1460,7 @@ pub mod tests {
             let raftlog_fetch_scheduler = raftlog_fetch_worker.scheduler();
             let mut store =
                 new_storage_from_ents(region_scheduler, raftlog_fetch_scheduler, &td, &ents);
-            raftlog_fetch_worker.start(RaftlogFetchRunner::new(router, store.engines.raft.clone()));
+            raftlog_fetch_worker.start(ReadRunner::new(router, store.engines.raft.clone()));
             store.compact_entry_cache(5);
             let mut e = store.entries(lo, hi, maxsize, GetEntriesContext::empty(true));
             if e == Err(raft::Error::Store(
