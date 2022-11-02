@@ -248,6 +248,15 @@ impl KvEngineFactory {
 }
 
 impl TabletFactory<RocksEngine> for KvEngineFactory {
+    #[inline]
+    fn create_shared_db(&self) -> Result<RocksEngine> {
+        let root_path = self.kv_engine_path();
+        let tablet = self.create_tablet(&root_path, 0, 0)?;
+        let mut root_db = self.inner.root_db.lock().unwrap();
+        root_db.replace(tablet.clone());
+        Ok(tablet)
+    }
+
     /// Open the root tablet according to the OpenOptions.
     ///
     /// If options.create_new is true, create the root tablet. If the tablet
@@ -289,20 +298,6 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
         self.create_shared_db()
     }
 
-    #[inline]
-    fn create_shared_db(&self) -> Result<RocksEngine> {
-        let root_path = self.kv_engine_path();
-        let tablet = self.create_tablet(&root_path, 0, 0)?;
-        let mut root_db = self.inner.root_db.lock().unwrap();
-        root_db.replace(tablet.clone());
-        Ok(tablet)
-    }
-
-    #[inline]
-    fn destroy_tablet(&self, _id: u64, _suffix: u64) -> engine_traits::Result<()> {
-        Ok(())
-    }
-
     fn exists_raw(&self, _path: &Path) -> bool {
         false
     }
@@ -313,6 +308,11 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
 
     fn tablets_path(&self) -> PathBuf {
         self.kv_engine_path()
+    }
+
+    #[inline]
+    fn destroy_tablet(&self, _id: u64, _suffix: u64) -> engine_traits::Result<()> {
+        Ok(())
     }
 
     fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()> {
