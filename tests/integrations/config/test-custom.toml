@@ -54,6 +54,7 @@ status-thread-pool-size = 1
 max-grpc-send-msg-len = 6291456
 raft-client-grpc-send-msg-buffer = 1263616
 raft-client-queue-size = 1234
+raft-client-max-backoff = "5s"
 raft-msg-max-batch-size = 123
 grpc-compression-type = "gzip"
 grpc-concurrency = 123
@@ -222,6 +223,7 @@ report-min-resolved-ts-interval = "233ms"
 report-region-buckets-tick-interval = "1234s"
 max-snapshot-file-raw-size = "10GB"
 unreachable-backoff = "111s"
+max-entry-cache-warmup-duration = "2s"
 
 [coprocessor]
 split-region-on-table = false

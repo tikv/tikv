@@ -4091,7 +4091,7 @@ mod tests {
         server::{config::ServerConfigManager, ttl::TtlCheckerTask},
         storage::{
             config_manager::StorageConfigManger,
-            lock_manager::DummyLockManager,
+            lock_manager::MockLockManager,
             txn::flow_controller::{EngineFlowController, FlowController},
             Storage, TestStorageBuilder,
         },
@@ -4481,7 +4481,7 @@ mod tests {
     fn new_engines<F: KvFormat>(
         cfg: TikvConfig,
     ) -> (
-        Storage<RocksDBEngine, DummyLockManager, F>,
+        Storage<RocksDBEngine, MockLockManager, F>,
         ConfigController,
         ReceiverWrapper<TtlCheckerTask>,
         Arc<FlowController>,
@@ -4500,7 +4500,7 @@ mod tests {
         )
         .unwrap();
         let storage =
-            TestStorageBuilder::<_, _, F>::from_engine_and_lock_mgr(engine, DummyLockManager)
+            TestStorageBuilder::<_, _, F>::from_engine_and_lock_mgr(engine, MockLockManager::new())
                 .config(cfg.storage.clone())
                 .build()
                 .unwrap();
