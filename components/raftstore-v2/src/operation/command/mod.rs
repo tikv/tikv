@@ -39,8 +39,7 @@ use raftstore::{
         local_metrics::RaftMetrics,
         metrics::*,
         msg::ErrorCallback,
-        util::{self, admin_cmd_epoch_lookup},
-        WriteCallback,
+        util, WriteCallback,
     },
     Error, Result,
 };
