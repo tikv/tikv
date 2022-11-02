@@ -1,4 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
+
 //! This module contains batch split related processing logic.
 //!
 //! Process Overview
@@ -35,7 +36,7 @@ use protobuf::Message;
 use raftstore::{
     coprocessor::split_observer::{is_valid_split_key, strip_timestamp_if_exists},
     store::{
-        fsm::apply::extract_split_keys,
+        fsm::apply::{extract_split_keys, validate_batch_split},
         metrics::PEER_ADMIN_CMD_COUNTER,
         util::{self, KeysInfoFormatter},
         PeerStat, ProposalContext, RAFT_INIT_LOG_INDEX,
@@ -60,57 +61,13 @@ pub struct SplitResult {
     pub tablet_index: u64,
 }
 
-pub fn validate_batch_split(
-    logger: &Logger,
-    req: &mut AdminRequest,
-    region: &Region,
-) -> Result<()> {
-    if !req.has_splits() || req.get_splits().get_requests().is_empty() {
-        return Err(box_err!(
-            "cmd_type is BatchSplit but it doesn't have splits request, message maybe \
-             corrupted!"
-                .to_owned()
-        ));
-    }
-
-    let split_reqs: &[SplitRequest] = req.mut_splits().get_requests();
-    let count = split_reqs.len();
-    if split_reqs[0].get_new_peer_ids().len() != region.get_peers().len() {
-        return Err(box_err!(
-            "invalid new peer id count, need {:?}, but got {:?}",
-            region.get_peers(),
-            split_reqs[0].get_new_peer_ids()
-        ));
-    }
-    for i in 1..count {
-        if split_reqs[i].get_new_peer_ids().len() != region.get_peers().len() {
-            return Err(box_err!(
-                "invalid new peer id count, need {:?}, but got {:?}",
-                region.get_peers(),
-                split_reqs[i].get_new_peer_ids()
-            ));
-        }
-        if split_reqs[i - 1].get_split_key() >= split_reqs[i].get_split_key() {
-            return Err(box_err!(format!(
-                "Split keys in the request are not in strict ascending order: {:?}",
-                req
-            )));
-        }
-    }
-
-    util::check_key_in_region_exclusive(split_reqs[0].get_split_key(), region)?;
-    util::check_key_in_region_exclusive(split_reqs[count - 1].get_split_key(), region)?;
-
-    Ok(())
-}
-
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn propose_split<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
     ) -> Result<u64> {
-        validate_batch_split(&self.logger, req.mut_admin_request(), self.region())?;
+        validate_batch_split(req.mut_admin_request(), self.region())?;
         let mut proposal_ctx = ProposalContext::empty();
         proposal_ctx.insert(ProposalContext::SYNC_LOG);
         proposal_ctx.insert(ProposalContext::SPLIT);
@@ -128,10 +85,9 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     ) -> Result<(AdminResponse, AdminCmdResult)> {
         PEER_ADMIN_CMD_COUNTER.batch_split.all.inc();
 
-        let split_reqs = req.get_splits();
         let mut derived = self.region_state().get_region().clone();
 
-        let mut keys = extract_split_keys(split_reqs, self.region_state().get_region())?;
+        let mut keys = extract_split_keys(req, self.region_state().get_region())?;
 
         info!(
             self.logger,
@@ -140,6 +96,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             "keys" => %KeysInfoFormatter(keys.iter()),
         );
 
+        let split_reqs = req.get_splits();
         let new_region_cnt = split_reqs.get_requests().len();
         let new_version = derived.get_region_epoch().get_version() + new_region_cnt as u64;
         derived.mut_region_epoch().set_version(new_version);
@@ -474,13 +431,14 @@ mod test {
             resp
         );
 
+        splits.mut_requests().clear();
         splits
             .mut_requests()
             .push(new_split_req(b"", 1, vec![11, 12, 13]));
         req.set_splits(splits.clone());
         let err = apply.exec_batch_split(&req, 0).unwrap_err();
-        // Empty key should be rejected.
-        assert!(err.to_string().contains("missing split key"), "{:?}", err);
+        // Empty key will not in any region exclusively.
+        assert!(err.to_string().contains("not in region"), "{:?}", err);
 
         splits.mut_requests().clear();
         splits
@@ -597,15 +555,14 @@ mod test {
         region.set_start_key(b"k05".to_vec());
         region.set_end_key(b"k10".to_vec());
         region.set_peers(vec![new_peer(1, 2)].into());
-        let logger = slog_global::borrow_global().new(o!());
 
         let mut req = AdminRequest::default();
         // default admin request should be rejected
         assert!(
-            validate_batch_split(&logger, &mut req, &region)
+            validate_batch_split(&req, &region)
                 .unwrap_err()
                 .to_string()
-                .contains("cmd_type is BatchSplit but it doesn't have splits request")
+                .contains("missing split requests")
         );
 
         req.set_cmd_type(AdminCmdType::Split);
@@ -614,19 +571,19 @@ mod test {
         req.set_split(split_req);
         // Split is deprecated
         assert!(
-            validate_batch_split(&logger, &mut req, &region)
+            validate_batch_split(&req, &region)
                 .unwrap_err()
                 .to_string()
-                .contains("cmd_type is BatchSplit but it doesn't have splits request")
+                .contains("missing split requests")
         );
 
         req = new_batch_split_request(vec![vec![]]);
         req.mut_splits().mut_requests().clear();
         assert!(
-            validate_batch_split(&logger, &mut req, &region)
+            validate_batch_split(&req, &region)
                 .unwrap_err()
                 .to_string()
-                .contains("cmd_type is BatchSplit but it doesn't have splits request")
+                .contains("missing split requests")
         );
 
         req = new_batch_split_request(vec![b"k07".to_vec()]);
@@ -637,7 +594,7 @@ mod test {
             .new_peer_ids
             .clear();
         assert!(
-            validate_batch_split(&logger, &mut req, &region)
+            validate_batch_split(&req, &region)
                 .unwrap_err()
                 .to_string()
                 .contains("invalid new peer id count")
@@ -645,15 +602,15 @@ mod test {
 
         req = new_batch_split_request(vec![b"k07".to_vec(), b"k08".to_vec(), b"k06".to_vec()]);
         assert!(
-            validate_batch_split(&logger, &mut req, &region)
+            validate_batch_split(&req, &region)
                 .unwrap_err()
                 .to_string()
-                .contains("Split keys in the request are not in strict ascending order")
+                .contains("invalid split request")
         );
 
         req = new_batch_split_request(vec![b"k04".to_vec(), b"k07".to_vec(), b"k08".to_vec()]);
         assert!(
-            validate_batch_split(&logger, &mut req, &region)
+            validate_batch_split(&req, &region)
                 .unwrap_err()
                 .to_string()
                 .contains("not in region")
@@ -661,13 +618,13 @@ mod test {
 
         req = new_batch_split_request(vec![b"k06".to_vec(), b"k07".to_vec(), b"k11".to_vec()]);
         assert!(
-            validate_batch_split(&logger, &mut req, &region)
+            validate_batch_split(&req, &region)
                 .unwrap_err()
                 .to_string()
                 .contains("not in region")
         );
 
         req = new_batch_split_request(vec![b"k06".to_vec(), b"k07".to_vec(), b"k08".to_vec()]);
-        validate_batch_split(&logger, &mut req, &region).unwrap();
+        validate_batch_split(&req, &region).unwrap();
     }
 }

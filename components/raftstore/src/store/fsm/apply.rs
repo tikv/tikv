@@ -38,8 +38,8 @@ use kvproto::{
     kvrpcpb::ExtraOp as TxnExtraOp,
     metapb::{PeerRole, Region, RegionEpoch},
     raft_cmdpb::{
-        AdminCmdType, AdminRequest, AdminResponse, BatchSplitRequest, ChangePeerRequest, CmdType,
-        CommitMergeRequest, RaftCmdRequest, RaftCmdResponse, Request,
+        AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
+        RaftCmdRequest, RaftCmdResponse, Request, SplitRequest,
     },
     raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState},
 };
@@ -1899,40 +1899,52 @@ mod confchange_cmd_metric {
     }
 }
 
-// Validate the request and the split keys
-pub fn extract_split_keys(
-    split_reqs: &BatchSplitRequest,
-    region_to_split: &Region,
-) -> Result<VecDeque<Vec<u8>>> {
-    if split_reqs.get_requests().is_empty() {
+pub fn validate_batch_split(req: &AdminRequest, region: &Region) -> Result<()> {
+    if !req.has_splits() || req.get_splits().get_requests().is_empty() {
         return Err(box_err!("missing split requests"));
     }
-    let mut keys: VecDeque<Vec<u8>> = VecDeque::with_capacity(split_reqs.get_requests().len() + 1);
-    for req in split_reqs.get_requests() {
-        let split_key = req.get_split_key();
-        if split_key.is_empty() {
-            return Err(box_err!("missing split key"));
-        }
-        if split_key
-            <= keys
-                .back()
-                .map_or_else(|| region_to_split.get_start_key(), Vec::as_slice)
-        {
-            return Err(box_err!("invalid split request: {:?}", split_reqs));
-        }
-        if req.get_new_peer_ids().len() != region_to_split.get_peers().len() {
+
+    let split_reqs: &[SplitRequest] = req.get_splits().get_requests();
+    let count = split_reqs.len();
+    if split_reqs[0].get_new_peer_ids().len() != region.get_peers().len() {
+        return Err(box_err!(
+            "invalid new peer id count, need {:?}, but got {:?}",
+            region.get_peers(),
+            split_reqs[0].get_new_peer_ids()
+        ));
+    }
+    for i in 1..count {
+        if split_reqs[i].get_new_peer_ids().len() != region.get_peers().len() {
             return Err(box_err!(
                 "invalid new peer id count, need {:?}, but got {:?}",
-                region_to_split.get_peers(),
-                req.get_new_peer_ids()
+                region.get_peers(),
+                split_reqs[i].get_new_peer_ids()
             ));
         }
-        keys.push_back(split_key.to_vec());
+        if split_reqs[i - 1].get_split_key() >= split_reqs[i].get_split_key() {
+            return Err(box_err!("invalid split request: {:?}", split_reqs));
+        }
     }
 
-    util::check_key_in_region_exclusive(keys.back().unwrap(), region_to_split)?;
+    util::check_key_in_region_exclusive(split_reqs[0].get_split_key(), region)?;
+    util::check_key_in_region_exclusive(split_reqs[count - 1].get_split_key(), region)?;
 
-    Ok(keys)
+    Ok(())
+}
+
+// Validate the request and the split keys
+pub fn extract_split_keys(
+    req: &AdminRequest,
+    region_to_split: &Region,
+) -> Result<VecDeque<Vec<u8>>> {
+    validate_batch_split(req, region_to_split)?;
+
+    Ok(req
+        .get_splits()
+        .get_requests()
+        .iter()
+        .map(|req| req.get_split_key().to_vec())
+        .collect())
 }
 
 // Admin commands related.
@@ -2403,8 +2415,7 @@ where
 
         PEER_ADMIN_CMD_COUNTER.batch_split.all.inc();
 
-        let split_reqs = req.get_splits();
-        let mut keys = extract_split_keys(split_reqs, &self.region)?;
+        let mut keys = extract_split_keys(req, &self.region)?;
         let mut derived = self.region.clone();
 
         info!(
@@ -2415,6 +2426,7 @@ where
             "keys" => %KeysInfoFormatter(keys.iter()),
         );
 
+        let split_reqs = req.get_splits();
         let new_region_cnt = split_reqs.get_requests().len();
         let new_version = derived.get_region_epoch().get_version() + new_region_cnt as u64;
         derived.mut_region_epoch().set_version(new_version);
@@ -6469,12 +6481,13 @@ mod tests {
             resp
         );
 
+        splits.mut_requests().clear();
         splits
             .mut_requests()
             .push(new_split_req(b"", 8, vec![9, 10, 11]));
         let resp = exec_split(&router, splits.clone());
-        // Empty key should be rejected.
-        assert!(error_msg(&resp).contains("missing"), "{:?}", resp);
+        // Empty key will not in any region exclusively.
+        assert!(error_msg(&resp).contains("not in region"), "{:?}", resp);
 
         splits.mut_requests().clear();
         splits

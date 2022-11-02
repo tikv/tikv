@@ -1,13 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    collections::VecDeque,
-    mem,
-    sync::{Arc, Mutex},
-};
+use std::{mem, sync::Arc};
 
-use collections::HashMap;
-use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletFactory, WriteBatch};
+use engine_traits::{KvEngine, TabletFactory};
 use kvproto::{metapb, raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
 use raftstore::store::{fsm::apply::DEFAULT_APPLY_WB_SIZE, ReadTask};
 use slog::Logger;
