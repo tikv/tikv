@@ -1263,7 +1263,7 @@ where
         apply_ctx: &mut ApplyContext<EK>,
         index: u64,
         term: u64,
-        cmd: RaftCmdRequest,
+        req: RaftCmdRequest,
     ) -> ApplyResult<EK::Snapshot> {
         if index == 0 {
             panic!(
@@ -1273,11 +1273,10 @@ where
         }
 
         // Set sync log hint if the cmd requires so.
-        apply_ctx.sync_log_hint |= should_sync_log(&cmd);
+        apply_ctx.sync_log_hint |= should_sync_log(&req);
 
-        apply_ctx.host.pre_apply(&self.region, &cmd);
-        let (mut resp, exec_result, should_write) =
-            self.apply_raft_cmd(apply_ctx, index, term, &cmd);
+        apply_ctx.host.pre_apply(&self.region, &req);
+        let (mut cmd, exec_result, should_write) = self.apply_raft_cmd(apply_ctx, index, term, req);
         if let ApplyResult::WaitMergeSource(_) = exec_result {
             return exec_result;
         }
@@ -1291,9 +1290,8 @@ where
 
         // TODO: if we have exec_result, maybe we should return this callback too. Outer
         // store will call it after handing exec result.
-        cmd_resp::bind_term(&mut resp, self.term);
-        let cmd_cb = self.find_pending(index, term, is_conf_change_cmd(&cmd));
-        let cmd = Cmd::new(index, term, cmd, resp);
+        cmd_resp::bind_term(&mut cmd.response, self.term);
+        let cmd_cb = self.find_pending(index, term, is_conf_change_cmd(&cmd.request));
         apply_ctx
             .applied_batch
             .push(cmd_cb, cmd, &self.observe_info, self.region_id());
@@ -1321,8 +1319,8 @@ where
         ctx: &mut ApplyContext<EK>,
         index: u64,
         term: u64,
-        req: &RaftCmdRequest,
-    ) -> (RaftCmdResponse, ApplyResult<EK::Snapshot>, bool) {
+        req: RaftCmdRequest,
+    ) -> (Cmd, ApplyResult<EK::Snapshot>, bool) {
         // if pending remove, apply should be aborted already.
         assert!(!self.pending_remove);
 
@@ -1330,7 +1328,7 @@ where
         // E.g. `RaftApplyState` must not be changed.
 
         let mut origin_epoch = None;
-        let (resp, exec_result) = if ctx.host.pre_exec(&self.region, req, index, term) {
+        let (resp, exec_result) = if ctx.host.pre_exec(&self.region, &req, index, term) {
             // One of the observers want to filter execution of the command.
             let mut resp = RaftCmdResponse::default();
             if !req.get_header().get_uuid().is_empty() {
@@ -1342,7 +1340,7 @@ where
             ctx.exec_log_index = index;
             ctx.exec_log_term = term;
             ctx.kv_wb_mut().set_save_point();
-            let (resp, exec_result) = match self.exec_raft_cmd(ctx, req) {
+            let (resp, exec_result) = match self.exec_raft_cmd(ctx, &req) {
                 Ok(a) => {
                     ctx.kv_wb_mut().pop_save_point().unwrap();
                     if req.has_admin_request() {
@@ -1383,14 +1381,15 @@ where
             };
             (resp, exec_result)
         };
+
+        let cmd = Cmd::new(index, term, req, resp);
         if let ApplyResult::WaitMergeSource(_) = exec_result {
-            return (resp, exec_result, false);
+            return (cmd, exec_result, false);
         }
 
         self.apply_state.set_applied_index(index);
         self.applied_term = term;
 
-        let cmd = Cmd::new(index, term, req.clone(), resp.clone());
         let (modified_region, mut pending_handle_ssts) = match exec_result {
             ApplyResult::Res(ref e) => match e {
                 ExecResult::SplitRegion { ref derived, .. } => (Some(derived.clone()), None),
@@ -1469,7 +1468,7 @@ where
             }
         }
         if let Some(epoch) = origin_epoch {
-            let cmd_type = req.get_admin_request().get_cmd_type();
+            let cmd_type = cmd.request.get_admin_request().get_cmd_type();
             let epoch_state = admin_cmd_epoch_lookup(cmd_type);
             // The change-epoch behavior **MUST BE** equal to the settings in
             // `admin_cmd_epoch_lookup`
@@ -1481,7 +1480,7 @@ where
                 panic!(
                     "{} apply admin cmd {:?} but epoch change is not expected, epoch state {:?}, before {:?}, after {:?}",
                     self.tag,
-                    req,
+                    cmd.request,
                     epoch_state,
                     epoch,
                     self.region.get_region_epoch()
@@ -1489,7 +1488,7 @@ where
             }
         }
 
-        (resp, exec_result, should_write)
+        (cmd, exec_result, should_write)
     }
 
     fn destroy(&mut self, apply_ctx: &mut ApplyContext<EK>) {
