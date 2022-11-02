@@ -231,6 +231,7 @@ fn test_serde_custom_tikv_config() {
         hibernate_regions: false,
         dev_assert: true,
         apply_yield_duration: ReadableDuration::millis(333),
+        apply_yield_write_size: ReadableSize(12345),
         perf_level: PerfLevel::Disable,
         evict_cache_on_memory_ratio: 0.8,
         cmd_batch: false,
