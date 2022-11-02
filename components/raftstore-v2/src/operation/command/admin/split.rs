@@ -438,7 +438,11 @@ mod test {
         req.set_splits(splits.clone());
         let err = apply.exec_batch_split(&req, 0).unwrap_err();
         // Empty key will not in any region exclusively.
-        assert!(err.to_string().contains("not in region"), "{:?}", err);
+        assert!(
+            err.to_string().contains("invalid split request"),
+            "{:?}",
+            err
+        );
 
         splits.mut_requests().clear();
         splits
@@ -534,97 +538,5 @@ mod test {
         apply.exec_batch_split(&req, 50).unwrap();
         assert!(apply.write_batch_mut().is_none());
         assert_eq!(apply.tablet().get_value(b"k04").unwrap().unwrap(), b"v4");
-    }
-
-    fn new_batch_split_request(keys: Vec<Vec<u8>>) -> AdminRequest {
-        let mut req = AdminRequest::default();
-        req.set_cmd_type(AdminCmdType::BatchSplit);
-        for key in keys {
-            let mut split_req = SplitRequest::default();
-            split_req.set_split_key(key);
-            split_req.set_new_peer_ids(vec![1]);
-            req.mut_splits().mut_requests().push(split_req);
-        }
-        req
-    }
-
-    #[test]
-    fn test_validate_batch_split() {
-        let mut region = Region::default();
-        let start_key = b"k05";
-        region.set_start_key(b"k05".to_vec());
-        region.set_end_key(b"k10".to_vec());
-        region.set_peers(vec![new_peer(1, 2)].into());
-
-        let mut req = AdminRequest::default();
-        // default admin request should be rejected
-        assert!(
-            validate_batch_split(&req, &region)
-                .unwrap_err()
-                .to_string()
-                .contains("missing split requests")
-        );
-
-        req.set_cmd_type(AdminCmdType::Split);
-        let mut split_req = SplitRequest::default();
-        split_req.set_split_key(b"k06".to_vec());
-        req.set_split(split_req);
-        // Split is deprecated
-        assert!(
-            validate_batch_split(&req, &region)
-                .unwrap_err()
-                .to_string()
-                .contains("missing split requests")
-        );
-
-        req = new_batch_split_request(vec![vec![]]);
-        req.mut_splits().mut_requests().clear();
-        assert!(
-            validate_batch_split(&req, &region)
-                .unwrap_err()
-                .to_string()
-                .contains("missing split requests")
-        );
-
-        req = new_batch_split_request(vec![b"k07".to_vec()]);
-        req.mut_splits()
-            .mut_requests()
-            .get_mut(0)
-            .unwrap()
-            .new_peer_ids
-            .clear();
-        assert!(
-            validate_batch_split(&req, &region)
-                .unwrap_err()
-                .to_string()
-                .contains("invalid new peer id count")
-        );
-
-        req = new_batch_split_request(vec![b"k07".to_vec(), b"k08".to_vec(), b"k06".to_vec()]);
-        assert!(
-            validate_batch_split(&req, &region)
-                .unwrap_err()
-                .to_string()
-                .contains("invalid split request")
-        );
-
-        req = new_batch_split_request(vec![b"k04".to_vec(), b"k07".to_vec(), b"k08".to_vec()]);
-        assert!(
-            validate_batch_split(&req, &region)
-                .unwrap_err()
-                .to_string()
-                .contains("not in region")
-        );
-
-        req = new_batch_split_request(vec![b"k06".to_vec(), b"k07".to_vec(), b"k11".to_vec()]);
-        assert!(
-            validate_batch_split(&req, &region)
-                .unwrap_err()
-                .to_string()
-                .contains("not in region")
-        );
-
-        req = new_batch_split_request(vec![b"k06".to_vec(), b"k07".to_vec(), b"k08".to_vec()]);
-        validate_batch_split(&req, &region).unwrap();
     }
 }
