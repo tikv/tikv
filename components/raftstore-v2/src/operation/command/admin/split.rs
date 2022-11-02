@@ -48,6 +48,7 @@ use tikv_util::box_err;
 
 use crate::{
     batch::StoreContext,
+    fsm::ApplyResReporter,
     operation::AdminCmdResult,
     raft::{Apply, Peer},
     router::ApplyRes,
@@ -77,7 +78,7 @@ pub fn validate_batch_split(
     for i in 1..count {
         if split_reqs[i - 1].get_split_key() >= split_reqs[i].get_split_key() {
             return Err(box_err!(format!(
-                "Split keys in the request are not in ascending order: {:?}",
+                "Split keys in the request are not in strict ascending order: {:?}",
                 req
             )));
         }
@@ -105,7 +106,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 }
 
-impl<EK: KvEngine, R> Apply<EK, R> {
+impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     pub fn exec_batch_split(
         &mut self,
         req: &AdminRequest,
@@ -622,7 +623,7 @@ mod test {
             validate_batch_split(&logger, &mut req, &region)
                 .unwrap_err()
                 .to_string()
-                .contains("Split keys in the request are not in ascending order")
+                .contains("Split keys in the request are not in strict ascending order")
         );
 
         req = new_batch_split_request(vec![b"k04".to_vec(), b"k07".to_vec(), b"k08".to_vec()]);
