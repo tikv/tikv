@@ -47,7 +47,10 @@ use crate::{
     errors::{Error, Result},
     event_loader::{InitialDataLoader, PendingMemoryQuota},
     future,
-    metadata::{store::MetaStore, MetadataClient, MetadataEvent, StreamTask},
+    metadata::{
+        store::{lazy_etcd::retry, MetaStore},
+        MetadataClient, MetadataEvent, StreamTask,
+    },
     metrics::{self, TaskStatus},
     observer::BackupStreamObserver,
     router::{ApplyEvents, Router, TaskSelector},
@@ -130,7 +133,8 @@ where
         let scheduler_clone = scheduler.clone();
         // TODO build a error handle mechanism #error 2
         pool.spawn(async {
-            if let Err(err) = Self::start_and_watch_tasks(meta_client_clone, scheduler_clone).await
+            if let Err(err) =
+                retry(move || Self::start_and_watch_tasks(meta_client_clone, scheduler_clone)).await
             {
                 err.report("failed to start watch tasks");
             }
