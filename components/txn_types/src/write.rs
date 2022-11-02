@@ -282,7 +282,8 @@ pub struct WriteRef<'a> {
     /// See [`Write::gc_fence`] for more detail.
     pub gc_fence: Option<TimeStamp>,
 
-    /// The commit TS of the last PUT/DELETE record before this write record
+    /// The commit TS of the last PUT/DELETE record before this write record.
+    /// It only exists if this is a LOCK/ROLLBACK record.
     pub last_change_ts: TimeStamp,
     /// The number of versions that need skipping from this record
     /// to find the latest PUT/DELETE record
