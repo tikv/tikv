@@ -107,7 +107,10 @@ pub use self::{
     raw::RawStore,
     read_pool::{build_read_pool, build_read_pool_for_test},
     txn::{Latches, Lock as LatchLock, ProcessResult, Scanner, SnapshotStore, Store},
-    types::{PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallback, TxnStatus},
+    types::{
+        PessimisticLockKeyResult, PessimisticLockResults, PrewriteResult, SecondaryLocksStatus,
+        StorageCallback, TxnStatus,
+    },
 };
 use self::{kv::SnapContext, test_util::latest_feature_gate};
 use crate::{
@@ -3185,7 +3188,11 @@ pub mod test_util {
     };
 
     use super::*;
-    use crate::storage::{lock_manager::WaitTimeout, txn::commands};
+    use crate::storage::{
+        lock_manager::WaitTimeout,
+        txn::commands,
+        types::{PessimisticLockKeyResult, PessimisticLockResults},
+    };
 
     pub fn expect_none(x: Option<Value>) {
         assert_eq!(x, None);
@@ -3253,10 +3260,52 @@ pub mod test_util {
 
     pub fn expect_pessimistic_lock_res_callback(
         done: Sender<i32>,
-        pessimistic_lock_res: PessimisticLockRes,
-    ) -> Callback<Result<PessimisticLockRes>> {
-        Box::new(move |res: Result<Result<PessimisticLockRes>>| {
-            assert_eq!(res.unwrap().unwrap(), pessimistic_lock_res);
+        pessimistic_lock_res: PessimisticLockResults,
+    ) -> Callback<Result<PessimisticLockResults>> {
+        fn key_res_matches_ignoring_error_content(
+            lhs: &PessimisticLockKeyResult,
+            rhs: &PessimisticLockKeyResult,
+        ) -> bool {
+            match (lhs, rhs) {
+                (PessimisticLockKeyResult::Empty, PessimisticLockKeyResult::Empty) => true,
+                (PessimisticLockKeyResult::Value(l), PessimisticLockKeyResult::Value(r)) => l == r,
+                (
+                    PessimisticLockKeyResult::Existence(l),
+                    PessimisticLockKeyResult::Existence(r),
+                ) => l == r,
+                (
+                    PessimisticLockKeyResult::LockedWithConflict {
+                        value: value1,
+                        conflict_ts: ts1,
+                    },
+                    PessimisticLockKeyResult::LockedWithConflict {
+                        value: value2,
+                        conflict_ts: ts2,
+                    },
+                ) => value1 == value2 && ts1 == ts2,
+                (PessimisticLockKeyResult::Waiting, PessimisticLockKeyResult::Waiting) => true,
+                (PessimisticLockKeyResult::Failed(_), PessimisticLockKeyResult::Failed(_)) => false,
+                _ => false,
+            }
+        }
+
+        Box::new(move |res: Result<Result<PessimisticLockResults>>| {
+            let res = res.unwrap().unwrap();
+            assert_eq!(
+                res.0.len(),
+                pessimistic_lock_res.0.len(),
+                "pessimistic lock result length not match, expected: {:?}, got: {:?}",
+                pessimistic_lock_res,
+                res
+            );
+            for (expected, got) in pessimistic_lock_res.0.iter().zip(res.0.iter()) {
+                assert!(
+                    key_res_matches_ignoring_error_content(expected, got),
+                    "pessimistic lock result not match, expected: {:?}, got: {:?}",
+                    pessimistic_lock_res,
+                    res
+                );
+            }
             done.send(0).unwrap();
         })
     }
@@ -3271,7 +3320,7 @@ pub mod test_util {
         })
     }
 
-    type PessimisticLockCommand = TypedCommand<Result<PessimisticLockRes>>;
+    type PessimisticLockCommand = TypedCommand<Result<PessimisticLockResults>>;
 
     pub fn new_acquire_pessimistic_lock_command(
         keys: Vec<(Key, bool)>,
@@ -3445,6 +3494,7 @@ mod tests {
                 tests::must_rollback,
                 Error as TxnError, ErrorInner as TxnErrorInner,
             },
+            types::{PessimisticLockKeyResult, PessimisticLockResults},
         },
     };
 
@@ -7712,16 +7762,33 @@ mod tests {
         let (key, val) = (Key::from_raw(b"key"), b"val".to_vec());
         let (key2, val2) = (Key::from_raw(b"key2"), b"val2".to_vec());
 
+        let results_values = |res: Vec<Option<Value>>| {
+            PessimisticLockResults(
+                res.into_iter()
+                    .map(|v| PessimisticLockKeyResult::Value(v))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let results_existence = |res: Vec<bool>| {
+            PessimisticLockResults(
+                res.into_iter()
+                    .map(|v| PessimisticLockKeyResult::Existence(v))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let results_empty =
+            |len| PessimisticLockResults(vec![PessimisticLockKeyResult::Empty; len]);
+
         // Key not exist
         for &(return_values, check_existence) in
             &[(false, false), (false, true), (true, false), (true, true)]
         {
             let pessimistic_lock_res = if return_values {
-                PessimisticLockRes::Values(vec![None])
+                results_values(vec![None])
             } else if check_existence {
-                PessimisticLockRes::Existence(vec![false])
+                results_existence(vec![false])
             } else {
-                PessimisticLockRes::Empty
+                results_empty(1)
             };
 
             storage
@@ -7769,7 +7836,7 @@ mod tests {
                     false,
                     false,
                 ),
-                expect_pessimistic_lock_res_callback(tx.clone(), PessimisticLockRes::Empty),
+                expect_pessimistic_lock_res_callback(tx.clone(), results_empty(1)),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -7802,8 +7869,8 @@ mod tests {
             rx.recv().unwrap();
         }
 
-        // Needn't update max_ts when failing to read value
-        assert_eq!(cm.max_ts(), 10.into());
+        // Always update max_ts when trying to read.
+        assert_eq!(cm.max_ts(), 20.into());
 
         // Put key and key2.
         storage
@@ -7872,19 +7939,18 @@ mod tests {
             rx.recv().unwrap();
         }
 
-        // Needn't update max_ts when failing to read value
-        assert_eq!(cm.max_ts(), 10.into());
+        assert_eq!(cm.max_ts(), 20.into());
 
         // Return multiple values
         for &(return_values, check_existence) in
             &[(false, false), (false, true), (true, false), (true, true)]
         {
             let pessimistic_lock_res = if return_values {
-                PessimisticLockRes::Values(vec![Some(val.clone()), Some(val2.clone()), None])
+                results_values(vec![Some(val.clone()), Some(val2.clone()), None])
             } else if check_existence {
-                PessimisticLockRes::Existence(vec![true, true, false])
+                results_existence(vec![true, true, false])
             } else {
-                PessimisticLockRes::Empty
+                results_empty(3)
             };
             storage
                 .sched_txn_command(
