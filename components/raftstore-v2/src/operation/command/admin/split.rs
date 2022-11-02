@@ -1,4 +1,27 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
+//! This module contains batch split related processing logic.
+//!
+//! Process Overview
+//!
+//! Propose:
+//! - Nothing special except for validating batch split requests (ex: split keys
+//!   are in ascending order).
+//!
+//! Execution:
+//! - exec_batch_split: Create and initialize metapb::region for split regions
+//!   and derived regions. Then, create checkpoints of the current talbet for
+//!   split regions and derived region to make tablet physical isolated. Update
+//!   the parent region's region state without persistency. Send the new regions
+//!   (including derived region) back to raftstore.
+//!
+//! Result apply:
+//! - todo
+//!
+//! Split peer creation and initlization:
+//! - todo
+//!
+//! Split finish:
+//! - todo
 
 use engine_traits::{
     Checkpointer, KvEngine, OpenOptions, RaftEngine, TabletFactory, CF_DEFAULT, SPLIT_PREFIX,
@@ -148,7 +171,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         // We will create checkpoint of the current tablet for both derived region and
         // split regions. Before the creation, we should flush the writes and remove the
         // write batch
-        self.flush_write();
+        self.flush();
         self.write_batch_mut().take();
 
         // todo(SpadeA): Here: we use a temporary solution that we use checkpoint API to

@@ -495,7 +495,18 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
     #[inline]
     pub fn flush(&mut self) {
-        self.flush_write();
+        if let Some(wb) = self.write_batch_mut() && !wb.is_empty() {
+            let mut write_opt = WriteOptions::default();
+            write_opt.set_disable_wal(true);
+            if let Err(e) = wb.write_opt(&write_opt) {
+                panic!("failed to write data: {:?}", self.logger.list());
+            }
+            if wb.data_size() <= APPLY_WB_SHRINK_SIZE {
+                wb.clear();
+            } else {
+                self.write_batch_mut().take();
+            }
+        }
         let callbacks = self.callbacks_mut();
         for (ch, resp) in callbacks.drain(..) {
             ch.set_result(resp);
@@ -509,23 +520,5 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         apply_res.applied_term = term;
         apply_res.admin_result = self.take_admin_result();
         self.res_reporter().report(apply_res);
-    }
-}
-
-impl<EK: KvEngine, R> Apply<EK, R> {
-    #[inline]
-    pub fn flush_write(&mut self) {
-        if let Some(wb) = self.write_batch_mut() && !wb.is_empty() {
-            let mut write_opt = WriteOptions::default();
-            write_opt.set_disable_wal(true);
-            if let Err(e) = wb.write_opt(&write_opt) {
-                panic!("failed to write data: {:?}", self.logger.list());
-            }
-            if wb.data_size() <= APPLY_WB_SHRINK_SIZE {
-                wb.clear();
-            } else {
-                self.write_batch_mut().take();
-            }
-        }
     }
 }
