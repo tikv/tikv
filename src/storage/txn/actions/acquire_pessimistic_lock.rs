@@ -126,7 +126,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 //   idempotency concern.
                 // * The key is locked by a newer request with larger for_update_ts, and the
                 //   current request is stale. We can't distinguish this case with the above
-                //   one, but we don't need to handle this case since no one wood need the
+                //   one, but we don't need to handle this case since no one would need the
                 //   current request's result anymore.
 
                 // Load value if locked_with_conflict, so that when the client (TiDB) need to
