@@ -838,7 +838,6 @@ pub mod test_utils {
             self
         }
 
-        #[cfg(not(feature = "test-engines-panic"))]
         fn prepare_gc(&self, _engine: &RocksEngine) {
             let safe_point = Arc::new(AtomicU64::new(self.safe_point));
             let cfg_tracker = {
@@ -870,10 +869,6 @@ pub mod test_utils {
                 callbacks_on_drop: self.callbacks_on_drop.clone(),
                 tablet_factory: Arc::new(factory),
             });
-        }
-        #[cfg(feature = "test-engines-panic")]
-        fn prepare_gc(&self, _engine: &RocksEngine) {
-            // place holder
         }
 
         fn post_gc(&mut self) {
@@ -963,7 +958,7 @@ pub mod test_utils {
 }
 
 #[cfg(test)]
-#[cfg(not(feature = "test-engines-panic"))]
+#[cfg(feature = "test-engine-kv-rocksdb")]
 pub mod tests {
     use engine_traits::{DeleteStrategy, MiscExt, Peekable, Range, SyncMutable, CF_WRITE};
 
