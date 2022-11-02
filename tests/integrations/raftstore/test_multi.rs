@@ -833,6 +833,8 @@ fn test_leader_drop_with_pessimistic_lock() {
                 ttl: 1000,
                 for_update_ts: 10.into(),
                 min_commit_ts: 10.into(),
+                last_change_ts: 5.into(),
+                versions_to_last_change: 3,
             },
         )])
         .unwrap();
