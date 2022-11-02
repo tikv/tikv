@@ -11,7 +11,7 @@ use crate::storage::{
         },
         flashback_to_version_read_lock, flashback_to_version_read_write,
         sched_pool::tls_collect_keyread_histogram_vec,
-        Error, ErrorInner, Result,
+        Error, ErrorInner, Result, FLASHBACK_BATCH_SIZE,
     },
     ScanMode, Snapshot, Statistics,
 };
@@ -81,40 +81,28 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
             self.tag().get_str(),
             (key_locks.len() + key_old_writes.len()) as f64,
         );
-        // Check next key firstly.
+        // Check the next lock and write keys.
         let next_lock_key = if has_remain_locks {
             key_locks.pop().map(|(key, _)| key)
         } else {
             None
         };
         let next_write_key = match (has_remain_writes, key_old_writes.is_empty()) {
-            (true, false) => key_old_writes.pop().map(|(key, _)| key),
+            (true, false) => {
+                assert_eq!(key_old_writes.len(), FLASHBACK_BATCH_SIZE - key_locks.len());
+                key_old_writes.pop().map(|(key, _)| key)
+            }
             // We haven't read any write yet, so we need to read the writes in the next
             // batch later.
             (true, true) => self.next_write_key,
             (..) => None,
         };
+        // No keys to flashback, just return.
         if key_locks.is_empty() && key_old_writes.is_empty() {
-            if next_write_key.is_some() || next_lock_key.is_some() {
-                // Although there is no key left in this batch, keep processing the next batch
-                // since next key(write or lock) exist.
-                let next_cmd = FlashbackToVersionReadPhase {
-                    ctx: self.ctx,
-                    deadline: self.deadline,
-                    start_ts: self.start_ts,
-                    commit_ts: self.commit_ts,
-                    version: self.version,
-                    end_key: self.end_key,
-                    next_lock_key,
-                    next_write_key,
-                };
-                return Ok(ProcessResult::NextCommand {
-                    cmd: Command::FlashbackToVersionReadPhase(next_cmd),
-                });
-            }
-            Ok(ProcessResult::Res)
-        } else {
-            let next_cmd = FlashbackToVersion {
+            return Ok(ProcessResult::Res);
+        }
+        Ok(ProcessResult::NextCommand {
+            cmd: Command::FlashbackToVersion(FlashbackToVersion {
                 ctx: self.ctx,
                 deadline: self.deadline,
                 start_ts: self.start_ts,
@@ -125,10 +113,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                 key_old_writes,
                 next_lock_key,
                 next_write_key,
-            };
-            Ok(ProcessResult::NextCommand {
-                cmd: Command::FlashbackToVersion(next_cmd),
-            })
-        }
+            }),
+        })
     }
 }
