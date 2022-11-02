@@ -8,7 +8,7 @@ use std::{
 
 use api_version::{ApiV2, KvFormat, RawValue};
 use engine_rocks::{util::get_cf_handle, RocksEngine};
-use engine_test::{ctor::DbOptions, kv::TestTabletFactory};
+use engine_test::{ctor::DbOptions, kv::TestRocksTabletFactory};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
 use kvproto::{
     kvrpcpb::*,
@@ -130,7 +130,6 @@ fn test_txn_mvcc_filtered() {
 }
 
 #[test]
-#[cfg(feature = "test-engine-kv-rocksdb")]
 fn test_txn_gc_keys_handled() {
     let store_id = 1;
     GC_COMPACTION_FILTER_MVCC_DELETION_MET.reset();
@@ -176,7 +175,7 @@ fn test_txn_gc_keys_handled() {
         .start_auto_gc(
             auto_gc_cfg,
             safe_point,
-            Arc::new(TestTabletFactory::new(path.path(), ops)),
+            Arc::new(TestRocksTabletFactory::new(path.path(), ops)),
         )
         .unwrap();
     host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
@@ -285,7 +284,6 @@ fn test_raw_mvcc_filtered() {
 }
 
 #[test]
-#[cfg(feature = "test-engine-kv-rocksdb")]
 fn test_raw_gc_keys_handled() {
     let store_id = 1;
     GC_COMPACTION_FILTER_MVCC_DELETION_MET.reset();
@@ -334,7 +332,7 @@ fn test_raw_gc_keys_handled() {
         .start_auto_gc(
             auto_gc_cfg,
             safe_point,
-            Arc::new(TestTabletFactory::new(path.path(), ops)),
+            Arc::new(TestRocksTabletFactory::new(path.path(), ops)),
         )
         .unwrap();
     host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);

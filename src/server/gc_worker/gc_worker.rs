@@ -1639,7 +1639,7 @@ mod tests {
 
     use api_version::{ApiV2, KvFormat, RawValue};
     use engine_rocks::{util::get_cf_handle, RocksEngine};
-    use engine_test::{ctor::DbOptions, kv::TestTabletFactory};
+    use engine_test::{ctor::DbOptions, kv::TestRocksTabletFactory};
     use engine_traits::Peekable as _;
     use futures::executor::block_on;
     use kvproto::{
@@ -2045,7 +2045,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "test-engine-kv-rocksdb")]
     fn test_gc_keys_with_region_info_provider() {
         let store_id = 1;
         let engine = TestEngineBuilder::new().build().unwrap();
@@ -2104,7 +2103,7 @@ mod tests {
             .start_auto_gc(
                 auto_gc_cfg,
                 safe_point,
-                Arc::new(TestTabletFactory::new(path.path(), ops)),
+                Arc::new(TestRocksTabletFactory::new(path.path(), ops)),
             )
             .unwrap();
         host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);

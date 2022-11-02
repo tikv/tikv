@@ -8,7 +8,7 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_test::{ctor::DbOptions, kv::TestTabletFactory};
+use engine_test::{ctor::DbOptions, kv::TestRocksTabletFactory};
 use engine_traits::{Peekable, WriteBatch};
 use grpcio::{ChannelBuilder, Environment};
 use keys::data_key;
@@ -417,7 +417,6 @@ fn test_orphan_versions_from_compaction_filter() {
 // Call `start_auto_gc` like `cmd/src/server.rs` does. It will combine
 // compaction filter and GC worker so that GC worker can help to process orphan
 // versions on default CF.
-#[cfg(feature = "test-engine-kv-rocksdb")]
 fn init_compaction_filter(
     cluster: &Cluster<ServerCluster>,
     store_id: u64,
@@ -461,7 +460,7 @@ fn init_compaction_filter(
     // Building a tablet factory
     let ops = DbOptions::default();
 
-    let factory = TestTabletFactory::new(root_path, ops);
+    let factory = TestRocksTabletFactory::new(root_path, ops);
     {
         let arc_root_db = factory.get_root_db();
         let mut root_db = arc_root_db.lock().unwrap();
@@ -475,13 +474,4 @@ fn init_compaction_filter(
             Arc::new(factory),
         )
         .unwrap();
-}
-#[cfg(not(feature = "test-engine-kv-rocksdb"))]
-fn init_compaction_filter(
-    _cluster: &Cluster<ServerCluster>,
-    _store_id: u64,
-    _safe_point: Arc<AtomicU64>,
-    _root_path: &Path,
-) {
-    // place holder
 }

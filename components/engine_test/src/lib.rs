@@ -91,8 +91,8 @@ pub mod kv {
         RocksSnapshot as KvTestSnapshot, RocksWriteBatchVec as KvTestWriteBatch,
     };
     use engine_traits::{
-        CfOptions, CfOptionsExt, MiscExt, OpenOptions, Result, TabletAccessor, TabletFactory,
-        ALL_CFS, CF_DEFAULT,
+        CfOptions, KvEngine, OpenOptions, Result, TabletAccessor, TabletFactory, ALL_CFS,
+        CF_DEFAULT,
     };
     use tikv_util::box_err;
 
@@ -112,14 +112,18 @@ pub mod kv {
 
     const TOMBSTONE_MARK: &str = "TOMBSTONE_TABLET";
 
+    pub type TestTabletFactory = GenericTabletFactory<KvTestEngine>;
+    // Reserved for rocks-dependent tests.
+    pub type TestRocksTabletFactory = GenericTabletFactory<engine_rocks::RocksEngine>;
+
     #[derive(Clone)]
-    pub struct TestTabletFactory {
+    pub struct GenericTabletFactory<T> {
         root_path: PathBuf,
         db_opt: DbOptions,
-        root_db: Arc<Mutex<Option<KvTestEngine>>>,
+        root_db: Arc<Mutex<Option<T>>>,
     }
 
-    impl TestTabletFactory {
+    impl<T: KvEngineConstructorExt> GenericTabletFactory<T> {
         pub fn new(root_path: &Path, db_opt: DbOptions) -> Self {
             Self {
                 root_path: root_path.to_path_buf(),
@@ -128,25 +132,21 @@ pub mod kv {
             }
         }
 
-        fn create_tablet(&self, tablet_path: &Path) -> Result<KvTestEngine> {
+        fn create_tablet(&self, tablet_path: &Path) -> Result<T> {
             let cf_opts = ALL_CFS
                 .iter()
                 .map(|cf| (*cf, KvTestCfOptions::new()))
                 .collect();
-            KvTestEngine::new_kv_engine_opt(
-                tablet_path.to_str().unwrap(),
-                self.db_opt.clone(),
-                cf_opts,
-            )
+            T::new_kv_engine_opt(tablet_path.to_str().unwrap(), self.db_opt.clone(), cf_opts)
         }
 
-        pub fn get_root_db(&self) -> Arc<Mutex<Option<KvTestEngine>>> {
+        pub fn get_root_db(&self) -> Arc<Mutex<Option<T>>> {
             self.root_db.clone()
         }
     }
 
-    impl TabletFactory<KvTestEngine> for TestTabletFactory {
-        fn create_shared_db(&self) -> Result<KvTestEngine> {
+    impl<T: KvEngine + KvEngineConstructorExt> TabletFactory<T> for GenericTabletFactory<T> {
+        fn create_shared_db(&self) -> Result<T> {
             let tablet_path = self.tablet_path(0, 0);
             let tablet = self.create_tablet(&tablet_path)?;
             let mut root_db = self.root_db.lock().unwrap();
@@ -155,12 +155,7 @@ pub mod kv {
         }
 
         /// See the comment above the same name method in KvEngineFactory
-        fn open_tablet(
-            &self,
-            _id: u64,
-            _suffix: Option<u64>,
-            options: OpenOptions,
-        ) -> Result<KvTestEngine> {
+        fn open_tablet(&self, _id: u64, _suffix: Option<u64>, options: OpenOptions) -> Result<T> {
             if let Some(db) = self.root_db.lock().unwrap().as_ref() {
                 if options.create_new() {
                     return Err(box_err!("root tablet {} already exists", db.path()));
@@ -182,7 +177,7 @@ pub mod kv {
             _id: u64,
             _suffix: u64,
             _options: OpenOptions,
-        ) -> Result<KvTestEngine> {
+        ) -> Result<T> {
             self.create_shared_db()
         }
 
@@ -213,8 +208,8 @@ pub mod kv {
         }
     }
 
-    impl TabletAccessor<KvTestEngine> for TestTabletFactory {
-        fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &KvTestEngine)) {
+    impl<T> TabletAccessor<T> for GenericTabletFactory<T> {
+        fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &T)) {
             let db = self.root_db.lock().unwrap();
             let db = db.as_ref().unwrap();
             f(0, 0, db);
@@ -225,35 +220,33 @@ pub mod kv {
         }
     }
 
+    pub type TestTabletFactoryV2 = GenericTabletFactoryV2<KvTestEngine>;
+    pub type TestRocksTabletFactoryV2 = GenericTabletFactoryV2<engine_rocks::RocksEngine>;
+
     #[derive(Clone)]
-    pub struct TestTabletFactoryV2 {
-        inner: TestTabletFactory,
+    pub struct GenericTabletFactoryV2<T> {
+        inner: GenericTabletFactory<T>,
         // region_id -> (tablet, tablet_suffix)
-        registry: Arc<Mutex<HashMap<u64, (KvTestEngine, u64)>>>,
+        registry: Arc<Mutex<HashMap<u64, (T, u64)>>>,
     }
 
-    impl TestTabletFactoryV2 {
+    impl<T: KvEngineConstructorExt> GenericTabletFactoryV2<T> {
         pub fn new(root_path: &Path, db_opt: DbOptions) -> Self {
             Self {
-                inner: TestTabletFactory::new(root_path, db_opt),
+                inner: GenericTabletFactory::new(root_path, db_opt),
                 registry: Arc::default(),
             }
         }
 
-        pub fn register_tablet(&self, region_id: u64, suffix: u64, tablet: KvTestEngine) {
+        pub fn register_tablet(&self, region_id: u64, suffix: u64, tablet: T) {
             let mut reg = self.registry.lock().unwrap();
             reg.insert(region_id, (tablet, suffix));
         }
     }
 
-    impl TabletFactory<KvTestEngine> for TestTabletFactoryV2 {
+    impl<T: KvEngine + KvEngineConstructorExt> TabletFactory<T> for GenericTabletFactoryV2<T> {
         /// See the comment above the same name method in KvEngineFactoryV2
-        fn open_tablet(
-            &self,
-            id: u64,
-            suffix: Option<u64>,
-            mut options: OpenOptions,
-        ) -> Result<KvTestEngine> {
+        fn open_tablet(&self, id: u64, suffix: Option<u64>, mut options: OpenOptions) -> Result<T> {
             if options.create_new() && suffix.is_none() {
                 return Err(box_err!(
                     "suffix should be provided when creating new tablet"
@@ -297,8 +290,8 @@ pub mod kv {
             id: u64,
             _suffix: u64,
             options: OpenOptions,
-        ) -> Result<KvTestEngine> {
-            let engine_exist = KvTestEngine::exists(path.to_str().unwrap_or_default());
+        ) -> Result<T> {
+            let engine_exist = T::exists(path.to_str().unwrap_or_default());
             // Even though neither options.create nor options.create_new are true, if the
             // tablet files already exists, we will open it by calling
             // inner.create_tablet. In this case, the tablet exists but not in the cache
@@ -322,13 +315,13 @@ pub mod kv {
         }
 
         #[inline]
-        fn create_shared_db(&self) -> Result<KvTestEngine> {
+        fn create_shared_db(&self) -> Result<T> {
             self.open_tablet(0, Some(0), OpenOptions::default().set_create_new(true))
         }
 
         #[inline]
         fn exists_raw(&self, path: &Path) -> bool {
-            KvTestEngine::exists(path.to_str().unwrap_or_default())
+            T::exists(path.to_str().unwrap_or_default())
         }
 
         #[inline]
@@ -378,7 +371,7 @@ pub mod kv {
         }
 
         #[inline]
-        fn load_tablet(&self, path: &Path, region_id: u64, suffix: u64) -> Result<KvTestEngine> {
+        fn load_tablet(&self, path: &Path, region_id: u64, suffix: u64) -> Result<T> {
             {
                 let reg = self.registry.lock().unwrap();
                 if let Some((db, db_suffix)) = reg.get(&region_id) && *db_suffix == suffix {
@@ -406,9 +399,9 @@ pub mod kv {
         }
     }
 
-    impl TabletAccessor<KvTestEngine> for TestTabletFactoryV2 {
+    impl<T> TabletAccessor<T> for GenericTabletFactoryV2<T> {
         #[inline]
-        fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &KvTestEngine)) {
+        fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &T)) {
             let reg = self.registry.lock().unwrap();
             for (id, (tablet, suffix)) in &*reg {
                 f(*id, *suffix, tablet)

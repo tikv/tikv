@@ -771,7 +771,7 @@ pub mod test_utils {
         util::get_cf_handle,
         RocksEngine,
     };
-    use engine_test::{ctor::DbOptions, kv::TestTabletFactory};
+    use engine_test::{ctor::DbOptions, kv::TestRocksTabletFactory};
     use engine_traits::{SyncMutable, CF_DEFAULT, CF_WRITE};
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use tempfile::Builder;
@@ -858,7 +858,7 @@ pub mod test_utils {
             // Building a tablet factory
             let ops = DbOptions::default();
             let path = Builder::new().prefix("prepare_gc").tempdir().unwrap();
-            let factory = TestTabletFactory::new(path.path(), ops);
+            let factory = TestRocksTabletFactory::new(path.path(), ops);
             *gc_context_opt = Some(GcContext {
                 store_id: 1,
                 safe_point,
@@ -958,7 +958,6 @@ pub mod test_utils {
 }
 
 #[cfg(test)]
-#[cfg(feature = "test-engine-kv-rocksdb")]
 pub mod tests {
     use engine_traits::{DeleteStrategy, MiscExt, Peekable, Range, SyncMutable, CF_WRITE};
 

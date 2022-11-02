@@ -8,7 +8,7 @@ use std::{
 
 use api_version::{ApiV1, KvFormat};
 use collections::HashMap;
-use engine_test::{ctor::DbOptions, kv::TestTabletFactory};
+use engine_test::{ctor::DbOptions, kv::TestRocksTabletFactory};
 use futures::executor::block_on;
 use kvproto::{
     kvrpcpb::{ChecksumAlgorithm, Context, GetRequest, KeyRange, LockInfo, RawGetRequest},
@@ -138,7 +138,6 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
         })
     }
 
-    #[cfg(feature = "test-engine-kv-rocksdb")]
     pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider + Clone + 'static>(
         &mut self,
         cfg: AutoGcConfig<S, R>,
@@ -150,18 +149,9 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
             .start_auto_gc(
                 cfg,
                 Arc::new(AtomicU64::new(0)),
-                Arc::new(TestTabletFactory::new(root_path, ops)),
+                Arc::new(TestRocksTabletFactory::new(root_path, ops)),
             )
             .unwrap();
-    }
-
-    #[cfg(not(feature = "test-engine-kv-rocksdb"))]
-    pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider + Clone + 'static>(
-        &mut self,
-        _cfg: AutoGcConfig<S, R>,
-        _root_path: &Path,
-    ) {
-        // place holder
     }
 
     pub fn get_storage(&self) -> Storage<E, MockLockManager, F> {
