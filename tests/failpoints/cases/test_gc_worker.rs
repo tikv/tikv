@@ -1,15 +1,15 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    path::Path,
     sync::{atomic::AtomicU64, Arc},
     thread,
     time::Duration,
 };
 
 use collections::HashMap;
-use engine_test::{ctor::DbOptions, kv::TestRocksTabletFactory};
-use engine_traits::{Peekable, WriteBatch};
+use engine_rocks::RocksEngine;
+use engine_test::kv::TestRocksTabletFactory;
+use engine_traits::{Peekable, TabletFactory, WriteBatch};
 use grpcio::{ChannelBuilder, Environment};
 use keys::data_key;
 use kvproto::{kvrpcpb::*, metapb::Region, tikvpb::TikvClient};
@@ -332,7 +332,7 @@ fn test_error_in_compaction_filter() {
     fail::cfg(fp, "return").unwrap();
 
     let mut gc_runner = TestGcRunner::new(200);
-    gc_runner.gc(&raw_engine, false);
+    gc_runner.gc(&raw_engine);
 
     match gc_runner.gc_receiver.recv().unwrap() {
         GcTask::OrphanVersions { wb, .. } => assert_eq!(wb.count(), 2),
@@ -362,9 +362,8 @@ fn test_orphan_versions_from_compaction_filter() {
     let channel = ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader_store));
     let client = TikvClient::new(channel);
 
-    let root_path = cluster.paths[0].path();
-
     let engine = cluster.engines.get(&leader_store).unwrap();
+    let factory = Arc::new(TestRocksTabletFactory::from_db(engine.kv.clone()));
 
     let safe_point = 100;
     let mut gc_runner = TestGcRunner::new(safe_point);
@@ -373,7 +372,7 @@ fn test_orphan_versions_from_compaction_filter() {
         &cluster,
         leader_store,
         Arc::new(AtomicU64::new(safe_point)),
-        root_path,
+        factory,
     );
 
     let pk = b"k1".to_vec();
@@ -396,7 +395,7 @@ fn test_orphan_versions_from_compaction_filter() {
     fail::cfg(fp, "return").unwrap();
 
     gc_runner.gc_scheduler = cluster.sim.rl().get_gc_worker(1).scheduler();
-    gc_runner.gc(&engine.kv, true);
+    gc_runner.gc(&engine.kv);
 
     'IterKeys: for &start_ts in &[10, 20, 30] {
         let key = Key::from_raw(b"k1").append_ts(start_ts.into());
@@ -421,7 +420,7 @@ fn init_compaction_filter(
     cluster: &Cluster<ServerCluster>,
     store_id: u64,
     safe_point: Arc<AtomicU64>,
-    root_path: &Path,
+    factory: Arc<dyn TabletFactory<RocksEngine> + Send + Sync>,
 ) {
     #[derive(Clone)]
     struct MockSafePointProvider;
@@ -455,23 +454,12 @@ fn init_compaction_filter(
 
     let sim = cluster.sim.rl();
     let gc_worker = sim.get_gc_worker(store_id);
-    gc_worker.set_feature_gate_verion("5.0.0").unwrap();
-    let kv_engine = cluster.get_engine(store_id);
-    // Building a tablet factory
-    let ops = DbOptions::default();
-
-    let factory = TestRocksTabletFactory::new(root_path, ops);
-    {
-        let arc_root_db = factory.get_root_db();
-        let mut root_db = arc_root_db.lock().unwrap();
-        root_db.replace(kv_engine);
-    }
 
     gc_worker
         .start_auto_gc(
             AutoGcConfig::new(MockSafePointProvider, MockRegionInfoProvider, 1),
             safe_point,
-            Arc::new(factory),
+            factory,
         )
         .unwrap();
 }

@@ -2,13 +2,13 @@
 
 use std::{
     marker::PhantomData,
-    path::Path,
     sync::{atomic::AtomicU64, Arc},
 };
 
 use api_version::{ApiV1, KvFormat};
 use collections::HashMap;
-use engine_test::{ctor::DbOptions, kv::TestRocksTabletFactory};
+use engine_rocks::RocksEngine as BaseRocksEngine;
+use engine_traits::TabletFactory;
 use futures::executor::block_on;
 use kvproto::{
     kvrpcpb::{ChecksumAlgorithm, Context, GetRequest, KeyRange, LockInfo, RawGetRequest},
@@ -141,16 +141,10 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
     pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider + Clone + 'static>(
         &mut self,
         cfg: AutoGcConfig<S, R>,
-        root_path: &Path,
+        factory: Arc<dyn TabletFactory<BaseRocksEngine> + Send + Sync>,
     ) {
-        // Building a tablet factory
-        let ops = DbOptions::default();
         self.gc_worker
-            .start_auto_gc(
-                cfg,
-                Arc::new(AtomicU64::new(0)),
-                Arc::new(TestRocksTabletFactory::new(root_path, ops)),
-            )
+            .start_auto_gc(cfg, Arc::new(AtomicU64::new(0)), factory)
             .unwrap();
     }
 

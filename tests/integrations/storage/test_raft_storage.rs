@@ -8,6 +8,7 @@ use std::{
 
 use api_version::{ApiV1, KvFormat};
 use collections::HashMap;
+use engine_test::kv::TestRocksTabletFactory;
 use error_code::{raftstore::STALE_COMMAND, ErrorCodeExt};
 use kvproto::kvrpcpb::Context;
 use test_raftstore::*;
@@ -312,8 +313,8 @@ fn test_auto_gc() {
             *id,
         );
         cfg.post_a_round_of_gc = Some(Box::new(move || tx.send(()).unwrap()));
-        let root_path = cluster.paths[(*id - 1) as usize].path();
-        storage.start_auto_gc(cfg, root_path);
+        let factory = Arc::new(TestRocksTabletFactory::from_db(cluster.get_engine(*id)));
+        storage.start_auto_gc(cfg, factory);
     }
 
     assert_eq!(storages.len(), count);

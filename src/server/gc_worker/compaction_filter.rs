@@ -145,7 +145,6 @@ where
     EK: KvEngine,
 {
     fn init_compaction_filter(
-        &self,
         store_id: u64,
         safe_point: Arc<AtomicU64>,
         cfg_tracker: GcWorkerConfigManager,
@@ -161,7 +160,6 @@ where
     EK: KvEngine,
 {
     default fn init_compaction_filter(
-        &self,
         _store_id: u64,
         _safe_point: Arc<AtomicU64>,
         _cfg_tracker: GcWorkerConfigManager,
@@ -176,12 +174,10 @@ where
 
 impl CompactionFilterInitializer<RocksEngine> for RocksEngine {
     fn init_compaction_filter(
-        &self,
         store_id: u64,
         safe_point: Arc<AtomicU64>,
         cfg_tracker: GcWorkerConfigManager,
         feature_gate: FeatureGate,
-
         gc_scheduler: Scheduler<GcTask<RocksEngine>>,
         region_info_provider: Arc<dyn RegionInfoProvider>,
         tablet_factory: Arc<dyn TabletFactory<RocksEngine> + Send + Sync>,
@@ -209,11 +205,9 @@ pub fn get_rocksdb_from_factory(region_id: u64, suffix: u64) -> engine_traits::R
         None => return Err(box_err!("GC_CONTEXT is not ready yet!")),
     };
 
-    gc_context.tablet_factory.open_tablet(
-        region_id,
-        Some(suffix),
-        OpenOptions::default().set_create(true),
-    )
+    gc_context
+        .tablet_factory
+        .open_tablet(region_id, Some(suffix), OpenOptions::default())
 }
 
 pub struct WriteCompactionFilterFactory {
@@ -789,7 +783,7 @@ pub mod test_utils {
         // Put a new key-value pair to ensure compaction can be triggered correctly.
         engine.delete_cf("write", b"znot-exists-key").unwrap();
 
-        TestGcRunner::new(safe_point).gc(&engine, false);
+        TestGcRunner::new(safe_point).gc(&engine);
     }
 
     lazy_static! {
@@ -878,21 +872,9 @@ pub mod test_utils {
             callbacks.clear();
         }
 
-        pub fn gc(&mut self, engine: &RocksEngine, gc_context_ready: bool) {
+        pub fn gc(&mut self, engine: &RocksEngine) {
             let _guard = LOCK.lock().unwrap();
-            if !gc_context_ready {
-                self.prepare_gc(engine);
-            } else {
-                let gc_context_option = GC_CONTEXT.lock().unwrap();
-                let gc_context = match *gc_context_option {
-                    Some(ref ctx) => ctx,
-                    None => panic!("gc_context retrieval fails!"),
-                };
-
-                gc_context
-                    .safe_point
-                    .store(self.safe_point, Ordering::Relaxed);
-            }
+            self.prepare_gc(engine);
 
             let db = engine.as_inner();
             let handle = get_cf_handle(db, CF_WRITE).unwrap();
@@ -1000,26 +982,26 @@ pub mod tests {
         // GC can't delete keys after the given safe point.
         must_prewrite_put(&mut engine, b"zkey", &value, b"zkey", 100);
         must_commit(&mut engine, b"zkey", 100, 110);
-        gc_runner.safe_point(50).gc(&raw_engine, false);
+        gc_runner.safe_point(50).gc(&raw_engine);
         must_get(&mut engine, b"zkey", 110, &value);
 
         // GC can't delete keys before the safe ponit if they are latest versions.
-        gc_runner.safe_point(200).gc(&raw_engine, false);
+        gc_runner.safe_point(200).gc(&raw_engine);
         must_get(&mut engine, b"zkey", 110, &value);
 
         // GC can't delete keys before the safe ponit if they are latest versions.
-        gc_runner.safe_point(200).gc(&raw_engine, false);
+        gc_runner.safe_point(200).gc(&raw_engine);
         must_get(&mut engine, b"zkey", 110, &value);
 
         must_prewrite_put(&mut engine, b"zkey", &value, b"zkey", 120);
         must_commit(&mut engine, b"zkey", 120, 130);
 
         // GC can't delete the latest version before the safe ponit.
-        gc_runner.safe_point(115).gc(&raw_engine, false);
+        gc_runner.safe_point(115).gc(&raw_engine);
         must_get(&mut engine, b"zkey", 110, &value);
 
         // GC a version will also delete the key on default CF.
-        gc_runner.safe_point(200).gc(&raw_engine, false);
+        gc_runner.safe_point(200).gc(&raw_engine);
         must_get_none(&mut engine, b"zkey", 110);
 
         let default_key = Key::from_encoded_slice(b"zkey").append_ts(100.into());
@@ -1036,7 +1018,7 @@ pub mod tests {
         let mut gc_runner = TestGcRunner::new(0);
 
         let mut gc_and_check = |expect_tasks: bool, prefix: &[u8]| {
-            gc_runner.safe_point(500).gc(&raw_engine, false);
+            gc_runner.safe_point(500).gc(&raw_engine);
 
             // Wait up to 1 second, and treat as no task if timeout.
             if let Ok(Some(task)) = gc_runner.gc_receiver.recv_timeout(Duration::new(1, 0)) {
@@ -1119,13 +1101,13 @@ pub mod tests {
                 unreachable!();
             }));
         gc_runner.target_level = Some(6);
-        gc_runner.safe_point(100).gc(&raw_engine, false);
+        gc_runner.safe_point(100).gc(&raw_engine);
 
         // Can perform GC at the bottommost level even if the threshold can't be
         // reached.
         gc_runner.ratio_threshold = Some(10.0);
         gc_runner.target_level = Some(6);
-        gc_runner.safe_point(140).gc(&raw_engine, false);
+        gc_runner.safe_point(140).gc(&raw_engine);
         for commit_ts in &[105, 115, 125] {
             must_get_none(&mut engine, b"zkey", commit_ts);
         }
@@ -1178,7 +1160,7 @@ pub mod tests {
         must_prewrite_put(&mut engine, b"zkey", b"zvalue", b"zkey", 100);
         must_commit(&mut engine, b"zkey", 100, 110);
         gc_runner.target_level = Some(6);
-        gc_runner.safe_point(50).gc(&raw_engine, false);
+        gc_runner.safe_point(50).gc(&raw_engine);
         assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[6], 1);
 
         // So the construction of SST files will be:
@@ -1206,7 +1188,7 @@ pub mod tests {
 
         // Compact the mvcc deletion mark to L6, the stale version shouldn't be exposed.
         gc_runner.target_level = Some(6);
-        gc_runner.safe_point(200).gc(&raw_engine, false);
+        gc_runner.safe_point(200).gc(&raw_engine);
         must_get_none(&mut engine, b"zkey", 200);
     }
 }

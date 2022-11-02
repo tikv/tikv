@@ -168,7 +168,6 @@ pub struct OpenOptions {
     // create tablet if non-exist
     create: bool,
     create_new: bool,
-    read_only: bool,
     cache_only: bool,
     skip_cache: bool,
 }
@@ -183,12 +182,6 @@ impl OpenOptions {
     /// Sets the option to create a new tablet, failing if it already exists.
     pub fn set_create_new(mut self, create_new: bool) -> Self {
         self.create_new = create_new;
-        self
-    }
-
-    /// Sets the option for read only
-    pub fn set_read_only(mut self, read_only: bool) -> Self {
-        self.read_only = read_only;
         self
     }
 
@@ -210,10 +203,6 @@ impl OpenOptions {
 
     pub fn create_new(&self) -> bool {
         self.create_new
-    }
-
-    pub fn read_only(&self) -> bool {
-        self.read_only
     }
 
     pub fn cache_only(&self) -> bool {

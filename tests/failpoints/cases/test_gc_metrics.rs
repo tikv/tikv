@@ -8,7 +8,7 @@ use std::{
 
 use api_version::{ApiV2, KvFormat, RawValue};
 use engine_rocks::{util::get_cf_handle, RocksEngine};
-use engine_test::{ctor::DbOptions, kv::TestRocksTabletFactory};
+use engine_test::kv::TestRocksTabletFactory;
 use engine_traits::{CF_DEFAULT, CF_WRITE};
 use kvproto::{
     kvrpcpb::*,
@@ -23,7 +23,6 @@ use raftstore::{
     router::RaftStoreBlackHole,
     RegionInfoAccessor,
 };
-use tempfile::Builder;
 use tikv::{
     config::DbConfig,
     server::gc_worker::{
@@ -66,7 +65,7 @@ fn test_txn_create_compaction_filter() {
 
     gc_runner
         .safe_point(TimeStamp::new(1).into_inner())
-        .gc(&raw_engine, false);
+        .gc(&raw_engine);
     assert_eq!(
         GC_COMPACTION_FILTER_PERFORM
             .with_label_values(&[STAT_TXN_KEYMODE])
@@ -97,21 +96,21 @@ fn test_txn_mvcc_filtered() {
     // GC can't delete keys after the given safe point.
     must_prewrite_put(&mut engine, b"zkey", &value, b"zkey", 100);
     must_commit(&mut engine, b"zkey", 100, 110);
-    gc_runner.safe_point(50).gc(&raw_engine, false);
+    gc_runner.safe_point(50).gc(&raw_engine);
     must_get(&mut engine, b"zkey", 110, &value);
 
     // GC can't delete keys before the safe ponit if they are latest versions.
-    gc_runner.safe_point(200).gc(&raw_engine, false);
+    gc_runner.safe_point(200).gc(&raw_engine);
     must_get(&mut engine, b"zkey", 110, &value);
     must_prewrite_put(&mut engine, b"zkey", &value, b"zkey", 120);
     must_commit(&mut engine, b"zkey", 120, 130);
 
     // GC can't delete the latest version before the safe ponit.
-    gc_runner.safe_point(115).gc(&raw_engine, false);
+    gc_runner.safe_point(115).gc(&raw_engine);
     must_get(&mut engine, b"zkey", 110, &value);
 
     // GC a version will also delete the key on default CF.
-    gc_runner.safe_point(200).gc(&raw_engine, false);
+    gc_runner.safe_point(200).gc(&raw_engine);
     assert_eq!(
         MVCC_VERSIONS_HISTOGRAM
             .with_label_values(&[STAT_TXN_KEYMODE])
@@ -165,22 +164,14 @@ fn test_txn_gc_keys_handled() {
     let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, 1);
     let safe_point = Arc::new(AtomicU64::new(500));
 
-    // Building a tablet factory
-    let ops = DbOptions::default();
-    let path = Builder::new()
-        .prefix("test_gc_keys_with_region_info_provider")
-        .tempdir()
-        .unwrap();
+    let kv_engine = engine.kv_engine().unwrap();
+    let factory = Arc::new(TestRocksTabletFactory::from_db(kv_engine.clone()));
     gc_worker
-        .start_auto_gc(
-            auto_gc_cfg,
-            safe_point,
-            Arc::new(TestRocksTabletFactory::new(path.path(), ops)),
-        )
+        .start_auto_gc(auto_gc_cfg, safe_point, factory)
         .unwrap();
     host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
 
-    let db = engine.kv_engine().unwrap().as_inner().clone();
+    let db = kv_engine.as_inner().clone();
     let cf = get_cf_handle(&db, CF_WRITE).unwrap();
 
     for i in 0..3 {
@@ -321,24 +312,14 @@ fn test_raw_gc_keys_handled() {
     let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, store_id);
     let safe_point = Arc::new(AtomicU64::new(500));
 
-    // Building a tablet factory
-    let ops = DbOptions::default();
-    let path = Builder::new()
-        .prefix("test_gc_keys_with_region_info_provider")
-        .tempdir()
-        .unwrap();
-
+    let kv_engine = engine.kv_engine().unwrap();
+    let factory = Arc::new(TestRocksTabletFactory::from_db(kv_engine.clone()));
     gc_worker
-        .start_auto_gc(
-            auto_gc_cfg,
-            safe_point,
-            Arc::new(TestRocksTabletFactory::new(path.path(), ops)),
-        )
+        .start_auto_gc(auto_gc_cfg, safe_point, factory)
         .unwrap();
     host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
 
-    let db = engine.kv_engine().unwrap().as_inner().clone();
-
+    let db = kv_engine.as_inner().clone();
     let user_key_del = b"r\0aaaaaaaaaaa";
 
     // If it's deleted, it will call async scheduler GcTask.

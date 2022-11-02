@@ -123,7 +123,7 @@ pub mod kv {
         root_db: Arc<Mutex<Option<T>>>,
     }
 
-    impl<T: KvEngineConstructorExt> GenericTabletFactory<T> {
+    impl<T: KvEngine + KvEngineConstructorExt> GenericTabletFactory<T> {
         pub fn new(root_path: &Path, db_opt: DbOptions) -> Self {
             Self {
                 root_path: root_path.to_path_buf(),
@@ -142,6 +142,14 @@ pub mod kv {
 
         pub fn get_root_db(&self) -> Arc<Mutex<Option<T>>> {
             self.root_db.clone()
+        }
+
+        pub fn from_db(db: T) -> Self {
+            Self {
+                root_path: Path::new(db.path()).to_path_buf(),
+                db_opt: DbOptions::default(),
+                root_db: Arc::new(Mutex::new(Some(db))),
+            }
         }
     }
 
@@ -230,17 +238,12 @@ pub mod kv {
         registry: Arc<Mutex<HashMap<u64, (T, u64)>>>,
     }
 
-    impl<T: KvEngineConstructorExt> GenericTabletFactoryV2<T> {
+    impl<T: KvEngine + KvEngineConstructorExt> GenericTabletFactoryV2<T> {
         pub fn new(root_path: &Path, db_opt: DbOptions) -> Self {
             Self {
                 inner: GenericTabletFactory::new(root_path, db_opt),
                 registry: Arc::default(),
             }
-        }
-
-        pub fn register_tablet(&self, region_id: u64, suffix: u64, tablet: T) {
-            let mut reg = self.registry.lock().unwrap();
-            reg.insert(region_id, (tablet, suffix));
         }
     }
 

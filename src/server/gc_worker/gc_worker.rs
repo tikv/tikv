@@ -1278,7 +1278,7 @@ where
         );
 
         info!("initialize compaction filter to perform GC when necessary");
-        self.engine.kv_engine().unwrap().init_compaction_filter(
+        E::Local::init_compaction_filter(
             cfg.self_store_id,
             safe_point.clone(),
             self.config_manager.clone(),
@@ -1639,7 +1639,7 @@ mod tests {
 
     use api_version::{ApiV2, KvFormat, RawValue};
     use engine_rocks::{util::get_cf_handle, RocksEngine};
-    use engine_test::{ctor::DbOptions, kv::TestRocksTabletFactory};
+    use engine_test::kv::TestRocksTabletFactory;
     use engine_traits::Peekable as _;
     use futures::executor::block_on;
     use kvproto::{
@@ -2092,25 +2092,16 @@ mod tests {
 
         let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, 1);
         let safe_point = Arc::new(AtomicU64::new(0));
-        // Building a tablet factory
-        let ops = DbOptions::default();
-        let path = Builder::new()
-            .prefix("test_gc_keys_with_region_info_provider")
-            .tempdir()
-            .unwrap();
-
+        let kv_engine = engine.kv_engine().unwrap();
+        let factory = Arc::new(TestRocksTabletFactory::from_db(kv_engine.clone()));
         gc_worker
-            .start_auto_gc(
-                auto_gc_cfg,
-                safe_point,
-                Arc::new(TestRocksTabletFactory::new(path.path(), ops)),
-            )
+            .start_auto_gc(auto_gc_cfg, safe_point, factory)
             .unwrap();
         host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
         host.on_region_changed(&r2, RegionChangeEvent::Create, StateRole::Leader);
         host.on_region_changed(&r3, RegionChangeEvent::Create, StateRole::Leader);
 
-        let db = engine.kv_engine().unwrap().as_inner().clone();
+        let db = kv_engine.as_inner().clone();
         let cf = get_cf_handle(&db, CF_WRITE).unwrap();
 
         for i in 0..100 {
