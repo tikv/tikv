@@ -229,10 +229,10 @@ fn test_witness_raftlog_gc_lagged_follower() {
 
     // the follower is back online
     cluster.run_node(nodes[1]).unwrap();
-
     cluster.must_put(b"k00", b"v00");
+    must_get_equal(&cluster.get_engine(nodes[1]), b"k00", b"v00");
     // make sure raft log gc is triggered
-    std::thread::sleep(Duration::from_millis(200));
+    std::thread::sleep(Duration::from_millis(300));
 
     // the truncated index is advanced now, as all the peers has replicated
     for (&id, engines) in &cluster.engines {
