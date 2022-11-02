@@ -116,6 +116,22 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
 
         let locked_with_conflict_ts =
             if allow_lock_with_conflict && for_update_ts < lock.for_update_ts {
+                // If the key is already locked by the same transaction with larger
+                // for_update_ts, and the current request has
+                // `allow_lock_with_conflict` set, we must consider
+                // these possibilities:
+                // * If a previous request successfully locked the key with conflict, but the
+                //   response is lost due to some errors such as RPC failures. In this case, we
+                //   return like the current request's result is locked_with_conflict, for
+                //   idempotency concern.
+                // * The key is locked by a newer request with larger for_update_ts, and the
+                //   current request is stale. We can't distinguish this case with the above
+                //   one, but we don't need to handle this case since no one wood need the
+                //   current request's result anymore.
+
+                // Load value if locked_with_conflict, so that when the client (TiDB) need to
+                // read the value during statement retry, it will be possible to read the value
+                // from cache instead of RPC.
                 need_load_value = true;
                 for_update_ts = lock.for_update_ts;
                 Some(lock.for_update_ts)
@@ -248,6 +264,9 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
 
         (last_change_ts, versions_to_last_change) = write.next_last_change_info(commit_ts);
 
+        // Load value if locked_with_conflict, so that when the client (TiDB) need to
+        // read the value during statement retry, it will be possible to read the value
+        // from cache instead of RPC.
         if need_value || need_check_existence || locked_with_conflict_ts.is_some() {
             val = match write.write_type {
                 // If it's a valid Write, no need to read again.
@@ -294,7 +313,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         versions_to_last_change,
     };
 
-    // When lock_only_if_exists is false, always accquire pessimitic lock, otherwise
+    // When lock_only_if_exists is false, always acquire pessimistic lock, otherwise
     // do it when val exists
     if !lock_only_if_exists || val.is_some() {
         txn.put_pessimistic_lock(key, lock);
