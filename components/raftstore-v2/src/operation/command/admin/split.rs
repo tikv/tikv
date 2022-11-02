@@ -26,7 +26,6 @@
 use engine_traits::{
     Checkpointer, KvEngine, OpenOptions, RaftEngine, TabletFactory, CF_DEFAULT, SPLIT_PREFIX,
 };
-use itertools::Itertools;
 use kvproto::{
     metapb::Region,
     raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, SplitRequest},
@@ -73,9 +72,24 @@ pub fn validate_batch_split(
                 .to_owned()
         ));
     }
+
     let split_reqs: &[SplitRequest] = req.mut_splits().get_requests();
     let count = split_reqs.len();
+    if split_reqs[0].get_new_peer_ids().len() != region.get_peers().len() {
+        return Err(box_err!(
+            "invalid new peer id count, need {:?}, but got {:?}",
+            region.get_peers(),
+            split_reqs[0].get_new_peer_ids()
+        ));
+    }
     for i in 1..count {
+        if split_reqs[i].get_new_peer_ids().len() != region.get_peers().len() {
+            return Err(box_err!(
+                "invalid new peer id count, need {:?}, but got {:?}",
+                region.get_peers(),
+                split_reqs[i].get_new_peer_ids()
+            ));
+        }
         if split_reqs[i - 1].get_split_key() >= split_reqs[i].get_split_key() {
             return Err(box_err!(format!(
                 "Split keys in the request are not in strict ascending order: {:?}",
@@ -256,7 +270,6 @@ mod test {
         Arc,
     };
 
-    use byteorder::{BigEndian, WriteBytesExt};
     use collections::HashMap;
     use engine_test::{
         ctor::{CfOptions, DbOptions},
@@ -272,10 +285,6 @@ mod test {
     use raftstore::store::{cmd_resp::new_error, Config, ReadRunner};
     use slog::o;
     use tempfile::TempDir;
-    use tidb_query_datatype::{
-        codec::{datum, table, Datum},
-        expr::EvalContext,
-    };
     use tikv_util::{
         codec::bytes::encode_bytes,
         config::VersionTrack,
@@ -303,7 +312,7 @@ mod test {
 
     impl ApplyResReporter for MockReporter {
         fn report(&self, apply_res: ApplyRes) {
-            self.sender.send(apply_res).unwrap();
+            let _ = self.sender.send(apply_res);
         }
     }
 
@@ -575,6 +584,7 @@ mod test {
         for key in keys {
             let mut split_req = SplitRequest::default();
             split_req.set_split_key(key);
+            split_req.set_new_peer_ids(vec![1]);
             req.mut_splits().mut_requests().push(split_req);
         }
         req
@@ -586,6 +596,7 @@ mod test {
         let start_key = b"k05";
         region.set_start_key(b"k05".to_vec());
         region.set_end_key(b"k10".to_vec());
+        region.set_peers(vec![new_peer(1, 2)].into());
         let logger = slog_global::borrow_global().new(o!());
 
         let mut req = AdminRequest::default();
@@ -616,6 +627,20 @@ mod test {
                 .unwrap_err()
                 .to_string()
                 .contains("cmd_type is BatchSplit but it doesn't have splits request")
+        );
+
+        req = new_batch_split_request(vec![b"k07".to_vec()]);
+        req.mut_splits()
+            .mut_requests()
+            .get_mut(0)
+            .unwrap()
+            .new_peer_ids
+            .clear();
+        assert!(
+            validate_batch_split(&logger, &mut req, &region)
+                .unwrap_err()
+                .to_string()
+                .contains("invalid new peer id count")
         );
 
         req = new_batch_split_request(vec![b"k07".to_vec(), b"k08".to_vec(), b"k06".to_vec()]);
