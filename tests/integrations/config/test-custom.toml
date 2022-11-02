@@ -190,6 +190,7 @@ merge-check-tick-interval = "11s"
 use-delete-range = true
 cleanup-import-sst-interval = "12m"
 local-read-batch-size = 33
+apply-yield-write-size = "12345B"
 apply-max-batch-size = 22
 apply-pool-size = 4
 apply-reschedule-duration = "3s"
