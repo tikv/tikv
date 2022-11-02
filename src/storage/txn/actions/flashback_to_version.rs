@@ -49,45 +49,52 @@ pub fn flashback_to_version_read_write<S: Snapshot>(
     // To flashback the data, we need to get all the latest keys first by scanning
     // every unique key in `CF_WRITE` and to get its corresponding old MVCC write
     // record if exists.
-    let (key_ts_old_writes, has_remain_writes) = reader.scan_writes(
-        next_write_key.as_ref(),
-        end_key.as_ref(),
-        Some(flashback_version),
-        // No need to find an old version for the key if its latest `commit_ts` is smaller
-        // than or equal to the version.
-        |key| key.decode_ts().unwrap_or(TimeStamp::zero()) > flashback_version,
-        FLASHBACK_BATCH_SIZE - key_locks_len,
-    )?;
-    statistics.add(&reader.statistics);
-    let mut key_old_writes = Vec::with_capacity(FLASHBACK_BATCH_SIZE - key_locks_len);
-    // Check the latest commit ts to make sure there is no commit change during the
-    // flashback, otherwise, we need to abort the flashback.
-    for (key, commit_ts, old_write) in key_ts_old_writes.iter() {
-        if *commit_ts > flashback_commit_ts {
-            return Err(Error::from(ErrorInner::InvalidTxnTso {
-                start_ts: flashback_start_ts,
-                commit_ts: flashback_commit_ts,
-            }));
+    let batch_size = FLASHBACK_BATCH_SIZE - key_locks_len;
+    let mut key_old_writes = Vec::with_capacity(batch_size);
+    let mut has_remain_writes = true;
+    let mut next_write_key = next_write_key.clone();
+    // Try to read as many writes as possible in one batch.
+    while key_old_writes.len() < batch_size && has_remain_writes {
+        let key_ts_old_writes;
+        (key_ts_old_writes, has_remain_writes) = reader.scan_writes(
+            next_write_key.as_ref(),
+            end_key.as_ref(),
+            Some(flashback_version),
+            // No need to find an old version for the key if its latest `commit_ts` is smaller
+            // than or equal to the version.
+            |key| key.decode_ts().unwrap_or(TimeStamp::zero()) > flashback_version,
+            batch_size - key_old_writes.len(),
+        )?;
+        statistics.add(&reader.statistics);
+        // If `has_remain_writes` is true, it means that the batch is full and we may
+        // need to read another round, so we have to update the `next_write_key` here.
+        if has_remain_writes {
+            next_write_key = key_ts_old_writes.last().map(|(key, ..)| key.clone());
         }
-        // Although the first flashback preparation phase makes sure there will be no
-        // writes other than flashback after it, we CAN NOT return directly here.
-        // Suppose the second phase procedure contains two batches to flashback. After
-        // the first batch is committed, if the region is down, the client will retry
-        // the flashback from the very first beginning, because the data in the
-        // first batch has been written the flashbacked data with the same
-        // `commit_ts`, So we need to skip it to ensure the following data will
-        // be flashbacked continuously.
-        // And some large key modifications will exceed the max txn size limit
-        // through the execution, the write will forcibly finish the batch of data.
-        // So it may happen that part of the keys in a batch may be flashbacked.
-        if *commit_ts == flashback_commit_ts {
-            continue;
-        }
-        key_old_writes.push((key.clone(), old_write.clone()));
-    }
-    if key_old_writes.is_empty() {
-        if let Some(last_write) = key_ts_old_writes.last() {
-            key_old_writes.push((last_write.0.clone(), last_write.2.clone()));
+        // Check the latest commit ts to make sure there is no commit change during the
+        // flashback, otherwise, we need to abort the flashback.
+        for (key, commit_ts, old_write) in key_ts_old_writes.iter() {
+            if *commit_ts > flashback_commit_ts {
+                return Err(Error::from(ErrorInner::InvalidTxnTso {
+                    start_ts: flashback_start_ts,
+                    commit_ts: flashback_commit_ts,
+                }));
+            }
+            // Although the first flashback preparation phase makes sure there will be no
+            // writes other than flashback after it, we CAN NOT return directly here.
+            // Suppose the second phase procedure contains two batches to flashback. After
+            // the first batch is committed, if the region is down, the client will retry
+            // the flashback from the very first beginning, because the data in the
+            // first batch has been written the flashbacked data with the same
+            // `commit_ts`, So we need to skip it to ensure the following data will
+            // be flashbacked continuously.
+            // And some large key modifications will exceed the max txn size limit
+            // through the execution, the write will forcibly finish the batch of data.
+            // So it may happen that part of the keys in a batch may be flashbacked.
+            if *commit_ts == flashback_commit_ts {
+                continue;
+            }
+            key_old_writes.push((key.clone(), old_write.clone()));
         }
     }
     Ok((key_old_writes, has_remain_writes))
