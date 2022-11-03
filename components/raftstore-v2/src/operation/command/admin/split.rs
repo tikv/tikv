@@ -38,7 +38,7 @@ use protobuf::Message;
 use raftstore::{
     coprocessor::split_observer::{is_valid_split_key, strip_timestamp_if_exists},
     store::{
-        fsm::apply::{extract_split_keys, validate_batch_split},
+        fsm::apply::validate_batch_split,
         metrics::PEER_ADMIN_CMD_COUNTER,
         util::{self, KeysInfoFormatter},
         PeerStat, ProposalContext, RAFT_INIT_LOG_INDEX,
@@ -59,7 +59,8 @@ use crate::{
 #[derive(Debug)]
 pub struct SplitResult {
     pub regions: Vec<Region>,
-    pub derived: Region,
+    // The index of the derived region in `regions`
+    pub derived_index: usize,
     pub tablet_index: u64,
 }
 
@@ -108,28 +109,31 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     ) -> Result<(AdminResponse, AdminCmdResult)> {
         PEER_ADMIN_CMD_COUNTER.batch_split.all.inc();
 
+        let region = self.region_state().get_region();
+        let region_id = region.get_id();
+        validate_batch_split(req, self.region_state().get_region())?;
+
         let mut boundaries: Vec<&[u8]> = Vec::default();
         boundaries.push(self.region_state().get_region().get_start_key());
-        extract_split_keys(req, self.region_state().get_region(), &mut boundaries)?;
+        for req in req.get_splits().get_requests() {
+            boundaries.push(req.get_split_key());
+        }
         boundaries.push(self.region_state().get_region().get_end_key());
-
-        let mut derived = self.region_state().get_region().clone();
 
         info!(
             self.logger,
             "split region";
-            "region" => ?derived,
+            "region" => ?region,
             "boundaries" => %KeysInfoFormatter(boundaries.iter()),
         );
 
         let split_reqs = req.get_splits();
         let new_region_cnt = split_reqs.get_requests().len();
-        let new_version = derived.get_region_epoch().get_version() + new_region_cnt as u64;
-        derived.mut_region_epoch().set_version(new_version);
+        let new_version = region.get_region_epoch().get_version() + new_region_cnt as u64;
 
         let mut derived_req = SplitRequest::default();
-        derived_req.new_region_id = derived.id;
-        derived_req.new_peer_ids = derived.get_peers().iter().map(|p| p.get_id()).collect();
+        derived_req.new_region_id = region.id;
+        derived_req.new_peer_ids = region.get_peers().iter().map(|p| p.get_id()).collect();
         let derived_req = &[derived_req];
 
         let right_derive = split_reqs.get_right_derive();
@@ -145,10 +149,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             .map(|([start_key, end_key], req)| {
                 let mut new_region = Region::default();
                 new_region.set_id(req.get_new_region_id());
-                new_region.set_region_epoch(derived.get_region_epoch().to_owned());
+                new_region.set_region_epoch(region.get_region_epoch().to_owned());
+                new_region.mut_region_epoch().set_version(new_version);
                 new_region.set_start_key(start_key.to_vec());
                 new_region.set_end_key(end_key.to_vec());
-                new_region.set_peers(derived.get_peers().to_vec().into());
+                new_region.set_peers(region.get_peers().to_vec().into());
                 for (peer, peer_id) in new_region
                     .mut_peers()
                     .iter_mut()
@@ -160,12 +165,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             })
             .collect();
 
-        // Amend the boundary of the derived region
-        if right_derive {
-            derived.set_start_key(regions.last().unwrap().get_start_key().to_vec());
-        } else {
-            derived.set_end_key(regions[0].get_end_key().to_vec());
-        }
+        let derived_index = if right_derive { regions.len() - 1 } else { 0 };
 
         // We will create checkpoint of the current tablet for both derived region and
         // split regions. Before the creation, we should flush the writes and remove the
@@ -177,7 +177,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         // clone new tablets. It may cause large jitter as we need to flush the
         // memtable. We will freeze the memtable rather than flush it in the
         // following PR.
-        let region_id = derived.get_id();
         let tablet = self.tablet().clone();
         let mut checkpointer = tablet.new_checkpointer().unwrap_or_else(|e| {
             panic!(
@@ -227,10 +226,9 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             .unwrap();
         self.publish_tablet(tablet);
 
-        self.region_state_mut().set_region(derived.clone());
+        self.region_state_mut()
+            .set_region(regions[derived_index].clone());
         self.region_state_mut().set_tablet_index(log_index);
-        // self.metrics.size_diff_hint = 0;
-        // self.metrics.delete_keys_hint = 0;
 
         let mut resp = AdminResponse::default();
         resp.mut_splits().set_regions(regions.clone().into());
@@ -240,7 +238,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             resp,
             AdminCmdResult::SplitRegion(SplitResult {
                 regions,
-                derived,
+                derived_index,
                 tablet_index: log_index,
             }),
         ))
