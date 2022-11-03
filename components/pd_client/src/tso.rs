@@ -32,7 +32,7 @@ use crate::{metrics::PD_PENDING_TSO_REQUEST_GAUGE, Error, Result};
 /// It is an empirical value.
 const MAX_BATCH_SIZE: usize = 64;
 
-const MAX_PENDING_COUNT: usize = 1 << 16;
+pub const MAX_PENDING_COUNT: usize = 1 << 16;
 
 pub struct TimestampRequest {
     pub sender: oneshot::Sender<TimeStamp>,
@@ -216,7 +216,7 @@ impl<'a> Stream for TsoRequestStream<'a> {
     }
 }
 
-fn allocate_timestamps(
+pub fn allocate_timestamps(
     resp: &TsoResponse,
     pending_requests: &mut VecDeque<RequestGroup>,
 ) -> Result<()> {

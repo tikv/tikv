@@ -13,7 +13,7 @@ use error_code::ErrorCodeExt;
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Error as GrpcError, RpcStatus, RpcStatusCode};
 use kvproto::{metapb, pdpb};
-use pd_client::{Error as PdError, Feature, PdClient, PdConnector, RegionStat, RpcClient};
+use pd_client::{Error as PdError, Feature, PdClient, PdConnector, RegionStat, RpcClientV2};
 use raftstore::store;
 use security::{SecurityConfig, SecurityManager};
 use test_pd::{mocker::*, util::*, Server as MockServer};
@@ -32,7 +32,7 @@ fn test_retry_rpc_client() {
     server.stop();
     let child = thread::spawn(move || {
         let cfg = new_config(m_eps);
-        RpcClient::new(&cfg, None, m_mgr).unwrap();
+        RpcClientV2::new(&cfg, None, m_mgr).unwrap();
     });
     thread::sleep(Duration::from_millis(500));
     server.start(&mgr, eps);
@@ -45,7 +45,7 @@ fn test_rpc_client() {
     let server = MockServer::new(eps_count);
     let eps = server.bind_addrs();
 
-    let client = new_client(eps.clone(), None);
+    let mut client = new_client_v2(eps.clone(), None);
     assert_ne!(client.get_cluster_id().unwrap(), 0);
 
     let store_id = client.alloc_id().unwrap();
@@ -89,6 +89,8 @@ fn test_rpc_client() {
         .unwrap();
     assert_eq!(tmp_region.get_id(), region.get_id());
 
+    println!("Before getting tso");
+
     let ts = block_on(client.get_tso()).unwrap();
     assert_ne!(ts, TimeStamp::zero());
 
@@ -97,7 +99,7 @@ fn test_rpc_client() {
 
     let mut prev_id = 0;
     for _ in 0..100 {
-        let client = new_client(eps.clone(), None);
+        let mut client = new_client_v2(eps.clone(), None);
         let alloc_id = client.alloc_id().unwrap();
         assert!(alloc_id > prev_id);
         prev_id = alloc_id;
@@ -150,7 +152,7 @@ fn test_connect_follower() {
     // test switch
     cfg.enable_forwarding = false;
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
-    let client1 = RpcClient::new(&cfg, None, mgr).unwrap();
+    let mut client1 = RpcClientV2::new(&cfg, None, mgr).unwrap();
     fail::cfg(connect_leader_fp, "return").unwrap();
     // RECONNECT_INTERVAL_SEC is 1s.
     thread::sleep(Duration::from_secs(1));
@@ -166,7 +168,7 @@ fn test_connect_follower() {
 
     cfg.enable_forwarding = true;
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
-    let client = RpcClient::new(&cfg, None, mgr).unwrap();
+    let mut client = RpcClientV2::new(&cfg, None, mgr).unwrap();
     // RECONNECT_INTERVAL_SEC is 1s.
     thread::sleep(Duration::from_secs(1));
     let leader_addr = client1.get_leader().get_client_urls()[0].clone();
@@ -188,7 +190,7 @@ fn test_get_tombstone_stores() {
     let eps_count = 1;
     let server = MockServer::new(eps_count);
     let eps = server.bind_addrs();
-    let client = new_client(eps, None);
+    let mut client = new_client_v2(eps, None);
 
     let mut all_stores = vec![];
     let store_id = client.alloc_id().unwrap();
@@ -242,7 +244,7 @@ fn test_get_tombstone_store() {
     let eps_count = 1;
     let server = MockServer::new(eps_count);
     let eps = server.bind_addrs();
-    let client = new_client(eps, None);
+    let mut client = new_client_v2(eps, None);
 
     let mut all_stores = vec![];
     let store_id = client.alloc_id().unwrap();
@@ -273,7 +275,7 @@ fn test_reboot() {
     let eps_count = 1;
     let server = MockServer::with_case(eps_count, Arc::new(AlreadyBootstrapped));
     let eps = server.bind_addrs();
-    let client = new_client(eps, None);
+    let mut client = new_client_v2(eps, None);
 
     assert!(!client.is_cluster_bootstrapped().unwrap());
 
@@ -299,7 +301,7 @@ fn test_validate_endpoints() {
 
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let connector = PdConnector::new(env, mgr);
-    assert!(block_on(connector.validate_endpoints(&new_config(eps))).is_err());
+    assert!(block_on(connector.validate_endpoints(&new_config(eps), true)).is_err());
 }
 
 #[test]
@@ -318,26 +320,26 @@ fn test_validate_endpoints_retry() {
     eps.pop();
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let connector = PdConnector::new(env, mgr);
-    assert!(block_on(connector.validate_endpoints(&new_config(eps))).is_err());
+    assert!(block_on(connector.validate_endpoints(&new_config(eps), true)).is_err());
 }
 
-fn test_retry<F: Fn(&RpcClient)>(func: F) {
+fn test_retry<F: Fn(&mut RpcClientV2)>(func: F) {
     let eps_count = 1;
     // Retry mocker returns `Err(_)` for most request, here two thirds are `Err(_)`.
     let retry = Arc::new(Retry::new(3));
     let server = MockServer::with_case(eps_count, retry);
     let eps = server.bind_addrs();
 
-    let client = new_client(eps, None);
+    let mut client = new_client_v2(eps, None);
 
     for _ in 0..3 {
-        func(&client);
+        func(&mut client);
     }
 }
 
 #[test]
 fn test_retry_async() {
-    let r#async = |client: &RpcClient| {
+    let r#async = |client: &mut RpcClientV2| {
         block_on(client.get_region_by_id(1)).unwrap();
     };
     test_retry(r#async);
@@ -345,13 +347,13 @@ fn test_retry_async() {
 
 #[test]
 fn test_retry_sync() {
-    let sync = |client: &RpcClient| {
+    let sync = |client: &mut RpcClientV2| {
         client.get_store(1).unwrap();
     };
     test_retry(sync)
 }
 
-fn test_not_retry<F: Fn(&RpcClient)>(func: F) {
+fn test_not_retry<F: Fn(&mut RpcClientV2)>(func: F) {
     let eps_count = 1;
     // NotRetry mocker returns Ok() with error header first, and next returns Ok()
     // without any error header.
@@ -359,14 +361,14 @@ fn test_not_retry<F: Fn(&RpcClient)>(func: F) {
     let server = MockServer::with_case(eps_count, not_retry);
     let eps = server.bind_addrs();
 
-    let client = new_client(eps, None);
+    let mut client = new_client_v2(eps, None);
 
-    func(&client);
+    func(&mut client);
 }
 
 #[test]
 fn test_not_retry_async() {
-    let r#async = |client: &RpcClient| {
+    let r#async = |client: &mut RpcClientV2| {
         block_on(client.get_region_by_id(1)).unwrap_err();
     };
     test_not_retry(r#async);
@@ -374,7 +376,7 @@ fn test_not_retry_async() {
 
 #[test]
 fn test_not_retry_sync() {
-    let sync = |client: &RpcClient| {
+    let sync = |client: &mut RpcClientV2| {
         client.get_store(1).unwrap_err();
     };
     test_not_retry(sync);
@@ -386,7 +388,7 @@ fn test_incompatible_version() {
     let server = MockServer::with_case(1, incompatible);
     let eps = server.bind_addrs();
 
-    let client = new_client(eps, None);
+    let mut client = new_client_v2(eps, None);
 
     let resp = block_on(client.ask_batch_split(metapb::Region::default(), 2));
     assert_eq!(
@@ -402,7 +404,7 @@ fn restart_leader(mgr: SecurityManager) {
         MockServer::<Service>::with_configuration(&mgr, vec![("127.0.0.1".to_owned(), 0); 3], None);
     let eps = server.bind_addrs();
 
-    let client = new_client(eps.clone(), Some(Arc::clone(&mgr)));
+    let mut client = new_client_v2(eps.clone(), Some(Arc::clone(&mgr)));
     // Put a region.
     let store_id = client.alloc_id().unwrap();
     let mut store = metapb::Store::default();
@@ -454,7 +456,7 @@ fn test_change_leader_async() {
     let eps = server.bind_addrs();
 
     let counter = Arc::new(AtomicUsize::new(0));
-    let client = new_client(eps, None);
+    let mut client = new_client_v2(eps, None);
     let counter1 = Arc::clone(&counter);
     client.handle_reconnect(move || {
         counter1.fetch_add(1, Ordering::SeqCst);
@@ -482,7 +484,7 @@ fn test_pd_client_ok_when_cluster_not_ready() {
     let server = MockServer::with_case(3, Arc::new(AlreadyBootstrapped));
     let eps = server.bind_addrs();
 
-    let client = new_client(eps, None);
+    let mut client = new_client_v2(eps, None);
     fail::cfg(pd_client_cluster_id_zero, "return()").unwrap();
     // wait 100ms to let client load member.
     thread::sleep(Duration::from_millis(101));
@@ -497,7 +499,7 @@ fn test_pd_client_heartbeat_send_failed() {
     let server = MockServer::with_case(1, Arc::new(AlreadyBootstrapped));
     let eps = server.bind_addrs();
 
-    let client = new_client(eps, None);
+    let mut client = new_client_v2(eps, None);
     let poller = Builder::new_multi_thread()
         .thread_name(thd_name!("poller"))
         .worker_threads(1)
@@ -508,7 +510,7 @@ fn test_pd_client_heartbeat_send_failed() {
         client.handle_region_heartbeat_response(1, move |resp| tx.send(resp).unwrap_or_default());
     poller.spawn(f);
 
-    let heartbeat_send_fail = |ok| {
+    let mut heartbeat_send_fail = |ok| {
         let mut region = metapb::Region::default();
         region.set_id(1);
         poller.spawn(client.region_heartbeat(
@@ -549,7 +551,7 @@ fn test_region_heartbeat_on_leader_change() {
     let server = MockServer::with_case(eps_count, Arc::new(LeaderChange::new()));
     let eps = server.bind_addrs();
 
-    let client = new_client(eps, None);
+    let mut client = new_client_v2(eps, None);
     let poller = Builder::new_multi_thread()
         .thread_name(thd_name!("poller"))
         .worker_threads(1)
@@ -573,7 +575,7 @@ fn test_region_heartbeat_on_leader_change() {
     rx.recv_timeout(LeaderChange::get_leader_interval())
         .unwrap();
 
-    let heartbeat_on_leader_change = |count| {
+    let mut heartbeat_on_leader_change = |count| {
         let mut leader = client.get_leader();
         for _ in 0..count {
             loop {
@@ -641,13 +643,14 @@ fn test_cluster_version() {
     let feature_b = Feature::require(5, 0, 0);
     let feature_c = Feature::require(5, 0, 1);
 
-    let client = new_client(eps, None);
-    let feature_gate = client.feature_gate();
+    let mut client = new_client_v2(eps, None);
+    let feature_gate = client.feature_gate().clone();
     assert!(!feature_gate.can_enable(feature_a));
 
-    let emit_heartbeat = || {
+    let mut client_clone = client.clone();
+    let mut emit_heartbeat = || {
         let req = pdpb::StoreStats::default();
-        block_on(client.store_heartbeat(req, /* store_report= */ None, None)).unwrap();
+        block_on(client_clone.store_heartbeat(req, /* store_report= */ None, None)).unwrap();
     };
 
     let set_cluster_version = |version: &str| {

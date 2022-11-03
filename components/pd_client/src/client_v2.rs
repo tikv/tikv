@@ -2,7 +2,8 @@
 
 use std::{
     cell::RefCell,
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
+    pin::Pin,
     rc::Rc,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -19,74 +20,81 @@ use futures::{
     compat::Future01CompatExt,
     executor::block_on,
     future::{FutureExt, TryFutureExt},
-    join, select,
+    select,
     sink::SinkExt,
-    stream::StreamExt,
-    task::AtomicWaker,
+    stream::{Stream, StreamExt},
+    task::{AtomicWaker, Context, Poll},
 };
-use grpcio::{CallOption, EnvBuilder, Environment, WriteFlags};
+use grpcio::{
+    CallOption, Channel, ClientDuplexReceiver, ConnectivityState, EnvBuilder, Environment,
+    WriteFlags,
+};
 use kvproto::{
-    metapb::{self, BucketStats},
+    metapb,
     pdpb::{
-        self, ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient as PdClientStub,
-        RegionHeartbeatRequest, RegionHeartbeatResponse, ReportBucketsRequest,
-        ReportBucketsResponse, ResponseHeader, TsoRequest,
+        self, GetMembersResponse, Member, PdClient as PdClientStub, RegionHeartbeatRequest,
+        RegionHeartbeatResponse, ReportBucketsRequest,
     },
     replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
 };
 use security::SecurityManager;
 use tikv_util::{
-    box_err, debug, error, info, slow_log,
+    box_err, error, info, slow_log,
     sys::thread::StdThreadBuildWrapper,
     thd_name,
     time::{duration_to_sec, Instant},
     timer::GLOBAL_TIMER_HANDLE,
-    warn, Either, HandyRwLock,
+    warn,
 };
 use tokio::sync::Mutex;
 use txn_types::TimeStamp;
-use yatp::{task::future::TaskCell, ThreadPool};
 
 use super::{
+    client::{CLIENT_PREFIX, CQ_COUNT},
     metrics::*,
-    tso::{TimestampRequest, TsoRequestStream},
-    util::{call_option_inner, check_resp_header, sync_request, Client, PdConnector, TargetInfo},
-    BucketStat, Config, Error, FeatureGate, PdClient, PdFuture, RegionInfo, RegionStat, Result,
-    UnixSecs, REQUEST_TIMEOUT,
+    tso::{
+        allocate_timestamps, TimestampRequest, TsoRequestStream,
+        MAX_PENDING_COUNT as TSO_MAX_PENDING_COUNT,
+    },
+    util::{check_resp_header, PdConnector, TargetInfo},
+    BucketStat, Config, Error, FeatureGate, RegionInfo, RegionStat, Result, UnixSecs,
+    REQUEST_TIMEOUT,
 };
+use crate::PdFuture;
 
 /// Immutable context for making requests.
-struct Context {
+struct ConnectContext {
     enable_forwarding: bool,
-    on_reconnect: Option<Box<dyn Fn() + Sync + Send + 'static>>,
     connector: PdConnector,
 }
 
 #[derive(Clone)]
 struct RawClient {
-    pub stub: PdClientStub,
-    pub target_info: TargetInfo,
-    pub members: GetMembersResponse,
+    channel: Channel,
+    stub: PdClientStub,
+    target_info: TargetInfo,
+    members: GetMembersResponse,
 }
 
 impl RawClient {
-    fn call_option(&self) -> CallOption {
-        self.target_info
-            .call_option()
-            .timeout(Duration::from_secs(REQUEST_TIMEOUT))
-    }
-
     /// Only updates client and version when the reconnection succeeds.
-    async fn maybe_reconnect(&mut self, ctx: &Context, force: bool) -> Result<bool> {
+    async fn maybe_reconnect(&mut self, ctx: &ConnectContext, force: bool) -> Result<bool> {
         PD_RECONNECT_COUNTER_VEC.with_label_values(&["try"]).inc();
         let start = Instant::now();
 
         let members = self.members.clone();
         let direct_connected = self.target_info.direct_connected();
         slow_log!(start.saturating_elapsed(), "try reconnect pd");
-        let (stub, target_info, members, _) = match ctx
+        // TODO: avoid constructing TimestampOracle for v2.
+        let (channel, stub, target_info, members, _) = match ctx
             .connector
-            .reconnect_pd(members, direct_connected, force, ctx.enable_forwarding)
+            .reconnect_pd(
+                members,
+                direct_connected,
+                force,
+                ctx.enable_forwarding,
+                false,
+            )
             .await
         {
             Err(e) => {
@@ -111,6 +119,7 @@ impl RawClient {
 
         fail_point!("pd_client_reconnect", |_| Ok(false));
 
+        self.channel = channel;
         self.stub = stub;
         self.target_info = target_info;
         self.members = members;
@@ -121,7 +130,7 @@ impl RawClient {
 
 #[derive(Clone)]
 pub struct CachedRawClient {
-    context: Arc<Context>,
+    context: Arc<ConnectContext>,
     latest: Arc<Mutex<RawClient>>,
     version: Arc<AtomicU64>,
     cache: RawClient,
@@ -129,7 +138,7 @@ pub struct CachedRawClient {
 }
 
 impl CachedRawClient {
-    fn new(context: Context, client: RawClient) -> Self {
+    fn new(context: ConnectContext, client: RawClient) -> Self {
         Self {
             context: Arc::new(context),
             latest: Arc::new(Mutex::new(client.clone())),
@@ -140,37 +149,27 @@ impl CachedRawClient {
     }
 
     /// Refreshes the local cache with latest client.
-    async fn refresh_cache(&mut self) -> &RawClient {
+    async fn wait_for_ready(&mut self) {
         if self.cache_version < self.version.load(Ordering::Acquire) {
             let latest = self.latest.lock().await;
             self.cache = (*latest).clone();
             self.cache_version = self.version.load(Ordering::Relaxed);
         }
-        &self.cache
+        self.channel()
+            .wait_for_connected(Duration::from_secs(REQUEST_TIMEOUT))
+            .await;
     }
 
-    async fn reconnect_if_needed(&mut self) -> Result<()> {
+    async fn reconnect(&mut self, force: bool, callback: &CallbackHolder) -> Result<()> {
         let mut latest = self.latest.lock().await;
-        if latest.maybe_reconnect(&self.context, false).await? {
+        if latest.maybe_reconnect(&self.context, force).await? {
             let latest_version = self.version.fetch_add(1, Ordering::AcqRel) + 1;
             debug_assert!(self.cache_version < latest_version);
             self.cache = latest.clone();
             self.cache_version = latest_version;
-        }
-        Ok(())
-    }
-
-    /// Reconnects the client if the provided version is already fresh.
-    async fn force_reconnect(&mut self, version: u64) -> Result<()> {
-        let mut latest = self.latest.lock().await;
-        if self.version.load(Ordering::Relaxed) == version {
-            let r = latest.maybe_reconnect(&self.context, true).await?;
-            // Force reconnect should always return true.
-            debug_assert!(r);
-            let latest_version = self.version.fetch_add(1, Ordering::AcqRel) + 1;
-            debug_assert!(self.cache_version < latest_version);
-            self.cache = latest.clone();
-            self.cache_version = latest_version;
+            if let Some(ref f) = *callback.lock().unwrap() {
+                f();
+            }
         }
         Ok(())
     }
@@ -181,15 +180,71 @@ impl CachedRawClient {
     }
 
     #[inline]
+    fn channel(&self) -> &Channel {
+        &self.cache.channel
+    }
+
+    #[inline]
     fn cache_version(&self) -> u64 {
         self.cache_version
     }
+
+    #[inline]
+    fn call_option(&self) -> CallOption {
+        self.cache.target_info.call_option()
+    }
+
+    #[inline]
+    fn leader(&self) -> Member {
+        self.cache.members.get_leader().clone()
+    }
 }
+
+pub struct CachedDuplexResponse<T> {
+    latest: DuplexResponseHolder<T>,
+    cache: Option<ClientDuplexReceiver<T>>,
+}
+
+impl<T: std::fmt::Debug> Stream for CachedDuplexResponse<T> {
+    type Item = Result<T>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        loop {
+            if let Some(ref mut receiver) = self.cache {
+                match Pin::new(receiver).poll_next(cx) {
+                    Poll::Ready(Some(Ok(item))) => return Poll::Ready(Some(Ok(item))),
+                    Poll::Pending => return Poll::Pending,
+                    // If it's None or there's error, we need to update receiver.
+                    _ => {}
+                }
+            }
+
+            let latest = self.latest.lock().unwrap().take();
+            self.cache = latest;
+            if self.cache.is_none() {
+                return Poll::Pending;
+            }
+        }
+    }
+}
+
+type DuplexResponseHolder<T> = Arc<std::sync::Mutex<Option<ClientDuplexReceiver<T>>>>;
+type CallbackHolder = Arc<std::sync::Mutex<Option<Box<dyn Fn() + Sync + Send + 'static>>>>;
 
 #[derive(Clone)]
 pub struct RpcClient {
+    cluster_id: u64,
     raw_client: CachedRawClient,
+    feature_gate: FeatureGate,
+    on_reconnect: CallbackHolder,
+
     heartbeat_sender: mpsc::UnboundedSender<RegionHeartbeatRequest>,
+    heartbeat_response_holder: DuplexResponseHolder<RegionHeartbeatResponse>,
+    pending_heartbeat: Arc<AtomicU64>,
+
+    bucket_sender: mpsc::UnboundedSender<ReportBucketsRequest>,
+    pending_bucket: Arc<AtomicU64>,
+
     tso_sender: tokio::sync::mpsc::Sender<TimestampRequest>,
 }
 
@@ -208,10 +263,12 @@ impl RpcClient {
         security_mgr: Arc<SecurityManager>,
     ) -> Result<RpcClient> {
         let env = shared_env.unwrap_or_else(|| {
-            Arc::new(EnvBuilder::new()
-                    // .cq_count(CQ_COUNT)
-                    // .name_prefix(thd_name!(CLIENT_PREFIX))
-                    .build())
+            Arc::new(
+                EnvBuilder::new()
+                    .cq_count(CQ_COUNT)
+                    .name_prefix(thd_name!(CLIENT_PREFIX))
+                    .build(),
+            )
         });
 
         // -1 means the max.
@@ -221,20 +278,20 @@ impl RpcClient {
         };
         let pd_connector = PdConnector::new(env.clone(), security_mgr.clone());
         for i in 0..retries {
-            match pd_connector.validate_endpoints(cfg).await {
-                Ok((stub, target_info, members, tso)) => {
+            match pd_connector.validate_endpoints(cfg, false).await {
+                Ok((channel, stub, target_info, members, _)) => {
                     let cluster_id = members.get_header().get_cluster_id();
+                    let context = ConnectContext {
+                        enable_forwarding: cfg.enable_forwarding,
+                        connector: pd_connector,
+                    };
                     let client = RawClient {
+                        channel,
                         stub,
                         target_info,
                         members,
                     };
-                    let context = Context {
-                        enable_forwarding: cfg.enable_forwarding,
-                        on_reconnect: None,
-                        connector: pd_connector,
-                    };
-                    return Self::build_from_raw(CachedRawClient::new(context, client));
+                    return Self::build_from_raw(cluster_id, CachedRawClient::new(context, client));
                 }
                 Err(e) => {
                     if i as usize % cfg.retry_log_every == 0 {
@@ -250,12 +307,24 @@ impl RpcClient {
         Err(box_err!("endpoints are invalid"))
     }
 
-    fn build_from_raw(raw_client: CachedRawClient) -> Result<Self> {
+    fn build_from_raw(cluster_id: u64, raw_client: CachedRawClient) -> Result<Self> {
         let (reconnect_tx, reconnect_rx) = mpsc::unbounded();
-        let (heartbeat_tx, heartbeat_rx) = mpsc::unbounded();
+        let (heartbeat_sender, heartbeat_receiver) = mpsc::unbounded();
+        let pending_heartbeat = Arc::new(AtomicU64::new(0));
+        let heartbeat_response_holder = Arc::new(std::sync::Mutex::new(None));
         raw_client.stub().spawn(heartbeat_loop(
             raw_client.clone(),
-            heartbeat_rx,
+            heartbeat_receiver,
+            heartbeat_response_holder.clone(),
+            pending_heartbeat.clone(),
+            reconnect_tx.clone(),
+        ));
+        let (bucket_sender, bucket_receiver) = mpsc::unbounded();
+        let pending_bucket = Arc::new(AtomicU64::new(0));
+        raw_client.stub().spawn(bucket_loop(
+            raw_client.clone(),
+            bucket_receiver,
+            pending_bucket.clone(),
             reconnect_tx.clone(),
         ));
         let (tso_tx, tso_rx) =
@@ -264,34 +333,460 @@ impl RpcClient {
         thread::Builder::new()
             .name("tso-worker".into())
             .spawn_wrapper(move || {
-                block_on(tso_loop(raw_client_clone, tso_rx, reconnect_tx.clone()))
+                block_on(tso_loop(cluster_id, raw_client_clone, tso_rx, reconnect_tx))
             })
             .expect("unable to create tso worker thread");
-        raw_client
-            .stub()
-            .spawn(reconnect_loop(raw_client.clone(), reconnect_rx));
+        let on_reconnect: CallbackHolder = Default::default();
+        raw_client.stub().spawn(reconnect_loop(
+            raw_client.clone(),
+            on_reconnect.clone(),
+            reconnect_rx,
+        ));
         Ok(Self {
+            cluster_id,
             raw_client,
-            heartbeat_sender: heartbeat_tx,
+            feature_gate: Default::default(),
+            on_reconnect,
+            heartbeat_sender,
+            heartbeat_response_holder,
+            pending_heartbeat,
+            bucket_sender,
+            pending_bucket,
             tso_sender: tso_tx,
         })
+    }
+
+    pub fn handle_reconnect<F: Fn() + Sync + Send + 'static>(&self, f: F) {
+        *self.on_reconnect.lock().unwrap() = Some(Box::new(f));
+    }
+
+    pub fn handle_region_heartbeat_response<F>(&self, _: u64, f: F) -> PdFuture<()>
+    where
+        F: Fn(RegionHeartbeatResponse) + Send + 'static,
+    {
+        use futures::TryStreamExt;
+        let recv = CachedDuplexResponse {
+            latest: self.heartbeat_response_holder.clone(),
+            cache: None,
+        };
+        Box::pin(
+            recv.try_for_each(move |resp| {
+                f(resp);
+                futures::future::ready(Ok(()))
+            })
+            .map_err(|e| panic!("unexpected error: {:?}", e)),
+        )
+    }
+
+    pub fn feature_gate(&self) -> &FeatureGate {
+        &self.feature_gate
+    }
+
+    #[inline]
+    fn header(&self) -> pdpb::RequestHeader {
+        let mut header = pdpb::RequestHeader::default();
+        header.set_cluster_id(self.cluster_id);
+        header
+    }
+
+    pub fn get_leader(&mut self) -> Member {
+        block_on(self.raw_client.wait_for_ready());
+        self.raw_client.leader()
+    }
+
+    pub fn reconnect(&mut self) -> Result<()> {
+        block_on(self.raw_client.reconnect(true, &self.on_reconnect))
     }
 }
 
 impl RpcClient {
-    async fn region_heartbeat(
+    pub fn load_global_config(&mut self, list: Vec<String>) -> PdFuture<HashMap<String, String>> {
+        use kvproto::pdpb::LoadGlobalConfigRequest;
+        let mut req = LoadGlobalConfigRequest::new();
+        req.set_names(list.into());
+        let mut raw_client = self.raw_client.clone();
+        Box::pin(async move {
+            raw_client.wait_for_ready().await;
+            let fut = raw_client.stub().load_global_config_async(&req)?;
+            match fut.await {
+                Ok(grpc_response) => {
+                    let mut res = HashMap::with_capacity(grpc_response.get_items().len());
+                    for c in grpc_response.get_items() {
+                        if c.has_error() {
+                            error!("failed to load global config with key {:?}", c.get_error());
+                        } else {
+                            res.insert(c.get_name().to_owned(), c.get_value().to_owned());
+                        }
+                    }
+                    Ok(res)
+                }
+                Err(err) => Err(box_err!("{:?}", err)),
+            }
+        })
+    }
+
+    pub fn watch_global_config(
+        &mut self,
+    ) -> Result<grpcio::ClientSStreamReceiver<pdpb::WatchGlobalConfigResponse>> {
+        use kvproto::pdpb::WatchGlobalConfigRequest;
+        let req = WatchGlobalConfigRequest::default();
+        block_on(self.raw_client.wait_for_ready());
+        Ok(self.raw_client.stub().watch_global_config(&req)?)
+    }
+
+    pub fn get_cluster_id(&self) -> Result<u64> {
+        Ok(self.cluster_id)
+    }
+
+    pub fn bootstrap_cluster(
+        &mut self,
+        stores: metapb::Store,
+        region: metapb::Region,
+    ) -> Result<Option<ReplicationStatus>> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["bootstrap_cluster"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::BootstrapRequest::default();
+        req.set_header(self.header());
+        req.set_store(stores);
+        req.set_region(region);
+
+        block_on(self.raw_client.wait_for_ready());
+        let mut resp = self.raw_client.stub().bootstrap_opt(
+            &req,
+            self.raw_client
+                .call_option()
+                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+        )?;
+        check_resp_header(resp.get_header())?;
+        Ok(resp.replication_status.take())
+    }
+
+    pub fn is_cluster_bootstrapped(&mut self) -> Result<bool> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["is_cluster_bootstrapped"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::IsBootstrappedRequest::default();
+        req.set_header(self.header());
+
+        block_on(self.raw_client.wait_for_ready());
+        let resp = self.raw_client.stub().is_bootstrapped_opt(
+            &req,
+            self.raw_client
+                .call_option()
+                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+        )?;
+        check_resp_header(resp.get_header())?;
+
+        Ok(resp.get_bootstrapped())
+    }
+
+    pub fn alloc_id(&mut self) -> Result<u64> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["alloc_id"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::AllocIdRequest::default();
+        req.set_header(self.header());
+
+        block_on(self.raw_client.wait_for_ready());
+        let resp = self.raw_client.stub().alloc_id_opt(
+            &req,
+            self.raw_client
+                .call_option()
+                .timeout(Duration::from_secs(10)),
+        )?;
+        check_resp_header(resp.get_header())?;
+
+        let id = resp.get_id();
+        if id == 0 {
+            return Err(box_err!("pd alloc weird id 0"));
+        }
+        Ok(id)
+    }
+
+    pub fn is_recovering_marked(&mut self) -> Result<bool> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["is_recovering_marked"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::IsSnapshotRecoveringRequest::default();
+        req.set_header(self.header());
+
+        block_on(self.raw_client.wait_for_ready());
+        let resp = self.raw_client.stub().is_snapshot_recovering_opt(
+            &req,
+            self.raw_client
+                .call_option()
+                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+        )?;
+        check_resp_header(resp.get_header())?;
+
+        Ok(resp.get_marked())
+    }
+
+    pub fn put_store(&mut self, store: metapb::Store) -> Result<Option<ReplicationStatus>> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["put_store"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::PutStoreRequest::default();
+        req.set_header(self.header());
+        req.set_store(store);
+
+        block_on(self.raw_client.wait_for_ready());
+        let mut resp = self.raw_client.stub().put_store_opt(
+            &req,
+            self.raw_client
+                .call_option()
+                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+        )?;
+        check_resp_header(resp.get_header())?;
+
+        Ok(resp.replication_status.take())
+    }
+
+    pub fn get_store_and_stats(
+        &mut self,
+        store_id: u64,
+    ) -> PdFuture<(metapb::Store, pdpb::StoreStats)> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::GetStoreRequest::default();
+        req.set_header(self.header());
+        req.set_store_id(store_id);
+
+        let mut raw_client = self.raw_client.clone();
+        Box::pin(async move {
+            raw_client.wait_for_ready().await;
+            let mut resp = raw_client
+                .stub()
+                .get_store_async_opt(
+                    &req,
+                    raw_client
+                        .call_option()
+                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+                )
+                .unwrap_or_else(|e| {
+                    panic!("fail to request PD {} err {:?}", "get_store_and_stats", e);
+                })
+                .await?;
+            PD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["get_store_and_stats"])
+                .observe(duration_to_sec(timer.saturating_elapsed()));
+            check_resp_header(resp.get_header())?;
+            let store = resp.take_store();
+            if store.get_state() != metapb::StoreState::Tombstone {
+                Ok((store, resp.take_stats()))
+            } else {
+                Err(Error::StoreTombstone(format!("{:?}", store)))
+            }
+        })
+    }
+
+    pub fn get_store(&mut self, store_id: u64) -> Result<metapb::Store> {
+        let (store, _) = block_on(self.get_store_and_stats(store_id))?;
+        Ok(store)
+    }
+
+    pub fn get_store_async(&mut self, store_id: u64) -> PdFuture<metapb::Store> {
+        self.get_store_and_stats(store_id).map_ok(|x| x.0).boxed()
+    }
+
+    pub fn get_store_stats_async(&mut self, store_id: u64) -> PdFuture<pdpb::StoreStats> {
+        self.get_store_and_stats(store_id).map_ok(|x| x.1).boxed()
+    }
+
+    pub fn get_all_stores(&mut self, exclude_tombstone: bool) -> Result<Vec<metapb::Store>> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["get_all_stores"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::GetAllStoresRequest::default();
+        req.set_header(self.header());
+        req.set_exclude_tombstone_stores(exclude_tombstone);
+
+        block_on(self.raw_client.wait_for_ready());
+        let mut resp = self.raw_client.stub().get_all_stores_opt(
+            &req,
+            self.raw_client
+                .call_option()
+                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+        )?;
+        check_resp_header(resp.get_header())?;
+
+        Ok(resp.take_stores().into())
+    }
+
+    pub fn get_cluster_config(&mut self) -> Result<metapb::Cluster> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["get_cluster_config"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::GetClusterConfigRequest::default();
+        req.set_header(self.header());
+
+        block_on(self.raw_client.wait_for_ready());
+        let mut resp = self.raw_client.stub().get_cluster_config_opt(
+            &req,
+            self.raw_client
+                .call_option()
+                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+        )?;
+        check_resp_header(resp.get_header())?;
+
+        Ok(resp.take_cluster())
+    }
+
+    pub fn get_region_and_leader(
+        &mut self,
+        key: &[u8],
+    ) -> PdFuture<(metapb::Region, Option<metapb::Peer>)> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["get_region"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::GetRegionRequest::default();
+        req.set_header(self.header());
+        req.set_region_key(key.to_vec());
+
+        let mut raw_client = self.raw_client.clone();
+        Box::pin(async move {
+            raw_client.wait_for_ready().await;
+            let mut resp = raw_client
+                .stub()
+                .get_region_async_opt(
+                    &req,
+                    raw_client
+                        .call_option()
+                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+                )
+                .unwrap_or_else(|e| {
+                    panic!("fail to request PD {} err {:?}", "get_region_async_opt", e)
+                })
+                .await?;
+            check_resp_header(resp.get_header())?;
+            let region = if resp.has_region() {
+                resp.take_region()
+            } else {
+                return Err(Error::RegionNotFound(req.region_key));
+            };
+            let leader = if resp.has_leader() {
+                Some(resp.take_leader())
+            } else {
+                None
+            };
+            Ok((region, leader))
+        })
+    }
+
+    pub fn get_region(&mut self, key: &[u8]) -> Result<metapb::Region> {
+        block_on(self.get_region_and_leader(key)).map(|x| x.0)
+    }
+
+    pub fn get_region_info(&mut self, key: &[u8]) -> Result<RegionInfo> {
+        block_on(self.get_region_and_leader(key)).map(|x| RegionInfo::new(x.0, x.1))
+    }
+
+    pub fn get_region_async(&mut self, key: &[u8]) -> PdFuture<metapb::Region> {
+        self.get_region_and_leader(key).map_ok(|x| x.0).boxed()
+    }
+
+    pub fn get_region_info_async(&mut self, key: &[u8]) -> PdFuture<RegionInfo> {
+        self.get_region_and_leader(key)
+            .map_ok(|x| RegionInfo::new(x.0, x.1))
+            .boxed()
+    }
+
+    pub fn get_region_by_id(&mut self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::GetRegionByIdRequest::default();
+        req.set_header(self.header());
+        req.set_region_id(region_id);
+
+        let mut raw_client = self.raw_client.clone();
+        Box::pin(async move {
+            raw_client.wait_for_ready().await;
+            let mut resp = raw_client
+                .stub()
+                .get_region_by_id_async_opt(
+                    &req,
+                    raw_client
+                        .call_option()
+                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+                )
+                .unwrap_or_else(|e| {
+                    panic!("fail to request PD {} err {:?}", "get_region_by_id", e);
+                })
+                .await?;
+            PD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["get_region_by_id"])
+                .observe(duration_to_sec(timer.saturating_elapsed()));
+            check_resp_header(resp.get_header())?;
+            if resp.has_region() {
+                Ok(Some(resp.take_region()))
+            } else {
+                Ok(None)
+            }
+        })
+    }
+
+    pub fn get_region_leader_by_id(
+        &mut self,
+        region_id: u64,
+    ) -> PdFuture<Option<(metapb::Region, metapb::Peer)>> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::GetRegionByIdRequest::default();
+        req.set_header(self.header());
+        req.set_region_id(region_id);
+
+        let mut raw_client = self.raw_client.clone();
+        Box::pin(async move {
+            raw_client.wait_for_ready().await;
+            let mut resp = raw_client
+                .stub()
+                .get_region_by_id_async_opt(
+                    &req,
+                    raw_client
+                        .call_option()
+                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+                )
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "fail to request PD {} err {:?}",
+                        "get_region_leader_by_id", e
+                    );
+                })
+                .await?;
+            PD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["get_region_leader_by_id"])
+                .observe(duration_to_sec(timer.saturating_elapsed()));
+            check_resp_header(resp.get_header())?;
+            if resp.has_region() && resp.has_leader() {
+                Ok(Some((resp.take_region(), resp.take_leader())))
+            } else {
+                Ok(None)
+            }
+        })
+    }
+
+    pub fn region_heartbeat(
         &mut self,
         term: u64,
         region: metapb::Region,
         leader: metapb::Peer,
         region_stat: RegionStat,
         replication_status: Option<RegionReplicationStatus>,
-    ) -> Result<()> {
+    ) -> PdFuture<()> {
         PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["send"]).inc();
 
         let mut req = RegionHeartbeatRequest::default();
         req.set_term(term);
-        // req.set_header(self.header());
+        req.set_header(self.header());
         req.set_region(region);
         req.set_leader(leader);
         req.set_down_peers(region_stat.down_peers.into());
@@ -312,99 +807,468 @@ impl RpcClient {
         interval.set_end_timestamp(UnixSecs::now().into_inner());
         req.set_interval(interval);
 
-        self.heartbeat_sender
-            .send(req)
-            .map_err(|e| Error::StreamDisconnect(e))
-            .await
+        let last = self.pending_heartbeat.fetch_add(1, Ordering::Relaxed);
+        PD_PENDING_HEARTBEAT_GAUGE.set(last as i64 + 1);
+
+        let mut sender = self.heartbeat_sender.clone();
+        Box::pin(async move {
+            sender
+                .send(req)
+                .map_err(|e| Error::StreamDisconnect(e))
+                .await
+        }) as PdFuture<_>
     }
 
-    async fn get_region_by_id(&mut self, region_id: u64) -> Result<Option<metapb::Region>> {
+    pub fn ask_split(&mut self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
         let timer = Instant::now();
 
-        let mut req = pdpb::GetRegionByIdRequest::default();
-        // req.set_header(self.header());
-        req.set_region_id(region_id);
+        let mut req = pdpb::AskSplitRequest::default();
+        req.set_header(self.header());
+        req.set_region(region);
 
-        let client = self.raw_client.refresh_cache().await;
-        let mut resp = client
-            .stub
-            .get_region_by_id_async_opt(&req, client.call_option())
-            .unwrap_or_else(|e| {
-                panic!("fail to request PD {} err {:?}", "get_region_by_id", e);
-            })
-            .await?;
-        PD_REQUEST_HISTOGRAM_VEC
-            .with_label_values(&["get_region_by_id"])
-            .observe(duration_to_sec(timer.saturating_elapsed()));
-        // check_resp_header(resp.get_header())?;
-        if resp.has_region() {
-            Ok(Some(resp.take_region()))
-        } else {
-            Ok(None)
-        }
+        let mut raw_client = self.raw_client.clone();
+        Box::pin(async move {
+            raw_client.wait_for_ready().await;
+            let resp = raw_client
+                .stub()
+                .ask_split_async_opt(
+                    &req,
+                    raw_client
+                        .call_option()
+                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+                )
+                .unwrap_or_else(|e| {
+                    panic!("fail to request PD {} err {:?}", "ask_split", e);
+                })
+                .await?;
+            PD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["ask_split"])
+                .observe(duration_to_sec(timer.saturating_elapsed()));
+            check_resp_header(resp.get_header())?;
+            Ok(resp)
+        })
     }
 
-    async fn batch_get_tso(&self, count: u32) -> Result<TimeStamp> {
-        let begin = Instant::now();
+    pub fn ask_batch_split(
+        &mut self,
+        region: metapb::Region,
+        count: usize,
+    ) -> PdFuture<pdpb::AskBatchSplitResponse> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::AskBatchSplitRequest::default();
+        req.set_header(self.header());
+        req.set_region(region);
+        req.set_split_count(count as u32);
+
+        let mut raw_client = self.raw_client.clone();
+        Box::pin(async move {
+            raw_client.wait_for_ready().await;
+            let resp = raw_client
+                .stub()
+                .ask_batch_split_async_opt(
+                    &req,
+                    raw_client
+                        .call_option()
+                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+                )
+                .unwrap_or_else(|e| {
+                    panic!("fail to request PD {} err {:?}", "ask_batch_split", e);
+                })
+                .await?;
+            PD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["ask_batch_split"])
+                .observe(duration_to_sec(timer.saturating_elapsed()));
+            check_resp_header(resp.get_header())?;
+            Ok(resp)
+        })
+    }
+
+    pub fn store_heartbeat(
+        &mut self,
+        mut stats: pdpb::StoreStats,
+        store_report: Option<pdpb::StoreReport>,
+        dr_autosync_status: Option<StoreDrAutoSyncStatus>,
+    ) -> PdFuture<pdpb::StoreHeartbeatResponse> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::StoreHeartbeatRequest::default();
+        req.set_header(self.header());
+        stats
+            .mut_interval()
+            .set_end_timestamp(UnixSecs::now().into_inner());
+        req.set_stats(stats);
+        if let Some(report) = store_report {
+            req.set_store_report(report);
+        }
+        if let Some(status) = dr_autosync_status {
+            req.set_dr_autosync_status(status);
+        }
+
+        let mut raw_client = self.raw_client.clone();
+        let feature_gate = self.feature_gate.clone();
+        Box::pin(async move {
+            raw_client.wait_for_ready().await;
+            let resp = raw_client
+                .stub()
+                .store_heartbeat_async_opt(
+                    &req,
+                    raw_client
+                        .call_option()
+                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+                )
+                .unwrap_or_else(|e| {
+                    panic!("fail to request PD {} err {:?}", "store_heartbeat", e);
+                })
+                .await?;
+            PD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["store_heartbeat"])
+                .observe(duration_to_sec(timer.saturating_elapsed()));
+            check_resp_header(resp.get_header())?;
+            match feature_gate.set_version(resp.get_cluster_version()) {
+                Err(_) => warn!("invalid cluster version: {}", resp.get_cluster_version()),
+                Ok(true) => info!("set cluster version to {}", resp.get_cluster_version()),
+                _ => {}
+            };
+            Ok(resp)
+        })
+    }
+
+    pub fn report_batch_split(&mut self, regions: Vec<metapb::Region>) -> PdFuture<()> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::ReportBatchSplitRequest::default();
+        req.set_header(self.header());
+        req.set_regions(regions.into());
+
+        let mut raw_client = self.raw_client.clone();
+        Box::pin(async move {
+            raw_client.wait_for_ready().await;
+            let resp = raw_client
+                .stub()
+                .report_batch_split_async_opt(
+                    &req,
+                    raw_client
+                        .call_option()
+                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+                )
+                .unwrap_or_else(|e| {
+                    panic!("fail to request PD {} err {:?}", "report_batch_split", e);
+                })
+                .await?;
+            PD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["report_batch_split"])
+                .observe(duration_to_sec(timer.saturating_elapsed()));
+            check_resp_header(resp.get_header())?;
+            Ok(())
+        })
+    }
+
+    pub fn scatter_region(&mut self, mut region: RegionInfo) -> Result<()> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["scatter_region"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::ScatterRegionRequest::default();
+        req.set_header(self.header());
+        req.set_region_id(region.get_id());
+        if let Some(leader) = region.leader.take() {
+            req.set_leader(leader);
+        }
+        req.set_region(region.region);
+
+        block_on(self.raw_client.wait_for_ready());
+        let resp = self.raw_client.stub().scatter_region_opt(
+            &req,
+            self.raw_client
+                .call_option()
+                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+        )?;
+        check_resp_header(resp.get_header())
+    }
+
+    pub fn get_gc_safe_point(&mut self) -> PdFuture<u64> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::GetGcSafePointRequest::default();
+        req.set_header(self.header());
+
+        let mut raw_client = self.raw_client.clone();
+        Box::pin(async move {
+            raw_client.wait_for_ready().await;
+            let resp = raw_client
+                .stub()
+                .get_gc_safe_point_async_opt(
+                    &req,
+                    raw_client
+                        .call_option()
+                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+                )
+                .unwrap_or_else(|e| {
+                    panic!("fail to request PD {} err {:?}", "get_gc_saft_point", e);
+                })
+                .await?;
+            PD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["get_gc_saft_point"])
+                .observe(duration_to_sec(timer.saturating_elapsed()));
+            check_resp_header(resp.get_header())?;
+            Ok(resp.get_safe_point())
+        })
+    }
+
+    pub fn get_operator(&mut self, region_id: u64) -> Result<pdpb::GetOperatorResponse> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["get_operator"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::GetOperatorRequest::default();
+        req.set_header(self.header());
+        req.set_region_id(region_id);
+
+        block_on(self.raw_client.wait_for_ready());
+        let resp = self.raw_client.stub().get_operator_opt(
+            &req,
+            self.raw_client
+                .call_option()
+                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+        )?;
+        check_resp_header(resp.get_header())?;
+
+        Ok(resp)
+    }
+
+    pub fn get_tso(&self) -> PdFuture<TimeStamp> {
+        self.batch_get_tso(1)
+    }
+
+    pub fn batch_get_tso(&self, count: u32) -> PdFuture<TimeStamp> {
+        let timer = Instant::now();
         let (tx, rx) = tokio::sync::oneshot::channel();
         let req = TimestampRequest { sender: tx, count };
-        self.tso_sender.send(req);
-        let with_timeout = GLOBAL_TIMER_HANDLE
-            .timeout(
-                rx.compat(),
-                std::time::Instant::now(), // + Duration::from_secs(REQUEST_TIMEOUT),
-            )
-            .compat();
-        let ts = with_timeout.await.map_err(|e| -> Error {
-            if e.is_timer() {
-                box_err!("get timestamp timeout")
-            } else {
-                box_err!("Timestamp channel is dropped")
-            }
-        })?;
-        PD_REQUEST_HISTOGRAM_VEC
-            .with_label_values(&["tso"])
-            .observe(duration_to_sec(begin.saturating_elapsed()));
-        Ok(ts)
+
+        let sender = self.tso_sender.clone();
+        Box::pin(async move {
+            sender
+                .send(req)
+                .map_err(|_| -> Error { box_err!("TimestampRequest channel is closed") })
+                .await?;
+            let with_timeout = GLOBAL_TIMER_HANDLE
+                .timeout(
+                    rx.compat(),
+                    std::time::Instant::now() + Duration::from_secs(REQUEST_TIMEOUT),
+                )
+                .compat();
+            let ts = with_timeout.await.map_err(|e| -> Error {
+                if e.is_timer() {
+                    box_err!("get timestamp timeout")
+                } else {
+                    box_err!("Timestamp channel is dropped")
+                }
+            })?;
+            PD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["tso"])
+                .observe(duration_to_sec(timer.saturating_elapsed()));
+            Ok(ts)
+        })
+    }
+
+    pub fn update_service_safe_point(
+        &mut self,
+        name: String,
+        safe_point: TimeStamp,
+        ttl: Duration,
+    ) -> PdFuture<()> {
+        let timer = Instant::now();
+        let mut req = pdpb::UpdateServiceGcSafePointRequest::default();
+        req.set_header(self.header());
+        req.set_service_id(name.into());
+        req.set_ttl(ttl.as_secs() as _);
+        req.set_safe_point(safe_point.into_inner());
+
+        let mut raw_client = self.raw_client.clone();
+        Box::pin(async move {
+            raw_client.wait_for_ready().await;
+            let resp = raw_client
+                .stub()
+                .update_service_gc_safe_point_async_opt(
+                    &req,
+                    raw_client
+                        .call_option()
+                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+                )
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "fail to request PD {} err {:?}",
+                        "update_service_safe_point", e
+                    );
+                })
+                .await?;
+            PD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["update_service_safe_point"])
+                .observe(duration_to_sec(timer.saturating_elapsed()));
+            check_resp_header(resp.get_header())?;
+            Ok(())
+        })
+    }
+
+    pub fn report_min_resolved_ts(&mut self, store_id: u64, min_resolved_ts: u64) -> PdFuture<()> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::ReportMinResolvedTsRequest::default();
+        req.set_header(self.header());
+        req.set_store_id(store_id);
+        req.set_min_resolved_ts(min_resolved_ts);
+
+        let mut raw_client = self.raw_client.clone();
+        Box::pin(async move {
+            raw_client.wait_for_ready().await;
+            let resp = raw_client
+                .stub()
+                .report_min_resolved_ts_async_opt(
+                    &req,
+                    raw_client
+                        .call_option()
+                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+                )
+                .unwrap_or_else(|e| {
+                    panic!("fail to request PD {} err {:?}", "min_resolved_ts", e);
+                })
+                .await?;
+            PD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["min_resolved_ts"])
+                .observe(duration_to_sec(timer.saturating_elapsed()));
+            check_resp_header(resp.get_header())?;
+            Ok(())
+        })
+    }
+
+    pub fn report_region_buckets(
+        &mut self,
+        bucket_stat: &BucketStat,
+        period: Duration,
+    ) -> PdFuture<()> {
+        PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["send"]).inc();
+
+        let mut buckets = metapb::Buckets::default();
+        buckets.set_region_id(bucket_stat.meta.region_id);
+        buckets.set_version(bucket_stat.meta.version);
+        buckets.set_keys(bucket_stat.meta.keys.clone().into());
+        buckets.set_period_in_ms(period.as_millis() as u64);
+        buckets.set_stats(bucket_stat.stats.clone());
+        let mut req = pdpb::ReportBucketsRequest::default();
+        req.set_header(self.header());
+        req.set_buckets(buckets);
+        req.set_region_epoch(bucket_stat.meta.region_epoch.clone());
+
+        let last = self.pending_bucket.fetch_add(1, Ordering::Relaxed);
+        PD_PENDING_BUCKETS_GAUGE.set(last as i64 + 1);
+
+        let mut sender = self.bucket_sender.clone();
+        Box::pin(async move {
+            sender
+                .send(req)
+                .map_err(|e| Error::StreamDisconnect(e))
+                .await?;
+            Ok(())
+        })
     }
 }
 
 async fn heartbeat_loop(
     mut client: CachedRawClient,
     requests: mpsc::UnboundedReceiver<RegionHeartbeatRequest>,
-    reconnect: mpsc::UnboundedSender<u64>,
+    response_holder: DuplexResponseHolder<RegionHeartbeatResponse>,
+    pending: Arc<AtomicU64>,
+    mut reconnect: mpsc::UnboundedSender<u64>,
 ) {
-    let mut requests_with_flags =
-        requests.map(|r| Ok((r, WriteFlags::default().buffer_hint(false))));
+    let mut last_report = u64::MAX;
+    let mut requests_with_flags = requests.map(|r| {
+        let last = pending.fetch_sub(1, Ordering::Relaxed);
+        // Sender will update pending at every send operation, so as long as
+        // pending task is increasing, pending count should be reported by
+        // sender.
+        if last + 10 < last_report || last == 1 {
+            PD_PENDING_HEARTBEAT_GAUGE.set(last as i64 - 1);
+            last_report = last;
+        }
+        if last > last_report {
+            last_report = last - 1;
+        }
+        fail::fail_point!("region_heartbeat_send_failed", |_| {
+            Err(grpcio::Error::RemoteStopped)
+        });
+        Ok((r, WriteFlags::default().buffer_hint(false)))
+    });
     loop {
-        let c = client.refresh_cache().await;
-        let (mut hb_tx, mut hb_rx) = c
-            .stub
-            .region_heartbeat_opt(c.call_option())
+        client.wait_for_ready().await;
+        let (mut hb_tx, hb_rx) = client
+            .stub()
+            .region_heartbeat_opt(client.call_option())
             .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_heartbeat", e));
-        let receive_and_handle_responses = async move {
-            while let Some(Ok(resp)) = hb_rx.next().await {
-                println!("got");
+        *response_holder.lock().unwrap() = Some(hb_rx);
+        let send_res = hb_tx.send_all(&mut requests_with_flags).await;
+        if send_res.is_ok() {
+            break;
+        }
+        let _ = hb_tx.close().await;
+        reconnect.send(client.cache_version()).await.unwrap();
+    }
+}
+
+async fn bucket_loop(
+    mut client: CachedRawClient,
+    requests: mpsc::UnboundedReceiver<ReportBucketsRequest>,
+    pending: Arc<AtomicU64>,
+    mut reconnect: mpsc::UnboundedSender<u64>,
+) {
+    let mut last_report = u64::MAX;
+    let mut requests_with_flags = requests.map(|r| {
+        let last = pending.fetch_sub(1, Ordering::Relaxed);
+        // Sender will update pending at every send operation, so as long as
+        // pending task is increasing, pending count should be reported by
+        // sender.
+        if last + 10 < last_report || last == 1 {
+            PD_PENDING_BUCKETS_GAUGE.set(last as i64 - 1);
+            last_report = last;
+        }
+        if last > last_report {
+            last_report = last - 1;
+        }
+        Ok((r, WriteFlags::default()))
+    });
+    loop {
+        client.wait_for_ready().await;
+        let (mut bk_tx, bk_rx) = client
+            .stub()
+            .report_buckets_opt(client.call_option())
+            .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "report_buckets", e));
+        select! {
+            send_res = bk_tx.send_all(&mut requests_with_flags).fuse() => {
+                if send_res.is_ok() {
+                    // requests are drained.
+                    break;
+                } else {
+                    warn!("region buckets stream existed: {:?}", send_res);
+                }
             }
-            Ok(())
-        };
-        let (send_res, recv_res): (grpcio::Result<()>, Result<()>) = join!(
-            hb_tx.send_all(&mut requests_with_flags),
-            receive_and_handle_responses
-        );
+            recv_res = bk_rx.fuse() => {
+                warn!("region buckets stream existed: {:?}", recv_res);
+            }
+        }
+        let _ = bk_tx.close().await;
+        reconnect.send(client.cache_version()).await.unwrap();
     }
 }
 
 async fn tso_loop(
+    cluster_id: u64,
     mut client: CachedRawClient,
     mut requests: tokio::sync::mpsc::Receiver<TimestampRequest>,
     mut reconnect: mpsc::UnboundedSender<u64>,
 ) {
     // The `TimestampRequest`s which are waiting for the responses from the PD
     // server
-    let pending_requests = Rc::new(RefCell::new(VecDeque::with_capacity(
-        1, // MAX_PENDING_COUNT
-    )));
+    let pending_requests = Rc::new(RefCell::new(VecDeque::with_capacity(TSO_MAX_PENDING_COUNT)));
 
     // When there are too many pending requests, the `send_request` future will
     // refuse to fetch more requests from the bounded channel. This waker is
@@ -413,7 +1277,7 @@ async fn tso_loop(
     let sending_future_waker = Rc::new(AtomicWaker::new());
 
     let mut request_stream = TsoRequestStream {
-        cluster_id: 0, // cluster_id
+        cluster_id,
         request_rx: &mut requests,
         pending_requests: pending_requests.clone(),
         self_waker: sending_future_waker.clone(),
@@ -421,10 +1285,10 @@ async fn tso_loop(
     .map(Ok);
 
     loop {
-        let c = client.refresh_cache().await;
-        let (mut tso_tx, mut tso_rx) = c
-            .stub
-            .tso_opt(c.call_option())
+        client.wait_for_ready().await;
+        let (mut tso_tx, mut tso_rx) = client
+            .stub()
+            .tso_opt(client.call_option())
             .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_heartbeat", e));
         let pending_requests = pending_requests.clone();
         let sending_future_waker = sending_future_waker.clone();
@@ -434,39 +1298,55 @@ async fn tso_loop(
 
                 // Wake up the sending future blocked by too many pending requests as we are
                 // consuming some of them here.
-                if pending_requests.len() >= 1
-                // MAX_PENDING_COUNT
-                {
+                if pending_requests.len() >= TSO_MAX_PENDING_COUNT {
                     sending_future_waker.wake();
                 }
 
-                // allocate_timestamps(&resp, &mut pending_requests)?;
-                // PD_PENDING_TSO_REQUEST_GAUGE.set(pending_requests.len() as
-                // i64);
+                allocate_timestamps(&resp, &mut pending_requests)?;
+                PD_PENDING_TSO_REQUEST_GAUGE.set(pending_requests.len() as i64);
             }
-            Ok(())
+            Ok::<_, Error>(())
         };
-        let (send_res, recv_res): (grpcio::Result<()>, Result<()>) = join!(
-            tso_tx.send_all(&mut request_stream),
-            receive_and_handle_responses
-        );
+        select! {
+            send_res = tso_tx.send_all(&mut request_stream).fuse() => {
+                if send_res.is_ok() {
+                    // requests are drained.
+                    break;
+                } else {
+                    warn!("tso stream closed: {:?}", send_res);
+                }
+            }
+            recv_res = receive_and_handle_responses.fuse() => {
+                warn!("tso stream closed: {:?}", recv_res);
+            }
+        }
+        let _ = tso_tx.close().await;
+        reconnect.send(client.cache_version()).await.unwrap();
     }
 }
 
-async fn reconnect_loop(mut client: CachedRawClient, mut reconnect: mpsc::UnboundedReceiver<u64>) {
+async fn reconnect_loop(
+    mut client: CachedRawClient,
+    on_reconnect: CallbackHolder,
+    mut reconnect: mpsc::UnboundedReceiver<u64>,
+) {
+    let interval = Duration::from_secs(REQUEST_TIMEOUT);
     loop {
+        while !client.channel().wait_for_connected(interval).await {
+            client.reconnect(true, &on_reconnect).await.unwrap();
+        }
+        let state = ConnectivityState::GRPC_CHANNEL_READY;
         select! {
-            _ = GLOBAL_TIMER_HANDLE
-            .delay(std::time::Instant::now()).compat().fuse() => {
-                client.reconnect_if_needed().await;
+            force = client.channel().wait_for_state_change(state, interval).fuse() => {
+                client.reconnect(force, &on_reconnect).await.unwrap();
             },
             v = reconnect.next() => {
-                if let Some(v) = v {
-                    client.force_reconnect(v).await;
-                } else {
+                if v.is_none() {
                     break;
+                } else if v.unwrap() == client.cache_version() {
+                    client.reconnect(true, &on_reconnect).await.unwrap();
                 }
             }
-        };
+        }
     }
 }

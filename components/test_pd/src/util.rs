@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use pd_client::{Config, RpcClient};
+use pd_client::{Config, RpcClient, RpcClientV2};
 use security::{SecurityConfig, SecurityManager};
 use tikv_util::config::ReadableDuration;
 
@@ -21,6 +21,13 @@ pub fn new_client(eps: Vec<(String, u16)>, mgr: Option<Arc<SecurityManager>>) ->
     let mgr =
         mgr.unwrap_or_else(|| Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap()));
     RpcClient::new(&cfg, None, mgr).unwrap()
+}
+
+pub fn new_client_v2(eps: Vec<(String, u16)>, mgr: Option<Arc<SecurityManager>>) -> RpcClientV2 {
+    let cfg = new_config(eps);
+    let mgr =
+        mgr.unwrap_or_else(|| Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap()));
+    RpcClientV2::new(&cfg, None, mgr).unwrap()
 }
 
 pub fn new_client_with_update_interval(

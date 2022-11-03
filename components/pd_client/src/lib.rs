@@ -25,6 +25,7 @@ use txn_types::TimeStamp;
 
 pub use self::{
     client::RpcClient,
+    client_v2::RpcClient as RpcClientV2,
     config::Config,
     errors::{Error, Result},
     feature_gate::{Feature, FeatureGate},
