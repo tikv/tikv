@@ -320,6 +320,7 @@ mod test {
         log_index: u64,
         region_boundries: Vec<(&[u8], &[u8])>,
         expected_region_epoch: RegionEpoch,
+        expected_derived_index: usize,
     ) {
         let mut splits = BatchSplitRequest::default();
         splits.set_right_derive(right_derived);
@@ -355,6 +356,18 @@ mod test {
                 assert_eq!(state.get_region(), region);
                 let tablet_path = factory.tablet_path(region.id, log_index);
                 assert!(factory.exists_raw(&tablet_path));
+
+                match apply_res {
+                    AdminCmdResult::SplitRegion(SplitResult {
+                        derived_index,
+                        tablet_index,
+                        ..
+                    }) => {
+                        assert_eq!(expected_derived_index, derived_index);
+                        assert_eq!(tablet_index, log_index);
+                    }
+                    _ => panic!(),
+                }
             } else {
                 assert_eq! {
                     region.get_peers().iter().map(|peer| peer.id).collect::<Vec<_>>(),
@@ -512,6 +525,7 @@ mod test {
                     epoch.set_version(4);
                     epoch
                 },
+                0,
             ),
             // region 1 ["", "k09"]
             // After split: region 20 ["", "k01"],
@@ -533,6 +547,7 @@ mod test {
                     epoch.set_version(5);
                     epoch
                 },
+                1,
             ),
             // region 1 ["k01", "k09"]
             // After split: region 30 ["k01", "k02"],
@@ -556,6 +571,7 @@ mod test {
                     epoch.set_version(7);
                     epoch
                 },
+                2,
             ),
             // region 1 ["k03", "k09"]
             // After split: region  1 ["k03", "k07"],
@@ -579,6 +595,7 @@ mod test {
                     epoch.set_version(9);
                     epoch
                 },
+                0,
             ),
         ];
 
@@ -591,6 +608,7 @@ mod test {
             log_index,
             region_boundries,
             expected_epoch,
+            expected_derived_index,
         ) in cases
         {
             assert_split(
@@ -604,6 +622,7 @@ mod test {
                 log_index,
                 region_boundries,
                 expected_epoch,
+                expected_derived_index,
             );
         }
 
