@@ -832,7 +832,7 @@ pub mod test_utils {
             self
         }
 
-        fn prepare_gc(&self, _engine: &RocksEngine) {
+        fn prepare_gc(&self, engine: &RocksEngine) {
             let safe_point = Arc::new(AtomicU64::new(self.safe_point));
             let cfg_tracker = {
                 let mut cfg = GcConfig::default();
@@ -849,10 +849,7 @@ pub mod test_utils {
             };
 
             let mut gc_context_opt = GC_CONTEXT.lock().unwrap();
-            // Building a tablet factory
-            let ops = DbOptions::default();
-            let path = Builder::new().prefix("prepare_gc").tempdir().unwrap();
-            let factory = TestRocksTabletFactory::new(path.path(), ops);
+            let tablet_factory = Arc::new(TestRocksTabletFactory::from_db(engine.clone()));
             *gc_context_opt = Some(GcContext {
                 store_id: 1,
                 safe_point,
@@ -861,7 +858,7 @@ pub mod test_utils {
                 gc_scheduler: self.gc_scheduler.clone(),
                 region_info_provider: Arc::new(MockRegionInfoProvider::new(vec![])),
                 callbacks_on_drop: self.callbacks_on_drop.clone(),
-                tablet_factory: Arc::new(factory),
+                tablet_factory,
             });
         }
 
@@ -995,10 +992,6 @@ pub mod tests {
 
         must_prewrite_put(&mut engine, b"zkey", &value, b"zkey", 120);
         must_commit(&mut engine, b"zkey", 120, 130);
-
-        // GC can't delete the latest version before the safe ponit.
-        gc_runner.safe_point(115).gc(&raw_engine);
-        must_get(&mut engine, b"zkey", 110, &value);
 
         // GC a version will also delete the key on default CF.
         gc_runner.safe_point(200).gc(&raw_engine);

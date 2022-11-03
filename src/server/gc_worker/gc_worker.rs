@@ -1444,11 +1444,6 @@ where
             .ok_or_else(|| box_err!("applied_lock_collector not supported"))
             .and_then(move |c| c.stop_collecting(max_ts, callback))
     }
-
-    pub fn set_feature_gate_verion(&self, version: &str) -> Result<()> {
-        self.feature_gate.set_version(version).unwrap();
-        Ok(())
-    }
 }
 
 #[cfg(any(test, feature = "testexport"))]
@@ -2117,7 +2112,7 @@ mod tests {
         for i in 0..100 {
             let k = format!("k{:02}", i).into_bytes();
 
-            // Stale MVCC-PUTs will be cleaned.
+            // Stale MVCC-PUTs will be cleaned in write CF's compaction filter.
             must_get_none(&mut prefixed_engine, &k, 150);
 
             // However, MVCC-DELETIONs will be kept.
