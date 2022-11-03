@@ -41,10 +41,10 @@ pub fn new_flashback_to_version_read_phase_cmd(
         version,
         start_key.clone(),
         end_key,
-        Some(FlashbackToVersionState::ScanLock {
+        FlashbackToVersionState::ScanLock {
             next_lock_key: start_key,
             key_locks: Vec::with_capacity(0),
-        }),
+        },
         ctx,
     )
 }
@@ -59,7 +59,7 @@ command! {
             version: TimeStamp,
             start_key: Option<Key>,
             end_key: Option<Key>,
-            state: Option<FlashbackToVersionState>,
+            state: FlashbackToVersionState,
         }
 }
 
@@ -92,12 +92,11 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
             }));
         }
         let tag = self.tag().get_str();
-        let cur_state = self.state.unwrap();
         let mut read_again = false;
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &self.ctx);
         // Separate the lock and write flashback to prevent from putting two writes for
         // the same key in a single batch to make the TiCDC panic.
-        let next_state = match cur_state {
+        let next_state = match self.state {
             FlashbackToVersionState::ScanLock { next_lock_key, .. } => {
                 let (mut key_locks, has_remain_locks) = flashback_to_version_read_lock(
                     &mut reader,
@@ -108,13 +107,13 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                 if key_locks.is_empty() && !has_remain_locks {
                     // No more locks to flashback, continue to scan the writes.
                     read_again = true;
-                    Some(FlashbackToVersionState::ScanWrite {
+                    FlashbackToVersionState::ScanWrite {
                         next_write_key: self.start_key.clone(),
                         key_old_writes: Vec::with_capacity(0),
-                    })
+                    }
                 } else {
                     tls_collect_keyread_histogram_vec(tag, key_locks.len() as f64);
-                    Some(FlashbackToVersionState::ScanLock {
+                    FlashbackToVersionState::ScanLock {
                         next_lock_key: if has_remain_locks {
                             // The batch must be full.
                             assert_eq!(key_locks.len(), FLASHBACK_BATCH_SIZE);
@@ -123,7 +122,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                             None
                         },
                         key_locks,
-                    })
+                    }
                 }
             }
             FlashbackToVersionState::ScanWrite { next_write_key, .. } => {
@@ -136,26 +135,22 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     self.commit_ts,
                     statistics,
                 )?;
-                if !key_old_writes.is_empty() {
-                    tls_collect_keyread_histogram_vec(tag, key_old_writes.len() as f64);
-                    Some(FlashbackToVersionState::ScanWrite {
-                        next_write_key: if has_remain_writes {
-                            assert_eq!(key_old_writes.len(), FLASHBACK_BATCH_SIZE);
-                            key_old_writes.pop().map(|(key, _)| key)
-                        } else {
-                            None
-                        },
-                        key_old_writes,
-                    })
-                } else {
-                    None
+                if key_old_writes.is_empty() {
+                    // No more keys to flashback, just return.
+                    return Ok(ProcessResult::Res);
+                }
+                tls_collect_keyread_histogram_vec(tag, key_old_writes.len() as f64);
+                FlashbackToVersionState::ScanWrite {
+                    next_write_key: if has_remain_writes {
+                        assert_eq!(key_old_writes.len(), FLASHBACK_BATCH_SIZE);
+                        key_old_writes.pop().map(|(key, _)| key)
+                    } else {
+                        None
+                    },
+                    key_old_writes,
                 }
             }
         };
-        // No more keys to flashback, just return.
-        if next_state.is_none() {
-            return Ok(ProcessResult::Res);
-        }
         Ok(ProcessResult::NextCommand {
             cmd: if read_again {
                 Command::FlashbackToVersionReadPhase(FlashbackToVersionReadPhase {

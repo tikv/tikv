@@ -103,13 +103,11 @@ pub fn flashback_to_version_read_write<S: Snapshot>(
 pub fn flashback_to_version_lock(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<impl Snapshot>,
-    next_lock_key: &mut Option<Key>,
     key_locks: &Vec<(Key, Lock)>,
-) -> TxnResult<()> {
+) -> TxnResult<Option<Key>> {
     for (key, lock) in key_locks {
         if txn.write_size() >= MAX_TXN_WRITE_SIZE {
-            *next_lock_key = Some(key.clone());
-            break;
+            return Ok(Some(key.clone()));
         }
         // To guarantee rollback with start ts of the locks
         reader.start_ts = lock.ts;
@@ -122,7 +120,7 @@ pub fn flashback_to_version_lock(
             true,
         )?;
     }
-    Ok(())
+    Ok(None)
 }
 
 // To flashback the `CF_WRITE` and `CF_DEFAULT`, we need to write a new MVCC
@@ -136,11 +134,10 @@ pub fn flashback_to_version_lock(
 pub fn flashback_to_version_write(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<impl Snapshot>,
-    next_write_key: &mut Option<Key>,
     key_old_writes: &Vec<(Key, Option<Write>)>,
     start_ts: TimeStamp,
     commit_ts: TimeStamp,
-) -> TxnResult<()> {
+) -> TxnResult<Option<Key>> {
     for (key, old_write) in key_old_writes {
         #[cfg(feature = "failpoints")]
         {
@@ -153,8 +150,7 @@ pub fn flashback_to_version_write(
             }
         }
         if txn.write_size() >= MAX_TXN_WRITE_SIZE {
-            *next_write_key = Some(key.clone());
-            break;
+            return Ok(Some(key.clone()));
         }
         let new_write = if let Some(old_write) = old_write {
             // If it's not a short value and it's a `WriteType::Put`, we should put the old
@@ -183,7 +179,7 @@ pub fn flashback_to_version_write(
         };
         txn.put_write(key.clone(), commit_ts, new_write.as_ref().to_bytes());
     }
-    Ok(())
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -229,13 +225,7 @@ pub mod tests {
         let mut txn = MvccTxn::new(start_ts, cm.clone());
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut snap_reader = SnapshotReader::new_with_ctx(version, snapshot, &ctx);
-        flashback_to_version_lock(
-            &mut txn,
-            &mut snap_reader,
-            &mut Some(key.clone()),
-            &key_locks,
-        )
-        .unwrap();
+        flashback_to_version_lock(&mut txn, &mut snap_reader, &key_locks).unwrap();
         let mut rows = txn.modifies.len();
         write(engine, &ctx, txn.into_modifies());
         // Flashback the writes.
@@ -256,7 +246,6 @@ pub mod tests {
         flashback_to_version_write(
             &mut txn,
             &mut snap_reader,
-            &mut Some(key),
             &key_old_writes,
             start_ts,
             commit_ts,

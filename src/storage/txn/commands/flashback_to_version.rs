@@ -29,7 +29,7 @@ command! {
             version: TimeStamp,
             start_key: Option<Key>,
             end_key: Option<Key>,
-            state: Option<FlashbackToVersionState>,
+            state: FlashbackToVersionState,
         }
 }
 
@@ -39,7 +39,7 @@ impl CommandExt for FlashbackToVersion {
     request_type!(KvFlashbackToVersion);
 
     fn gen_lock(&self) -> latch::Lock {
-        match self.state.as_ref().unwrap() {
+        match &self.state {
             FlashbackToVersionState::ScanLock { key_locks, .. } => {
                 latch::Lock::new(key_locks.iter().map(|(key, _)| key))
             }
@@ -50,7 +50,7 @@ impl CommandExt for FlashbackToVersion {
     }
 
     fn write_bytes(&self) -> usize {
-        match self.state.as_ref().unwrap() {
+        match &self.state {
             FlashbackToVersionState::ScanLock { key_locks, .. } => key_locks
                 .iter()
                 .map(|(key, _)| key.as_encoded().len())
@@ -71,22 +71,31 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
         );
         let mut txn = MvccTxn::new(TimeStamp::zero(), context.concurrency_manager);
         // The state must be `ScanLock` or `ScanWrite` here.
-        match self.state.as_mut().unwrap() {
+        match self.state {
             FlashbackToVersionState::ScanLock {
-                next_lock_key,
-                key_locks,
-            } => flashback_to_version_lock(&mut txn, &mut reader, next_lock_key, key_locks)?,
+                ref mut next_lock_key,
+                ref key_locks,
+            } => {
+                if let Some(new_next_lock_key) =
+                    flashback_to_version_lock(&mut txn, &mut reader, key_locks)?
+                {
+                    *next_lock_key = Some(new_next_lock_key);
+                }
+            }
             FlashbackToVersionState::ScanWrite {
-                next_write_key,
-                key_old_writes,
-            } => flashback_to_version_write(
-                &mut txn,
-                &mut reader,
-                next_write_key,
-                key_old_writes,
-                self.start_ts,
-                self.commit_ts,
-            )?,
+                ref mut next_write_key,
+                ref key_old_writes,
+            } => {
+                if let Some(new_next_write_key) = flashback_to_version_write(
+                    &mut txn,
+                    &mut reader,
+                    key_old_writes,
+                    self.start_ts,
+                    self.commit_ts,
+                )? {
+                    *next_write_key = Some(new_next_write_key);
+                }
+            }
         }
         let rows = txn.modifies.len();
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
