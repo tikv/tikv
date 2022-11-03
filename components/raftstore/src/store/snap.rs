@@ -1492,6 +1492,11 @@ impl SnapManager {
         path.to_str().unwrap().to_string()
     }
 
+    pub fn get_path_for_tablet_checkpoint(&self, key: &SnapKey) -> PathBuf {
+        let prefix = format!("{}_{}", SNAP_GEN_PREFIX, key);
+        PathBuf::from(&self.core.base).join(&prefix)
+    }
+
     #[inline]
     pub fn has_registered(&self, key: &SnapKey) -> bool {
         self.core.registry.rl().contains_key(key)

@@ -25,7 +25,7 @@ pub use self::{
     cleanup_sst::{Runner as CleanupSstRunner, Task as CleanupSstTask},
     compact::{Runner as CompactRunner, Task as CompactTask},
     consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask},
-    metrics::TLS_LOCAL_READ_METRICS,
+    metrics::{TLS_LOCAL_READ_METRICS, SNAP_COUNTER, SNAP_HISTOGRAM},
     pd::{
         new_change_peer_v2_request, FlowStatistics, FlowStatsReporter, HeartbeatTask,
         Runner as PdRunner, Task as PdTask,

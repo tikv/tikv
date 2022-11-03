@@ -31,7 +31,7 @@ use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_serverpb::{RaftSnapshotData, RegionLocalState};
 use protobuf::Message;
 use raft::eraftpb::Snapshot;
-use raftstore::store::{metrics::STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER, ReadTask};
+use raftstore::store::{metrics::STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER, ReadTask, GenSnapRes};
 use slog::{error, info};
 use tikv_util::{box_try, worker::Scheduler};
 
@@ -100,7 +100,7 @@ impl Debug for GenSnapTask {
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
-    pub fn on_snapshot_generated(&mut self, snapshot: Box<Snapshot>) {
+    pub fn on_snapshot_generated(&mut self, snapshot: GenSnapRes) {
         if self.storage_mut().on_snapshot_generated(snapshot) {
             self.raft_group_mut().ping();
             self.set_has_ready();
@@ -114,6 +114,14 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     /// Will schedule a task to read worker and then generate a snapshot
     /// asynchronously.
     pub fn schedule_gen_snapshot(&mut self, snap_task: GenSnapTask) {
+        if self.tombstone() {
+            snap_task.canceled.store(true, Ordering::SeqCst);
+            error!(
+                self.logger,
+                "cancel generating snapshot because it's already destroyed";
+            );
+            return;
+        }
         // Flush before do snapshot.
         if snap_task.canceled.load(Ordering::SeqCst) {
             return;
@@ -267,7 +275,12 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     /// Try to switch snap state to generated. only `Generating` can switch to
     /// `Generated`.
     ///  TODO: make the snap state more clearer, the snapshot must be consumed.
-    pub fn on_snapshot_generated(&self, snap: Box<Snapshot>) -> bool {
+    pub fn on_snapshot_generated(&self, res: GenSnapRes) -> bool {
+        if !res.success{
+            self.cancel_generating_snap(None);
+            return false;
+        }
+        let snap = res.snapshot;
         let mut snap_state = self.snap_state_mut();
         let SnapState::Generating {
             ref canceled,

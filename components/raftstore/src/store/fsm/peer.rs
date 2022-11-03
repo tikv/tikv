@@ -1849,6 +1849,7 @@ where
                 .update_async_fetch_res(low, Some(res));
         }
         self.fsm.peer.raft_group.on_entries_fetched(context);
+        // self.fsm.peer.raft_group.set_snapshot_state();
         // clean the async fetch result immediately if not used to free memory
         self.fsm.peer.mut_store().update_async_fetch_res(low, None);
         self.fsm.has_ready = true;

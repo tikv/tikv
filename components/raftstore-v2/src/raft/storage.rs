@@ -370,7 +370,7 @@ mod tests {
     };
     use raft::{eraftpb::Snapshot as RaftSnapshot, Error as RaftError, StorageError};
     use raftstore::store::{
-        AsyncReadNotifier, FetchedLogs, ReadRunner, ReadTask, RAFT_INIT_LOG_INDEX,
+        AsyncReadNotifier, FetchedLogs, GenSnapRes, ReadRunner, ReadTask, RAFT_INIT_LOG_INDEX,
         RAFT_INIT_LOG_TERM,
     };
     use slog::o;
@@ -382,11 +382,11 @@ mod tests {
 
     #[derive(Clone)]
     pub struct TestRouter {
-        ch: SyncSender<Box<Snapshot>>,
+        ch: SyncSender<GenSnapRes>,
     }
 
     impl TestRouter {
-        pub fn new() -> (Self, Receiver<Box<Snapshot>>) {
+        pub fn new() -> (Self, Receiver<GenSnapRes>) {
             let (tx, rx) = sync_channel(1);
             (Self { ch: tx }, rx)
         }
@@ -397,8 +397,8 @@ mod tests {
             unreachable!();
         }
 
-        fn notify_snapshot_generated(&self, _region_id: u64, snapshot: Box<Snapshot>) {
-            self.ch.send(snapshot).unwrap();
+        fn notify_snapshot_generated(&self, _region_id: u64, res: GenSnapRes) {
+            self.ch.send(res).unwrap();
         }
     }
 
