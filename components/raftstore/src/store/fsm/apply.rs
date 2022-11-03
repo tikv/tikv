@@ -89,8 +89,7 @@ use crate::{
         peer_storage::{write_initial_apply_state, write_peer_state},
         util::{
             self, admin_cmd_epoch_lookup, check_flashback_state, check_region_epoch,
-            compare_region_epoch, ChangePeerI, ConfChangeKind, KeysInfoFormatter2,
-            LatencyInspector,
+            compare_region_epoch, ChangePeerI, ConfChangeKind, KeysInfoFormatter, LatencyInspector,
         },
         Config, RegionSnapshot, RegionTask, WriteCallback,
     },
@@ -2421,7 +2420,7 @@ where
             "region_id" => self.region_id(),
             "peer_id" => self.id(),
             "region" => ?derived,
-            "boundaries" => %KeysInfoFormatter2(boundaries.iter()),
+            "boundaries" => %KeysInfoFormatter(boundaries.iter()),
         );
 
         let split_reqs = req.get_splits();
