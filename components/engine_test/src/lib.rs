@@ -120,30 +120,40 @@ pub mod kv {
     pub struct GenericTabletFactory<T> {
         root_path: PathBuf,
         db_opt: DbOptions,
+        cf_opts: Vec<(&'static str, KvTestCfOptions)>,
         root_db: Arc<Mutex<Option<T>>>,
     }
 
     impl<T: KvEngine + KvEngineConstructorExt> GenericTabletFactory<T> {
-        pub fn new(root_path: &Path, db_opt: DbOptions) -> Self {
+        pub fn new(
+            root_path: &Path,
+            db_opt: DbOptions,
+            cf_opts: Vec<(&'static str, KvTestCfOptions)>,
+        ) -> Self {
             Self {
                 root_path: root_path.to_path_buf(),
                 db_opt,
+                cf_opts,
                 root_db: Arc::new(Mutex::default()),
             }
         }
 
         fn create_tablet(&self, tablet_path: &Path) -> Result<T> {
-            let cf_opts = ALL_CFS
-                .iter()
-                .map(|cf| (*cf, KvTestCfOptions::new()))
-                .collect();
-            T::new_kv_engine_opt(tablet_path.to_str().unwrap(), self.db_opt.clone(), cf_opts)
+            T::new_kv_engine_opt(
+                tablet_path.to_str().unwrap(),
+                self.db_opt.clone(),
+                self.cf_opts.clone(),
+            )
         }
 
         pub fn from_db(db: T) -> Self {
             Self {
                 root_path: Path::new(db.path()).to_path_buf(),
                 db_opt: DbOptions::default(),
+                cf_opts: ALL_CFS
+                    .iter()
+                    .map(|cf| (*cf, KvTestCfOptions::new()))
+                    .collect(),
                 root_db: Arc::new(Mutex::new(Some(db))),
             }
         }
@@ -235,9 +245,13 @@ pub mod kv {
     }
 
     impl<T: KvEngine + KvEngineConstructorExt> GenericTabletFactoryV2<T> {
-        pub fn new(root_path: &Path, db_opt: DbOptions) -> Self {
+        pub fn new(
+            root_path: &Path,
+            db_opt: DbOptions,
+            cf_opts: Vec<(&'static str, KvTestCfOptions)>,
+        ) -> Self {
             Self {
-                inner: GenericTabletFactory::new(root_path, db_opt),
+                inner: GenericTabletFactory::new(root_path, db_opt, cf_opts),
                 registry: Arc::default(),
             }
         }

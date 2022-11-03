@@ -460,9 +460,11 @@ mod tests {
         raft_engine.consume(&mut wb, true).unwrap();
         // building a tablet factory
         let ops = DbOptions::default();
+        let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
         let factory = Arc::new(TestTabletFactoryV2::new(
             path.path().join("tablet").as_path(),
             ops,
+            cf_opts,
         ));
         // create tablet with region_id 1
         let tablet = factory
