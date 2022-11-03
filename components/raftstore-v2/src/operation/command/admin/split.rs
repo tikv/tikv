@@ -133,7 +133,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
         let mut derived_req = SplitRequest::default();
         derived_req.new_region_id = region.id;
-        derived_req.new_peer_ids = region.get_peers().iter().map(|p| p.get_id()).collect();
         let derived_req = &[derived_req];
 
         let right_derive = split_reqs.get_right_derive();
@@ -154,6 +153,9 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 new_region.set_start_key(start_key.to_vec());
                 new_region.set_end_key(end_key.to_vec());
                 new_region.set_peers(region.get_peers().to_vec().into());
+                // If the `req` is the `derived_req`, the peers are already set correctly and
+                // the following loop will not be executed due to the empty `new_peer_ids` in
+                // the `derived_req`
                 for (peer, peer_id) in new_region
                     .mut_peers()
                     .iter_mut()
