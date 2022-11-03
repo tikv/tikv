@@ -359,8 +359,8 @@ impl From<FlashbackToVersionRequest> for TypedCommand<()> {
             req.get_start_ts().into(),
             req.get_commit_ts().into(),
             req.get_version().into(),
-            Some(Key::from_raw(req.get_start_key())),
-            Some(Key::from_raw(req.get_end_key())),
+            Key::from_raw(req.get_start_key()),
+            Key::from_raw(req.get_end_key()),
             req.take_context(),
         )
     }

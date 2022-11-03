@@ -31,8 +31,8 @@ pub fn new_flashback_to_version_read_phase_cmd(
     start_ts: TimeStamp,
     commit_ts: TimeStamp,
     version: TimeStamp,
-    start_key: Option<Key>,
-    end_key: Option<Key>,
+    start_key: Key,
+    end_key: Key,
     ctx: Context,
 ) -> TypedCommand<()> {
     FlashbackToVersionReadPhase::new(
@@ -42,8 +42,8 @@ pub fn new_flashback_to_version_read_phase_cmd(
         start_key.clone(),
         end_key,
         FlashbackToVersionState::ScanLock {
-            next_lock_key: start_key,
-            key_locks: Vec::with_capacity(0),
+            next_lock_key: Some(start_key),
+            key_locks: Vec::new(),
         },
         ctx,
     )
@@ -57,8 +57,8 @@ command! {
             start_ts: TimeStamp,
             commit_ts: TimeStamp,
             version: TimeStamp,
-            start_key: Option<Key>,
-            end_key: Option<Key>,
+            start_key: Key,
+            end_key: Key,
             state: FlashbackToVersionState,
         }
 }
@@ -101,15 +101,15 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                 let (mut key_locks, has_remain_locks) = flashback_to_version_read_lock(
                     &mut reader,
                     &next_lock_key,
-                    &self.end_key,
+                    &Some(self.end_key.clone()),
                     statistics,
                 )?;
                 if key_locks.is_empty() && !has_remain_locks {
                     // No more locks to flashback, continue to scan the writes.
                     read_again = true;
                     FlashbackToVersionState::ScanWrite {
-                        next_write_key: self.start_key.clone(),
-                        key_old_writes: Vec::with_capacity(0),
+                        next_write_key: Some(self.start_key.clone()),
+                        key_old_writes: Vec::new(),
                     }
                 } else {
                     tls_collect_keyread_histogram_vec(tag, key_locks.len() as f64);
@@ -129,7 +129,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                 let (mut key_old_writes, has_remain_writes) = flashback_to_version_read_write(
                     &mut reader,
                     &next_write_key,
-                    &self.end_key,
+                    &Some(self.end_key.clone()),
                     self.version,
                     self.start_ts,
                     self.commit_ts,

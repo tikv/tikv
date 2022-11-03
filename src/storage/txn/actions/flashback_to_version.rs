@@ -231,7 +231,7 @@ pub mod tests {
         // Flashback the writes.
         let (key_old_writes, has_remain_writes) = flashback_to_version_read_write(
             &mut reader,
-            &Some(key.clone()),
+            &Some(key),
             &None,
             version,
             start_ts,

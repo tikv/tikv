@@ -27,8 +27,8 @@ command! {
             start_ts: TimeStamp,
             commit_ts: TimeStamp,
             version: TimeStamp,
-            start_key: Option<Key>,
-            end_key: Option<Key>,
+            start_key: Key,
+            end_key: Key,
             state: FlashbackToVersionState,
         }
 }
