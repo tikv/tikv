@@ -24,6 +24,8 @@
 //! Split finish:
 //! - todo
 
+use std::collections::VecDeque;
+
 use engine_traits::{
     Checkpointer, KvEngine, OpenOptions, RaftEngine, TabletFactory, CF_DEFAULT, SPLIT_PREFIX,
 };
@@ -38,7 +40,7 @@ use raftstore::{
     store::{
         fsm::apply::{extract_split_keys, validate_batch_split},
         metrics::PEER_ADMIN_CMD_COUNTER,
-        util::{self, KeysInfoFormatter},
+        util::{self, KeysInfoFormatter2},
         PeerStat, ProposalContext, RAFT_INIT_LOG_INDEX,
     },
     Result,
@@ -106,15 +108,18 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     ) -> Result<(AdminResponse, AdminCmdResult)> {
         PEER_ADMIN_CMD_COUNTER.batch_split.all.inc();
 
-        let mut derived = self.region_state().get_region().clone();
+        let mut boundaries: Vec<&[u8]> = Vec::default();
+        boundaries.push(self.region_state().get_region().get_start_key());
+        extract_split_keys(req, self.region_state().get_region(), &mut boundaries)?;
+        boundaries.push(self.region_state().get_region().get_end_key());
 
-        let mut keys = extract_split_keys(req, self.region_state().get_region())?;
+        let mut derived = self.region_state().get_region().clone();
 
         info!(
             self.logger,
             "split region";
             "region" => ?derived,
-            "keys" => %KeysInfoFormatter(keys.iter()),
+            "boundaries" => %KeysInfoFormatter2(boundaries.iter()),
         );
 
         let split_reqs = req.get_splits();
@@ -122,43 +127,44 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         let new_version = derived.get_region_epoch().get_version() + new_region_cnt as u64;
         derived.mut_region_epoch().set_version(new_version);
 
+        let mut derived_req = SplitRequest::default();
+        derived_req.new_region_id = derived.id;
+        derived_req.new_peer_ids = derived.get_peers().iter().map(|p| p.get_id()).collect();
+        let derived_req = &[derived_req];
+
         let right_derive = split_reqs.get_right_derive();
-        let mut regions = Vec::with_capacity(new_region_cnt + 1);
-        // Note that the split requests only contain ids for new regions, so we need
-        // to handle new regions and old region separately.
-        if right_derive {
-            // So the range of new regions is [old_start_key, split_key1, ...,
-            // last_split_key].
-            keys.push_front(derived.get_start_key().to_vec());
+        let reqs = if right_derive {
+            split_reqs.get_requests().iter().chain(derived_req)
         } else {
-            // So the range of new regions is [split_key1, ..., last_split_key,
-            // old_end_key].
-            keys.push_back(derived.get_end_key().to_vec());
-            derived.set_end_key(keys.front().unwrap().to_vec());
-            regions.push(derived.clone());
-        }
+            derived_req.iter().chain(split_reqs.get_requests())
+        };
 
-        // Init split regions' meta info
-        for req in split_reqs.get_requests() {
-            let mut new_region = Region::default();
-            new_region.set_id(req.get_new_region_id());
-            new_region.set_region_epoch(derived.get_region_epoch().to_owned());
-            new_region.set_start_key(keys.pop_front().unwrap());
-            new_region.set_end_key(keys.front().unwrap().to_vec());
-            new_region.set_peers(derived.get_peers().to_vec().into());
-            for (peer, peer_id) in new_region
-                .mut_peers()
-                .iter_mut()
-                .zip(req.get_new_peer_ids())
-            {
-                peer.set_id(*peer_id);
-            }
-            regions.push(new_region);
-        }
+        let regions: Vec<_> = boundaries
+            .array_windows::<2>()
+            .zip(reqs)
+            .map(|([start_key, end_key], req)| {
+                let mut new_region = Region::default();
+                new_region.set_id(req.get_new_region_id());
+                new_region.set_region_epoch(derived.get_region_epoch().to_owned());
+                new_region.set_start_key(start_key.to_vec());
+                new_region.set_end_key(end_key.to_vec());
+                new_region.set_peers(derived.get_peers().to_vec().into());
+                for (peer, peer_id) in new_region
+                    .mut_peers()
+                    .iter_mut()
+                    .zip(req.get_new_peer_ids())
+                {
+                    peer.set_id(*peer_id);
+                }
+                new_region
+            })
+            .collect();
 
+        // Amend the boundary of the derived region
         if right_derive {
-            derived.set_start_key(keys.pop_front().unwrap());
-            regions.push(derived.clone());
+            derived.set_start_key(regions.last().unwrap().get_start_key().to_vec());
+        } else {
+            derived.set_end_key(regions[0].get_end_key().to_vec());
         }
 
         // We will create checkpoint of the current tablet for both derived region and

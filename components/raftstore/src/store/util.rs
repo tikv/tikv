@@ -740,6 +740,7 @@ pub fn conf_state_from_region(region: &metapb::Region) -> ConfState {
     conf_state
 }
 
+// Key is owned
 pub struct KeysInfoFormatter<
     'a,
     I: std::iter::DoubleEndedIterator<Item = &'a Vec<u8>>
@@ -753,6 +754,37 @@ impl<
         + std::iter::ExactSizeIterator<Item = &'a Vec<u8>>
         + Clone,
 > fmt::Display for KeysInfoFormatter<'a, I>
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut it = self.0.clone();
+        match it.len() {
+            0 => write!(f, "(no key)"),
+            1 => write!(f, "key {}", log_wrappers::Value::key(it.next().unwrap())),
+            _ => write!(
+                f,
+                "{} keys range from {} to {}",
+                it.len(),
+                log_wrappers::Value::key(it.next().unwrap()),
+                log_wrappers::Value::key(it.next_back().unwrap())
+            ),
+        }
+    }
+}
+
+// Key is borrowed
+pub struct KeysInfoFormatter2<
+    'a,
+    I: std::iter::DoubleEndedIterator<Item = &'a &'a [u8]>
+        + std::iter::ExactSizeIterator<Item = &'a &'a [u8]>
+        + Clone,
+>(pub I);
+
+impl<
+    'a,
+    I: std::iter::DoubleEndedIterator<Item = &'a &'a [u8]>
+        + std::iter::ExactSizeIterator<Item = &'a &'a [u8]>
+        + Clone,
+> fmt::Display for KeysInfoFormatter2<'a, I>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut it = self.0.clone();

@@ -8,6 +8,7 @@
 #![feature(hash_drain_filter)]
 #![feature(let_else)]
 #![recursion_limit = "256"]
+#![feature(array_windows)]
 
 #[cfg(test)]
 extern crate test;
