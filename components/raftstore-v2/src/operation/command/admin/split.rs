@@ -320,7 +320,7 @@ mod test {
         log_index: u64,
         region_boundries: Vec<(&[u8], &[u8])>,
         expected_region_epoch: RegionEpoch,
-    ) -> HashMap<u64, Region> {
+    ) {
         let mut splits = BatchSplitRequest::default();
         splits.set_right_derive(right_derived);
 
@@ -367,11 +367,6 @@ mod test {
                 assert!(factory.exists_raw(&tablet_path));
             }
         }
-
-        regions
-            .iter()
-            .map(|region| (region.id, region.clone()))
-            .collect()
     }
 
     #[test]
@@ -497,7 +492,9 @@ mod test {
         assert!(err.to_string().contains("id count"), "{:?}", err);
 
         let cases = vec![
-            // After split: region 1 ["", "k09"], region 10 ["k09", "k10"]
+            // region 1["", "k10"]
+            // After split: region  1 ["", "k09"],
+            //              region 10 ["k09", "k10"]
             (
                 1,
                 false,
@@ -516,7 +513,9 @@ mod test {
                     epoch
                 },
             ),
-            // After split: region 20 ["", "k01"], region 1 ["k01", "k09"]
+            // region 1 ["", "k09"]
+            // After split: region 20 ["", "k01"],
+            //               region 1 ["k01", "k09"]
             (
                 1,
                 true,
@@ -535,8 +534,10 @@ mod test {
                     epoch
                 },
             ),
-            // After split: region 30 ["k01", "k02"], region 40 ["k02", "k03"],
-            //              region 1 ["k03", "k09"]
+            // region 1 ["k01", "k09"]
+            // After split: region 30 ["k01", "k02"],
+            //              region 40 ["k02", "k03"],
+            //              region  1 ["k03", "k09"]
             (
                 1,
                 true,
@@ -556,8 +557,10 @@ mod test {
                     epoch
                 },
             ),
-            // After split: region 1 ["k03", "k07"], region 50 ["k07", "k08"],
-            //              region 60["k08", "k09"]
+            // region 1 ["k03", "k09"]
+            // After split: region  1 ["k03", "k07"],
+            //              region 50 ["k07", "k08"],
+            //              region 60 ["k08", "k09"]
             (
                 1,
                 false,
@@ -590,7 +593,7 @@ mod test {
             expected_epoch,
         ) in cases
         {
-            let regions = assert_split(
+            assert_split(
                 &mut apply,
                 &factory,
                 parent_id,
@@ -604,8 +607,8 @@ mod test {
             );
         }
 
-        // Split will checkpoint tablet, so if there are some writes before split, they
-        // should be flushed immediately.
+        // Split will create checkpoint tablet, so if there are some writes before
+        // split, they should be flushed immediately.
         apply.apply_put(CF_DEFAULT, b"k04", b"v4").unwrap();
         assert!(!apply.write_batch_mut().as_ref().unwrap().is_empty());
         splits.mut_requests().clear();
