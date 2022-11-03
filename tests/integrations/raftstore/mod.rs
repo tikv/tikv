@@ -11,6 +11,7 @@ mod test_flashback;
 mod test_hibernate;
 mod test_joint_consensus;
 mod test_lease_read;
+mod test_many_regions;
 mod test_merge;
 mod test_multi;
 mod test_prevote;

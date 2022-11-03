@@ -5967,6 +5967,7 @@ dependencies = [
  "tidb_query_executors",
  "tidb_query_expr",
  "tikv",
+ "tikv_alloc",
  "tikv_util",
  "time",
  "tipb",
