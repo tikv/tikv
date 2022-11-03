@@ -117,6 +117,10 @@ where
             .create()
             .unwrap();
         importer.start_switch_mode_check(&threads, engine.clone());
+
+        let memory_limit = crate::config::TikvConfig::suggested_memory_usage_limit();
+        info!("memory limit when apply"; "mem" => memory_limit.0);
+
         ImportSstService {
             cfg,
             engine,
@@ -476,14 +480,14 @@ where
         let start = Instant::now();
         let mut start_apply = Instant::now();
         let raft_size = self.raft_entry_max_size;
-        let need_mem = self.calculate_memory(&req);
-        let mem_in_use = self.mem_use.fetch_add(need_mem, Ordering::SeqCst);
-        let serve_is_busy = if mem_in_use > self.memory_limit.0 {
-            true
-        }else{
-            false
-        };
-        defer! {{self.mem_use.fetch_sub(need_mem, Ordering::SeqCst);}}
+        // let need_mem = self.calculate_memory(&req);
+        // let mem_in_use = self.mem_use.fetch_add(need_mem, Ordering::SeqCst);
+        // let serve_is_busy = if mem_in_use > self.memory_limit.0 {
+        //     true
+        // }else{
+        //     false
+        // };
+        // defer! {{self.mem_use.fetch_sub(need_mem, Ordering::SeqCst);}}
 
         let handle_task = async move {
             // Records how long the apply task waits to be scheduled.
@@ -493,19 +497,19 @@ where
             let mut futs = vec![];
             let mut apply_resp = ApplyResponse::default();
             let context = req.take_context();
-            if serve_is_busy {
-                let mut err = kvproto::errorpb::Error::new();
-                err.set_server_is_busy(kvproto::errorpb::ServerIsBusy::new());
+            // if serve_is_busy {
+            //     let mut err = kvproto::errorpb::Error::new();
+            //     err.set_server_is_busy(kvproto::errorpb::ServerIsBusy::new());
 
-                let mut import_err = kvproto::import_sstpb::Error::default();
-                import_err.set_message(String::from("the server is busy"));
-                import_err.set_store_error(err);
+            //     let mut import_err = kvproto::import_sstpb::Error::default();
+            //     import_err.set_message(String::from("the server is busy"));
+            //     import_err.set_store_error(err);
 
-                apply_resp.set_error(import_err);
-                let tmp = Ok(apply_resp);
-                crate::send_rpc_response!(tmp, sink, label, timer);
-                return
-            }
+            //     apply_resp.set_error(import_err);
+            //     let tmp = Ok(apply_resp);
+            //     crate::send_rpc_response!(tmp, sink, label, timer);
+            //     return
+            // }
 
             let result = (|| -> Result<()> {
                 let mut cmd_reqs = vec![];
@@ -515,14 +519,14 @@ where
                 let mut req_write_size = 0_u64;
                 let mut range: Option<Range> = None;
                 let mut rules = req.take_rewrite_rules();
-                let mut metas = req.get_metas().to_vec();
+                let mut metas = req.take_metas();
                 // For compatibility with old requests.
                 if req.has_meta() {
                     metas.push(req.take_meta());
                     rules.push(req.take_rewrite_rule());
                 }
 
-                for (i, meta) in req.get_metas().iter().enumerate() {
+                for (i, meta) in metas.iter().enumerate() {
                     let (reqs, req_size) = if meta.get_cf() == CF_DEFAULT {
                         (&mut reqs_default, &mut req_default_size)
                     } else {
