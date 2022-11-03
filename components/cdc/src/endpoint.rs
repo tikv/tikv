@@ -1538,8 +1538,9 @@ mod tests {
                 updated_cfg.min_ts_interval = ReadableDuration::secs(0);
             }
             let diff = cfg.diff(&updated_cfg);
+            let origin_min_ts_interval = ep.config.min_ts_interval;
             ep.run(Task::ChangeConfig(diff));
-            assert_eq!(ep.config.min_ts_interval, ReadableDuration::secs(1));
+            assert_eq!(ep.config.min_ts_interval, origin_min_ts_interval);
             assert_eq!(ep.config.hibernate_regions_compatible, true);
 
             {
