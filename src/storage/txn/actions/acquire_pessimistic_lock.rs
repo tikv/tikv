@@ -9,7 +9,10 @@ use crate::storage::{
         metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
         ErrorInner, MvccTxn, Result as MvccResult, SnapshotReader,
     },
-    txn::actions::check_data_constraint::check_data_constraint,
+    txn::{
+        actions::check_data_constraint::check_data_constraint, sched_pool::tls_can_enable,
+        scheduler::LAST_CHANGE_TS,
+    },
     types::PessimisticLockKeyResult,
     Snapshot,
 };
@@ -262,7 +265,9 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             check_data_constraint(reader, should_not_exist, &write, commit_ts, &key)?;
         }
 
-        (last_change_ts, versions_to_last_change) = write.next_last_change_info(commit_ts);
+        if tls_can_enable(LAST_CHANGE_TS) {
+            (last_change_ts, versions_to_last_change) = write.next_last_change_info(commit_ts);
+        }
 
         // Load value if locked_with_conflict, so that when the client (TiDB) need to
         // read the value during statement retry, it will be possible to read the value
@@ -1612,11 +1617,19 @@ pub mod tests {
     #[test]
     fn test_calculate_last_change_ts() {
         use engine_traits::CF_WRITE;
+        use pd_client::FeatureGate;
+
+        use crate::storage::txn::sched_pool::set_tls_feature_gate;
 
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let key = b"k";
 
-        // Latest version is a PUT
+        let feature_gate = FeatureGate::default();
+        feature_gate.set_version("6.4.0").unwrap();
+        set_tls_feature_gate(feature_gate.clone());
+
+        // Latest version is a PUT, but last_change_ts is enabled with cluster version
+        // higher than 6.5.0.
         let write = Write::new(WriteType::Put, 15.into(), Some(b"value".to_vec()));
         engine
             .put_cf(
@@ -1626,6 +1639,13 @@ pub mod tests {
                 write.as_ref().to_bytes(),
             )
             .unwrap();
+        must_succeed(&mut engine, key, key, 10, 30);
+        let lock = must_pessimistic_locked(&mut engine, key, 10, 30);
+        assert_eq!(lock.last_change_ts, TimeStamp::zero());
+        assert_eq!(lock.versions_to_last_change, 0);
+        pessimistic_rollback::tests::must_success(&mut engine, key, 10, 30);
+        // Set cluster version to 6.5.0, last_change_ts should work now.
+        feature_gate.set_version("6.5.0").unwrap();
         must_succeed(&mut engine, key, key, 10, 30);
         let lock = must_pessimistic_locked(&mut engine, key, 10, 30);
         assert_eq!(lock.last_change_ts, 20.into());
