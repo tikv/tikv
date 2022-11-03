@@ -263,6 +263,7 @@ mod test {
     use engine_traits::{CfOptionsExt, Peekable, WriteBatch, ALL_CFS};
     use futures::channel::mpsc::unbounded;
     use kvproto::{
+        metapb::RegionEpoch,
         raft_cmdpb::{AdminCmdType, BatchSplitRequest, PutRequest, RaftCmdResponse, SplitRequest},
         raft_serverpb::{PeerState, RaftApplyState, RegionLocalState},
     };
@@ -311,13 +312,14 @@ mod test {
     fn assert_split(
         apply: &mut Apply<engine_test::kv::KvTestEngine, MockReporter>,
         factory: &Arc<TestTabletFactoryV2>,
-        region_to_split: &Region,
+        parent_id: u64,
         right_derived: bool,
         new_region_ids: Vec<u64>,
         split_keys: Vec<Vec<u8>>,
         children_peers: Vec<Vec<u64>>,
         log_index: u64,
         region_boundries: Vec<(&[u8], &[u8])>,
+        expected_region_epoch: RegionEpoch,
     ) -> HashMap<u64, Region> {
         let mut splits = BatchSplitRequest::default();
         splits.set_right_derive(right_derived);
@@ -341,16 +343,13 @@ mod test {
         let regions = resp.get_splits().get_regions();
         assert!(regions.len() == region_boundries.len());
 
-        let mut epoch = region_to_split.get_region_epoch().clone();
-        epoch.version += children_peers.len() as u64;
-
         let mut child_idx = 0;
         for (i, region) in regions.iter().enumerate() {
             assert_eq!(region.get_start_key().to_vec(), region_boundries[i].0);
             assert_eq!(region.get_end_key().to_vec(), region_boundries[i].1);
-            assert_eq!(*region.get_region_epoch(), epoch);
+            assert_eq!(*region.get_region_epoch(), expected_region_epoch);
 
-            if region.id == region_to_split.id {
+            if region.id == parent_id {
                 let state = apply.region_state();
                 assert_eq!(state.tablet_index, log_index);
                 assert_eq!(state.get_region(), region);
@@ -497,63 +496,113 @@ mod test {
         // All requests should be checked.
         assert!(err.to_string().contains("id count"), "{:?}", err);
 
-        let mut log_index = 10;
-        // After split: region 1 ["", "k09"], region 10 ["k09", "k10"]
-        let regions = assert_split(
-            &mut apply,
-            &factory,
-            &region,
-            false,
-            vec![10],
-            vec![b"k09".to_vec()],
-            vec![vec![11, 12, 13]],
-            log_index,
-            vec![(b"", b"k09"), (b"k09", b"k10")],
-        );
+        let cases = vec![
+            // After split: region 1 ["", "k09"], region 10 ["k09", "k10"]
+            (
+                1,
+                false,
+                vec![10],
+                vec![b"k09".to_vec()],
+                vec![vec![11, 12, 13]],
+                10,
+                {
+                    let boundaries: Vec<(&[u8], &[u8])> = vec![(b"", b"k09"), (b"k09", b"k10")];
+                    boundaries
+                },
+                {
+                    let mut epoch = RegionEpoch::new();
+                    epoch.set_conf_ver(0);
+                    epoch.set_version(4);
+                    epoch
+                },
+            ),
+            // After split: region 20 ["", "k01"], region 1 ["k01", "k09"]
+            (
+                1,
+                true,
+                vec![20],
+                vec![b"k01".to_vec()],
+                vec![vec![21, 22, 23]],
+                20,
+                {
+                    let boundaries: Vec<(&[u8], &[u8])> = vec![(b"", b"k01"), (b"k01", b"k09")];
+                    boundaries
+                },
+                {
+                    let mut epoch = RegionEpoch::new();
+                    epoch.set_conf_ver(0);
+                    epoch.set_version(5);
+                    epoch
+                },
+            ),
+            // After split: region 30 ["k01", "k02"], region 40 ["k02", "k03"],
+            //              region 1 ["k03", "k09"]
+            (
+                1,
+                true,
+                vec![30, 40],
+                vec![b"k02".to_vec(), b"k03".to_vec()],
+                vec![vec![31, 32, 33], vec![41, 42, 43]],
+                30,
+                {
+                    let boundaries: Vec<(&[u8], &[u8])> =
+                        vec![(b"k01", b"k02"), (b"k02", b"k03"), (b"k03", b"k09")];
+                    boundaries
+                },
+                {
+                    let mut epoch = RegionEpoch::new();
+                    epoch.set_conf_ver(0);
+                    epoch.set_version(7);
+                    epoch
+                },
+            ),
+            // After split: region 1 ["k03", "k07"], region 50 ["k07", "k08"],
+            //              region 60["k08", "k09"]
+            (
+                1,
+                false,
+                vec![50, 60],
+                vec![b"k07".to_vec(), b"k08".to_vec()],
+                vec![vec![51, 52, 53], vec![61, 62, 63]],
+                40,
+                {
+                    let boundaries: Vec<(&[u8], &[u8])> =
+                        vec![(b"k03", b"k07"), (b"k07", b"k08"), (b"k08", b"k09")];
+                    boundaries
+                },
+                {
+                    let mut epoch = RegionEpoch::new();
+                    epoch.set_conf_ver(0);
+                    epoch.set_version(9);
+                    epoch
+                },
+            ),
+        ];
 
-        log_index = 20;
-        // After split: region 20 ["", "k01"], region 1 ["k01", "k09"]
-        let regions = assert_split(
-            &mut apply,
-            &factory,
-            regions.get(&1).unwrap(),
-            true,
-            vec![20],
-            vec![b"k01".to_vec()],
-            vec![vec![21, 22, 23]],
+        for (
+            parent_id,
+            right_derive,
+            new_region_ids,
+            split_keys,
+            children_peers,
             log_index,
-            vec![(b"", b"k01"), (b"k01", b"k09")],
-        );
-
-        log_index = 30;
-        // After split: region 30 ["k01", "k02"], region 40 ["k02", "k03"],
-        //              region 1 ["k03", "k09"]
-        let regions = assert_split(
-            &mut apply,
-            &factory,
-            regions.get(&1).unwrap(),
-            true,
-            vec![30, 40],
-            vec![b"k02".to_vec(), b"k03".to_vec()],
-            vec![vec![31, 32, 33], vec![41, 42, 43]],
-            log_index,
-            vec![(b"k01", b"k02"), (b"k02", b"k03"), (b"k03", b"k09")],
-        );
-
-        // After split: region 1 ["k03", "k07"], region 50 ["k07", "k08"],
-        //              region 60["k08", "k09"]
-        log_index = 40;
-        let regions = assert_split(
-            &mut apply,
-            &factory,
-            regions.get(&1).unwrap(),
-            false,
-            vec![50, 60],
-            vec![b"k07".to_vec(), b"k08".to_vec()],
-            vec![vec![51, 52, 53], vec![61, 62, 63]],
-            log_index,
-            vec![(b"k03", b"k07"), (b"k07", b"k08"), (b"k08", b"k09")],
-        );
+            region_boundries,
+            expected_epoch,
+        ) in cases
+        {
+            let regions = assert_split(
+                &mut apply,
+                &factory,
+                parent_id,
+                right_derive,
+                new_region_ids,
+                split_keys,
+                children_peers,
+                log_index,
+                region_boundries,
+                expected_epoch,
+            );
+        }
 
         // Split will checkpoint tablet, so if there are some writes before split, they
         // should be flushed immediately.
