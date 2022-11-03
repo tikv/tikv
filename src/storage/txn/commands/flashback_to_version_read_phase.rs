@@ -87,17 +87,16 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     &self.end_key,
                     statistics,
                 )?;
-                let next_state;
-                if key_locks.is_empty() && !has_remain_locks {
+                let next_state = if key_locks.is_empty() && !has_remain_locks {
                     // No more locks to flashback, continue to scan the writes.
-                    next_state = Some(FlashbackToVersionState::ScanWrite {
+                    read_again = true;
+                    Some(FlashbackToVersionState::ScanWrite {
                         next_write_key: self.start_write_key.clone(),
                         key_old_writes: Vec::with_capacity(0),
-                    });
-                    read_again = true;
+                    })
                 } else {
                     tls_collect_keyread_histogram_vec(tag, key_locks.len() as f64);
-                    next_state = Some(FlashbackToVersionState::ScanLock {
+                    Some(FlashbackToVersionState::ScanLock {
                         next_lock_key: if has_remain_locks {
                             // The batch must be full.
                             assert_eq!(key_locks.len(), FLASHBACK_BATCH_SIZE);
@@ -106,8 +105,8 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                             None
                         },
                         key_locks,
-                    });
-                }
+                    })
+                };
                 next_state
             }
             FlashbackToVersionState::ScanWrite { next_write_key, .. } => {
@@ -120,10 +119,9 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     self.commit_ts,
                     statistics,
                 )?;
-                let mut next_state = None;
-                if !key_old_writes.is_empty() {
+                let next_state = if !key_old_writes.is_empty() {
                     tls_collect_keyread_histogram_vec(tag, key_old_writes.len() as f64);
-                    next_state = Some(FlashbackToVersionState::ScanWrite {
+                    Some(FlashbackToVersionState::ScanWrite {
                         next_write_key: if has_remain_writes {
                             assert_eq!(key_old_writes.len(), FLASHBACK_BATCH_SIZE);
                             key_old_writes.pop().map(|(key, _)| key)
@@ -131,7 +129,9 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                             None
                         },
                         key_old_writes,
-                    });
+                    })
+                } else {
+                    None
                 };
                 next_state
             }
