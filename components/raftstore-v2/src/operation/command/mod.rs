@@ -49,6 +49,7 @@ use tikv_util::{box_err, time::monotonic_raw_now};
 use crate::{
     batch::StoreContext,
     fsm::{ApplyFsm, ApplyResReporter, PeerFsmDelegate},
+    operation::GenSnapTask,
     raft::{Apply, Peer},
     router::{ApplyRes, ApplyTask, CmdResChannel, PeerMsg},
 };
@@ -120,8 +121,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let mailbox = store_ctx.router.mailbox(self.region_id()).unwrap();
         let tablet = self.tablet().clone();
         let logger = self.logger.clone();
-        let (apply_scheduler, mut apply_fsm) =
-            ApplyFsm::new(self.peer().clone(), region_state, mailbox, tablet, logger);
+        let read_scheduler = self.storage().read_scheduler();
+        let (apply_scheduler, mut apply_fsm) = ApplyFsm::new(
+            self.peer().clone(),
+            region_state,
+            mailbox,
+            tablet,
+            read_scheduler,
+            logger,
+        );
+
         store_ctx
             .apply_pool
             .spawn(async move { apply_fsm.handle_all_tasks().await })
