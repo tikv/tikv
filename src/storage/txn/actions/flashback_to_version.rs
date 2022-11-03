@@ -32,7 +32,6 @@ pub fn flashback_to_version_read_lock<S: Snapshot>(
 
 pub fn flashback_to_version_read_write<S: Snapshot>(
     reader: &mut MvccReader<S>,
-    key_locks_len: usize,
     next_write_key: &Option<Key>,
     end_key: &Option<Key>,
     flashback_version: TimeStamp,
@@ -42,19 +41,15 @@ pub fn flashback_to_version_read_write<S: Snapshot>(
 ) -> TxnResult<(Vec<(Key, Option<Write>)>, bool)> {
     if next_write_key.is_none() {
         return Ok((vec![], false));
-    } else if key_locks_len >= FLASHBACK_BATCH_SIZE {
-        // The batch is full, we need to read the writes in the next batch later.
-        return Ok((vec![], true));
     }
     // To flashback the data, we need to get all the latest keys first by scanning
     // every unique key in `CF_WRITE` and to get its corresponding old MVCC write
     // record if exists.
-    let batch_size = FLASHBACK_BATCH_SIZE - key_locks_len;
-    let mut key_old_writes = Vec::with_capacity(batch_size);
+    let mut key_old_writes = Vec::with_capacity(FLASHBACK_BATCH_SIZE);
     let mut has_remain_writes = true;
     let mut next_write_key = next_write_key.clone();
     // Try to read as many writes as possible in one batch.
-    while key_old_writes.len() < batch_size && has_remain_writes {
+    while key_old_writes.len() < FLASHBACK_BATCH_SIZE && has_remain_writes {
         let key_ts_old_writes;
         (key_ts_old_writes, has_remain_writes) = reader.scan_writes(
             next_write_key.as_ref(),
@@ -63,7 +58,7 @@ pub fn flashback_to_version_read_write<S: Snapshot>(
             // No need to find an old version for the key if its latest `commit_ts` is smaller
             // than or equal to the version.
             |key| key.decode_ts().unwrap_or(TimeStamp::zero()) > flashback_version,
-            batch_size - key_old_writes.len(),
+            FLASHBACK_BATCH_SIZE - key_old_writes.len(),
         )?;
         statistics.add(&reader.statistics);
         // If `has_remain_writes` is true, it means that the batch is full and we may
@@ -210,7 +205,6 @@ pub mod tests {
         assert!(!has_remain_locks);
         let (key_old_writes, has_remain_writes) = flashback_to_version_read_write(
             &mut reader,
-            key_locks.len(),
             &Some(key.clone()),
             &None,
             version,

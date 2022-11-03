@@ -66,30 +66,35 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
             &self.end_key,
             statistics,
         )?;
-        // Scan the writes.
-        let (mut key_old_writes, has_remain_writes) = flashback_to_version_read_write(
-            &mut reader,
-            key_locks.len(),
-            &self.next_write_key,
-            &self.end_key,
-            self.version,
-            self.start_ts,
-            self.commit_ts,
-            statistics,
-        )?;
+        // Scan the writes only if there is no more locks to unlock, otherwise, there
+        // might be two writes in a single batch which will make the TiCDC panic.
+        let (mut key_old_writes, mut has_remain_writes) = (Vec::with_capacity(0), true);
+        if key_locks.is_empty() && !has_remain_locks {
+            (key_old_writes, has_remain_writes) = flashback_to_version_read_write(
+                &mut reader,
+                &self.next_write_key,
+                &self.end_key,
+                self.version,
+                self.start_ts,
+                self.commit_ts,
+                statistics,
+            )?;
+        }
         tls_collect_keyread_histogram_vec(
             self.tag().get_str(),
             (key_locks.len() + key_old_writes.len()) as f64,
         );
-        // Check the next lock and write keys.
+        // Check the next lock key.
         let next_lock_key = if has_remain_locks {
+            assert_eq!(key_locks.len(), FLASHBACK_BATCH_SIZE);
             key_locks.pop().map(|(key, _)| key)
         } else {
             None
         };
+        // Check the next write key.
         let next_write_key = match (has_remain_writes, key_old_writes.is_empty()) {
             (true, false) => {
-                assert_eq!(key_old_writes.len(), FLASHBACK_BATCH_SIZE - key_locks.len());
+                assert_eq!(key_old_writes.len(), FLASHBACK_BATCH_SIZE);
                 key_old_writes.pop().map(|(key, _)| key)
             }
             // We haven't read any write yet, so we need to read the writes in the next
