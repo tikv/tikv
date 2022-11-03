@@ -24,7 +24,7 @@ elif [[ $M == "testnew" ]]; then
     export ENGINE_LABEL_VALUE=tiflash
     export RUST_BACKTRACE=full
     export ENABLE_FEATURES="test-engine-kv-rocksdb test-engine-raft-raft-engine"
-    cargo check --workspace --features="$ENABLE_FEATURES"
+    cargo check --package proxy_server --features="$ENABLE_FEATURES"
     # tests based on new-mock-engine-store, with compat for new proxy
     cargo test --package proxy_tests --test proxy normal::store
     cargo test --package proxy_tests --test proxy normal::region

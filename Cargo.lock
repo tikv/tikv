@@ -30,6 +30,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d2e7343e7fc9de883d1b0341e0b13970f764c14101234857d2ddafa1cb1cac2"
 
 [[package]]
+name = "afl"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59206260f98d163b3ca42fb29fe551dbcda1d43cf70a244066b2a0666a8fb2a9"
+dependencies = [
+ "cc",
+ "clap",
+ "rustc_version 0.2.3",
+ "xdg",
+]
+
+[[package]]
 name = "ahash"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -67,18 +79,30 @@ checksum = "7825f6833612eb2414095684fcf6c635becf3ce97fe48cf6421321e93bfbd53c"
 [[package]]
 name = "api_version"
 version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "bitflags",
  "codec",
  "engine_traits",
  "kvproto",
  "match-template",
+ "panic_hook",
  "thiserror",
  "tikv_alloc",
  "tikv_util",
  "txn_types",
 ]
+
+[[package]]
+name = "arbitrary"
+version = "0.4.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "db55d72333851e17d572bec876e390cd3b11eb1ef53ae821dd9f3b653d2b4569"
+
+[[package]]
+name = "arbitrary"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29d47fbf90d5149a107494b15a7dc8d69b351be2db3bb9691740e88ec17fd880"
 
 [[package]]
 name = "arc-swap"
@@ -250,7 +274,6 @@ checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
 [[package]]
 name = "aws"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "async-trait",
  "base64",
@@ -270,6 +293,7 @@ dependencies = [
  "rusoto_core",
  "rusoto_credential",
  "rusoto_kms",
+ "rusoto_mock",
  "rusoto_s3",
  "rusoto_sts",
  "slog",
@@ -278,13 +302,12 @@ dependencies = [
  "tikv_util",
  "tokio",
  "url",
- "uuid",
+ "uuid 0.8.2",
 ]
 
 [[package]]
 name = "azure"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "async-trait",
  "azure_core",
@@ -327,7 +350,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "url",
- "uuid",
+ "uuid 0.8.2",
 ]
 
 [[package]]
@@ -372,7 +395,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "url",
- "uuid",
+ "uuid 0.8.2",
 ]
 
 [[package]]
@@ -393,7 +416,6 @@ dependencies = [
 [[package]]
 name = "backup"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "api_version",
  "async-channel",
@@ -422,11 +444,13 @@ dependencies = [
  "prometheus",
  "raft",
  "raftstore",
+ "rand 0.8.3",
  "security",
  "serde",
  "serde_derive",
  "slog",
  "slog-global",
+ "tempfile",
  "thiserror",
  "tidb_query_common",
  "tikv",
@@ -441,7 +465,6 @@ dependencies = [
 [[package]]
 name = "backup-stream"
 version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "async-compression",
  "async-trait",
@@ -451,6 +474,7 @@ dependencies = [
  "crossbeam",
  "crossbeam-channel",
  "dashmap",
+ "engine_panic",
  "engine_rocks",
  "engine_traits",
  "error_code",
@@ -473,10 +497,15 @@ dependencies = [
  "protobuf",
  "raft",
  "raftstore",
+ "rand 0.8.3",
  "regex",
  "resolved_ts",
  "slog",
  "slog-global",
+ "tempdir",
+ "tempfile",
+ "test_raftstore",
+ "test_util",
  "thiserror",
  "tidb_query_datatype",
  "tikv",
@@ -488,7 +517,9 @@ dependencies = [
  "tokio-util 0.7.2",
  "tonic",
  "txn_types",
- "uuid",
+ "url",
+ "uuid 0.8.2",
+ "walkdir",
  "yatp",
 ]
 
@@ -501,9 +532,9 @@ checksum = "904dfeac50f3cdaba28fc6f57fdcddb75f49ed61346676a78c4ffe55877802fd"
 [[package]]
 name = "batch-system"
 version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "collections",
+ "criterion",
  "crossbeam",
  "derive_more",
  "fail",
@@ -518,6 +549,26 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
 ]
+
+[[package]]
+name = "bcc"
+version = "0.0.30"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5dbbe5cc2887bc0bc8506b26dcd4c41d1b54bdf4ff1de8e12d404deee60e4ec"
+dependencies = [
+ "bcc-sys",
+ "bitflags",
+ "byteorder",
+ "libc 0.2.132",
+ "regex",
+ "thiserror",
+]
+
+[[package]]
+name = "bcc-sys"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42d3c07869b846ba3306739375e9ed2f8055a8759fcf7f72ab7bf3bc4df38b9b"
 
 [[package]]
 name = "bindgen"
@@ -675,9 +726,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cargo_metadata"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46e3374c604fb39d1a2f35ed5e4a4e30e60d01fab49446e08f1b3e9a90aef202"
+dependencies = [
+ "semver 0.9.0",
+ "serde",
+ "serde_derive",
+ "serde_json",
+]
+
+[[package]]
 name = "case_macros"
 version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 
 [[package]]
 name = "cast"
@@ -688,10 +750,10 @@ checksum = "926013f2860c46252efceabb19f4a6b308197505082c609025aa6706c011d427"
 [[package]]
 name = "causal_ts"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "api_version",
  "async-trait",
+ "criterion",
  "engine_rocks",
  "engine_traits",
  "enum_dispatch",
@@ -730,13 +792,13 @@ dependencies = [
 [[package]]
 name = "cdc"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "api_version",
  "bitflags",
  "causal_ts",
  "collections",
  "concurrency_manager",
+ "criterion",
  "crossbeam",
  "engine_rocks",
  "engine_traits",
@@ -761,6 +823,10 @@ dependencies = [
  "semver 1.0.4",
  "slog",
  "slog-global",
+ "tempfile",
+ "test_pd_client",
+ "test_raftstore",
+ "test_util",
  "thiserror",
  "tikv",
  "tikv_kv",
@@ -850,11 +916,11 @@ dependencies = [
 [[package]]
 name = "cloud"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "async-trait",
  "derive_more",
  "error_code",
+ "fail",
  "futures-io",
  "kvproto",
  "lazy_static",
@@ -878,11 +944,14 @@ dependencies = [
 [[package]]
 name = "codec"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "byteorder",
+ "bytes",
  "error_code",
  "libc 0.2.132",
+ "panic_hook",
+ "protobuf",
+ "rand 0.8.3",
  "static_assertions",
  "thiserror",
  "tikv_alloc",
@@ -891,7 +960,6 @@ dependencies = [
 [[package]]
 name = "collections"
 version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "fxhash",
  "tikv_alloc",
@@ -900,12 +968,15 @@ dependencies = [
 [[package]]
 name = "concurrency_manager"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
+ "criterion",
  "crossbeam-skiplist",
  "fail",
+ "futures 0.3.15",
  "kvproto",
  "parking_lot 0.12.0",
+ "rand 0.8.3",
+ "tikv_alloc",
  "tikv_util",
  "tokio",
  "txn_types",
@@ -923,7 +994,6 @@ dependencies = [
 [[package]]
 name = "coprocessor_plugin_api"
 version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "async-trait",
  "atomic",
@@ -945,6 +1015,15 @@ name = "core-foundation-sys"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea221b5284a47e40033bf9b66f35f984ec0ea2931eb03505246cd27a963f981b"
+
+[[package]]
+name = "cpp_demangle"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eeaa953eaad386a53111e47172c2fedba671e5684c8dd601a5f474f4f118710f"
+dependencies = [
+ "cfg-if 1.0.0",
+]
 
 [[package]]
 name = "cpu-time"
@@ -988,7 +1067,7 @@ dependencies = [
  "clap",
  "criterion-plot",
  "csv",
- "itertools",
+ "itertools 0.10.0",
  "lazy_static",
  "num-traits",
  "oorandom",
@@ -1030,7 +1109,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d00996de9f2f7559f7f4dc286073197f83e92256a59ed395f9aac01fe717da57"
 dependencies = [
  "cast",
- "itertools",
+ "itertools 0.10.0",
 ]
 
 [[package]]
@@ -1226,11 +1305,11 @@ dependencies = [
 
 [[package]]
 name = "debugid"
-version = "0.7.2"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f91cf5a8c2f2097e2a32627123508635d47ce10563d999ec1a95addf08b502ba"
+checksum = "bef552e6f588e446098f6ba40d89ac146c8c7b64aade83c051ee00bb5d2bc18d"
 dependencies = [
- "uuid",
+ "uuid 1.2.1",
 ]
 
 [[package]]
@@ -1265,6 +1344,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dirs"
+version = "4.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca3aa72a6f96ea37bbc5aa912f6788242832f75369bdfdadcb0e38423f100059"
+dependencies = [
+ "dirs-sys",
+]
+
+[[package]]
 name = "dirs-next"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1272,6 +1360,17 @@ checksum = "b98cf8ebf19c3d1b223e151f99a4f9f0690dca41414773390fc824184ac833e1"
 dependencies = [
  "cfg-if 1.0.0",
  "dirs-sys-next",
+]
+
+[[package]]
+name = "dirs-sys"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b1d1d91c932ef41c0f2663aa8b0ca0342d444d842c06914aa0a7e352d0bada6"
+dependencies = [
+ "libc 0.2.132",
+ "redox_users",
+ "winapi 0.3.9",
 ]
 
 [[package]]
@@ -1323,7 +1422,6 @@ dependencies = [
 [[package]]
 name = "encryption"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "async-trait",
  "byteorder",
@@ -1340,6 +1438,7 @@ dependencies = [
  "hex 0.4.2",
  "kvproto",
  "lazy_static",
+ "matches",
  "online_config",
  "openssl",
  "prometheus",
@@ -1349,16 +1448,18 @@ dependencies = [
  "serde_derive",
  "slog",
  "slog-global",
+ "tempfile",
+ "test_util",
  "thiserror",
  "tikv_alloc",
  "tikv_util",
  "tokio",
+ "toml",
 ]
 
 [[package]]
 name = "encryption_export"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "async-trait",
  "aws",
@@ -1370,15 +1471,16 @@ dependencies = [
  "kvproto",
  "openssl",
  "protobuf",
+ "rust-ini",
  "slog",
  "slog-global",
+ "structopt",
  "tikv_util",
 ]
 
 [[package]]
 name = "engine_panic"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "engine_traits",
  "kvproto",
@@ -1392,7 +1494,6 @@ dependencies = [
 [[package]]
 name = "engine_rocks"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "api_version",
  "case_macros",
@@ -1412,6 +1513,7 @@ dependencies = [
  "prometheus-static-metric",
  "protobuf",
  "raft",
+ "rand 0.8.3",
  "regex",
  "rocksdb",
  "serde",
@@ -1423,6 +1525,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "time",
+ "toml",
  "tracker",
  "txn_types",
 ]
@@ -1430,13 +1533,14 @@ dependencies = [
 [[package]]
 name = "engine_rocks_helper"
 version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "engine_rocks",
+ "engine_test",
  "engine_traits",
  "fail",
  "futures 0.3.15",
  "keys",
+ "kvproto",
  "lazy_static",
  "pd_client",
  "prometheus",
@@ -1444,6 +1548,7 @@ dependencies = [
  "raftstore",
  "slog",
  "slog-global",
+ "tempfile",
  "tikv_util",
 ]
 
@@ -1474,7 +1579,7 @@ dependencies = [
  "getset",
  "grpcio-health",
  "into_other",
- "itertools",
+ "itertools 0.10.0",
  "keys",
  "kvproto",
  "lazy_static",
@@ -1508,14 +1613,13 @@ dependencies = [
  "tokio",
  "tokio-timer",
  "tracker",
- "uuid",
+ "uuid 0.8.2",
  "yatp",
 ]
 
 [[package]]
 name = "engine_test"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "collections",
  "encryption",
@@ -1574,7 +1678,6 @@ dependencies = [
 [[package]]
 name = "engine_traits"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "case_macros",
  "error_code",
@@ -1585,11 +1688,13 @@ dependencies = [
  "protobuf",
  "raft",
  "serde",
+ "serde_derive",
  "slog",
  "slog-global",
  "thiserror",
  "tikv_alloc",
  "tikv_util",
+ "toml",
  "tracker",
  "txn_types",
 ]
@@ -1597,7 +1702,6 @@ dependencies = [
 [[package]]
 name = "engine_traits_tests"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "engine_test",
  "engine_traits",
@@ -1667,7 +1771,6 @@ dependencies = [
 [[package]]
 name = "error_code"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "grpcio",
  "kvproto",
@@ -1683,7 +1786,7 @@ version = "0.7.2"
 source = "git+https://github.com/pingcap/etcd-client?rev=e0321a1990ee561cf042973666c0db61c8d82364#e0321a1990ee561cf042973666c0db61c8d82364"
 dependencies = [
  "http",
- "prost",
+ "prost 0.8.0",
  "tokio",
  "tokio-stream",
  "tonic",
@@ -1699,9 +1802,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f7531096570974c3a9dcf9e4b8e1cede1ec26cf5046219fb3b9d897503b9be59"
 
 [[package]]
+name = "example_coprocessor_plugin"
+version = "0.1.0"
+dependencies = [
+ "coprocessor_plugin_api",
+]
+
+[[package]]
 name = "external_storage"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "async-compression",
  "async-trait",
@@ -1709,19 +1818,27 @@ dependencies = [
  "encryption",
  "engine_traits",
  "fail",
+ "ffi-support",
  "file_system",
  "futures 0.3.15",
  "futures-executor",
  "futures-io",
  "futures-util",
+ "grpcio",
  "kvproto",
  "lazy_static",
+ "libloading",
+ "matches",
  "openssl",
  "prometheus",
+ "protobuf",
  "rand 0.8.3",
  "rusoto_core",
+ "rust-ini",
  "slog",
  "slog-global",
+ "structopt",
+ "tempfile",
  "tikv_alloc",
  "tikv_util",
  "tokio",
@@ -1732,7 +1849,6 @@ dependencies = [
 [[package]]
 name = "external_storage_export"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "async-compression",
  "async-trait",
@@ -1742,11 +1858,32 @@ dependencies = [
  "encryption",
  "engine_traits",
  "external_storage",
+ "ffi-support",
+ "file_system",
+ "futures 0.3.15",
+ "futures-executor",
  "futures-io",
  "futures-util",
  "gcp",
+ "grpcio",
  "kvproto",
+ "lazy_static",
+ "libc 0.2.132",
+ "libloading",
+ "matches",
+ "nix 0.24.1",
+ "once_cell",
+ "protobuf",
+ "rust-ini",
+ "signal-hook",
+ "slog",
+ "slog-global",
+ "slog-term",
+ "structopt",
+ "tempfile",
  "tikv_util",
+ "tokio",
+ "tokio-util 0.7.2",
  "url",
 ]
 
@@ -1768,16 +1905,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f35ce9c8fb9891c75ceadbc330752951a4e369b50af10775955aeb9af3eee34b"
 
 [[package]]
+name = "ffi-support"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "27838c6815cfe9de2d3aeb145ffd19e565f577414b33f3bdbf42fe040e9e0ff6"
+dependencies = [
+ "lazy_static",
+ "log",
+]
+
+[[package]]
 name = "file_system"
 version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
+ "bcc",
  "collections",
  "crc32fast",
  "crossbeam-utils 0.8.8",
  "fs2",
  "lazy_static",
  "libc 0.2.132",
+ "maligned",
  "online_config",
  "openssl",
  "parking_lot 0.12.0",
@@ -1788,10 +1936,22 @@ dependencies = [
  "slog",
  "slog-global",
  "strum 0.20.0",
+ "tempfile",
  "thread_local",
  "tikv_alloc",
  "tikv_util",
  "tokio",
+]
+
+[[package]]
+name = "filedescriptor"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7199d965852c3bac31f779ef99cbb4537f80e952e2d6aa0ffeb30cce00f4f46e"
+dependencies = [
+ "libc 0.2.132",
+ "thiserror",
+ "winapi 0.3.9",
 ]
 
 [[package]]
@@ -2043,6 +2203,51 @@ dependencies = [
 ]
 
 [[package]]
+name = "fuzz"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "cargo_metadata",
+ "lazy_static",
+ "regex",
+ "structopt",
+]
+
+[[package]]
+name = "fuzz-targets"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "byteorder",
+ "tidb_query_datatype",
+ "tikv_util",
+]
+
+[[package]]
+name = "fuzzer-afl"
+version = "0.0.1"
+dependencies = [
+ "afl",
+ "fuzz-targets",
+]
+
+[[package]]
+name = "fuzzer-honggfuzz"
+version = "0.0.1"
+dependencies = [
+ "fuzz-targets",
+ "honggfuzz",
+]
+
+[[package]]
+name = "fuzzer-libfuzzer"
+version = "0.0.1"
+dependencies = [
+ "fuzz-targets",
+ "libfuzzer-sys",
+]
+
+[[package]]
 name = "fxhash"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2052,9 +2257,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "gag"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a713bee13966e9fbffdf7193af71d54a6b35a0bb34997cd6c9519ebeb5005972"
+dependencies = [
+ "filedescriptor",
+ "tempfile",
+]
+
+[[package]]
 name = "gcp"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "async-trait",
  "cloud",
@@ -2063,6 +2277,7 @@ dependencies = [
  "hyper",
  "hyper-tls",
  "kvproto",
+ "matches",
  "slog",
  "slog-global",
  "tame-gcs",
@@ -2290,6 +2505,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "honggfuzz"
+version = "0.5.55"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "848e9c511092e0daa0a35a63e8e6e475a3e8f870741448b9f6028d69b142f18e"
+dependencies = [
+ "arbitrary 1.2.0",
+ "lazy_static",
+ "memmap2",
+ "rustc_version 0.4.0",
+]
+
+[[package]]
 name = "http"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2351,6 +2578,24 @@ dependencies = [
  "tower-service",
  "tracing",
  "want",
+]
+
+[[package]]
+name = "hyper-openssl"
+version = "0.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d6ee5d7a8f718585d1c3c61dfde28ef5b0bb14734b4db13f5ada856cdc6c612b"
+dependencies = [
+ "http",
+ "hyper",
+ "linked_hash_set",
+ "once_cell",
+ "openssl",
+ "openssl-sys",
+ "parking_lot 0.12.0",
+ "tokio",
+ "tokio-openssl",
+ "tower-layer",
 ]
 
 [[package]]
@@ -2461,7 +2706,6 @@ dependencies = [
 [[package]]
 name = "into_other"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "engine_traits",
  "kvproto",
@@ -2490,6 +2734,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a69dd5e3613374e74da81c251750153abe3bd0ad17641ea63d43d1e21d0dbd4d"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "itertools"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "284f18f85651fe11e8a991b2adb42cb078325c996ed026d994719efcfca1d54b"
+dependencies = [
+ "either",
 ]
 
 [[package]]
@@ -2555,11 +2808,11 @@ dependencies = [
 [[package]]
 name = "keys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "byteorder",
  "kvproto",
  "log_wrappers",
+ "panic_hook",
  "thiserror",
  "tikv_alloc",
 ]
@@ -2665,6 +2918,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8371e4e5341c3a96db127eb2465ac681ced4c433e01dd0e938adbef26ba93ba5"
 
 [[package]]
+name = "libfuzzer-sys"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fcf184a4b6b274f82a5df6b357da6055d3e82272327bba281c28bbba6f1664ef"
+dependencies = [
+ "arbitrary 0.4.7",
+ "cc",
+]
+
+[[package]]
 name = "libloading"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2730,6 +2993,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "linked-hash-map"
+version = "0.5.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0717cef1bc8b636c6e1c1bbdefc09e6322da8a9321966e8928ef80d20f7f770f"
+
+[[package]]
+name = "linked_hash_set"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47186c6da4d81ca383c7c47c1bfc80f4b95f4720514d860a5407aaf4233f9588"
+dependencies = [
+ "linked-hash-map",
+]
+
+[[package]]
 name = "lock_api"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2750,7 +3028,6 @@ dependencies = [
 [[package]]
 name = "log_wrappers"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "hex 0.4.2",
  "protobuf",
@@ -2768,6 +3045,12 @@ dependencies = [
  "cc",
  "libc 0.2.132",
 ]
+
+[[package]]
+name = "maligned"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e88c3cbe8288f77f293e48a28b3232e3defd203a6d839fa7f68ea4329e83464"
 
 [[package]]
 name = "match-template"
@@ -2813,16 +3096,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "memmap"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6585fd95e7bb50d6cc31e20d4cf9afb4e2ba16c5846fc76793f11218da9c475b"
-dependencies = [
- "libc 0.2.132",
- "winapi 0.3.9",
-]
-
-[[package]]
 name = "memmap2"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2843,7 +3116,6 @@ dependencies = [
 [[package]]
 name = "memory_trace_macros"
 version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "quote",
  "syn",
@@ -2975,6 +3247,9 @@ name = "multimap"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a97fbd5d00e0e37bfb10f433af8f5aaf631e739368dc9fc28286ca81ca4948dc"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "multiversion"
@@ -3378,16 +3653,16 @@ checksum = "87f3e037eac156d1775da914196f0f37741a274155e34a0b7e427c35d2a2ecb9"
 [[package]]
 name = "online_config"
 version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "online_config_derive",
  "serde",
+ "serde_derive",
+ "toml",
 ]
 
 [[package]]
 name = "online_config_derive"
 version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3483,7 +3758,6 @@ dependencies = [
 [[package]]
 name = "panic_hook"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 
 [[package]]
 name = "parking_lot"
@@ -3551,7 +3825,6 @@ checksum = "c5d65c4d95931acda4498f675e332fcbdc9a06705cd07086c510e9b6009cd1c1"
 [[package]]
 name = "pd_client"
 version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "collections",
  "error_code",
@@ -3766,8 +4039,8 @@ dependencies = [
 
 [[package]]
 name = "pprof"
-version = "0.9.1"
-source = "git+https://github.com/tikv/pprof-rs.git?rev=3fed55af8fc6cf69dbd954a0321c799c5a111e4e#3fed55af8fc6cf69dbd954a0321c799c5a111e4e"
+version = "0.11.0"
+source = "git+https://github.com/CalvinNeo/pprof-rs?branch=master#383921febf2c12e65de682442c1d7cebec3ad195"
 dependencies = [
  "backtrace",
  "cfg-if 1.0.0",
@@ -3864,7 +4137,6 @@ dependencies = [
 [[package]]
 name = "profiler"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "callgrind",
  "gperftools",
@@ -3903,12 +4175,22 @@ dependencies = [
 
 [[package]]
 name = "prost"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e6984d2f1a23009bd270b8bb56d0926810a3d483f59c987d77969e9d8e840b2"
+dependencies = [
+ "bytes",
+ "prost-derive 0.7.0",
+]
+
+[[package]]
+name = "prost"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "de5e2533f59d08fcf364fd374ebda0692a70bd6d7e66ef97f306f45c6c5d8020"
 dependencies = [
  "bytes",
- "prost-derive",
+ "prost-derive 0.8.0",
 ]
 
 [[package]]
@@ -3919,14 +4201,27 @@ checksum = "355f634b43cdd80724ee7848f95770e7e70eefa6dcf14fea676216573b8fd603"
 dependencies = [
  "bytes",
  "heck 0.3.1",
- "itertools",
+ "itertools 0.10.0",
  "log",
  "multimap",
  "petgraph",
- "prost",
+ "prost 0.8.0",
  "prost-types",
  "tempfile",
  "which 4.2.4",
+]
+
+[[package]]
+name = "prost-derive"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "169a15f3008ecb5160cba7d37bcd690a7601b6d30cfb87a117d45e59d52af5d4"
+dependencies = [
+ "anyhow",
+ "itertools 0.9.0",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -3936,7 +4231,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "600d2f334aa05acb02a755e217ef1ab6dea4d51b58b7846588b747edec04efba"
 dependencies = [
  "anyhow",
- "itertools",
+ "itertools 0.10.0",
  "proc-macro2",
  "quote",
  "syn",
@@ -3949,7 +4244,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "603bbd6394701d13f3f25aada59c7de9d35a6a5887cfc156181234a44002771b"
 dependencies = [
  "bytes",
- "prost",
+ "prost 0.8.0",
 ]
 
 [[package]]
@@ -4023,7 +4318,7 @@ dependencies = [
  "grpcio-health",
  "hex 0.4.2",
  "hyper",
- "itertools",
+ "itertools 0.10.0",
  "keys",
  "kvproto",
  "lazy_static",
@@ -4149,7 +4444,7 @@ dependencies = [
  "tokio",
  "toml",
  "txn_types",
- "uuid",
+ "uuid 0.8.2",
 ]
 
 [[package]]
@@ -4231,7 +4526,6 @@ dependencies = [
 [[package]]
 name = "raft_log_engine"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "encryption",
  "engine_traits",
@@ -4255,7 +4549,6 @@ dependencies = [
 [[package]]
 name = "raftstore"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "batch-system",
  "bitflags",
@@ -4268,6 +4561,8 @@ dependencies = [
  "crossbeam",
  "derivative",
  "encryption",
+ "encryption_export",
+ "engine_panic",
  "engine_rocks",
  "engine_test",
  "engine_traits",
@@ -4280,7 +4575,7 @@ dependencies = [
  "getset",
  "grpcio-health",
  "into_other",
- "itertools",
+ "itertools 0.10.0",
  "keys",
  "kvproto",
  "lazy_static",
@@ -4290,6 +4585,7 @@ dependencies = [
  "online_config",
  "openssl",
  "ordered-float",
+ "panic_hook",
  "parking_lot 0.12.0",
  "pd_client",
  "prometheus",
@@ -4307,6 +4603,7 @@ dependencies = [
  "smallvec",
  "sst_importer",
  "tempfile",
+ "test_sst_importer",
  "thiserror",
  "tidb_query_datatype",
  "tikv_alloc",
@@ -4315,7 +4612,7 @@ dependencies = [
  "tokio",
  "tracker",
  "txn_types",
- "uuid",
+ "uuid 0.8.2",
  "yatp",
 ]
 
@@ -4324,6 +4621,39 @@ name = "raftstore-proxy"
 version = "0.0.1"
 dependencies = [
  "proxy_server",
+]
+
+[[package]]
+name = "raftstore-v2"
+version = "0.1.0"
+dependencies = [
+ "batch-system",
+ "collections",
+ "crossbeam",
+ "engine_test",
+ "engine_traits",
+ "error_code",
+ "fail",
+ "file_system",
+ "futures 0.3.15",
+ "keys",
+ "kvproto",
+ "log_wrappers",
+ "pd_client",
+ "protobuf",
+ "raft",
+ "raft-proto",
+ "raftstore",
+ "slog",
+ "slog-global",
+ "smallvec",
+ "tempfile",
+ "test_pd",
+ "test_util",
+ "tikv_util",
+ "time",
+ "tracker",
+ "txn_types",
 ]
 
 [[package]]
@@ -4594,11 +4924,11 @@ dependencies = [
 [[package]]
 name = "resolved_ts"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "collections",
  "concurrency_manager",
  "crossbeam",
+ "engine_rocks",
  "engine_traits",
  "fail",
  "futures 0.3.15",
@@ -4608,6 +4938,7 @@ dependencies = [
  "lazy_static",
  "log_wrappers",
  "online_config",
+ "panic_hook",
  "pd_client",
  "prometheus",
  "protobuf",
@@ -4616,8 +4947,13 @@ dependencies = [
  "security",
  "slog",
  "slog-global",
+ "tempfile",
+ "test_raftstore",
+ "test_sst_importer",
+ "test_util",
  "thiserror",
  "tikv",
+ "tikv_kv",
  "tikv_util",
  "tokio",
  "txn_types",
@@ -4626,7 +4962,6 @@ dependencies = [
 [[package]]
 name = "resource_metering"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "collections",
  "crossbeam",
@@ -4641,6 +4976,7 @@ dependencies = [
  "pin-project",
  "procinfo",
  "prometheus",
+ "rand 0.8.3",
  "serde",
  "serde_derive",
  "slog",
@@ -4742,6 +5078,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rusoto_mock"
+version = "0.46.0"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#5fcf2d1c36b93d0146cc49f257dd850e01b6e4db"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "futures 0.3.15",
+ "http",
+ "rusoto_core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "rusoto_s3"
 version = "0.46.0"
 source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#5fcf2d1c36b93d0146cc49f257dd850e01b6e4db"
@@ -4792,6 +5142,15 @@ dependencies = [
  "rusoto_core",
  "serde_urlencoded",
  "xml-rs",
+]
+
+[[package]]
+name = "rust-ini"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c96a7d6722944454c68ff2ba2a252a4e9b0635c03dd510fdf482a2c8981cbf2"
+dependencies = [
+ "multimap",
 ]
 
 [[package]]
@@ -4911,7 +5270,6 @@ checksum = "1c107b6f4780854c8b126e228ea8869f4d7b71260f962fefb57b996b8959ba6b"
 [[package]]
 name = "security"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "collections",
  "encryption",
@@ -4919,6 +5277,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
+ "tempfile",
  "tikv_util",
  "tonic",
 ]
@@ -4953,6 +5312,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d7eb9ef2c18661902cc47e535f9bc51b78acd254da71d375c2f6720d9a40403"
 dependencies = [
  "semver-parser 0.7.0",
+ "serde",
 ]
 
 [[package]]
@@ -5113,7 +5473,6 @@ dependencies = [
 [[package]]
 name = "server"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "api_version",
  "backup",
@@ -5307,7 +5666,6 @@ checksum = "2fd0db749597d91ff862fd1d55ea87f7855a744a8425a64695b6fca237d1dad1"
 [[package]]
 name = "snap_recovery"
 version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "chrono",
  "encryption",
@@ -5382,7 +5740,6 @@ checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 [[package]]
 name = "sst_importer"
 version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "api_version",
  "crc32fast",
@@ -5406,12 +5763,15 @@ dependencies = [
  "serde_derive",
  "slog",
  "slog-global",
+ "tempfile",
+ "test_sst_importer",
+ "test_util",
  "thiserror",
  "tikv_alloc",
  "tikv_util",
  "tokio",
  "txn_types",
- "uuid",
+ "uuid 0.8.2",
 ]
 
 [[package]]
@@ -5525,22 +5885,23 @@ checksum = "343f3f510c2915908f155e94f17220b19ccfacf2a64a2a5d8004f2c3e311e7fd"
 
 [[package]]
 name = "symbolic-common"
-version = "8.0.0"
+version = "10.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0caab39ce6f074031b8fd3dd297bfda70a2d1f33c6e7cc1b737ac401f856448d"
+checksum = "ac457d054f793cedfde6f32d21d692b8351cfec9084fefd0470c0373f6d799bc"
 dependencies = [
  "debugid",
- "memmap",
+ "memmap2",
  "stable_deref_trait",
- "uuid",
+ "uuid 1.2.1",
 ]
 
 [[package]]
 name = "symbolic-demangle"
-version = "8.0.0"
+version = "10.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b77ecb5460a87faa37ed53521eed8f073c8339b7a5788c1f93efc09ce74e1b68"
+checksum = "48808b846eef84e0ac06365dc620f028ae632355e5dcffc007bf1b2bf5eab17b"
 dependencies = [
+ "cpp_demangle",
  "rustc-demangle",
  "symbolic-common",
 ]
@@ -5684,7 +6045,6 @@ dependencies = [
 [[package]]
 name = "test_backup"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "api_version",
  "backup",
@@ -5712,7 +6072,6 @@ dependencies = [
 [[package]]
 name = "test_coprocessor"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "api_version",
  "collections",
@@ -5734,7 +6093,6 @@ dependencies = [
 [[package]]
 name = "test_pd"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "collections",
  "fail",
@@ -5751,7 +6109,6 @@ dependencies = [
 [[package]]
 name = "test_pd_client"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "collections",
  "fail",
@@ -5773,7 +6130,6 @@ dependencies = [
 [[package]]
 name = "test_raftstore"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "api_version",
  "backtrace",
@@ -5819,20 +6175,18 @@ dependencies = [
 [[package]]
 name = "test_sst_importer"
 version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "crc32fast",
  "engine_rocks",
  "engine_traits",
  "keys",
  "kvproto",
- "uuid",
+ "uuid 0.8.2",
 ]
 
 [[package]]
 name = "test_storage"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "api_version",
  "collections",
@@ -5850,7 +6204,6 @@ dependencies = [
 [[package]]
 name = "test_util"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "backtrace",
  "collections",
@@ -5945,7 +6298,7 @@ dependencies = [
  "tokio",
  "toml",
  "txn_types",
- "uuid",
+ "uuid 0.8.2",
 ]
 
 [[package]]
@@ -5989,21 +6342,21 @@ dependencies = [
 [[package]]
 name = "tidb_query_aggr"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "match-template",
+ "panic_hook",
  "tidb_query_codegen",
  "tidb_query_common",
  "tidb_query_datatype",
  "tidb_query_expr",
  "tikv_util",
  "tipb",
+ "tipb_helper",
 ]
 
 [[package]]
 name = "tidb_query_codegen"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "darling",
  "heck 0.3.1",
@@ -6015,10 +6368,10 @@ dependencies = [
 [[package]]
 name = "tidb_query_common"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "byteorder",
  "derive_more",
  "error_code",
  "futures 0.3.15",
@@ -6037,7 +6390,6 @@ dependencies = [
 [[package]]
 name = "tidb_query_datatype"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "base64",
  "bitfield",
@@ -6077,14 +6429,14 @@ dependencies = [
 [[package]]
 name = "tidb_query_executors"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "codec",
  "collections",
  "fail",
  "futures 0.3.15",
- "itertools",
+ "itertools 0.10.0",
  "kvproto",
  "log_wrappers",
  "match-template",
@@ -6093,22 +6445,24 @@ dependencies = [
  "slog-global",
  "smallvec",
  "tidb_query_aggr",
+ "tidb_query_codegen",
  "tidb_query_common",
  "tidb_query_datatype",
  "tidb_query_expr",
  "tikv_util",
  "tipb",
+ "tipb_helper",
  "yatp",
 ]
 
 [[package]]
 name = "tidb_query_expr"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "base64",
  "bstr",
  "byteorder",
+ "chrono",
  "codec",
  "file_system",
  "flate2",
@@ -6118,6 +6472,8 @@ dependencies = [
  "num 0.3.0",
  "num-traits",
  "openssl",
+ "panic_hook",
+ "profiler",
  "protobuf",
  "rand 0.8.3",
  "regex",
@@ -6131,14 +6487,14 @@ dependencies = [
  "tikv_util",
  "time",
  "tipb",
+ "tipb_helper",
  "twoway",
- "uuid",
+ "uuid 0.8.2",
 ]
 
 [[package]]
 name = "tikv"
 version = "6.4.0-alpha"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "anyhow",
  "api_version",
@@ -6162,9 +6518,11 @@ dependencies = [
  "engine_panic",
  "engine_rocks",
  "engine_test",
+ "engine_tiflash",
  "engine_traits",
  "engine_traits_tests",
  "error_code",
+ "example_coprocessor_plugin",
  "fail",
  "file_system",
  "flate2",
@@ -6179,9 +6537,10 @@ dependencies = [
  "hex 0.4.2",
  "http",
  "hyper",
+ "hyper-openssl",
  "hyper-tls",
  "into_other",
- "itertools",
+ "itertools 0.10.0",
  "keyed_priority_queue",
  "keys",
  "kvproto",
@@ -6201,6 +6560,7 @@ dependencies = [
  "num_cpus",
  "online_config",
  "openssl",
+ "panic_hook",
  "parking_lot 0.12.0",
  "paste",
  "pd_client",
@@ -6210,12 +6570,14 @@ dependencies = [
  "procinfo",
  "prometheus",
  "prometheus-static-metric",
+ "prost 0.7.0",
  "protobuf",
  "raft",
  "raft_log_engine",
  "raftstore",
  "rand 0.7.3",
  "regex",
+ "reqwest",
  "resource_metering",
  "rev_lines",
  "seahash",
@@ -6233,6 +6595,8 @@ dependencies = [
  "sync_wrapper",
  "sysinfo",
  "tempfile",
+ "test_sst_importer",
+ "test_util",
  "thiserror",
  "tidb_query_aggr",
  "tidb_query_common",
@@ -6251,9 +6615,10 @@ dependencies = [
  "tracker",
  "txn_types",
  "url",
- "uuid",
+ "uuid 0.8.2",
  "walkdir",
  "yatp",
+ "zipf",
 ]
 
 [[package]]
@@ -6291,7 +6656,6 @@ dependencies = [
 [[package]]
 name = "tikv_alloc"
 version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "fxhash",
  "lazy_static",
@@ -6299,6 +6663,7 @@ dependencies = [
  "mimalloc",
  "snmalloc-rs",
  "tcmalloc",
+ "tempfile",
  "tikv-jemalloc-ctl",
  "tikv-jemalloc-sys",
  "tikv-jemallocator",
@@ -6307,7 +6672,6 @@ dependencies = [
 [[package]]
 name = "tikv_kv"
 version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "backtrace",
  "collections",
@@ -6320,8 +6684,10 @@ dependencies = [
  "file_system",
  "futures 0.3.15",
  "into_other",
+ "keys",
  "kvproto",
  "log_wrappers",
+ "panic_hook",
  "pd_client",
  "prometheus",
  "prometheus-static-metric",
@@ -6339,7 +6705,6 @@ dependencies = [
 [[package]]
 name = "tikv_util"
 version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "async-speed-limit",
  "backtrace",
@@ -6356,6 +6721,7 @@ dependencies = [
  "fail",
  "futures 0.3.15",
  "futures-util",
+ "gag",
  "grpcio",
  "http",
  "kvproto",
@@ -6369,6 +6735,7 @@ dependencies = [
  "online_config",
  "openssl",
  "page_size",
+ "panic_hook",
  "pin-project",
  "procfs",
  "procinfo",
@@ -6376,6 +6743,7 @@ dependencies = [
  "prometheus-static-metric",
  "protobuf",
  "rand 0.8.3",
+ "regex",
  "rusoto_core",
  "serde",
  "serde_json",
@@ -6385,14 +6753,17 @@ dependencies = [
  "slog-json",
  "slog-term",
  "sysinfo",
+ "tempfile",
  "thiserror",
  "tikv_alloc",
  "time",
  "tokio",
  "tokio-executor",
  "tokio-timer",
+ "toml",
  "tracker",
  "url",
+ "utime",
  "yatp",
 ]
 
@@ -6431,7 +6802,6 @@ dependencies = [
 [[package]]
 name = "tipb_helper"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "codec",
  "tidb_query_datatype",
@@ -6600,8 +6970,8 @@ dependencies = [
  "hyper-timeout",
  "percent-encoding",
  "pin-project",
- "prost",
- "prost-derive",
+ "prost 0.8.0",
+ "prost-derive 0.8.0",
  "tokio",
  "tokio-rustls",
  "tokio-stream",
@@ -6703,7 +7073,6 @@ dependencies = [
 [[package]]
 name = "tracker"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "collections",
  "crossbeam-utils 0.8.8",
@@ -6740,7 +7109,6 @@ checksum = "3bfd5b7557925ce778ff9b9ef90e3ade34c524b5ff10e239c69a42d546d2af56"
 [[package]]
 name = "txn_types"
 version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=0f5058ebcc489bc28f997b93765862d79312b#0f5058ebcc489bc28f997b93765862d79312b5c0"
 dependencies = [
  "bitflags",
  "byteorder",
@@ -6750,6 +7118,8 @@ dependencies = [
  "farmhash",
  "kvproto",
  "log_wrappers",
+ "panic_hook",
+ "rand 0.8.3",
  "slog",
  "thiserror",
  "tikv_alloc",
@@ -6830,6 +7200,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "utime"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "055058552ca15c566082fc61da433ae678f78986a6f16957e33162d1b218792a"
+dependencies = [
+ "kernel32-sys",
+ "libc 0.2.132",
+ "winapi 0.2.8",
+]
+
+[[package]]
 name = "uuid"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6838,6 +7219,12 @@ dependencies = [
  "getrandom 0.2.3",
  "serde",
 ]
+
+[[package]]
+name = "uuid"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "feb41e78f93363bb2df8b0e86a2ca30eed7806ea16ea0c790d757cf93f79be83"
 
 [[package]]
 name = "valgrind_request"
@@ -7147,6 +7534,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "xdg"
+version = "2.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c4583db5cbd4c4c0303df2d15af80f0539db703fa1c68802d4cbbd2dd0f88f6"
+dependencies = [
+ "dirs",
+]
+
+[[package]]
 name = "xml-rs"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7172,6 +7568,15 @@ name = "zeroize"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3cbac2ed2ba24cc90f5e06485ac8c7c1e5449fe8911aef4d8877218af021a5b8"
+
+[[package]]
+name = "zipf"
+version = "6.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e12b8667a4fff63d236f8363be54392f93dbb13616be64a83e761a9319ab589"
+dependencies = [
+ "rand 0.7.3",
+]
 
 [[package]]
 name = "zstd"
@@ -7201,8 +7606,3 @@ dependencies = [
  "cc",
  "libc 0.2.132",
 ]
-
-[[patch.unused]]
-name = "rusoto_mock"
-version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#5fcf2d1c36b93d0146cc49f257dd850e01b6e4db"

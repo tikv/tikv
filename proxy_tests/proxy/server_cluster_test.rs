@@ -99,3 +99,72 @@ fn test_safe_ts_basic() {
 
     suite.stop();
 }
+
+use std::{error::Error, fs::File, io::Write, net::SocketAddr, sync::Arc};
+
+use hyper::{body, Client, StatusCode, Uri};
+use kvproto::recoverdatapb::RegionMeta;
+use proxy_server::status_server::StatusServer;
+use security::SecurityConfig;
+use tikv::config::ConfigController;
+
+async fn check(authority: SocketAddr, region_id: u64) -> Result<(), Box<dyn Error>> {
+    let client = Client::new();
+    let uri = Uri::builder()
+        .scheme("http")
+        .authority(authority.to_string().as_str())
+        .path_and_query("/debug/pprof/profile")
+        .build()?;
+    let resp = client.get(uri).await?;
+    let (parts, raw_body) = resp.into_parts();
+    let body = body::to_bytes(raw_body).await?;
+    assert_eq!(
+        StatusCode::OK,
+        parts.status,
+        "{}",
+        String::from_utf8(body.to_vec())?
+    );
+    assert_eq!("image/svg+xml", parts.headers["content-type"].to_str()?);
+    {
+        let xmldata = body.as_ref();
+        let xmlstr = std::str::from_utf8(xmldata);
+        assert_eq!(xmlstr.is_ok(), true);
+        let res = String::from(xmlstr.unwrap()).find("raftstore");
+        assert_eq!(res.is_some(), true);
+    }
+    Ok(())
+}
+
+#[test]
+fn test_pprof() {
+    let mut cluster = new_server_cluster(0, 1);
+    cluster.run();
+    let region = cluster.get_region(b"");
+    let region_id = region.get_id();
+    let peer = region.get_peers().get(0);
+    assert!(peer.is_some());
+    let store_id = peer.unwrap().get_store_id();
+    let router = cluster.sim.rl().get_router(store_id);
+    assert!(router.is_some());
+    let id = 1;
+    let engine = cluster.get_engine(id);
+    let mut lock = cluster.ffi_helper_set.lock().unwrap();
+    let ffiset = lock.get_mut(&id).unwrap();
+    let mut status_server = StatusServer::new(
+        engine_store_ffi::gen_engine_store_server_helper(ffiset.engine_store_server_helper_ptr),
+        1,
+        ConfigController::default(),
+        Arc::new(SecurityConfig::default()),
+        router.unwrap(),
+        std::env::temp_dir(),
+    )
+    .unwrap();
+    let addr = format!("127.0.0.1:{}", test_util::alloc_port());
+    status_server.start(addr).unwrap();
+    let check_task = check(status_server.listening_addr(), region_id);
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    if let Err(err) = rt.block_on(check_task) {
+        panic!("{}", err);
+    }
+    status_server.stop();
+}
