@@ -1,5 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::path::PathBuf;
+
 use engine_traits::{
     CfNamesExt, DeleteStrategy, ImportExt, IterOptions, Iterable, Iterator, MiscExt, Mutable,
     Range, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt, ALL_CFS,
@@ -325,6 +327,20 @@ impl MiscExt for RocksEngine {
                 .get_property_int(ROCKSDB_IS_WRITE_STOPPED)
                 .unwrap_or_default()
                 != 0
+    }
+
+    fn checkpoint_to(&self, path: &[PathBuf], size_to_flush: u64) -> Result<()> {
+        if path.is_empty() {
+            return Ok(());
+        }
+        let mut checkpoint = self.as_inner().new_checkpointer().map_err(r2e)?;
+        checkpoint
+            .create_at(&path[0], None, size_to_flush)
+            .map_err(r2e)?;
+        for p in &path[1..] {
+            checkpoint.create_at(p, None, u64::MAX).map_err(r2e)?;
+        }
+        Ok(())
     }
 }
 

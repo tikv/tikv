@@ -18,7 +18,6 @@ use std::{
 
 use engine_traits::{DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, CF_LOCK, CF_RAFT};
 use fail::fail_point;
-use file_system::{IoType, WithIoType};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use pd_client::PdClient;
 use raft::eraftpb::Snapshot as RaftSnapshot;
@@ -310,11 +309,6 @@ where
         }
 
         let start = Instant::now();
-        let _io_type_guard = WithIoType::new(if for_balance {
-            IoType::LoadBalance
-        } else {
-            IoType::Replication
-        });
 
         if let Err(e) = self.generate_snap(
             region_id,

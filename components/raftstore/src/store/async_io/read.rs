@@ -3,16 +3,24 @@
 use std::{
     fmt,
     marker::PhantomData,
-    sync::{atomic::AtomicBool, Arc},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
 
 use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
-use kvproto::raft_serverpb::RegionLocalState;
-use raft::{eraftpb::Snapshot as RaftSnapshot, GetEntriesContext};
-use tikv_util::worker::Runnable;
+use kvproto::raft_serverpb::{PeerState, RaftSnapshotData, RegionLocalState};
+use protobuf::Message;
+use raft::{eraftpb::Snapshot, GetEntriesContext};
+use tikv_util::{defer, error, info, time::Instant, worker::Runnable};
 
-use crate::store::{RaftlogFetchResult, MAX_INIT_ENTRY_COUNT};
+use crate::store::{
+    util,
+    worker::{SNAP_COUNTER, SNAP_HISTOGRAM},
+    RaftlogFetchResult, SnapEntry, SnapKey, SnapManager, MAX_INIT_ENTRY_COUNT,
+};
 
 pub enum ReadTask<EK> {
     FetchLogs {
@@ -66,10 +74,16 @@ pub struct FetchedLogs {
     pub logs: Box<RaftlogFetchResult>,
 }
 
+#[derive(Debug)]
+pub struct GenSnapRes {
+    pub snapshot: Box<Snapshot>,
+    pub success: bool,
+}
+
 /// A router for receiving fetched result.
 pub trait AsyncReadNotifier: Send {
     fn notify_logs_fetched(&self, region_id: u64, fetched: FetchedLogs);
-    fn notify_snapshot_generated(&self, region_id: u64, snapshot: Box<RaftSnapshot>);
+    fn notify_snapshot_generated(&self, region_id: u64, res: GenSnapRes);
 }
 
 pub struct ReadRunner<EK, ER, N>
@@ -80,6 +94,7 @@ where
 {
     notifier: N,
     raft_engine: ER,
+    mgr: Option<SnapManager>,
     _phantom: PhantomData<EK>,
 }
 
@@ -88,8 +103,19 @@ impl<EK: KvEngine, ER: RaftEngine, N: AsyncReadNotifier> ReadRunner<EK, ER, N> {
         ReadRunner {
             notifier,
             raft_engine,
+            mgr: None,
             _phantom: PhantomData,
         }
+    }
+
+    #[inline]
+    pub fn set_snap_mgr(&mut self, mgr: SnapManager) {
+        self.mgr = Some(mgr);
+    }
+
+    #[inline]
+    fn snap_mgr(&self) -> &SnapManager {
+        self.mgr.as_ref().unwrap()
     }
 }
 
@@ -141,10 +167,84 @@ where
                     },
                 );
             }
-            ReadTask::GenTabletSnapshot { region_id, .. } => {
-                // TODO: implement generate tablet snapshot for raftstore v2
-                self.notifier
-                    .notify_snapshot_generated(region_id, Box::new(RaftSnapshot::default()));
+
+            ReadTask::GenTabletSnapshot {
+                region_id,
+                tablet,
+                region_state,
+                last_applied_term,
+                last_applied_index,
+                canceled,
+                for_balance,
+            } => {
+                if canceled.load(Ordering::Relaxed) {
+                    info!("generate snap is canceled"; "region_id" => region_id);
+                    return;
+                }
+                let start = Instant::now();
+
+                // the state should already checked in apply workers.
+                assert_ne!(region_state.get_state(), PeerState::Tombstone);
+                let key = SnapKey::new(region_id, last_applied_term, last_applied_index);
+                self.snap_mgr().register(key.clone(), SnapEntry::Generating);
+                defer!(self.snap_mgr().deregister(&key, &SnapEntry::Generating));
+
+                let mut success = true;
+                let mut snapshot = Snapshot::default();
+                // Set snapshot metadata.
+                snapshot.mut_metadata().set_index(key.idx);
+                snapshot.mut_metadata().set_term(key.term);
+
+                let conf_state = util::conf_state_from_region(region_state.get_region());
+                snapshot.mut_metadata().set_conf_state(conf_state);
+
+                // Set snapshot data.
+                let mut snap_data = RaftSnapshotData::default();
+                snap_data.set_region(region_state.get_region().clone());
+                snap_data.mut_meta().set_for_balance(for_balance);
+                if let Ok(v) = snap_data.write_to_bytes().map_err(|e| {
+                    error!("fail to encode snapshot data"; "region_id" => region_id,  "snap_key" => ?key, "error" => ?e);
+                    success = false;
+                    e
+                }) {
+                    snapshot.set_data(v.into());
+                }
+
+                let checkpoint_path = self.snap_mgr().get_path_for_tablet_checkpoint(&key);
+                if checkpoint_path.as_path().exists() {
+                    // Remove the old checkpoint directly.
+                    let _ = std::fs::remove_dir_all(checkpoint_path.as_path()).map_err(|e| {
+                        error!("fail to remove old checkpoint"; "region_id" => region_id,  "snap_key" => ?key, "error" => ?e);
+                        success = false;
+                        e
+                    });
+                }
+                // If the checkpoint directory doesn't exist, create it. also need do it after
+                // removing the old checkpoint.
+                if !checkpoint_path.as_path().exists() {
+                    // Here not checkpoint to a temporary directory first, the temporary directory
+                    // logic already implemented in rocksdb.
+                    let _ = tablet
+                    .checkpoint_to(std::slice::from_ref(&checkpoint_path), 0)
+                    .map_err(|e| {
+                        error!("failed to create checkpoint"; "region_id" => region_id, "snap_key" => ?key, "error" => ?e); 
+                        success = false;
+                        e
+                    });
+                }
+                if success {
+                    SNAP_COUNTER.generate.success.inc();
+                    SNAP_HISTOGRAM
+                        .generate
+                        .observe(start.saturating_elapsed_secs());
+                } else {
+                    SNAP_COUNTER.generate.fail.inc();
+                }
+                let res = GenSnapRes {
+                    snapshot: Box::new(snapshot),
+                    success,
+                };
+                self.notifier.notify_snapshot_generated(region_id, res);
             }
         }
     }
