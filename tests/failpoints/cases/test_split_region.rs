@@ -13,7 +13,9 @@ use collections::HashMap;
 use engine_traits::CF_WRITE;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
-    kvrpcpb::{Mutation, Op, PessimisticLockRequest, PrewriteRequest},
+    kvrpcpb::{
+        Mutation, Op, PessimisticLockRequest, PrewriteRequest, PrewriteRequestPessimisticAction::*,
+    },
     metapb::Region,
     raft_serverpb::RaftMessage,
     tikvpb::TikvClient,
@@ -941,6 +943,8 @@ fn test_split_pessimistic_locks_with_concurrent_prewrite() {
         ttl: 3000,
         for_update_ts: (commit_ts + 10).into(),
         min_commit_ts: (commit_ts + 10).into(),
+        last_change_ts: 5.into(),
+        versions_to_last_change: 3,
     };
     let lock_c = PessimisticLock {
         primary: b"c".to_vec().into_boxed_slice(),
@@ -948,6 +952,8 @@ fn test_split_pessimistic_locks_with_concurrent_prewrite() {
         ttl: 3000,
         for_update_ts: (commit_ts + 10).into(),
         min_commit_ts: (commit_ts + 10).into(),
+        last_change_ts: 5.into(),
+        versions_to_last_change: 3,
     };
     {
         let mut locks = txn_ext.pessimistic_locks.write();
@@ -966,7 +972,7 @@ fn test_split_pessimistic_locks_with_concurrent_prewrite() {
     let mut req = PrewriteRequest::default();
     req.set_context(cluster.get_ctx(b"a"));
     req.set_mutations(vec![mutation].into());
-    req.set_is_pessimistic_lock(vec![true]);
+    req.set_pessimistic_actions(vec![DoPessimisticCheck]);
     req.set_start_version(10);
     req.set_for_update_ts(commit_ts + 20);
     req.set_primary_lock(b"a".to_vec());

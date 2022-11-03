@@ -8,22 +8,22 @@ publish = false
 failpoints = ["fail/failpoints"]
 
 [dependencies]
-case_macros = { path = "../case_macros" }
-error_code = { path = "../error_code", default-features = false }
+case_macros = { workspace = true }
+error_code = { workspace = true }
 fail = "0.5"
-file_system = { path = "../file_system", default-features = false }
+file_system = { workspace = true }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
-log_wrappers = { path = "../log_wrappers" }
+log_wrappers = { workspace = true }
 protobuf = "2"
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 serde = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 thiserror = "1.0"
-tikv_alloc = { path = "../tikv_alloc" }
-tikv_util = { path = "../tikv_util", default-features = false }
-tracker = { path = "../tracker" }
-txn_types = { path = "../txn_types", default-features = false }
+tikv_alloc = { workspace = true }
+tikv_util = { workspace = true }
+tracker = { workspace = true }
+txn_types = { workspace = true }
 
 [dev-dependencies]
 serde_derive = "1.0"

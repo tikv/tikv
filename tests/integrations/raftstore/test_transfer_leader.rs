@@ -2,6 +2,7 @@
 
 use std::{sync::Arc, thread, time::Duration};
 
+use api_version::{test_kv_format_impl, KvFormat};
 use engine_traits::CF_LOCK;
 use kvproto::kvrpcpb::Context;
 use raft::eraftpb::MessageType;
@@ -18,7 +19,12 @@ fn test_basic_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
     let reserved_time = Duration::from_millis(
         cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
-            * cluster.cfg.raft_store.raft_heartbeat_ticks as u64,
+            * cluster.cfg.raft_store.raft_heartbeat_ticks as u64
+            + cluster
+                .cfg
+                .raft_store
+                .max_entry_cache_warmup_duration
+                .as_millis(),
     );
     cluster.run();
 
@@ -227,12 +233,16 @@ fn test_server_transfer_leader_during_snapshot() {
 
 #[test]
 fn test_sync_max_ts_after_leader_transfer() {
-    let mut cluster = new_server_cluster(0, 3);
+    test_kv_format_impl!(test_sync_max_ts_after_leader_transfer_impl);
+}
+
+fn test_sync_max_ts_after_leader_transfer_impl<F: KvFormat>() {
+    let mut cluster = new_server_cluster_with_api_ver(0, 3, F::TAG);
     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
     cluster.run();
 
     let cm = cluster.sim.read().unwrap().get_concurrency_manager(1);
-    let storage = cluster
+    let mut storage = cluster
         .sim
         .read()
         .unwrap()
@@ -240,7 +250,7 @@ fn test_sync_max_ts_after_leader_transfer() {
         .get(&1)
         .unwrap()
         .clone();
-    let wait_for_synced = |cluster: &mut Cluster<ServerCluster>| {
+    let mut wait_for_synced = |cluster: &mut Cluster<ServerCluster>| {
         let region_id = 1;
         let leader = cluster.leader_of_region(region_id).unwrap();
         let epoch = cluster.get_region_epoch(region_id);
@@ -294,6 +304,8 @@ fn test_propose_in_memory_pessimistic_locks() {
         ttl: 3000,
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
+        last_change_ts: 5.into(),
+        versions_to_last_change: 3,
     };
     // Write a pessimistic lock to the in-memory pessimistic lock table.
     {
@@ -334,6 +346,8 @@ fn test_memory_pessimistic_locks_status_after_transfer_leader_failure() {
         ttl: 3000,
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
+        last_change_ts: 5.into(),
+        versions_to_last_change: 3,
     };
     // Write a pessimistic lock to the in-memory pessimistic lock table.
     txn_ext

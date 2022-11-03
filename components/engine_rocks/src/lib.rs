@@ -28,6 +28,8 @@ mod cf_names;
 pub use crate::cf_names::*;
 mod cf_options;
 pub use crate::cf_options::*;
+mod checkpoint;
+pub use crate::checkpoint::*;
 mod compact;
 pub use crate::compact::*;
 mod db_options;
@@ -68,7 +70,7 @@ mod perf_context_metrics;
 mod engine_iterator;
 pub use crate::engine_iterator::*;
 
-mod options;
+pub mod options;
 pub mod util;
 
 mod compact_listener;

@@ -12,7 +12,7 @@ use std::{
 use engine_traits::{Peekable, CF_RAFT};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
-    kvrpcpb::*,
+    kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
     raft_serverpb::{PeerState, RaftMessage, RegionLocalState},
     tikvpb::TikvClient,
 };
@@ -1346,6 +1346,8 @@ fn test_merge_with_concurrent_pessimistic_locking() {
                 ttl: 3000,
                 for_update_ts: 20.into(),
                 min_commit_ts: 30.into(),
+                last_change_ts: 15.into(),
+                versions_to_last_change: 3,
             },
         )])
         .unwrap();
@@ -1433,6 +1435,8 @@ fn test_merge_pessimistic_locks_with_concurrent_prewrite() {
         ttl: 3000,
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
+        last_change_ts: 15.into(),
+        versions_to_last_change: 3,
     };
     txn_ext
         .pessimistic_locks
@@ -1450,7 +1454,7 @@ fn test_merge_pessimistic_locks_with_concurrent_prewrite() {
     let mut req = PrewriteRequest::default();
     req.set_context(cluster.get_ctx(b"k0"));
     req.set_mutations(vec![mutation].into());
-    req.set_is_pessimistic_lock(vec![true]);
+    req.set_pessimistic_actions(vec![DoPessimisticCheck]);
     req.set_start_version(10);
     req.set_for_update_ts(40);
     req.set_primary_lock(b"k0".to_vec());
@@ -1512,6 +1516,8 @@ fn test_retry_pending_prepare_merge_fail() {
         ttl: 3000,
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
+        last_change_ts: 15.into(),
+        versions_to_last_change: 3,
     };
     txn_ext
         .pessimistic_locks
@@ -1586,6 +1592,8 @@ fn test_merge_pessimistic_locks_propose_fail() {
         ttl: 3000,
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
+        last_change_ts: 15.into(),
+        versions_to_last_change: 3,
     };
     txn_ext
         .pessimistic_locks

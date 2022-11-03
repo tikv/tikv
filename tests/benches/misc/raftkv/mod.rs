@@ -1,7 +1,8 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
+use collections::HashSet;
 use crossbeam::channel::TrySendError;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngine, ALL_CFS, CF_DEFAULT};
@@ -14,9 +15,9 @@ use kvproto::{
 use raftstore::{
     router::{LocalReadRouter, RaftStoreRouter},
     store::{
-        cmd_resp, util, Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter,
-        RaftCmdExtraOpts, RaftCommand, ReadResponse, RegionSnapshot, SignificantMsg,
-        SignificantRouter, StoreMsg, StoreRouter, WriteResponse,
+        cmd_resp, Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter, RaftCmdExtraOpts,
+        RaftCommand, ReadResponse, RegionSnapshot, SignificantMsg, SignificantRouter, StoreMsg,
+        StoreRouter, WriteResponse,
     },
     Result,
 };
@@ -28,7 +29,7 @@ use tikv::{
         Engine,
     },
 };
-use tikv_util::time::ThreadReadId;
+use tikv_util::{store::new_peer, time::ThreadReadId};
 use txn_types::Key;
 
 use crate::test;
@@ -50,7 +51,7 @@ impl SyncBenchRouter {
         let mut response = RaftCmdResponse::default();
         cmd_resp::bind_term(&mut response, 1);
         match cmd.callback {
-            Callback::Read(cb) => {
+            Callback::Read { cb, .. } => {
                 let snapshot = self.db.snapshot();
                 let region = Arc::new(self.region.to_owned());
                 cb(ReadResponse {
@@ -118,7 +119,7 @@ impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
 
 impl LocalReadRouter<RocksEngine> for SyncBenchRouter {
     fn read(
-        &self,
+        &mut self,
         _: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
@@ -126,7 +127,7 @@ impl LocalReadRouter<RocksEngine> for SyncBenchRouter {
         self.send_command(req, cb, RaftCmdExtraOpts::default())
     }
 
-    fn release_snapshot_cache(&self) {}
+    fn release_snapshot_cache(&mut self) {}
 }
 
 fn new_engine() -> (TempDir, RocksEngine) {
@@ -160,7 +161,7 @@ fn bench_async_snapshots_noop(b: &mut test::Bencher) {
             }
         });
         let cb: Callback<RocksSnapshot> =
-            Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
+            Callback::read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
                 let res = CmdRes::Snap(resp.snapshot.unwrap());
                 cb2(Ok(res));
             }));
@@ -170,7 +171,7 @@ fn bench_async_snapshots_noop(b: &mut test::Bencher) {
 
 #[bench]
 fn bench_async_snapshot(b: &mut test::Bencher) {
-    let leader = util::new_peer(2, 3);
+    let leader = new_peer(2, 3);
     let mut region = Region::default();
     region.set_id(1);
     region.set_start_key(vec![]);
@@ -179,7 +180,11 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
     region.mut_region_epoch().set_version(2);
     region.mut_region_epoch().set_conf_ver(5);
     let (_tmp, db) = new_engine();
-    let kv = RaftKv::new(SyncBenchRouter::new(region.clone(), db.clone()), db);
+    let mut kv = RaftKv::new(
+        SyncBenchRouter::new(region.clone(), db.clone()),
+        db,
+        Arc::new(RwLock::new(HashSet::default())),
+    );
 
     let mut ctx = Context::default();
     ctx.set_region_id(region.get_id());
@@ -199,7 +204,7 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
 
 #[bench]
 fn bench_async_write(b: &mut test::Bencher) {
-    let leader = util::new_peer(2, 3);
+    let leader = new_peer(2, 3);
     let mut region = Region::default();
     region.set_id(1);
     region.set_start_key(vec![]);
@@ -208,7 +213,11 @@ fn bench_async_write(b: &mut test::Bencher) {
     region.mut_region_epoch().set_version(2);
     region.mut_region_epoch().set_conf_ver(5);
     let (_tmp, db) = new_engine();
-    let kv = RaftKv::new(SyncBenchRouter::new(region.clone(), db.clone()), db);
+    let kv = RaftKv::new(
+        SyncBenchRouter::new(region.clone(), db.clone()),
+        db,
+        Arc::new(RwLock::new(HashSet::default())),
+    );
 
     let mut ctx = Context::default();
     ctx.set_region_id(region.get_id());

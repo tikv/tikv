@@ -3,19 +3,16 @@
 // #[PerformanceCriticalPath]
 use std::fmt;
 
-use engine_traits::{KvEngine, Snapshot};
-use kvproto::{
-    cdcpb::Event,
-    metapb,
-    raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
-};
-use raftstore::store::{
-    metrics::RaftEventDurationType, FetchedLogs, InspectedRaftMessage, RegionSnapshot,
-};
+use engine_traits::Snapshot;
+use kvproto::{raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
+use raft::eraftpb::Snapshot as RaftSnapshot;
+use raftstore::store::{metrics::RaftEventDurationType, FetchedLogs};
 use tikv_util::time::Instant;
 
 use super::{
-    response_channel::{CmdResChannel, QueryResChannel},
+    response_channel::{
+        CmdResChannel, CmdResSubscriber, DebugInfoChannel, QueryResChannel, QueryResSubscriber,
+    },
     ApplyRes,
 };
 
@@ -95,49 +92,17 @@ impl StoreTick {
 }
 
 /// Command that can be handled by raftstore.
-pub struct RaftRequest {
+pub struct RaftRequest<C> {
     pub send_time: Instant,
     pub request: RaftCmdRequest,
+    pub ch: C,
 }
 
-impl RaftRequest {
-    pub fn new(request: RaftCmdRequest) -> Self {
+impl<C> RaftRequest<C> {
+    pub fn new(request: RaftCmdRequest, ch: C) -> Self {
         RaftRequest {
             send_time: Instant::now(),
             request,
-        }
-    }
-}
-
-/// A query that won't change any state. So it doesn't have to be replicated to
-/// all replicas.
-pub struct RaftQuery {
-    pub req: RaftRequest,
-    pub ch: QueryResChannel,
-}
-
-impl RaftQuery {
-    #[inline]
-    pub fn new(request: RaftCmdRequest, ch: QueryResChannel) -> Self {
-        Self {
-            req: RaftRequest::new(request),
-            ch,
-        }
-    }
-}
-
-/// Commands that change the inernal states. It will be transformed into logs
-/// and reach consensus in the raft group.
-pub struct RaftCommand {
-    pub cmd: RaftRequest,
-    pub ch: CmdResChannel,
-}
-
-impl RaftCommand {
-    #[inline]
-    pub fn new(request: RaftCmdRequest, ch: CmdResChannel) -> Self {
-        Self {
-            cmd: RaftRequest::new(request),
             ch,
         }
     }
@@ -148,19 +113,20 @@ pub enum PeerMsg {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
     /// peer doesn't exist.
-    RaftMessage(InspectedRaftMessage),
-    /// Read command only involves read operations, they are usually processed
-    /// using lease or read index.
-    RaftQuery(RaftQuery),
-    /// Proposal needs to be processed by all peers in a raft group. They will
-    /// be transformed into logs and be proposed by the leader peer.
-    RaftCommand(RaftCommand),
+    RaftMessage(Box<RaftMessage>),
+    /// Query won't change any state. A typical query is KV read. In most cases,
+    /// it will be processed using lease or read index.
+    RaftQuery(RaftRequest<QueryResChannel>),
+    /// Command changes the inernal states. It will be transformed into logs and
+    /// applied on all replicas.
+    RaftCommand(RaftRequest<CmdResChannel>),
     /// Tick is periodical task. If target peer doesn't exist there is a
     /// potential that the raft node will not work anymore.
     Tick(PeerTick),
     /// Result of applying committed entries. The message can't be lost.
     ApplyRes(ApplyRes),
-    FetchedLogs(FetchedLogs),
+    LogsFetched(FetchedLogs),
+    SnapshotGenerated(Box<RaftSnapshot>),
     /// Start the FSM.
     Start,
     /// A message only used to notify a peer.
@@ -170,6 +136,22 @@ pub enum PeerMsg {
         peer_id: u64,
         ready_number: u64,
     },
+    QueryDebugInfo(DebugInfoChannel),
+    /// A message that used to check if a flush is happened.
+    #[cfg(feature = "testexport")]
+    WaitFlush(super::FlushChannel),
+}
+
+impl PeerMsg {
+    pub fn raft_query(req: RaftCmdRequest) -> (Self, QueryResSubscriber) {
+        let (ch, sub) = QueryResChannel::pair();
+        (PeerMsg::RaftQuery(RaftRequest::new(req, ch)), sub)
+    }
+
+    pub fn raft_command(req: RaftCmdRequest) -> (Self, CmdResSubscriber) {
+        let (ch, sub) = CmdResChannel::pair();
+        (PeerMsg::RaftCommand(RaftRequest::new(req, ch)), sub)
+    }
 }
 
 impl fmt::Debug for PeerMsg {
@@ -194,15 +176,19 @@ impl fmt::Debug for PeerMsg {
                 "Persisted peer_id {}, ready_number {}",
                 peer_id, ready_number
             ),
-            PeerMsg::FetchedLogs(fetched) => write!(fmt, "FetchedLogs {:?}", fetched),
+            PeerMsg::LogsFetched(fetched) => write!(fmt, "LogsFetched {:?}", fetched),
+            PeerMsg::SnapshotGenerated(_) => write!(fmt, "SnapshotGenerated"),
+            PeerMsg::QueryDebugInfo(_) => write!(fmt, "QueryDebugInfo"),
+            #[cfg(feature = "testexport")]
+            PeerMsg::WaitFlush(_) => write!(fmt, "FlushMessages"),
         }
     }
 }
 
 pub enum StoreMsg {
-    RaftMessage(InspectedRaftMessage),
+    RaftMessage(Box<RaftMessage>),
     Tick(StoreTick),
-    Start { store: metapb::Store },
+    Start,
 }
 
 impl fmt::Debug for StoreMsg {
@@ -210,7 +196,7 @@ impl fmt::Debug for StoreMsg {
         match *self {
             StoreMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
             StoreMsg::Tick(tick) => write!(fmt, "StoreTick {:?}", tick),
-            StoreMsg::Start { ref store } => write!(fmt, "Start store {:?}", store),
+            StoreMsg::Start => write!(fmt, "Start store"),
         }
     }
 }

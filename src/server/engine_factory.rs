@@ -248,7 +248,10 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
                 ));
             }
             return Ok(db.clone());
-        } else if options.create_new() || options.create() {
+        }
+        // No need for mutex protection here since root_db creation only occurs at
+        // tikv bootstrap time when there is no racing issue.
+        if options.create_new() || options.create() {
             return self.create_shared_db();
         }
 
@@ -269,7 +272,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
         false
     }
 
-    fn tablet_path(&self, _id: u64, _suffix: u64) -> PathBuf {
+    fn tablet_path_with_prefix(&self, _prefix: &str, _id: u64, _suffix: u64) -> PathBuf {
         self.kv_engine_path()
     }
 

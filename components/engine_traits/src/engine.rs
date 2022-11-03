@@ -40,6 +40,7 @@ pub trait KvEngine:
     + Clone
     + Debug
     + Unpin
+    + Checkpointable
     + 'static
 {
     /// A consistent read-only snapshot of the database
@@ -64,6 +65,14 @@ pub trait KvEngine:
     /// This only exists as a temporary hack during refactoring.
     /// It cannot be used forever.
     fn bad_downcast<T: 'static>(&self) -> &T;
+
+    /// Returns false if KvEngine can't apply snapshot for this region now.
+    /// Some KvEngines need to do some transforms before apply data from
+    /// snapshot. These procedures can be batched in background if there are
+    /// more than one incoming snapshots, thus not blocking applying thread.
+    fn can_apply_snapshot(&self, _is_timeout: bool, _new_batch: bool, _region_id: u64) -> bool {
+        true
+    }
 }
 
 /// TabletAccessor is the trait to access all the tablets with provided accessor
@@ -216,10 +225,13 @@ impl OpenOptions {
     }
 }
 
+pub const SPLIT_PREFIX: &str = "split_";
+pub const MERGE_PREFIX: &str = "merge_";
+
 /// A factory trait to create new engine.
 // It should be named as `EngineFactory` for consistency, but we are about to
 // rename engine to tablet, so always use tablet for new traits/types.
-pub trait TabletFactory<EK>: TabletAccessor<EK> {
+pub trait TabletFactory<EK>: TabletAccessor<EK> + Send + Sync {
     /// Open the tablet with id and suffix according to the OpenOptions.
     ///
     /// The id is likely the region Id, the suffix could be the current raft log
@@ -253,7 +265,15 @@ pub trait TabletFactory<EK>: TabletAccessor<EK> {
     fn exists_raw(&self, path: &Path) -> bool;
 
     /// Get the tablet path by id and suffix
-    fn tablet_path(&self, id: u64, suffix: u64) -> PathBuf;
+    fn tablet_path(&self, id: u64, suffix: u64) -> PathBuf {
+        self.tablet_path_with_prefix("", id, suffix)
+    }
+
+    /// Get the tablet path by id and suffix
+    ///
+    /// Used in special situations
+    /// Ex: split/merge.
+    fn tablet_path_with_prefix(&self, prefix: &str, id: u64, suffix: u64) -> PathBuf;
 
     /// Tablets root path
     fn tablets_path(&self) -> PathBuf;
@@ -287,7 +307,7 @@ where
 
 impl<EK> TabletFactory<EK> for DummyFactory<EK>
 where
-    EK: CfOptionsExt + Clone + Send + 'static,
+    EK: CfOptionsExt + Clone + Send + Sync + 'static,
 {
     fn create_shared_db(&self) -> Result<EK> {
         Ok(self.engine.as_ref().unwrap().clone())
@@ -315,7 +335,7 @@ where
         true
     }
 
-    fn tablet_path(&self, _id: u64, _suffix: u64) -> PathBuf {
+    fn tablet_path_with_prefix(&self, _prefix: &str, _id: u64, _suffix: u64) -> PathBuf {
         PathBuf::from(&self.root_path)
     }
 

@@ -10,7 +10,7 @@ use engine_traits::{KvEngine, CF_DEFAULT, CF_WRITE};
 use futures::executor::block_on;
 use kvproto::{kvrpcpb::ExtraOp, metapb::Region, raft_cmdpb::CmdType};
 use raftstore::{
-    coprocessor::RegionInfoProvider,
+    coprocessor::{ObserveHandle, RegionInfoProvider},
     router::RaftStoreRouter,
     store::{fsm::ChangeObserver, Callback, SignificantMsg},
 };
@@ -152,7 +152,9 @@ impl<S: Snapshot> EventLoader<S> {
                         )
                     })?;
                     debug!("meet lock during initial scanning."; "key" => %utils::redact(&lock_at), "ts" => %lock.ts);
-                    resolver.track_phase_one_lock(lock.ts, lock_at)
+                    if utils::should_track_lock(&lock) {
+                        resolver.track_phase_one_lock(lock.ts, lock_at);
+                    }
                 }
                 TxnEntry::Commit { default, write, .. } => {
                     result.push(ApplyEvent {
@@ -295,7 +297,7 @@ where
                 SignificantMsg::CaptureChange {
                     cmd,
                     region_epoch: region.get_region_epoch().clone(),
-                    callback: Callback::Read(Box::new(|snapshot| {
+                    callback: Callback::read(Box::new(|snapshot| {
                         if snapshot.response.get_header().has_error() {
                             callback(Err(Error::RaftRequest(
                                 snapshot.response.get_header().get_error().clone(),
@@ -333,17 +335,19 @@ where
         Ok(snap)
     }
 
-    pub fn with_resolver<T: 'static>(
+    fn with_resolver<T: 'static>(
         &self,
         region: &Region,
+        handle: &ObserveHandle,
         f: impl FnOnce(&mut TwoPhaseResolver) -> Result<T>,
     ) -> Result<T> {
-        Self::with_resolver_by(&self.tracing, region, f)
+        Self::with_resolver_by(&self.tracing, region, handle, f)
     }
 
-    pub fn with_resolver_by<T: 'static>(
+    fn with_resolver_by<T: 'static>(
         tracing: &SubscriptionTracer,
         region: &Region,
+        handle: &ObserveHandle,
         f: impl FnOnce(&mut TwoPhaseResolver) -> Result<T>,
     ) -> Result<T> {
         let region_id = region.get_id();
@@ -351,6 +355,8 @@ where
             .get_subscription_of(region_id)
             .ok_or_else(|| Error::Other(box_err!("observer for region {} canceled", region_id)))
             .and_then(|v| {
+                // NOTE: once we have compared the observer handle, perhaps we can remove this 
+                // check because epoch version changed implies observer handle changed.
                 raftstore::store::util::compare_region_epoch(
                     region.get_region_epoch(),
                     &v.value().meta,
@@ -360,6 +366,10 @@ where
                     true,
                     false,
                 )?;
+                if v.value().handle().id != handle.id {
+                    return Err(box_err!("stale observe handle {:?}, should be {:?}, perhaps new initial scanning starts", 
+                        handle.id, v.value().handle().id));
+                }
                 Ok(v)
             })
             .map_err(|err| Error::Contextual {
@@ -377,6 +387,7 @@ where
     fn scan_and_async_send(
         &self,
         region: &Region,
+        handle: &ObserveHandle,
         mut event_loader: EventLoader<impl Snapshot>,
         join_handles: &mut Vec<tokio::task::JoinHandle<()>>,
     ) -> Result<Statistics> {
@@ -399,7 +410,9 @@ where
             // and we would exit after the first run of loop :(
             let no_progress = event_loader.entry_batch.is_empty();
             let stat = stat?;
-            self.with_resolver(region, |r| event_loader.emit_entries_to(&mut events, r))?;
+            self.with_resolver(region, handle, |r| {
+                event_loader.emit_entries_to(&mut events, r)
+            })?;
             if no_progress {
                 metrics::INITIAL_SCAN_DURATION.observe(start.saturating_elapsed_secs());
                 return Ok(stats.stat);
@@ -427,6 +440,8 @@ where
     pub fn do_initial_scan(
         &self,
         region: &Region,
+        // We are using this handle for checking whether the initial scan is stale.
+        handle: ObserveHandle,
         start_ts: TimeStamp,
         snap: impl Snapshot,
     ) -> Result<Statistics> {
@@ -438,13 +453,13 @@ where
 
         // It is ok to sink more data than needed. So scan to +inf TS for convenance.
         let event_loader = EventLoader::load_from(snap, start_ts, TimeStamp::max(), region)?;
-        let stats = self.scan_and_async_send(region, event_loader, &mut join_handles)?;
+        let stats = self.scan_and_async_send(region, &handle, event_loader, &mut join_handles)?;
 
         Handle::current()
             .block_on(futures::future::try_join_all(join_handles))
             .map_err(|err| annotate!(err, "tokio runtime failed to join consuming threads"))?;
 
-        Self::with_resolver_by(&tr, region, |r| {
+        Self::with_resolver_by(&tr, region, &handle, |r| {
             r.phase_one_done();
             Ok(())
         })
@@ -487,8 +502,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use futures::executor::block_on;
     use kvproto::metapb::*;
-    use tikv::storage::{txn::tests::*, Engine, TestEngineBuilder};
+    use tikv::storage::{txn::tests::*, TestEngineBuilder};
+    use tikv_kv::SnapContext;
     use txn_types::TimeStamp;
 
     use super::EventLoader;
@@ -499,14 +516,14 @@ mod tests {
 
     #[test]
     fn test_disk_read() {
-        let engine = TestEngineBuilder::new().build_without_cache().unwrap();
+        let mut engine = TestEngineBuilder::new().build_without_cache().unwrap();
         for i in 0..100 {
             let owned_key = format!("{:06}", i);
             let key = owned_key.as_bytes();
             let owned_value = [i as u8; 512];
             let value = owned_value.as_slice();
-            must_prewrite_put(&engine, key, value, key, i * 2);
-            must_commit(&engine, key, i * 2, i * 2 + 1);
+            must_prewrite_put(&mut engine, key, value, key, i * 2);
+            must_commit(&mut engine, key, i * 2, i * 2 + 1);
         }
         // let compact the memtable to disk so we can see the disk read.
         engine.get_rocksdb().as_inner().compact_range(None, None);
@@ -515,7 +532,9 @@ mod tests {
         r.set_id(42);
         r.set_start_key(b"".to_vec());
         r.set_end_key(b"".to_vec());
-        let snap = engine.snapshot_on_kv_engine(b"", b"").unwrap();
+
+        let snap = block_on(async { tikv_kv::snapshot(&mut engine, SnapContext::default()).await })
+            .unwrap();
         let mut loader =
             EventLoader::load_from(snap, TimeStamp::zero(), TimeStamp::max(), &r).unwrap();
 

@@ -10,11 +10,18 @@ use tikv_util::time::Instant;
 make_auto_flush_static_metric! {
     pub label_enum SnapType {
        generate,
-       apply,
+       apply
     }
 
+    // snapshot task status
+    // |all---------start--------------|
+    //               |
+    //               |
+    //               V
+    // |success|abort|fail|delay|ignore|
     pub label_enum SnapStatus {
         all,
+        start,
         success,
         abort,
         fail,
@@ -78,7 +85,7 @@ thread_local! {
     );
 }
 
-const METRICS_FLUSH_INTERVAL: u64 = 15_000; // 15s
+const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
 
 pub fn maybe_tls_local_read_metrics_flush() {
     TLS_LOCAL_READ_METRICS.with(|m| {

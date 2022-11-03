@@ -11,11 +11,9 @@ use tikv_util::{info, worker::Scheduler};
 use txn_types::TimeStamp;
 
 use crate::{
-    errors::{ContextualResultExt, Error, Result},
+    errors::{Error, Result},
     metadata::{store::MetaStore, Checkpoint, CheckpointProvider, MetadataClient},
-    metrics,
-    subscription_track::SubscriptionTracer,
-    try_send, RegionCheckpointOperation, Task,
+    metrics, try_send, RegionCheckpointOperation, Task,
 };
 
 /// A manager for maintaining the last flush ts.
@@ -201,7 +199,7 @@ impl<PD: PdClient + 'static> FlushObserver for BasicFlushObserver<PD> {
             .pd_cli
             .update_service_safe_point(
                 format!("backup-stream-{}-{}", task, self.store_id),
-                TimeStamp::new(rts),
+                TimeStamp::new(rts - 1),
                 // Add a service safe point for 30 mins (6x the default flush interval).
                 // It would probably be safe.
                 Duration::from_secs(1800),
@@ -221,119 +219,25 @@ impl<PD: PdClient + 'static> FlushObserver for BasicFlushObserver<PD> {
     }
 }
 
-pub struct CheckpointV2FlushObserver<S, F, O> {
-    resolvers: SubscriptionTracer,
-    meta_cli: MetadataClient<S>,
-
-    fresh_regions: Vec<Region>,
-    checkpoints: Vec<(Region, TimeStamp)>,
-    can_advance: Option<F>,
-    base: O,
-}
-
-impl<S, F, O> CheckpointV2FlushObserver<S, F, O> {
-    pub fn new(
-        meta_cli: MetadataClient<S>,
-        can_advance: F,
-        resolvers: SubscriptionTracer,
-        base: O,
-    ) -> Self {
-        Self {
-            resolvers,
-            meta_cli,
-            fresh_regions: vec![],
-            checkpoints: vec![],
-            can_advance: Some(can_advance),
-            base,
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl<S, F, O> FlushObserver for CheckpointV2FlushObserver<S, F, O>
-where
-    S: MetaStore + 'static,
-    F: FnOnce() -> bool + Send + 'static,
-    O: FlushObserver,
-{
-    async fn before(&mut self, _checkpoints: Vec<(Region, TimeStamp)>) {
-        let fresh_regions = self.resolvers.collect_fresh_subs();
-        let removal = self.resolvers.collect_removal_subs();
-        let checkpoints = removal
-            .into_iter()
-            .map(|sub| (sub.meta, sub.resolver.resolved_ts()))
-            .collect::<Vec<_>>();
-        self.checkpoints = checkpoints;
-        self.fresh_regions = fresh_regions;
-    }
-
-    async fn after(&mut self, task: &str, rts: u64) -> Result<()> {
-        if !self.can_advance.take().map(|f| f()).unwrap_or(true) {
-            let cp_now = self
-                .meta_cli
-                .get_local_task_checkpoint(task)
-                .await
-                .context(format_args!(
-                    "during checking whether we should skip advancing ts to {}.",
-                    rts
-                ))?;
-            // if we need to roll back checkpoint ts, don't prevent it.
-            if rts >= cp_now.into_inner() {
-                info!("skipping advance checkpoint."; "rts" => %rts, "old_rts" => %cp_now);
-                return Ok(());
-            }
-        }
-        // Optionally upload the region checkpoint.
-        // Unless in some extreme condition, skipping upload the region checkpoint won't
-        // lead to data loss.
-        if let Err(err) = self
-            .meta_cli
-            .upload_region_checkpoint(task, &self.checkpoints)
-            .await
-        {
-            err.report("failed to upload region checkpoint");
-        }
-        // we can advance the progress at next time.
-        // return early so we won't be mislead by the metrics.
-        self.meta_cli
-            .set_local_task_checkpoint(task, rts)
-            .await
-            .context(format_args!("on flushing task {}", task))?;
-        self.base.after(task, rts).await?;
-        self.meta_cli
-            .clear_region_checkpoint(task, &self.fresh_regions)
-            .await
-            .context(format_args!("on clearing the checkpoint for task {}", task))?;
-        Ok(())
-    }
-}
-
 pub struct CheckpointV3FlushObserver<S, O> {
     /// We should modify the rts (the local rts isn't right.)
     /// This should be a BasicFlushObserver or something likewise.
     baseline: O,
     sched: Scheduler<Task>,
     meta_cli: MetadataClient<S>,
-    subs: SubscriptionTracer,
 
     checkpoints: Vec<(Region, TimeStamp)>,
     global_checkpoint_cache: HashMap<String, Checkpoint>,
 }
 
 impl<S, O> CheckpointV3FlushObserver<S, O> {
-    pub fn new(
-        sched: Scheduler<Task>,
-        meta_cli: MetadataClient<S>,
-        subs: SubscriptionTracer,
-        baseline: O,
-    ) -> Self {
+    pub fn new(sched: Scheduler<Task>, meta_cli: MetadataClient<S>, baseline: O) -> Self {
         Self {
             sched,
             meta_cli,
             checkpoints: vec![],
             // We almost always have only one entry.
             global_checkpoint_cache: HashMap::with_capacity(1),
-            subs,
             baseline,
         }
     }
@@ -369,7 +273,6 @@ where
     }
 
     async fn after(&mut self, task: &str, _rts: u64) -> Result<()> {
-        self.subs.update_status_for_v3();
         let t = Task::RegionCheckpointsOp(RegionCheckpointOperation::Update(std::mem::take(
             &mut self.checkpoints,
         )));
@@ -396,12 +299,19 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::assert_matches;
+    use std::{
+        assert_matches,
+        collections::HashMap,
+        sync::{Arc, RwLock},
+        time::Duration,
+    };
 
+    use futures::future::ok;
     use kvproto::metapb::*;
+    use pd_client::{PdClient, PdFuture};
     use txn_types::TimeStamp;
 
-    use super::RegionIdWithVersion;
+    use super::{BasicFlushObserver, FlushObserver, RegionIdWithVersion};
     use crate::GetCheckpointResult;
 
     fn region(id: u64, version: u64, conf_version: u64) -> Region {
@@ -438,5 +348,51 @@ mod tests {
         mgr.update_region_checkpoint(&region(1, 33, 8), TimeStamp::new(24));
         let r = mgr.get_from_region(RegionIdWithVersion::new(1, 33));
         assert_matches::assert_matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 24);
+    }
+
+    struct MockPdClient {
+        safepoint: RwLock<HashMap<String, TimeStamp>>,
+    }
+
+    impl PdClient for MockPdClient {
+        fn update_service_safe_point(
+            &self,
+            name: String,
+            safepoint: TimeStamp,
+            _ttl: Duration,
+        ) -> PdFuture<()> {
+            // let _ = self.safepoint.insert(name, safepoint);
+            self.safepoint.write().unwrap().insert(name, safepoint);
+
+            Box::pin(ok(()))
+        }
+    }
+
+    impl MockPdClient {
+        fn new() -> Self {
+            Self {
+                safepoint: RwLock::new(HashMap::default()),
+            }
+        }
+
+        fn get_service_safe_point(&self, name: String) -> Option<TimeStamp> {
+            self.safepoint.read().unwrap().get(&name).copied()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_after() {
+        let store_id = 1;
+        let pd_cli = Arc::new(MockPdClient::new());
+        let mut flush_observer = BasicFlushObserver::new(pd_cli.clone(), store_id);
+        let task = String::from("test");
+        let rts = 12345;
+
+        let r = flush_observer.after(&task, rts).await;
+        assert_eq!(r.is_ok(), true);
+
+        let serivce_id = format!("backup-stream-{}-{}", task, store_id);
+        let r = pd_cli.get_service_safe_point(serivce_id).unwrap();
+        assert_eq!(r.into_inner(), rts - 1);
     }
 }

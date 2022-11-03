@@ -391,6 +391,8 @@ impl FromStr for ReadableDuration {
 }
 
 impl ReadableDuration {
+    pub const ZERO: ReadableDuration = ReadableDuration(Duration::ZERO);
+
     pub const fn micros(micros: u64) -> ReadableDuration {
         ReadableDuration(Duration::from_micros(micros))
     }
