@@ -600,81 +600,113 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
 #[test]
 #[cfg(feature = "failpoints")]
 fn test_mvcc_flashback_failed_in_first_batch() {
+    use std::char::from_u32;
+
+    use tikv::storage::txn::FLASHBACK_BATCH_SIZE;
+
     let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
     let mut ts = 0;
-    for i in 0..2000 {
-        let k = format!("key@{}", i % 1000).into_bytes();
-        let v = format!("value@{}", i).into_bytes();
-        // Prewrite
-        ts += 1;
-        let prewrite_start_version = ts;
-        let mut mutation = Mutation::default();
-        mutation.set_op(Op::Put);
-        mutation.set_key(k.clone());
-        mutation.set_value(v.clone());
-        must_kv_prewrite(
+    for i in 0..FLASHBACK_BATCH_SIZE*2 {
+        // Meet the constraints of the alphabetical order for test
+        let k = format!("key@{}", from_u32(i as u32).unwrap()).into_bytes();
+        complete_data_commit(
             &client,
-            ctx.clone(),
-            vec![mutation],
+            &ctx,
+            ts,
             k.clone(),
-            prewrite_start_version,
+            b"value@0".to_vec(),
         );
-        // Commit
-        ts += 1;
-        let commit_version = ts;
-        must_kv_commit(
-            &client,
-            ctx.clone(),
-            vec![k.clone()],
-            prewrite_start_version,
-            commit_version,
-            commit_version,
-        );
-        // Get
-        ts += 1;
-        must_kv_read_equal(&client, ctx.clone(), k.clone(), v.clone(), ts)
     }
+    ts += 3;
+    let check_ts = ts;
+    for i in 0..FLASHBACK_BATCH_SIZE*2 {
+        let k = format!("key@{}", from_u32(i as u32).unwrap()).into_bytes();
+        complete_data_commit(
+            &client,
+            &ctx,
+            ts,
+            k.clone(),
+            b"value@1".to_vec(),
+        );
+    }
+    ts += 3;
     // Flashback
     fail::cfg("flashback_failed_in_first_batch", "return").unwrap();
-    must_flashback_to_version(&client, ctx.clone(), 5, ts + 1, ts + 2);
+    fail::cfg("flashback_skip_1_key_in_write", "1*return").unwrap();
+    must_flashback_to_version(&client, ctx.clone(), check_ts, ts + 1, ts + 2);
+    fail::remove("flashback_skip_1_key_in_write");
     fail::remove("flashback_failed_in_first_batch");
-    // Flashback again to check if any error occurs:)
-    fail::cfg("flashback_failed_in_first_batch", "return").unwrap();
-    must_flashback_to_version(&client, ctx.clone(), 5, ts + 1, ts + 2);
-    fail::remove("flashback_failed_in_first_batch");
-    // The first batch of writes are deleted.
+    // skip for key@0
     must_kv_read_equal(
         &client,
         ctx.clone(),
-        b"key@1".to_vec(),
+        format!("key@{}", from_u32(0 as u32).unwrap()).as_bytes().to_vec(),
         b"value@1".to_vec(),
         ts + 2,
     );
-    // Subsequent batches of writes are not deleted.
+    // The first batch of writes are flashbacked.
     must_kv_read_equal(
         &client,
         ctx.clone(),
-        b"key@999".to_vec(),
-        b"value@1999".to_vec(),
+        format!("key@{}", from_u32(1 as u32).unwrap()).as_bytes().to_vec(),
+        b"value@0".to_vec(),
+        ts + 2,
+    );
+    // Subsequent batches of writes are not flashbacked.
+    must_kv_read_equal(
+        &client,
+        ctx.clone(),
+        format!("key@{}", from_u32(FLASHBACK_BATCH_SIZE as u32 - 1).unwrap())
+            .as_bytes()
+            .to_vec(),
+        b"value@1".to_vec(),
+        ts + 2,
+    );
+    // Flashback batch 2.
+    fail::cfg("flashback_failed_in_first_batch", "return").unwrap();
+    must_flashback_to_version(&client, ctx.clone(), check_ts, ts + 1, ts + 2);
+    fail::remove("flashback_failed_in_first_batch");
+    // key@0 ust be flahsbacked in the second batch firstly.
+    must_kv_read_equal(
+        &client,
+        ctx.clone(),
+        format!("key@{}", from_u32(0 as u32).unwrap()).as_bytes().to_vec(),
+        b"value@0".to_vec(),
+        ts + 2,
+    );
+    must_kv_read_equal(
+        &client,
+        ctx.clone(),
+        format!("key@{}", from_u32(FLASHBACK_BATCH_SIZE as u32 - 1).unwrap())
+            .as_bytes()
+            .to_vec(),
+        b"value@0".to_vec(),
+        ts + 2,
+    );
+    // 2*(FLASHBACK_BATCH_SIZE - 1) - 1 keys are flashbacked.
+    must_kv_read_equal(
+        &client,
+        ctx.clone(),
+        format!("key@{}", from_u32(2*FLASHBACK_BATCH_SIZE as u32 - 3).unwrap())
+            .as_bytes()
+            .to_vec(),
+        b"value@1".to_vec(),
         ts + 2,
     );
     // Flashback needs to be continued.
-    must_flashback_to_version(&client, ctx.clone(), 5, ts + 1, ts + 2);
+    must_flashback_to_version(&client, ctx.clone(), check_ts, ts + 1, ts + 2);
     // Flashback again to check if any error occurs:)
-    must_flashback_to_version(&client, ctx.clone(), 5, ts + 1, ts + 2);
+    must_flashback_to_version(&client, ctx.clone(), check_ts, ts + 1, ts + 2);
     ts += 2;
-    // The first batch of writes are deleted.
+    // Subsequent batches of writes are flashbacked.
     must_kv_read_equal(
         &client,
-        ctx.clone(),
-        b"key@1".to_vec(),
-        b"value@1".to_vec(),
+        ctx,
+        format!("key@{}", from_u32(2*FLASHBACK_BATCH_SIZE as u32 - 3).unwrap())
+            .as_bytes()
+            .to_vec(),
+        b"value@0".to_vec(),
         ts,
-    );
-    // Subsequent batches of writes are deleted.
-    assert_eq!(
-        kv_read(&client, ctx, b"key@999".to_vec(), ts).value,
-        b"".to_vec()
     );
 }
 

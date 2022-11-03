@@ -135,6 +135,16 @@ pub fn flashback_to_version(
     //     in `CF_WRITE` and `CF_DEFAULT` if needed with `self.commit_ts` and
     //     `self.start_ts`.
     for (key, old_write) in key_old_writes {
+        #[cfg(feature = "failpoints")]
+        {
+            let should_skip = || {
+                fail::fail_point!("flashback_skip_1_key_in_write", |_| true);
+                false
+            };
+            if should_skip() {
+                continue;
+            }
+        }
         if txn.write_size() >= MAX_TXN_WRITE_SIZE {
             *next_write_key = Some(key);
             break;
