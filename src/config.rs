@@ -3572,7 +3572,7 @@ impl TikvConfig {
         Ok((cfg, tmp))
     }
 
-    fn suggested_memory_usage_limit() -> ReadableSize {
+    pub fn suggested_memory_usage_limit() -> ReadableSize {
         let total = SysQuota::memory_limit_in_bytes();
         // Reserve some space for page cache. The
         ReadableSize((total as f64 * MEMORY_USAGE_LIMIT_RATE) as u64)

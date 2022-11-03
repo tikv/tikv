@@ -5,7 +5,7 @@ use std::{
     future::Future,
     ops::Add,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, atomic::{AtomicU64, Ordering}},
 };
 
 use collections::HashSet;
@@ -50,7 +50,6 @@ use crate::{import::duplicate_detect::DuplicateDetector, server::CONFIG_ROCKSDB_
 ///
 /// It saves the SST sent from client to a file and then sends a command to
 /// raftstore to trigger the ingest process.
-#[derive(Clone)]
 pub struct ImportSstService<E, Router>
 where
     E: KvEngine,
@@ -63,11 +62,34 @@ where
     limiter: Limiter,
     task_slots: Arc<Mutex<HashSet<PathBuf>>>,
     raft_entry_max_size: ReadableSize,
+    memory_limit: ReadableSize,
+    mem_use: AtomicU64,
 }
 
 pub struct SnapshotResult<E: KvEngine> {
     snapshot: RegionSnapshot<E::Snapshot>,
     term: u64,
+}
+
+impl<E, Router> Clone for ImportSstService<E, Router>
+where
+    E: KvEngine,
+    Router: 'static + RaftStoreRouter<E>,
+{
+    fn clone(&self) -> Self {
+        Self{
+            mem_use: AtomicU64::new(self.mem_use.load(Ordering::SeqCst)),
+            cfg: self.cfg.clone(),
+            engine: self.engine.clone(),
+            router: self.router.clone(),
+            threads: self.threads.clone(),
+            importer: self.importer.clone(),
+            limiter: self.limiter.clone(),
+            task_slots: self.task_slots.clone(),
+            raft_entry_max_size: self.raft_entry_max_size,
+            memory_limit: self.memory_limit.clone(),
+        }
+    }
 }
 
 impl<E, Router> ImportSstService<E, Router>
@@ -104,6 +126,8 @@ where
             limiter: Limiter::new(f64::INFINITY),
             task_slots: Arc::new(Mutex::new(HashSet::default())),
             raft_entry_max_size,
+            memory_limit: crate::config::TikvConfig::suggested_memory_usage_limit(),
+            mem_use: AtomicU64::new(0),
         }
     }
 
@@ -241,6 +265,18 @@ where
                 resp.set_error(header.take_error());
             }
             Ok(resp)
+        }
+    }
+
+    fn calculate_memory(&self, req: &ApplyRequest) -> u64 {    
+        if req.meta.is_some(){
+            req.get_meta().get_length()
+        }else{
+            let mut sum_len = 0;
+            for meta in req.get_metas() {
+                sum_len += meta.get_length();
+            }
+            sum_len
         }
     }
 }
@@ -440,16 +476,36 @@ where
         let start = Instant::now();
         let mut start_apply = Instant::now();
         let raft_size = self.raft_entry_max_size;
+        let need_mem = self.calculate_memory(&req);
+        let mem_in_use = self.mem_use.fetch_add(need_mem, Ordering::SeqCst);
+        let serve_is_busy = if mem_in_use > self.memory_limit.0 {
+            true
+        }else{
+            false
+        };
+        defer! {{self.mem_use.fetch_sub(need_mem, Ordering::SeqCst);}}
 
         let handle_task = async move {
             // Records how long the apply task waits to be scheduled.
             sst_importer::metrics::IMPORTER_APPLY_DURATION
                 .with_label_values(&["queue"])
                 .observe(start.saturating_elapsed().as_secs_f64());
-
             let mut futs = vec![];
             let mut apply_resp = ApplyResponse::default();
             let context = req.take_context();
+            if serve_is_busy {
+                let mut err = kvproto::errorpb::Error::new();
+                err.set_server_is_busy(kvproto::errorpb::ServerIsBusy::new());
+
+                let mut import_err = kvproto::import_sstpb::Error::default();
+                import_err.set_message(String::from("the server is busy"));
+                import_err.set_store_error(err);
+
+                apply_resp.set_error(import_err);
+                let tmp = Ok(apply_resp);
+                crate::send_rpc_response!(tmp, sink, label, timer);
+                return
+            }
 
             let result = (|| -> Result<()> {
                 let mut cmd_reqs = vec![];
