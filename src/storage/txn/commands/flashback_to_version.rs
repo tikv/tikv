@@ -1,18 +1,20 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use txn_types::{Key, Lock, TimeStamp, Write};
+use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
     kv::WriteData,
     lock_manager::LockManager,
     mvcc::{MvccTxn, SnapshotReader},
     txn::{
+        actions::flashback_to_version::{flashback_to_version_lock, flashback_to_version_write},
         commands::{
-            Command, CommandExt, FlashbackToVersionReadPhase, ReaderWithStats, ReleasedLocks,
-            ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
+            Command, CommandExt, FlashbackToVersionReadPhase, FlashbackToVersionState,
+            ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand,
+            WriteContext, WriteResult,
         },
-        flashback_to_version, latch, Result,
+        latch, Result,
     },
     ProcessResult, Snapshot,
 };
@@ -26,10 +28,9 @@ command! {
             commit_ts: TimeStamp,
             version: TimeStamp,
             end_key: Option<Key>,
-            next_lock_key: Option<Key>,
-            next_write_key: Option<Key>,
-            key_locks: Vec<(Key, Lock)>,
-            key_old_writes: Vec<(Key, Option<Write>)>,
+            start_lock_key: Option<Key>,
+            start_write_key: Option<Key>,
+            state: Option<FlashbackToVersionState>,
         }
 }
 
@@ -39,24 +40,27 @@ impl CommandExt for FlashbackToVersion {
     request_type!(KvFlashbackToVersion);
 
     fn gen_lock(&self) -> latch::Lock {
-        latch::Lock::new(
-            self.key_locks
-                .iter()
-                .map(|(key, _)| key)
-                .chain(self.key_old_writes.iter().map(|(key, _)| key)),
-        )
+        match self.state.as_ref().unwrap() {
+            FlashbackToVersionState::ScanLock { key_locks, .. } => {
+                latch::Lock::new(key_locks.iter().map(|(key, _)| key))
+            }
+            FlashbackToVersionState::ScanWrite { key_old_writes, .. } => {
+                latch::Lock::new(key_old_writes.iter().map(|(key, _)| key))
+            }
+        }
     }
 
     fn write_bytes(&self) -> usize {
-        self.key_locks
-            .iter()
-            .map(|(key, _)| key.as_encoded().len())
-            .chain(
-                self.key_old_writes
-                    .iter()
-                    .map(|(key, _)| key.as_encoded().len()),
-            )
-            .sum()
+        match self.state.as_ref().unwrap() {
+            FlashbackToVersionState::ScanLock { key_locks, .. } => key_locks
+                .iter()
+                .map(|(key, _)| key.as_encoded().len())
+                .sum(),
+            FlashbackToVersionState::ScanWrite { key_old_writes, .. } => key_old_writes
+                .iter()
+                .map(|(key, _)| key.as_encoded().len())
+                .sum(),
+        }
     }
 }
 
@@ -67,19 +71,25 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
             context.statistics,
         );
         let mut txn = MvccTxn::new(TimeStamp::zero(), context.concurrency_manager);
-
-        let mut next_lock_key = self.next_lock_key.take();
-        let mut next_write_key = self.next_write_key.take();
-        let rows = flashback_to_version(
-            &mut txn,
-            &mut reader,
-            &mut next_lock_key,
-            &mut next_write_key,
-            self.key_locks.clone(),
-            self.key_old_writes.clone(),
-            self.start_ts,
-            self.commit_ts,
-        )?;
+        // The state must be `ScanLock` or `ScanWrite` here.
+        match self.state.as_mut().unwrap() {
+            FlashbackToVersionState::ScanLock {
+                next_lock_key,
+                key_locks,
+            } => flashback_to_version_lock(&mut txn, &mut reader, next_lock_key, key_locks)?,
+            FlashbackToVersionState::ScanWrite {
+                next_write_key,
+                key_old_writes,
+            } => flashback_to_version_write(
+                &mut txn,
+                &mut reader,
+                next_write_key,
+                key_old_writes,
+                self.start_ts,
+                self.commit_ts,
+            )?,
+        }
+        let rows = txn.modifies.len();
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
         write_data.extra.for_flashback = true;
         Ok(WriteResult {
@@ -90,22 +100,19 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
                 fail_point!("flashback_failed_after_first_batch", |_| {
                     ProcessResult::Res
                 });
-                if next_lock_key.is_none() && next_write_key.is_none() {
-                    ProcessResult::Res
-                } else {
-                    let next_cmd = FlashbackToVersionReadPhase {
-                        ctx: self.ctx,
-                        deadline: self.deadline,
-                        start_ts: self.start_ts,
-                        commit_ts: self.commit_ts,
-                        version: self.version,
-                        end_key: self.end_key,
-                        next_lock_key,
-                        next_write_key,
-                    };
-                    ProcessResult::NextCommand {
-                        cmd: Command::FlashbackToVersionReadPhase(next_cmd),
-                    }
+                let next_cmd = FlashbackToVersionReadPhase {
+                    ctx: self.ctx,
+                    deadline: self.deadline,
+                    start_ts: self.start_ts,
+                    commit_ts: self.commit_ts,
+                    version: self.version,
+                    end_key: self.end_key,
+                    start_lock_key: self.start_lock_key,
+                    start_write_key: self.start_write_key,
+                    state: self.state,
+                };
+                ProcessResult::NextCommand {
+                    cmd: Command::FlashbackToVersionReadPhase(next_cmd),
                 }
             })(),
             lock_info: None,
