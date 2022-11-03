@@ -1,6 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use std::mem;
+
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
@@ -74,22 +76,22 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
         match self.state {
             FlashbackToVersionState::ScanLock {
                 ref mut next_lock_key,
-                ref key_locks,
+                ref mut key_locks,
             } => {
                 if let Some(new_next_lock_key) =
-                    flashback_to_version_lock(&mut txn, &mut reader, key_locks)?
+                    flashback_to_version_lock(&mut txn, &mut reader, mem::take(key_locks))?
                 {
                     *next_lock_key = Some(new_next_lock_key);
                 }
             }
             FlashbackToVersionState::ScanWrite {
                 ref mut next_write_key,
-                ref key_old_writes,
+                ref mut key_old_writes,
             } => {
                 if let Some(new_next_write_key) = flashback_to_version_write(
                     &mut txn,
                     &mut reader,
-                    key_old_writes,
+                    mem::take(key_old_writes),
                     self.start_ts,
                     self.commit_ts,
                 )? {
