@@ -63,7 +63,7 @@ pub struct LazyEtcdClientInner {
     cli: OnceCell<EtcdStore>,
 }
 
-fn etcd_error_is_retryable(etcd_err: &EtcdError) -> bool {
+pub fn etcd_error_is_retryable(etcd_err: &EtcdError) -> bool {
     match etcd_err {
         EtcdError::InvalidArgs(_)
         | EtcdError::InvalidUri(_)

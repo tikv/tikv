@@ -132,9 +132,11 @@ where
         let meta_client_clone = meta_client.clone();
         let scheduler_clone = scheduler.clone();
         // TODO build a error handle mechanism #error 2
-        pool.spawn(async {
-            if let Err(err) =
-                retry(move || Self::start_and_watch_tasks(meta_client_clone, scheduler_clone)).await
+        pool.spawn(async move {
+            if let Err(err) = tikv_util::stream::retry(|| {
+                Self::start_and_watch_tasks(meta_client_clone, scheduler_clone)
+            })
+            .await
             {
                 err.report("failed to start watch tasks");
             }

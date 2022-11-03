@@ -12,9 +12,9 @@ use protobuf::ProtobufError;
 use raftstore::Error as RaftStoreError;
 use thiserror::Error as ThisError;
 use tikv::storage::txn::Error as TxnError;
-use tikv_util::{error, warn, worker::ScheduleError};
+use tikv_util::{error, stream::RetryError, warn, worker::ScheduleError};
 
-use crate::{endpoint::Task, metrics};
+use crate::{endpoint::Task, metadata::store::lazy_etcd::etcd_error_is_retryable, metrics};
 
 #[derive(ThisError, Debug)]
 pub enum Error {
@@ -66,6 +66,29 @@ impl ErrorCodeExt for Error {
             Error::Other(_) => OTHER,
             Error::RaftStore(_) => RAFTSTORE,
             Error::ObserveCanceled(..) => OBSERVE_CANCELED,
+        }
+    }
+}
+
+impl RetryError for Error {
+    fn is_retryable(&self) -> bool {
+        match self {
+            Error::Etcd(e) => etcd_error_is_retryable(e),
+            Error::Protobuf(_) => false,
+            Error::NoSuchTask { task_name } => false,
+            Error::ObserveCanceled(..) => false,
+            Error::MalformedMetadata(_) => false,
+            Error::Io(_) => todo!(),
+            Error::Txn(_) => todo!(),
+            Error::Sched(_) => true,
+            Error::Pd(_) => todo!(),
+            Error::RaftRequest(_) => true,
+            Error::RaftStore(_) => true,
+            Error::Contextual {
+                context,
+                inner_error,
+            } => false,
+            Error::Other(_) => true,
         }
     }
 }
