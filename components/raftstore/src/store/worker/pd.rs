@@ -781,7 +781,7 @@ impl SlowScore {
 
             inspect_interval,
             ratio_thresh: OrderedFloat(0.1),
-            min_ttr: Duration::from_secs(STORE_HEARTBEAT_DELAY_LIMIT),
+            min_ttr: Duration::from_secs(5 * 60),
             last_record_time: Instant::now(),
             last_update_time: Instant::now(),
             round_ticks: 30,
@@ -1832,18 +1832,9 @@ where
         }
     }
 
-    fn is_store_heartbeat_delayed(&self) -> bool {
-        let now = UnixSecs::now();
-        let interval_second = now.into_inner() - self.store_stat.last_report_ts.into_inner();
-        // To avoid reporting too many fake heartbeats to PD, we should also
-        // check whether it reach the report limitation or not.
-        (interval_second >= self.store_heartbeat_interval.as_secs())
-            && (interval_second <= STORE_HEARTBEAT_DELAY_LIMIT)
-    }
-
     /// Force to send a special heartbeat to pd when current store is hung on
     /// some special circumstances, i.e. disk busy, handler busy and others.
-    fn force_report_store_heartbeat(&mut self) {
+    fn handle_fake_store_heartbeat(&mut self) {
         let mut stats = pdpb::StoreStats::default();
         stats.set_store_id(self.store_id);
         stats.set_region_count(self.region_peers.len() as u32);
@@ -1881,6 +1872,13 @@ where
                 "store_id" => self.store_id,
             );
         }
+    }
+
+    fn is_store_heartbeat_delayed(&self) -> bool {
+        let now = UnixSecs::now();
+        let interval_second = now.into_inner() - self.store_stat.last_report_ts.into_inner();
+        (interval_second >= self.store_heartbeat_interval.as_secs())
+            && (interval_second <= STORE_HEARTBEAT_DELAY_LIMIT)
     }
 }
 
@@ -2166,7 +2164,7 @@ where
             // a FAKE `store-heartbeat`.
             if self.slow_score.should_force_report_slow_store() && self.is_store_heartbeat_delayed()
             {
-                self.force_report_store_heartbeat();
+                self.handle_fake_store_heartbeat();
             }
         }
         let scheduler = self.scheduler.clone();
