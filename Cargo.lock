@@ -5873,7 +5873,6 @@ dependencies = [
  "kvproto",
  "pd_client",
  "raftstore",
- "tempfile",
  "test_raftstore",
  "tikv",
  "tikv_util",

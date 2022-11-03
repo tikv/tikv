@@ -765,10 +765,9 @@ pub mod test_utils {
         util::get_cf_handle,
         RocksEngine,
     };
-    use engine_test::{ctor::DbOptions, kv::TestRocksTabletFactory};
+    use engine_test::kv::TestRocksTabletFactory;
     use engine_traits::{SyncMutable, CF_DEFAULT, CF_WRITE};
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
-    use tempfile::Builder;
     use tikv_util::{
         config::VersionTrack,
         worker::{dummy_scheduler, ReceiverWrapper},
@@ -982,16 +981,16 @@ pub mod tests {
         gc_runner.safe_point(50).gc(&raw_engine);
         must_get(&mut engine, b"zkey", 110, &value);
 
-        // GC can't delete keys before the safe ponit if they are latest versions.
-        gc_runner.safe_point(200).gc(&raw_engine);
-        must_get(&mut engine, b"zkey", 110, &value);
-
-        // GC can't delete keys before the safe ponit if they are latest versions.
+        // GC can't delete keys before the safe point if they are latest versions.
         gc_runner.safe_point(200).gc(&raw_engine);
         must_get(&mut engine, b"zkey", 110, &value);
 
         must_prewrite_put(&mut engine, b"zkey", &value, b"zkey", 120);
         must_commit(&mut engine, b"zkey", 120, 130);
+
+        // GC can't delete the latest version before the safe point.
+        gc_runner.safe_point(115).gc(&raw_engine);
+        must_get(&mut engine, b"zkey", 110, &value);
 
         // GC a version will also delete the key on default CF.
         gc_runner.safe_point(200).gc(&raw_engine);

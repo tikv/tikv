@@ -140,10 +140,6 @@ pub mod kv {
             T::new_kv_engine_opt(tablet_path.to_str().unwrap(), self.db_opt.clone(), cf_opts)
         }
 
-        pub fn get_root_db(&self) -> Arc<Mutex<Option<T>>> {
-            self.root_db.clone()
-        }
-
         pub fn from_db(db: T) -> Self {
             Self {
                 root_path: Path::new(db.path()).to_path_buf(),
