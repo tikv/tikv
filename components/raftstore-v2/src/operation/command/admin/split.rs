@@ -315,12 +315,10 @@ mod test {
         split_keys: Vec<Vec<u8>>,
         children_peers: Vec<Vec<u64>>,
         log_index: u64,
+        region_boundries: Vec<(&[u8], &[u8])>,
     ) -> HashMap<u64, Region> {
         let mut splits = BatchSplitRequest::default();
         splits.set_right_derive(right_derived);
-        let mut region_boundries = split_keys.clone();
-        region_boundries.insert(0, region_to_split.get_start_key().to_vec());
-        region_boundries.push(region_to_split.get_end_key().to_vec());
 
         for ((new_region_id, children), split_key) in new_region_ids
             .into_iter()
@@ -339,15 +337,15 @@ mod test {
         let (resp, apply_res) = apply.apply_batch_split(&req, log_index).unwrap();
 
         let regions = resp.get_splits().get_regions();
-        assert!(regions.len() == region_boundries.len() - 1);
+        assert!(regions.len() == region_boundries.len());
 
         let mut epoch = region_to_split.get_region_epoch().clone();
         epoch.version += children_peers.len() as u64;
 
         let mut child_idx = 0;
         for (i, region) in regions.iter().enumerate() {
-            assert_eq!(region.get_start_key().to_vec(), region_boundries[i]);
-            assert_eq!(region.get_end_key().to_vec(), region_boundries[i + 1]);
+            assert_eq!(region.get_start_key().to_vec(), region_boundries[i].0);
+            assert_eq!(region.get_end_key().to_vec(), region_boundries[i].1);
             assert_eq!(*region.get_region_epoch(), epoch);
 
             if region.id == region_to_split.id {
@@ -508,6 +506,7 @@ mod test {
             vec![b"k09".to_vec()],
             vec![vec![11, 12, 13]],
             log_index,
+            vec![(b"", b"k09"), (b"k09", b"k10")],
         );
 
         log_index = 20;
@@ -521,6 +520,7 @@ mod test {
             vec![b"k01".to_vec()],
             vec![vec![21, 22, 23]],
             log_index,
+            vec![(b"", b"k01"), (b"k01", b"k09")],
         );
 
         log_index = 30;
@@ -535,6 +535,7 @@ mod test {
             vec![b"k02".to_vec(), b"k03".to_vec()],
             vec![vec![31, 32, 33], vec![41, 42, 43]],
             log_index,
+            vec![(b"k01", b"k02"), (b"k02", b"k03"), (b"k03", b"k09")],
         );
 
         // After split: region 1 ["k03", "k07"], region 50 ["k07", "k08"],
@@ -549,6 +550,7 @@ mod test {
             vec![b"k07".to_vec(), b"k08".to_vec()],
             vec![vec![51, 52, 53], vec![61, 62, 63]],
             log_index,
+            vec![(b"k03", b"k07"), (b"k07", b"k08"), (b"k08", b"k09")],
         );
 
         // Split will checkpoint tablet, so if there are some writes before split, they
