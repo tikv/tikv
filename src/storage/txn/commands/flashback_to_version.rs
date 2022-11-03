@@ -87,7 +87,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
             to_be_write: write_data,
             rows,
             pr: (move || {
-                fail_point!("flashback_failed_in_first_batch", |_| {
+                fail_point!("flashback_failed_after_first_batch", |_| {
                     ProcessResult::Res
                 });
                 if next_lock_key.is_none() && next_write_key.is_none() {

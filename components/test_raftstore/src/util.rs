@@ -818,14 +818,8 @@ pub fn must_kv_read_equal(client: &TikvClient, ctx: Context, key: Vec<u8>, val: 
     assert_eq!(get_resp.take_value(), val);
 }
 
-// TODO replace the redundant code
-pub fn complete_data_commit(
-    client: &TikvClient,
-    ctx: &Context,
-    ts: u64,
-    k: Vec<u8>,
-    v: Vec<u8>,
-) {
+// TODO: replace the redundant code
+pub fn complete_data_commit(client: &TikvClient, ctx: &Context, ts: u64, k: Vec<u8>, v: Vec<u8>) {
     // Prewrite
     let prewrite_start_version = ts + 1;
     let mut mutation = Mutation::default();
@@ -850,7 +844,7 @@ pub fn complete_data_commit(
         commit_version,
     );
     // Get
-    must_kv_read_equal(client, ctx.clone(), k.clone(), v.clone(), ts + 3);
+    must_kv_read_equal(client, ctx.clone(), k, v, ts + 3);
 }
 
 pub fn kv_read(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) -> GetResponse {
