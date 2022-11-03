@@ -3423,7 +3423,7 @@ mod tests {
     use super::{
         mvcc::tests::{must_unlocked, must_written},
         test_util::*,
-        txn::FLASHBACK_BATCH_SIZE,
+        txn::{commands::new_flashback_to_version_read_phase_cmd, FLASHBACK_BATCH_SIZE},
         *,
     };
     use crate::{
@@ -4695,12 +4695,10 @@ mod tests {
             let version = write.2;
             storage
                 .sched_txn_command(
-                    commands::FlashbackToVersionReadPhase::new(
+                    new_flashback_to_version_read_phase_cmd(
                         start_ts,
                         commit_ts,
                         version,
-                        None,
-                        Some(key.clone()),
                         Some(key.clone()),
                         None,
                         Context::default(),
@@ -4787,12 +4785,10 @@ mod tests {
         let commit_ts = *ts.incr();
         storage
             .sched_txn_command(
-                commands::FlashbackToVersionReadPhase::new(
+                new_flashback_to_version_read_phase_cmd(
                     start_ts,
                     commit_ts,
                     2.into(),
-                    None,
-                    Some(Key::from_raw(b"k")),
                     Some(Key::from_raw(b"k")),
                     None,
                     Context::default(),
@@ -4811,12 +4807,10 @@ mod tests {
         let commit_ts = *ts.incr();
         storage
             .sched_txn_command(
-                commands::FlashbackToVersionReadPhase::new(
+                new_flashback_to_version_read_phase_cmd(
                     start_ts,
                     commit_ts,
                     1.into(),
-                    None,
-                    Some(Key::from_raw(b"k")),
                     Some(Key::from_raw(b"k")),
                     None,
                     Context::default(),
@@ -4910,12 +4904,10 @@ mod tests {
         for _ in 0..10 {
             storage
                 .sched_txn_command(
-                    commands::FlashbackToVersionReadPhase::new(
+                    new_flashback_to_version_read_phase_cmd(
                         flashback_start_ts,
                         flashback_commit_ts,
                         TimeStamp::zero(),
-                        None,
-                        Some(Key::from_raw(b"k")),
                         Some(Key::from_raw(b"k")),
                         None,
                         Context::default(),

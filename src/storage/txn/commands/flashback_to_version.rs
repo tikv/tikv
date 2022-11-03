@@ -27,9 +27,8 @@ command! {
             start_ts: TimeStamp,
             commit_ts: TimeStamp,
             version: TimeStamp,
+            start_key: Option<Key>,
             end_key: Option<Key>,
-            start_lock_key: Option<Key>,
-            start_write_key: Option<Key>,
             state: Option<FlashbackToVersionState>,
         }
 }
@@ -106,9 +105,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
                     start_ts: self.start_ts,
                     commit_ts: self.commit_ts,
                     version: self.version,
+                    start_key: self.start_key,
                     end_key: self.end_key,
-                    start_lock_key: self.start_lock_key,
-                    start_write_key: self.start_write_key,
                     state: self.state,
                 };
                 ProcessResult::NextCommand {

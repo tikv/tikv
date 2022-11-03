@@ -13,7 +13,7 @@ use crate::storage::{
         sched_pool::tls_collect_keyread_histogram_vec,
         Error, ErrorInner, Result, FLASHBACK_BATCH_SIZE,
     },
-    ScanMode, Snapshot, Statistics,
+    Context, ScanMode, Snapshot, Statistics,
 };
 
 pub enum FlashbackToVersionState {
@@ -27,6 +27,28 @@ pub enum FlashbackToVersionState {
     },
 }
 
+pub fn new_flashback_to_version_read_phase_cmd(
+    start_ts: TimeStamp,
+    commit_ts: TimeStamp,
+    version: TimeStamp,
+    start_key: Option<Key>,
+    end_key: Option<Key>,
+    ctx: Context,
+) -> TypedCommand<()> {
+    FlashbackToVersionReadPhase::new(
+        start_ts,
+        commit_ts,
+        version,
+        start_key.clone(),
+        end_key,
+        Some(FlashbackToVersionState::ScanLock {
+            next_lock_key: start_key,
+            key_locks: Vec::with_capacity(0),
+        }),
+        ctx,
+    )
+}
+
 command! {
     FlashbackToVersionReadPhase:
         cmd_ty => (),
@@ -35,9 +57,8 @@ command! {
             start_ts: TimeStamp,
             commit_ts: TimeStamp,
             version: TimeStamp,
+            start_key: Option<Key>,
             end_key: Option<Key>,
-            start_lock_key: Option<Key>,
-            start_write_key: Option<Key>,
             state: Option<FlashbackToVersionState>,
         }
 }
@@ -71,10 +92,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
             }));
         }
         let tag = self.tag().get_str();
-        let cur_state = self.state.unwrap_or(FlashbackToVersionState::ScanLock {
-            next_lock_key: self.start_lock_key.clone(),
-            key_locks: Vec::with_capacity(0),
-        });
+        let cur_state = self.state.unwrap();
         let mut read_again = false;
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &self.ctx);
         // Separate the lock and write flashback to prevent from putting two writes for
@@ -87,11 +105,11 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     &self.end_key,
                     statistics,
                 )?;
-                let next_state = if key_locks.is_empty() && !has_remain_locks {
+                if key_locks.is_empty() && !has_remain_locks {
                     // No more locks to flashback, continue to scan the writes.
                     read_again = true;
                     Some(FlashbackToVersionState::ScanWrite {
-                        next_write_key: self.start_write_key.clone(),
+                        next_write_key: self.start_key.clone(),
                         key_old_writes: Vec::with_capacity(0),
                     })
                 } else {
@@ -106,8 +124,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                         },
                         key_locks,
                     })
-                };
-                next_state
+                }
             }
             FlashbackToVersionState::ScanWrite { next_write_key, .. } => {
                 let (mut key_old_writes, has_remain_writes) = flashback_to_version_read_write(
@@ -119,7 +136,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     self.commit_ts,
                     statistics,
                 )?;
-                let next_state = if !key_old_writes.is_empty() {
+                if !key_old_writes.is_empty() {
                     tls_collect_keyread_histogram_vec(tag, key_old_writes.len() as f64);
                     Some(FlashbackToVersionState::ScanWrite {
                         next_write_key: if has_remain_writes {
@@ -132,8 +149,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     })
                 } else {
                     None
-                };
-                next_state
+                }
             }
         };
         // No more keys to flashback, just return.
@@ -148,9 +164,8 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     start_ts: self.start_ts,
                     commit_ts: self.commit_ts,
                     version: self.version,
+                    start_key: self.start_key,
                     end_key: self.end_key,
-                    start_lock_key: self.start_lock_key,
-                    start_write_key: self.start_write_key,
                     state: next_state,
                 })
             } else {
@@ -160,9 +175,8 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     start_ts: self.start_ts,
                     commit_ts: self.commit_ts,
                     version: self.version,
+                    start_key: self.start_key,
                     end_key: self.end_key,
-                    start_lock_key: self.start_lock_key,
-                    start_write_key: self.start_write_key,
                     state: next_state,
                 })
             },
