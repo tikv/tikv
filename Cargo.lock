@@ -6089,7 +6089,7 @@ dependencies = [
  "lazy_static",
  "log_wrappers",
  "match-template",
- "nom 5.1.0",
+ "nom 7.1.0",
  "num 0.3.0",
  "num-derive",
  "num-traits",
