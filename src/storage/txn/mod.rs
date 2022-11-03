@@ -40,7 +40,7 @@ pub use self::{
 };
 use crate::storage::{
     mvcc::Error as MvccError,
-    types::{MvccInfo, PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, TxnStatus},
+    types::{MvccInfo, PessimisticLockResults, PrewriteResult, SecondaryLocksStatus, TxnStatus},
     Error as StorageError, Result as StorageResult,
 };
 
@@ -73,7 +73,7 @@ pub enum ProcessResult {
         err: StorageError,
     },
     PessimisticLockRes {
-        res: StorageResult<PessimisticLockRes>,
+        res: StorageResult<PessimisticLockResults>,
     },
     SecondaryLocksStatus {
         status: SecondaryLocksStatus,
