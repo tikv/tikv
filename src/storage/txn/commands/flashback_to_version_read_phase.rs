@@ -11,18 +11,19 @@ use crate::storage::{
         },
         flashback_to_version_read_lock, flashback_to_version_read_write,
         sched_pool::tls_collect_keyread_histogram_vec,
-        Error, ErrorInner, Result, FLASHBACK_BATCH_SIZE,
+        Error, ErrorInner, Result,
     },
     Context, ScanMode, Snapshot, Statistics,
 };
 
+#[derive(Debug)]
 pub enum FlashbackToVersionState {
     ScanLock {
-        next_lock_key: Option<Key>,
+        next_lock_key: Key,
         key_locks: Vec<(Key, Lock)>,
     },
     ScanWrite {
-        next_write_key: Option<Key>,
+        next_write_key: Key,
         key_old_writes: Vec<(Key, Option<Write>)>,
     },
 }
@@ -42,7 +43,7 @@ pub fn new_flashback_to_version_read_phase_cmd(
         start_key.clone(),
         end_key,
         FlashbackToVersionState::ScanLock {
-            next_lock_key: Some(start_key),
+            next_lock_key: start_key,
             key_locks: Vec::new(),
         },
         ctx,
@@ -98,48 +99,38 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
         // the same key in a single batch to make the TiCDC panic.
         let next_state = match self.state {
             FlashbackToVersionState::ScanLock { next_lock_key, .. } => {
-                if next_lock_key.is_none() {
+                let (mut key_locks, has_remain_locks) = flashback_to_version_read_lock(
+                    &mut reader,
+                    next_lock_key,
+                    &self.end_key,
+                    statistics,
+                )?;
+                if key_locks.is_empty() && !has_remain_locks {
+                    // No more locks to flashback, continue to scan the writes.
                     read_again = true;
                     FlashbackToVersionState::ScanWrite {
-                        next_write_key: Some(self.start_key.clone()),
+                        next_write_key: self.start_key.clone(),
                         key_old_writes: Vec::new(),
                     }
                 } else {
-                    let (mut key_locks, has_remain_locks) = flashback_to_version_read_lock(
-                        &mut reader,
-                        &next_lock_key.unwrap(),
-                        &self.end_key,
-                        statistics,
-                    )?;
-                    if key_locks.is_empty() && !has_remain_locks {
-                        // No more locks to flashback, continue to scan the writes.
-                        read_again = true;
-                        FlashbackToVersionState::ScanWrite {
-                            next_write_key: Some(self.start_key.clone()),
-                            key_old_writes: Vec::new(),
-                        }
-                    } else {
-                        tls_collect_keyread_histogram_vec(tag, key_locks.len() as f64);
-                        FlashbackToVersionState::ScanLock {
-                            next_lock_key: if has_remain_locks {
-                                // The batch must be full.
-                                assert_eq!(key_locks.len(), FLASHBACK_BATCH_SIZE);
-                                key_locks.pop().map(|(key, _)| key)
-                            } else {
-                                None
-                            },
-                            key_locks,
-                        }
+                    assert!(!key_locks.is_empty());
+                    tls_collect_keyread_histogram_vec(tag, key_locks.len() as f64);
+                    FlashbackToVersionState::ScanLock {
+                        // DO NOT pop the last key as the next key when it's the only key to prevent
+                        // from making flashback fall into an dead loop.
+                        next_lock_key: if key_locks.len() > 1 {
+                            key_locks.pop().map(|(key, _)| key).unwrap()
+                        } else {
+                            key_locks.last().map(|(key, _)| key.clone()).unwrap()
+                        },
+                        key_locks,
                     }
                 }
             }
             FlashbackToVersionState::ScanWrite { next_write_key, .. } => {
-                if next_write_key.is_none() {
-                    return Ok(ProcessResult::Res);
-                }
-                let (mut key_old_writes, has_remain_writes) = flashback_to_version_read_write(
+                let mut key_old_writes = flashback_to_version_read_write(
                     &mut reader,
-                    &next_write_key.unwrap(),
+                    next_write_key,
                     &self.end_key,
                     self.version,
                     self.start_ts,
@@ -152,11 +143,10 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                 }
                 tls_collect_keyread_histogram_vec(tag, key_old_writes.len() as f64);
                 FlashbackToVersionState::ScanWrite {
-                    next_write_key: if has_remain_writes {
-                        assert_eq!(key_old_writes.len(), FLASHBACK_BATCH_SIZE);
-                        key_old_writes.pop().map(|(key, _)| key)
+                    next_write_key: if key_old_writes.len() > 1 {
+                        key_old_writes.pop().map(|(key, _)| key).unwrap()
                     } else {
-                        None
+                        key_old_writes.last().map(|(key, _)| key.clone()).unwrap()
                     },
                     key_old_writes,
                 }

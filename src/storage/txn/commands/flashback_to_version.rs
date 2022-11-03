@@ -81,7 +81,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
                 if let Some(new_next_lock_key) =
                     flashback_to_version_lock(&mut txn, &mut reader, mem::take(key_locks))?
                 {
-                    *next_lock_key = Some(new_next_lock_key);
+                    *next_lock_key = new_next_lock_key;
                 }
             }
             FlashbackToVersionState::ScanWrite {
@@ -95,7 +95,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
                     self.start_ts,
                     self.commit_ts,
                 )? {
-                    *next_write_key = Some(new_next_write_key);
+                    *next_write_key = new_next_write_key;
                 }
             }
         }

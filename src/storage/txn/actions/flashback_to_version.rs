@@ -12,12 +12,12 @@ pub const FLASHBACK_BATCH_SIZE: usize = 256 + 1 /* To store the next key for mul
 
 pub fn flashback_to_version_read_lock<S: Snapshot>(
     reader: &mut MvccReader<S>,
-    next_lock_key: &Key,
+    next_lock_key: Key,
     end_key: &Key,
     statistics: &mut Statistics,
 ) -> TxnResult<(Vec<(Key, Lock)>, bool)> {
     let key_locks_result = reader.scan_locks(
-        Some(next_lock_key),
+        Some(&next_lock_key),
         Some(end_key),
         // To flashback `CF_LOCK`, we need to delete all locks.
         |_| true,
@@ -29,19 +29,19 @@ pub fn flashback_to_version_read_lock<S: Snapshot>(
 
 pub fn flashback_to_version_read_write<S: Snapshot>(
     reader: &mut MvccReader<S>,
-    next_write_key: &Key,
+    next_write_key: Key,
     end_key: &Key,
     flashback_version: TimeStamp,
     flashback_start_ts: TimeStamp,
     flashback_commit_ts: TimeStamp,
     statistics: &mut Statistics,
-) -> TxnResult<(Vec<(Key, Option<Write>)>, bool)> {
+) -> TxnResult<Vec<(Key, Option<Write>)>> {
     // To flashback the data, we need to get all the latest keys first by scanning
     // every unique key in `CF_WRITE` and to get its corresponding old MVCC write
     // record if exists.
     let mut key_old_writes = Vec::with_capacity(FLASHBACK_BATCH_SIZE);
     let mut has_remain_writes = true;
-    let mut next_write_key = next_write_key.clone();
+    let mut next_write_key = next_write_key;
     // Try to read as many writes as possible in one batch.
     while key_old_writes.len() < FLASHBACK_BATCH_SIZE && has_remain_writes {
         let key_ts_old_writes;
@@ -89,7 +89,7 @@ pub fn flashback_to_version_read_write<S: Snapshot>(
             key_old_writes.push((key, old_write));
         }
     }
-    Ok((key_old_writes, has_remain_writes))
+    Ok(key_old_writes)
 }
 
 // To flashback the `CF_LOCK`, we need to delete all locks records whose
@@ -216,7 +216,8 @@ pub mod tests {
         let mut statistics = Statistics::default();
         // Flashback the locks.
         let (key_locks, has_remain_locks) =
-            flashback_to_version_read_lock(&mut reader, &key, &next_key, &mut statistics).unwrap();
+            flashback_to_version_read_lock(&mut reader, key.clone(), &next_key, &mut statistics)
+                .unwrap();
         assert!(!has_remain_locks);
         let cm = ConcurrencyManager::new(TimeStamp::zero());
         let mut txn = MvccTxn::new(start_ts, cm.clone());
@@ -226,9 +227,9 @@ pub mod tests {
         let mut rows = txn.modifies.len();
         write(engine, &ctx, txn.into_modifies());
         // Flashback the writes.
-        let (key_old_writes, has_remain_writes) = flashback_to_version_read_write(
+        let key_old_writes = flashback_to_version_read_write(
             &mut reader,
-            &key,
+            key,
             &next_key,
             version,
             start_ts,
@@ -236,7 +237,6 @@ pub mod tests {
             &mut statistics,
         )
         .unwrap();
-        assert!(!has_remain_writes);
         let mut txn = MvccTxn::new(start_ts, cm);
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut snap_reader = SnapshotReader::new_with_ctx(version, snapshot, &ctx);
