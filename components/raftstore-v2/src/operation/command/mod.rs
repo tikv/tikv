@@ -183,7 +183,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    fn propose<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>, data: Vec<u8>) -> Result<u64> {
+    fn propose<T>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        data: Vec<u8>,
+    ) -> Result<u64> {
         self.propose_with_ctx(store_ctx, data, vec![])
     }
 
