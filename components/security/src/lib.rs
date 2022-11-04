@@ -15,8 +15,8 @@ use collections::HashSet;
 use encryption::EncryptionConfig;
 use grpcio::{
     CertificateRequestType, Channel, ChannelBuilder, ChannelCredentialsBuilder, CheckResult,
-    RpcContext, RpcStatus, RpcStatusCode, ServerBuilder, ServerChecker, ServerCredentialsBuilder,
-    ServerCredentialsFetcher,
+    RpcContext, RpcStatus, RpcStatusCode, Server, ServerBuilder, ServerChecker, ServerCredentials,
+    ServerCredentialsBuilder, ServerCredentialsFetcher,
 };
 #[cfg(feature = "tonic")]
 use tonic::transport::{channel::ClientTlsConfig, Certificate, Identity};
@@ -142,9 +142,7 @@ impl SecurityManager {
     }
 
     pub fn connect(&self, mut cb: ChannelBuilder, addr: &str) -> Channel {
-        if self.cfg.ca_path.is_empty() {
-            cb.connect(addr)
-        } else {
+        if !self.cfg.ca_path.is_empty() {
             if !self.cfg.override_ssl_target.is_empty() {
                 cb = cb.override_ssl_target(self.cfg.override_ssl_target.clone());
             }
@@ -157,31 +155,35 @@ impl SecurityManager {
                 .root_cert(ca)
                 .cert(cert, key)
                 .build();
-            cb.secure_connect(addr, cred)
+            cb = cb.set_credentials(cred);
         }
+        cb.connect(addr)
     }
 
-    pub fn bind(&self, mut sb: ServerBuilder, addr: &str, port: u16) -> ServerBuilder {
-        if self.cfg.ca_path.is_empty() {
-            sb.bind(addr, port)
-        } else {
-            if !self.cfg.cert_allowed_cn.is_empty() {
-                let cn_checker = CnChecker {
-                    allowed_cn: Arc::new(self.cfg.cert_allowed_cn.clone()),
-                };
-                sb = sb.add_checker(cn_checker);
-            }
+    pub fn configure(&self, mut sb: ServerBuilder) -> ServerBuilder {
+        if !self.cfg.ca_path.is_empty() && !self.cfg.cert_allowed_cn.is_empty() {
+            let cn_checker = CnChecker {
+                allowed_cn: Arc::new(self.cfg.cert_allowed_cn.clone()),
+            };
+            sb = sb.add_checker(cn_checker);
+        }
+        sb
+    }
+
+    pub fn bind(&self, server: &mut Server, addr: &str) -> grpcio::Result<u16> {
+        let creds = if !self.cfg.ca_path.is_empty() {
             let fetcher = Box::new(Fetcher {
                 cfg: self.cfg.clone(),
                 last_modified_time: Arc::new(Mutex::new(None)),
             });
-            sb.bind_with_fetcher(
-                addr,
-                port,
+            ServerCredentials::with_fetcher(
                 fetcher,
                 CertificateRequestType::RequestAndRequireClientCertificateAndVerify,
             )
-        }
+        } else {
+            ServerCredentials::insecure()
+        };
+        server.add_listening_port(addr, creds)
     }
 }
 

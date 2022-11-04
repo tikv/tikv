@@ -1,12 +1,14 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    net::SocketAddr,
     sync::{
         atomic::{AtomicI64, Ordering},
         Arc,
     },
     thread,
     time::Duration,
+    vec,
 };
 
 use fail::fail_point;
@@ -23,15 +25,16 @@ use super::mocker::*;
 
 pub struct Server<C: PdMocker> {
     server: Option<GrpcServer>,
+    addrs: Vec<String>,
     mocker: PdMock<C>,
 }
 
 impl Server<Service> {
     pub fn new(eps_count: usize) -> Server<Service> {
         let mgr = SecurityManager::new(&SecurityConfig::default()).unwrap();
-        let eps = vec![("127.0.0.1".to_owned(), 0); eps_count];
+        let eps = vec!["127.0.0.1".to_owned(); eps_count];
         let case = Option::None::<Arc<Service>>;
-        Self::with_configuration(&mgr, eps, case)
+        Self::with_configuration(&mgr, &eps, case)
     }
 
     pub fn default_handler(&self) -> &Service {
@@ -42,13 +45,13 @@ impl Server<Service> {
 impl<C: PdMocker + Send + Sync + 'static> Server<C> {
     pub fn with_case(eps_count: usize, case: Arc<C>) -> Server<C> {
         let mgr = SecurityManager::new(&SecurityConfig::default()).unwrap();
-        let eps = vec![("127.0.0.1".to_owned(), 0); eps_count];
-        Server::with_configuration(&mgr, eps, Some(case))
+        let eps = vec!["127.0.0.1".to_owned(); eps_count];
+        Server::with_configuration(&mgr, &eps, Some(case))
     }
 
     pub fn with_configuration(
         mgr: &SecurityManager,
-        eps: Vec<(String, u16)>,
+        eps: &[String],
         case: Option<Arc<C>>,
     ) -> Server<C> {
         let handler = Arc::new(Service::new());
@@ -61,12 +64,13 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
         let mut server = Server {
             server: None,
             mocker,
+            addrs: vec![],
         };
         server.start(mgr, eps);
         server
     }
 
-    pub fn start(&mut self, mgr: &SecurityManager, eps: Vec<(String, u16)>) {
+    pub fn start(&mut self, mgr: &SecurityManager, eps: &[String]) {
         let service = create_pd(self.mocker.clone());
         let env = Arc::new(
             EnvBuilder::new()
@@ -74,17 +78,18 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
                 .name_prefix(thd_name!("mock-server"))
                 .build(),
         );
-        let mut sb = ServerBuilder::new(env).register_service(service);
-        for (host, port) in eps {
-            sb = mgr.bind(sb, &host, port);
+        let mut server = mgr
+            .configure(ServerBuilder::new(env).register_service(service))
+            .build()
+            .unwrap();
+        let mut addrs = Vec::with_capacity(eps.len());
+        for addr in eps {
+            let port = mgr.bind(&mut server, addr).unwrap();
+            let mut socket_addr: SocketAddr = addr.parse().unwrap();
+            socket_addr.set_port(port);
+            addrs.push(socket_addr.to_string());
         }
-
-        let mut server = sb.build().unwrap();
         {
-            let addrs: Vec<String> = server
-                .bind_addrs()
-                .map(|(host, port)| format!("{}:{}", host, port))
-                .collect();
             self.mocker.default_handler.set_endpoints(addrs.clone());
             if let Some(case) = self.mocker.case.as_ref() {
                 case.set_endpoints(addrs);
@@ -104,13 +109,8 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
             .shutdown();
     }
 
-    pub fn bind_addrs(&self) -> Vec<(String, u16)> {
-        self.server
-            .as_ref()
-            .unwrap()
-            .bind_addrs()
-            .map(|(host, port)| (host.clone(), port))
-            .collect()
+    pub fn bind_addrs(&self) -> Vec<String> {
+        self.addrs.clone()
     }
 }
 

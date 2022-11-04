@@ -97,8 +97,8 @@ futures-timer = "3.0"
 futures-util = { version = "0.3.1", default-features = false, features = ["io", "async-await"] }
 fxhash = "0.2.1"
 getset = "0.1"
-grpcio = { version = "0.10.3", default-features = false, features = ["openssl-vendored", "protobuf-codec", "nightly"] }
-grpcio-health = { version = "0.10", default-features = false, features = ["protobuf-codec"] }
+grpcio = { workspace = true, features = ["openssl-vendored", "protobuf-codec", "nightly"] }
+grpcio-health = { workspace = true, features = ["protobuf-codec"] }
 hex = "0.4"
 http = "0"
 hyper = { version = "0.14", features = ["full"] }
@@ -221,7 +221,10 @@ procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229
 # kvproto at the same time.
 # After the PR to kvproto is merged, remember to comment this out and run `cargo update -p kvproto`.
 [patch.'https://github.com/pingcap/kvproto']
-# kvproto = { git = "https://github.com/your_github_id/kvproto", branch = "your_branch" }
+kvproto = { git = "https://github.com/busyjay/kvproto", branch = "update-grpc" }
+
+[patch.'https://github.com/pingcap/tipb']
+tipb = { git = "https://github.com/busyjay/tipb", branch = "update-grpc" }
 
 [workspace]
 # See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md
@@ -368,7 +371,8 @@ tipb_helper = { path = "components/tipb_helper" }
 tracker = { path = "components/tracker" }
 txn_types = { path = "components/txn_types" }
 # External libs
-grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+grpcio = { version = "0.12", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+grpcio-health = { version = "0.12", default-features = false }
 
 [profile.dev.package.grpcio-sys]
 debug = false

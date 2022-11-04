@@ -324,7 +324,9 @@ mod tests {
     use std::{sync::Arc, time::Duration};
 
     use futures::executor::block_on;
-    use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder, WriteFlags};
+    use grpcio::{
+        self, ChannelBuilder, EnvBuilder, Server, ServerBuilder, ServerCredentials, WriteFlags,
+    };
     use kvproto::cdcpb::{create_change_data, ChangeDataClient, ResolvedTs};
 
     use super::*;
@@ -335,12 +337,15 @@ mod tests {
         let (scheduler, rx) = dummy_scheduler();
         let cdc_service = Service::new(scheduler, memory_quota);
         let env = Arc::new(EnvBuilder::new().build());
-        let builder =
-            ServerBuilder::new(env.clone()).register_service(create_change_data(cdc_service));
-        let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
+        let mut server = ServerBuilder::new(env.clone())
+            .register_service(create_change_data(cdc_service))
+            .build()
+            .unwrap();
+        let port = server
+            .add_listening_port("127.0.0.1:0", ServerCredentials::insecure())
+            .unwrap();
         server.start();
-        let (_, port) = server.bind_addrs().next().unwrap();
-        let addr = format!("127.0.0.1:{}", port);
+        let addr = format!("127.0.0.1:{port}");
         let channel = ChannelBuilder::new(env).connect(&addr);
         let client = ChangeDataClient::new(channel);
         (server, client, rx)

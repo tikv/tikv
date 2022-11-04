@@ -543,18 +543,18 @@ impl ServerCluster {
                     svr.register_service(fact());
                 }
             }
-            match svr.build_and_bind() {
+            match svr.build_and_bind(&security_mgr, &server_cfg) {
                 Ok(_) => {
                     server = Some(svr);
                     break;
                 }
-                Err(Error::Grpc(GrpcError::BindFail(ref addr, ref port))) => {
+                Err(Error::Grpc(GrpcError::BindFail(addr))) => {
                     // Servers may meet the error, when we restart them.
-                    debug!("fail to create a server: bind fail {:?}", (addr, port));
+                    debug!("fail to create a server: bind fail {:?}", addr);
                     thread::sleep(Duration::from_millis(100));
                     continue;
                 }
-                Err(ref e) => panic!("fail to create a server: {:?}", e),
+                Err(e) => panic!("fail to create a server: {:?}", e),
             }
         }
         let mut server = server.unwrap();

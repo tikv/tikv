@@ -134,20 +134,14 @@ impl BatchExecutorsRunner<()> {
                     BatchProjectionExecutor::check_supported(descriptor)
                         .map_err(|e| other_err!("BatchProjectionExecutor: {}", e))?;
                 }
-                ExecType::TypeJoin => {
-                    other_err!("Join executor not implemented");
-                }
-                ExecType::TypeKill => {
-                    other_err!("Kill executor not implemented");
-                }
-                ExecType::TypeExchangeSender => {
-                    other_err!("ExchangeSender executor not implemented");
-                }
-                ExecType::TypeExchangeReceiver => {
-                    other_err!("ExchangeReceiver executor not implemented");
-                }
-                ExecType::TypePartitionTableScan => {
-                    other_err!("PartitionTableScan executor not implemented");
+                ExecType::TypeJoin
+                | ExecType::TypeKill
+                | ExecType::TypeExchangeSender
+                | ExecType::TypeExchangeReceiver
+                | ExecType::TypePartitionTableScan
+                | ExecType::TypeSort
+                | ExecType::TypeWindow => {
+                    other_err!("{:?} executor not implemented", ed.get_tp());
                 }
             }
         }

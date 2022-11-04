@@ -13,7 +13,7 @@ use crossbeam::channel::Sender;
 use futures::prelude::*;
 use grpcio::{
     ChannelBuilder, ClientStreamingSink, Environment, RequestStream, RpcContext, Server,
-    ServerBuilder,
+    ServerBuilder, ServerCredentials,
 };
 use kvproto::resource_usage_agent::{
     create_resource_usage_agent, EmptyResponse, ResourceUsageAgent, ResourceUsageRecord,
@@ -41,17 +41,17 @@ impl MockReceiverServer {
             .max_send_message_len(-1)
             .build_args();
 
-        let server = ServerBuilder::new(env)
+        let mut server = ServerBuilder::new(env)
             .channel_args(channel_args)
-            .bind("127.0.0.1", port)
             .register_service(create_resource_usage_agent(MockReceiverService {
                 should_block: self.should_block.clone(),
                 tx: self.tx.clone(),
-            }));
-
-        let mut server = server
+            }))
             .build()
-            .expect("failed to build mock receiver server");
+            .unwrap();
+        server
+            .add_listening_port(&format!("127.0.0.1:{port}"), ServerCredentials::insecure())
+            .unwrap();
         server.start();
         self.server = Some(server);
     }

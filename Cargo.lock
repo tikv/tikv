@@ -2251,16 +2251,16 @@ dependencies = [
 
 [[package]]
 name = "grpcio"
-version = "0.10.3"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9bcdd3694fa08158334501af37bdf5b4f00b1865b602d917e3cd74ecf80cd0a"
+checksum = "55edb2eaa4b13b9a8a07f1a1bbaadc8a5bf4132c2b1fa6358d2be14afd18a2c3"
 dependencies = [
  "futures-executor",
  "futures-util",
  "grpcio-sys",
  "libc 0.2.132",
  "log",
- "parking_lot 0.11.1",
+ "parking_lot 0.12.0",
  "protobuf",
 ]
 
@@ -2275,9 +2275,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio-health"
-version = "0.10.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "641a95bace445aed36b31ae8731513c4c4d1d3dcdbc05aaeeefefe4fd673ada1"
+checksum = "c30abe9518aa9e18c116c829ba10e57e7587672b108fd56d6ecbc15bec07dcfc"
 dependencies = [
  "futures-executor",
  "futures-util",
@@ -2288,9 +2288,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio-sys"
-version = "0.10.3+1.44.0-patched"
+version = "0.12.0+1.46.5-patched"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f23adc509a3c4dea990e0ab8d2add4a65389ee69c288b7851d75dd1df7a6d6c6"
+checksum = "3e37f6f61ce8fab679051f2cb157f1de3a0c821827441e7f9a561765d98c7d50"
 dependencies = [
  "bindgen 0.59.2",
  "cc",
@@ -2694,7 +2694,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#65d0ae8fa853c1e41b43f329afbf60616bdd4d18"
+source = "git+https://github.com/busyjay/kvproto?branch=update-grpc#1307d77868b550ad8d99477183af21654d66272d"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -6537,7 +6537,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#f3286471a05a4454a1071dd5f66ac7dbf6c79ba3"
+source = "git+https://github.com/busyjay/tipb?branch=update-grpc#c4af6ba2357364a98ade1923367db1c25ee8cd8d"
 dependencies = [
  "futures 0.3.15",
  "grpcio",

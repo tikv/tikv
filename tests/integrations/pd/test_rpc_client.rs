@@ -35,7 +35,7 @@ fn test_retry_rpc_client() {
         RpcClient::new(&cfg, None, m_mgr).unwrap();
     });
     thread::sleep(Duration::from_millis(500));
-    server.start(&mgr, eps);
+    server.start(&mgr, &eps);
     child.join().unwrap();
 }
 
@@ -313,8 +313,7 @@ fn test_validate_endpoints_retry() {
             .build(),
     );
     let mut eps = server.bind_addrs();
-    let mock_port = 65535;
-    eps.insert(0, ("127.0.0.1".to_string(), mock_port));
+    eps.insert(0, "127.0.0.1:65535".to_string());
     eps.pop();
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let connector = PdConnector::new(env, mgr);
@@ -398,8 +397,8 @@ fn test_incompatible_version() {
 fn restart_leader(mgr: SecurityManager) {
     let mgr = Arc::new(mgr);
     // Service has only one GetMembersResponse, so the leader never changes.
-    let mut server =
-        MockServer::<Service>::with_configuration(&mgr, vec![("127.0.0.1".to_owned(), 0); 3], None);
+    let eps = vec!["127.0.0.1:0".to_owned(); 3];
+    let mut server = MockServer::<Service>::with_configuration(&mgr, &eps, None);
     let eps = server.bind_addrs();
 
     let client = new_client(eps.clone(), Some(Arc::clone(&mgr)));
@@ -425,7 +424,7 @@ fn restart_leader(mgr: SecurityManager) {
 
     // Stop servers and restart them again.
     server.stop();
-    server.start(&mgr, eps);
+    server.start(&mgr, &eps);
 
     // The GLOBAL_RECONNECT_INTERVAL is 0.1s so sleeps 0.2s here.
     thread::sleep(Duration::from_millis(200));
