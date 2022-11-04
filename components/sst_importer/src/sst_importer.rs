@@ -10,7 +10,7 @@ use std::{
     sync::Arc,
 };
 
-use dashmap::{mapref::entry::Entry, DashMap};
+use dashmap::{DashMap};
 use encryption::{to_engine_encryption_method, DataKeyManager};
 use engine_rocks::{get_env, RocksSstReader};
 use engine_traits::{
@@ -27,7 +27,6 @@ use kvproto::{
 };
 use tikv_util::{
     codec::stream_event::{EventIterator, Iterator as EIterator},
-    stream::block_on_external_io,
     time::{Instant, Limiter},
     Either,
 };
