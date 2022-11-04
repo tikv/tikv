@@ -11,6 +11,7 @@ use super::{
     path_expr::{PathExpression, PathLeg},
     Json, JsonRef, JsonType,
 };
+use crate::codec::mysql::json::path_expr::{ArraySelection, KeySelection};
 
 /// A helper struct that derives a new JSON by combining and manipulating
 /// the encoded bytes directly. Only used by `json_replace`, `json_set`,
@@ -88,7 +89,7 @@ impl<'a> BinaryModifier<'a> {
         }
         let parent_node = &result[0];
         match last_leg {
-            PathLeg::Index(_) => {
+            PathLeg::ArraySelection(ArraySelection::Index(_)) => {
                 // Record the parent node value offset, as it's actually relative to `old`
                 self.to_be_modified_ptr = parent_node.as_ptr();
                 match parent_node.get_type() {
@@ -109,7 +110,7 @@ impl<'a> BinaryModifier<'a> {
                     }
                 }
             }
-            PathLeg::Key(insert_key) => {
+            PathLeg::Key(KeySelection::Key(insert_key)) => {
                 // Ignore constant
                 if parent_node.get_type() != JsonType::Object {
                     return Ok(());
@@ -168,21 +169,23 @@ impl<'a> BinaryModifier<'a> {
         }
         let parent_node = &result[0];
         match last_leg {
-            PathLeg::Index(remove_idx) => {
+            PathLeg::ArraySelection(ArraySelection::Index(remove_idx)) => {
                 if parent_node.get_type() == JsonType::Array {
                     self.to_be_modified_ptr = parent_node.as_ptr();
                     let elems_count = parent_node.get_elem_count();
                     let mut elems = Vec::with_capacity(elems_count - 1);
-                    let remove_idx = *remove_idx as usize;
-                    for i in 0..elems_count {
-                        if i != remove_idx {
-                            elems.push(parent_node.array_get_elem(i)?);
+                    if let Some(remove_idx) = parent_node.array_get_index(*remove_idx) {
+                        for i in 0..elems_count {
+                            if i != remove_idx {
+                                elems.push(parent_node.array_get_elem(i)?);
+                            }
                         }
+
+                        self.new_value = Some(Json::from_ref_array(elems)?);
                     }
-                    self.new_value = Some(Json::from_ref_array(elems)?);
                 }
             }
-            PathLeg::Key(remove_key) => {
+            PathLeg::Key(KeySelection::Key(remove_key)) => {
                 // Ignore constant
                 if parent_node.get_type() == JsonType::Object {
                     self.to_be_modified_ptr = parent_node.as_ptr();

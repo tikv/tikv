@@ -218,6 +218,14 @@ pub struct Config {
     pub dev_assert: bool,
     #[online_config(hidden)]
     pub apply_yield_duration: ReadableDuration,
+    /// yield the fsm when apply flushed data size exceeds this threshold.
+    /// the yield is check after commit, so the actual handled messages can be
+    /// bigger than the configed value.
+    // NOTE: the default value is much smaller than the default max raft batch msg size(0.2
+    // * raft_entry_max_size), this is intentional because in the common case, a raft entry
+    // is unlikely to exceed this threshold, but in case when raftstore is the bottleneck,
+    // we still allow big raft batch for better throughput.
+    pub apply_yield_write_size: ReadableSize,
 
     #[serde(with = "perf_level_serde")]
     #[online_config(skip)]
@@ -386,6 +394,7 @@ impl Default for Config {
             hibernate_regions: true,
             dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
+            apply_yield_write_size: ReadableSize::kb(32),
             perf_level: PerfLevel::Uninitialized,
             evict_cache_on_memory_ratio: 0.0,
             cmd_batch: true,
@@ -898,6 +907,9 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["local_read_batch_size"])
             .set(self.local_read_batch_size as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["apply_yield_write_size"])
+            .set(self.apply_yield_write_size.0 as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["apply_max_batch_size"])
             .set(self.apply_batch_system.max_batch_size() as f64);

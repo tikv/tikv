@@ -24,8 +24,8 @@ pub use self::{
         cleanup::cleanup,
         commit::commit,
         flashback_to_version::{
-            flashback_to_version, flashback_to_version_read_lock, flashback_to_version_read_write,
-            FLASHBACK_BATCH_SIZE,
+            flashback_to_version_lock, flashback_to_version_read_lock,
+            flashback_to_version_read_write, flashback_to_version_write, FLASHBACK_BATCH_SIZE,
         },
         gc::gc,
         prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties},
@@ -40,7 +40,7 @@ pub use self::{
 };
 use crate::storage::{
     mvcc::Error as MvccError,
-    types::{MvccInfo, PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, TxnStatus},
+    types::{MvccInfo, PessimisticLockResults, PrewriteResult, SecondaryLocksStatus, TxnStatus},
     Error as StorageError, Result as StorageResult,
 };
 
@@ -73,7 +73,7 @@ pub enum ProcessResult {
         err: StorageError,
     },
     PessimisticLockRes {
-        res: StorageResult<PessimisticLockRes>,
+        res: StorageResult<PessimisticLockResults>,
     },
     SecondaryLocksStatus {
         status: SecondaryLocksStatus,

@@ -1,6 +1,6 @@
 # TiKV Change Log
 All notable changes to this project are documented in this file.
-See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
+See also [TiDB Release Notes](https://github.com/pingcap/docs/blob/master/releases/release-notes.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
 ## [5.3.0] - 2021-11-29
 

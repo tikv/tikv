@@ -65,7 +65,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
             SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx),
             context.statistics,
         );
-        let mut released_locks = ReleasedLocks::new(self.start_ts, TimeStamp::zero());
+        let mut released_locks = ReleasedLocks::new();
         let mut result = SecondaryLocksStatus::Locked(Vec::new());
 
         for key in self.keys {
@@ -76,7 +76,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
                 // The lock exists, the lock information is returned.
                 Some(lock) if lock.ts == self.start_ts => {
                     if lock.lock_type == LockType::Pessimistic {
-                        released_lock = txn.unlock_key(key.clone(), true);
+                        released_lock = txn.unlock_key(key.clone(), true, TimeStamp::zero());
                         let overlapped_write = reader.get_txn_commit_record(&key)?.unwrap_none();
                         (SecondaryLockStatus::RolledBack, true, overlapped_write)
                     } else {
@@ -142,8 +142,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
 
         let mut rows = 0;
         if let SecondaryLocksStatus::RolledBack = &result {
-            // Lock is only released when result is `RolledBack`.
-            released_locks.wake_up(context.lock_mgr);
             // One row is mutated only when a secondary lock is rolled back.
             rows = 1;
         }
@@ -156,6 +154,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
             rows,
             pr,
             lock_info: None,
+            released_locks,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
         })
@@ -171,7 +170,7 @@ pub mod tests {
     use super::*;
     use crate::storage::{
         kv::TestEngineBuilder,
-        lock_manager::DummyLockManager,
+        lock_manager::MockLockManager,
         mvcc::tests::*,
         txn::{commands::WriteCommand, scheduler::DEFAULT_EXECUTION_DURATION_LIMIT, tests::*},
         Engine,
@@ -197,7 +196,7 @@ pub mod tests {
             .process_write(
                 snapshot,
                 WriteContext {
-                    lock_mgr: &DummyLockManager,
+                    lock_mgr: &MockLockManager::new(),
                     concurrency_manager: cm,
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
@@ -235,7 +234,7 @@ pub mod tests {
                 .process_write(
                     snapshot,
                     WriteContext {
-                        lock_mgr: &DummyLockManager,
+                        lock_mgr: &MockLockManager::new(),
                         concurrency_manager: cm.clone(),
                         extra_op: Default::default(),
                         statistics: &mut Default::default(),

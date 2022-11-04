@@ -788,8 +788,7 @@ where
         let (mut oldest_leader_ts, mut oldest_leader_region) = (u64::MAX, 0);
         self.region_read_progress.with(|registry| {
             for (region_id, read_progress) in registry {
-                let (peers, leader_info) = read_progress.dump_leader_info();
-                let leader_store_id = crate::util::find_store_id(&peers, leader_info.peer_id);
+                let (leader_info, leader_store_id) = read_progress.dump_leader_info();
                 let ts = leader_info.get_read_state().get_safe_ts();
                 if ts == 0 {
                     zero_ts_count += 1;
