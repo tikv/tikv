@@ -317,65 +317,6 @@ fn test_validate_endpoints_retry() {
     assert!(block_on(connector.validate_endpoints(&new_config(eps), true)).is_err());
 }
 
-fn test_retry<F: Fn(&mut RpcClientV2)>(func: F) {
-    let eps_count = 1;
-    // Retry mocker returns `Err(_)` for most request, here two thirds are `Err(_)`.
-    let retry = Arc::new(Retry::new(3));
-    let server = MockServer::with_case(eps_count, retry);
-    let eps = server.bind_addrs();
-
-    let mut client = new_client_v2(eps, None);
-
-    for _ in 0..3 {
-        func(&mut client);
-    }
-}
-
-#[test]
-fn test_retry_async() {
-    let r#async = |client: &mut RpcClientV2| {
-        block_on(client.get_region_by_id(1)).unwrap();
-    };
-    test_retry(r#async);
-}
-
-#[test]
-fn test_retry_sync() {
-    let sync = |client: &mut RpcClientV2| {
-        client.get_store(1).unwrap();
-    };
-    test_retry(sync)
-}
-
-fn test_not_retry<F: Fn(&mut RpcClientV2)>(func: F) {
-    let eps_count = 1;
-    // NotRetry mocker returns Ok() with error header first, and next returns Ok()
-    // without any error header.
-    let not_retry = Arc::new(NotRetry::new());
-    let server = MockServer::with_case(eps_count, not_retry);
-    let eps = server.bind_addrs();
-
-    let mut client = new_client_v2(eps, None);
-
-    func(&mut client);
-}
-
-#[test]
-fn test_not_retry_async() {
-    let r#async = |client: &mut RpcClientV2| {
-        block_on(client.get_region_by_id(1)).unwrap_err();
-    };
-    test_not_retry(r#async);
-}
-
-#[test]
-fn test_not_retry_sync() {
-    let sync = |client: &mut RpcClientV2| {
-        client.get_store(1).unwrap_err();
-    };
-    test_not_retry(sync);
-}
-
 #[test]
 fn test_incompatible_version() {
     let incompatible = Arc::new(Incompatible);

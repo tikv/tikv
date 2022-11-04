@@ -194,19 +194,21 @@ impl<'a> Stream for TsoRequestStream<'a> {
                     _ => break,
                 }
             }
-            let mut req = TsoRequest::default();
-            req.mut_header().cluster_id = self.cluster_id;
-            req.count = requests.iter().map(|r| r.count).sum();
+            if !requests.is_empty() {
+                let mut req = TsoRequest::default();
+                req.mut_header().cluster_id = self.cluster_id;
+                req.count = requests.iter().map(|r| r.count).sum();
 
-            let request_group = RequestGroup {
-                tso_request: req.clone(),
-                requests,
-            };
-            pending_requests.push_back(request_group);
-            PD_PENDING_TSO_REQUEST_GAUGE.set(pending_requests.len() as i64);
+                let request_group = RequestGroup {
+                    tso_request: req.clone(),
+                    requests,
+                };
+                pending_requests.push_back(request_group);
+                PD_PENDING_TSO_REQUEST_GAUGE.set(pending_requests.len() as i64);
 
-            let write_flags = WriteFlags::default().buffer_hint(false);
-            return Poll::Ready(Some((req, write_flags)));
+                let write_flags = WriteFlags::default().buffer_hint(false);
+                return Poll::Ready(Some((req, write_flags)));
+            }
         }
 
         // Set the waker to the context, then the stream can be waked up after the
