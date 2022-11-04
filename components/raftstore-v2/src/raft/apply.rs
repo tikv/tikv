@@ -9,8 +9,9 @@ use std::{
 use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletFactory, WriteBatch};
 use kvproto::{metapb, raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
-use raftstore::store::fsm::apply::DEFAULT_APPLY_WB_SIZE;
+use raftstore::store::{fsm::apply::DEFAULT_APPLY_WB_SIZE, ReadTask};
 use slog::Logger;
+use tikv_util::worker::Scheduler;
 
 use super::Peer;
 use crate::{
@@ -22,8 +23,6 @@ use crate::{
 
 /// Apply applies all the committed commands to kv db.
 pub struct Apply<EK: KvEngine, R> {
-    store_id: u64,
-
     peer: metapb::Peer,
     /// publish the update of the tablet
     remote_tablet: CachedTablet<EK>,
@@ -44,22 +43,22 @@ pub struct Apply<EK: KvEngine, R> {
     region_state: RegionLocalState,
 
     res_reporter: R,
+    read_scheduler: Scheduler<ReadTask<EK>>,
     pub(crate) logger: Logger,
 }
 
 impl<EK: KvEngine, R> Apply<EK, R> {
     #[inline]
     pub fn new(
-        store_id: u64,
         peer: metapb::Peer,
         region_state: RegionLocalState,
         res_reporter: R,
         mut remote_tablet: CachedTablet<EK>,
         tablet_factory: Arc<dyn TabletFactory<EK>>,
+        read_scheduler: Scheduler<ReadTask<EK>>,
         logger: Logger,
     ) -> Self {
         Apply {
-            store_id,
             peer,
             tablet: remote_tablet.latest().unwrap().clone(),
             remote_tablet,
@@ -71,14 +70,10 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             admin_cmd_result: vec![],
             region_state,
             tablet_factory,
+            read_scheduler,
             res_reporter,
             logger,
         }
-    }
-
-    #[inline]
-    pub fn store_id(&self) -> u64 {
-        self.store_id
     }
 
     #[inline]
@@ -121,6 +116,11 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     }
 
     #[inline]
+    pub fn read_scheduler(&self) -> &Scheduler<ReadTask<EK>> {
+        &self.read_scheduler
+    }
+
+    #[inline]
     pub fn region_state(&self) -> &RegionLocalState {
         &self.region_state
     }
@@ -135,11 +135,6 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         self.region_state = region_state;
     }
 
-    #[inline]
-    pub fn tablet(&self) -> &EK {
-        &self.tablet
-    }
-
     /// Publish the tablet so that it can be used by read worker.
     ///
     /// Note, during split/merge, lease is expired explicitly and read is
@@ -148,6 +143,11 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     pub fn publish_tablet(&mut self, tablet: EK) {
         self.remote_tablet.set(tablet.clone());
         self.tablet = tablet;
+    }
+
+    #[inline]
+    pub fn tablet(&self) -> &EK {
+        &self.tablet
     }
 
     #[inline]

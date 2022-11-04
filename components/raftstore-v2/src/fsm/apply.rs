@@ -15,8 +15,12 @@ use crossbeam::channel::TryRecvError;
 use engine_traits::{KvEngine, RaftEngine, TabletFactory};
 use futures::{Future, StreamExt};
 use kvproto::{metapb, raft_serverpb::RegionLocalState};
+use raftstore::store::ReadTask;
 use slog::Logger;
-use tikv_util::mpsc::future::{self, Receiver, Sender, WakePolicy};
+use tikv_util::{
+    mpsc::future::{self, Receiver, Sender, WakePolicy},
+    worker::Scheduler,
+};
 
 use crate::{
     raft::Apply,
@@ -58,22 +62,22 @@ pub struct ApplyFsm<EK: KvEngine, R> {
 
 impl<EK: KvEngine, R> ApplyFsm<EK, R> {
     pub fn new(
-        store_id: u64,
         peer: metapb::Peer,
         region_state: RegionLocalState,
         res_reporter: R,
         remote_tablet: CachedTablet<EK>,
         tablet_factory: Arc<dyn TabletFactory<EK>>,
+        read_scheduler: Scheduler<ReadTask<EK>>,
         logger: Logger,
     ) -> (ApplyScheduler, Self) {
         let (tx, rx) = future::unbounded(WakePolicy::Immediately);
         let apply = Apply::new(
-            store_id,
             peer,
             region_state,
             res_reporter,
             remote_tablet,
             tablet_factory,
+            read_scheduler,
             logger,
         );
         (
@@ -97,6 +101,7 @@ impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
                 match task {
                     // TODO: flush by buffer size.
                     ApplyTask::CommittedEntries(ce) => self.apply.apply_committed_entries(ce).await,
+                    ApplyTask::Snapshot(snap_task) => self.apply.schedule_gen_snapshot(snap_task),
                 }
 
                 // TODO: yield after some time.

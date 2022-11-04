@@ -42,7 +42,7 @@ const REGION_READ_PROGRESS_CAP: usize = 128;
 
 /// A peer that delegates commands between state machine and raft.
 pub struct Peer<EK: KvEngine, ER: RaftEngine> {
-    raft_group: RawNode<Storage<ER>>,
+    raft_group: RawNode<Storage<EK, ER>>,
     tablet: CachedTablet<EK>,
     /// We use a cache for looking up peers. Not all peers exist in region's
     /// peer list, for example, an isolated peer may need to send/receive
@@ -132,7 +132,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn new(
         cfg: &Config,
         tablet_factory: &dyn TabletFactory<EK>,
-        storage: Storage<ER>,
+        storage: Storage<EK, ER>,
     ) -> Result<Self> {
         let logger = storage.logger().clone();
 
@@ -296,7 +296,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn storage(&self) -> &Storage<ER> {
+    pub fn storage(&self) -> &Storage<EK, ER> {
         self.raft_group.store()
     }
 
@@ -321,7 +321,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn storage_mut(&mut self) -> &mut Storage<ER> {
+    pub fn storage_mut(&mut self) -> &mut Storage<EK, ER> {
         self.raft_group.mut_store()
     }
 
@@ -336,12 +336,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn entry_storage(&self) -> &EntryStorage<ER> {
+    pub fn entry_storage(&self) -> &EntryStorage<EK, ER> {
         self.raft_group.store().entry_storage()
     }
 
     #[inline]
-    pub fn entry_storage_mut(&mut self) -> &mut EntryStorage<ER> {
+    pub fn entry_storage_mut(&mut self) -> &mut EntryStorage<EK, ER> {
         self.raft_group.mut_store().entry_storage_mut()
     }
 
@@ -356,17 +356,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn raft_group(&self) -> &RawNode<Storage<ER>> {
+    pub fn raft_group(&self) -> &RawNode<Storage<EK, ER>> {
         &self.raft_group
     }
 
     #[inline]
-    pub fn raft_group_mut(&mut self) -> &mut RawNode<Storage<ER>> {
+    pub fn raft_group_mut(&mut self) -> &mut RawNode<Storage<EK, ER>> {
         &mut self.raft_group
     }
 
     #[inline]
-    pub fn set_raft_group(&mut self, raft_group: RawNode<Storage<ER>>) {
+    pub fn set_raft_group(&mut self, raft_group: RawNode<Storage<EK, ER>>) {
         self.raft_group = raft_group;
     }
 

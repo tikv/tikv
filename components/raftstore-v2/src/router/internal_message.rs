@@ -6,11 +6,12 @@ use collections::HashMap;
 use kvproto::{metapb::Region, raft_serverpb::RegionLocalState};
 use raftstore::store::fsm::{apply::NewSplitPeer, ChangePeer};
 
-use crate::operation::{AdminCmdResult, CommittedEntries};
+use crate::operation::{AdminCmdResult, CommittedEntries, GenSnapTask};
 
 #[derive(Debug)]
 pub enum ApplyTask {
     CommittedEntries(CommittedEntries),
+    Snapshot(GenSnapTask),
 }
 
 #[derive(Debug, Default)]

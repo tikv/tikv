@@ -24,6 +24,7 @@
 #![allow(unused)]
 #![feature(let_else)]
 #![feature(box_into_inner)]
+#![feature(array_windows)]
 
 mod batch;
 mod bootstrap;

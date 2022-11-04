@@ -50,6 +50,7 @@ use tikv_util::{box_err, time::monotonic_raw_now};
 use crate::{
     batch::StoreContext,
     fsm::{ApplyFsm, ApplyResReporter, PeerFsmDelegate},
+    operation::GenSnapTask,
     raft::{Apply, Peer},
     router::{ApplyRes, ApplyTask, CmdResChannel, PeerMsg},
 };
@@ -122,15 +123,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let mailbox = store_ctx.router.mailbox(self.region_id()).unwrap();
         let tablet = self.tablet().clone();
         let logger = self.logger.clone();
+        let read_scheduler = self.storage().read_scheduler();
         let (apply_scheduler, mut apply_fsm) = ApplyFsm::new(
-            store_ctx.store_id,
             self.peer().clone(),
             region_state,
             mailbox,
             tablet,
             store_ctx.tablet_factory.clone(),
+            read_scheduler,
             logger,
         );
+
         store_ctx
             .apply_pool
             .spawn(async move { apply_fsm.handle_all_tasks().await })
@@ -182,12 +185,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    fn propose<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>, data: Vec<u8>) -> Result<u64> {
-        self.propose_with_proposal_ctx(ctx, data, vec![])
+    fn propose<T>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        data: Vec<u8>,
+    ) -> Result<u64> {
+        self.propose_with_ctx(store_ctx, data, vec![])
     }
 
     #[inline]
-    fn propose_with_proposal_ctx<T>(
+    fn propose_with_ctx<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
         data: Vec<u8>,
@@ -282,9 +289,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
                 AdminCmdResult::SplitRegion(SplitResult {
                     regions,
-                    derived,
+                    derived_index,
                     tablet_index,
-                }) => self.on_ready_split_region(ctx, derived, tablet_index, regions),
+                }) => self.on_ready_split_region(ctx, derived_index, tablet_index, regions),
+                AdminCmdResult::SplitRegion(_) => unimplemented!(),
             }
         }
 
@@ -424,8 +432,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             let cmd_type = req.get_admin_request().get_cmd_type();
             let (admin_resp, admin_result) = match cmd_type {
                 AdminCmdType::CompactLog => unimplemented!(),
-                AdminCmdType::Split => self.exec_split(admin_req, entry.index)?,
-                AdminCmdType::BatchSplit => self.exec_batch_split(admin_req, entry.index)?,
+                AdminCmdType::Split => self.apply_split(admin_req, entry.index)?,
+                AdminCmdType::BatchSplit => self.apply_batch_split(admin_req, entry.index)?,
                 AdminCmdType::PrepareMerge => unimplemented!(),
                 AdminCmdType::CommitMerge => unimplemented!(),
                 AdminCmdType::RollbackMerge => unimplemented!(),
@@ -444,24 +452,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     return Err(box_err!("invalid admin command type"));
                 }
             };
-            // Check if the region epoch changes as expected
-            let epoch_state = admin_cmd_epoch_lookup(cmd_type);
-            let cur_epoch = self.region_state().get_region().get_region_epoch();
-            // The change-epoch behavior **MUST BE** equal to the settings in
-            // `admin_cmd_epoch_lookup`
-            if (epoch_state.change_ver && origin_epoch.get_version() == cur_epoch.get_version())
-                || (epoch_state.change_conf_ver
-                    && origin_epoch.get_conf_ver() == cur_epoch.get_conf_ver())
-            {
-                panic!(
-                    "{:?} apply admin cmd {:?} but epoch change is not expected, epoch state {:?}, before {:?}, after {:?}",
-                    self.logger.list(),
-                    req,
-                    epoch_state,
-                    epoch_state,
-                    cur_epoch,
-                );
-            }
 
             self.push_admin_result(admin_result);
             let mut resp = new_response(req.get_header());

@@ -886,6 +886,8 @@ pub mod test_util {
         pub commit_ts: TimeStamp,
         pub for_update_ts: TimeStamp,
         pub old_value: OldValue,
+        pub last_change_ts: TimeStamp,
+        pub versions_to_last_change: u64,
     }
 
     impl Default for EntryBuilder {
@@ -898,6 +900,8 @@ pub mod test_util {
                 commit_ts: 0.into(),
                 for_update_ts: 0.into(),
                 old_value: OldValue::None,
+                last_change_ts: TimeStamp::zero(),
+                versions_to_last_change: 0,
             }
         }
     }
@@ -931,6 +935,15 @@ pub mod test_util {
             self.old_value = OldValue::value(old_value.to_owned());
             self
         }
+        pub fn last_change(
+            &mut self,
+            last_change_ts: TimeStamp,
+            versions_to_last_change: u64,
+        ) -> &mut Self {
+            self.last_change_ts = last_change_ts;
+            self.versions_to_last_change = versions_to_last_change;
+            self
+        }
         pub fn build_commit(&self, wt: WriteType, is_short_value: bool) -> TxnEntry {
             let write_key = Key::from_raw(&self.key).append_ts(self.commit_ts);
             let (key, value, short) = if is_short_value {
@@ -949,7 +962,8 @@ pub mod test_util {
                     None,
                 )
             };
-            let write_value = Write::new(wt, self.start_ts, short);
+            let write_value = Write::new(wt, self.start_ts, short)
+                .set_last_change(self.last_change_ts, self.versions_to_last_change);
             TxnEntry::Commit {
                 default: (key, value),
                 write: (write_key.into_encoded(), write_value.as_ref().to_bytes()),
@@ -984,7 +998,8 @@ pub mod test_util {
                 self.for_update_ts,
                 0,
                 0.into(),
-            );
+            )
+            .set_last_change(self.last_change_ts, self.versions_to_last_change);
             TxnEntry::Prewrite {
                 default: (key, value),
                 lock: (lock_key.into_encoded(), lock_value.to_bytes()),
@@ -2351,6 +2366,16 @@ mod delta_entry_tests {
 
     #[test]
     fn test_mess() {
+        use pd_client::FeatureGate;
+
+        use crate::storage::txn::sched_pool::set_tls_feature_gate;
+
+        // Set version to 6.5.0 to enable last_change_ts.
+        // TODO: Remove this after TiKV version reaches 6.5
+        let feature_gate = FeatureGate::default();
+        feature_gate.set_version("6.5.0").unwrap();
+        set_tls_feature_gate(feature_gate);
+
         // TODO: non-pessimistic lock should be returned enven if its ts < from_ts.
         // (key, lock, [commit1, commit2, ...])
         // Values ends with 'L' will be made larger than `SHORT_VALUE_MAX_LEN` so it
@@ -2426,11 +2451,15 @@ mod delta_entry_tests {
                     let mut entries_of_key = vec![];
 
                     if let Some((ts, lock_type, value)) = lock {
-                        let max_commit_ts = writes
-                            .last()
-                            .cloned()
-                            .map(|(_, commit_ts, ..)| commit_ts)
-                            .unwrap_or(0);
+                        let last_write = writes.last();
+                        let max_commit_ts =
+                            last_write.map(|(_, commit_ts, ..)| *commit_ts).unwrap_or(0);
+                        let (mut last_change_ts, mut versions_to_last_change) = (0,0);
+                        // TODO: Remove `*lock_type == LockType::Pessimistic` after calculating last_change_ts for prewrite.
+                        if *lock_type == LockType::Pessimistic &&
+                            let Some((_, commit_ts, WriteType::Put | WriteType::Delete, _)) = last_write {
+                            (last_change_ts, versions_to_last_change) = (*commit_ts, 1);
+                        }
                         let for_update_ts = std::cmp::max(*ts, max_commit_ts + 1);
 
                         if *ts <= to_ts {
@@ -2441,6 +2470,7 @@ mod delta_entry_tests {
                                 .for_update_ts(for_update_ts.into())
                                 .primary(key)
                                 .value(&value)
+                                .last_change(last_change_ts.into(), versions_to_last_change)
                                 .build_prewrite(*lock_type, is_short_value(&value));
                             entries_of_key.push(entry);
                         }
