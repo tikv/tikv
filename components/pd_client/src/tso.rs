@@ -30,7 +30,7 @@ use txn_types::TimeStamp;
 use crate::{metrics::PD_PENDING_TSO_REQUEST_GAUGE, Error, Result};
 
 /// It is an empirical value.
-const MAX_BATCH_SIZE: usize = 64;
+pub const MAX_BATCH_SIZE: usize = 64;
 
 pub const MAX_PENDING_COUNT: usize = 1 << 16;
 

@@ -7,7 +7,7 @@ use std::{
     rc::Rc,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc,
+        Arc, Mutex as StdMutex,
     },
     thread,
     time::Duration,
@@ -54,7 +54,7 @@ use super::{
     metrics::*,
     tso::{
         allocate_timestamps, TimestampRequest, TsoRequestStream,
-        MAX_PENDING_COUNT as TSO_MAX_PENDING_COUNT,
+        MAX_BATCH_SIZE as TSO_MAX_BATCH_SIZE, MAX_PENDING_COUNT as TSO_MAX_PENDING_COUNT,
     },
     util::{check_resp_header, PdConnector, TargetInfo},
     BucketStat, Config, Error, FeatureGate, RegionInfo, RegionStat, Result, UnixSecs,
@@ -62,7 +62,7 @@ use super::{
 };
 use crate::PdFuture;
 
-/// Immutable context for making requests.
+/// Immutable context for making new connections.
 struct ConnectContext {
     enable_forwarding: bool,
     connector: PdConnector,
@@ -77,7 +77,7 @@ struct RawClient {
 }
 
 impl RawClient {
-    /// Only updates client and version when the reconnection succeeds.
+    /// Returns Ok(true) when a new connection is established.
     async fn maybe_reconnect(&mut self, ctx: &ConnectContext, force: bool) -> Result<bool> {
         PD_RECONNECT_COUNTER_VEC.with_label_values(&["try"]).inc();
         let start = Instant::now();
@@ -117,7 +117,7 @@ impl RawClient {
             }
         };
 
-        fail_point!("pd_client_reconnect", |_| Ok(false));
+        fail_point!("pd_client_v2_reconnect", |_| Ok(true));
 
         self.channel = channel;
         self.stub = stub;
@@ -148,18 +148,41 @@ impl CachedRawClient {
         }
     }
 
-    /// Refreshes the local cache with latest client.
-    async fn wait_for_ready(&mut self) {
+    #[inline]
+    async fn refresh_cache(&mut self) -> bool {
         if self.cache_version < self.version.load(Ordering::Acquire) {
             let latest = self.latest.lock().await;
             self.cache = (*latest).clone();
             self.cache_version = self.version.load(Ordering::Relaxed);
+            true
+        } else {
+            false
         }
-        self.channel()
-            .wait_for_connected(Duration::from_secs(REQUEST_TIMEOUT))
-            .await;
     }
 
+    /// Refreshes the local cache with latest client, then waits for the
+    /// connection to be ready.
+    async fn wait_for_ready(&mut self) -> Result<()> {
+        self.refresh_cache().await;
+        for _ in 0..3 {
+            if self
+                .channel()
+                .wait_for_connected(Duration::from_secs(REQUEST_TIMEOUT))
+                .await
+            {
+                return Ok(());
+            } else if !self.refresh_cache().await {
+                // Only retry if client is updated.
+                break;
+            }
+        }
+        Err(box_err!(
+            "Connection unavailable {:?}",
+            self.channel().check_connectivity_state(false)
+        ))
+    }
+
+    /// Increases global version only when a new connection is established.
     async fn reconnect(&mut self, force: bool, callback: &CallbackHolder) -> Result<()> {
         let mut latest = self.latest.lock().await;
         if latest.maybe_reconnect(&self.context, force).await? {
@@ -228,8 +251,8 @@ impl<T: std::fmt::Debug> Stream for CachedDuplexResponse<T> {
     }
 }
 
-type DuplexResponseHolder<T> = Arc<std::sync::Mutex<Option<ClientDuplexReceiver<T>>>>;
-type CallbackHolder = Arc<std::sync::Mutex<Option<Box<dyn Fn() + Sync + Send + 'static>>>>;
+type DuplexResponseHolder<T> = Arc<StdMutex<Option<ClientDuplexReceiver<T>>>>;
+type CallbackHolder = Arc<StdMutex<Option<Box<dyn Fn() + Sync + Send + 'static>>>>;
 
 #[derive(Clone)]
 pub struct RpcClient {
@@ -309,6 +332,13 @@ impl RpcClient {
 
     fn build_from_raw(cluster_id: u64, raw_client: CachedRawClient) -> Result<Self> {
         let (reconnect_tx, reconnect_rx) = mpsc::unbounded();
+        let on_reconnect: CallbackHolder = Default::default();
+        raw_client.stub().spawn(reconnect_loop(
+            raw_client.clone(),
+            on_reconnect.clone(),
+            reconnect_rx,
+        ));
+
         let (heartbeat_sender, heartbeat_receiver) = mpsc::unbounded();
         let pending_heartbeat = Arc::new(AtomicU64::new(0));
         let heartbeat_response_holder = Arc::new(std::sync::Mutex::new(None));
@@ -319,6 +349,7 @@ impl RpcClient {
             pending_heartbeat.clone(),
             reconnect_tx.clone(),
         ));
+
         let (bucket_sender, bucket_receiver) = mpsc::unbounded();
         let pending_bucket = Arc::new(AtomicU64::new(0));
         raw_client.stub().spawn(bucket_loop(
@@ -327,21 +358,17 @@ impl RpcClient {
             pending_bucket.clone(),
             reconnect_tx.clone(),
         ));
-        let (tso_tx, tso_rx) =
-            tokio::sync::mpsc::channel::<TimestampRequest>(1 /* batch_size */);
+
+        let (tso_tx, tso_rx) = tokio::sync::mpsc::channel::<TimestampRequest>(TSO_MAX_BATCH_SIZE);
         let raw_client_clone = raw_client.clone();
+        // TODO: maybe move it to grpc thread pool.
         thread::Builder::new()
             .name("tso-worker".into())
             .spawn_wrapper(move || {
                 block_on(tso_loop(cluster_id, raw_client_clone, tso_rx, reconnect_tx))
             })
             .expect("unable to create tso worker thread");
-        let on_reconnect: CallbackHolder = Default::default();
-        raw_client.stub().spawn(reconnect_loop(
-            raw_client.clone(),
-            on_reconnect.clone(),
-            reconnect_rx,
-        ));
+
         Ok(Self {
             cluster_id,
             raw_client,
@@ -378,10 +405,6 @@ impl RpcClient {
         )
     }
 
-    pub fn feature_gate(&self) -> &FeatureGate {
-        &self.feature_gate
-    }
-
     #[inline]
     fn header(&self) -> pdpb::RequestHeader {
         let mut header = pdpb::RequestHeader::default();
@@ -389,11 +412,18 @@ impl RpcClient {
         header
     }
 
+    /// Used in integration tests.
+    pub fn feature_gate(&self) -> &FeatureGate {
+        &self.feature_gate
+    }
+
+    /// Used in integration tests.
     pub fn get_leader(&mut self) -> Member {
-        block_on(self.raw_client.wait_for_ready());
+        block_on(self.raw_client.wait_for_ready()).unwrap();
         self.raw_client.leader()
     }
 
+    /// Used in integration tests.
     pub fn reconnect(&mut self) -> Result<()> {
         block_on(self.raw_client.reconnect(true, &self.on_reconnect))
     }
@@ -406,7 +436,7 @@ impl RpcClient {
         req.set_names(list.into());
         let mut raw_client = self.raw_client.clone();
         Box::pin(async move {
-            raw_client.wait_for_ready().await;
+            raw_client.wait_for_ready().await?;
             let fut = raw_client.stub().load_global_config_async(&req)?;
             match fut.await {
                 Ok(grpc_response) => {
@@ -430,7 +460,7 @@ impl RpcClient {
     ) -> Result<grpcio::ClientSStreamReceiver<pdpb::WatchGlobalConfigResponse>> {
         use kvproto::pdpb::WatchGlobalConfigRequest;
         let req = WatchGlobalConfigRequest::default();
-        block_on(self.raw_client.wait_for_ready());
+        block_on(self.raw_client.wait_for_ready())?;
         Ok(self.raw_client.stub().watch_global_config(&req)?)
     }
 
@@ -452,7 +482,7 @@ impl RpcClient {
         req.set_store(stores);
         req.set_region(region);
 
-        block_on(self.raw_client.wait_for_ready());
+        block_on(self.raw_client.wait_for_ready())?;
         let mut resp = self.raw_client.stub().bootstrap_opt(
             &req,
             self.raw_client
@@ -471,7 +501,7 @@ impl RpcClient {
         let mut req = pdpb::IsBootstrappedRequest::default();
         req.set_header(self.header());
 
-        block_on(self.raw_client.wait_for_ready());
+        block_on(self.raw_client.wait_for_ready())?;
         let resp = self.raw_client.stub().is_bootstrapped_opt(
             &req,
             self.raw_client
@@ -491,7 +521,7 @@ impl RpcClient {
         let mut req = pdpb::AllocIdRequest::default();
         req.set_header(self.header());
 
-        block_on(self.raw_client.wait_for_ready());
+        block_on(self.raw_client.wait_for_ready())?;
         let resp = self.raw_client.stub().alloc_id_opt(
             &req,
             self.raw_client
@@ -515,7 +545,7 @@ impl RpcClient {
         let mut req = pdpb::IsSnapshotRecoveringRequest::default();
         req.set_header(self.header());
 
-        block_on(self.raw_client.wait_for_ready());
+        block_on(self.raw_client.wait_for_ready())?;
         let resp = self.raw_client.stub().is_snapshot_recovering_opt(
             &req,
             self.raw_client
@@ -536,7 +566,7 @@ impl RpcClient {
         req.set_header(self.header());
         req.set_store(store);
 
-        block_on(self.raw_client.wait_for_ready());
+        block_on(self.raw_client.wait_for_ready())?;
         let mut resp = self.raw_client.stub().put_store_opt(
             &req,
             self.raw_client
@@ -560,7 +590,7 @@ impl RpcClient {
 
         let mut raw_client = self.raw_client.clone();
         Box::pin(async move {
-            raw_client.wait_for_ready().await;
+            raw_client.wait_for_ready().await?;
             let mut resp = raw_client
                 .stub()
                 .get_store_async_opt(
@@ -608,7 +638,7 @@ impl RpcClient {
         req.set_header(self.header());
         req.set_exclude_tombstone_stores(exclude_tombstone);
 
-        block_on(self.raw_client.wait_for_ready());
+        block_on(self.raw_client.wait_for_ready())?;
         let mut resp = self.raw_client.stub().get_all_stores_opt(
             &req,
             self.raw_client
@@ -628,7 +658,7 @@ impl RpcClient {
         let mut req = pdpb::GetClusterConfigRequest::default();
         req.set_header(self.header());
 
-        block_on(self.raw_client.wait_for_ready());
+        block_on(self.raw_client.wait_for_ready())?;
         let mut resp = self.raw_client.stub().get_cluster_config_opt(
             &req,
             self.raw_client
@@ -654,7 +684,7 @@ impl RpcClient {
 
         let mut raw_client = self.raw_client.clone();
         Box::pin(async move {
-            raw_client.wait_for_ready().await;
+            raw_client.wait_for_ready().await?;
             let mut resp = raw_client
                 .stub()
                 .get_region_async_opt(
@@ -709,7 +739,7 @@ impl RpcClient {
 
         let mut raw_client = self.raw_client.clone();
         Box::pin(async move {
-            raw_client.wait_for_ready().await;
+            raw_client.wait_for_ready().await?;
             let mut resp = raw_client
                 .stub()
                 .get_region_by_id_async_opt(
@@ -746,7 +776,7 @@ impl RpcClient {
 
         let mut raw_client = self.raw_client.clone();
         Box::pin(async move {
-            raw_client.wait_for_ready().await;
+            raw_client.wait_for_ready().await?;
             let mut resp = raw_client
                 .stub()
                 .get_region_by_id_async_opt(
@@ -828,7 +858,7 @@ impl RpcClient {
 
         let mut raw_client = self.raw_client.clone();
         Box::pin(async move {
-            raw_client.wait_for_ready().await;
+            raw_client.wait_for_ready().await?;
             let resp = raw_client
                 .stub()
                 .ask_split_async_opt(
@@ -863,7 +893,7 @@ impl RpcClient {
 
         let mut raw_client = self.raw_client.clone();
         Box::pin(async move {
-            raw_client.wait_for_ready().await;
+            raw_client.wait_for_ready().await?;
             let resp = raw_client
                 .stub()
                 .ask_batch_split_async_opt(
@@ -908,7 +938,7 @@ impl RpcClient {
         let mut raw_client = self.raw_client.clone();
         let feature_gate = self.feature_gate.clone();
         Box::pin(async move {
-            raw_client.wait_for_ready().await;
+            raw_client.wait_for_ready().await?;
             let resp = raw_client
                 .stub()
                 .store_heartbeat_async_opt(
@@ -943,7 +973,7 @@ impl RpcClient {
 
         let mut raw_client = self.raw_client.clone();
         Box::pin(async move {
-            raw_client.wait_for_ready().await;
+            raw_client.wait_for_ready().await?;
             let resp = raw_client
                 .stub()
                 .report_batch_split_async_opt(
@@ -977,7 +1007,7 @@ impl RpcClient {
         }
         req.set_region(region.region);
 
-        block_on(self.raw_client.wait_for_ready());
+        block_on(self.raw_client.wait_for_ready())?;
         let resp = self.raw_client.stub().scatter_region_opt(
             &req,
             self.raw_client
@@ -995,7 +1025,7 @@ impl RpcClient {
 
         let mut raw_client = self.raw_client.clone();
         Box::pin(async move {
-            raw_client.wait_for_ready().await;
+            raw_client.wait_for_ready().await?;
             let resp = raw_client
                 .stub()
                 .get_gc_safe_point_async_opt(
@@ -1025,7 +1055,7 @@ impl RpcClient {
         req.set_header(self.header());
         req.set_region_id(region_id);
 
-        block_on(self.raw_client.wait_for_ready());
+        block_on(self.raw_client.wait_for_ready())?;
         let resp = self.raw_client.stub().get_operator_opt(
             &req,
             self.raw_client
@@ -1087,7 +1117,7 @@ impl RpcClient {
 
         let mut raw_client = self.raw_client.clone();
         Box::pin(async move {
-            raw_client.wait_for_ready().await;
+            raw_client.wait_for_ready().await?;
             let resp = raw_client
                 .stub()
                 .update_service_gc_safe_point_async_opt(
@@ -1121,7 +1151,7 @@ impl RpcClient {
 
         let mut raw_client = self.raw_client.clone();
         Box::pin(async move {
-            raw_client.wait_for_ready().await;
+            raw_client.wait_for_ready().await?;
             let resp = raw_client
                 .stub()
                 .report_min_resolved_ts_async_opt(
@@ -1200,7 +1230,14 @@ async fn heartbeat_loop(
         Ok((r, WriteFlags::default().buffer_hint(false)))
     });
     loop {
-        client.wait_for_ready().await;
+        if let Err(e) = client.wait_for_ready().await {
+            warn!("failed to acquire client for heartbeat stream"; "err" => ?e);
+            let _ = GLOBAL_TIMER_HANDLE
+                .delay(std::time::Instant::now() + Duration::from_secs(REQUEST_TIMEOUT))
+                .compat()
+                .await;
+            continue;
+        }
         let (mut hb_tx, hb_rx) = client
             .stub()
             .region_heartbeat_opt(client.call_option())
@@ -1237,7 +1274,14 @@ async fn bucket_loop(
         Ok((r, WriteFlags::default()))
     });
     loop {
-        client.wait_for_ready().await;
+        if let Err(e) = client.wait_for_ready().await {
+            warn!("failed to acquire client for bucket stream"; "err" => ?e);
+            let _ = GLOBAL_TIMER_HANDLE
+                .delay(std::time::Instant::now() + Duration::from_secs(REQUEST_TIMEOUT))
+                .compat()
+                .await;
+            continue;
+        }
         let (mut bk_tx, bk_rx) = client
             .stub()
             .report_buckets_opt(client.call_option())
@@ -1285,7 +1329,14 @@ async fn tso_loop(
     .map(Ok);
 
     loop {
-        client.wait_for_ready().await;
+        if let Err(e) = client.wait_for_ready().await {
+            warn!("failed to acquire client for tso stream"; "err" => ?e);
+            let _ = GLOBAL_TIMER_HANDLE
+                .delay(std::time::Instant::now() + Duration::from_secs(REQUEST_TIMEOUT))
+                .compat()
+                .await;
+            continue;
+        }
         let (mut tso_tx, mut tso_rx) = client
             .stub()
             .tso_opt(client.call_option())
@@ -1333,18 +1384,27 @@ async fn reconnect_loop(
     let interval = Duration::from_secs(REQUEST_TIMEOUT);
     loop {
         while !client.channel().wait_for_connected(interval).await {
-            client.reconnect(true, &on_reconnect).await.unwrap();
+            // wait_for_connected will attempt to connect internally. When it fails we
+            // should force reconnect.
+            if let Err(e) = client.reconnect(true, &on_reconnect).await {
+                warn!("failed to reconnect pd"; "err" => ?e);
+            }
         }
         let state = ConnectivityState::GRPC_CHANNEL_READY;
         select! {
-            force = client.channel().wait_for_state_change(state, interval).fuse() => {
-                client.reconnect(force, &on_reconnect).await.unwrap();
+            _ = client.channel().wait_for_state_change(state, interval).fuse() => {
+                let force = client.channel().check_connectivity_state(true) == ConnectivityState::GRPC_CHANNEL_SHUTDOWN;
+                if let Err(e) = client.reconnect(force, &on_reconnect).await {
+                    warn!("failed to reconnect pd"; "err" => ?e);
+                }
             },
             v = reconnect.next() => {
                 if v.is_none() {
                     break;
                 } else if v.unwrap() == client.cache_version() {
-                    client.reconnect(true, &on_reconnect).await.unwrap();
+                    if let Err(e) = client.reconnect(true, &on_reconnect).await {
+                        warn!("failed to reconnect pd when requested"; "err" => ?e);
+                    }
                 }
             }
         }

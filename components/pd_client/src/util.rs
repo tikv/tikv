@@ -530,6 +530,7 @@ pub type StubTuple = (
     PdClientStub,
     TargetInfo,
     GetMembersResponse,
+    // Only used by RpcClient, not by RpcClientV2.
     Option<TimestampOracle>,
 );
 
@@ -614,7 +615,7 @@ impl PdConnector {
             ))
         });
         let client = PdClientStub::new(channel.clone());
-        let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT * 5));
+        let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
         let response = client
             .get_members_async_opt(&GetMembersRequest::default(), option)
             .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "get_members", e))
