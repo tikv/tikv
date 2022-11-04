@@ -20,7 +20,6 @@ use engine_traits::{
 };
 use external_storage_export::{EncryptedExternalStorage, ExternalStorage};
 use file_system::{get_io_rate_limiter, OpenOptions};
-use futures::executor::ThreadPool;
 use kvproto::{
     brpb::{CipherInfo, StorageBackend},
     import_sstpb::*,
@@ -28,6 +27,7 @@ use kvproto::{
 };
 use tikv_util::{
     codec::stream_event::{EventIterator, Iterator as EIterator},
+    stream::block_on_external_io,
     time::{Instant, Limiter},
     Either,
 };
@@ -39,25 +39,21 @@ use crate::{
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     metrics::*,
     sst_writer::{RawSstWriter, TxnSstWriter},
+    storage_cache::StorageCache,
     Config, Error, Result,
 };
 
-struct StoragePool(Box<[Arc<dyn ExternalStorage>]>);
+#[derive(Default, Debug, Clone)]
+pub struct DownloadExt<'a> {
+    cache_key: Option<&'a str>,
+}
 
-impl StoragePool {
-    fn create(backend: &StorageBackend, size: usize) -> Result<Self> {
-        let mut r = Vec::with_capacity(size);
-        for _ in 0..size {
-            let s = external_storage_export::create_storage(backend, Default::default())?;
-            r.push(Arc::from(s));
+impl<'a> DownloadExt<'a> {
+    pub fn cache_key(self, key: &'a str) -> Self {
+        Self {
+            cache_key: Some(key),
+            ..self
         }
-        Ok(Self(r.into_boxed_slice()))
-    }
-
-    fn get(&self) -> Arc<dyn ExternalStorage> {
-        use rand::Rng;
-        let idx = rand::thread_rng().gen_range(0..self.0.len());
-        Arc::clone(&self.0[idx])
     }
 }
 
@@ -70,8 +66,8 @@ pub struct SstImporter {
     api_version: ApiVersion,
     compression_types: HashMap<CfName, SstCompressionType>,
     file_locks: Arc<DashMap<String, ()>>,
-    cached_storage: Arc<DashMap<String, StoragePool>>,
 
+    cached_storage: StorageCache,
     download_rt: Runtime,
 }
 
@@ -83,6 +79,11 @@ impl SstImporter {
         api_version: ApiVersion,
     ) -> Result<SstImporter> {
         let switcher = ImportModeSwitcher::new(cfg);
+        let cached_storage = StorageCache::default();
+        let download_rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        download_rt.spawn(cached_storage.gc_loop());
         Ok(SstImporter {
             dir: ImportDir::new(root)?,
             key_manager,
@@ -90,10 +91,8 @@ impl SstImporter {
             api_version,
             compression_types: HashMap::with_capacity(2),
             file_locks: Arc::new(DashMap::default()),
-            cached_storage: Arc::default(),
-            download_rt: tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?,
+            cached_storage,
+            download_rt,
         })
     }
 
@@ -203,7 +202,7 @@ impl SstImporter {
     //
     // This method returns the *inclusive* key range (`[start, end]`) of SST
     // file created, or returns None if the SST is empty.
-    pub async fn download<E: KvEngine>(
+    pub async fn download_ext<E: KvEngine>(
         &self,
         meta: &SstMeta,
         backend: &StorageBackend,
@@ -211,8 +210,8 @@ impl SstImporter {
         rewrite_rule: &RewriteRule,
         crypter: Option<CipherInfo>,
         speed_limiter: Limiter,
-        cache_key: &str,
         engine: E,
+        ext: DownloadExt<'_>,
     ) -> Result<Option<Range>> {
         debug!("download start";
             "meta" => ?meta,
@@ -221,15 +220,15 @@ impl SstImporter {
             "rewrite_rule" => ?rewrite_rule,
             "speed_limit" => speed_limiter.speed_limit(),
         );
-        let r = self.do_download::<E>(
+        let r = self.do_download_ext::<E>(
             meta,
             backend,
             name,
             rewrite_rule,
             crypter,
             &speed_limiter,
-            cache_key,
             engine,
+            ext,
         );
         match r.await {
             Ok(r) => {
@@ -255,35 +254,31 @@ impl SstImporter {
         self.switcher.get_mode()
     }
 
-    fn cached_storage(
+    #[cfg(test)]
+    fn download_file_from_external_storage(
         &self,
-        cache_key: &str,
+        file_length: u64,
+        src_file_name: &str,
+        dst_file: std::path::PathBuf,
         backend: &StorageBackend,
-    ) -> Result<Arc<dyn ExternalStorage>> {
-        let s = self.cached_storage.get(cache_key);
-        match s {
-            Some(s) => {
-                EXT_STORAGE_CACHE_COUNT.with_label_values(&["hit"]).inc();
-                Ok(s.value().get())
-            }
-            None => {
-                drop(s);
-                let e = self.cached_storage.entry(cache_key.to_owned());
-                match e {
-                    Entry::Occupied(v) => Ok(v.get().get()),
-                    Entry::Vacant(v) => {
-                        EXT_STORAGE_CACHE_COUNT.with_label_values(&["miss"]).inc();
-                        let pool = StoragePool::create(backend, 16)?;
-                        let cached = pool.get();
-                        v.insert(pool);
-                        Ok(cached)
-                    }
-                }
-            }
-        }
+        support_kms: bool,
+        speed_limiter: &Limiter,
+        restore_config: external_storage_export::RestoreConfig,
+    ) -> Result<()> {
+        self.download_rt
+            .block_on(self.async_download_file_from_external_storage(
+                file_length,
+                src_file_name,
+                dst_file,
+                backend,
+                support_kms,
+                speed_limiter,
+                "",
+                restore_config,
+            ))
     }
 
-    async fn download_file_from_external_storage(
+    async fn async_download_file_from_external_storage(
         &self,
         file_length: u64,
         src_file_name: &str,
@@ -311,7 +306,7 @@ impl SstImporter {
             let s = external_storage_export::create_storage(backend, Default::default())?;
             Arc::from(s)
         } else {
-            self.cached_storage(cache_key, backend)?
+            self.cached_storage.cached_or_create(cache_key, backend)?
         };
         let url = ext_storage.url()?.to_string();
 
@@ -400,7 +395,7 @@ impl SstImporter {
             file_crypter: None,
         };
         self.download_rt
-            .block_on(self.download_file_from_external_storage(
+            .block_on(self.async_download_file_from_external_storage(
                 meta.get_length(),
                 src_name,
                 path.temp.clone(),
@@ -557,7 +552,31 @@ impl SstImporter {
         }
     }
 
-    async fn do_download<E: KvEngine>(
+    // raw download, without ext, compatibility to old tests.
+    #[cfg(test)]
+    fn download<E: KvEngine>(
+        &self,
+        meta: &SstMeta,
+        backend: &StorageBackend,
+        name: &str,
+        rewrite_rule: &RewriteRule,
+        crypter: Option<CipherInfo>,
+        speed_limiter: Limiter,
+        engine: E,
+    ) -> Result<Option<Range>> {
+        self.download_rt.block_on(self.download_ext(
+            meta,
+            backend,
+            name,
+            rewrite_rule,
+            crypter,
+            speed_limiter,
+            engine,
+            DownloadExt::default(),
+        ))
+    }
+
+    async fn do_download_ext<E: KvEngine>(
         &self,
         meta: &SstMeta,
         backend: &StorageBackend,
@@ -565,8 +584,8 @@ impl SstImporter {
         rewrite_rule: &RewriteRule,
         crypter: Option<CipherInfo>,
         speed_limiter: &Limiter,
-        cache_key: &str,
         engine: E,
+        ext: DownloadExt<'_>,
     ) -> Result<Option<Range>> {
         let path = self.dir.join(meta)?;
 
@@ -581,14 +600,14 @@ impl SstImporter {
             ..Default::default()
         };
 
-        self.download_file_from_external_storage(
+        self.async_download_file_from_external_storage(
             meta.length,
             name,
             path.temp.clone(),
             backend,
             true,
             speed_limiter,
-            cache_key,
+            ext.cache_key.unwrap_or(""),
             restore_config,
         )
         .await?;
@@ -882,8 +901,6 @@ fn is_after_end_bound<K: AsRef<[u8]>>(value: &[u8], bound: &Bound<K>) -> bool {
 }
 
 #[cfg(test)]
-// TODO: Fix those cases.
-#[cfg(FALSE)]
 mod tests {
     use std::io::{self, BufWriter};
 
@@ -1349,7 +1366,6 @@ mod tests {
                 &backend,
                 true,
                 &Limiter::new(f64::INFINITY),
-                "",
                 restore_config,
             )
             .unwrap();
@@ -1387,7 +1403,6 @@ mod tests {
                 &backend,
                 false,
                 &Limiter::new(f64::INFINITY),
-                "",
                 restore_config,
             )
             .unwrap();
@@ -1476,7 +1491,6 @@ mod tests {
                 &RewriteRule::default(),
                 None,
                 Limiter::new(f64::INFINITY),
-                "",
                 db,
             )
             .unwrap()

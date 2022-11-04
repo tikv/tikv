@@ -21,6 +21,7 @@ mod util;
 pub mod import_mode;
 pub mod metrics;
 pub mod sst_importer;
+mod storage_cache;
 
 pub use self::{
     config::Config,

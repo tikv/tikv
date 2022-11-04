@@ -32,7 +32,10 @@ use raftstore::{
     router::RaftStoreRouter,
     store::{Callback, RaftCmdExtraOpts, RegionSnapshot},
 };
-use sst_importer::{error_inc, metrics::*, sst_meta_to_path, Config, Error, Result, SstImporter};
+use sst_importer::{
+    error_inc, metrics::*, sst_importer::DownloadExt, sst_meta_to_path, Config, Error, Result,
+    SstImporter,
+};
 use tikv_util::{
     config::ReadableSize,
     future::{create_stream_with_buffer, paired_future_callback},
@@ -561,15 +564,15 @@ where
                 .into_option()
                 .filter(|c| c.cipher_type != EncryptionMethod::Plaintext);
 
-            let res = importer.download::<E>(
+            let res = importer.download_ext::<E>(
                 req.get_sst(),
                 req.get_storage_backend(),
                 req.get_name(),
                 req.get_rewrite_rule(),
                 cipher,
                 limiter,
-                req.get_storage_cache_id(),
                 engine,
+                DownloadExt::default().cache_key(req.get_storage_cache_id()),
             );
             let mut resp = DownloadResponse::default();
             match res.await {
