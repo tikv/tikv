@@ -16,9 +16,9 @@ use crate::storage::{
         },
         Error, ErrorInner, Result,
     },
-    types::PessimisticLockParameters,
-    Error as StorageError, ErrorInner as StorageErrorInner, PessimisticLockRes, ProcessResult,
-    Result as StorageResult, Snapshot,
+    types::{PessimisticLockParameters, PessimisticLockResults},
+    Error as StorageError, ErrorInner as StorageErrorInner, ProcessResult, Result as StorageResult,
+    Snapshot,
 };
 
 command! {
@@ -26,7 +26,7 @@ command! {
     ///
     /// This can be rolled back with a [`PessimisticRollback`](Command::PessimisticRollback) command.
     AcquirePessimisticLock:
-        cmd_ty => StorageResult<PessimisticLockRes>,
+        cmd_ty => StorageResult<PessimisticLockResults>,
         display => "kv::command::acquirepessimisticlock keys({:?}) @ {} {} {} {:?} {} {} {} | {:?}",
         (keys, start_ts, lock_ttl, for_update_ts, wait_timeout, min_commit_ts, check_existence, lock_only_if_exists, ctx),
         content => {
@@ -88,16 +88,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         );
 
         let rows = keys.len();
-        let mut res = if self.return_values {
-            Ok(PessimisticLockRes::Values(vec![]))
-        } else if self.check_existence {
-            // If return_value is set, the existence status is implicitly included in the
-            // result. So check_existence only need to be explicitly handled if
-            // `return_values` is not set.
-            Ok(PessimisticLockRes::Existence(vec![]))
-        } else {
-            Ok(PessimisticLockRes::Empty)
-        };
+        let mut res = Ok(PessimisticLockResults::with_capacity(rows));
         let need_old_value = context.extra_op == ExtraOp::ReadOldValue;
         for (k, should_not_exist) in keys {
             match acquire_pessimistic_lock(
@@ -113,11 +104,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                 self.min_commit_ts,
                 need_old_value,
                 self.lock_only_if_exists,
+                false,
             ) {
-                Ok((val, old_value)) => {
-                    if self.return_values || self.check_existence {
-                        res.as_mut().unwrap().push(val);
-                    }
+                Ok((key_res, old_value)) => {
+                    res.as_mut().unwrap().push(key_res);
                     if old_value.resolved() {
                         let key = k.append_ts(txn.start_ts);
                         // MutationType is unknown in AcquirePessimisticLock stage.
@@ -131,17 +121,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                 }
                 Err(e) => return Err(Error::from(e)),
             }
-        }
-
-        // Some values are read, update max_ts
-        match &res {
-            Ok(PessimisticLockRes::Values(values)) if !values.is_empty() => {
-                txn.concurrency_manager.update_max_ts(self.for_update_ts);
-            }
-            Ok(PessimisticLockRes::Existence(values)) if !values.is_empty() => {
-                txn.concurrency_manager.update_max_ts(self.for_update_ts);
-            }
-            _ => (),
         }
 
         // no conflict

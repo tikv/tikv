@@ -129,7 +129,7 @@ paste = "1.0"
 pd_client = { workspace = true }
 pin-project = "1.0"
 pnet_datalink = "0.23"
-pprof = { git = "https://github.com/tikv/pprof-rs.git", rev = "3fed55af8fc6cf69dbd954a0321c799c5a111e4e", default-features = false, features = ["flamegraph", "protobuf-codec"] }
+pprof = { version = "0.11", default-features = false, features = ["flamegraph", "protobuf-codec"] }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 protobuf = { version = "2.8", features = ["bytes"] }
@@ -221,7 +221,7 @@ procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229
 # kvproto at the same time.
 # After the PR to kvproto is merged, remember to comment this out and run `cargo update -p kvproto`.
 [patch.'https://github.com/pingcap/kvproto']
-# kvproto = { git = "https://github.com/your_github_id/kvproto", branch="your_branch" }
+# kvproto = { git = "https://github.com/your_github_id/kvproto", branch = "your_branch" }
 
 [workspace]
 # See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md
