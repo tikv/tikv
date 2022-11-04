@@ -299,17 +299,38 @@ pub async fn read_external_storage_into_file(
 
 pub async fn read_external_storage_info_buff(
     reader: &mut (dyn AsyncRead + Unpin),
-    _speed_limit: &Limiter,
+    speed_limiter: &Limiter,
     expected_length: u64,
     expected_sha256: Option<Vec<u8>>,
 ) -> io::Result<Vec<u8>> {
-    let mut buff = Vec::new();
-    let len = reader.read_to_end(&mut buff).await?;
-    // check lenght of file
-    if len != 0 && len != expected_length as usize {
+    // the minimum speed of reading data, in bytes/second.
+    // if reading speed is slower than this rate, we will stop with
+    // a "TimedOut" error.
+    // (at 8 KB/s for a 2 MB buffer, this means we timeout after 4m16s.)
+    let min_read_speed: usize = 8192;
+    let dur = Duration::from_secs((READ_BUF_SIZE / min_read_speed) as u64);
+    let mut output = Vec::new();
+    let mut buffer = vec![0u8; READ_BUF_SIZE];
+
+    loop {
+        // separate the speed limiting from actual reading so it won't
+        // affect the timeout calculation.
+        let bytes_read = timeout(dur, reader.read(&mut buffer))
+            .await
+            .map_err(|_| io::ErrorKind::TimedOut)??;
+        if bytes_read == 0 {
+            break;
+        }
+
+        speed_limiter.consume(bytes_read).await;
+        output.append(&mut buffer[..bytes_read].to_vec());
+    }
+
+    // check length of file
+    if expected_length > 0 && output.len() != expected_length as usize {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("downloaded size {}, expected {}", len, expected_length),
+            format!("downloaded size {}, expected {}", output.len(), expected_length),
         ));
     }
     // check sha256 of file
@@ -320,8 +341,7 @@ pub async fn read_external_storage_info_buff(
                 format!("openssl hasher failed to init: {}", err),
             )
         })?;
-
-        hasher.update(&buff).map_err(|err| {
+        hasher.update(&output).map_err(|err| {
             io::Error::new(
                 io::ErrorKind::Other,
                 format!("openssl hasher udpate failed: {}", err),
@@ -348,5 +368,5 @@ pub async fn read_external_storage_info_buff(
         }
     }
 
-    Ok(buff)
+    Ok(output)
 }
