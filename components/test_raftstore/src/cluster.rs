@@ -22,7 +22,7 @@ use file_system::IoRateLimiter;
 use futures::{self, channel::oneshot, executor::block_on};
 use kvproto::{
     errorpb::Error as PbError,
-    kvrpcpb::{ApiVersion, Context},
+    kvrpcpb::{ApiVersion, Context, DiskFullOpt},
     metapb::{self, Buckets, PeerRole, RegionEpoch, StoreLabel},
     pdpb::{self, CheckPolicy, StoreReport},
     raft_cmdpb::*,
@@ -1139,6 +1139,23 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn wait_applied_index(&mut self, region_id: u64, store_id: u64, index: u64) {
+        let timer = Instant::now();
+        loop {
+            let applied_index = self.apply_state(region_id, store_id).applied_index;
+            if applied_index >= index {
+                return;
+            }
+            if timer.saturating_elapsed() >= Duration::from_secs(5) {
+                panic!(
+                    "[region {}] log is still not applied to {}: {} on store {}",
+                    region_id, index, applied_index, store_id,
+                );
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     pub fn wait_tombstone(&self, region_id: u64, peer: metapb::Peer, check_exist: bool) {
         let timer = Instant::now();
         let mut state;
@@ -1421,14 +1438,47 @@ impl<T: Simulator> Cluster<T> {
             .unwrap();
     }
 
-    pub fn must_send_flashback_msg(&mut self, region_id: u64, cmd_type: AdminCmdType) {
-        self.wait_applied_to_current_term(region_id, Duration::from_secs(3));
+    pub fn must_send_flashback_msg(
+        &mut self,
+        region_id: u64,
+        cmd_type: AdminCmdType,
+        cb: Callback<RocksSnapshot>,
+    ) {
         let leader = self.leader_of_region(region_id).unwrap();
         let store_id = leader.get_store_id();
         let region_epoch = self.get_region_epoch(region_id);
-        block_on(async move {
-            let (result_tx, result_rx) = oneshot::channel();
-            let cb = Callback::write(Box::new(move |resp| {
+        let mut admin = AdminRequest::default();
+        admin.set_cmd_type(cmd_type);
+        let mut req = RaftCmdRequest::default();
+        req.mut_header().set_region_id(region_id);
+        req.mut_header().set_region_epoch(region_epoch);
+        req.mut_header().set_peer(leader);
+        req.set_admin_request(admin);
+        req.mut_header()
+            .set_flags(WriteBatchFlags::FLASHBACK.bits());
+        let router = self.sim.rl().get_router(store_id).unwrap();
+        if let Err(e) = router.send_command(
+            req,
+            cb,
+            RaftCmdExtraOpts {
+                deadline: None,
+                disk_full_opt: DiskFullOpt::AllowedOnAlmostFull,
+            },
+        ) {
+            panic!(
+                "router send flashback msg {:?} failed, error: {}",
+                cmd_type, e
+            );
+        }
+    }
+
+    pub fn must_send_wait_flashback_msg(&mut self, region_id: u64, cmd_type: AdminCmdType) {
+        self.wait_applied_to_current_term(region_id, Duration::from_secs(3));
+        let (result_tx, result_rx) = oneshot::channel();
+        self.must_send_flashback_msg(
+            region_id,
+            cmd_type,
+            Callback::write(Box::new(move |resp| {
                 if resp.response.get_header().has_error() {
                     result_tx
                         .send(Some(resp.response.get_header().get_error().clone()))
@@ -1436,38 +1486,14 @@ impl<T: Simulator> Cluster<T> {
                     return;
                 }
                 result_tx.send(None).unwrap();
-            }));
-
-            let mut admin = AdminRequest::default();
-            admin.set_cmd_type(cmd_type);
-            let mut req = RaftCmdRequest::default();
-            req.mut_header().set_region_id(region_id);
-            req.mut_header().set_region_epoch(region_epoch);
-            req.mut_header().set_peer(leader);
-            req.set_admin_request(admin);
-            req.mut_header()
-                .set_flags(WriteBatchFlags::FLASHBACK.bits());
-            let router = self.sim.rl().get_router(store_id).unwrap();
-            if let Err(e) = router.send_command(
-                req,
-                cb,
-                RaftCmdExtraOpts {
-                    deadline: None,
-                    disk_full_opt: kvproto::kvrpcpb::DiskFullOpt::AllowedOnAlmostFull,
-                },
-            ) {
-                panic!(
-                    "router send flashback msg {:?} failed, error: {}",
-                    cmd_type, e
-                );
-            }
-            if let Some(e) = result_rx.await.unwrap() {
-                panic!("call flashback msg {:?} failed, error: {:?}", cmd_type, e);
-            }
-        });
+            })),
+        );
+        if let Some(e) = block_on(result_rx).unwrap() {
+            panic!("call flashback msg {:?} failed, error: {:?}", cmd_type, e);
+        }
     }
 
-    fn wait_applied_to_current_term(&mut self, region_id: u64, timeout: Duration) {
+    pub fn wait_applied_to_current_term(&mut self, region_id: u64, timeout: Duration) {
         let mut now = Instant::now();
         let deadline = now + timeout;
         while now < deadline {

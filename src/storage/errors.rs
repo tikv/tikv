@@ -461,7 +461,7 @@ pub fn extract_key_errors(res: Result<Vec<Result<()>>>) -> Vec<kvrpcpb::KeyError
 /// The shared version of [`Error`]. In some cases, it's necessary to pass a
 /// single error to more than one requests, since the inner error doesn't
 /// support cloning.
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 #[error(transparent)]
 pub struct SharedError(pub Arc<ErrorInner>);
 

@@ -417,6 +417,11 @@ impl fmt::Debug for QueryResChannel {
 pub type DebugInfoChannel = BaseChannel<RegionMeta>;
 pub type DebugInfoSubscriber = BaseSubscriber<RegionMeta>;
 
+#[cfg(feature = "testexport")]
+pub type FlushChannel = BaseChannel<()>;
+#[cfg(feature = "testexport")]
+pub type FlushSubscriber = BaseSubscriber<()>;
+
 #[cfg(test)]
 mod tests {
     use futures::executor::block_on;
