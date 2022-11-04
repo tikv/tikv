@@ -32,7 +32,7 @@ pub struct Server<C: PdMocker> {
 impl Server<Service> {
     pub fn new(eps_count: usize) -> Server<Service> {
         let mgr = SecurityManager::new(&SecurityConfig::default()).unwrap();
-        let eps = vec!["127.0.0.1".to_owned(); eps_count];
+        let eps = vec!["127.0.0.1:0".to_owned(); eps_count];
         let case = Option::None::<Arc<Service>>;
         Self::with_configuration(&mgr, &eps, case)
     }
@@ -45,7 +45,7 @@ impl Server<Service> {
 impl<C: PdMocker + Send + Sync + 'static> Server<C> {
     pub fn with_case(eps_count: usize, case: Arc<C>) -> Server<C> {
         let mgr = SecurityManager::new(&SecurityConfig::default()).unwrap();
-        let eps = vec!["127.0.0.1".to_owned(); eps_count];
+        let eps = vec!["127.0.0.1:0".to_owned(); eps_count];
         Server::with_configuration(&mgr, &eps, Some(case))
     }
 
@@ -78,21 +78,23 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
                 .name_prefix(thd_name!("mock-server"))
                 .build(),
         );
+        self.addrs.clear();
         let mut server = mgr
             .configure(ServerBuilder::new(env).register_service(service))
             .build()
             .unwrap();
-        let mut addrs = Vec::with_capacity(eps.len());
         for addr in eps {
             let port = mgr.bind(&mut server, addr).unwrap();
             let mut socket_addr: SocketAddr = addr.parse().unwrap();
             socket_addr.set_port(port);
-            addrs.push(socket_addr.to_string());
+            self.addrs.push(socket_addr.to_string());
         }
         {
-            self.mocker.default_handler.set_endpoints(addrs.clone());
+            self.mocker
+                .default_handler
+                .set_endpoints(self.addrs.clone());
             if let Some(case) = self.mocker.case.as_ref() {
-                case.set_endpoints(addrs);
+                case.set_endpoints(self.addrs.clone());
             }
         }
 
