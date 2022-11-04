@@ -742,29 +742,35 @@ pub fn conf_state_from_region(region: &metapb::Region) -> ConfState {
 
 pub struct KeysInfoFormatter<
     'a,
-    I: std::iter::DoubleEndedIterator<Item = &'a Vec<u8>>
-        + std::iter::ExactSizeIterator<Item = &'a Vec<u8>>
+    T: 'a + AsRef<[u8]>,
+    I: std::iter::DoubleEndedIterator<Item = &'a T>
+        + std::iter::ExactSizeIterator<Item = &'a T>
         + Clone,
 >(pub I);
 
 impl<
     'a,
-    I: std::iter::DoubleEndedIterator<Item = &'a Vec<u8>>
-        + std::iter::ExactSizeIterator<Item = &'a Vec<u8>>
+    T: 'a + AsRef<[u8]>,
+    I: std::iter::DoubleEndedIterator<Item = &'a T>
+        + std::iter::ExactSizeIterator<Item = &'a T>
         + Clone,
-> fmt::Display for KeysInfoFormatter<'a, I>
+> fmt::Display for KeysInfoFormatter<'a, T, I>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut it = self.0.clone();
         match it.len() {
             0 => write!(f, "(no key)"),
-            1 => write!(f, "key {}", log_wrappers::Value::key(it.next().unwrap())),
+            1 => write!(
+                f,
+                "key {}",
+                log_wrappers::Value::key(it.next().unwrap().as_ref())
+            ),
             _ => write!(
                 f,
                 "{} keys range from {} to {}",
                 it.len(),
-                log_wrappers::Value::key(it.next().unwrap()),
-                log_wrappers::Value::key(it.next_back().unwrap())
+                log_wrappers::Value::key(it.next().unwrap().as_ref()),
+                log_wrappers::Value::key(it.next_back().unwrap().as_ref())
             ),
         }
     }
