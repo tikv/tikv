@@ -111,6 +111,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         req: RaftCmdRequest,
     ) -> Result<u64> {
+        validate_batch_split(req.get_admin_request(), self.region())?;
         let mut proposal_ctx = ProposalContext::empty();
         proposal_ctx.insert(ProposalContext::SYNC_LOG);
         proposal_ctx.insert(ProposalContext::SPLIT);
@@ -1046,6 +1047,6 @@ mod test {
         req.set_splits(splits);
         apply.apply_batch_split(&req, 50).unwrap();
         assert!(apply.write_batch_mut().is_none());
-        assert_eq!(apply.tablet().get_value(b"k04").unwrap().unwrap(), b"v4");
+        assert_eq!(apply.tablet().get_value(b"zk04").unwrap().unwrap(), b"v4");
     }
 }

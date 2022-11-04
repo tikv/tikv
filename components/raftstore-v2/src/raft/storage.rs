@@ -24,23 +24,13 @@ use crate::{
     Result,
 };
 
-pub fn write_peer_state(
-    wb: &mut impl RaftLogBatch,
-    region: Region,
-    tablet_index: u64,
-) -> Result<()> {
-    let region_id = region.id;
-    let mut state = RegionLocalState::default();
-    state.set_region(region);
-    state.set_tablet_index(tablet_index);
-    wb.put_region_state(region_id, &state)?;
-    Ok(())
-}
-
 pub fn write_initial_states(wb: &mut impl RaftLogBatch, region: Region) -> Result<()> {
     let region_id = region.get_id();
 
-    write_peer_state(wb, region, RAFT_INIT_LOG_INDEX)?;
+    let mut state = RegionLocalState::default();
+    state.set_region(region);
+    state.set_tablet_index(RAFT_INIT_LOG_INDEX);
+    wb.put_region_state(region_id, &state)?;
 
     let mut apply_state = RaftApplyState::default();
     apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);

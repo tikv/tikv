@@ -6,4 +6,4 @@ mod storage;
 
 pub use apply::Apply;
 pub use peer::{raft_config, Peer};
-pub use storage::{write_initial_states, write_peer_state, Storage};
+pub use storage::{write_initial_states, Storage};

@@ -4,15 +4,14 @@ use std::{
     pin::Pin,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        Arc,
     },
     task::{Context, Poll},
 };
 
 use batch_system::{Fsm, FsmScheduler, Mailbox};
-use collections::HashMap;
 use crossbeam::channel::TryRecvError;
-use engine_traits::{KvEngine, RaftEngine, TabletFactory};
+use engine_traits::{KvEngine, TabletFactory};
 use futures::{Future, StreamExt};
 use kvproto::{metapb, raft_serverpb::RegionLocalState};
 use raftstore::store::ReadTask;
