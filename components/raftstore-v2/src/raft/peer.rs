@@ -145,7 +145,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             region_buckets: None,
             txn_ext: Arc::default(),
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
-            proposal_control: ProposalControl::default(),
+            proposal_control: ProposalControl::new(0),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -157,6 +157,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             peer.raft_group.campaign()?;
             peer.set_has_ready();
         }
+        let term = peer.term();
+        peer.proposal_control.maybe_update_term(term);
 
         Ok(peer)
     }

@@ -79,7 +79,6 @@ impl ProposedAdminCmd {
 ///
 /// Compared to `CmdEpochChecker`, `ProposalControl` also traces the whole
 /// lifetime of prepare merge.
-#[derive(Default)]
 pub struct ProposalControl {
     // Use `LinkedList` to reduce memory footprint. In most cases, the list
     // should be empty or 1 element. And access speed is not a concern.
@@ -89,6 +88,14 @@ pub struct ProposalControl {
 }
 
 impl ProposalControl {
+    pub fn new(term: u64) -> ProposalControl {
+        ProposalControl {
+            proposed_admin_cmd: LinkedList::new(),
+            pending_merge_index: 0,
+            term,
+        }
+    }
+
     /// Clears all queued conflict callbacks if term changed.
     ///
     /// If term is changed, leader is probably changed. Clear all callbacks to
@@ -243,15 +250,9 @@ impl ProposalControl {
 
 impl Drop for ProposalControl {
     fn drop(&mut self) {
-        if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
-            for mut state in mem::take(&mut self.proposed_admin_cmd) {
-                state.delayed_chs.clear();
-            }
-        } else {
-            for state in mem::take(&mut self.proposed_admin_cmd) {
-                for ch in state.delayed_chs {
-                    apply::notify_stale_req(self.term, ch);
-                }
+        for state in mem::take(&mut self.proposed_admin_cmd) {
+            for ch in state.delayed_chs {
+                apply::notify_stale_req(self.term, ch);
             }
         }
     }
@@ -271,14 +272,13 @@ mod tests {
     fn test_proposal_control() {
         let region = metapb::Region::default();
 
-        let mut control = ProposalControl::default();
-
+        let mut control = ProposalControl::new(10);
+        assert_eq!(control.term, 10);
         assert!(
             control
                 .check_conflict(Some(AdminCmdType::BatchSplit))
                 .is_none()
         );
-        assert_eq!(control.term, 10);
         control.record_proposed_admin(AdminCmdType::BatchSplit, 5);
         assert_eq!(control.proposed_admin_cmd.len(), 1);
 
@@ -405,7 +405,7 @@ mod tests {
     fn test_proposal_control_merge() {
         let region = metapb::Region::default();
 
-        let mut control = ProposalControl::default();
+        let mut control = ProposalControl::new(5);
         assert!(!control.is_merging());
         control.record_proposed_admin(AdminCmdType::PrepareMerge, 5);
         assert!(!control.is_merging());
