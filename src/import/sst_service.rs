@@ -10,13 +10,7 @@ use std::{
 use collections::HashSet;
 use engine_traits::{KvEngine, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IoType};
-use futures::{
-    executor::{ThreadPool, ThreadPoolBuilder},
-    future::join_all,
-    sink::SinkExt,
-    stream::TryStreamExt,
-    TryFutureExt,
-};
+use futures::{future::join_all, sink::SinkExt, stream::TryStreamExt, TryFutureExt};
 use grpcio::{
     ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
 };
