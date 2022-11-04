@@ -41,6 +41,7 @@ use crate::{
     WriteCmdType, WriteCmds, CF_LOCK,
 };
 
+#[allow(clippy::from_over_into)]
 impl Into<engine_tiflash::FsStatsExt> for ffi_interfaces::StoreStats {
     fn into(self) -> FsStatsExt {
         FsStatsExt {
@@ -192,7 +193,7 @@ impl TiFlashObserver {
             }
 
             // We still need this to filter error ssts.
-            if let Err(e) = check_sst_for_ingestion(sst, &ob_ctx.region()) {
+            if let Err(e) = check_sst_for_ingestion(sst, ob_ctx.region()) {
                 error!(?e;
                  "proxy ingest fail";
                  "sst" => ?sst,
@@ -503,7 +504,7 @@ impl QueryObserver for TiFlashObserver {
                     // thus leaving no un-tracked sst files.
 
                     // We must hereby move all ssts to `pending_delete_ssts` for protection.
-                    let pending_count = match apply_ctx_info.pending_handle_ssts {
+                    match apply_ctx_info.pending_handle_ssts {
                         None => (), // No ssts to handle, unlikely.
                         Some(v) => {
                             self.pending_delete_ssts
@@ -519,7 +520,6 @@ impl QueryObserver for TiFlashObserver {
                         "term" => cmd.term,
                         "index" => cmd.index,
                         "ssts_to_clean" => ?ssts,
-                        "pending_count" => pending_count,
                     );
                     false
                 }
@@ -600,6 +600,8 @@ impl RegionChangeObserver for TiFlashObserver {
                 .handle_destroy(ob_ctx.region().get_id());
         }
     }
+
+    #[allow(clippy::match_like_matches_macro)]
     fn pre_persist(
         &self,
         ob_ctx: &mut ObserverContext<'_>,
@@ -637,7 +639,7 @@ impl RegionChangeObserver for TiFlashObserver {
         should_persist
     }
 
-    fn pre_write_apply_state(&self, ob_ctx: &mut ObserverContext<'_>) -> bool {
+    fn pre_write_apply_state(&self, _ob_ctx: &mut ObserverContext<'_>) -> bool {
         fail::fail_point!("on_pre_persist_with_finish", |_| { true });
         false
     }
@@ -660,7 +662,7 @@ fn retrieve_sst_files(snap: &store::Snapshot) -> Vec<(PathBuf, ColumnFamilyType)
     for cf_file in snap.cf_files() {
         // Skip empty cf file.
         // CfFile is changed by dynamic region.
-        if cf_file.size.len() == 0 {
+        if cf_file.size.is_empty() {
             continue;
         }
 
@@ -673,7 +675,7 @@ fn retrieve_sst_files(snap: &store::Snapshot) -> Vec<(PathBuf, ColumnFamilyType)
         }
         // We have only one file for each cf for now.
         let mut full_paths = cf_file.file_paths();
-        assert!(full_paths.len() != 0);
+        assert!(!full_paths.is_empty());
         if full_paths.len() != 1 {
             // Multi sst files for one cf.
             tikv_util::info!("observe multi-file snapshot";
@@ -715,6 +717,7 @@ fn pre_handle_snapshot_impl(
 }
 
 impl ApplySnapshotObserver for TiFlashObserver {
+    #[allow(clippy::single_match)]
     fn pre_apply_snapshot(
         &self,
         ob_ctx: &mut ObserverContext<'_>,

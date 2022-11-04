@@ -1,16 +1,17 @@
 use kvproto::metapb::RegionEpoch;
 use tikv::{
-    server::lock_manager::{waiter_manager, waiter_manager::Callback},
+    server::lock_manager::waiter_manager,
     storage::{
         lock_manager::{
             DiagnosticContext, KeyLockWaitInfo, LockManager as LockManagerTrait, LockWaitToken,
             UpdateWaitForEvent, WaitTimeout,
         },
-        Error as StorageError, ProcessResult, StorageCallback,
+        Error as StorageError,
     },
 };
 use txn_types::TimeStamp;
 
+#[allow(clippy::new_without_default)]
 #[derive(Copy, Clone)]
 pub struct HackedLockManager {}
 

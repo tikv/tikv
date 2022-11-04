@@ -53,7 +53,7 @@ pub use test_raftstore::{
     new_put_cmd, new_region_leader_cmd, new_request, new_status_request, new_store,
     new_tikv_config, new_transfer_leader_cmd, sleep_ms,
 };
-use tikv::{config::TikvConfig, server::Result as ServerResult, storage::mvcc::TimeStamp};
+use tikv::{config::TikvConfig, server::Result as ServerResult};
 use tikv_util::{
     debug, error, escape, safe_panic,
     sys::SysQuota,

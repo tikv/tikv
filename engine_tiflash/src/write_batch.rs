@@ -223,11 +223,11 @@ impl Mutable for RocksWriteBatchVec {
     }
 
     fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        return Ok(());
+        Ok(())
     }
 
     fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        return Ok(());
+        Ok(())
     }
 }
 

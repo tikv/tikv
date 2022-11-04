@@ -1,21 +1,17 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+#![allow(dead_code)]
+#![allow(unused_variables)]
 
-use std::{sync::*, time::Duration};
+use std::sync::*;
 
 use collections::HashMap;
-use concurrency_manager::ConcurrencyManager;
-use engine_rocks::RocksSnapshot;
-use grpcio::{ChannelBuilder, ClientUnaryReceiver, Environment};
+use grpcio::{ChannelBuilder, Environment};
 use kvproto::{kvrpcpb::*, tikvpb::TikvClient};
 use new_mock_engine_store::{
-    mock_cluster::{get_global_engine_helper_set, sleep_ms},
     server::{new_server_cluster, ServerCluster},
     *,
 };
-use online_config::ConfigValue;
-use raftstore::coprocessor::CoprocessorHost;
-use tikv::config::ResolvedTsConfig;
-use tikv_util::{worker::LazyWorker, HandyRwLock};
+use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 static INIT: Once = Once::new();
 
@@ -32,7 +28,7 @@ pub struct TestSuite {
 
 impl TestSuite {
     pub fn new(count: usize) -> Self {
-        let mut cluster = Box::new(new_server_cluster(1, count));
+        let cluster = Box::new(new_server_cluster(1, count));
         Self::with_cluster(count, cluster)
     }
 

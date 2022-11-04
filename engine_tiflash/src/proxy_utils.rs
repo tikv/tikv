@@ -1,13 +1,13 @@
 use crate::util::get_cf_handle;
 
 pub fn do_write(cf: &str, key: &[u8]) -> bool {
-    return match cf {
+    match cf {
         engine_traits::CF_RAFT => true,
         engine_traits::CF_DEFAULT => {
             key == keys::PREPARE_BOOTSTRAP_KEY || key == keys::STORE_IDENT_KEY
         }
         _ => false,
-    };
+    }
 }
 
 fn cf_to_name(batch: &crate::RocksWriteBatchVec, cf: u32) -> &'static str {
@@ -19,13 +19,13 @@ fn cf_to_name(batch: &crate::RocksWriteBatchVec, cf: u32) -> &'static str {
     let handle_lock = get_cf_handle(batch.db.as_ref(), engine_traits::CF_LOCK).unwrap();
     let l = handle_lock.id();
     if cf == l {
-        return engine_traits::CF_LOCK;
+        engine_traits::CF_LOCK
     } else if cf == w {
-        return engine_traits::CF_WRITE;
+        engine_traits::CF_WRITE
     } else if cf == d {
-        return engine_traits::CF_DEFAULT;
+        engine_traits::CF_DEFAULT
     } else {
-        return engine_traits::CF_RAFT;
+        engine_traits::CF_RAFT
     }
 }
 #[cfg(any(test, feature = "testexport"))]

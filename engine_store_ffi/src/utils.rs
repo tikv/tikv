@@ -36,6 +36,7 @@ pub fn make_timer_task(millis: u64) -> TimerTask {
     }
 }
 
+#[allow(clippy::explicit_auto_deref)]
 pub fn poll_timer_task(task: &mut TimerTask, waker: Option<&ArcNotifyWaker>) -> Option<()> {
     let mut func = |cx: &mut std::task::Context| {
         let fut = &mut task.future;

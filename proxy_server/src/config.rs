@@ -316,7 +316,7 @@ pub fn ensure_no_common_unrecognized_keys(
             false
         })
         .collect::<Vec<_>>();
-    if inter.len() != 0 {
+    if !inter.is_empty() {
         return Err(inter.iter().join(", "));
     }
     Ok(())
@@ -360,7 +360,7 @@ pub fn address_proxy_config(config: &mut TikvConfig, proxy_config: &ProxyConfig)
         .server
         .labels
         .entry(DEFAULT_ENGINE_LABEL_KEY.to_owned())
-        .or_insert(String::from(option_env!("ENGINE_LABEL_VALUE").unwrap()));
+        .or_insert_with(|| String::from(option_env!("ENGINE_LABEL_VALUE").unwrap()));
     info!(
         "config.server.labels after address: {:?}",
         config.server.labels

@@ -192,6 +192,7 @@ impl<ER: RaftEngine, EK: KvEngine> ReadIndex for ReadIndexClient<ER, EK> {
         read_index_res
     }
 
+    #[allow(clippy::needless_return)]
     fn make_read_index_task(&self, mut req: ReadIndexRequest) -> Option<ReadIndexTask> {
         let fut = {
             let region_id = req.get_context().get_region_id();
@@ -200,7 +201,7 @@ impl<ER: RaftEngine, EK: KvEngine> ReadIndex for ReadIndexClient<ER, EK> {
             let (cb, f) = paired_future_callback();
 
             let tracker = tracker::get_tls_tracker_token();
-            if let Err(_) = self.routers[region_id as usize % self.routers.len()]
+            if self.routers[region_id as usize % self.routers.len()]
                 .lock()
                 .unwrap()
                 .send_command(
@@ -208,6 +209,7 @@ impl<ER: RaftEngine, EK: KvEngine> ReadIndex for ReadIndexClient<ER, EK> {
                     Callback::Read { cb, tracker },
                     RaftCmdExtraOpts::default(),
                 )
+                .is_err()
             {
                 return None;
             } else {
@@ -231,6 +233,7 @@ impl<ER: RaftEngine, EK: KvEngine> ReadIndex for ReadIndexClient<ER, EK> {
         })
     }
 
+    #[allow(clippy::explicit_auto_deref)]
     fn poll_read_index_task(
         &self,
         task: &mut ReadIndexTask,

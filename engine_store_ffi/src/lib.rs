@@ -55,6 +55,7 @@ impl From<&[u8]> for BaseBuffView {
     }
 }
 
+#[allow(clippy::wrong_self_convention)]
 pub trait UnwrapExternCFunc<T> {
     unsafe fn into_inner(&self) -> &T;
 }
@@ -113,7 +114,7 @@ impl RaftStoreProxyFFI for RaftStoreProxy {
         let kv_engine_lock = self.kv_engine.read().unwrap();
         let kv_engine = kv_engine_lock.as_ref();
         if kv_engine.is_none() {
-            cb(Err(format!("KV engine is not initialized")));
+            cb(Err("KV engine is not initialized".to_string()));
             return;
         }
         let value = kv_engine.unwrap().get_value_cf(cf, key);
@@ -137,7 +138,7 @@ impl RaftStoreProxyPtr {
         &*(self.inner as *const RaftStoreProxy)
     }
     pub fn is_null(&self) -> bool {
-        self.inner == std::ptr::null()
+        self.inner.is_null()
     }
 }
 
@@ -183,7 +184,7 @@ unsafe extern "C" fn ffi_get_region_local_state(
             };
         });
 
-    return res;
+    res
 }
 
 pub extern "C" fn ffi_handle_get_proxy_status(proxy_ptr: RaftStoreProxyPtr) -> RaftProxyStatus {
@@ -219,11 +220,8 @@ pub extern "C" fn ffi_batch_read_index(
 ) {
     assert!(!proxy_ptr.is_null());
     unsafe {
-        match proxy_ptr.as_ref().read_index_client {
-            Option::None => {
-                return;
-            }
-            _ => {}
+        if proxy_ptr.as_ref().read_index_client.is_none() {
+            return;
         }
     }
     debug_assert!(fn_insert_batch_read_index_resp.is_some());
@@ -269,6 +267,8 @@ impl From<u32> for RawRustPtrType {
     }
 }
 
+// TODO remove this warn.
+#[allow(clippy::from_over_into)]
 impl Into<u32> for RawRustPtrType {
     fn into(self) -> u32 {
         unsafe { std::mem::transmute(self) }
@@ -318,11 +318,8 @@ pub extern "C" fn ffi_make_read_index_task(
 ) -> RawRustPtr {
     assert!(!proxy_ptr.is_null());
     unsafe {
-        match proxy_ptr.as_ref().read_index_client {
-            Option::None => {
-                return RawRustPtr::default();
-            }
-            _ => {}
+        if proxy_ptr.as_ref().read_index_client.is_none() {
+            return RawRustPtr::default();
         }
     }
     let mut req = kvrpcpb::ReadIndexRequest::default();
@@ -335,7 +332,7 @@ pub extern "C" fn ffi_make_read_index_task(
             .unwrap()
             .make_read_index_task(req)
     };
-    return match task {
+    match task {
         None => {
             RawRustPtr::default() // Full or Disconnected
         }
@@ -343,9 +340,10 @@ pub extern "C" fn ffi_make_read_index_task(
             ptr: Box::into_raw(Box::new(task)) as *mut _,
             type_: RawRustPtrType::ReadIndexTask.into(),
         },
-    };
+    }
 }
 
+#[allow(clippy::redundant_closure_call)]
 pub extern "C" fn ffi_make_async_waker(
     wake_fn: Option<unsafe extern "C" fn(RawVoidPtr)>,
     data: RawCppPtr,
@@ -379,20 +377,17 @@ pub extern "C" fn ffi_poll_read_index_task(
 ) -> u8 {
     assert!(!proxy_ptr.is_null());
     unsafe {
-        match proxy_ptr.as_ref().read_index_client {
-            Option::None => {
-                return 0;
-            }
-            _ => {}
+        if proxy_ptr.as_ref().read_index_client.is_none() {
+            return 0;
         }
     }
     let task = unsafe { &mut *(task_ptr as *mut self::read_index_helper::ReadIndexTask) };
-    let waker = if std::ptr::null_mut() == waker {
+    let waker = if waker.is_null() {
         None
     } else {
         Some(unsafe { &*(waker as *mut utils::ArcNotifyWaker) })
     };
-    return if let Some(res) = unsafe {
+    if let Some(res) = unsafe {
         proxy_ptr
             .as_ref()
             .read_index_client
@@ -404,7 +399,7 @@ pub extern "C" fn ffi_poll_read_index_task(
         1
     } else {
         0
-    };
+    }
 }
 
 impl From<EncryptionMethod> for interfaces::root::DB::EncryptionMethod {
@@ -666,18 +661,14 @@ impl<'a> SSTFileReader<'a> {
     fn ffi_get_cf_file_reader(path: &str, key_manager: Option<Arc<DataKeyManager>>) -> RawVoidPtr {
         let env = get_env(key_manager, None).unwrap();
         let sst_reader_res = RocksSstReader::open_with_env(path, Some(env));
-        match sst_reader_res {
-            Err(ref e) => tikv_util::error!("Can not open sst file {:?}", e),
-            Ok(_) => (),
-        };
+        if let Err(ref e) = sst_reader_res {
+            tikv_util::error!("Can not open sst file {:?}", e);
+        }
         let sst_reader = sst_reader_res.unwrap();
         sst_reader.verify_checksum().unwrap();
-        match sst_reader.verify_checksum() {
-            Err(e) => {
-                tikv_util::error!("verify_checksum sst file error {:?}", e);
-                panic!("verify_checksum sst file error {:?}", e);
-            }
-            Ok(_) => (),
+        if let Err(e) = sst_reader.verify_checksum() {
+            tikv_util::error!("verify_checksum sst file error {:?}", e);
+            panic!("verify_checksum sst file error {:?}", e);
         }
         let b = Box::new(SSTFileReader {
             iter: RefCell::new(None),
@@ -745,13 +736,14 @@ pub fn name_to_cf(cf: &str) -> ColumnFamilyType {
         return ColumnFamilyType::Default;
     }
     if cf == CF_LOCK {
-        return ColumnFamilyType::Lock;
+        ColumnFamilyType::Lock
     } else if cf == CF_WRITE {
-        return ColumnFamilyType::Write;
+        ColumnFamilyType::Write
     } else if cf == CF_DEFAULT {
-        return ColumnFamilyType::Default;
+        ColumnFamilyType::Default
+    } else {
+        unreachable!()
     }
-    unreachable!()
 }
 
 #[derive(Default)]
@@ -846,7 +838,7 @@ impl RawCppPtr {
     }
 
     pub fn is_null(&self) -> bool {
-        self.ptr == std::ptr::null_mut()
+        self.ptr.is_null()
     }
 }
 
@@ -990,6 +982,7 @@ impl EngineStoreServerHelper {
     // Please notice that when specifying (index,term), we will do a prelim update
     // of (index,term) before post_exec. DO NOT use it other than CompactLog.
     // Use (0,0) instead.
+    #[allow(clippy::collapsible_else_if)]
     pub fn try_flush_data(
         &self,
         region_id: u64,
@@ -1166,50 +1159,54 @@ impl EngineStoreServerHelper {
     }
 }
 
+#[allow(clippy::clone_on_copy)]
 impl Clone for SSTReaderPtr {
     fn clone(&self) -> SSTReaderPtr {
-        return SSTReaderPtr {
+        SSTReaderPtr {
             inner: self.inner.clone(),
-        };
+        }
     }
 }
 
+#[allow(clippy::clone_on_copy)]
 impl Clone for BaseBuffView {
     fn clone(&self) -> BaseBuffView {
-        return BaseBuffView {
+        BaseBuffView {
             data: self.data.clone(),
             len: self.len.clone(),
-        };
+        }
     }
 }
 
+#[allow(clippy::clone_on_copy)]
 impl Clone for SSTView {
     fn clone(&self) -> SSTView {
-        return SSTView {
+        SSTView {
             type_: self.type_.clone(),
             path: self.path.clone(),
-        };
+        }
     }
 }
 
+#[allow(clippy::clone_on_copy)]
 impl Clone for SSTReaderInterfaces {
     fn clone(&self) -> SSTReaderInterfaces {
-        return SSTReaderInterfaces {
+        SSTReaderInterfaces {
             fn_get_sst_reader: self.fn_get_sst_reader.clone(),
             fn_remained: self.fn_remained.clone(),
             fn_key: self.fn_key.clone(),
             fn_value: self.fn_value.clone(),
             fn_next: self.fn_next.clone(),
             fn_gc: self.fn_gc.clone(),
-        };
+        }
     }
 }
 
 impl Clone for RaftStoreProxyPtr {
     fn clone(&self) -> RaftStoreProxyPtr {
-        return RaftStoreProxyPtr {
+        RaftStoreProxyPtr {
             inner: self.inner.clone(),
-        };
+        }
     }
 }
 
@@ -1236,14 +1233,14 @@ pub extern "C" fn ffi_make_timer_task(millis: u64) -> RawRustPtr {
 
 pub unsafe extern "C" fn ffi_poll_timer_task(task_ptr: RawVoidPtr, waker: RawVoidPtr) -> u8 {
     let task = &mut *(task_ptr as *mut utils::TimerTask);
-    let waker = if std::ptr::null_mut() == waker {
+    let waker = if waker.is_null() {
         None
     } else {
         Some(&*(waker as *mut utils::ArcNotifyWaker))
     };
-    return if let Some(_) = { utils::poll_timer_task(task, waker) } {
+    if utils::poll_timer_task(task, waker).is_some() {
         1
     } else {
         0
-    };
+    }
 }

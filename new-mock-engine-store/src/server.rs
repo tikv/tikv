@@ -20,7 +20,7 @@ use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Servic
 use grpcio_health::HealthService;
 use kvproto::{
     deadlock::create_deadlock,
-    debugpb::{create_debug, DebugClient},
+    debugpb::DebugClient,
     import_sstpb::create_import_sst,
     kvrpcpb::{ApiVersion, Context},
     metapb,
@@ -45,7 +45,6 @@ use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
 use tempfile::TempDir;
 use tikv::{
-    config::ConfigController,
     coprocessor, coprocessor_v2,
     import::{ImportSstService, SstImporter},
     read_pool::ReadPool,
@@ -56,7 +55,6 @@ use tikv::{
         lock_manager::LockManager,
         raftkv::ReplicaReadLockChecker,
         resolve::{self, StoreAddrResolver},
-        service::DebugService,
         ConnectionBuilder, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv,
         Result as ServerResult, Server, ServerTransport,
     },
@@ -803,11 +801,11 @@ impl Simulator<TiFlashEngine> for ServerCluster {
             .map_err(|e| RaftError::Timeout(format!("request timeout for {:?}: {:?}", timeout, e)))
     }
 
-    fn add_send_filter(&mut self, node_id: u64, filter: Box<dyn test_raftstore::Filter>) {
+    fn add_send_filter(&mut self, _node_id: u64, _filter: Box<dyn test_raftstore::Filter>) {
         todo!()
     }
 
-    fn add_recv_filter(&mut self, node_id: u64, filter: Box<dyn test_raftstore::Filter>) {
+    fn add_recv_filter(&mut self, _node_id: u64, _filter: Box<dyn test_raftstore::Filter>) {
         todo!()
     }
 }
@@ -849,7 +847,7 @@ pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
 pub fn new_server_cluster_with_api_ver(
     id: u64,
     count: usize,
-    api_ver: ApiVersion,
+    _api_ver: ApiVersion,
 ) -> Cluster<ServerCluster> {
     let pd_client = Arc::new(TestPdClient::new(id, false));
     let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));

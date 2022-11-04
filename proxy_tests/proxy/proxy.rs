@@ -1,24 +1,38 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
+pub use std::{
     collections::HashMap,
-    sync::{Arc, RwLock},
+    io::Write,
+    ops::DerefMut,
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::{atomic::Ordering, mpsc, Arc, RwLock},
 };
 
-use engine_store_ffi::RaftStoreProxyFFI;
+pub use engine_store_ffi::{KVGetStatus, RaftStoreProxyFFI};
+pub use engine_traits::{MiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE};
 // use engine_store_ffi::config::{ensure_no_common_unrecognized_keys, ProxyConfig};
-use engine_traits::{Peekable, CF_RAFT};
-use kvproto::{
-    raft_cmdpb::{AdminCmdType, AdminRequest},
+pub use engine_traits::{Peekable, CF_RAFT};
+pub use kvproto::{
+    import_sstpb::SstMeta,
+    metapb,
+    metapb::RegionEpoch,
+    raft_cmdpb::{AdminCmdType, AdminRequest, CmdType, Request},
     raft_serverpb::{RaftApplyState, RegionLocalState, StoreIdent},
 };
-use new_mock_engine_store::{
-    mock_cluster::FFIHelperSet, node::NodeCluster, Cluster, ProxyConfig, TestPdClient,
+pub use new_mock_engine_store::{
+    config::Config,
+    mock_cluster::{new_put_cmd, new_request, FFIHelperSet},
+    must_get_equal, must_get_none,
+    node::NodeCluster,
+    transport_simulate::{
+        CloneFilterFactory, CollectSnapshotFilter, Direction, RegionPacketFilter,
+    },
+    Cluster, ProxyConfig, Simulator, TestPdClient,
 };
-pub use new_mock_engine_store::{must_get_equal, must_get_none};
-use raftstore::coprocessor::ConsistencyCheckMethod;
+pub use raftstore::coprocessor::ConsistencyCheckMethod;
 pub use test_raftstore::new_peer;
-use tikv_util::{
+pub use tikv_util::{
     config::{ReadableDuration, ReadableSize},
     time::Duration,
 };

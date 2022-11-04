@@ -22,7 +22,7 @@ pub fn gen_proxy_config(
     proxy_unrecognized_keys: &mut Vec<String>,
 ) -> ProxyConfig {
     // Double read the same file for proxy-specific arguments.
-    let proxy_config = config_path.map_or_else(ProxyConfig::default, |path| {
+    config_path.map_or_else(ProxyConfig::default, |path| {
         let path = Path::new(path);
         crate::config::ProxyConfig::from_file(
             path,
@@ -39,8 +39,7 @@ pub fn gen_proxy_config(
                 e
             );
         })
-    });
-    proxy_config
+    })
 }
 
 /// Generate default TikvConfig, but with some Proxy's default values.

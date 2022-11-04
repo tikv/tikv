@@ -14,7 +14,7 @@ path = "bin.rs"
 # features = ["which-rustfmt"]
 
 [dependencies]
+bindgen = { version = "0.57.0", default-features = true }
 # md5 = ""
 clap = "2.33.0"
 walkdir = "2"
-bindgen = { version = "0.57.0", default-features = true }

@@ -219,6 +219,7 @@ ci_fmt_check:
 ci_test:
 	M="testold" ./ci_check.sh
 	M="testnew" ./ci_check.sh
+	make debug
 
 gen_proxy_ffi: pre-format
 	./gen-proxy-ffi.sh

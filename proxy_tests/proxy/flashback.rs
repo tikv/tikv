@@ -3,18 +3,7 @@
 use std::ops::DerefMut;
 
 use futures::executor::block_on;
-use kvproto::{metapb, metapb::RegionEpoch};
-use new_mock_engine_store::{
-    config::Config,
-    mock_cluster::{new_put_cmd, new_request, FFIHelperSet},
-    node::NodeCluster,
-    transport_simulate::{
-        CloneFilterFactory, CollectSnapshotFilter, Direction, RegionPacketFilter,
-    },
-    Cluster, ProxyConfig, Simulator, TestPdClient,
-};
-use tikv::config::{TikvConfig, LAST_CONFIG_FILE};
-use tikv_util::{sys::SysQuota, time::Duration, HandyRwLock};
+use tikv_util::time::Duration;
 use txn_types::WriteBatchFlags;
 
 use crate::proxy::*;
@@ -68,7 +57,7 @@ fn must_cmd_add_flashback_flag(
 mod persist {
     use super::*;
     fn flashback_recover(do_persist: bool) {
-        let (mut cluster, pd_client) = new_mock_cluster(0, 3);
+        let (mut cluster, _) = new_mock_cluster(0, 3);
         disable_auto_gen_compact_log(&mut cluster);
         cluster.run();
 
@@ -93,8 +82,6 @@ mod persist {
             cluster.get_region_epoch(region_id),
             new_peer(1, 1),
         ));
-
-        let new_states = collect_all_states(&cluster, region_id);
 
         // Write will be blocked
         must_get_error_flashback_in_progress(&mut cluster, &region, new_put_cmd(b"k1", b"v2"));
