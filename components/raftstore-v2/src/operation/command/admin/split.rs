@@ -76,7 +76,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         proposal_ctx.insert(ProposalContext::SPLIT);
 
         let data = req.write_to_bytes().unwrap();
-        self.propose_with_proposal_ctx(store_ctx, data, proposal_ctx.to_vec())
+        self.propose_with_ctx(store_ctx, data, proposal_ctx.to_vec())
     }
 }
 
@@ -318,7 +318,7 @@ mod test {
         split_keys: Vec<Vec<u8>>,
         children_peers: Vec<Vec<u64>>,
         log_index: u64,
-        region_boundries: Vec<(&[u8], &[u8])>,
+        region_boundries: Vec<(Vec<u8>, Vec<u8>)>,
         expected_region_epoch: RegionEpoch,
         expected_derived_index: usize,
     ) {
@@ -470,11 +470,7 @@ mod test {
         req.set_splits(splits.clone());
         let err = apply.apply_batch_split(&req, 0).unwrap_err();
         // Empty key will not in any region exclusively.
-        assert!(
-            err.to_string().contains("invalid split request"),
-            "{:?}",
-            err
-        );
+        assert!(err.to_string().contains("missing split key"), "{:?}", err);
 
         splits.mut_requests().clear();
         splits
@@ -515,16 +511,11 @@ mod test {
                 vec![b"k09".to_vec()],
                 vec![vec![11, 12, 13]],
                 10,
-                {
-                    let boundaries: Vec<(&[u8], &[u8])> = vec![(b"", b"k09"), (b"k09", b"k10")];
-                    boundaries
-                },
-                {
-                    let mut epoch = RegionEpoch::new();
-                    epoch.set_conf_ver(0);
-                    epoch.set_version(4);
-                    epoch
-                },
+                vec![
+                    (b"".to_vec(), b"k09".to_vec()),
+                    (b"k09".to_vec(), b"k10".to_vec()),
+                ],
+                4,
                 0,
             ),
             // region 1 ["", "k09"]
@@ -537,16 +528,11 @@ mod test {
                 vec![b"k01".to_vec()],
                 vec![vec![21, 22, 23]],
                 20,
-                {
-                    let boundaries: Vec<(&[u8], &[u8])> = vec![(b"", b"k01"), (b"k01", b"k09")];
-                    boundaries
-                },
-                {
-                    let mut epoch = RegionEpoch::new();
-                    epoch.set_conf_ver(0);
-                    epoch.set_version(5);
-                    epoch
-                },
+                vec![
+                    (b"".to_vec(), b"k01".to_vec()),
+                    (b"k01".to_vec(), b"k09".to_vec()),
+                ],
+                5,
                 1,
             ),
             // region 1 ["k01", "k09"]
@@ -560,17 +546,12 @@ mod test {
                 vec![b"k02".to_vec(), b"k03".to_vec()],
                 vec![vec![31, 32, 33], vec![41, 42, 43]],
                 30,
-                {
-                    let boundaries: Vec<(&[u8], &[u8])> =
-                        vec![(b"k01", b"k02"), (b"k02", b"k03"), (b"k03", b"k09")];
-                    boundaries
-                },
-                {
-                    let mut epoch = RegionEpoch::new();
-                    epoch.set_conf_ver(0);
-                    epoch.set_version(7);
-                    epoch
-                },
+                vec![
+                    (b"k01".to_vec(), b"k02".to_vec()),
+                    (b"k02".to_vec(), b"k03".to_vec()),
+                    (b"k03".to_vec(), b"k09".to_vec()),
+                ],
+                7,
                 2,
             ),
             // region 1 ["k03", "k09"]
@@ -584,17 +565,12 @@ mod test {
                 vec![b"k07".to_vec(), b"k08".to_vec()],
                 vec![vec![51, 52, 53], vec![61, 62, 63]],
                 40,
-                {
-                    let boundaries: Vec<(&[u8], &[u8])> =
-                        vec![(b"k03", b"k07"), (b"k07", b"k08"), (b"k08", b"k09")];
-                    boundaries
-                },
-                {
-                    let mut epoch = RegionEpoch::new();
-                    epoch.set_conf_ver(0);
-                    epoch.set_version(9);
-                    epoch
-                },
+                vec![
+                    (b"k03".to_vec(), b"k07".to_vec()),
+                    (b"k07".to_vec(), b"k08".to_vec()),
+                    (b"k08".to_vec(), b"k09".to_vec()),
+                ],
+                9,
                 0,
             ),
         ];
@@ -607,10 +583,13 @@ mod test {
             children_peers,
             log_index,
             region_boundries,
-            expected_epoch,
+            version,
             expected_derived_index,
         ) in cases
         {
+            let mut expected_epoch = RegionEpoch::new();
+            expected_epoch.set_version(version);
+
             assert_split(
                 &mut apply,
                 &factory,
