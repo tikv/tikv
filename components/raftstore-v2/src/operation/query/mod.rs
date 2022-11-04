@@ -216,7 +216,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.pending_reads_mut().advance_leader_reads(states);
             if let Some(propose_time) = self.pending_reads().last_ready().map(|r| r.propose_time) {
                 if !self.leader_lease_mut().is_suspect() {
-                    self.maybe_renew_leader_lease(propose_time, &mut ctx.store_meta, None);
+                    self.maybe_renew_leader_lease(propose_time, &ctx.store_meta, None);
                 }
             }
 
@@ -286,6 +286,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // If it is in pending merge state(i.e. applied PrepareMerge), the data may be stale.
             // TODO: Add a test to cover this case
             && !self.has_pending_merge_state()
+    }
+
+    #[inline]
+    pub fn ready_to_handle_read(&self) -> bool {
+        // TODO: It may cause read index to wait a long time.
+
+        // There may be some values that are not applied by this leader yet but the old
+        // leader, if applied_term isn't equal to current term.
+        self.applied_to_current_term()
+            // There may be stale read if the old leader splits really slow,
+            // the new region may already elected a new leader while
+            // the old leader still think it owns the split range.
+            && !self.proposal_control().is_splitting()
+            // There may be stale read if a target leader is in another store and
+            // applied commit merge, written new values, but the sibling peer in
+            // this store does not apply commit merge, so the leader is not ready
+            // to read, until the merge is rollbacked.
+            && !self.proposal_control().is_merging()
     }
 
     fn send_read_command<T>(
@@ -409,7 +427,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // TODO: add coprocessor_host hook
             let progress = ReadProgress::applied_term(applied_term);
             // TODO: remove it
-            self.add_reader_if_necessary(&mut ctx.store_meta);
+            self.add_reader_if_necessary(&ctx.store_meta);
             let mut meta = ctx.store_meta.lock().unwrap();
             let reader = meta.readers.get_mut(&self.region_id()).unwrap();
             self.maybe_update_read_progress(reader, progress);

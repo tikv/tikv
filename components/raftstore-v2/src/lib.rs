@@ -23,6 +23,7 @@
 
 #![allow(unused)]
 #![feature(let_else)]
+#![feature(generators)]
 
 mod batch;
 mod bootstrap;
