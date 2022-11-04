@@ -173,12 +173,12 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         // split regions. Before the creation, we should flush the writes and remove the
         // write batch
         self.flush();
-        self.write_batch_mut().take();
 
         // todo(SpadeA): Here: we use a temporary solution that we use checkpoint API to
         // clone new tablets. It may cause large jitter as we need to flush the
-        // memtable. We will freeze the memtable rather than flush it in the
-        // following PR.
+        // memtable. And more what is more important is that after removing WAL, the API
+        // will never flush.
+        // We will freeze the memtable rather than flush it in the following PR.
         let tablet = self.tablet().clone();
         let mut checkpointer = tablet.new_checkpointer().unwrap_or_else(|e| {
             panic!(
@@ -226,6 +226,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             .tablet_factory()
             .open_tablet(region_id, Some(log_index), OpenOptions::default())
             .unwrap();
+        // Remove the old write batch.
+        self.write_batch_mut().take();
         self.publish_tablet(tablet);
 
         self.region_state_mut()
