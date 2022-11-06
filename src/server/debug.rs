@@ -120,11 +120,35 @@ impl From<BottommostLevelCompaction> for debugpb::BottommostLevelCompaction {
     }
 }
 
+trait InnerRocksEngineExtractor {
+    fn get_db_from_type(&self, db: DbType) -> Result<&RocksEngine>;
+}
+
 #[derive(Clone)]
 pub struct Debugger<ER: RaftEngine> {
     engines: Engines<RocksEngine, ER>,
     reset_to_version_manager: ResetToVersionManager,
     cfg_controller: ConfigController,
+}
+
+impl<ER: RaftEngine> InnerRocksEngineExtractor for Debugger<ER> {
+    default fn get_db_from_type(&self, db: DbType) -> Result<&RocksEngine> {
+        match db {
+            DbType::Kv => Ok(&self.engines.kv),
+            DbType::Raft => Err(box_err!("Get raft db is not allowed")),
+            _ => Err(box_err!("invalid DB type")),
+        }
+    }
+}
+
+impl InnerRocksEngineExtractor for Debugger<RocksEngine> {
+    fn get_db_from_type(&self, db: DbType) -> Result<&RocksEngine> {
+        match db {
+            DbType::Kv => Ok(&self.engines.kv),
+            DbType::Raft => Ok(&self.engines.raft),
+            _ => Err(box_err!("invalid DB type")),
+        }
+    }
 }
 
 impl<ER: RaftEngine> Debugger<ER> {
@@ -161,14 +185,6 @@ impl<ER: RaftEngine> Debugger<ER> {
         }));
         regions.sort_unstable();
         Ok(regions)
-    }
-
-    fn get_db_from_type(&self, db: DbType) -> Result<&RocksEngine> {
-        match db {
-            DbType::Kv => Ok(&self.engines.kv),
-            DbType::Raft => Err(box_err!("Get raft db is not allowed")),
-            _ => Err(box_err!("invalid DB type")),
-        }
     }
 
     pub fn get(&self, db: DbType, cf: &str, key: &[u8]) -> Result<Vec<u8>> {
