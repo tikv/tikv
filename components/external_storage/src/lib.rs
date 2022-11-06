@@ -330,7 +330,11 @@ pub async fn read_external_storage_info_buff(
     if expected_length > 0 && output.len() != expected_length as usize {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("downloaded size {}, expected {}", output.len(), expected_length),
+            format!(
+                "downloaded size {}, expected {}",
+                output.len(),
+                expected_length
+            ),
         ));
     }
     // check sha256 of file

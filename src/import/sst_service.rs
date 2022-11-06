@@ -5,7 +5,10 @@ use std::{
     future::Future,
     ops::Add,
     path::PathBuf,
-    sync::{Arc, Mutex, atomic::{AtomicU64, Ordering}},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
 };
 
 use collections::HashSet;
@@ -77,7 +80,7 @@ where
     Router: 'static + RaftStoreRouter<E>,
 {
     fn clone(&self) -> Self {
-        Self{
+        Self {
             mem_use: AtomicU64::new(self.mem_use.load(Ordering::SeqCst)),
             cfg: self.cfg.clone(),
             engine: self.engine.clone(),
@@ -272,10 +275,10 @@ where
         }
     }
 
-    fn calculate_memory(&self, req: &ApplyRequest) -> u64 {    
-        if req.meta.is_some(){
+    fn calculate_memory(&self, req: &ApplyRequest) -> u64 {
+        if req.meta.is_some() {
             req.get_meta().get_length()
-        }else{
+        } else {
             let mut sum_len = 0;
             for meta in req.get_metas() {
                 sum_len += meta.get_length();
@@ -480,6 +483,7 @@ where
         let start = Instant::now();
         let mut start_apply = Instant::now();
         let raft_size = self.raft_entry_max_size;
+
         // let need_mem = self.calculate_memory(&req);
         // let mem_in_use = self.mem_use.fetch_add(need_mem, Ordering::SeqCst);
         // let serve_is_busy = if mem_in_use > self.memory_limit.0 {
@@ -497,6 +501,13 @@ where
             let mut futs = vec![];
             let mut apply_resp = ApplyResponse::default();
             let context = req.take_context();
+            let mut rules = req.take_rewrite_rules();
+            let mut metas = req.take_metas();
+            // For compatibility with old requests.
+            if req.has_meta() {
+                metas.push(req.take_meta());
+                rules.push(req.take_rewrite_rule());
+            }
             // if serve_is_busy {
             //     let mut err = kvproto::errorpb::Error::new();
             //     err.set_server_is_busy(kvproto::errorpb::ServerIsBusy::new());
@@ -518,13 +529,6 @@ where
                 let mut req_default_size = 0_u64;
                 let mut req_write_size = 0_u64;
                 let mut range: Option<Range> = None;
-                let mut rules = req.take_rewrite_rules();
-                let mut metas = req.take_metas();
-                // For compatibility with old requests.
-                if req.has_meta() {
-                    metas.push(req.take_meta());
-                    rules.push(req.take_rewrite_rule());
-                }
 
                 for (i, meta) in metas.iter().enumerate() {
                     let (reqs, req_size) = if meta.get_cf() == CF_DEFAULT {
@@ -620,6 +624,10 @@ where
                 }
                 resp
             }));
+
+            for m in metas.iter(){
+                importer.clear_kv_buff(m);
+            }
             // Records how long the apply task waits to be scheduled.
             sst_importer::metrics::IMPORTER_APPLY_DURATION
                 .with_label_values(&["apply"])

@@ -30,6 +30,7 @@ use kvproto::{
 use tikv_util::{
     codec::stream_event::{EventIterator, Iterator as EIterator},
     stream::block_on_external_io,
+    sys::DiskExt,
     time::{Instant, Limiter},
 };
 use txn_types::{Key, Lock, TimeStamp, WriteRef};
@@ -50,7 +51,7 @@ pub struct SstImporter {
     // TODO: lift api_version as a type parameter.
     api_version: ApiVersion,
     compression_types: HashMap<CfName, SstCompressionType>,
-    file_locks: Arc<DashMap<String, Arc<Vec<u8>>>>,
+    file_locks: Arc<DashMap<String, (Arc<Vec<u8>>, u64)>>,
 }
 
 impl SstImporter {
@@ -295,20 +296,36 @@ impl SstImporter {
         Ok(())
     }
 
+    pub fn clear_kv_buff(&self, meta: &KvMeta) {
+        let dst_name = format!("{}_{}", meta.get_name(), meta.get_range_offset());
+        self.file_locks.remove_if_mut(&dst_name, |k, v| {
+            v.1 -= 1;
+            v.1 == 0 as u64
+        });
+    }
+
     pub fn do_read_kv_file(
         &self,
         meta: &KvMeta,
         backend: &StorageBackend,
         speed_limiter: &Limiter,
-    ) -> Result<Vec<u8>> {
+    ) -> Result<Arc<Vec<u8>>> {
         let start = Instant::now();
+        let dst_name = format!("{}_{}", meta.get_name(), meta.get_range_offset());
+
+        let mut lock = self.file_locks.entry(dst_name).or_default();
+        let v = lock.value_mut();
+        if v.0.len() > 0 {
+            v.1 += 1;
+            return Ok(v.0.clone());
+        }
+
         let sha256 = meta.get_sha256().to_vec();
         let expected_sha256 = if !sha256.is_empty() {
             Some(sha256)
         } else {
             None
         };
-
         let file_length = meta.get_length();
         let range_length = meta.get_range_length();
         let range = if range_length == 0 {
@@ -331,13 +348,14 @@ impl SstImporter {
             speed_limiter,
             restore_config,
         )?;
+        *lock = (Arc::new(buff), 1);
 
         IMPORTER_DOWNLOAD_BYTES.observe(file_length as _);
         IMPORTER_APPLY_DURATION
             .with_label_values(&["download"])
             .observe(start.saturating_elapsed().as_secs_f64());
 
-        Ok(buff)
+        Ok(lock.value().0.clone())
     }
 
     fn read_kv_files_from_external_storage(
@@ -480,11 +498,11 @@ impl SstImporter {
         start_key: &[u8],
         end_key: &[u8],
         restore_ts: u64,
-        file_buff: Vec<u8>,
+        file_buff: Arc<Vec<u8>>,
         rewrite_rule: &RewriteRule,
         build_fn: &mut dyn FnMut(Vec<u8>, Vec<u8>),
     ) -> Result<Option<Range>> {
-        let mut event_iter = EventIterator::new(file_buff);
+        let mut event_iter = EventIterator::new(file_buff.as_slice());
 
         let old_prefix = rewrite_rule.get_old_key_prefix();
         let new_prefix = rewrite_rule.get_new_key_prefix();
