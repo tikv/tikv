@@ -4990,7 +4990,7 @@ mod tests {
             .sched_txn_command(
                 commands::Prewrite::with_defaults(
                     vec![Mutation::make_put(k.clone(), v.clone())],
-                    k.clone().as_encoded().to_vec(),
+                    k.as_encoded().to_vec(),
                     *ts.incr(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -5005,8 +5005,8 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         expect_value(
-            v.clone(),
-            block_on(storage.get(Context::default(), Key::from_raw(b"k"), ts))
+            v,
+            block_on(storage.get(Context::default(), k.clone(), ts))
                 .unwrap()
                 .0,
         );
@@ -5015,7 +5015,7 @@ mod tests {
             .sched_txn_command(
                 commands::Prewrite::with_defaults(
                     vec![Mutation::make_delete(k.clone())],
-                    k.clone().as_encoded().to_vec(),
+                    k.as_encoded().to_vec(),
                     *ts.incr(),
                 ),
                 expect_ok_callback(tx.clone(), 2),
@@ -5047,12 +5047,12 @@ mod tests {
                     Key::from_raw(b"z"),
                     Context::default(),
                 ),
-                expect_ok_callback(tx.clone(), 4),
+                expect_ok_callback(tx, 4),
             )
             .unwrap();
         rx.recv().unwrap();
         expect_none(
-            block_on(storage.get(Context::default(), Key::from_raw(b"k"), flashback_commit_ts))
+            block_on(storage.get(Context::default(), k, flashback_commit_ts))
                 .unwrap()
                 .0,
         );
