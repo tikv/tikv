@@ -120,25 +120,6 @@ fn split_region<F: Fn(u64) -> u64>(
         .set_region_epoch(region.get_region_epoch().clone());
     req.mut_header().set_peer(peer);
 
-    let mut put_req = Request::default();
-    put_req.set_cmd_type(CmdType::Put);
-    put_req.mut_put().set_key(left_key.to_vec());
-    put_req.mut_put().set_value(b"v1".to_vec());
-    req.mut_requests().push(put_req);
-
-    let mut put_req = Request::default();
-    put_req.set_cmd_type(CmdType::Put);
-    put_req.mut_put().set_key(right_key.to_vec());
-    put_req.mut_put().set_value(b"v3".to_vec());
-    req.mut_requests().push(put_req);
-
-    let (msg, mut sub) = PeerMsg::raft_command(req.clone());
-    router.send(region_id, msg).unwrap();
-    assert!(block_on(sub.wait_proposed()));
-    assert!(block_on(sub.wait_committed()));
-    let resp = block_on(sub.result()).unwrap();
-    assert!(!resp.get_header().has_error(), "{:?}", resp);
-
     let mut split_id = pdpb::SplitId::new();
     split_id.new_region_id = split_region_id;
     split_id.new_peer_ids = vec![split_peer.id];
