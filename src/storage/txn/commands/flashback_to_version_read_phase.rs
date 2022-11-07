@@ -117,7 +117,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     tls_collect_keyread_histogram_vec(tag, key_locks.len() as f64);
                     FlashbackToVersionState::ScanLock {
                         // DO NOT pop the last key as the next key when it's the only key to prevent
-                        // from making flashback fall into an dead loop.
+                        // from making flashback fall into a dead loop.
                         next_lock_key: if key_locks.len() > 1 {
                             key_locks.pop().map(|(key, _)| key).unwrap()
                         } else {

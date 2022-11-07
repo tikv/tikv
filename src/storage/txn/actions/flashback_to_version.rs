@@ -126,8 +126,7 @@ pub fn flashback_to_version_lock(
 //   - If a key doesn't exist at `self.version`, it will be put a
 //     `WriteType::Delete`.
 //   - If a key exists at `self.version`, it will be put the exact same record
-//     in `CF_WRITE` and `CF_DEFAULT` if needed with `self.commit_ts` and
-//     `self.start_ts`.
+//     in `CF_WRITE` and `CF_DEFAULT` with `self.commit_ts` and `self.start_ts`.
 pub fn flashback_to_version_write(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<impl Snapshot>,
@@ -167,11 +166,6 @@ pub fn flashback_to_version_write(
         } else {
             // If the old write doesn't exist, we should put a `WriteType::Delete` record to
             // delete the current key when needed.
-            if let Some((_, latest_write)) = reader.seek_write(&key, commit_ts)? {
-                if latest_write.write_type == WriteType::Delete {
-                    continue;
-                }
-            }
             Write::new(WriteType::Delete, start_ts, None)
         };
         txn.put_write(key.clone(), commit_ts, new_write.as_ref().to_bytes());
@@ -334,11 +328,11 @@ pub mod tests {
         must_get(&mut engine, k, ts, v);
         must_prewrite_delete(&mut engine, k, k, *ts.incr());
         must_commit(&mut engine, k, ts, *ts.incr());
-        // Since the key has been deleted, flashback to version 1 should not do
-        // anything.
+        // Though the key has been deleted, flashback to version 1 still needs to write
+        // a new `WriteType::Delete` with the flashback `commit_ts`.
         assert_eq!(
             must_flashback_to_version(&mut engine, k, 1, *ts.incr(), *ts.incr()),
-            0
+            1
         );
         must_get_none(&mut engine, k, ts);
     }
