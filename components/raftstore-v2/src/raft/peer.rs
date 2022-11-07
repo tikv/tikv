@@ -560,10 +560,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &self.txn_ext
     }
 
-    fn get_role(&self) -> StateRole {
-        self.raft_group.raft.state
-    }
-
     pub fn peer_stat(&self) -> &PeerStat {
         &self.peer_stat
     }
@@ -572,20 +568,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.peer_stat = peer_stat;
     }
 
-    pub fn last_compacted_idx(&self) -> u64 {
-        self.last_compacted_idx
-    }
-
     pub fn set_last_compacted_idx(&mut self, last_compacted_idx: u64) {
         self.last_compacted_idx = last_compacted_idx;
-    }
-
-    pub fn size_diff_hint(&self) -> u64 {
-        self.size_diff_hint
-    }
-
-    pub fn set_size_diff_hint(&mut self, size_diff_hint: u64) {
-        self.size_diff_hint = size_diff_hint;
     }
 
     pub fn approximate_size(&self) -> Option<u64> {
@@ -604,16 +588,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.approximate_keys = approximate_keys;
     }
 
-    pub fn may_skip_split_check(&self) -> bool {
-        self.may_skip_split_check
+    pub fn set_may_skip_split_check(&mut self, may_skip_split_check: bool) {
+        self.may_skip_split_check = may_skip_split_check;
     }
 
     pub fn split_progress_mut(&mut self) -> &mut HashMap<u64, bool> {
         &mut self.split_progress
-    }
-
-    pub fn set_may_skip_split_check(&mut self, may_skip_split_check: bool) {
-        self.may_skip_split_check = may_skip_split_check;
     }
 
     pub fn heartbeat_pd<T>(&self, store_ctx: &StoreContext<EK, ER, T>) {

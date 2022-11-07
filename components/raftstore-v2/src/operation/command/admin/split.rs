@@ -15,14 +15,19 @@
 //!   the parent region's region state without persistency. Send the new regions
 //!   (including derived region) back to raftstore.
 //!
-//! Result apply:
-//! - todo
+//! On Apply Result:
+//! - on_ready_split_region: Update the relevant in memory meta info of the
+//!   parent peer, and wrap and send to the store the relevant info needed to
+//!   create and initialize the split regions.
 //!
 //! Split peer creation and initlization:
-//! - todo
+//! - init_split_region: In normal cases, the uninitialized split region will be
+//!   created by the store, and here init it using the data sent from the parent
+//!   peer.
 //!
 //! Split finish:
-//! - todo
+//! - handle_peer_split_response: If all split peers are initialized, the region
+//!   state of the parent peer can be persisted
 
 use std::collections::VecDeque;
 
@@ -73,7 +78,7 @@ pub struct SplitResult {
 pub struct SplitRegionInitInfo {
     pub parent_region_id: u64,
     pub parent_epoch: RegionEpoch,
-    /// Initialized region meta info of the split region
+    /// Split region
     pub region: metapb::Region,
     pub parent_is_leader: bool,
     pub parent_stat: PeerStat,
@@ -95,17 +100,6 @@ pub struct SplitRegionInitResp {
 pub enum AcrossPeerMsg {
     SplitRegionInit(Box<SplitRegionInitInfo>),
     SplitRegionInitResp(Box<SplitRegionInitResp>),
-}
-
-fn get_range_not_in_region(region: &metapb::Region) -> Vec<Range<'_>> {
-    let mut ranges = Vec::new();
-    if !region.get_start_key().is_empty() {
-        ranges.push(Range::new(b"", region.get_start_key()));
-    }
-    if !region.get_end_key().is_empty() {
-        ranges.push(Range::new(region.get_end_key(), b""));
-    }
-    ranges
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -169,6 +163,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if is_leader {
             self.set_approximate_size(estimated_size);
             self.set_approximate_keys(estimated_keys);
+            // todo: this may should be doing in handle_peer_split_response.
             self.heartbeat_pd(store_ctx);
 
             info!(
@@ -182,7 +177,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // todo: report to PD
         }
 
-        self.split_progress_mut().clear();
+        assert!(self.split_progress_mut().is_empty());
         let last_key = enc_end_key(regions.last().unwrap());
         if meta.region_ranges.remove(&last_key).is_none() {
             panic!("{:?} original region should exist", self.logger.list());
@@ -278,6 +273,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 )
             });
 
+            // todo: need to do asynchronously?
             store_ctx.engine.consume(&mut wb, true).unwrap_or_else(|e| {
                 panic!(
                     "{:?} fails to consume the write: {:?}",
@@ -324,7 +320,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 raft_group.campaign().unwrap();
                 self.set_has_ready();
             }
-            // FIXME: unwrap
             self.set_raft_group(raft_group);
 
             need_schedule_apply_fsm = true;
@@ -342,11 +337,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             "region" => ?region,
         );
 
-        // todo(SpadeA)
-        // let mut replication_state =
-        // self.ctx.global_replication_state.lock().unwrap(); new_peer.peer.
-        // init_replication_mode(&mut replication_state);
-        // drop(replication_state);
+        // todo: GlobalReplicationState
 
         for p in region.get_peers() {
             self.insert_peer_cache(p.clone());
@@ -385,7 +376,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 OpenOptions::default().set_create(true),
             )
             .unwrap();
-        self.tablet_mut().set(tablet.clone());
+        self.tablet_mut().set(tablet);
 
         meta.tablet_caches.insert(region_id, self.tablet().clone());
         meta.regions.insert(region_id, region.clone());
@@ -400,13 +391,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .insert(region_id, self.read_progress().clone());
 
         drop(meta);
-
-        let ranges_to_delete = get_range_not_in_region(&region);
-        tablet
-            .delete_ranges_cfs(DeleteStrategy::DeleteFiles, &ranges_to_delete)
-            .unwrap_or_else(|e| {
-                error!(self.logger,"failed to delete files in range"; "err" => %e);
-            });
 
         if last_split_region {
             // todo: check if the last region needs to split again
@@ -453,7 +437,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         if split_progress.values().all(|v| *v) {
             // Split can be finished
-            let mut wb = store_ctx.engine.log_batch(5);
+            let mut wb = store_ctx.engine.log_batch(10);
+            // Persist region state, so the tablet index points to the new tablet
             let state = self.storage().region_state();
             wb.put_region_state(self.region_id(), state)
                 .unwrap_or_else(|e| {
@@ -464,23 +449,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         e
                     )
                 });
+            // todo: need to do asynchronously?
             store_ctx.engine.consume(&mut wb, true).unwrap();
 
-            let region_id = self.region_id();
-            let tablet_index = self.storage().region_state().tablet_index;
-            let tablet_path = store_ctx
-                .tablet_factory
-                .tablet_path(region_id, tablet_index);
-            let tablet = self.tablet_mut().latest().unwrap().clone();
-            assert_eq!(tablet.path(), tablet_path.as_path().to_str().unwrap());
-
-            let ranges_to_delete = get_range_not_in_region(self.region());
-            // todo: async version
-            tablet
-                .delete_ranges_cfs(DeleteStrategy::DeleteFiles, &ranges_to_delete)
-                .unwrap_or_else(|e| {
-                    error!(self.logger,"failed to delete files in range"; "err" => %e);
-                });
+            self.split_progress_mut().clear();
         }
     }
 }
