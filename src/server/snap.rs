@@ -229,7 +229,7 @@ pub fn send_snap(
     assert!(msg.get_message().has_snapshot());
     let timer = Instant::now();
     let snapshot = msg.get_message().get_snapshot();
-    let key = SnapKey::from_snap(&snapshot)?;
+    let key = SnapKey::from_snap(snapshot)?;
     mgr.register(key.clone(), SnapEntry::Sending);
     let deregister = {
         let (mgr, key) = (mgr.clone(), key.clone());
@@ -246,7 +246,7 @@ pub fn send_snap(
     let client = TikvClient::new(channel);
     let (sink, receiver) = client.snapshot()?;
 
-    let snap_data = get_snap_data(&snapshot)?;
+    let snap_data = get_snap_data(snapshot)?;
     let ckey = key.clone();
     let send_task = async move {
         let sink = sink.sink_map_err(Error::from);
@@ -272,7 +272,7 @@ pub fn send_snap(
             Err(e) => Err(e),
         }
     };
-    return Ok(send_task);
+    Ok(send_task)
 }
 
 async fn send_snap_chunk(

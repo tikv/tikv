@@ -542,23 +542,20 @@ fn test_send_snapshot() {
     let mut snapshot = Snapshot::default();
     let snap_mgr = cluster.get_snap_mgr(1);
     let final_path = snap_mgr.get_final_name_for_build(&key);
-    assert!(fs::create_dir_all(final_path.as_path()).is_ok());
+    fs::create_dir_all(final_path.as_path()).unwrap();
     for i in 0..2 {
         let mut f = fs::File::create(final_path.join(i.to_string())).unwrap();
-        assert!(f.write_all(format!("snapshot-{}", i).as_bytes()).is_ok());
-        assert!(f.sync_data().is_ok());
+        f.write_all(format!("snapshot-{}", i).as_bytes()).unwrap();
+        f.sync_data().unwrap();
     }
     let mut snap_data = RaftSnapshotData::default();
-    snap_data.set_region(r.clone());
+    snap_data.set_region(r);
     snap_data.mut_meta().set_for_balance(true);
     snap_data.set_version(3);
     let v = snap_data.write_to_bytes().unwrap();
     snapshot.set_data(v.into());
     let s1_addr = cluster.sim.rl().get_addr(1);
     let sec_mgr = cluster.sim.rl().security_mgr.clone();
-
-    let snap_mgr = snap_mgr.clone();
-    let sec_mgr = sec_mgr.clone();
     let s = snapshot.clone();
     if let Err(e) = send_a_large_snapshot(snap_mgr, sec_mgr, &s1_addr, r1, s, idx, term) {
         info!("send_a_large_snapshot fail: {}", e);

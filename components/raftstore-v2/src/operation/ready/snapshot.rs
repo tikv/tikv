@@ -1,4 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
+
 //! This module contains snapshot relative processing logic.
 //!
 //! # Snapshot State
@@ -31,7 +32,7 @@ use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_serverpb::{RaftSnapshotData, RegionLocalState};
 use protobuf::Message;
 use raft::eraftpb::Snapshot;
-use raftstore::store::{metrics::STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER, ReadTask, GenSnapRes};
+use raftstore::store::{metrics::STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER, GenSnapRes, ReadTask};
 use slog::{error, info};
 use tikv_util::{box_try, worker::Scheduler};
 
@@ -276,7 +277,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     /// `Generated`.
     ///  TODO: make the snap state more clearer, the snapshot must be consumed.
     pub fn on_snapshot_generated(&self, res: GenSnapRes) -> bool {
-        if !res.success{
+        if !res.success {
             self.cancel_generating_snap(None);
             return false;
         }
