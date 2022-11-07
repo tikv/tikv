@@ -31,7 +31,7 @@ pub fn get_tls_tracker_token() -> TrackerToken {
 
 pub fn with_tls_tracker<F>(f: F)
 where
-    F: FnMut(&Tracker),
+    F: FnOnce(&mut Tracker),
 {
     TLS_TRACKER_TOKEN.with(|c| {
         GLOBAL_TRACKERS.with_tracker(c.get(), f);

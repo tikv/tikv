@@ -1812,7 +1812,7 @@ where
                     if term == proposal.term {
                         for tracker in proposal.cb.write_trackers().iter().flat_map(|v| v.iter()) {
                             tracker.observe(std_now, &ctx.raft_metrics.wf_send_proposal, |t| {
-                                &t.metrics.wf_send_proposal_nanos
+                                &mut t.metrics.wf_send_proposal_nanos
                             });
                         }
                     }
@@ -1953,7 +1953,7 @@ where
                 {
                     for tracker in trackers {
                         tracker.observe(now, &metrics.wf_persist_log, |t| {
-                            &t.metrics.wf_persist_log_nanos
+                            &mut t.metrics.wf_persist_log_nanos
                         });
                     }
                 }
@@ -1982,8 +1982,8 @@ where
                     };
                     for tracker in trackers {
                         tracker.observe(now, hist, |t| {
-                            // t.metrics.commit_not_persisted = !commit_persisted;
-                            &t.metrics.wf_commit_log_nanos
+                            t.metrics.commit_not_persisted = !commit_persisted;
+                            &mut t.metrics.wf_commit_log_nanos
                         });
                     }
                 }
@@ -2754,7 +2754,7 @@ where
                         trackers.extend_from_slice(times);
                         for tracker in times {
                             tracker.observe(now, &ctx.raft_metrics.wf_send_to_queue, |t| {
-                                &t.metrics.wf_send_to_queue_nanos
+                                &mut t.metrics.wf_send_to_queue_nanos
                             });
                         }
                     }
@@ -3277,10 +3277,8 @@ where
         for (req, cb, mut read_index) in read.take_cmds().drain(..) {
             cb.read_tracker().map(|tracker| {
                 GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
-                    t.metrics.read_index_confirm_wait_nanos.store(
-                        (time - read.propose_time).to_std().unwrap().as_nanos() as u64,
-                        Ordering::Release,
-                    );
+                    t.metrics.read_index_confirm_wait_nanos =
+                        (time - read.propose_time).to_std().unwrap().as_nanos() as u64;
                 })
             });
             // leader reports key is locked

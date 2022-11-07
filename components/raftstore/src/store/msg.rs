@@ -145,10 +145,7 @@ where
             TimeTracker::Instant(now)
         } else {
             GLOBAL_TRACKERS.with_tracker(tracker_token, |tracker| {
-                tracker
-                    .metrics
-                    .write_instant
-                    .store(ns_since_anchor(now), Ordering::Release);
+                tracker.metrics.write_instant = ns_since_anchor(now);
             });
             TimeTracker::Tracker(tracker_token)
         };

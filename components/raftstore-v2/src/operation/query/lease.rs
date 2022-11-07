@@ -114,13 +114,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         for (req, ch, mut read_index) in read_index_req.take_cmds().drain(..) {
             ch.read_tracker().map(|tracker| {
                 GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
-                    t.metrics.read_index_confirm_wait_nanos.store(
-                        (time - read_index_req.propose_time)
-                            .to_std()
-                            .unwrap()
-                            .as_nanos() as u64,
-                        Ordering::Release,
-                    );
+                    t.metrics.read_index_confirm_wait_nanos = (time - read_index_req.propose_time)
+                        .to_std()
+                        .unwrap()
+                        .as_nanos()
+                        as u64
                 })
             });
 

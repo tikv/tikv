@@ -109,10 +109,8 @@ impl<E: Engine> Tracker<E> {
         let now = Instant::now();
         self.schedule_wait_time = now - self.request_begin_at;
         with_tls_tracker(|tracker| {
-            tracker
-                .metrics
-                .read_pool_schedule_wait_nanos
-                .store(self.schedule_wait_time.as_nanos() as u64, Ordering::Release);
+            tracker.metrics.read_pool_schedule_wait_nanos =
+                self.schedule_wait_time.as_nanos() as u64;
         });
         self.current_stage = TrackerState::Scheduled(now);
     }
@@ -272,13 +270,13 @@ impl<E: Engine> Tracker<E> {
                     "scan.total" => total_storage_stats.write.total_op_count(),
                     "scan.ranges" => self.req_ctx.ranges.len(),
                     "scan.range.first" => ?first_range,
-                    "perf_stats.block_cache_hit_count" => tracker.metrics.block_cache_hit_count.load(Ordering::Acquire),
-                    "perf_stats.block_read_count" => tracker.metrics.block_read_count.load(Ordering::Acquire),
-                    "perf_stats.block_read_byte" => tracker.metrics.block_read_byte.load(Ordering::Acquire),
+                    "perf_stats.block_cache_hit_count" => tracker.metrics.block_cache_hit_count,
+                    "perf_stats.block_read_count" => tracker.metrics.block_read_count,
+                    "perf_stats.block_read_byte" => tracker.metrics.block_read_byte,
                     "perf_stats.internal_key_skipped_count"
-                        => tracker.metrics.internal_key_skipped_count.load(Ordering::Acquire),
+                        => tracker.metrics.internal_key_skipped_count,
                     "perf_stats.internal_delete_skipped_count"
-                        => tracker.metrics.deleted_key_skipped_count.load(Ordering::Acquire),
+                        => tracker.metrics.deleted_key_skipped_count,
                 )
             });
         }

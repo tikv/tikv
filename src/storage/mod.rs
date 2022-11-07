@@ -708,10 +708,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         process_wall_time_ms: duration_to_ms(process_wall_time),
                     };
                     with_tls_tracker(|tracker| {
-                        tracker.metrics.read_pool_schedule_wait_nanos.store(
-                            schedule_wait_time.as_nanos() as u64,
-                            atomic::Ordering::Release,
-                        );
+                        tracker.metrics.read_pool_schedule_wait_nanos =
+                            schedule_wait_time.as_nanos() as u64;
                     });
                     Ok((
                         result?,
@@ -1059,10 +1057,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let process_wall_time =
                         stage_finished_ts.saturating_duration_since(stage_snap_recv_ts);
                     with_tls_tracker(|tracker| {
-                        tracker
-                            .metrics
-                            .read_pool_schedule_wait_nanos
-                            .store(schedule_wait_time.as_nanos() as u64, Ordering::Release);
+                        tracker.metrics.read_pool_schedule_wait_nanos =
+                            schedule_wait_time.as_nanos() as u64;
                     });
                     let latency_stats = StageLatencyStats {
                         schedule_wait_time_ms: duration_to_ms(schedule_wait_time),

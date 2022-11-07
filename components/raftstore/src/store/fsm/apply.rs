@@ -601,7 +601,7 @@ where
         let now = std::time::Instant::now();
         for (cb, resp) in cb_batch.drain(..) {
             for tracker in cb.write_trackers().iter().flat_map(|v| *v) {
-                tracker.observe(now, &self.apply_time, |t| &t.metrics.apply_time_nanos);
+                tracker.observe(now, &self.apply_time, |t| &mut t.metrics.apply_time_nanos);
             }
             cb.invoke_with_response(resp);
         }
@@ -3192,10 +3192,8 @@ impl<C: WriteCallback> Apply<C> {
             if let Some(trackers) = cb.cb.write_trackers_mut() {
                 for tracker in trackers {
                     tracker.observe(now, &metrics.store_time, |t| {
-                        t.metrics
-                            .write_instant
-                            .store(ns_since_anchor(now), Ordering::Release);
-                        &t.metrics.store_time_nanos
+                        t.metrics.write_instant = ns_since_anchor(now);
+                        &mut t.metrics.store_time_nanos
                     });
                     if let TimeTracker::Instant(t) = tracker {
                         *t = now;
@@ -3982,9 +3980,7 @@ where
                         .flat_map(|ts| ts.iter().flat_map(|t| t.as_tracker_token()))
                     {
                         GLOBAL_TRACKERS.with_tracker(tracker, |t| {
-                            t.metrics
-                                .apply_wait_nanos
-                                .store(apply_wait.as_nanos() as u64, Ordering::Release);
+                            t.metrics.apply_wait_nanos = apply_wait.as_nanos() as u64;
                         });
                     }
 

@@ -17,21 +17,14 @@ impl engine_traits::PerfContext for RaftEnginePerfContext {
         let perf_context = get_perf_context();
         for token in trackers {
             GLOBAL_TRACKERS.with_tracker(*token, |t| {
-                t.metrics.store_thread_wait_nanos.store(
-                    perf_context.write_wait_duration.as_nanos() as u64,
-                    Ordering::Release,
-                );
-                t.metrics.store_write_wal_nanos.store(
-                    (perf_context.log_write_duration
-                        + perf_context.log_sync_duration
-                        + perf_context.log_rotate_duration)
-                        .as_nanos() as u64,
-                    Ordering::Release,
-                );
-                t.metrics.store_write_memtable_nanos.store(
-                    perf_context.apply_duration.as_nanos() as u64,
-                    Ordering::Release,
-                );
+                t.metrics.store_thread_wait_nanos =
+                    perf_context.write_wait_duration.as_nanos() as u64;
+                t.metrics.store_write_wal_nanos = (perf_context.log_write_duration
+                    + perf_context.log_sync_duration
+                    + perf_context.log_rotate_duration)
+                    .as_nanos() as u64;
+                t.metrics.store_write_memtable_nanos =
+                    perf_context.apply_duration.as_nanos() as u64;
             });
         }
     }

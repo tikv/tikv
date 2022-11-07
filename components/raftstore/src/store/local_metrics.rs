@@ -228,21 +228,19 @@ impl TimeTracker {
         &self,
         now: std::time::Instant,
         local_metric: &LocalHistogram,
-        tracker_metric: impl FnOnce(&Tracker) -> &AtomicU64,
+        tracker_metric: impl FnOnce(&mut Tracker) -> &mut u64,
     ) {
         match self {
             TimeTracker::Tracker(t) => {
                 if let Some(dur) = GLOBAL_TRACKERS
                     .with_tracker(*t, |tracker| {
-                        let write_instant = tracker.metrics.write_instant.load(Ordering::Acquire);
+                        let write_instant = tracker.metrics.write_instant;
                         if write_instant != 0 {
                             let dur = ns_since_anchor(now).saturating_sub(write_instant);
-                            let _ = tracker_metric(tracker).compare_exchange(
-                                0,
-                                dur,
-                                Ordering::AcqRel,
-                                Ordering::Relaxed,
-                            );
+                            let m = tracker_metric(tracker);
+                            if *m == 0 {
+                                *m = dur;
+                            }
                             Some(Duration::from_nanos(dur))
                         } else {
                             None

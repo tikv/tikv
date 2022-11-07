@@ -491,7 +491,7 @@ where
             for task in &self.tasks {
                 for tracker in &task.trackers {
                     tracker.observe(now, &metrics.wf_before_write, |t| {
-                        &t.metrics.wf_before_write_nanos
+                        &mut t.metrics.wf_before_write_nanos
                     });
                 }
             }
@@ -503,7 +503,9 @@ where
             let now = std::time::Instant::now();
             for task in &self.tasks {
                 for tracker in &task.trackers {
-                    tracker.observe(now, &metrics.wf_kvdb_end, |t| &t.metrics.wf_kvdb_end_nanos);
+                    tracker.observe(now, &metrics.wf_kvdb_end, |t| {
+                        &mut t.metrics.wf_kvdb_end_nanos
+                    });
                 }
             }
         }
@@ -515,7 +517,7 @@ where
             for task in &self.tasks {
                 for tracker in &task.trackers {
                     tracker.observe(now, &metrics.wf_write_end, |t| {
-                        &t.metrics.wf_write_end_nanos
+                        &mut t.metrics.wf_write_end_nanos
                     });
                 }
             }

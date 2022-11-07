@@ -256,10 +256,7 @@ impl Waiter {
     fn cancel(self, error: Option<StorageError>) -> KeyLockWaitInfo {
         let elapsed = self.start_waiting_time.saturating_elapsed();
         GLOBAL_TRACKERS.with_tracker(self.diag_ctx.tracker, |tracker| {
-            tracker
-                .metrics
-                .pessimistic_lock_wait_nanos
-                .store(elapsed.as_nanos() as u64, Ordering::Release);
+            tracker.metrics.pessimistic_lock_wait_nanos = elapsed.as_nanos() as u64;
         });
         WAITER_LIFETIME_HISTOGRAM.observe(duration_to_sec(elapsed));
         // Cancel the delay timer to prevent removing the same `Waiter` earlier.

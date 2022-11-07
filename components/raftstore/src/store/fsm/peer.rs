@@ -626,9 +626,8 @@ where
                         .observe(propose_time.as_secs_f64());
                     cmd.callback.read_tracker().map(|tracker| {
                         GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
-                            t.metrics
-                                .read_index_propose_wait_nanos
-                                .store(propose_time.as_nanos() as u64, Ordering::Release);
+                            t.metrics.read_index_propose_wait_nanos =
+                                propose_time.as_nanos() as u64;
                         })
                     });
 
@@ -5151,7 +5150,7 @@ where
             let now = Instant::now();
             for tracker in cb.write_trackers().iter().flat_map(|v| *v) {
                 tracker.observe(now, &self.ctx.raft_metrics.wf_batch_wait, |t| {
-                    &t.metrics.wf_batch_wait_nanos
+                    &mut t.metrics.wf_batch_wait_nanos
                 });
             }
         }

@@ -597,10 +597,7 @@ pub fn snapshot<E: Engine>(
             .map_err(|cancel| Error::from(ErrorInner::Other(box_err!(cancel))))
             .await?;
         with_tls_tracker(|tracker| {
-            tracker
-                .metrics
-                .get_snapshot_nanos
-                .fetch_add(begin.elapsed().as_nanos() as u64, Ordering::Release);
+            tracker.metrics.get_snapshot_nanos += begin.elapsed().as_nanos() as u64;
         });
         fail_point!("after-snapshot");
         result

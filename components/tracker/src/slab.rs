@@ -10,6 +10,7 @@ use std::{
 };
 
 use crossbeam_utils::CachePadded;
+use parking_lot::Mutex;
 
 use crate::{metrics::*, Tracker};
 
@@ -48,13 +49,13 @@ impl GlobalTrackers {
     #[inline(always)]
     pub fn with_tracker<F, T>(&self, token: TrackerToken, f: F) -> Option<T>
     where
-        F: FnOnce(&Tracker) -> T,
+        F: FnOnce(&mut Tracker) -> T,
     {
         GLOBAL_TRACKER_SLAB.get().and_then(|slab| {
             if token != INVALID_TRACKER_TOKEN {
                 let entry = &slab.entries[token.key()];
                 if entry.seq.load(Ordering::Acquire) == token.seq() {
-                    return Some(f(unsafe { &*entry.tracker.get() }));
+                    return Some(f(&mut entry.tracker.lock()));
                 }
             }
             None
@@ -75,7 +76,7 @@ impl TrackerSlab {
         let entries = (0..capacity)
             .map(|i| {
                 CachePadded::new(SlabEntry {
-                    tracker: UnsafeCell::new(Tracker::default()),
+                    tracker: Mutex::new(Tracker::default()),
                     seq: AtomicU32::new(0),
                 })
             })
@@ -130,7 +131,7 @@ impl TrackerSlab {
                 )
                 .is_ok()
         {
-            let tracker = unsafe { mem::take(&mut *self.entries[key].tracker.get()) };
+            let tracker = mem::take(&mut *self.entries[key].tracker.lock());
             let mut cursors = self.cursors.load(Ordering::Acquire);
             loop {
                 let (head, tail) = (cursors & ((1 << 32) - 1), cursors >> 32);
@@ -158,7 +159,7 @@ impl TrackerSlab {
 unsafe impl Sync for TrackerSlab {}
 
 struct SlabEntry {
-    tracker: UnsafeCell<Tracker>,
+    tracker: Mutex<Tracker>,
     seq: AtomicU32,
 }
 
