@@ -126,8 +126,7 @@ pub fn flashback_to_version_lock(
 //   - If a key doesn't exist at `self.version`, it will be put a
 //     `WriteType::Delete`.
 //   - If a key exists at `self.version`, it will be put the exact same record
-//     in `CF_WRITE` and `CF_DEFAULT` if needed with `self.commit_ts` and
-//     `self.start_ts`.
+//     in `CF_WRITE` and `CF_DEFAULT` with `self.commit_ts` and `self.start_ts`.
 pub fn flashback_to_version_write(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<impl Snapshot>,
