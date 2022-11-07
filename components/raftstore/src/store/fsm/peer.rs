@@ -5041,7 +5041,7 @@ where
             return Err(Error::NotLeader(region_id, leader));
         }
 
-        // Forbid reads and writes when it's a witness except transfer leader
+        // Forbid requests when it's a witness unless it's transfer leader
         if self.fsm.peer.is_witness()
             && !(msg.has_admin_request()
                 && msg.get_admin_request().get_cmd_type() == AdminCmdType::TransferLeader)

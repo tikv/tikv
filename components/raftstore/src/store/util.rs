@@ -137,14 +137,12 @@ pub fn new_empty_snapshot(
     snapshot
         .mut_metadata()
         .set_conf_state(conf_state_from_region(&region));
-    snapshot.set_data({
-        let mut snap_data = RaftSnapshotData::default();
-        snap_data.set_region(region);
-        snap_data.set_file_size(0);
-        snap_data.set_version(SNAPSHOT_VERSION);
-        snap_data.mut_meta().set_for_witness(for_witness);
-        snap_data.write_to_bytes().unwrap().into()
-    });
+    let mut snap_data = RaftSnapshotData::default();
+    snap_data.set_region(region);
+    snap_data.set_file_size(0);
+    snap_data.set_version(SNAPSHOT_VERSION);
+    snap_data.mut_meta().set_for_witness(for_witness);
+    snapshot.set_data(snap_data.write_to_bytes().unwrap().into());
     snapshot
 }
 
@@ -892,6 +890,7 @@ impl<'a> ChangePeerI for &'a ChangePeerV2Request {
 pub fn check_conf_change(
     cfg: &Config,
     node: &RawNode<impl raft::Storage>,
+    region: &metapb::Region,
     leader: &metapb::Peer,
     change_peers: &[ChangePeerRequest],
     cc: &impl ConfChangeI,
@@ -933,14 +932,17 @@ pub fn check_conf_change(
             (ConfChangeType::RemoveNode, _) => {}
             (ConfChangeType::AddNode, PeerRole::Voter)
             | (ConfChangeType::AddLearnerNode, PeerRole::Learner) => {
-                if peer.get_id() == leader.get_id()
-                    && !leader.get_is_witness()
-                    && peer.get_is_witness()
+                if let Some(p) = region
+                    .get_peers()
+                    .iter()
+                    .find(|p| p.get_id() == peer.get_id())
                 {
-                    return Err(box_err!(
-                        "invalid conf change request: {:?}, can not change leader to witness",
-                        cp
-                    ));
+                    if p.get_is_witness() != peer.get_is_witness() {
+                        return Err(box_err!(
+                            "invalid conf change request: {:?}, can not switch witness in conf change",
+                            cp
+                        ));
+                    }
                 }
             }
             _ => {

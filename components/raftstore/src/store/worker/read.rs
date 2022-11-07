@@ -937,30 +937,6 @@ where
                         let region = Arc::clone(&delegate.region);
                         let response = delegate.execute(&req, &region, None, Some(local_read_ctx));
 
-                        // Double check in case `witness` change after the first check and before
-                        // getting snapshot
-                        if let Some(delegate) =
-                            self.local_reader.get_delegate(delegate.region.get_id())
-                        {
-                            if find_peer_by_id(&delegate.region, delegate.peer_id)
-                                .unwrap()
-                                .is_witness
-                            {
-                                TLS_LOCAL_READ_METRICS
-                                    .with(|m| m.borrow_mut().reject_reason.witness.inc());
-                                let mut response = cmd_resp::new_error(Error::RecoveryInProgress(
-                                    delegate.region.get_id(),
-                                ));
-                                cmd_resp::bind_term(&mut response, delegate.term);
-                                cb.set_result(ReadResponse {
-                                    response,
-                                    snapshot: None,
-                                    txn_extra_op: TxnExtraOp::Noop,
-                                });
-                                return;
-                            }
-                        }
-
                         // Try renew lease in advance
                         delegate.maybe_renew_lease_advance(&self.router, snapshot_ts);
                         response
@@ -985,6 +961,30 @@ where
                         let region = Arc::clone(&delegate.region);
                         // Getting the snapshot
                         let response = delegate.execute(&req, &region, None, Some(local_read_ctx));
+
+                        // Double check in case `witness` change after the first check and before
+                        // getting snapshot
+                        if let Some(delegate) =
+                            self.local_reader.get_delegate(delegate.region.get_id())
+                        {
+                            if find_peer_by_id(&delegate.region, delegate.peer_id)
+                                .unwrap()
+                                .is_witness
+                            {
+                                TLS_LOCAL_READ_METRICS
+                                    .with(|m| m.borrow_mut().reject_reason.witness.inc());
+                                let mut response = cmd_resp::new_error(Error::RecoveryInProgress(
+                                    delegate.region.get_id(),
+                                ));
+                                cmd_resp::bind_term(&mut response, delegate.term);
+                                cb.set_result(ReadResponse {
+                                    response,
+                                    snapshot: None,
+                                    txn_extra_op: TxnExtraOp::Noop,
+                                });
+                                return;
+                            }
+                        }
 
                         // Double check in case `safe_ts` change after the first check and before
                         // getting snapshot

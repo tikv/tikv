@@ -1165,7 +1165,7 @@ where
         let data = entry.get_data();
 
         if !data.is_empty() {
-            if !(self.peer.is_witness && can_witness_skip(entry)) {
+            if !self.peer.is_witness || !can_witness_skip(entry) {
                 let cmd = util::parse_data_at(data, index, &self.tag);
                 if apply_ctx.yield_high_latency_operation && has_high_latency_operation(&cmd) {
                     self.priority = Priority::Low;
