@@ -162,12 +162,12 @@ fn test_witness_election_priority() {
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
-    cluster.must_put(b"k0", b"v0");
-
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
     // nonwitness -> witness
     let mut peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
     become_witness(&cluster, region.get_id(), &mut peer_on_store3);
+    cluster.must_put(b"k0", b"v0");
+
     for _ in 1..10 {
         let node = cluster.leader_of_region(region.get_id()).unwrap().store_id;
         cluster.stop_node(node);
