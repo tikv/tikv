@@ -5297,26 +5297,9 @@ where
         let first_idx = self.fsm.peer.get_store().first_index();
         let last_idx = self.fsm.peer.get_store().last_index();
 
-        // replicated_idx excludes witnesses
         let (mut replicated_idx, mut alive_cache_idx) = (last_idx, last_idx);
-        let mut witness_replicated_idx = None;
-        let witness_peers = self
-            .region()
-            .get_peers()
-            .iter()
-            .filter(|p| p.is_witness)
-            .collect::<Vec<_>>();
         for (peer_id, p) in self.fsm.peer.raft_group.raft.prs().iter() {
-            if witness_peers.iter().any(|p| p.id == *peer_id) {
-                // is witness
-                if let Some(idx) = witness_replicated_idx {
-                    if idx > p.matched {
-                        witness_replicated_idx = Some(p.matched);
-                    }
-                } else {
-                    witness_replicated_idx = Some(p.matched);
-                }
-            } else if replicated_idx > p.matched {
+            if replicated_idx > p.matched {
                 replicated_idx = p.matched;
             }
             if let Some(last_heartbeat) = self.fsm.peer.peer_heartbeats.get(peer_id) {
@@ -5388,25 +5371,8 @@ where
             replicated_idx
         };
         assert!(compact_idx >= first_idx);
-
-        if let Some(witness_idx) = witness_replicated_idx {
-            if witness_idx < replicated_idx {
-                // do not compact the log not replicated to witness, except witness is the
-                // most lagging peer
-                if witness_idx + self.ctx.cfg.raft_log_gc_count_limit() < replicated_idx {
-                    compact_idx = std::cmp::min(compact_idx, replicated_idx);
-                } else {
-                    compact_idx = std::cmp::min(compact_idx, witness_idx);
-                }
-            } else if replicated_idx < witness_idx {
-                // if there is a lagging behind follower, should not compact log, otherwise
-                // witness can't help the follower to catch up if the leader is down
-                compact_idx = std::cmp::min(compact_idx, replicated_idx);
-            }
-        }
-
         // Have no idea why subtract 1 here, but original code did this by magic.
-        compact_idx = compact_idx.saturating_sub(1);
+        compact_idx -= 1;
         if compact_idx < first_idx {
             // In case compact_idx == first_idx before subtraction.
             self.ctx
