@@ -1014,6 +1014,6 @@ mod test {
         req.set_splits(splits);
         apply.apply_batch_split(&req, 50).unwrap();
         assert!(apply.write_batch_mut().is_none());
-        assert_eq!(apply.tablet().get_value(b"zk04").unwrap().unwrap(), b"v4");
+        assert_eq!(apply.tablet().get_value(b"k04").unwrap().unwrap(), b"v4");
     }
 }
