@@ -114,6 +114,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     /// Will schedule a task to read worker and then generate a snapshot
     /// asynchronously.
     pub fn schedule_gen_snapshot(&mut self, snap_task: GenSnapTask) {
+        // Do not generate, the peer is removed.
         if self.tombstone() {
             snap_task.canceled.store(true, Ordering::SeqCst);
             error!(

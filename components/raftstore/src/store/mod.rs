@@ -59,9 +59,9 @@ pub use self::{
         SnapshotRecoveryWaitApplySyncer,
     },
     peer_storage::{
-        clear_meta, do_snapshot, storage_error, write_initial_apply_state,
-        write_initial_raft_state, write_peer_state, PeerStorage, SnapState, INIT_EPOCH_CONF_VER,
-        INIT_EPOCH_VER, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+        clear_meta, do_snapshot, write_initial_apply_state, write_initial_raft_state,
+        write_peer_state, PeerStorage, SnapState, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
+        RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
     },
     read_queue::{ReadIndexContext, ReadIndexQueue, ReadIndexRequest},
     region_snapshot::{RegionIterator, RegionSnapshot},
