@@ -11,6 +11,7 @@ use std::{
 
 use engine_traits::{Checkpointer, KvEngine, RaftEngine};
 use fail::fail_point;
+use file_system::{IoType, WithIoType};
 use kvproto::raft_serverpb::{PeerState, RaftSnapshotData, RegionLocalState};
 use protobuf::Message;
 use raft::{eraftpb::Snapshot, GetEntriesContext};
@@ -18,7 +19,7 @@ use tikv_util::{defer, error, info, time::Instant, worker::Runnable};
 
 use crate::store::{
     util,
-    worker::{SNAP_COUNTER, SNAP_HISTOGRAM},
+    worker::metrics::{SNAP_COUNTER, SNAP_HISTOGRAM},
     RaftlogFetchResult, SnapEntry, SnapKey, SnapManager, MAX_INIT_ENTRY_COUNT,
 };
 
@@ -184,7 +185,11 @@ where
                     return;
                 }
                 let start = Instant::now();
-
+                let _io_type_guard = WithIoType::new(if for_balance {
+                    IoType::LoadBalance
+                } else {
+                    IoType::Replication
+                });
                 // the state should already checked in apply workers.
                 assert_ne!(region_state.get_state(), PeerState::Tombstone);
                 let key = SnapKey::new(region_id, last_applied_term, last_applied_index);
@@ -194,15 +199,14 @@ where
                 // Set snapshot metadata.
                 snapshot.mut_metadata().set_index(key.idx);
                 snapshot.mut_metadata().set_term(key.term);
-
                 let conf_state = util::conf_state_from_region(region_state.get_region());
                 snapshot.mut_metadata().set_conf_state(conf_state);
-
                 // Set snapshot data.
                 let mut snap_data = RaftSnapshotData::default();
                 snap_data.set_region(region_state.get_region().clone());
                 snap_data.mut_meta().set_for_balance(for_balance);
                 snapshot.set_data(snap_data.write_to_bytes().unwrap().into());
+                // create checkpointer.
                 let success = create_checkpointer_for_snap(self.snap_mgr(), &key, tablet);
                 if success {
                     SNAP_COUNTER.generate.success.inc();
@@ -225,16 +229,17 @@ where
     }
 }
 
+/// Used for create checkpointer. return true if success.
 fn create_checkpointer_for_snap<EK: KvEngine>(
     snap_mgr: &SnapManager,
     snap_key: &SnapKey,
     tablet: EK,
 ) -> bool {
-    let checkpoint_path = snap_mgr.get_path_for_tablet_checkpoint(snap_key);
-    if checkpoint_path.as_path().exists() {
+    let checkpointer_path = snap_mgr.get_path_for_tablet_checkpointer(snap_key);
+    if checkpointer_path.as_path().exists() {
         // Remove the old checkpoint directly.
-        let Ok (_) = std::fs::remove_dir_all(checkpoint_path.as_path()).map_err(|e| {
-            error!("failed to remove old checkpoint"; "path" => %checkpoint_path.as_path().display(), "err" => %e);
+        let Ok (_) = std::fs::remove_dir_all(checkpointer_path.as_path()).map_err(|e| {
+            error!("failed to remove old checkpoint"; "path" => %checkpointer_path.as_path().display(), "err" => %e);
             e
         }) else { return false };
     }
@@ -245,7 +250,7 @@ fn create_checkpointer_for_snap<EK: KvEngine>(
         e
     }) else { return false };
 
-    let Ok(_) = checkpointer.create_at(checkpoint_path.as_path(), None,0)
+    let Ok(_) = checkpointer.create_at(checkpointer_path.as_path(), None,0)
         .map_err(|e| {
             error!("failed to create checkpoint"; "region_id" => snap_key.region_id, "snap_key" => %snap_key, "error" => %e); 
             e
