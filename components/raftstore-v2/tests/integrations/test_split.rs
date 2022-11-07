@@ -2,11 +2,13 @@
 
 use std::{thread, time::Duration};
 
-use engine_traits::{Peekable, RaftEngineReadOnly};
+use engine_traits::RaftEngineReadOnly;
 use futures::executor::block_on;
 use kvproto::{
     metapb, pdpb,
-    raft_cmdpb::{AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, Request, SplitRequest},
+    raft_cmdpb::{
+        AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, RaftCmdResponse, Request, SplitRequest,
+    },
 };
 use raftstore_v2::router::PeerMsg;
 use tikv_util::store::new_peer;
@@ -54,9 +56,52 @@ fn must_split<F: Fn(u64) -> u64>(
     }
 }
 
+fn put(
+    store_id: u64,
+    router: &mut TestRouter,
+    region: &metapb::Region,
+    key: &[u8],
+) -> RaftCmdResponse {
+    let mut req = RaftCmdRequest::default();
+    req.mut_header().set_region_id(region.id);
+    req.mut_header()
+        .set_region_epoch(region.get_region_epoch().clone());
+    req.mut_header().set_peer(
+        region
+            .get_peers()
+            .iter()
+            .find(|p| p.get_store_id() == store_id)
+            .unwrap()
+            .clone(),
+    );
+
+    let mut put_req = Request::default();
+    put_req.set_cmd_type(CmdType::Put);
+    put_req.mut_put().set_key(key.to_vec());
+    put_req.mut_put().set_value(b"v1".to_vec());
+    req.mut_requests().push(put_req);
+
+    let (msg, mut sub) = PeerMsg::raft_command(req.clone());
+    router.send(region.id, msg).unwrap();
+    assert!(block_on(sub.wait_proposed()));
+    assert!(block_on(sub.wait_committed()));
+    block_on(sub.result()).unwrap()
+}
+
+fn must_put_succeed(store_id: u64, router: &mut TestRouter, region: &metapb::Region, key: &[u8]) {
+    let resp = put(store_id, router, region, key);
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
+}
+
+fn must_put_error(store_id: u64, router: &mut TestRouter, region: &metapb::Region, key: &[u8]) {
+    let resp = put(store_id, router, region, key);
+    assert!(resp.get_header().get_error().has_key_not_in_region());
+}
+
 // Split the region according to the parameters
 // return the updated original region
 fn split_region<F: Fn(u64) -> u64>(
+    store_id: u64,
     router: &mut TestRouter,
     get_tablet_index: F,
     region: metapb::Region,
@@ -116,13 +161,15 @@ fn split_region<F: Fn(u64) -> u64>(
         )
     };
 
-    let snap = router.snapshot(left.id).unwrap();
-    assert_eq!(snap.get_value(left_key).unwrap().unwrap(), b"v1");
-    snap.get_value(right_key).unwrap_err();
+    // The end key of left region is `split_key`
+    // So writing `right_key` will fail
+    must_put_error(store_id, router, &left, right_key);
+    // But `left_key` should succeed
+    must_put_succeed(store_id, router, &left, left_key);
 
-    let snap = router.snapshot(right.id).unwrap();
-    assert_eq!(snap.get_value(right_key).unwrap().unwrap(), b"v3");
-    snap.get_value(left_key).unwrap_err();
+    // Mirror of above case
+    must_put_error(store_id, router, &right, left_key);
+    must_put_succeed(store_id, router, &right, right_key);
 
     assert_eq!(left.get_end_key(), split_key);
     assert_eq!(right.get_start_key(), split_key);
@@ -157,6 +204,7 @@ fn test_split() {
     //   -> Region 2    ["", "k22"] peer(1, 3)
     //      Region 1000 ["k22", ""] peer(1, 10)
     let (left, right) = split_region(
+        store_id,
         &mut router,
         get_tablet_index,
         region,
@@ -173,6 +221,7 @@ fn test_split() {
     //   -> Region 2    ["", "k11"]    peer(1, 3)
     //      Region 1001 ["k11", "k22"] peer(1, 11)
     let _ = split_region(
+        store_id,
         &mut router,
         get_tablet_index,
         left,
@@ -189,6 +238,7 @@ fn test_split() {
     //   -> Region 1000 ["k22", "k33"] peer(1, 10)
     //      Region 1002 ["k33", ""]    peer(1, 12)
     let _ = split_region(
+        store_id,
         &mut router,
         get_tablet_index,
         right,

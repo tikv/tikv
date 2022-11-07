@@ -15,20 +15,18 @@ use collections::HashSet;
 use crossbeam::channel::{self, Receiver, Sender, TrySendError};
 use engine_test::{
     ctor::{CfOptions, DbOptions},
-    kv::{KvTestEngine, KvTestSnapshot, TestTabletFactoryV2},
+    kv::{KvTestEngine, TestTabletFactoryV2},
     raft::RaftTestEngine,
 };
 use engine_traits::{OpenOptions, TabletFactory, ALL_CFS};
 use futures::executor::block_on;
 use kvproto::{
     metapb::{self, Store},
-    raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, Request, StatusCmdType},
+    raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, StatusCmdType},
     raft_serverpb::RaftMessage,
 };
 use pd_client::RpcClient;
-use raftstore::store::{
-    region_meta::RegionMeta, Config, RegionSnapshot, Transport, RAFT_INIT_LOG_INDEX,
-};
+use raftstore::store::{region_meta::RegionMeta, Config, Transport, RAFT_INIT_LOG_INDEX};
 use raftstore_v2::{
     create_store_batch_system,
     router::{DebugInfoChannel, FlushChannel, PeerMsg, QueryResult, RaftRouter},
@@ -156,17 +154,6 @@ impl TestRouter {
         let status_resp = res.response().unwrap().get_status_response();
         let detail = status_resp.get_region_detail();
         detail.get_region().clone()
-    }
-
-    pub fn snapshot(
-        &mut self,
-        region_id: u64,
-    ) -> std::result::Result<RegionSnapshot<KvTestSnapshot>, RaftCmdResponse> {
-        let mut req = self.new_request_for(region_id);
-        let mut request_inner = Request::default();
-        request_inner.set_cmd_type(CmdType::Snap);
-        req.mut_requests().push(request_inner);
-        block_on(async { self.get_snapshot(req).await })
     }
 }
 
