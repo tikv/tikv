@@ -5389,18 +5389,24 @@ where
         };
         assert!(compact_idx >= first_idx);
 
-        if let Some(idx) = witness_replicated_idx {
-            // 1. do not compact the log not replicated to witness, except witness is the
-            // most lagging peer
-            // 2. if there is a lagging behind follower, should not compact log, otherwise
-            // witness can't help the follower to catch up if the leader is down
-            if idx != replicated_idx {
-                compact_idx = std::cmp::min(compact_idx, replicated_idx);
+        if let Some(witness_idx) = witness_replicated_idx {
+            if witness_idx < replicated_idx {
+                // do not compact the log not replicated to witness, except witness is the
+                // most lagging peer
+                if witness_idx + self.ctx.cfg.raft_log_gc_count_limit() < replicated_idx {
+                    compact_idx = std::cmp::min(compact_idx, replicated_idx);
+                } else {
+                    compact_idx = std::cmp::min(compact_idx, witness_idx);
+                }
+            } else if replicated_idx < witness_idx {
+                // if there is a lagging behind follower, should not compact log, otherwise
+                // witness can't help the follower to catch up if the leader is down
+                compact_idx = std::cmp::min(compact_idx, replicated_idx); 
             }
         }
 
         // Have no idea why subtract 1 here, but original code did this by magic.
-        compact_idx -= 1;
+        compact_idx = compact_idx.saturating_sub(1);
         if compact_idx < first_idx {
             // In case compact_idx == first_idx before subtraction.
             self.ctx
