@@ -296,7 +296,7 @@ dependencies = [
  "tikv_util",
  "tokio",
  "url",
- "uuid",
+ "uuid 0.8.2",
 ]
 
 [[package]]
@@ -344,7 +344,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "url",
- "uuid",
+ "uuid 0.8.2",
 ]
 
 [[package]]
@@ -389,7 +389,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "url",
- "uuid",
+ "uuid 0.8.2",
 ]
 
 [[package]]
@@ -512,7 +512,7 @@ dependencies = [
  "tonic",
  "txn_types",
  "url",
- "uuid",
+ "uuid 0.8.2",
  "walkdir",
  "yatp",
 ]
@@ -1337,11 +1337,11 @@ dependencies = [
 
 [[package]]
 name = "debugid"
-version = "0.7.2"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f91cf5a8c2f2097e2a32627123508635d47ce10563d999ec1a95addf08b502ba"
+checksum = "bef552e6f588e446098f6ba40d89ac146c8c7b64aade83c051ee00bb5d2bc18d"
 dependencies = [
- "uuid",
+ "uuid 1.2.1",
 ]
 
 [[package]]
@@ -2694,7 +2694,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#26e28e6a281abb927f91ef992eb8f93b39698ffa"
+source = "git+https://github.com/pingcap/kvproto.git#65d0ae8fa853c1e41b43f329afbf60616bdd4d18"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -3859,8 +3859,9 @@ dependencies = [
 
 [[package]]
 name = "pprof"
-version = "0.9.1"
-source = "git+https://github.com/tikv/pprof-rs.git?rev=3fed55af8fc6cf69dbd954a0321c799c5a111e4e#3fed55af8fc6cf69dbd954a0321c799c5a111e4e"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e20150f965e0e4c925982b9356da71c84bcd56cb66ef4e894825837cbcf6613e"
 dependencies = [
  "backtrace",
  "cfg-if 1.0.0",
@@ -4263,7 +4264,7 @@ dependencies = [
  "tokio",
  "tracker",
  "txn_types",
- "uuid",
+ "uuid 0.8.2",
  "yatp",
 ]
 
@@ -5442,7 +5443,7 @@ dependencies = [
  "tikv_util",
  "tokio",
  "txn_types",
- "uuid",
+ "uuid 0.8.2",
 ]
 
 [[package]]
@@ -5562,21 +5563,21 @@ checksum = "343f3f510c2915908f155e94f17220b19ccfacf2a64a2a5d8004f2c3e311e7fd"
 
 [[package]]
 name = "symbolic-common"
-version = "8.0.0"
+version = "10.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0caab39ce6f074031b8fd3dd297bfda70a2d1f33c6e7cc1b737ac401f856448d"
+checksum = "ac457d054f793cedfde6f32d21d692b8351cfec9084fefd0470c0373f6d799bc"
 dependencies = [
  "debugid",
- "memmap",
+ "memmap2",
  "stable_deref_trait",
- "uuid",
+ "uuid 1.2.1",
 ]
 
 [[package]]
 name = "symbolic-demangle"
-version = "8.0.0"
+version = "10.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b77ecb5460a87faa37ed53521eed8f073c8339b7a5788c1f93efc09ce74e1b68"
+checksum = "48808b846eef84e0ac06365dc620f028ae632355e5dcffc007bf1b2bf5eab17b"
 dependencies = [
  "rustc-demangle",
  "symbolic-common",
@@ -5857,7 +5858,7 @@ dependencies = [
  "engine_traits",
  "keys",
  "kvproto",
- "uuid",
+ "uuid 0.8.2",
 ]
 
 [[package]]
@@ -5974,7 +5975,7 @@ dependencies = [
  "tokio",
  "toml",
  "txn_types",
- "uuid",
+ "uuid 0.8.2",
 ]
 
 [[package]]
@@ -6089,7 +6090,7 @@ dependencies = [
  "lazy_static",
  "log_wrappers",
  "match-template",
- "nom 5.1.0",
+ "nom 7.1.0",
  "num 0.3.0",
  "num-derive",
  "num-traits",
@@ -6171,7 +6172,7 @@ dependencies = [
  "tipb",
  "tipb_helper",
  "twoway",
- "uuid",
+ "uuid 0.8.2",
 ]
 
 [[package]]
@@ -6295,7 +6296,7 @@ dependencies = [
  "tracker",
  "txn_types",
  "url",
- "uuid",
+ "uuid 0.8.2",
  "walkdir",
  "yatp",
  "zipf",
@@ -6964,6 +6965,12 @@ dependencies = [
  "getrandom 0.2.3",
  "serde",
 ]
+
+[[package]]
+name = "uuid"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "feb41e78f93363bb2df8b0e86a2ca30eed7806ea16ea0c790d757cf93f79be83"
 
 [[package]]
 name = "valgrind_request"

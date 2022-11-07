@@ -5,9 +5,29 @@ use std::convert::TryInto;
 use codec::number::NumberCodec;
 
 use super::{constants::*, JsonRef, JsonType, ERR_CONVERT_FAILED};
-use crate::codec::Result;
+use crate::codec::{mysql::json::path_expr::ArrayIndex, Result};
 
 impl<'a> JsonRef<'a> {
+    /// Gets the index from the ArrayIndex
+    ///
+    /// If the idx is greater than the count and is from right, it will return
+    /// `None`
+    ///
+    /// See `jsonPathArrayIndex.getIndexFromStart()` in TiDB
+    /// `types/json_path_expr.go`
+    pub fn array_get_index(&self, idx: ArrayIndex) -> Option<usize> {
+        match idx {
+            ArrayIndex::Left(idx) => Some(idx as usize),
+            ArrayIndex::Right(idx) => {
+                if self.get_elem_count() < 1 + (idx as usize) {
+                    None
+                } else {
+                    Some(self.get_elem_count() - 1 - (idx as usize))
+                }
+            }
+        }
+    }
+
     /// Gets the ith element in JsonRef
     ///
     /// See `arrayGetElem()` in TiDB `json/binary.go`
