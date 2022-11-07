@@ -5401,7 +5401,7 @@ where
             } else if replicated_idx < witness_idx {
                 // if there is a lagging behind follower, should not compact log, otherwise
                 // witness can't help the follower to catch up if the leader is down
-                compact_idx = std::cmp::min(compact_idx, replicated_idx); 
+                compact_idx = std::cmp::min(compact_idx, replicated_idx);
             }
         }
 
