@@ -28,7 +28,12 @@ use raft::{
     Changer, RawNode, INVALID_INDEX,
 };
 use raft_proto::ConfChangeI;
-use tikv_util::{box_err, debug, info, store::region, time::monotonic_raw_now, Either};
+use tikv_util::{
+    box_err, debug, info,
+    store::{find_peer_by_id, region},
+    time::monotonic_raw_now,
+    Either,
+};
 use time::{Duration, Timespec};
 use txn_types::{TimeStamp, WriteBatchFlags};
 
@@ -1157,9 +1162,19 @@ pub struct RegionReadProgress {
 }
 
 impl RegionReadProgress {
-    pub fn new(region: &Region, applied_index: u64, cap: usize, tag: String) -> RegionReadProgress {
+    pub fn new(
+        region: &Region,
+        applied_index: u64,
+        cap: usize,
+        peer_id: u64,
+    ) -> RegionReadProgress {
         RegionReadProgress {
-            core: Mutex::new(RegionReadProgressCore::new(region, applied_index, cap, tag)),
+            core: Mutex::new(RegionReadProgressCore::new(
+                region,
+                applied_index,
+                cap,
+                peer_id,
+            )),
             safe_ts: AtomicU64::from(0),
         }
     }
@@ -1318,7 +1333,7 @@ impl RegionReadProgress {
 
 #[derive(Debug)]
 pub struct RegionReadProgressCore {
-    tag: String,
+    peer_id: u64,
     region_id: u64,
     applied_index: u64,
     // A wrapper of `(apply_index, safe_ts)` item, where the `read_state.ts` is the peer's current
@@ -1390,17 +1405,24 @@ fn find_store_id(peer_list: &[Peer], peer_id: u64) -> Option<u64> {
 }
 
 impl RegionReadProgressCore {
-    fn new(region: &Region, applied_index: u64, cap: usize, tag: String) -> RegionReadProgressCore {
+    fn new(
+        region: &Region,
+        applied_index: u64,
+        cap: usize,
+        peer_id: u64,
+    ) -> RegionReadProgressCore {
+        // forbids stale read for witness
+        let is_witness = find_peer_by_id(region, peer_id).map_or(false, |p| p.is_witness);
         RegionReadProgressCore {
-            tag,
+            peer_id,
             region_id: region.get_id(),
             applied_index,
             read_state: ReadState::default(),
             leader_info: LocalLeaderInfo::new(region),
             pending_items: VecDeque::with_capacity(cap),
             last_merge_index: 0,
-            pause: false,
-            discard: false,
+            pause: is_witness,
+            discard: is_witness,
         }
     }
 

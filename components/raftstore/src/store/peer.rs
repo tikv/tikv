@@ -1154,7 +1154,7 @@ where
                 region,
                 applied_index,
                 REGION_READ_PROGRESS_CAP,
-                tag.clone(),
+                peer_id,
             )),
             memtrace_raft_entries: 0,
             write_router: WriteRouter::new(tag),
