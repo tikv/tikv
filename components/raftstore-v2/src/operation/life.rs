@@ -90,6 +90,10 @@ impl DestroyProgress {
 }
 
 impl Store {
+    /// The method is called during split.
+    /// The creation process is:
+    /// 1. create an uninitialized peer if not existed before
+    /// 2. initialize the peer by the information sent from parent peer
     #[inline]
     pub fn on_peer_creation<EK, ER, T>(
         &mut self,
@@ -100,7 +104,7 @@ impl Store {
         ER: RaftEngine,
     {
         let region_id = msg.raft_message.get_region_id();
-        // It will create the peer if not created before
+        // It will create the peer if it is not existed
         self.on_raft_message(ctx, msg.raft_message);
         ctx.router.force_send(
             region_id,
@@ -193,11 +197,12 @@ impl Store {
         let mut region = Region::default();
         region.set_id(region_id);
         region.set_region_epoch(from_epoch.clone());
+
         // Peer list doesn't have to be complete, as it's uninitialized.
-        // If the store_id of from_peer and to_peer being the same means the from_peer
-        // if the parent peer in the split process in which case we do not add it into
-        // the region.
-        if from_peer.store_id != to_peer.store_id {
+        //
+        // If the id of the from_peer is INVALID_ID, this msg must be sent from parent
+        // peer in the split execution in which case we do not add it into the region.
+        if from_peer.id != raft::INVALID_ID {
             region.mut_peers().push(from_peer.clone());
         }
         region.mut_peers().push(to_peer.clone());

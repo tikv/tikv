@@ -32,9 +32,8 @@ use engine_traits::{
 };
 use keys::enc_end_key;
 use kvproto::{
-    metapb::{self, Region},
+    metapb::{self, Region, RegionEpoch},
     raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, SplitRequest},
-    raft_serverpb::RegionLocalState,
 };
 use protobuf::Message;
 use raft::RawNode;
@@ -72,20 +71,24 @@ pub struct SplitResult {
 
 #[derive(Debug)]
 pub struct SplitRegionInitInfo {
-    pub source_state: RegionLocalState,
+    pub parent_region_id: u64,
+    pub parent_epoch: RegionEpoch,
+    /// Initialized region meta info of the split region
     pub region: metapb::Region,
     pub parent_is_leader: bool,
     pub parent_stat: PeerStat,
     pub approximate_size: Option<u64>,
     pub approximate_keys: Option<u64>,
+    /// In-memory pessimistic locks that should be inherited from parent region
     pub locks: PeerPessimisticLocks,
     pub last_split_region: bool,
 }
 
 #[derive(Debug)]
 pub struct SplitRegionInitResp {
-    pub parent_state: RegionLocalState,
+    pub parent_epoch: RegionEpoch,
     pub child_region_id: u64,
+    // FIXME: when it is false
     pub result: bool,
 }
 
@@ -120,13 +123,130 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.propose_with_ctx(store_ctx, data, proposal_ctx.to_vec())
     }
 
+    pub fn on_ready_split_region<T>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        derived_index: usize,
+        tablet_index: u64,
+        regions: Vec<Region>,
+    ) {
+        let derived = &regions[derived_index];
+        let derived_id = derived.id;
+        let derived_epoch = derived.get_region_epoch().clone();
+        let region_id = derived.get_id();
+
+        // Group in-memory pessimistic locks in the original region into new regions.
+        // The locks of new regions will be put into the corresponding new regions
+        // later. And the locks belonging to the old region will stay in the original
+        // map.
+        let region_locks = {
+            let mut pessimistic_locks = self.txn_ext().pessimistic_locks.write();
+            info!(self.logger, "moving {} locks to new regions", pessimistic_locks.len(); "region_id"=> region_id);
+            // Update the version so the concurrent reader will fail due to EpochNotMatch
+            // instead of PessimisticLockNotFound.
+            pessimistic_locks.version = derived_epoch.get_version();
+            pessimistic_locks.group_by_regions(&regions, derived)
+        };
+
+        // Roughly estimate the size and keys for new regions.
+        let new_region_count = regions.len() as u64;
+        let estimated_size = self.approximate_size().map(|v| v / new_region_count);
+        let estimated_keys = self.approximate_keys().map(|v| v / new_region_count);
+        let mut meta = store_ctx.store_meta.lock().unwrap();
+        meta.set_region(
+            derived.clone(),
+            self,
+            RegionChangeReason::Split,
+            tablet_index,
+        );
+        self.post_split();
+
+        // It's not correct anymore, so set it to false to schedule a split
+        // check task.
+        self.set_may_skip_split_check(false);
+
+        let is_leader = self.is_leader();
+        if is_leader {
+            self.set_approximate_size(estimated_size);
+            self.set_approximate_keys(estimated_keys);
+            self.heartbeat_pd(store_ctx);
+
+            info!(
+                self.logger,
+                "notify pd with split";
+                "region_id" => self.region_id(),
+                "peer_id" => self.peer_id(),
+                "split_count" => regions.len(),
+            );
+
+            // todo: report to PD
+        }
+
+        self.split_progress_mut().clear();
+        let last_key = enc_end_key(regions.last().unwrap());
+        if meta.region_ranges.remove(&last_key).is_none() {
+            panic!("{:?} original region should exist", self.logger.list());
+        }
+        let last_region_id = regions.last().unwrap().get_id();
+        for (new_region, locks) in regions.into_iter().zip(region_locks) {
+            let new_region_id = new_region.get_id();
+
+            if new_region_id == region_id {
+                let not_exist = meta
+                    .region_ranges
+                    .insert(enc_end_key(&new_region), new_region_id)
+                    .is_none();
+                assert!(not_exist, "[region {}] should not exist", new_region_id);
+                continue;
+            }
+
+            let mut raft_message = self.prepare_raft_message();
+            raft_message.mut_from_peer().set_id(raft::INVALID_ID);
+            raft_message.set_region_id(new_region_id);
+            raft_message.set_to_peer(
+                new_region
+                    .get_peers()
+                    .iter()
+                    .find(|p| p.store_id == store_ctx.store_id)
+                    .unwrap()
+                    .clone(),
+            );
+
+            self.split_progress_mut().insert(new_region_id, false);
+            let init_info = SplitRegionInitInfo {
+                region: new_region,
+                parent_region_id: derived_id,
+                parent_epoch: derived_epoch.clone(),
+                parent_is_leader: self.is_leader(),
+                parent_stat: self.peer_stat().clone(),
+                approximate_keys: estimated_keys,
+                approximate_size: estimated_size,
+                locks,
+                last_split_region: last_region_id == new_region_id,
+            };
+
+            store_ctx
+                .router
+                .send_control(StoreMsg::PeerCreation(PeerCreation {
+                    raft_message: Box::new(raft_message),
+                    split_region_info: Box::new(init_info),
+                }));
+        }
+        drop(meta);
+
+        if is_leader {
+            self.on_split_region_check_tick();
+        }
+    }
+
     pub fn init_split_region<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
         init_info: Box<SplitRegionInitInfo>,
     ) {
         let SplitRegionInitInfo {
-            source_state,
+            parent_region_id,
+            parent_epoch,
             region,
             parent_is_leader,
             parent_stat,
@@ -279,18 +399,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         meta.region_read_progress
             .insert(region_id, self.read_progress().clone());
 
-        if !campaigned {
-            if let Some(msg) = meta
-                .pending_msgs
-                .swap_remove_front(|m| m.get_to_peer() == self.peer())
-            {
-                let peer_msg = PeerMsg::RaftMessage(Box::new(msg));
-                if let Err(e) = store_ctx.router.force_send(region_id, peer_msg) {
-                    warn!(self.logger, "handle first requset failed"; "region_id" => region_id, "error" => ?e);
-                }
-            }
-        }
-
         drop(meta);
 
         let ranges_to_delete = get_range_not_in_region(&region);
@@ -301,22 +409,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             });
 
         if last_split_region {
-            // todo: cfg validation should be called to make
-            // region_split_check_diff be Some(x)
-
-            // To prevent from big region, the right region needs run split
-            // check again after split.
-            // new_peer
-            //     .peer_mut()
-            //     .set_size_diff_hint(store_ctx.cfg.
-            // region_split_check_diff().0);
+            // todo: check if the last region needs to split again
         }
 
         store_ctx.router.force_send(
-            source_state.get_region().id,
+            parent_region_id,
             PeerMsg::AcrossPeerMsg(AcrossPeerMsg::SplitRegionInitResp(Box::new(
                 SplitRegionInitResp {
-                    parent_state: source_state,
+                    parent_epoch,
                     child_region_id: region_id,
                     result: true,
                 },
@@ -334,12 +434,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         resp: Box<SplitRegionInitResp>,
     ) {
         let SplitRegionInitResp {
-            parent_state,
+            parent_epoch,
             child_region_id,
             result,
         } = Box::into_inner(resp);
 
-        assert_eq!(parent_state, *self.storage().region_state());
+        assert_eq!(
+            parent_epoch,
+            *self
+                .storage()
+                .region_state()
+                .get_region()
+                .get_region_epoch()
+        );
 
         let mut split_progress = self.split_progress_mut();
         *split_progress.get_mut(&child_region_id).unwrap() = true;
@@ -374,118 +481,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 .unwrap_or_else(|e| {
                     error!(self.logger,"failed to delete files in range"; "err" => %e);
                 });
-        }
-    }
-
-    pub fn on_ready_split_region<T>(
-        &mut self,
-        store_ctx: &mut StoreContext<EK, ER, T>,
-        derived_index: usize,
-        tablet_index: u64,
-        regions: Vec<Region>,
-    ) {
-        let derived = &regions[derived_index];
-        let region_id = derived.get_id();
-
-        // Group in-memory pessimistic locks in the original region into new regions.
-        // The locks of new regions will be put into the corresponding new regions
-        // later. And the locks belonging to the old region will stay in the original
-        // map.
-        let region_locks = {
-            let mut pessimistic_locks = self.txn_ext().pessimistic_locks.write();
-            info!(self.logger, "moving {} locks to new regions", pessimistic_locks.len(); "region_id"=> region_id);
-            // Update the version so the concurrent reader will fail due to EpochNotMatch
-            // instead of PessimisticLockNotFound.
-            pessimistic_locks.version = derived.get_region_epoch().get_version();
-            pessimistic_locks.group_by_regions(&regions, derived)
-        };
-
-        // Roughly estimate the size and keys for new regions.
-        let new_region_count = regions.len() as u64;
-        let estimated_size = self.approximate_size().map(|v| v / new_region_count);
-        let estimated_keys = self.approximate_keys().map(|v| v / new_region_count);
-        let mut meta = store_ctx.store_meta.lock().unwrap();
-        meta.set_region(
-            derived.clone(),
-            self,
-            RegionChangeReason::Split,
-            tablet_index,
-        );
-        self.post_split();
-
-        // It's not correct anymore, so set it to false to schedule a split
-        // check task.
-        self.set_may_skip_split_check(false);
-
-        let is_leader = self.is_leader();
-        if is_leader {
-            self.set_approximate_size(estimated_size);
-            self.set_approximate_keys(estimated_keys);
-            self.heartbeat_pd(store_ctx);
-
-            info!(
-                self.logger,
-                "notify pd with split";
-                "region_id" => self.region_id(),
-                "peer_id" => self.peer_id(),
-                "split_count" => regions.len(),
-            );
-
-            // todo: report to PD
-        }
-
-        self.split_progress_mut().clear();
-        let last_key = enc_end_key(regions.last().unwrap());
-        if meta.region_ranges.remove(&last_key).is_none() {
-            panic!("{:?} original region should exist", self.logger.list());
-        }
-        let last_region_id = regions.last().unwrap().get_id();
-        for (new_region, locks) in regions.into_iter().zip(region_locks) {
-            let new_region_id = new_region.get_id();
-
-            if new_region_id == region_id {
-                let not_exist = meta
-                    .region_ranges
-                    .insert(enc_end_key(&new_region), new_region_id)
-                    .is_none();
-                assert!(not_exist, "[region {}] should not exist", new_region_id);
-                continue;
-            }
-
-            let mut raft_message = self.prepare_raft_message();
-            raft_message.set_region_id(new_region_id);
-            raft_message.set_to_peer(
-                new_region
-                    .get_peers()
-                    .iter()
-                    .find(|p| p.store_id == store_ctx.store_id)
-                    .unwrap()
-                    .clone(),
-            );
-
-            self.split_progress_mut().insert(new_region_id, false);
-            let init_info = SplitRegionInitInfo {
-                region: new_region,
-                source_state: self.storage().region_state().clone(),
-                parent_is_leader: self.is_leader(),
-                parent_stat: self.peer_stat().clone(),
-                approximate_keys: estimated_keys,
-                approximate_size: estimated_size,
-                locks,
-                last_split_region: last_region_id == new_region_id,
-            };
-
-            store_ctx
-                .router
-                .send_control(StoreMsg::PeerCreation(PeerCreation {
-                    raft_message: Box::new(raft_message),
-                    split_region_info: Box::new(init_info),
-                }));
-        }
-        drop(meta);
-
-        if is_leader {
-            self.on_split_region_check_tick();
         }
     }
 }

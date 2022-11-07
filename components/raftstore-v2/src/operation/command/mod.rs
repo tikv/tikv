@@ -428,9 +428,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         util::check_region_epoch(&req, self.region_state().get_region(), true)?;
         if req.has_admin_request() {
             let admin_req = req.get_admin_request();
-            let origin_epoch = self.region_state().get_region().get_region_epoch().clone();
-            let cmd_type = req.get_admin_request().get_cmd_type();
-            let (admin_resp, admin_result) = match cmd_type {
+            let (admin_resp, admin_result) = match req.get_admin_request().get_cmd_type() {
                 AdminCmdType::CompactLog => unimplemented!(),
                 AdminCmdType::Split => self.apply_split(admin_req, entry.index)?,
                 AdminCmdType::BatchSplit => self.apply_batch_split(admin_req, entry.index)?,

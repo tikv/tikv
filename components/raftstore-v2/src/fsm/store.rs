@@ -36,12 +36,6 @@ where
     pub readers: HashMap<u64, ReadDelegate>,
     /// region_id -> tablet cache
     pub tablet_caches: HashMap<u64, CachedTablet<E>>,
-
-    /// `MsgRequestPreVote`, `MsgRequestVote` or `MsgAppend` messages from newly
-    /// split Regions shouldn't be dropped if there is no such Region in this
-    /// store now. So the messages are recorded temporarily and will be handled
-    /// later.
-    pub pending_msgs: RingQueue<RaftMessage>,
     /// region_id -> `RegionReadProgress`
     pub region_read_progress: RegionReadProgressRegistry,
 }
@@ -57,7 +51,6 @@ where
             regions: HashMap::default(),
             readers: HashMap::default(),
             tablet_caches: HashMap::default(),
-            pending_msgs: RingQueue::with_capacity(vote_capacity),
             region_read_progress: RegionReadProgressRegistry::new(),
         }
     }

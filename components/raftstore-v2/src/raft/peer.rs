@@ -91,13 +91,6 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     read_progress: Arc<RegionReadProgress>,
     leader_lease: Lease,
 
-    /// Whether this peer is destroyed asynchronously.
-    /// If it's true,
-    /// - when merging, its data in storeMeta will be removed early by the
-    ///   target peer.
-    /// - all read requests must be rejected.
-    pending_remove: bool,
-
     /// region buckets.
     region_buckets: Option<BucketStat>,
     last_region_buckets: Option<BucketStat>,
@@ -196,7 +189,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 cfg.raft_store_max_leader_lease(),
                 cfg.renew_leader_lease_advance_duration(),
             ),
-            pending_remove: false,
             region_buckets: Some(BucketStat {
                 meta: Arc::default(),
                 stats: metapb::BucketStats::default(),
@@ -274,15 +266,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             pessimistic_locks.version = self.region().get_region_epoch().get_version();
         }
 
-        // todo: `CoprocessorHost::new` needs a CasualRouter where v2 does not
-        // have this now.
-        // if !self.pending_remove {
-        //     host.on_region_changed(
-        //         self.region(),
-        //         RegionChangeEvent::Update(reason),
-        //         self.get_role(),
-        //     )
-        // }
+        // todo: CoprocessorHost
     }
 
     #[inline]
