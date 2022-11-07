@@ -167,11 +167,6 @@ pub fn flashback_to_version_write(
         } else {
             // If the old write doesn't exist, we should put a `WriteType::Delete` record to
             // delete the current key when needed.
-            if let Some((_, latest_write)) = reader.seek_write(&key, commit_ts)? {
-                if latest_write.write_type == WriteType::Delete {
-                    continue;
-                }
-            }
             Write::new(WriteType::Delete, start_ts, None)
         };
         txn.put_write(key.clone(), commit_ts, new_write.as_ref().to_bytes());
