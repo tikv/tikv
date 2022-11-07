@@ -4978,6 +4978,87 @@ mod tests {
     }
 
     #[test]
+    fn test_flashback_to_version_deleted_key() {
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+        let mut ts = TimeStamp::zero();
+        let (k, v) = (Key::from_raw(b"k"), b"v".to_vec());
+        // Write a key.
+        storage
+            .sched_txn_command(
+                commands::Prewrite::with_defaults(
+                    vec![Mutation::make_put(k.clone(), v.clone())],
+                    k.as_encoded().to_vec(),
+                    *ts.incr(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .sched_txn_command(
+                commands::Commit::new(vec![k.clone()], ts, *ts.incr(), Context::default()),
+                expect_value_callback(tx.clone(), 1, TxnStatus::committed(ts)),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_value(
+            v,
+            block_on(storage.get(Context::default(), k.clone(), ts))
+                .unwrap()
+                .0,
+        );
+        // Delete the key.
+        storage
+            .sched_txn_command(
+                commands::Prewrite::with_defaults(
+                    vec![Mutation::make_delete(k.clone())],
+                    k.as_encoded().to_vec(),
+                    *ts.incr(),
+                ),
+                expect_ok_callback(tx.clone(), 2),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .sched_txn_command(
+                commands::Commit::new(vec![k.clone()], ts, *ts.incr(), Context::default()),
+                expect_value_callback(tx.clone(), 3, TxnStatus::committed(ts)),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_none(
+            block_on(storage.get(Context::default(), Key::from_raw(b"k"), ts))
+                .unwrap()
+                .0,
+        );
+        // Flashback the key.
+        let flashback_start_ts = *ts.incr();
+        let flashback_commit_ts = *ts.incr();
+        storage
+            .sched_txn_command(
+                new_flashback_to_version_read_phase_cmd(
+                    flashback_start_ts,
+                    flashback_commit_ts,
+                    1.into(),
+                    Key::from_raw(b"k"),
+                    Key::from_raw(b"z"),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx, 4),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_none(
+            block_on(storage.get(Context::default(), k, flashback_commit_ts))
+                .unwrap()
+                .0,
+        );
+    }
+
+    #[test]
     fn test_high_priority_get_put() {
         let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .build()
