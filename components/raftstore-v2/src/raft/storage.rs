@@ -485,6 +485,7 @@ mod tests {
             RegionLocalState::default(),
             router,
             CachedTablet::new(Some(tablet)),
+            factory,
             sched,
             logger,
         );
