@@ -82,16 +82,16 @@ fn test_multi_early_apply() {
 }
 
 /// Test if the commit state check of apply msg is ok.
-/// In the previous implementation, the commit state check uses the state of last
-/// committed entry and it relies on the guarantee that the commit index and term
-/// of the last committed entry must be monotonically increasing even between restarting.
-/// However, this guarantee can be broken by
+/// In the previous implementation, the commit state check uses the state of
+/// last committed entry and it relies on the guarantee that the commit index
+/// and term of the last committed entry must be monotonically increasing even
+/// between restarting. However, this guarantee can be broken by
 ///     1. memory limitation of fetching committed entries
 ///     2. batching apply msg
-/// Now the commit state uses the minimum of persist index and commit index from the peer
-/// to fix this issue.
-/// For simplicity, this test uses region merge to ensure that the apply state will be written
-/// to kv db before crash.
+/// Now the commit state uses the minimum of persist index and commit index from
+/// the peer to fix this issue.
+/// For simplicity, this test uses region merge to ensure that the apply state
+/// will be written to kv db before crash.
 #[test]
 fn test_early_apply_yield_followed_with_many_entries() {
     let mut cluster = new_node_cluster(0, 3);

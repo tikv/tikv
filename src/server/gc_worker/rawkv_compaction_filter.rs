@@ -16,7 +16,7 @@ use engine_rocks::{
     RocksEngine,
 };
 use engine_traits::{raw_ttl::ttl_current_ts, MiscExt};
-use prometheus::local::LocalHistogram;
+use prometheus::local::LocalHistogramVec;
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::worker::{ScheduleError, Scheduler};
 use txn_types::Key;
@@ -24,14 +24,15 @@ use txn_types::Key;
 use crate::{
     server::gc_worker::{
         compaction_filter::{
-            CompactionFilterStats, DEFAULT_DELETE_BATCH_COUNT, GC_COMPACTION_FAILURE,
-            GC_COMPACTION_FILTERED, GC_COMPACTION_FILTER_ORPHAN_VERSIONS, GC_CONTEXT,
+            check_need_gc, CompactionFilterStats, DEFAULT_DELETE_BATCH_COUNT,
+            GC_COMPACTION_FAILURE, GC_COMPACTION_FILTERED, GC_COMPACTION_FILTER_MVCC_DELETION_MET,
+            GC_COMPACTION_FILTER_ORPHAN_VERSIONS, GC_COMPACTION_FILTER_PERFORM,
+            GC_COMPACTION_FILTER_SKIP, GC_CONTEXT,
         },
-        GcTask,
+        GcTask, STAT_RAW_KEYMODE,
     },
     storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM},
 };
-
 pub struct RawCompactionFilterFactory;
 
 impl CompactionFilterFactory for RawCompactionFilterFactory {
@@ -59,6 +60,36 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
             debug!("skip gc in compaction filter because of no safe point");
             return std::ptr::null_mut();
         }
+
+        let ratio_threshold = {
+            let value = &*gc_context.cfg_tracker.value();
+            value.ratio_threshold
+        };
+
+        debug!(
+            "creating rawkv compaction filter";
+            "ratio_threshold" => ratio_threshold,
+        );
+
+        if db.is_stalled_or_stopped() {
+            debug!("skip gc in compaction filter because the DB is stalled");
+            return std::ptr::null_mut();
+        }
+
+        drop(gc_context_option);
+
+        GC_COMPACTION_FILTER_PERFORM
+            .with_label_values(&[STAT_RAW_KEYMODE])
+            .inc();
+
+        if !check_need_gc(safe_point.into(), ratio_threshold, context) {
+            debug!("skip gc in compaction filter because it's not necessary");
+            GC_COMPACTION_FILTER_SKIP
+                .with_label_values(&[STAT_RAW_KEYMODE])
+                .inc();
+            return std::ptr::null_mut();
+        }
+
         let filter = RawCompactionFilter::new(
             db,
             safe_point,
@@ -75,6 +106,7 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
 struct RawCompactionFilter {
     safe_point: u64,
     engine: RocksEngine,
+    is_bottommost_level: bool,
     gc_scheduler: Scheduler<GcTask<RocksEngine>>,
     current_ts: u64,
     mvcc_key_prefix: Vec<u8>,
@@ -87,8 +119,8 @@ struct RawCompactionFilter {
     total_versions: usize,
     total_filtered: usize,
     orphan_versions: usize,
-    versions_hist: LocalHistogram,
-    filtered_hist: LocalHistogram,
+    versions_hist: LocalHistogramVec,
+    filtered_hist: LocalHistogramVec,
 
     encountered_errors: bool,
 }
@@ -98,8 +130,8 @@ thread_local! {
 }
 
 impl Drop for RawCompactionFilter {
-    // NOTE: it's required that `CompactionFilter` is dropped before the compaction result
-    // becomes installed into the DB instance.
+    // NOTE: it's required that `CompactionFilter` is dropped before the compaction
+    // result becomes installed into the DB instance.
     fn drop(&mut self) {
         self.raw_gc_mvcc_deletions();
 
@@ -128,7 +160,9 @@ impl CompactionFilter for RawCompactionFilter {
             Ok(decision) => decision,
             Err(e) => {
                 warn!("compaction filter meet error: {}", e);
-                GC_COMPACTION_FAILURE.with_label_values(&["filter"]).inc();
+                GC_COMPACTION_FAILURE
+                    .with_label_values(&[STAT_RAW_KEYMODE, "filter"])
+                    .inc();
                 self.encountered_errors = true;
                 CompactionFilterDecision::Keep
             }
@@ -142,7 +176,7 @@ impl RawCompactionFilter {
         safe_point: u64,
         gc_scheduler: Scheduler<GcTask<RocksEngine>>,
         ts: u64,
-        _context: &CompactionFilterContext,
+        context: &CompactionFilterContext,
         regions_provider: (u64, Arc<dyn RegionInfoProvider>),
     ) -> Self {
         // Safe point must have been initialized.
@@ -151,6 +185,7 @@ impl RawCompactionFilter {
         RawCompactionFilter {
             safe_point,
             engine,
+            is_bottommost_level: context.is_bottommost_level(),
             gc_scheduler,
             current_ts: ts,
             mvcc_key_prefix: vec![],
@@ -181,7 +216,8 @@ impl RawCompactionFilter {
             return Ok(CompactionFilterDecision::Keep);
         }
 
-        // If the key mode is not KeyMode::Raw or value_type is not CompactionFilterValueType::Value, it's needed to be retained.
+        // If the key mode is not KeyMode::Raw or value_type is not
+        // CompactionFilterValueType::Value, it's needed to be retained.
         let key_mode = ApiV2::parse_key_mode(keys::origin_key(key));
         if key_mode != KeyMode::Raw || value_type != CompactionFilterValueType::Value {
             return Ok(CompactionFilterDecision::Keep);
@@ -199,15 +235,22 @@ impl RawCompactionFilter {
 
             self.versions += 1;
             let raw_value = ApiV2::decode_raw_value(value)?;
-            // If it's the latest version, and it's deleted or expired, it needs to be sent to GCWorker to be processed asynchronously.
-            if !raw_value.is_valid(self.current_ts) {
+            // If it's the latest version, and it's deleted or expired, it needs to be sent
+            // to GcWorker to be processed asynchronously.
+            if !raw_value.is_valid(self.current_ts) && self.is_bottommost_level {
+                GC_COMPACTION_FILTER_MVCC_DELETION_MET
+                    .with_label_values(&[STAT_RAW_KEYMODE])
+                    .inc();
                 self.raw_handle_delete();
                 if self.mvcc_deletions.len() >= DEFAULT_DELETE_BATCH_COUNT {
                     self.raw_gc_mvcc_deletions();
                 }
             }
-            // 1. If it's the latest version, and it's neither deleted nor expired, it's needed to be retained.
-            // 2. If it's the latest version, and it's deleted or expired, while we do async gctask to deleted or expired records, both put records and deleted/expired records are actually kept within the compaction filter.
+            // 1. If it's the latest version, and it's neither deleted nor expired, it's
+            // needed to be retained. 2. If it's the latest version, and it's
+            // deleted or expired, while we do async gctask to deleted or expired records,
+            // both put records and deleted/expired records are actually kept within the
+            // compaction filter.
             Ok(CompactionFilterDecision::Keep)
         } else {
             if commit_ts.into_inner() >= self.safe_point {
@@ -216,7 +259,8 @@ impl RawCompactionFilter {
 
             self.versions += 1;
             self.filtered += 1;
-            // If it's ts < safepoint, and it's not the latest version, it's need to be removed.
+            // If it's ts < safepoint, and it's not the latest version, it's need to be
+            // removed.
             Ok(CompactionFilterDecision::Remove)
         }
     }
@@ -227,15 +271,14 @@ impl RawCompactionFilter {
             let task = GcTask::RawGcKeys {
                 keys: mem::replace(&mut self.mvcc_deletions, empty),
                 safe_point: self.safe_point.into(),
-                store_id: self.regions_provider.0,
                 region_info_provider: self.regions_provider.1.clone(),
             };
             self.schedule_gc_task(task, false);
         }
     }
 
-    // `log_on_error` indicates whether to print an error log on scheduling failures.
-    // It's only enabled for `GcTask::OrphanVersions`.
+    // `log_on_error` indicates whether to print an error log on scheduling
+    // failures. It's only enabled for `GcTask::OrphanVersions`.
     fn schedule_gc_task(&self, task: GcTask<RocksEngine>, log_on_error: bool) {
         match self.gc_scheduler.schedule(task) {
             Ok(_) => {}
@@ -245,10 +288,14 @@ impl RawCompactionFilter {
                 }
                 match e {
                     ScheduleError::Full(_) => {
-                        GC_COMPACTION_FAILURE.with_label_values(&["full"]).inc();
+                        GC_COMPACTION_FAILURE
+                            .with_label_values(&[STAT_RAW_KEYMODE, "full"])
+                            .inc();
                     }
                     ScheduleError::Stopped(_) => {
-                        GC_COMPACTION_FAILURE.with_label_values(&["stopped"]).inc();
+                        GC_COMPACTION_FAILURE
+                            .with_label_values(&[STAT_RAW_KEYMODE, "stopped"])
+                            .inc();
                     }
                 }
             }
@@ -264,21 +311,27 @@ impl RawCompactionFilter {
     // TODO some refactor to avoid duplicated codes.
     fn switch_key_metrics(&mut self) {
         if self.versions != 0 {
-            self.versions_hist.observe(self.versions as f64);
+            self.versions_hist
+                .with_label_values(&[STAT_RAW_KEYMODE])
+                .observe(self.versions as f64);
             self.total_versions += self.versions;
             self.versions = 0;
         }
         if self.filtered != 0 {
-            self.filtered_hist.observe(self.filtered as f64);
+            self.filtered_hist
+                .with_label_values(&[STAT_RAW_KEYMODE])
+                .observe(self.filtered as f64);
             self.total_filtered += self.filtered;
             self.filtered = 0;
         }
     }
 
     fn flush_metrics(&self) {
-        GC_COMPACTION_FILTERED.inc_by(self.total_filtered as u64);
+        GC_COMPACTION_FILTERED
+            .with_label_values(&[STAT_RAW_KEYMODE])
+            .inc_by(self.total_filtered as u64);
         GC_COMPACTION_FILTER_ORPHAN_VERSIONS
-            .with_label_values(&["generated"])
+            .with_label_values(&[STAT_RAW_KEYMODE, "generated"])
             .inc_by(self.orphan_versions as u64);
         if let Some((versions, filtered)) = STATS.with(|stats| {
             stats.versions.update(|x| x + self.total_versions);
@@ -295,6 +348,13 @@ impl RawCompactionFilter {
     }
 }
 
+#[cfg(any(test, feature = "testexport"))]
+pub fn make_key(key: &[u8], ts: u64) -> Vec<u8> {
+    let encode_key = ApiV2::encode_raw_key(key, Some(ts.into()));
+    let res = keys::data_key(encode_key.as_encoded());
+    res
+}
+
 #[cfg(test)]
 pub mod tests {
 
@@ -308,14 +368,8 @@ pub mod tests {
 
     use super::*;
     use crate::{
-        config::DbConfig, server::gc_worker::TestGCRunner, storage::kv::TestEngineBuilder,
+        config::DbConfig, server::gc_worker::TestGcRunner, storage::kv::TestEngineBuilder,
     };
-
-    pub fn make_key(key: &[u8], ts: u64) -> Vec<u8> {
-        let encode_key = ApiV2::encode_raw_key(key, Some(ts.into()));
-        let res = keys::data_key(encode_key.as_encoded());
-        res
-    }
 
     #[test]
     fn test_raw_compaction_filter() {
@@ -328,8 +382,7 @@ pub mod tests {
             .build_with_cfg(&cfg)
             .unwrap();
         let raw_engine = engine.get_rocksdb();
-        let mut gc_runner = TestGCRunner::new(0);
-
+        let mut gc_runner = TestGcRunner::new(0);
         let user_key = b"r\0aaaaaaaaaaa";
 
         let test_raws = vec![
@@ -363,7 +416,8 @@ pub mod tests {
 
         gc_runner.safe_point(80).gc_raw(&raw_engine);
 
-        // If ts(70) < safepoint(80), and this userkey's latest verion is not deleted or expired, this version will be removed in do_filter.
+        // If ts(70) < safepoint(80), and this userkey's latest version is not deleted
+        // or expired, this version will be removed in do_filter.
         let entry70 = raw_engine
             .get_value_cf(CF_DEFAULT, make_key(b"r\0a", 70).as_slice())
             .unwrap();
@@ -392,8 +446,7 @@ pub mod tests {
             .build()
             .unwrap();
         let raw_engine = engine.get_rocksdb();
-        let mut gc_runner = TestGCRunner::new(0);
-
+        let mut gc_runner = TestGcRunner::new(0);
         let mut gc_and_check = |expect_tasks: bool, prefix: &[u8]| {
             gc_runner.safe_point(500).gc_raw(&raw_engine);
 

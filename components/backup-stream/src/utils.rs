@@ -1,20 +1,27 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use core::pin::Pin;
 use std::{
     borrow::Borrow,
     collections::{hash_map::RandomState, BTreeMap, HashMap},
     ops::{Bound, RangeBounds},
+    path::Path,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
+    task::Context,
     time::Duration,
 };
 
+use async_compression::{tokio::write::ZstdEncoder, Level};
 use engine_rocks::ReadPerfInstant;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use futures::{channel::mpsc, executor::block_on, FutureExt, StreamExt};
-use kvproto::raft_cmdpb::{CmdType, Request};
+use futures::{channel::mpsc, executor::block_on, ready, task::Poll, FutureExt, StreamExt};
+use kvproto::{
+    brpb::CompressionType,
+    raft_cmdpb::{CmdType, Request},
+};
 use raft::StateRole;
 use raftstore::{coprocessor::RegionInfoProvider, RegionInfo};
 use tikv::storage::CfStatistics;
@@ -28,7 +35,11 @@ use tikv_util::{
     worker::Scheduler,
     Either,
 };
-use tokio::sync::{oneshot, Mutex, RwLock};
+use tokio::{
+    fs::File,
+    io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufWriter},
+    sync::{oneshot, Mutex, RwLock},
+};
 use txn_types::{Key, Lock, LockType};
 
 use crate::{
@@ -46,8 +57,9 @@ pub fn wrap_key(v: Vec<u8>) -> Vec<u8> {
 }
 
 /// Transform a str to a [`engine_traits::CfName`]\(`&'static str`).
-/// If the argument isn't one of `""`, `"DEFAULT"`, `"default"`, `"WRITE"`, `"write"`, `"LOCK"`, `"lock"`...
-/// returns "ERR_CF". (Which would be ignored then.)
+/// If the argument isn't one of `""`, `"DEFAULT"`, `"default"`, `"WRITE"`,
+/// `"write"`, `"LOCK"`, `"lock"`... returns "ERR_CF". (Which would be ignored
+/// then.)
 pub fn cf_name(s: &str) -> CfName {
     match s {
         "" | "DEFAULT" | "default" => CF_DEFAULT,
@@ -149,7 +161,8 @@ pub type Slot<T> = Mutex<T>;
 /// NOTE: Maybe we can use dashmap for replacing the RwLock.
 pub type SlotMap<K, V, S = RandomState> = RwLock<HashMap<K, Slot<V>, S>>;
 
-/// Like `..=val`(a.k.a. `RangeToInclusive`), but allows `val` being a reference to DSTs.
+/// Like `..=val`(a.k.a. `RangeToInclusive`), but allows `val` being a reference
+/// to DSTs.
 struct RangeToInclusiveRef<'a, T: ?Sized>(&'a T);
 
 impl<'a, T: ?Sized> RangeBounds<T> for RangeToInclusiveRef<'a, T> {
@@ -191,7 +204,8 @@ pub type SegmentSet<T> = SegmentMap<T, ()>;
 
 impl<K: Ord, V: Default> SegmentMap<K, V> {
     /// Try to add a element into the segment tree, with default value.
-    /// (This is useful when using the segment tree as a `Set`, i.e. `SegmentMap<T, ()>`)
+    /// (This is useful when using the segment tree as a `Set`, i.e.
+    /// `SegmentMap<T, ()>`)
     ///
     /// - If no overlapping, insert the range into the tree and returns `true`.
     /// - If overlapping detected, do nothing and return `false`.
@@ -267,8 +281,8 @@ impl<K: Ord, V> SegmentMap<K, V> {
             return Some(overlap_with_start);
         }
         // |--s----+-----+----e----|
-        // Otherwise, the possibility of being overlapping would be there are some sub range
-        // of the queried range...
+        // Otherwise, the possibility of being overlapping would be there are some sub
+        // range of the queried range...
         // |--s----+----e----+-----|
         // ...Or the end key is contained by some Range.
         // For faster query, we merged the two cases together.
@@ -286,7 +300,8 @@ impl<K: Ord, V> SegmentMap<K, V> {
         covered_by_the_range.map(|(k, v)| (k, &v.range_end, &v.item))
     }
 
-    /// Check whether the range is overlapping with any range in the segment tree.
+    /// Check whether the range is overlapping with any range in the segment
+    /// tree.
     pub fn is_overlapping<R>(&self, range: (&R, &R)) -> bool
     where
         K: Borrow<R>,
@@ -301,8 +316,8 @@ impl<K: Ord, V> SegmentMap<K, V> {
 }
 
 /// transform a [`RaftCmdRequest`] to `(key, value, cf)` triple.
-/// once it contains a write request, extract it, and return `Left((key, value, cf))`,
-/// otherwise return the request itself via `Right`.
+/// once it contains a write request, extract it, and return `Left((key, value,
+/// cf))`, otherwise return the request itself via `Right`.
 pub fn request_to_triple(mut req: Request) -> Either<(Vec<u8>, Vec<u8>, CfName), Request> {
     let (key, value, cf) = match req.get_cmd_type() {
         CmdType::Put => {
@@ -319,11 +334,11 @@ pub fn request_to_triple(mut req: Request) -> Either<(Vec<u8>, Vec<u8>, CfName),
 }
 
 /// `try_send!(s: Scheduler<T>, task: T)` tries to send a task to the scheduler,
-/// once meet an error, would report it, with the current file and line (so it is made as a macro).    
-/// returns whether it success.
+/// once meet an error, would report it, with the current file and line (so it
+/// is made as a macro). returns whether it success.
 #[macro_export(crate)]
 macro_rules! try_send {
-    ($s: expr, $task: expr) => {
+    ($s:expr, $task:expr) => {
         match $s.schedule($task) {
             Err(err) => {
                 $crate::errors::Error::from(err).report(concat!(
@@ -341,9 +356,10 @@ macro_rules! try_send {
     };
 }
 
-/// a hacky macro which allow us enable all debug log via the feature `backup_stream_debug`.
-/// because once we enable debug log for all crates, it would soon get too verbose to read.
-/// using this macro now we can enable debug log level for the crate only (even compile time...).
+/// a hacky macro which allow us enable all debug log via the feature
+/// `backup_stream_debug`. because once we enable debug log for all crates, it
+/// would soon get too verbose to read. using this macro now we can enable debug
+/// log level for the crate only (even compile time...).
 #[macro_export(crate)]
 macro_rules! debug {
     ($($t: tt)+) => {
@@ -391,7 +407,8 @@ pub fn record_cf_stat(cf_name: &str, stat: &CfStatistics) {
     );
 }
 
-/// a shortcut for handing the result return from `Router::on_events`, when any faliure, send a fatal error to the `doom_messenger`.
+/// a shortcut for handing the result return from `Router::on_events`, when any
+/// failure, send a fatal error to the `doom_messenger`.
 pub fn handle_on_event_result(doom_messenger: &Scheduler<Task>, result: Vec<(String, Result<()>)>) {
     for (task, res) in result.into_iter() {
         if let Err(err) = res {
@@ -422,8 +439,8 @@ pub struct CallbackWaitGroup {
     on_finish_all: std::sync::Mutex<Vec<Box<dyn FnOnce() + Send + 'static>>>,
 }
 
-/// A shortcut for making an opaque future type for return type or argument type,
-/// which is sendable and not borrowing any variables.  
+/// A shortcut for making an opaque future type for return type or argument
+/// type, which is sendable and not borrowing any variables.  
 ///
 /// `fut![T]` == `impl Future<Output = T> + Send + 'static`
 #[macro_export(crate)]
@@ -469,7 +486,8 @@ impl CallbackWaitGroup {
         Box::pin(rx.map(|_| ()))
     }
 
-    /// make a work, as long as the return value held, mark a work in the group is running.
+    /// make a work, as long as the return value held, mark a work in the group
+    /// is running.
     pub fn work(self: Arc<Self>) -> Work {
         self.running.fetch_add(1, Ordering::SeqCst);
         Work(self)
@@ -520,11 +538,12 @@ impl ReadThroughputRecorder {
         let begin = self.begin.as_ref()?;
         let end = ins.io_stat().ok()??;
         let bytes_read = end.read - begin.read;
-        // FIXME: In our test environment, there may be too many caches hence
-        //        the `bytes_read` is always zero :(
-        //        For now, we eject here and let rocksDB prove that we did read something
-        //        When the proc think we don't touch the block device (even in fact we didn't).
-        //  NOTE: In the real-world, we would accept the zero `bytes_read` value since the cache did exists.
+        // FIXME: In our test environment, there may be too many caches hence the
+        // `bytes_read` is always zero.
+        // For now, we eject here and let rocksDB prove that we did read something when
+        // the proc think we don't touch the block device (even in fact we didn't).
+        // NOTE: In the real-world, we would accept the zero `bytes_read` value since
+        // the cache did exists.
         #[cfg(test)]
         if bytes_read == 0 {
             // use println here so we can get this message even log doesn't enabled.
@@ -581,6 +600,149 @@ pub fn is_overlapping(range: (&[u8], &[u8]), range2: (&[u8], &[u8])) -> bool {
     }
 }
 
+/// read files asynchronously in sequence
+pub struct FilesReader {
+    files: Vec<File>,
+    index: usize,
+}
+
+impl FilesReader {
+    pub fn new(files: Vec<File>) -> Self {
+        FilesReader { files, index: 0 }
+    }
+}
+
+impl AsyncRead for FilesReader {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let me = self.get_mut();
+
+        while me.index < me.files.len() {
+            let rem = buf.remaining();
+            ready!(Pin::new(&mut me.files[me.index]).poll_read(cx, buf))?;
+            if buf.remaining() == rem {
+                me.index += 1;
+            } else {
+                return Poll::Ready(Ok(()));
+            }
+        }
+
+        Poll::Ready(Ok(()))
+    }
+}
+
+/// a wrapper for different compression type
+#[async_trait::async_trait]
+pub trait CompressionWriter: AsyncWrite + Sync + Send {
+    /// call the `File.sync_all()` to flush immediately to disk.
+    async fn done(mut self: Pin<&mut Self>) -> Result<()>;
+}
+
+/// a writer dispatcher for different compression type.
+/// regard `Compression::Unknown` as uncompressed type
+/// to be compatible with v6.2.0.
+pub async fn compression_writer_dispatcher(
+    local_path: impl AsRef<Path>,
+    compression_type: CompressionType,
+) -> Result<Pin<Box<dyn CompressionWriter>>> {
+    let inner = BufWriter::with_capacity(128 * 1024, File::create(local_path.as_ref()).await?);
+    match compression_type {
+        CompressionType::Unknown => Ok(Box::pin(NoneCompressionWriter::new(inner))),
+        CompressionType::Zstd => Ok(Box::pin(ZstdCompressionWriter::new(inner))),
+        _ => Err(Error::Other(box_err!(format!(
+            "the compression type is unimplemented, compression type id {:?}",
+            compression_type
+        )))),
+    }
+}
+
+/// uncompressed type writer
+pub struct NoneCompressionWriter {
+    inner: BufWriter<File>,
+}
+
+impl NoneCompressionWriter {
+    pub fn new(inner: BufWriter<File>) -> Self {
+        NoneCompressionWriter { inner }
+    }
+}
+
+impl AsyncWrite for NoneCompressionWriter {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        src: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let me = self.get_mut();
+        Pin::new(&mut me.inner).poll_write(cx, src)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+#[async_trait::async_trait]
+impl CompressionWriter for NoneCompressionWriter {
+    async fn done(mut self: Pin<&mut Self>) -> Result<()> {
+        let bufwriter = &mut self.inner;
+        bufwriter.flush().await?;
+        bufwriter.get_ref().sync_all().await?;
+        Ok(())
+    }
+}
+
+/// use zstd compression algorithm
+pub struct ZstdCompressionWriter {
+    inner: ZstdEncoder<BufWriter<File>>,
+}
+
+impl ZstdCompressionWriter {
+    pub fn new(inner: BufWriter<File>) -> Self {
+        ZstdCompressionWriter {
+            inner: ZstdEncoder::with_quality(inner, Level::Fastest),
+        }
+    }
+}
+
+impl AsyncWrite for ZstdCompressionWriter {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        src: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let me = self.get_mut();
+        Pin::new(&mut me.inner).poll_write(cx, src)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+#[async_trait::async_trait]
+impl CompressionWriter for ZstdCompressionWriter {
+    async fn done(mut self: Pin<&mut Self>) -> Result<()> {
+        let encoder = &mut self.inner;
+        encoder.shutdown().await?;
+        let bufwriter = encoder.get_mut();
+        bufwriter.flush().await?;
+        bufwriter.get_ref().sync_all().await?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::{
@@ -591,9 +753,9 @@ mod test {
         time::Duration,
     };
 
-    use engine_rocks::raw::DBOptions;
     use engine_traits::WriteOptions;
     use futures::executor::block_on;
+    use tokio::io::{AsyncWriteExt, BufReader};
 
     use crate::utils::{is_in_range, CallbackWaitGroup, SegmentMap};
 
@@ -691,7 +853,7 @@ mod test {
                         drop(work);
                     });
                 }
-                let _ = block_on(tokio::time::timeout(Duration::from_secs(20), wg.wait())).unwrap();
+                block_on(tokio::time::timeout(Duration::from_secs(20), wg.wait())).unwrap();
                 assert_eq!(cnt.load(Ordering::SeqCst), 0, "{:?}@{}", c, i);
             }
         }
@@ -736,15 +898,12 @@ mod test {
 
     #[test]
     fn test_recorder() {
-        use engine_rocks::{raw::DB, RocksEngine};
         use engine_traits::{Iterable, KvEngine, Mutable, WriteBatch, WriteBatchExt, CF_DEFAULT};
         use tempdir::TempDir;
 
         let p = TempDir::new("test_db").unwrap();
-        let mut opt = DBOptions::default();
-        opt.create_if_missing(true);
-        let db = DB::open(opt.clone(), p.path().as_os_str().to_str().unwrap()).unwrap();
-        let engine = RocksEngine::from_db(Arc::new(db));
+        let engine =
+            engine_rocks::util::new_engine(p.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
         let mut wb = engine.write_batch();
         for i in 0..100 {
             wb.put_cf(CF_DEFAULT, format!("hello{}", i).as_bytes(), b"world")
@@ -759,7 +918,7 @@ mod test {
         let (items, size) = super::with_record_read_throughput(|| {
             let mut items = vec![];
             let snap = engine.snapshot();
-            snap.scan(b"", b"", false, |k, v| {
+            snap.scan(CF_DEFAULT, b"", b"", false, |k, v| {
                 items.push((k.to_owned(), v.to_owned()));
                 Ok(true)
             })
@@ -783,5 +942,83 @@ mod test {
             size,
             items_size
         );
+    }
+
+    #[tokio::test]
+    async fn test_files_reader() {
+        use tempdir::TempDir;
+        use tokio::{fs::File, io::AsyncReadExt};
+
+        use super::FilesReader;
+
+        let dir = TempDir::new("test_files").unwrap();
+        let files_num = 5;
+        let mut files_path = Vec::new();
+        let mut expect_content = String::new();
+        for i in 0..files_num {
+            let path = dir.path().join(format!("f{}", i));
+            let mut file = File::create(&path).await.unwrap();
+            let content = format!("{i}_{i}_{i}_{i}_{i}\n{i}{i}{i}{i}\n").repeat(10);
+            file.write_all(content.as_bytes()).await.unwrap();
+            file.sync_all().await.unwrap();
+
+            files_path.push(path);
+            expect_content.push_str(&content);
+        }
+
+        let mut files = Vec::new();
+        for i in 0..files_num {
+            let file = File::open(&files_path[i]).await.unwrap();
+            files.push(file);
+        }
+
+        let mut files_reader = FilesReader::new(files);
+        let mut read_content = String::new();
+        files_reader
+            .read_to_string(&mut read_content)
+            .await
+            .unwrap();
+        assert_eq!(expect_content, read_content);
+    }
+
+    #[tokio::test]
+    async fn test_compression_writer() {
+        use kvproto::brpb::CompressionType;
+        use tempdir::TempDir;
+        use tokio::{fs::File, io::AsyncReadExt};
+
+        use super::compression_writer_dispatcher;
+
+        let dir = TempDir::new("test_files").unwrap();
+        let content = "test for compression writer. try to write to local path, and read it back.";
+
+        // uncompressed writer
+        let path1 = dir.path().join("f1");
+        let mut writer = compression_writer_dispatcher(path1.clone(), CompressionType::Unknown)
+            .await
+            .unwrap();
+        writer.write_all(content.as_bytes()).await.unwrap();
+        writer.as_mut().done().await.unwrap();
+
+        let mut reader = BufReader::new(File::open(path1).await.unwrap());
+        let mut read_content = String::new();
+        reader.read_to_string(&mut read_content).await.unwrap();
+        assert_eq!(content, read_content);
+
+        // zstd compressed writer
+        let path2 = dir.path().join("f2");
+        let mut writer = compression_writer_dispatcher(path2.clone(), CompressionType::Zstd)
+            .await
+            .unwrap();
+        writer.write_all(content.as_bytes()).await.unwrap();
+        writer.as_mut().done().await.unwrap();
+
+        use async_compression::tokio::bufread::ZstdDecoder;
+        let mut reader = ZstdDecoder::new(BufReader::new(File::open(path2).await.unwrap()));
+        let mut read_content = String::new();
+        reader.read_to_string(&mut read_content).await.unwrap();
+
+        println!("1{}2,{}", read_content, read_content.len());
+        assert_eq!(content, read_content);
     }
 }

@@ -82,8 +82,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
 
         let mut scan_key = self.scan_key.take();
         let rows = key_locks.len();
-        // Map txn's start_ts to ReleasedLocks
-        let mut released_locks = HashMap::default();
+        let mut released_locks = ReleasedLocks::new();
         for (current_key, current_lock) in key_locks {
             txn.start_ts = current_lock.ts;
             reader.start_ts = current_lock.ts;
@@ -100,9 +99,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
                     false,
                 )?
             } else if commit_ts > current_lock.ts {
-                // Continue to resolve locks if the not found committed locks are pessimistic type.
-                // They could be left if the transaction is finally committed and pessimistic conflict
-                // retry happens during execution.
+                // Continue to resolve locks if the not found committed locks are pessimistic
+                // type. They could be left if the transaction is finally committed and
+                // pessimistic conflict retry happens during execution.
                 match commit(&mut txn, &mut reader, current_key.clone(), commit_ts) {
                     Ok(res) => res,
                     Err(MvccError(box MvccErrorInner::TxnLockNotFound { .. }))
@@ -118,20 +117,13 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
                     commit_ts,
                 }));
             };
-            released_locks
-                .entry(current_lock.ts)
-                .or_insert_with(|| ReleasedLocks::new(current_lock.ts, commit_ts))
-                .push(released);
+            released_locks.push(released);
 
             if txn.write_size() >= MAX_TXN_WRITE_SIZE {
                 scan_key = Some(current_key);
                 break;
             }
         }
-        let lock_mgr = context.lock_mgr;
-        released_locks
-            .into_iter()
-            .for_each(|(_, released_locks)| released_locks.wake_up(lock_mgr));
 
         let pr = if scan_key.is_none() {
             ProcessResult::Res
@@ -154,12 +146,14 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
             rows,
             pr,
             lock_info: None,
+            released_locks,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
         })
     }
 }
 
-// To resolve a key, the write size is about 100~150 bytes, depending on key and value length.
-// The write batch will be around 32KB if we scan 256 keys each time.
+// To resolve a key, the write size is about 100~150 bytes, depending on key and
+// value length. The write batch will be around 32KB if we scan 256 keys each
+// time.
 pub const RESOLVE_LOCK_BATCH_SIZE: usize = 256;

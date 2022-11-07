@@ -24,6 +24,16 @@ impl<'a> JsonRef<'a> {
                 let s = self.get_str()?;
                 unquote_string(s)
             }
+            JsonType::Date
+            | JsonType::Datetime
+            | JsonType::Timestamp
+            | JsonType::Time
+            | JsonType::Opaque => {
+                let s = self.to_string();
+                // Remove the quotes of output
+                assert!(s.len() > 2);
+                Ok(s[1..s.len() - 1].to_string())
+            }
             _ => Ok(self.to_string()),
         }
     }
@@ -83,6 +93,13 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::{super::Json, *};
+    use crate::{
+        codec::{
+            data_type::Duration,
+            mysql::{Time, TimeType},
+        },
+        expr::EvalContext,
+    };
 
     #[test]
     fn test_decode_escaped_unicode() {
@@ -160,5 +177,30 @@ mod tests {
                 i, expected, got
             );
         }
+    }
+
+    #[test]
+    fn test_json_unquote_time_duration() {
+        let mut ctx = EvalContext::default();
+
+        let time = Json::from_time(
+            Time::parse(
+                &mut ctx,
+                "1998-06-13 12:13:14",
+                TimeType::DateTime,
+                0,
+                false,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            time.as_ref().unquote().unwrap(),
+            "1998-06-13 12:13:14.000000"
+        );
+
+        let duration =
+            Json::from_duration(Duration::parse(&mut ctx, "12:13:14", 0).unwrap()).unwrap();
+        assert_eq!(duration.as_ref().unquote().unwrap(), "12:13:14.000000");
     }
 }

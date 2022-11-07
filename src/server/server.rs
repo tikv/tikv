@@ -320,7 +320,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
             server.shutdown();
         }
         if let Some(pool) = self.stats_pool.take() {
-            let _ = pool.shutdown_background();
+            pool.shutdown_background();
         }
         let _ = self.yatp_read_pool.take();
         self.health_service.shutdown();
@@ -340,7 +340,6 @@ pub mod test_router {
     use std::sync::mpsc::*;
 
     use engine_rocks::{RocksEngine, RocksSnapshot};
-    use engine_traits::{KvEngine, Snapshot};
     use kvproto::raft_serverpb::RaftMessage;
     use raftstore::{store::*, Result as RaftStoreResult};
 
@@ -348,13 +347,13 @@ pub mod test_router {
 
     #[derive(Clone)]
     pub struct TestRaftStoreRouter {
-        tx: Sender<usize>,
+        tx: Sender<Either<PeerMsg<RocksEngine>, StoreMsg<RocksEngine>>>,
         significant_msg_sender: Sender<SignificantMsg<RocksSnapshot>>,
     }
 
     impl TestRaftStoreRouter {
         pub fn new(
-            tx: Sender<usize>,
+            tx: Sender<Either<PeerMsg<RocksEngine>, StoreMsg<RocksEngine>>>,
             significant_msg_sender: Sender<SignificantMsg<RocksSnapshot>>,
         ) -> TestRaftStoreRouter {
             TestRaftStoreRouter {
@@ -365,25 +364,26 @@ pub mod test_router {
     }
 
     impl StoreRouter<RocksEngine> for TestRaftStoreRouter {
-        fn send(&self, _: StoreMsg<RocksEngine>) -> RaftStoreResult<()> {
-            let _ = self.tx.send(1);
+        fn send(&self, msg: StoreMsg<RocksEngine>) -> RaftStoreResult<()> {
+            let _ = self.tx.send(Either::Right(msg));
             Ok(())
         }
     }
 
-    impl<S: Snapshot> ProposalRouter<S> for TestRaftStoreRouter {
+    impl ProposalRouter<RocksSnapshot> for TestRaftStoreRouter {
         fn send(
             &self,
-            _: RaftCommand<S>,
-        ) -> std::result::Result<(), crossbeam::channel::TrySendError<RaftCommand<S>>> {
-            let _ = self.tx.send(1);
+            cmd: RaftCommand<RocksSnapshot>,
+        ) -> std::result::Result<(), crossbeam::channel::TrySendError<RaftCommand<RocksSnapshot>>>
+        {
+            let _ = self.tx.send(Either::Left(PeerMsg::RaftCommand(cmd)));
             Ok(())
         }
     }
 
-    impl<EK: KvEngine> CasualRouter<EK> for TestRaftStoreRouter {
-        fn send(&self, _: u64, _: CasualMessage<EK>) -> RaftStoreResult<()> {
-            let _ = self.tx.send(1);
+    impl CasualRouter<RocksEngine> for TestRaftStoreRouter {
+        fn send(&self, _: u64, msg: CasualMessage<RocksEngine>) -> RaftStoreResult<()> {
+            let _ = self.tx.send(Either::Left(PeerMsg::CasualMessage(msg)));
             Ok(())
         }
     }
@@ -400,13 +400,18 @@ pub mod test_router {
     }
 
     impl RaftStoreRouter<RocksEngine> for TestRaftStoreRouter {
-        fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
-            let _ = self.tx.send(1);
+        fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
+            let _ = self
+                .tx
+                .send(Either::Left(PeerMsg::RaftMessage(InspectedRaftMessage {
+                    heap_size: 0,
+                    msg,
+                })));
             Ok(())
         }
 
-        fn broadcast_normal(&self, _: impl FnMut() -> PeerMsg<RocksEngine>) {
-            let _ = self.tx.send(1);
+        fn broadcast_normal(&self, mut f: impl FnMut() -> PeerMsg<RocksEngine>) {
+            let _ = self.tx.send(Either::Left(f()));
         }
     }
 }
@@ -421,10 +426,13 @@ mod tests {
     use engine_rocks::RocksSnapshot;
     use grpcio::EnvBuilder;
     use kvproto::raft_serverpb::RaftMessage;
-    use raftstore::store::{transport::Transport, *};
+    use raftstore::{
+        coprocessor::region_info_accessor::MockRegionInfoProvider,
+        store::{transport::Transport, *},
+    };
     use resource_metering::ResourceTagFactory;
     use security::SecurityConfig;
-    use tikv_util::quota_limiter::QuotaLimiter;
+    use tikv_util::{config::ReadableDuration, quota_limiter::QuotaLimiter};
     use tokio::runtime::Builder as TokioBuilder;
 
     use super::{
@@ -438,7 +446,7 @@ mod tests {
         config::CoprReadPoolConfig,
         coprocessor::{self, readpool_impl},
         server::TestRaftStoreRouter,
-        storage::{lock_manager::DummyLockManager, TestStorageBuilderApiV1},
+        storage::{lock_manager::MockLockManager, TestStorageBuilderApiV1},
     };
 
     #[derive(Clone)]
@@ -477,15 +485,19 @@ mod tests {
         }
     }
 
-    // if this failed, unset the environmental variables 'http_proxy' and 'https_proxy', and retry.
+    // if this failed, unset the environmental variables 'http_proxy' and
+    // 'https_proxy', and retry.
     #[test]
     fn test_peer_resolve() {
+        let mock_store_id = 5;
         let cfg = Config {
             addr: "127.0.0.1:0".to_owned(),
+            raft_client_max_backoff: ReadableDuration::millis(100),
+            raft_client_initial_reconnect_backoff: ReadableDuration::millis(100),
             ..Default::default()
         };
 
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
             .build()
             .unwrap();
 
@@ -506,8 +518,9 @@ mod tests {
             tx,
             Default::default(),
             Default::default(),
+            Arc::new(MockRegionInfoProvider::new(Vec::new())),
         );
-        gc_worker.start().unwrap();
+        gc_worker.start(mock_store_id).unwrap();
 
         let quick_fail = Arc::new(AtomicBool::new(false));
         let cfg = Arc::new(VersionTrack::new(cfg));
@@ -534,7 +547,6 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        let mock_store_id = 5;
         let addr = Arc::new(Mutex::new(None));
         let (check_leader_scheduler, _) = tikv_util::worker::dummy_scheduler();
         let mut server = Server::new(
@@ -580,7 +592,7 @@ mod tests {
 
         trans.send(msg.clone()).unwrap();
         trans.flush();
-        assert!(rx.recv_timeout(Duration::from_secs(5)).is_ok());
+        rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
         msg.mut_to_peer().set_store_id(2);
         msg.set_region_id(2);

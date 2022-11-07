@@ -12,10 +12,13 @@ use std::{
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
-    kvrpcpb::{self as pb, AssertionLevel, Context, Op, PessimisticLockRequest, PrewriteRequest},
+    kvrpcpb::{
+        self as pb, AssertionLevel, Context, Op, PessimisticLockRequest, PrewriteRequest,
+        PrewriteRequestPessimisticAction::*,
+    },
     tikvpb::TikvClient,
 };
-use raftstore::store::{util::new_peer, LocksStatus};
+use raftstore::store::LocksStatus;
 use storage::{
     mvcc::{
         self,
@@ -27,46 +30,46 @@ use test_raftstore::new_server_cluster;
 use tikv::storage::{
     self,
     kv::SnapshotExt,
-    lock_manager::DummyLockManager,
+    lock_manager::MockLockManager,
     txn::tests::{
         must_acquire_pessimistic_lock, must_commit, must_pessimistic_prewrite_put,
         must_pessimistic_prewrite_put_err, must_prewrite_put, must_prewrite_put_err,
     },
     Snapshot, TestEngineBuilder, TestStorageBuilderApiV1,
 };
-use tikv_util::HandyRwLock;
+use tikv_util::{store::new_peer, HandyRwLock};
 use txn_types::{Key, Mutation, PessimisticLock, TimeStamp};
 
 #[test]
 fn test_txn_failpoints() {
-    let engine = TestEngineBuilder::new().build().unwrap();
+    let mut engine = TestEngineBuilder::new().build().unwrap();
     let (k, v) = (b"k", b"v");
     fail::cfg("prewrite", "return(WriteConflict)").unwrap();
-    must_prewrite_put_err(&engine, k, v, k, 10);
+    must_prewrite_put_err(&mut engine, k, v, k, 10);
     fail::remove("prewrite");
-    must_prewrite_put(&engine, k, v, k, 10);
+    must_prewrite_put(&mut engine, k, v, k, 10);
     fail::cfg("commit", "delay(100)").unwrap();
-    must_commit(&engine, k, 10, 20);
+    must_commit(&mut engine, k, 10, 20);
     fail::remove("commit");
 
     let v1 = b"v1";
     let (k2, v2) = (b"k2", b"v2");
-    must_acquire_pessimistic_lock(&engine, k, k, 30, 30);
+    must_acquire_pessimistic_lock(&mut engine, k, k, 30, 30);
     fail::cfg("pessimistic_prewrite", "return()").unwrap();
-    must_pessimistic_prewrite_put_err(&engine, k, v1, k, 30, 30, true);
-    must_prewrite_put(&engine, k2, v2, k2, 31);
+    must_pessimistic_prewrite_put_err(&mut engine, k, v1, k, 30, 30, DoPessimisticCheck);
+    must_prewrite_put(&mut engine, k2, v2, k2, 31);
     fail::remove("pessimistic_prewrite");
-    must_pessimistic_prewrite_put(&engine, k, v1, k, 30, 30, true);
-    must_commit(&engine, k, 30, 40);
-    must_commit(&engine, k2, 31, 41);
-    must_get(&engine, k, 50, v1);
-    must_get(&engine, k2, 50, v2);
+    must_pessimistic_prewrite_put(&mut engine, k, v1, k, 30, 30, DoPessimisticCheck);
+    must_commit(&mut engine, k, 30, 40);
+    must_commit(&mut engine, k2, 31, 41);
+    must_get(&mut engine, k, 50, v1);
+    must_get(&mut engine, k2, 50, v2);
 }
 
 #[test]
 fn test_atomic_getting_max_ts_and_storing_memory_lock() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
         .build()
         .unwrap();
 
@@ -117,11 +120,12 @@ fn test_atomic_getting_max_ts_and_storing_memory_lock() {
 #[test]
 fn test_snapshot_must_be_later_than_updating_max_ts() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
         .build()
         .unwrap();
 
-    // Suppose snapshot was before updating max_ts, after sleeping for 500ms the following prewrite should complete.
+    // Suppose snapshot was before updating max_ts, after sleeping for 500ms the
+    // following prewrite should complete.
     fail::cfg("after-snapshot", "sleep(500)").unwrap();
     let read_ts = 20.into();
     let get_fut = storage.get(Context::default(), Key::from_raw(b"j"), read_ts);
@@ -151,14 +155,15 @@ fn test_snapshot_must_be_later_than_updating_max_ts() {
         .unwrap();
     let has_lock = block_on(get_fut).is_err();
     let res = prewrite_rx.recv().unwrap().unwrap();
-    // We must make sure either the lock is visible to the reader or min_commit_ts > read_ts.
+    // We must make sure either the lock is visible to the reader or min_commit_ts >
+    // read_ts.
     assert!(res.min_commit_ts > read_ts || has_lock);
 }
 
 #[test]
 fn test_update_max_ts_before_scan_memory_locks() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
         .build()
         .unwrap();
 
@@ -197,15 +202,22 @@ fn test_update_max_ts_before_scan_memory_locks() {
     assert_eq!(res.min_commit_ts, 101.into());
 }
 
-/// Generates a test that checks the correct behavior of holding and dropping locks,
-/// during the process of a single prewrite command.
+/// Generates a test that checks the correct behavior of holding and dropping
+/// locks, during the process of a single prewrite command.
 macro_rules! lock_release_test {
-    ($test_name:ident, $lock_exists:ident, $before_actions:expr, $middle_actions:expr, $after_actions:expr, $should_succeed:expr) => {
+    (
+        $test_name:ident,
+        $lock_exists:ident,
+        $before_actions:expr,
+        $middle_actions:expr,
+        $after_actions:expr,
+        $should_succeed:expr
+    ) => {
         #[test]
         fn $test_name() {
             let engine = TestEngineBuilder::new().build().unwrap();
             let storage =
-                TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+                TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
                     .build()
                     .unwrap();
 
@@ -262,7 +274,8 @@ lock_release_test!(
     false
 );
 
-// Must hold lock until prewrite ends. Must release lock after prewrite succeeds.
+// Must hold lock until prewrite ends. Must release lock after prewrite
+// succeeds.
 lock_release_test!(
     test_lock_lifetime_on_prewrite_success,
     lock_exists,
@@ -281,7 +294,7 @@ lock_release_test!(
 #[test]
 fn test_max_commit_ts_error() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
         .build()
         .unwrap();
     let cm = storage.get_concurrency_manager();
@@ -313,10 +326,8 @@ fn test_max_commit_ts_error() {
         )
         .unwrap();
     thread::sleep(Duration::from_millis(200));
-    assert!(
-        cm.read_key_check(&Key::from_raw(b"k1"), |_| Err(()))
-            .is_err()
-    );
+    cm.read_key_check(&Key::from_raw(b"k1"), |_| Err(()))
+        .unwrap_err();
     cm.update_max_ts(200.into());
 
     let res = prewrite_rx.recv().unwrap().unwrap();
@@ -324,11 +335,11 @@ fn test_max_commit_ts_error() {
     assert!(res.one_pc_commit_ts.is_zero());
 
     // There should not be any memory lock left.
-    assert!(cm.read_range_check(None, None, |_, _| Err(())).is_ok());
+    cm.read_range_check(None, None, |_, _| Err(())).unwrap();
 
     // Two locks should be written, the second one does not async commit.
-    let l1 = must_locked(&storage.get_engine(), b"k1", 10);
-    let l2 = must_locked(&storage.get_engine(), b"k2", 10);
+    let l1 = must_locked(&mut storage.get_engine(), b"k1", 10);
+    let l2 = must_locked(&mut storage.get_engine(), b"k2", 10);
     assert!(l1.use_async_commit);
     assert!(!l2.use_async_commit);
 }
@@ -336,7 +347,7 @@ fn test_max_commit_ts_error() {
 #[test]
 fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
         .build()
         .unwrap();
     let cm = storage.get_concurrency_manager();
@@ -395,7 +406,8 @@ fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
     assert_eq!(locks[1].get_key(), b"k2");
     assert!(!locks[1].get_use_async_commit());
 
-    // Send a duplicated request to test the idempotency of prewrite when falling back to 2PC.
+    // Send a duplicated request to test the idempotency of prewrite when falling
+    // back to 2PC.
     let (prewrite_tx, prewrite_rx) = channel();
     storage
         .sched_txn_command(
@@ -554,14 +566,14 @@ fn test_concurrent_write_after_transfer_leader_invalidates_locks() {
         ttl: 3000,
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
+        last_change_ts: 5.into(),
+        versions_to_last_change: 3,
     };
-    assert!(
-        txn_ext
-            .pessimistic_locks
-            .write()
-            .insert(vec![(Key::from_raw(b"key"), lock.clone())])
-            .is_ok()
-    );
+    txn_ext
+        .pessimistic_locks
+        .write()
+        .insert(vec![(Key::from_raw(b"key"), lock.clone())])
+        .unwrap();
 
     let region = cluster.get_region(b"");
     let leader = region.get_peers()[0].clone();
@@ -583,7 +595,8 @@ fn test_concurrent_write_after_transfer_leader_invalidates_locks() {
     let mut req = PrewriteRequest::default();
     req.set_context(ctx);
     req.set_mutations(vec![mutation].into());
-    // Set a different start_ts. It should fail because the memory lock is still visible.
+    // Set a different start_ts. It should fail because the memory lock is still
+    // visible.
     req.set_start_version(20);
     req.set_primary_lock(b"key".to_vec());
 

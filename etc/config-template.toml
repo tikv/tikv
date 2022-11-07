@@ -1047,12 +1047,6 @@
 ## If you set this configuration item to `0`, compression is disabled.
 # batch-compression-threshold = "8KB"
 
-## Specifies the maximum accumulative size of buffered writes. When this
-## configuration value is exceeded, buffered writes are flushed to the disk.
-##
-## If you set this configuration item to `0`, incremental sync is disabled.
-# bytes-per-sync = "4MB"
-
 ## Specifies the maximum size of log files. When a log file is larger than this
 ## value, it is rotated.
 # target-file-size = "128MB"
@@ -1085,6 +1079,23 @@
 ## Memory usage limit for Raft Engine.
 ## When it's not set, 15% of available system memory will be used.
 # memory-limit = "1GB"
+
+## Version of the log file in Raft Engine.
+##
+## Candidates:
+##   1: Can be read by TiKV release 6.1 and above.
+##   2: Can be read by TiKV release 6.3 and above. Supports log recycling.
+##
+## Default: 2.
+# format-version = 2
+
+## Whether to recycle stale log files in Raft Engine.
+## If `true`, logically purged log files will be reserved for recycling.
+## Only available for `format-version` >= 2. This option is only
+## available when TiKV >= 6.3.x.
+##
+## Default: false.
+# enable-log-recycle = false
 
 [security]
 ## The path for TLS certificates. Empty string means disabling secure connections.
@@ -1194,7 +1205,7 @@
 
 ## enable this feature. TiKV will starts watch related tasks in PD. and backup kv changes to storage accodring to task.
 ## The default value is false.
-# enable = false 
+# enable = true 
 
 [backup.hadoop]
 ## let TiKV know how to find the hdfs shell command.

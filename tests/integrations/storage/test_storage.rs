@@ -13,8 +13,12 @@ use std::{
 
 use api_version::{dispatch_api_version, KvFormat};
 use engine_traits::{CF_DEFAULT, CF_LOCK};
-use kvproto::kvrpcpb::{ApiVersion, Context, KeyRange, LockInfo};
+use kvproto::{
+    kvrpcpb::{ApiVersion, Context, KeyRange, LockInfo},
+    metapb,
+};
 use rand::random;
+use test_raftstore::new_peer;
 use test_storage::*;
 use tikv::{
     coprocessor::checksum_crc64_xor,
@@ -680,9 +684,11 @@ fn test_store_resolve_with_illegal_tso() {
 fn test_txn_store_gc() {
     let key = "k";
     let store = AssertionStorage::default();
-    let (_cluster, raft_store) = AssertionStorageApiV1::new_raft_storage_with_store_count(3, key);
-    store.test_txn_store_gc(key);
-    raft_store.test_txn_store_gc(key);
+    let (cluster, raft_store) = AssertionStorageApiV1::new_raft_storage_with_store_count(3, key);
+
+    let region = cluster.get_region(key.as_bytes());
+    store.test_txn_store_gc(key, region.clone());
+    raft_store.test_txn_store_gc(key, region);
 }
 
 fn test_txn_store_gc_multiple_keys(key_prefix_len: usize, n: usize) {
@@ -698,7 +704,11 @@ pub fn test_txn_store_gc_multiple_keys_single_storage(n: usize, prefix: String) 
         store.put_ok(k.as_bytes(), b"v1", 5, 10);
         store.put_ok(k.as_bytes(), b"v2", 15, 20);
     }
-    store.gc_ok(30);
+
+    let store_id = 1;
+    let mut region = metapb::Region::default();
+    region.mut_peers().push(new_peer(store_id, 0));
+    store.gc_ok(region, 30);
     for k in &keys {
         store.get_none(k.as_bytes(), 15);
     }
@@ -714,12 +724,12 @@ pub fn test_txn_store_gc_multiple_keys_cluster_storage(n: usize, prefix: String)
     }
 
     let mut last_region = cluster.get_region(b"");
-    store.gc_ok_for_cluster(&mut cluster, b"", 30);
+    store.gc_ok_for_cluster(&mut cluster, b"", last_region.clone(), 30);
     for k in &keys {
         // clear data whose commit_ts < 30
         let region = cluster.get_region(k.as_bytes());
         if last_region != region {
-            store.gc_ok_for_cluster(&mut cluster, k.as_bytes(), 30);
+            store.gc_ok_for_cluster(&mut cluster, k.as_bytes(), region.clone(), 30);
             last_region = region;
         }
     }
@@ -913,7 +923,8 @@ const RAW_KEY_CASE: &[u8] = b"r\0_a";
 // Test API version verification for txnkv requests.
 // See the following for detail:
 //   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
-//   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum APIVersion.
+//   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto,
+//     enum APIVersion.
 #[test]
 fn test_txn_store_txnkv_api_version() {
     let test_data = vec![
@@ -967,7 +978,8 @@ fn test_txn_store_txnkv_api_version() {
 
                 store.scan_err(key, None, 100, 10);
 
-                // To compatible with TiDB gc-worker, we remove check_api_version_ranges in scan_lock
+                // To compatible with TiDB gc-worker, we remove check_api_version_ranges in
+                // scan_lock
                 store.scan_locks_ok(20, key, &end_key, 10, vec![]);
 
                 store.delete_range_err(key, key);
@@ -979,7 +991,8 @@ fn test_txn_store_txnkv_api_version() {
 // Test API version verification for rawkv requests.
 // See the following for detail:
 //   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
-//   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum APIVersion.
+//   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto,
+//     enum APIVersion.
 #[test]
 fn test_txn_store_rawkv_api_version() {
     let test_data = vec![

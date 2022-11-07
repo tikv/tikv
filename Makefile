@@ -330,11 +330,11 @@ unset-override:
 
 pre-format: unset-override
 	@rustup component add rustfmt
-	@cargo install -q cargo-sort 
+	@which cargo-sort &> /dev/null || cargo install -q cargo-sort 
 
 format: pre-format
 	@cargo fmt
-	@cargo sort -w ./Cargo.toml ./*/Cargo.toml components/*/Cargo.toml cmd/*/Cargo.toml >/dev/null 
+	@cargo sort -w >/dev/null 
 
 doc:
 	@cargo doc --workspace --document-private-items \
@@ -347,6 +347,7 @@ pre-clippy: unset-override
 clippy: pre-clippy
 	@./scripts/check-redact-log
 	@./scripts/check-docker-build
+	@./scripts/check-license
 	@./scripts/clippy-all
 
 pre-audit:

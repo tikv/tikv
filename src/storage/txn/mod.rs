@@ -23,6 +23,10 @@ pub use self::{
         acquire_pessimistic_lock::acquire_pessimistic_lock,
         cleanup::cleanup,
         commit::commit,
+        flashback_to_version::{
+            flashback_to_version_lock, flashback_to_version_read_lock,
+            flashback_to_version_read_write, flashback_to_version_write, FLASHBACK_BATCH_SIZE,
+        },
         gc::gc,
         prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties},
     },
@@ -36,7 +40,7 @@ pub use self::{
 };
 use crate::storage::{
     mvcc::Error as MvccError,
-    types::{MvccInfo, PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, TxnStatus},
+    types::{MvccInfo, PessimisticLockResults, PrewriteResult, SecondaryLocksStatus, TxnStatus},
     Error as StorageError, Result as StorageResult,
 };
 
@@ -69,7 +73,7 @@ pub enum ProcessResult {
         err: StorageError,
     },
     PessimisticLockRes {
-        res: StorageResult<PessimisticLockRes>,
+        res: StorageResult<PessimisticLockResults>,
     },
     SecondaryLocksStatus {
         status: SecondaryLocksStatus,
@@ -237,7 +241,10 @@ pub mod tests {
         cleanup::tests::{
             must_cleanup_with_gc_fence, must_err as must_cleanup_err, must_succeed as must_cleanup,
         },
-        commit::tests::{must_err as must_commit_err, must_succeed as must_commit},
+        commit::tests::{
+            must_err as must_commit_err, must_succeed as must_commit,
+            must_succeed_on_region as must_commit_on_region,
+        },
         gc::tests::must_succeed as must_gc,
         prewrite::tests::{
             try_pessimistic_prewrite_check_not_exists, try_prewrite_check_not_exists,

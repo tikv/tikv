@@ -42,8 +42,8 @@ impl<S: Snapshot> ScannerBuilder<S> {
         self
     }
 
-    /// Set whether values of the user key should be omitted. When `omit_value` is `true`, the
-    /// length of returned value will be 0.
+    /// Set whether values of the user key should be omitted. When `omit_value`
+    /// is `true`, the length of returned value will be 0.
     ///
     /// Previously this option is called `key_only`.
     ///
@@ -75,8 +75,8 @@ impl<S: Snapshot> ScannerBuilder<S> {
         self
     }
 
-    /// Limit the range to `[lower_bound, upper_bound)` in which the `ForwardKvScanner` should scan.
-    /// `None` means unbounded.
+    /// Limit the range to `[lower_bound, upper_bound)` in which the
+    /// `ForwardKvScanner` should scan. `None` means unbounded.
     ///
     /// Default is `(None, None)`.
     #[inline]
@@ -87,8 +87,8 @@ impl<S: Snapshot> ScannerBuilder<S> {
         self
     }
 
-    /// Set locks that the scanner can bypass. Locks with start_ts in the specified set will be
-    /// ignored during scanning.
+    /// Set locks that the scanner can bypass. Locks with start_ts in the
+    /// specified set will be ignored during scanning.
     ///
     /// Default is empty.
     #[inline]
@@ -98,8 +98,8 @@ impl<S: Snapshot> ScannerBuilder<S> {
         self
     }
 
-    /// Set locks that the scanner can read through. Locks with start_ts in the specified set will be
-    /// accessed during scanning.
+    /// Set locks that the scanner can read through. Locks with start_ts in the
+    /// specified set will be accessed during scanning.
     ///
     /// Default is empty.
     #[inline]
@@ -133,8 +133,8 @@ impl<S: Snapshot> ScannerBuilder<S> {
         self
     }
 
-    /// Check whether there is data with newer ts. The result of `met_newer_ts_data` is Unknown
-    /// if this option is not set.
+    /// Check whether there is data with newer ts. The result of
+    /// `met_newer_ts_data` is Unknown if this option is not set.
     ///
     /// Default is false.
     #[inline]
@@ -237,8 +237,8 @@ impl<S: Snapshot> StoreScanner for Scanner<S> {
         }
     }
 
-    /// Returns whether data with newer ts is found. The result is meaningful only when
-    /// `check_has_newer_ts_data` is set to true.
+    /// Returns whether data with newer ts is found. The result is meaningful
+    /// only when `check_has_newer_ts_data` is set to true.
     fn met_newer_ts_data(&self) -> NewerTsCheckState {
         match self {
             Scanner::Forward(scanner) => scanner.met_newer_ts_data(),
@@ -253,9 +253,10 @@ pub struct ScannerConfig<S: Snapshot> {
     omit_value: bool,
     isolation_level: IsolationLevel,
 
-    /// `lower_bound` and `upper_bound` is used to create `default_cursor`. `upper_bound`
-    /// is used in initial seek(or `lower_bound` in initial backward seek) as well. They will be consumed after `default_cursor` is being
-    /// created.
+    /// `lower_bound` and `upper_bound` is used to create `default_cursor`.
+    /// `upper_bound` is used in initial seek(or `lower_bound` in initial
+    /// backward seek) as well. They will be consumed after `default_cursor` is
+    /// being created.
     lower_bound: Option<Key>,
     upper_bound: Option<Key>,
     // hint for we will only scan data with commit ts >= hint_min_ts
@@ -306,7 +307,8 @@ impl<S: Snapshot> ScannerConfig<S> {
         self.create_cf_cursor_with_scan_mode(cf, self.scan_mode())
     }
 
-    /// Create the cursor with specified scan_mode, instead of inferring scan_mode from the config.
+    /// Create the cursor with specified scan_mode, instead of inferring
+    /// scan_mode from the config.
     #[inline]
     fn create_cf_cursor_with_scan_mode(
         &mut self,
@@ -340,14 +342,15 @@ impl<S: Snapshot> ScannerConfig<S> {
 ///
 /// Internally, there will be a `near_seek` operation.
 ///
-/// Notice that the value may be already carried in the `write` (short value). In this
-/// case, you should not call this function.
+/// Notice that the value may be already carried in the `write` (short value).
+/// In this case, you should not call this function.
 ///
 /// # Panics
 ///
 /// Panics if there is a short value carried in the given `write`.
 ///
-/// Panics if key in default CF does not exist. This means there is a data corruption.
+/// Panics if key in default CF does not exist. This means there is a data
+/// corruption.
 pub fn near_load_data_by_write<I>(
     default_cursor: &mut Cursor<I>, // TODO: make it `ForwardCursor`.
     user_key: &Key,
@@ -363,7 +366,7 @@ where
         || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
     {
         return Err(default_not_found_error(
-            user_key.to_raw()?,
+            user_key.clone().append_ts(write_start_ts).into_encoded(),
             "near_load_data_by_write",
         ));
     }
@@ -388,7 +391,7 @@ where
         || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
     {
         return Err(default_not_found_error(
-            user_key.to_raw()?,
+            user_key.clone().append_ts(write_start_ts).into_encoded(),
             "near_reverse_load_data_by_write",
         ));
     }
@@ -429,14 +432,15 @@ pub fn has_data_in_range<S: Snapshot>(
 }
 
 /// Seek for the next valid (write type == Put or Delete) write record.
-/// The write cursor must indicate a data key of the user key of which ts <= after_ts.
-/// Return None if cannot find any valid write record.
+/// The write cursor must indicate a data key of the user key of which ts <=
+/// after_ts. Return None if cannot find any valid write record.
 ///
-/// GC fence will be checked against the specified `gc_fence_limit`. If `gc_fence_limit` is greater
-/// than the `commit_ts` of the current write record pointed by the cursor, The caller must
-/// guarantee that there are no other versions in range `(current_commit_ts, gc_fence_limit]`. Note
-/// that if a record is determined as invalid by checking GC fence, the `write_cursor`'s position
-/// will be left remain on it.
+/// GC fence will be checked against the specified `gc_fence_limit`. If
+/// `gc_fence_limit` is greater than the `commit_ts` of the current write record
+/// pointed by the cursor, The caller must guarantee that there are no other
+/// versions in range `(current_commit_ts, gc_fence_limit]`. Note that if a
+/// record is determined as invalid by checking GC fence, the `write_cursor`'s
+/// position will be left remain on it.
 pub fn seek_for_valid_write<I>(
     write_cursor: &mut Cursor<I>,
     user_key: &Key,
@@ -477,18 +481,21 @@ where
 }
 
 /// Seek for the last written value.
-/// The write cursor must indicate a data key of the user key of which ts <= after_ts.
-/// Return None if cannot find any valid write record or found a delete record.
+/// The write cursor must indicate a data key of the user key of which ts <=
+/// after_ts. Return None if cannot find any valid write record or found a
+/// delete record.
 ///
-/// GC fence will be checked against the specified `gc_fence_limit`. If `gc_fence_limit` is greater
-/// than the `commit_ts` of the current write record pointed by the cursor, The caller must
-/// guarantee that there are no other versions in range `(current_commit_ts, gc_fence_limit]`. Note
-/// that if a record is determined as invalid by checking GC fence, the `write_cursor`'s position
-/// will be left remain on it.
+/// GC fence will be checked against the specified `gc_fence_limit`. If
+/// `gc_fence_limit` is greater than the `commit_ts` of the current write record
+/// pointed by the cursor, The caller must guarantee that there are no other
+/// versions in range `(current_commit_ts, gc_fence_limit]`. Note that if a
+/// record is determined as invalid by checking GC fence, the `write_cursor`'s
+/// position will be left remain on it.
 ///
-/// `write_cursor` maybe created with an `TsFilter`, which can filter out some key-value pairs with
-/// less `commit_ts` than `ts_filter`. So if the got value has a less timestamp than `ts_filter`, it
-/// should be replaced by None because the real wanted value can have been filtered.
+/// `write_cursor` maybe created with an `TsFilter`, which can filter out some
+/// key-value pairs with less `commit_ts` than `ts_filter`. So if the got value
+/// has a less timestamp than `ts_filter`, it should be replaced by None because
+/// the real wanted value can have been filtered.
 pub fn seek_for_valid_value<I>(
     write_cursor: &mut Cursor<I>,
     default_cursor: &mut Cursor<I>,
@@ -570,8 +577,8 @@ pub(crate) fn load_data_by_lock<S: Snapshot, I: Iterator>(
         }
         LockType::Delete => Ok(None),
         LockType::Lock | LockType::Pessimistic => {
-            // Only when fails to call `Lock::check_ts_conflict()`, the function is called, so it's
-            // unreachable here.
+            // Only when fails to call `Lock::check_ts_conflict()`, the function is called,
+            // so it's unreachable here.
             unreachable!()
         }
     }
@@ -592,8 +599,8 @@ mod tests {
         },
     };
 
-    // Collect data from the scanner and assert it equals to `expected`, which is a collection of
-    // (raw_key, value).
+    // Collect data from the scanner and assert it equals to `expected`, which is a
+    // collection of (raw_key, value).
     // `None` value in `expected` means the key is locked.
     fn check_scan_result<S: Snapshot>(
         mut scanner: Scanner<S>,
@@ -620,18 +627,18 @@ mod tests {
         const POST_TS: TimeStamp = TimeStamp::new(5);
 
         let new_engine = || TestEngineBuilder::new().build().unwrap();
-        let add_write_at_ts = |commit_ts, engine, key, value| {
+        let add_write_at_ts = |commit_ts, engine: &mut _, key, value| {
             must_prewrite_put(engine, key, value, key, commit_ts);
             must_commit(engine, key, commit_ts, commit_ts);
         };
 
-        let add_lock_at_ts = |lock_ts, engine, key| {
+        let add_lock_at_ts = |lock_ts, engine: &mut _, key| {
             must_prewrite_put(engine, key, b"lock", key, lock_ts);
             must_locked(engine, key, lock_ts);
         };
 
         let test_scanner_result =
-            move |engine: &RocksEngine, expected_result: Vec<(Vec<u8>, Option<Vec<u8>>)>| {
+            move |engine: &mut RocksEngine, expected_result: Vec<(Vec<u8>, Option<Vec<u8>>)>| {
                 let snapshot = engine.snapshot(Default::default()).unwrap();
 
                 let scanner = ScannerBuilder::new(snapshot, SCAN_TS)
@@ -650,68 +657,68 @@ mod tests {
         };
 
         // Lock after write
-        let engine = new_engine();
+        let mut engine = new_engine();
 
-        add_write_at_ts(POST_TS, &engine, b"a", b"a_value");
-        add_lock_at_ts(PREV_TS, &engine, b"b");
+        add_write_at_ts(POST_TS, &mut engine, b"a", b"a_value");
+        add_lock_at_ts(PREV_TS, &mut engine, b"b");
 
         let expected_result = desc_map(vec![
             (b"a".to_vec(), Some(b"a_value".to_vec())),
             (b"b".to_vec(), None),
         ]);
 
-        test_scanner_result(&engine, expected_result);
+        test_scanner_result(&mut engine, expected_result);
 
         // Lock before write for same key
-        let engine = new_engine();
-        add_write_at_ts(PREV_TS, &engine, b"a", b"a_value");
-        add_lock_at_ts(POST_TS, &engine, b"a");
+        let mut engine = new_engine();
+        add_write_at_ts(PREV_TS, &mut engine, b"a", b"a_value");
+        add_lock_at_ts(POST_TS, &mut engine, b"a");
 
         let expected_result = vec![(b"a".to_vec(), None)];
 
-        test_scanner_result(&engine, expected_result);
+        test_scanner_result(&mut engine, expected_result);
 
         // Lock before write in different keys
-        let engine = new_engine();
-        add_lock_at_ts(POST_TS, &engine, b"a");
-        add_write_at_ts(PREV_TS, &engine, b"b", b"b_value");
+        let mut engine = new_engine();
+        add_lock_at_ts(POST_TS, &mut engine, b"a");
+        add_write_at_ts(PREV_TS, &mut engine, b"b", b"b_value");
 
         let expected_result = desc_map(vec![
             (b"a".to_vec(), None),
             (b"b".to_vec(), Some(b"b_value".to_vec())),
         ]);
-        test_scanner_result(&engine, expected_result);
+        test_scanner_result(&mut engine, expected_result);
 
         // Only a lock here
-        let engine = new_engine();
-        add_lock_at_ts(PREV_TS, &engine, b"a");
+        let mut engine = new_engine();
+        add_lock_at_ts(PREV_TS, &mut engine, b"a");
 
         let expected_result = desc_map(vec![(b"a".to_vec(), None)]);
 
-        test_scanner_result(&engine, expected_result);
+        test_scanner_result(&mut engine, expected_result);
 
         // Write Only
-        let engine = new_engine();
-        add_write_at_ts(PREV_TS, &engine, b"a", b"a_value");
+        let mut engine = new_engine();
+        add_write_at_ts(PREV_TS, &mut engine, b"a", b"a_value");
 
         let expected_result = desc_map(vec![(b"a".to_vec(), Some(b"a_value".to_vec()))]);
-        test_scanner_result(&engine, expected_result);
+        test_scanner_result(&mut engine, expected_result);
     }
 
     fn test_scan_with_lock_impl(desc: bool) {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
         for i in 0..5 {
-            must_prewrite_put(&engine, &[i], &[b'v', i], &[i], 1);
-            must_commit(&engine, &[i], 1, 2);
-            must_prewrite_put(&engine, &[i], &[b'v', i], &[i], 10);
-            must_commit(&engine, &[i], 10, 100);
+            must_prewrite_put(&mut engine, &[i], &[b'v', i], &[i], 1);
+            must_commit(&mut engine, &[i], 1, 2);
+            must_prewrite_put(&mut engine, &[i], &[b'v', i], &[i], 10);
+            must_commit(&mut engine, &[i], 10, 100);
         }
 
-        must_acquire_pessimistic_lock(&engine, &[1], &[1], 20, 110);
-        must_acquire_pessimistic_lock(&engine, &[2], &[2], 50, 110);
-        must_acquire_pessimistic_lock(&engine, &[3], &[3], 105, 110);
-        must_prewrite_put(&engine, &[4], b"a", &[4], 105);
+        must_acquire_pessimistic_lock(&mut engine, &[1], &[1], 20, 110);
+        must_acquire_pessimistic_lock(&mut engine, &[2], &[2], 50, 110);
+        must_acquire_pessimistic_lock(&mut engine, &[3], &[3], 105, 110);
+        must_prewrite_put(&mut engine, &[4], b"a", &[4], 105);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
 
@@ -771,16 +778,16 @@ mod tests {
     }
 
     fn test_scan_bypass_locks_impl(desc: bool) {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
         for i in 0..5 {
-            must_prewrite_put(&engine, &[i], &[b'v', i], &[i], 10);
-            must_commit(&engine, &[i], 10, 20);
+            must_prewrite_put(&mut engine, &[i], &[b'v', i], &[i], 10);
+            must_commit(&mut engine, &[i], 10, 20);
         }
 
         // Locks are: 30, 40, 50, 60, 70
         for i in 0..5 {
-            must_prewrite_put(&engine, &[i], &[b'v', i], &[i], 30 + u64::from(i) * 10);
+            must_prewrite_put(&mut engine, &[i], &[b'v', i], &[i], 30 + u64::from(i) * 10);
         }
 
         let bypass_locks = TsSet::from_u64s(vec![30, 41, 50]);
@@ -814,43 +821,43 @@ mod tests {
     }
 
     fn test_scan_access_locks_impl(desc: bool, delete_bound: bool) {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
         for i in 0..=8 {
-            must_prewrite_put(&engine, &[i], &[b'v', i], &[i], 10);
-            must_commit(&engine, &[i], 10, 20);
+            must_prewrite_put(&mut engine, &[i], &[b'v', i], &[i], 10);
+            must_commit(&mut engine, &[i], 10, 20);
         }
 
         if delete_bound {
-            must_prewrite_delete(&engine, &[0], &[0], 30); // access delete
+            must_prewrite_delete(&mut engine, &[0], &[0], 30); // access delete
         } else {
-            must_prewrite_put(&engine, &[0], &[b'v', 0, 0], &[0], 30); // access put
+            must_prewrite_put(&mut engine, &[0], &[b'v', 0, 0], &[0], 30); // access put
         }
-        must_prewrite_put(&engine, &[1], &[b'v', 1, 1], &[1], 40); // access put
-        must_prewrite_delete(&engine, &[2], &[2], 50); // access delete
-        must_prewrite_lock(&engine, &[3], &[3], 60); // access lock(actually ignored)
-        must_prewrite_put(&engine, &[4], &[b'v', 4, 4], &[4], 70); // locked
-        must_prewrite_put(&engine, &[5], &[b'v', 5, 5], &[5], 80); // bypass
-        must_prewrite_put(&engine, &[6], &[b'v', 6, 6], &[6], 100); // locked with larger ts
+        must_prewrite_put(&mut engine, &[1], &[b'v', 1, 1], &[1], 40); // access put
+        must_prewrite_delete(&mut engine, &[2], &[2], 50); // access delete
+        must_prewrite_lock(&mut engine, &[3], &[3], 60); // access lock(actually ignored)
+        must_prewrite_put(&mut engine, &[4], &[b'v', 4, 4], &[4], 70); // locked
+        must_prewrite_put(&mut engine, &[5], &[b'v', 5, 5], &[5], 80); // bypass
+        must_prewrite_put(&mut engine, &[6], &[b'v', 6, 6], &[6], 100); // locked with larger ts
         if delete_bound {
-            must_prewrite_delete(&engine, &[8], &[8], 90); // access delete
+            must_prewrite_delete(&mut engine, &[8], &[8], 90); // access delete
         } else {
-            must_prewrite_put(&engine, &[8], &[b'v', 8, 8], &[8], 90); // access put
+            must_prewrite_put(&mut engine, &[8], &[b'v', 8, 8], &[8], 90); // access put
         }
 
         let bypass_locks = TsSet::from_u64s(vec![80]);
         let access_locks = TsSet::from_u64s(vec![30, 40, 50, 60, 90]);
 
         let mut expected_result = vec![
-            (vec![0], Some(vec![b'v', 0, 0])), /* access put if not delete_bound */
-            (vec![1], Some(vec![b'v', 1, 1])), /* access put */
-            /* vec![2] access delete */
-            (vec![3], Some(vec![b'v', 3])), /* ignore LockType::Lock */
-            (vec![4], None),                /* locked */
-            (vec![5], Some(vec![b'v', 5])), /* bypass */
-            (vec![6], Some(vec![b'v', 6])), /* ignore lock with larger ts */
-            (vec![7], Some(vec![b'v', 7])), /* no lock */
-            (vec![8], Some(vec![b'v', 8, 8])), /* access put if not delete_bound*/
+            (vec![0], Some(vec![b'v', 0, 0])), // access put if not delete_bound
+            (vec![1], Some(vec![b'v', 1, 1])), // access put
+            // vec![2] access delete
+            (vec![3], Some(vec![b'v', 3])),    // ignore LockType::Lock
+            (vec![4], None),                   // locked
+            (vec![5], Some(vec![b'v', 5])),    // bypass
+            (vec![6], Some(vec![b'v', 6])),    // ignore lock with larger ts
+            (vec![7], Some(vec![b'v', 7])),    // no lock
+            (vec![8], Some(vec![b'v', 8, 8])), // access put if not delete_bound
         ];
         if desc {
             expected_result.reverse();
@@ -880,7 +887,7 @@ mod tests {
     }
 
     fn must_met_newer_ts_data<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         scanner_ts: impl Into<TimeStamp>,
         key: &[u8],
         value: Option<&[u8]>,
@@ -915,39 +922,39 @@ mod tests {
     }
 
     fn test_met_newer_ts_data_impl(deep_write_seek: bool, desc: bool) {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let (key, val1) = (b"foo", b"bar1");
 
         if deep_write_seek {
             for i in 0..SEEK_BOUND {
-                must_prewrite_put(&engine, key, val1, key, i);
-                must_commit(&engine, key, i, i);
+                must_prewrite_put(&mut engine, key, val1, key, i);
+                must_commit(&mut engine, key, i, i);
             }
         }
 
-        must_prewrite_put(&engine, key, val1, key, 100);
-        must_commit(&engine, key, 100, 200);
+        must_prewrite_put(&mut engine, key, val1, key, 100);
+        must_commit(&mut engine, key, 100, 200);
         let (key, val2) = (b"foo", b"bar2");
-        must_prewrite_put(&engine, key, val2, key, 300);
-        must_commit(&engine, key, 300, 400);
+        must_prewrite_put(&mut engine, key, val2, key, 300);
+        must_commit(&mut engine, key, 300, 400);
 
         must_met_newer_ts_data(
-            &engine,
+            &mut engine,
             100,
             key,
             if deep_write_seek { Some(val1) } else { None },
             desc,
             true,
         );
-        must_met_newer_ts_data(&engine, 200, key, Some(val1), desc, true);
-        must_met_newer_ts_data(&engine, 300, key, Some(val1), desc, true);
-        must_met_newer_ts_data(&engine, 400, key, Some(val2), desc, false);
-        must_met_newer_ts_data(&engine, 500, key, Some(val2), desc, false);
+        must_met_newer_ts_data(&mut engine, 200, key, Some(val1), desc, true);
+        must_met_newer_ts_data(&mut engine, 300, key, Some(val1), desc, true);
+        must_met_newer_ts_data(&mut engine, 400, key, Some(val2), desc, false);
+        must_met_newer_ts_data(&mut engine, 500, key, Some(val2), desc, false);
 
-        must_prewrite_lock(&engine, key, key, 600);
+        must_prewrite_lock(&mut engine, key, key, 600);
 
-        must_met_newer_ts_data(&engine, 500, key, Some(val2), desc, true);
-        must_met_newer_ts_data(&engine, 600, key, Some(val2), desc, true);
+        must_met_newer_ts_data(&mut engine, 500, key, Some(val2), desc, true);
+        must_met_newer_ts_data(&mut engine, 600, key, Some(val2), desc, true);
     }
 
     #[test]
@@ -960,9 +967,10 @@ mod tests {
 
     #[test]
     fn test_old_value_with_hint_min_ts() {
-        let engine = TestEngineBuilder::new().build_without_cache().unwrap();
-        let create_scanner = |from_ts: u64| {
-            let snap = engine.snapshot(Default::default()).unwrap();
+        let mut engine = TestEngineBuilder::new().build_without_cache().unwrap();
+        let mut engine_clone = engine.clone();
+        let mut create_scanner = |from_ts: u64| {
+            let snap = engine_clone.snapshot(Default::default()).unwrap();
             ScannerBuilder::new(snap, TimeStamp::max())
                 .fill_cache(false)
                 .hint_min_ts(Some(from_ts.into()))
@@ -974,13 +982,21 @@ mod tests {
         (0..128).for_each(|_| value.extend_from_slice(b"long-val"));
 
         // Create the initial data with CF_WRITE L0: |zkey_110, zkey1_160|
-        must_prewrite_put(&engine, b"zkey", &value, b"zkey", 100);
-        must_commit(&engine, b"zkey", 100, 110);
-        must_prewrite_put(&engine, b"zkey1", &value, b"zkey1", 150);
-        must_commit(&engine, b"zkey1", 150, 160);
-        engine.kv_engine().flush_cf(CF_WRITE, true).unwrap();
-        engine.kv_engine().flush_cf(CF_DEFAULT, true).unwrap();
-        must_prewrite_delete(&engine, b"zkey", b"zkey", 200);
+        must_prewrite_put(&mut engine, b"zkey", &value, b"zkey", 100);
+        must_commit(&mut engine, b"zkey", 100, 110);
+        must_prewrite_put(&mut engine, b"zkey1", &value, b"zkey1", 150);
+        must_commit(&mut engine, b"zkey1", 150, 160);
+        engine
+            .kv_engine()
+            .unwrap()
+            .flush_cf(CF_WRITE, true)
+            .unwrap();
+        engine
+            .kv_engine()
+            .unwrap()
+            .flush_cf(CF_DEFAULT, true)
+            .unwrap();
+        must_prewrite_delete(&mut engine, b"zkey", b"zkey", 200);
 
         let tests = vec![
             // `zkey_110` is filtered, so no old value and block reads is 0.
@@ -1003,9 +1019,17 @@ mod tests {
         }
 
         // CF_WRITE L0: |zkey_110, zkey1_160|, |zkey_210|
-        must_commit(&engine, b"zkey", 200, 210);
-        engine.kv_engine().flush_cf(CF_WRITE, false).unwrap();
-        engine.kv_engine().flush_cf(CF_DEFAULT, false).unwrap();
+        must_commit(&mut engine, b"zkey", 200, 210);
+        engine
+            .kv_engine()
+            .unwrap()
+            .flush_cf(CF_WRITE, false)
+            .unwrap();
+        engine
+            .kv_engine()
+            .unwrap()
+            .flush_cf(CF_DEFAULT, false)
+            .unwrap();
 
         let tests = vec![
             // `zkey_110` is filtered, so no old value and block reads is 0.
@@ -1035,7 +1059,7 @@ mod tests {
     }
 
     fn test_rc_scan_skip_lock_impl(desc: bool) {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let (key1, val1, val12) = (b"foo1", b"bar1", b"bar12");
         let (key2, val2) = (b"foo2", b"bar2");
         let mut expected = vec![(key1, val1), (key2, val2)];
@@ -1043,13 +1067,13 @@ mod tests {
             expected.reverse();
         }
 
-        must_prewrite_put(&engine, key1, val1, key1, 10);
-        must_commit(&engine, key1, 10, 20);
+        must_prewrite_put(&mut engine, key1, val1, key1, 10);
+        must_commit(&mut engine, key1, 10, 20);
 
-        must_prewrite_put(&engine, key2, val2, key2, 30);
-        must_commit(&engine, key2, 30, 40);
+        must_prewrite_put(&mut engine, key2, val2, key2, 30);
+        must_commit(&mut engine, key2, 30, 40);
 
-        must_prewrite_put(&engine, key1, val12, key1, 50);
+        must_prewrite_put(&mut engine, key1, val12, key1, 50);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, 60.into())

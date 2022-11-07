@@ -37,12 +37,14 @@ fn test_compact_lock_cf<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.rocksdb.lockcf.disable_auto_compactions = true;
     cluster.run();
 
-    // Write 40 bytes, not reach lock_cf_compact_bytes_threshold, so there is no compaction.
+    // Write 40 bytes, not reach lock_cf_compact_bytes_threshold, so there is no
+    // compaction.
     for i in 0..5 {
         let (k, v) = (format!("k{}", i), format!("value{}", i));
         cluster.must_put_cf(CF_LOCK, k.as_bytes(), v.as_bytes());
     }
-    // Generate one sst, if there are datas only in one memtable, no compactions will be triggered.
+    // Generate one sst, if there are datas only in one memtable, no compactions
+    // will be triggered.
     flush(cluster);
 
     // Write more 40 bytes, still not reach lock_cf_compact_bytes_threshold,

@@ -15,7 +15,8 @@ pub trait BlobConfig: 'static + Send + Sync {
 /// It is identity to [external_storage::UnpinReader],
 /// only for decoupling external_storage and cloud package.
 ///
-/// See the documentation of [external_storage::UnpinReader] for why those wrappers exists.
+/// See the documentation of [external_storage::UnpinReader] for why those
+/// wrappers exists.
 pub struct PutResource(pub Box<dyn AsyncRead + Send + Unpin>);
 
 impl AsyncRead for PutResource {
@@ -45,6 +46,9 @@ pub trait BlobStorage: 'static + Send + Sync {
 
     /// Read all contents of the given path.
     fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_>;
+
+    /// Read part of contents of the given path.
+    fn get_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_>;
 }
 
 impl BlobConfig for dyn BlobStorage {
@@ -70,6 +74,10 @@ impl BlobStorage for Box<dyn BlobStorage> {
 
     fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
         (**self).get(name)
+    }
+
+    fn get_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_> {
+        (**self).get_part(name, off, len)
     }
 }
 

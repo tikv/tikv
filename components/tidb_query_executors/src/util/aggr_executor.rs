@@ -9,7 +9,8 @@
 //!                                                 ^^^^^  ^^^^    : Group By Expressions
 //! ```
 //!
-//! The SQL above has 2 GROUP BY columns, so we say it's *group by cardinality* is 2.
+//! The SQL above has 2 GROUP BY columns, so we say it's *group by cardinality*
+//! is 2.
 //!
 //! In the result:
 //!
@@ -22,12 +23,13 @@
 //!                                     ^^^^^^     ^^^^^        : Group By Column
 //! ```
 //!
-//! Some aggregate function output multiple results, for example, `AVG(Int)` output two results:
-//! count and sum. In this case we say that the result of `AVG(Int)` has a *cardinality* of 2.
-//!
+//! Some aggregate function output multiple results, for example, `AVG(Int)`
+//! output two results: count and sum. In this case we say that the result of
+//! `AVG(Int)` has a *cardinality* of 2.
 
 use std::{convert::TryFrom, sync::Arc};
 
+use async_trait::async_trait;
 use tidb_query_aggr::*;
 use tidb_query_common::{storage::IntervalRange, Result};
 use tidb_query_datatype::{
@@ -44,17 +46,20 @@ use tipb::{Expr, FieldType};
 use crate::interface::*;
 
 pub trait AggregationExecutorImpl<Src: BatchExecutor>: Send {
-    /// Accepts entities without any group by columns and modifies them optionally.
+    /// Accepts entities without any group by columns and modifies them
+    /// optionally.
     ///
-    /// Implementors should modify the `schema` entity when there are group by columns.
+    /// Implementors should modify the `schema` entity when there are group by
+    /// columns.
     ///
     /// This function will be called only once.
     fn prepare_entities(&mut self, entities: &mut Entities<Src>);
 
-    /// Processes a set of columns which are emitted from the underlying executor.
+    /// Processes a set of columns which are emitted from the underlying
+    /// executor.
     ///
-    /// Implementors should update the aggregate function states according to the data of
-    /// these columns.
+    /// Implementors should update the aggregate function states according to
+    /// the data of these columns.
     fn process_batch_input(
         &mut self,
         entities: &mut Entities<Src>,
@@ -64,19 +69,20 @@ pub trait AggregationExecutorImpl<Src: BatchExecutor>: Send {
 
     /// Returns the current number of groups.
     ///
-    /// Note that this number can be inaccurate because it is a hint for the capacity of the vector.
+    /// Note that this number can be inaccurate because it is a hint for the
+    /// capacity of the vector.
     fn groups_len(&self) -> usize;
 
     /// Iterates aggregate function states for each available group.
     ///
-    /// Implementors should call `iteratee` for each group with the aggregate function states of
-    /// that group as the argument.
+    /// Implementors should call `iteratee` for each group with the aggregate
+    /// function states of that group as the argument.
     ///
-    /// Implementors may return the content of each group as extra columns in the return value
-    /// if there are group by columns.
+    /// Implementors may return the content of each group as extra columns in
+    /// the return value if there are group by columns.
     ///
-    /// Implementors should not iterate the same group multiple times for the same partial
-    /// input data.
+    /// Implementors should not iterate the same group multiple times for the
+    /// same partial input data.
     fn iterate_available_groups(
         &mut self,
         entities: &mut Entities<Src>,
@@ -84,10 +90,12 @@ pub trait AggregationExecutorImpl<Src: BatchExecutor>: Send {
         iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
     ) -> Result<Vec<LazyBatchColumn>>;
 
-    /// Returns whether we can now output partial aggregate results when the source is not drained.
+    /// Returns whether we can now output partial aggregate results when the
+    /// source is not drained.
     ///
-    /// This method is called only when the source is not drained because aggregate result is always
-    /// ready if the source is drained and no error occurs.
+    /// This method is called only when the source is not drained because
+    /// aggregate result is always ready if the source is drained and no
+    /// error occurs.
     fn is_partial_results_ready(&self) -> bool;
 }
 
@@ -97,8 +105,8 @@ pub struct Entities<Src: BatchExecutor> {
     pub src: Src,
     pub context: EvalContext,
 
-    /// The schema of the aggregation executor. It consists of aggregate result columns and
-    /// group by columns.
+    /// The schema of the aggregation executor. It consists of aggregate result
+    /// columns and group by columns.
     pub schema: Vec<FieldType>,
 
     /// The aggregate function.
@@ -110,13 +118,14 @@ pub struct Entities<Src: BatchExecutor> {
     /// The (input) expression of each aggregate function.
     pub each_aggr_exprs: Vec<RpnExpression>,
 
-    /// The eval type of the result columns of all aggregate functions. One aggregate function
-    /// may have multiple result columns.
+    /// The eval type of the result columns of all aggregate functions. One
+    /// aggregate function may have multiple result columns.
     pub all_result_column_types: Vec<EvalType>,
 }
 
-/// A shared executor implementation for simple aggregation, hash aggregation and
-/// stream aggregation. Implementation differences are further given via `AggregationExecutorImpl`.
+/// A shared executor implementation for simple aggregation, hash aggregation
+/// and stream aggregation. Implementation differences are further given via
+/// `AggregationExecutorImpl`.
 pub struct AggregationExecutor<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> {
     imp: I,
     is_ended: bool,
@@ -154,7 +163,8 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
             )?;
 
             assert!(schema.len() > schema_len);
-            // Currently only support 1 parameter aggregate functions, so let's simply assert it.
+            // Currently only support 1 parameter aggregate functions, so let's simply
+            // assert it.
             assert_eq!(each_aggr_exprs.len(), each_aggr_exprs_len + 1);
 
             each_aggr_fn.push(aggr_fn);
@@ -190,21 +200,27 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
         })
     }
 
-    /// Returns partial results of aggregation if available and whether the source is drained
+    /// Returns partial results of aggregation if available and whether the
+    /// source is drained
     #[inline]
-    fn handle_next_batch(&mut self) -> Result<(Option<LazyBatchColumnVec>, bool)> {
+    async fn handle_next_batch(&mut self) -> Result<(Option<LazyBatchColumnVec>, bool)> {
         // Use max batch size from the beginning because aggregation
         // always needs to calculate over all data.
-        let src_result = self.entities.src.next_batch(crate::runner::BATCH_MAX_SIZE);
+        let src_result = self
+            .entities
+            .src
+            .next_batch(crate::runner::BATCH_MAX_SIZE)
+            .await;
 
         self.entities.context.warnings = src_result.warnings;
 
-        // When there are errors in the underlying executor, there must be no aggregate output.
-        // Thus we even don't need to update the aggregate function state and can return directly.
+        // When there are errors in the underlying executor, there must be no aggregate
+        // output. Thus we even don't need to update the aggregate function
+        // state and can return directly.
         let mut src_is_drained = src_result.is_drained?;
 
-        // Consume all data from the underlying executor. We directly return when there are errors
-        // for the same reason as above.
+        // Consume all data from the underlying executor. We directly return when there
+        // are errors for the same reason as above.
         if !src_result.logical_rows.is_empty() {
             self.imp.process_batch_input(
                 &mut self.entities,
@@ -279,6 +295,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
     }
 }
 
+#[async_trait]
 impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
     for AggregationExecutor<Src, I>
 {
@@ -290,10 +307,10 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
     }
 
     #[inline]
-    fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
+    async fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
 
-        let result = self.handle_next_batch();
+        let result = self.handle_next_batch().await;
 
         match result {
             Err(e) => {
@@ -381,6 +398,7 @@ pub mod tests {
 
     /// Builds an executor that will return these logical data:
     ///
+    /// ```text
     /// == Schema ==
     /// Col0(Real)   Col1(Real)  Col2(Bytes) Col3(Int)  Col4(Bytes-utf8_general_ci)
     /// == Call #1 ==
@@ -392,6 +410,7 @@ pub mod tests {
     /// == Call #3 ==
     /// 1.5          4.5         aaaaa       5          ááá
     /// (drained)
+    /// ```
     pub fn make_src_executor_1() -> MockExecutor {
         MockExecutor::new(
             vec![
@@ -568,6 +587,7 @@ pub mod tests {
     fn test_agg_paging() {
         use std::sync::Arc;
 
+        use futures::executor::block_on;
         use tidb_query_datatype::expr::EvalConfig;
         use tidb_query_expr::RpnExpressionBuilder;
         use tipb::ExprType;
@@ -629,7 +649,7 @@ pub mod tests {
                 let src_exec = make_src_executor_2();
                 let mut exec = exec_builder(src_exec, Some(paging_size));
                 for nth_call in 0..call_num {
-                    let r = exec.next_batch(1);
+                    let r = block_on(exec.next_batch(1));
                     if nth_call == call_num - 1 {
                         assert!(r.is_drained.unwrap());
                     } else {
@@ -659,7 +679,7 @@ pub mod tests {
             let row_num = &expect_row_num2[test_case];
             let mut exec = exec_stream(make_src_executor_2(), Some(paging_size));
             for nth_call in 0..call_num {
-                let r = exec.next_batch(1);
+                let r = block_on(exec.next_batch(1));
                 if nth_call == call_num - 1 {
                     assert!(r.is_drained.unwrap());
                 } else {

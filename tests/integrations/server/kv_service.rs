@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    char::from_u32,
     path::Path,
     sync::*,
     thread,
@@ -9,7 +10,6 @@ use std::{
 
 use api_version::{ApiV1, ApiV1Ttl, ApiV2, KvFormat};
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::{raw::Writable, Compat};
 use engine_traits::{
     MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT,
     CF_WRITE,
@@ -20,7 +20,7 @@ use grpcio_health::{proto::HealthCheckRequest, *};
 use kvproto::{
     coprocessor::*,
     debugpb,
-    kvrpcpb::{self, *},
+    kvrpcpb::{self, PrewriteRequestPessimisticAction::*, *},
     metapb, raft_serverpb,
     raft_serverpb::*,
     tikvpb::*,
@@ -43,6 +43,7 @@ use tikv::{
         gc_worker::sync_gc,
         service::{batch_commands_request, batch_commands_response},
     },
+    storage::txn::FLASHBACK_BATCH_SIZE,
 };
 use tikv_util::{
     config::ReadableSize,
@@ -553,7 +554,8 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
     ts += 1;
     let gc_safe_ponit = TimeStamp::from(ts);
     let gc_scheduler = cluster.sim.rl().get_gc_worker(1).scheduler();
-    sync_gc(&gc_scheduler, 0, vec![], vec![], gc_safe_ponit).unwrap();
+    let region = cluster.get_region(&k);
+    sync_gc(&gc_scheduler, region, gc_safe_ponit).unwrap();
 
     // the `k` at the old ts should be none.
     let get_version2 = commit_version + 1;
@@ -595,6 +597,266 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
     let del_resp = client.kv_delete_range(&del_req).unwrap();
     assert!(!del_resp.has_region_error());
     assert!(del_resp.error.is_empty());
+}
+
+#[test]
+#[cfg(feature = "failpoints")]
+fn test_mvcc_flashback_failed_after_first_batch() {
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let mut ts = 0;
+    for i in 0..FLASHBACK_BATCH_SIZE * 2 {
+        // Meet the constraints of the alphabetical order for test
+        let k = format!("key@{}", from_u32(i as u32).unwrap()).into_bytes();
+        complete_data_commit(&client, &ctx, ts, k.clone(), b"value@0".to_vec());
+    }
+    ts += 3;
+    let check_ts = ts;
+    for i in 0..FLASHBACK_BATCH_SIZE * 2 {
+        let k = format!("key@{}", from_u32(i as u32).unwrap()).into_bytes();
+        complete_data_commit(&client, &ctx, ts, k.clone(), b"value@1".to_vec());
+    }
+    ts += 3;
+    // Flashback
+    fail::cfg("flashback_failed_after_first_batch", "return").unwrap();
+    fail::cfg("flashback_skip_1_key_in_write", "1*return").unwrap();
+    must_flashback_to_version(&client, ctx.clone(), check_ts, ts + 1, ts + 2);
+    fail::remove("flashback_skip_1_key_in_write");
+    fail::remove("flashback_failed_after_first_batch");
+    // skip for key@0
+    must_kv_read_equal(
+        &client,
+        ctx.clone(),
+        format!("key@{}", from_u32(0_u32).unwrap())
+            .as_bytes()
+            .to_vec(),
+        b"value@1".to_vec(),
+        ts + 2,
+    );
+    // The first batch of writes are flashbacked.
+    must_kv_read_equal(
+        &client,
+        ctx.clone(),
+        format!("key@{}", from_u32(1_u32).unwrap())
+            .as_bytes()
+            .to_vec(),
+        b"value@0".to_vec(),
+        ts + 2,
+    );
+    // Subsequent batches of writes are not flashbacked.
+    must_kv_read_equal(
+        &client,
+        ctx.clone(),
+        format!("key@{}", from_u32(FLASHBACK_BATCH_SIZE as u32 - 1).unwrap())
+            .as_bytes()
+            .to_vec(),
+        b"value@1".to_vec(),
+        ts + 2,
+    );
+    // Flashback batch 2.
+    fail::cfg("flashback_failed_after_first_batch", "return").unwrap();
+    must_flashback_to_version(&client, ctx.clone(), check_ts, ts + 1, ts + 2);
+    fail::remove("flashback_failed_after_first_batch");
+    // key@0 must be flahsbacked in the second batch firstly.
+    must_kv_read_equal(
+        &client,
+        ctx.clone(),
+        format!("key@{}", from_u32(0_u32).unwrap())
+            .as_bytes()
+            .to_vec(),
+        b"value@0".to_vec(),
+        ts + 2,
+    );
+    must_kv_read_equal(
+        &client,
+        ctx.clone(),
+        format!("key@{}", from_u32(FLASHBACK_BATCH_SIZE as u32 - 1).unwrap())
+            .as_bytes()
+            .to_vec(),
+        b"value@0".to_vec(),
+        ts + 2,
+    );
+    // 2 * (FLASHBACK_BATCH_SIZE - 1) - 1 keys are flashbacked.
+    must_kv_read_equal(
+        &client,
+        ctx.clone(),
+        format!(
+            "key@{}",
+            from_u32(2 * FLASHBACK_BATCH_SIZE as u32 - 3).unwrap()
+        )
+        .as_bytes()
+        .to_vec(),
+        b"value@1".to_vec(),
+        ts + 2,
+    );
+    // Flashback needs to be continued.
+    must_flashback_to_version(&client, ctx.clone(), check_ts, ts + 1, ts + 2);
+    // Flashback again to check if any error occurs :)
+    must_flashback_to_version(&client, ctx.clone(), check_ts, ts + 1, ts + 2);
+    ts += 2;
+    // Subsequent batches of writes are flashbacked.
+    must_kv_read_equal(
+        &client,
+        ctx,
+        format!(
+            "key@{}",
+            from_u32(2 * FLASHBACK_BATCH_SIZE as u32 - 3).unwrap()
+        )
+        .as_bytes()
+        .to_vec(),
+        b"value@0".to_vec(),
+        ts,
+    );
+}
+
+#[test]
+fn test_mvcc_flashback() {
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let mut ts = 0;
+    // Need to write many batches.
+    for i in 0..2000 {
+        let v = format!("value@{}", i).into_bytes();
+        let k = format!("key@{}", i % 1000).into_bytes();
+        // Prewrite
+        ts += 1;
+        let prewrite_start_version = ts;
+        let mut mutation = Mutation::default();
+        mutation.set_op(Op::Put);
+        mutation.set_key(k.clone());
+        mutation.set_value(v.clone());
+        must_kv_prewrite(
+            &client,
+            ctx.clone(),
+            vec![mutation],
+            k.clone(),
+            prewrite_start_version,
+        );
+        // Commit
+        ts += 1;
+        let commit_version = ts;
+        must_kv_commit(
+            &client,
+            ctx.clone(),
+            vec![k.clone()],
+            prewrite_start_version,
+            commit_version,
+            commit_version,
+        );
+        // Get
+        ts += 1;
+        must_kv_read_equal(&client, ctx.clone(), k.clone(), v.clone(), ts)
+    }
+    // Prewrite to leave a lock.
+    let k = b"key@1".to_vec();
+    ts += 1;
+    let prewrite_start_version = ts;
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k.clone());
+    mutation.set_value(b"value@latest".to_vec());
+    must_kv_prewrite(
+        &client,
+        ctx.clone(),
+        vec![mutation],
+        k.clone(),
+        prewrite_start_version,
+    );
+    ts += 1;
+    let get_version = ts;
+    let mut get_req = GetRequest::default();
+    get_req.set_context(ctx.clone());
+    get_req.key = k;
+    get_req.version = get_version;
+    let get_resp = client.kv_get(&get_req).unwrap();
+    assert!(!get_resp.has_region_error());
+    assert!(get_resp.get_error().has_locked());
+    assert!(get_resp.value.is_empty());
+    // Flashback
+    must_flashback_to_version(&client, ctx.clone(), 5, ts + 1, ts + 2);
+    ts += 2;
+    // Should not meet the lock and can not get the latest data any more.
+    must_kv_read_equal(&client, ctx, b"key@1".to_vec(), b"value@1".to_vec(), ts);
+}
+
+#[test]
+#[cfg(feature = "failpoints")]
+fn test_mvcc_flashback_block_rw() {
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    fail::cfg("skip_finish_flashback_to_version", "return").unwrap();
+    // Flashback
+    must_flashback_to_version(&client, ctx.clone(), 0, 1, 2);
+    // Try to read.
+    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+    // Get
+    let mut get_req = GetRequest::default();
+    get_req.set_context(ctx.clone());
+    get_req.key = k.clone();
+    get_req.version = 1;
+    let get_resp = client.kv_get(&get_req).unwrap();
+    assert!(get_resp.get_region_error().has_flashback_in_progress());
+    assert!(!get_resp.has_error());
+    assert!(get_resp.value.is_empty());
+    // Scan
+    let mut scan_req = ScanRequest::default();
+    scan_req.set_context(ctx.clone());
+    scan_req.start_key = k.clone();
+    scan_req.limit = 1;
+    scan_req.version = 1;
+    let scan_resp = client.kv_scan(&scan_req).unwrap();
+    assert!(scan_resp.get_region_error().has_flashback_in_progress());
+    assert!(scan_resp.pairs.is_empty());
+    // Try to write.
+    // Prewrite
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k.clone());
+    mutation.set_value(v);
+    let prewrite_resp = try_kv_prewrite(&client, ctx, vec![mutation], k, 1);
+    assert!(prewrite_resp.get_region_error().has_flashback_in_progress());
+    fail::remove("skip_finish_flashback_to_version");
+}
+
+#[test]
+#[cfg(feature = "failpoints")]
+fn test_mvcc_flashback_block_scheduling() {
+    let (mut cluster, client, ctx) = must_new_cluster_and_kv_client();
+    fail::cfg("skip_finish_flashback_to_version", "return").unwrap();
+    // Flashback
+    must_flashback_to_version(&client, ctx, 0, 1, 2);
+    // Try to transfer leader.
+    let transfer_leader_resp = cluster.try_transfer_leader(1, new_peer(2, 2));
+    assert!(
+        transfer_leader_resp
+            .get_header()
+            .get_error()
+            .has_flashback_in_progress()
+    );
+    fail::remove("skip_finish_flashback_to_version");
+}
+
+#[test]
+fn test_mvcc_flashback_unprepared() {
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+    // Prewrite
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k.clone());
+    mutation.set_value(v.clone());
+    must_kv_prewrite(&client, ctx.clone(), vec![mutation], k.clone(), 1);
+    // Commit
+    must_kv_commit(&client, ctx.clone(), vec![k.clone()], 1, 2, 2);
+    must_kv_read_equal(&client, ctx.clone(), k.clone(), v.clone(), 3);
+    // Try to flashback without preparing first.
+    let mut req = FlashbackToVersionRequest::default();
+    req.set_context(ctx.clone());
+    req.set_start_ts(4);
+    req.set_commit_ts(5);
+    req.version = 0;
+    req.start_key = b"a".to_vec();
+    req.end_key = b"z".to_vec();
+    let resp = client.kv_flashback_to_version(&req).unwrap();
+    assert!(resp.get_region_error().has_flashback_not_prepared());
+    must_kv_read_equal(&client, ctx, k, v, 6);
 }
 
 // raft related RPC is tested as parts of test_snapshot.rs, so skip here.
@@ -667,7 +929,7 @@ fn test_split_region_impl<F: KvFormat>(is_raw_kv: bool) {
         .collect();
     assert_eq!(
         result_split_keys,
-        vec![b"b", b"c", b"d", b"e",]
+        vec![b"b", b"c", b"d", b"e"]
             .into_iter()
             .map(|k| encode_key(&k[..]))
             .collect::<Vec<_>>()
@@ -709,7 +971,7 @@ fn test_debug_get() {
     let engine = cluster.get_engine(store_id);
     let key = keys::data_key(k);
     engine.put(&key, v).unwrap();
-    assert_eq!(engine.get(&key).unwrap().unwrap(), v);
+    assert_eq!(engine.get_value(&key).unwrap().unwrap(), v);
 
     // Debug get
     let mut req = debugpb::GetRequest::default();
@@ -784,12 +1046,10 @@ fn test_debug_region_info() {
     let mut apply_state = raft_serverpb::RaftApplyState::default();
     apply_state.set_applied_index(42);
     kv_engine
-        .c()
         .put_msg_cf(CF_RAFT, &apply_state_key, &apply_state)
         .unwrap();
     assert_eq!(
         kv_engine
-            .c()
             .get_msg_cf::<raft_serverpb::RaftApplyState>(CF_RAFT, &apply_state_key)
             .unwrap()
             .unwrap(),
@@ -800,12 +1060,10 @@ fn test_debug_region_info() {
     let mut region_state = raft_serverpb::RegionLocalState::default();
     region_state.set_state(raft_serverpb::PeerState::Tombstone);
     kv_engine
-        .c()
         .put_msg_cf(CF_RAFT, &region_state_key, &region_state)
         .unwrap();
     assert_eq!(
         kv_engine
-            .c()
             .get_msg_cf::<raft_serverpb::RegionLocalState>(CF_RAFT, &region_state_key)
             .unwrap()
             .unwrap(),
@@ -844,7 +1102,6 @@ fn test_debug_region_size() {
     let mut state = RegionLocalState::default();
     state.set_region(region);
     engine
-        .c()
         .put_msg_cf(CF_RAFT, &region_state_key, &state)
         .unwrap();
 
@@ -852,8 +1109,7 @@ fn test_debug_region_size() {
     // At lease 8 bytes for the WRITE cf.
     let (k, v) = (keys::data_key(b"kkkk_kkkk"), b"v");
     for cf in &cfs {
-        let cf_handle = engine.cf_handle(cf).unwrap();
-        engine.put_cf(cf_handle, k.as_slice(), v).unwrap();
+        engine.put_cf(cf, k.as_slice(), v).unwrap();
     }
 
     let mut req = debugpb::RegionSizeRequest::default();
@@ -938,8 +1194,7 @@ fn test_debug_scan_mvcc() {
             TimeStamp::zero(),
         )
         .to_bytes();
-        let cf_handle = engine.cf_handle(CF_LOCK).unwrap();
-        engine.put_cf(cf_handle, k.as_slice(), &v).unwrap();
+        engine.put_cf(CF_LOCK, k.as_slice(), &v).unwrap();
     }
 
     let mut req = debugpb::ScanMvccRequest::default();
@@ -993,6 +1248,7 @@ fn test_double_run_node() {
             AutoSplitController::default(),
             ConcurrencyManager::new(1.into()),
             CollectorRegHandle::new_for_test(),
+            None,
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);
@@ -1353,7 +1609,7 @@ fn test_prewrite_check_max_commit_ts() {
     }
 
     // There shouldn't be locks remaining in the lock table.
-    assert!(cm.read_range_check(None, None, |_, _| Err(())).is_ok());
+    cm.read_range_check(None, None, |_, _| Err(())).unwrap();
 }
 
 #[test]
@@ -1452,7 +1708,7 @@ macro_rules! test_func {
 
 macro_rules! test_func_init {
     ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $req:ident) => {{ test_func!($client, $ctx, $call_opt, $func, $req::default()) }};
-    ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $req:ident, batch) => {{
+    ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $req:ident,batch) => {{
         test_func!($client, $ctx, $call_opt, $func, {
             let mut req = $req::default();
             req.set_keys(vec![b"key".to_vec()].into());
@@ -1672,7 +1928,8 @@ fn test_tikv_forwarding() {
     }
 }
 
-/// Test if forwarding works correctly if the target node is shutdown and restarted.
+/// Test if forwarding works correctly if the target node is shutdown and
+/// restarted.
 #[test]
 fn test_forwarding_reconnect() {
     let (mut cluster, client, call_opt, ctx) = setup_cluster();
@@ -1761,7 +2018,8 @@ fn test_get_lock_wait_info_api() {
 // Test API version verification for transaction requests.
 // See the following for detail:
 //   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
-//   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum APIVersion.
+//   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto,
+//     enum APIVersion.
 #[test]
 fn test_txn_api_version() {
     const TIDB_KEY_CASE: &[u8] = b"t_a";
@@ -1839,7 +2097,7 @@ fn test_txn_api_version() {
                 let expect_prefix = format!("Error({}", errcode);
                 assert!(!errs.is_empty(), "case {}", i);
                 assert!(
-                    errs[0].get_abort().starts_with(&expect_prefix), // e.g. Error(ApiVersionNotMatched { storage_api_version: V1, req_api_version: V2 })
+                    errs[0].get_abort().starts_with(&expect_prefix), /* e.g. Error(ApiVersionNotMatched { storage_api_version: V1, req_api_version: V2 }) */
                     "case {}: errs[0]: {:?}, expected: {}",
                     i,
                     errs[0],
@@ -1942,7 +2200,7 @@ fn test_txn_api_version() {
                 // Pessimistic Lock
                 ts += 1;
                 let lock_ts = ts;
-                let _resp = must_kv_pessimistic_lock(&client, ctx.clone(), k.clone(), lock_ts);
+                must_kv_pessimistic_lock(&client, ctx.clone(), k.clone(), lock_ts);
 
                 // Prewrite Pessimistic
                 let mut mutation = Mutation::default();
@@ -1964,7 +2222,8 @@ fn test_txn_api_version() {
 #[test]
 fn test_storage_with_quota_limiter_enable() {
     let (cluster, leader, ctx) = must_new_and_configure_cluster(|cluster| {
-        // write_bandwidth is limited to 1, which means that every write request will trigger the limit.
+        // write_bandwidth is limited to 1, which means that every write request will
+        // trigger the limit.
         let quota_config = QuotaConfig {
             foreground_cpu_time: 2000,
             foreground_write_bandwidth: ReadableSize(10),
@@ -2046,7 +2305,9 @@ fn test_commands_write_detail() {
         assert!(wd.get_commit_log_nanos() > 0);
         assert!(wd.get_apply_batch_wait_nanos() > 0);
         assert!(wd.get_apply_log_nanos() > 0);
-        assert!(wd.get_apply_mutex_lock_nanos() > 0);
+        // Mutex has been removed from write path.
+        // Ref https://github.com/facebook/rocksdb/pull/7516
+        // assert!(wd.get_apply_mutex_lock_nanos() > 0);
         assert!(wd.get_apply_write_wal_nanos() > 0);
         assert!(wd.get_apply_write_memtable_nanos() > 0);
     };
@@ -2078,7 +2339,7 @@ fn test_commands_write_detail() {
     mutation.set_op(Op::Put);
     mutation.set_value(v);
     prewrite_req.set_mutations(vec![mutation].into());
-    prewrite_req.set_is_pessimistic_lock(vec![true]);
+    prewrite_req.set_pessimistic_actions(vec![DoPessimisticCheck]);
     prewrite_req.set_context(ctx.clone());
     prewrite_req.set_primary_lock(k.clone());
     prewrite_req.set_start_version(20);
@@ -2152,4 +2413,41 @@ fn test_rpc_wall_time() {
                 > 0
         );
     }
+}
+
+#[test]
+fn test_pessimistic_lock_execution_tracking() {
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (k, v) = (b"k1".to_vec(), b"k2".to_vec());
+
+    // Add a prewrite lock.
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k.clone());
+    mutation.set_value(v);
+    must_kv_prewrite(&client, ctx.clone(), vec![mutation], k.clone(), 10);
+
+    let block_duration = Duration::from_millis(300);
+    let client_clone = client.clone();
+    let ctx_clone = ctx.clone();
+    let k_clone = k.clone();
+    let handle = thread::spawn(move || {
+        thread::sleep(block_duration);
+        must_kv_commit(&client_clone, ctx_clone, vec![k_clone], 10, 30, 30);
+    });
+
+    let resp = kv_pessimistic_lock(&client, ctx, vec![k], 20, 20, false);
+    assert!(
+        resp.get_exec_details_v2()
+            .get_write_detail()
+            .get_pessimistic_lock_wait_nanos()
+            > 0,
+        "resp lock wait time={:?}, block_duration={:?}",
+        resp.get_exec_details_v2()
+            .get_write_detail()
+            .get_pessimistic_lock_wait_nanos(),
+        block_duration
+    );
+
+    handle.join().unwrap();
 }

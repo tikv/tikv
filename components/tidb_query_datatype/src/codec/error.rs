@@ -95,8 +95,8 @@ impl Error {
         }
     }
 
-    pub fn cannot_convert_string(charset: &str) -> Error {
-        let msg = format!("cannot convert string from binary to {}", charset);
+    pub fn cannot_convert_string(s: &str, charset: &str) -> Error {
+        let msg = format!("Cannot convert string {} from binary to {}", s, charset);
         Error::Eval(msg, ERR_CANNOT_CONVERT_STRING)
     }
 
@@ -144,6 +144,10 @@ impl Error {
             val
         );
         Error::Eval(msg, ERR_INCORRECT_PARAMETERS)
+    }
+
+    pub fn regexp_error(msg: String) -> Error {
+        Error::Eval(msg, ERR_REGEXP)
     }
 }
 

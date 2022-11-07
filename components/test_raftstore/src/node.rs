@@ -17,6 +17,7 @@ use kvproto::{
     raft_cmdpb::*,
     raft_serverpb::{self, RaftMessage},
 };
+use protobuf::Message;
 use raft::{eraftpb::MessageType, SnapshotStatus};
 use raftstore::{
     coprocessor::{config::SplitCheckConfigManager, CoprocessorHost},
@@ -31,6 +32,7 @@ use raftstore::{
 };
 use resource_metering::CollectorRegHandle;
 use tempfile::TempDir;
+use test_pd_client::TestPdClient;
 use tikv::{
     config::{ConfigController, Module},
     import::SstImporter,
@@ -94,7 +96,10 @@ impl Transport for ChannelTransport {
                 Some(p) => {
                     p.0.register(key.clone(), SnapEntry::Receiving);
                     let data = msg.get_message().get_snapshot().get_data();
-                    p.0.get_snapshot_for_receiving(&key, data).unwrap()
+                    let mut snapshot_data = raft_serverpb::RaftSnapshotData::default();
+                    snapshot_data.merge_from_bytes(data).unwrap();
+                    p.0.get_snapshot_for_receiving(&key, snapshot_data.take_meta())
+                        .unwrap()
                 }
                 None => return Err(box_err!("missing temp dir for store {}", to_store)),
             };
@@ -187,8 +192,8 @@ impl NodeCluster {
             .unwrap()
     }
 
-    // Set a function that will be invoked after creating each CoprocessorHost. The first argument
-    // of `op` is the node_id.
+    // Set a function that will be invoked after creating each CoprocessorHost. The
+    // first argument of `op` is the node_id.
     // Set this before invoking `run_node`.
     #[allow(clippy::type_complexity)]
     pub fn post_create_coprocessor_host(
@@ -247,6 +252,7 @@ impl Simulator for NodeCluster {
             Arc::default(),
             bg_worker.clone(),
             None,
+            None,
         );
 
         let (snap_mgr, snap_mgr_path) = if node_id == 0
@@ -264,6 +270,7 @@ impl Simulator for NodeCluster {
                 .max_total_size(cfg.server.snap_max_total_size.0)
                 .encryption_key_manager(key_manager)
                 .max_per_file_size(cfg.raft_store.max_snapshot_file_raw_size.0)
+                .enable_multi_snapshot_files(true)
                 .build(tmp.path().to_str().unwrap());
             (snap_mgr, Some(tmp))
         } else {
@@ -290,7 +297,11 @@ impl Simulator for NodeCluster {
             Arc::new(SstImporter::new(&cfg.import, dir, None, cfg.storage.api_version()).unwrap())
         };
 
-        let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
+        let local_reader = LocalReader::new(
+            engines.kv.clone(),
+            StoreMetaDelegate::new(store_meta.clone(), engines.kv.clone()),
+            router.clone(),
+        );
         let cfg_controller = ConfigController::new(cfg.tikv.clone());
 
         let split_check_runner =
@@ -314,6 +325,7 @@ impl Simulator for NodeCluster {
             AutoSplitController::default(),
             cm,
             CollectorRegHandle::new_for_test(),
+            None,
         )?;
         assert!(
             engines
@@ -433,7 +445,7 @@ impl Simulator for NodeCluster {
     }
 
     fn async_read(
-        &self,
+        &mut self,
         node_id: u64,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,

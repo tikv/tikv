@@ -1,8 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! This module provides unified APIs for accessing thread/process related information.
-//! Only Linux platform is implemented correctly, for other platform, it only guarantees
-//! successful compilation.
+//! This module provides unified APIs for accessing thread/process related
+//! information. Only Linux platform is implemented correctly, for other
+//! platform, it only guarantees successful compilation.
 
 use std::{io, io::Result, sync::Mutex, thread};
 
@@ -82,7 +82,8 @@ mod imp {
     }
 
     /// Gets thread ids of the given process id.
-    /// WARN: Don't call this function frequently. Otherwise there will be a lot of memory fragments.
+    /// WARN: Don't call this function frequently. Otherwise there will be a lot
+    /// of memory fragments.
     pub fn thread_ids<C: FromIterator<Pid>>(pid: Pid) -> io::Result<C> {
         let dir = fs::read_dir(format!("/proc/{}/task", pid))?;
         Ok(dir
@@ -216,8 +217,8 @@ mod imp {
         pub command: String,
     }
 
-    /// Unlike Linux, the unit of `stime` and `utime` is microseconds instead of ticks.
-    /// See [`full_thread_stat()`]
+    /// Unlike Linux, the unit of `stime` and `utime` is microseconds instead of
+    /// ticks. See [`full_thread_stat()`]
     #[inline]
     pub fn ticks_per_second() -> i64 {
         MICRO_SEC_PER_SEC

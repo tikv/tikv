@@ -11,15 +11,15 @@ use std::{
 
 use kvproto::metapb::Region;
 use raft::StateRole;
-use raftstore::{
-    coprocessor::{
-        BoxRegionChangeObserver, Coprocessor, ObserverContext, RegionChangeEvent,
-        RegionChangeObserver, RegionChangeReason,
-    },
-    store::util::{find_peer, new_peer},
+use raftstore::coprocessor::{
+    BoxRegionChangeObserver, Coprocessor, ObserverContext, RegionChangeEvent, RegionChangeObserver,
+    RegionChangeReason,
 };
 use test_raftstore::{new_node_cluster, Cluster, NodeCluster};
-use tikv_util::HandyRwLock;
+use tikv_util::{
+    store::{find_peer, new_peer},
+    HandyRwLock,
+};
 
 #[derive(Clone)]
 struct TestObserver {
@@ -97,7 +97,8 @@ fn test_region_change_observer_impl(mut cluster: Cluster<NodeCluster>) {
     cluster.must_split(&add_peer_event.0, b"k2");
     let mut split_update = receiver.recv().unwrap();
     let mut split_create = receiver.recv().unwrap();
-    // We should receive an `Update` and a `Create`. The order of them is not important.
+    // We should receive an `Update` and a `Create`. The order of them is not
+    // important.
     if split_update.1 != RegionChangeEvent::Update(RegionChangeReason::Split) {
         mem::swap(&mut split_update, &mut split_create);
     }
@@ -135,7 +136,8 @@ fn test_region_change_observer_impl(mut cluster: Cluster<NodeCluster>) {
     );
     let mut merge_update = receiver.recv().unwrap();
     let mut merge_destroy = receiver.recv().unwrap();
-    // We should receive an `Update` and a `Destroy`. The order of them is not important.
+    // We should receive an `Update` and a `Destroy`. The order of them is not
+    // important.
     if merge_update.1 != RegionChangeEvent::Update(RegionChangeReason::CommitMerge) {
         mem::swap(&mut merge_update, &mut merge_destroy);
     }

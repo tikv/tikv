@@ -11,13 +11,14 @@ use crate::storage::{
     txn::{
         acquire_pessimistic_lock,
         commands::{
-            Command, CommandExt, ReaderWithStats, ResponsePolicy, TypedCommand, WriteCommand,
-            WriteContext, WriteResult, WriteResultLockInfo,
+            Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
+            WriteCommand, WriteContext, WriteResult, WriteResultLockInfo,
         },
         Error, ErrorInner, Result,
     },
-    Error as StorageError, ErrorInner as StorageErrorInner, PessimisticLockRes, ProcessResult,
-    Result as StorageResult, Snapshot,
+    types::{PessimisticLockParameters, PessimisticLockResults},
+    Error as StorageError, ErrorInner as StorageErrorInner, ProcessResult, Result as StorageResult,
+    Snapshot,
 };
 
 command! {
@@ -25,9 +26,9 @@ command! {
     ///
     /// This can be rolled back with a [`PessimisticRollback`](Command::PessimisticRollback) command.
     AcquirePessimisticLock:
-        cmd_ty => StorageResult<PessimisticLockRes>,
-        display => "kv::command::acquirepessimisticlock keys({:?}) @ {} {} {} {:?} {} {} | {:?}",
-        (keys, start_ts, lock_ttl, for_update_ts, wait_timeout, min_commit_ts, check_existence, ctx),
+        cmd_ty => StorageResult<PessimisticLockResults>,
+        display => "kv::command::acquirepessimisticlock keys({:?}) @ {} {} {} {:?} {} {} {} | {:?}",
+        (keys, start_ts, lock_ttl, for_update_ts, wait_timeout, min_commit_ts, check_existence, lock_only_if_exists, ctx),
         content => {
             /// The set of keys to lock.
             keys: Vec<(Key, bool)>,
@@ -47,6 +48,7 @@ command! {
             min_commit_ts: TimeStamp,
             old_values: OldValues,
             check_existence: bool,
+            lock_only_if_exists: bool,
         }
 }
 
@@ -86,15 +88,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         );
 
         let rows = keys.len();
-        let mut res = if self.return_values {
-            Ok(PessimisticLockRes::Values(vec![]))
-        } else if self.check_existence {
-            // If return_value is set, the existence status is implicitly included in the result.
-            // So check_existence only need to be explicitly handled if `return_values` is not set.
-            Ok(PessimisticLockRes::Existence(vec![]))
-        } else {
-            Ok(PessimisticLockRes::Empty)
-        };
+        let mut res = Ok(PessimisticLockResults::with_capacity(rows));
         let need_old_value = context.extra_op == ExtraOp::ReadOldValue;
         for (k, should_not_exist) in keys {
             match acquire_pessimistic_lock(
@@ -109,11 +103,11 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                 self.check_existence,
                 self.min_commit_ts,
                 need_old_value,
+                self.lock_only_if_exists,
+                false,
             ) {
-                Ok((val, old_value)) => {
-                    if self.return_values || self.check_existence {
-                        res.as_mut().unwrap().push(val);
-                    }
+                Ok((key_res, old_value)) => {
+                    res.as_mut().unwrap().push(key_res);
                     if old_value.resolved() {
                         let key = k.append_ts(txn.start_ts);
                         // MutationType is unknown in AcquirePessimisticLock stage.
@@ -129,17 +123,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             }
         }
 
-        // Some values are read, update max_ts
-        match &res {
-            Ok(PessimisticLockRes::Values(values)) if !values.is_empty() => {
-                txn.concurrency_manager.update_max_ts(self.for_update_ts);
-            }
-            Ok(PessimisticLockRes::Existence(values)) if !values.is_empty() => {
-                txn.concurrency_manager.update_max_ts(self.for_update_ts);
-            }
-            _ => (),
-        }
-
         // no conflict
         let (pr, to_be_write, rows, ctx, lock_info) = if res.is_ok() {
             let pr = ProcessResult::PessimisticLockRes { res };
@@ -147,16 +130,26 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                 old_values: self.old_values,
                 // One pc status is unkown AcquirePessimisticLock stage.
                 one_pc: false,
+                for_flashback: false,
             };
             let write_data = WriteData::new(txn.into_modifies(), extra);
             (pr, write_data, rows, ctx, None)
         } else {
+            let request_parameters = PessimisticLockParameters {
+                pb_ctx: ctx.clone(),
+                primary: self.primary.clone(),
+                start_ts: self.start_ts,
+                lock_ttl: self.lock_ttl,
+                for_update_ts: self.for_update_ts,
+                wait_timeout: self.wait_timeout,
+                return_values: self.return_values,
+                min_commit_ts: self.min_commit_ts,
+                check_existence: self.check_existence,
+                is_first_lock: self.is_first_lock,
+                allow_lock_with_conflict: false,
+            };
             let lock_info_pb = extract_lock_info_from_result(&res);
-            let lock_info = WriteResultLockInfo::from_lock_info_pb(
-                lock_info_pb,
-                self.is_first_lock,
-                self.wait_timeout,
-            );
+            let lock_info = WriteResultLockInfo::new(lock_info_pb.clone(), request_parameters);
             let pr = ProcessResult::PessimisticLockRes { res };
             // Wait for lock released
             (pr, WriteData::default(), 0, ctx, Some(lock_info))
@@ -167,6 +160,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             rows,
             pr,
             lock_info,
+            released_locks: ReleasedLocks::new(),
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnProposed,
         })
@@ -190,17 +184,21 @@ mod tests {
         info.set_lock_version(ts);
         info.set_lock_ttl(100);
         let case = StorageError::from(StorageErrorInner::Txn(Error::from(ErrorInner::Mvcc(
-            MvccError::from(MvccErrorInner::KeyIsLocked(info)),
+            MvccError::from(MvccErrorInner::KeyIsLocked(info.clone())),
         ))));
-        let lock_info = WriteResultLockInfo::from_lock_info_pb(
-            extract_lock_info_from_result::<()>(&Err(case)),
-            is_first_lock,
-            wait_timeout,
+        let lock_info = WriteResultLockInfo::new(
+            extract_lock_info_from_result::<()>(&Err(case)).clone(),
+            PessimisticLockParameters {
+                is_first_lock,
+                wait_timeout,
+                ..Default::default()
+            },
         );
-        assert_eq!(lock_info.lock.ts, ts.into());
-        assert_eq!(lock_info.lock.hash, key.gen_hash());
-        assert_eq!(lock_info.key, raw_key);
-        assert_eq!(lock_info.is_first_lock, is_first_lock);
-        assert_eq!(lock_info.wait_timeout, wait_timeout);
+        assert_eq!(lock_info.lock_digest.ts, ts.into());
+        assert_eq!(lock_info.lock_digest.hash, key.gen_hash());
+        assert_eq!(lock_info.key.into_raw().unwrap(), raw_key);
+        assert_eq!(lock_info.parameters.is_first_lock, is_first_lock);
+        assert_eq!(lock_info.parameters.wait_timeout, wait_timeout);
+        assert_eq!(lock_info.lock_info_pb, info);
     }
 }

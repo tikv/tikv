@@ -31,7 +31,8 @@ where
     }
 }
 
-/// A bencher that will use batch selection aggregation executor to bench the giving expressions.
+/// A bencher that will use batch selection aggregation executor to bench the
+/// giving expressions.
 pub struct BatchBencher;
 
 impl<M> SelectionBencher<M> for BatchBencher

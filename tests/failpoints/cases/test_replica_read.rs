@@ -7,7 +7,6 @@ use std::{
 };
 
 use crossbeam::channel;
-use engine_rocks::Compat;
 use engine_traits::{Peekable, RaftEngineReadOnly, CF_RAFT};
 use futures::executor::block_on;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
@@ -42,8 +41,8 @@ fn test_wait_for_apply_index() {
     cluster.must_put(b"k1", b"v1");
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
 
-    // Peer 3 does not apply the cmd of putting 'k1' right now, then the follower read must
-    // be blocked.
+    // Peer 3 does not apply the cmd of putting 'k1' right now, then the follower
+    // read must be blocked.
     must_get_none(&cluster.get_engine(3), b"k1");
     let mut request = new_request(
         region.get_id(),
@@ -60,7 +59,7 @@ fn test_wait_for_apply_index() {
         .async_command_on_node(3, request, cb)
         .unwrap();
     // Must timeout here
-    assert!(rx.recv_timeout(Duration::from_millis(500)).is_err());
+    rx.recv_timeout(Duration::from_millis(500)).unwrap_err();
     fail::remove("on_apply_write_cmd");
 
     // After write cmd applied, the follower read will be executed.
@@ -229,7 +228,6 @@ fn test_read_applying_snapshot() {
     let region_key = keys::region_state_key(r1);
     let region_state: RegionLocalState = cluster
         .get_engine(3)
-        .c()
         .get_msg_cf(CF_RAFT, &region_key)
         .unwrap()
         .unwrap();
@@ -356,12 +354,14 @@ fn test_read_after_cleanup_range_for_snap() {
     rx1.recv_timeout(Duration::from_secs(5)).unwrap();
 }
 
-/// Tests the learner of new split region will know its leader without waiting for the leader heartbeat timeout.
+/// Tests the learner of new split region will know its leader without waiting
+/// for the leader heartbeat timeout.
 ///
 /// Before https://github.com/tikv/tikv/pull/8820,
-/// the learner of a new split region may not know its leader if it applies log slowly and drops the no-op
-/// entry from the new leader, and it had to wait for a heartbeat timeout to know its leader before that it
-/// can't handle any read request.
+/// the learner of a new split region may not know its leader if it applies log
+/// slowly and drops the no-op entry from the new leader, and it had to wait for
+/// a heartbeat timeout to know its leader before that it can't handle any read
+/// request.
 #[test]
 fn test_new_split_learner_can_not_find_leader() {
     let mut cluster = new_node_cluster(0, 4);
@@ -385,9 +385,10 @@ fn test_new_split_learner_can_not_find_leader() {
     let region = cluster.get_region(b"k3");
     cluster.must_split(&region, b"k3");
 
-    // This `put` will not inform learner leadership because the The learner is paused at apply split command,
-    // so the learner peer of the new split region is not create yet. Also, the leader will not send another
-    // append request before the previous one response as all peer is initiated with the `Probe` mod
+    // This `put` will not inform learner leadership because the The learner is
+    // paused at apply split command, so the learner peer of the new split region is
+    // not create yet. Also, the leader will not send another append request before
+    // the previous one response as all peer is initiated with the `Probe` mod
     cluster.must_put(b"k2", b"v2");
     assert_eq!(cluster.get(b"k2"), Some(b"v2".to_vec()));
 
@@ -404,8 +405,8 @@ fn test_new_split_learner_can_not_find_leader() {
     assert_eq!(exp_value, b"v2");
 }
 
-/// Test if the read index request can get a correct response when the commit index of leader
-/// if not up-to-date after transferring leader.
+/// Test if the read index request can get a correct response when the commit
+/// index of leader if not up-to-date after transferring leader.
 #[test]
 fn test_replica_read_after_transfer_leader() {
     let mut cluster = new_node_cluster(0, 3);
@@ -456,7 +457,8 @@ fn test_replica_read_after_transfer_leader() {
 
     // Wait peer 1 and 3 to send heartbeat response to peer 2
     sleep_ms(100);
-    // Pause before collecting message to make the these message be handled in one loop
+    // Pause before collecting message to make the these message be handled in one
+    // loop
     let on_peer_collect_message_2 = "on_peer_collect_message_2";
     fail::cfg(on_peer_collect_message_2, "pause").unwrap();
 
@@ -479,8 +481,8 @@ fn test_replica_read_after_transfer_leader() {
     assert_eq!(exp_value, b"v2");
 }
 
-// This test is for reproducing the bug that some replica reads was sent to a leader and shared a same
-// read index because of the optimization on leader.
+// This test is for reproducing the bug that some replica reads was sent to a
+// leader and shared a same read index because of the optimization on leader.
 #[test]
 fn test_read_index_after_transfer_leader() {
     let mut cluster = new_node_cluster(0, 3);
@@ -513,7 +515,8 @@ fn test_read_index_after_transfer_leader() {
             async_read_index_on_peer(&mut cluster, new_peer(2, 2), region.clone(), b"k1", true);
         responses.push(resp);
     }
-    // Try to split the region to change the peer into `splitting` state then can not handle read requests.
+    // Try to split the region to change the peer into `splitting` state then can
+    // not handle read requests.
     cluster.split_region(&region, b"k2", raftstore::store::Callback::None);
     // Wait the split command be sent.
     sleep_ms(100);
@@ -527,12 +530,15 @@ fn test_read_index_after_transfer_leader() {
         let msg_type = msg.get_message().get_msg_type();
         matches!(msg_type, MessageType::MsgAppendResponse)
     });
-    // Transfer leader to peer 1, peer 2 should not change role since we added a recv filter.
+    // Transfer leader to peer 1, peer 2 should not change role since we added a
+    // recv filter.
     cluster.transfer_leader(region_id, new_peer(1, 1));
-    // Pause before collecting peer messages to make sure all messages can be handled in one batch.
+    // Pause before collecting peer messages to make sure all messages can be
+    // handled in one batch.
     let on_peer_collect_message_2 = "on_peer_collect_message_2";
     fail::cfg(on_peer_collect_message_2, "pause").unwrap();
-    // Pause apply worker to stop the split command so peer 2 would keep in `splitting` state.
+    // Pause apply worker to stop the split command so peer 2 would keep in
+    // `splitting` state.
     let on_handle_apply_2 = "on_handle_apply_2";
     fail::cfg(on_handle_apply_2, "pause").unwrap();
     // Send heartbeat and append responses to advance read index.
@@ -546,8 +552,8 @@ fn test_read_index_after_transfer_leader() {
     fail::remove(on_peer_collect_message_2);
     // Wait for read index has been advanced.
     sleep_ms(100);
-    // Filter and send vote message, peer 2 would step down to follower and try to handle read requests
-    // as a follower.
+    // Filter and send vote message, peer 2 would step down to follower and try to
+    // handle read requests as a follower.
     let msgs = std::mem::take(&mut *dropped_msgs.lock().unwrap());
     let vote_msgs = msgs.iter().filter(|msg| {
         let msg_type = msg.get_message().get_msg_type();
@@ -568,8 +574,8 @@ fn test_read_index_after_transfer_leader() {
     fail::remove(on_handle_apply_2);
 }
 
-/// Test if the read index request can get a correct response when the commit index of leader
-/// if not up-to-date after transferring leader.
+/// Test if the read index request can get a correct response when the commit
+/// index of leader if not up-to-date after transferring leader.
 #[test]
 fn test_batch_read_index_after_transfer_leader() {
     let mut cluster = new_node_cluster(0, 3);
@@ -600,7 +606,8 @@ fn test_batch_read_index_after_transfer_leader() {
 
     cluster.must_transfer_leader(1, new_peer(2, 2));
 
-    // Pause before collecting message to make the these message be handled in one loop
+    // Pause before collecting message to make the these message be handled in one
+    // loop
     let on_peer_collect_message_2 = "on_peer_collect_message_2";
     fail::cfg(on_peer_collect_message_2, "pause").unwrap();
 
@@ -629,7 +636,8 @@ fn test_batch_read_index_after_transfer_leader() {
         .map(|x| x.recv_timeout(Duration::from_secs(5)).unwrap())
         .collect::<Vec<_>>();
 
-    // `term` in the header is `current_term`, not term of the entry at `read_index`.
+    // `term` in the header is `current_term`, not term of the entry at
+    // `read_index`.
     let term = resps[0].get_header().get_current_term();
     assert_eq!(term, resps[1].get_header().get_current_term());
     assert_eq!(term, pd_client.get_region_last_report_term(1).unwrap());
@@ -638,8 +646,9 @@ fn test_batch_read_index_after_transfer_leader() {
         let index = resps[i].responses[0].get_read_index().read_index;
         let raft_engine = cluster.get_raft_engine(2);
         let entry = raft_engine.get_entry(1, index).unwrap().unwrap();
-        // According to Raft, a peer shouldn't be able to perform read index until it commits
-        // to the current term. So term of `read_index` must equal to the current one.
+        // According to Raft, a peer shouldn't be able to perform read index until it
+        // commits to the current term. So term of `read_index` must equal to
+        // the current one.
         assert_eq!(entry.get_term(), term);
     }
 }
@@ -703,8 +712,8 @@ fn test_read_index_lock_checking_on_follower() {
     let guard = block_on(leader_cm.lock_key(&Key::from_raw(b"k1")));
     guard.with_lock(|l| *l = Some(lock.clone()));
 
-    // Now, the leader has been transferred to peer 3. The original read index request
-    // will be first sent to peer 1 and then redirected to peer 3.
+    // Now, the leader has been transferred to peer 3. The original read index
+    // request will be first sent to peer 1 and then redirected to peer 3.
     // We must make sure the lock check is done on peer 3.
 
     fail::remove("before_propose_readindex");
@@ -781,14 +790,14 @@ fn test_read_index_lock_checking_on_false_leader() {
     let guard = block_on(leader_cm.lock_key(&Key::from_raw(b"k1")));
     guard.with_lock(|l| *l = Some(lock.clone()));
 
-    // Read index from peer 2, the read index message will be sent to the old leader peer 1.
-    // But the lease of peer 1 has expired and it cannot get majority of heartbeat.
-    // So, we cannot get the result here.
+    // Read index from peer 2, the read index message will be sent to the old leader
+    // peer 1. But the lease of peer 1 has expired and it cannot get majority of
+    // heartbeat. So, we cannot get the result here.
     let resp = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1, b"k1", true);
-    assert!(resp.recv_timeout(Duration::from_millis(300)).is_err());
+    resp.recv_timeout(Duration::from_millis(300)).unwrap_err();
 
-    // Now, restore the network partition. Peer 1 should now become follower and drop its
-    // pending read index request. Peer 2 cannot get the result now.
+    // Now, restore the network partition. Peer 1 should now become follower and
+    // drop its pending read index request. Peer 2 cannot get the result now.
     let recv_filter = Box::new(
         RegionPacketFilter::new(rid, 2)
             .direction(Direction::Recv)
@@ -796,7 +805,7 @@ fn test_read_index_lock_checking_on_false_leader() {
     );
     cluster.sim.wl().add_recv_filter(2, recv_filter);
     cluster.clear_send_filters();
-    assert!(resp.recv_timeout(Duration::from_millis(300)).is_err());
+    resp.recv_timeout(Duration::from_millis(300)).unwrap_err();
 
     // After cleaning all filters, peer 2 will retry and will get error.
     cluster.sim.wl().clear_recv_filters(2);

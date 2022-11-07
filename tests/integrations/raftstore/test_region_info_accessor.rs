@@ -8,12 +8,12 @@ use std::{
 
 use kvproto::metapb::Region;
 use raft::StateRole;
-use raftstore::{
-    coprocessor::{RangeKey, RegionInfo, RegionInfoAccessor},
-    store::util::{find_peer, new_peer},
-};
+use raftstore::coprocessor::{RangeKey, RegionInfo, RegionInfoAccessor};
 use test_raftstore::{configure_for_merge, new_node_cluster, Cluster, NodeCluster};
-use tikv_util::HandyRwLock;
+use tikv_util::{
+    store::{find_peer, new_peer},
+    HandyRwLock,
+};
 
 fn dump(c: &RegionInfoAccessor) -> Vec<(Region, StateRole)> {
     let (regions, region_ranges) = c.debug_dump();
@@ -190,7 +190,8 @@ fn test_node_cluster_region_info_accessor() {
         }));
     cluster.run_conf_change();
     let c = rx.recv().unwrap();
-    // We only created it on the node whose id == 1 so we shouldn't receive more than one item.
+    // We only created it on the node whose id == 1 so we shouldn't receive more
+    // than one item.
     assert!(rx.try_recv().is_err());
 
     test_region_info_accessor_impl(&mut cluster, &c);

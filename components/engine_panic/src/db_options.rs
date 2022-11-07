@@ -1,13 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{DBOptions, DBOptionsExt, Result, TitanDBOptions};
+use engine_traits::{DbOptions, DbOptionsExt, Result, TitanCfOptions};
 
 use crate::engine::PanicEngine;
 
-impl DBOptionsExt for PanicEngine {
-    type DBOptions = PanicDBOptions;
+impl DbOptionsExt for PanicEngine {
+    type DbOptions = PanicDbOptions;
 
-    fn get_db_options(&self) -> Self::DBOptions {
+    fn get_db_options(&self) -> Self::DbOptions {
         panic!()
     }
     fn set_db_options(&self, options: &[(&str, &str)]) -> Result<()> {
@@ -15,10 +15,10 @@ impl DBOptionsExt for PanicEngine {
     }
 }
 
-pub struct PanicDBOptions;
+pub struct PanicDbOptions;
 
-impl DBOptions for PanicDBOptions {
-    type TitanDBOptions = PanicTitanDBOptions;
+impl DbOptions for PanicDbOptions {
+    type TitanDbOptions = PanicTitanDbOptions;
 
     fn new() -> Self {
         panic!()
@@ -44,14 +44,14 @@ impl DBOptions for PanicDBOptions {
         panic!()
     }
 
-    fn set_titandb_options(&mut self, opts: &Self::TitanDBOptions) {
+    fn set_titandb_options(&mut self, opts: &Self::TitanDbOptions) {
         panic!()
     }
 }
 
-pub struct PanicTitanDBOptions;
+pub struct PanicTitanDbOptions;
 
-impl TitanDBOptions for PanicTitanDBOptions {
+impl TitanCfOptions for PanicTitanDbOptions {
     fn new() -> Self {
         panic!()
     }

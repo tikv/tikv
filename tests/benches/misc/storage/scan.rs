@@ -11,7 +11,7 @@ use txn_types::{Key, Mutation};
 #[ignore]
 #[bench]
 fn bench_tombstone_scan(b: &mut Bencher) {
-    let store = SyncTestStorageBuilder::default().build().unwrap();
+    let store = SyncTestStorageBuilder::default().build(0).unwrap();
     let mut ts_generator = 1..;
 
     let mut kvs = KvGenerator::new(100, 1000);

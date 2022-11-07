@@ -1,8 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::cell::RefCell;
-
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine, Snapshot};
 use kvproto::{raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
@@ -12,13 +10,12 @@ use tikv_util::time::ThreadReadId;
 use crate::{
     store::{
         fsm::RaftRouter,
-        transport::{CasualRouter, ProposalRouter, SignificantRouter, StoreRouter},
+        transport::{CasualRouter, ProposalRouter, SignificantRouter},
         Callback, CasualMessage, LocalReader, PeerMsg, RaftCmdExtraOpts, RaftCommand,
-        SignificantMsg, StoreMsg,
+        SignificantMsg, StoreMsg, StoreRouter,
     },
     DiscardReason, Error as RaftStoreError, Result as RaftStoreResult,
 };
-
 /// Routes messages to the raftstore.
 pub trait RaftStoreRouter<EK>:
     StoreRouter<EK>
@@ -116,13 +113,13 @@ where
     EK: KvEngine,
 {
     fn read(
-        &self,
+        &mut self,
         read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
     ) -> RaftStoreResult<()>;
 
-    fn release_snapshot_cache(&self);
+    fn release_snapshot_cache(&mut self);
 }
 
 #[derive(Clone)]
@@ -168,12 +165,20 @@ where
 }
 
 /// A router that routes messages to the raftstore
-pub struct ServerRaftStoreRouter<EK: KvEngine, ER: RaftEngine> {
+pub struct ServerRaftStoreRouter<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
     router: RaftRouter<EK, ER>,
-    local_reader: RefCell<LocalReader<RaftRouter<EK, ER>, EK>>,
+    local_reader: LocalReader<EK, RaftRouter<EK, ER>>,
 }
 
-impl<EK: KvEngine, ER: RaftEngine> Clone for ServerRaftStoreRouter<EK, ER> {
+impl<EK, ER> Clone for ServerRaftStoreRouter<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
     fn clone(&self) -> Self {
         ServerRaftStoreRouter {
             router: self.router.clone(),
@@ -186,9 +191,8 @@ impl<EK: KvEngine, ER: RaftEngine> ServerRaftStoreRouter<EK, ER> {
     /// Creates a new router.
     pub fn new(
         router: RaftRouter<EK, ER>,
-        reader: LocalReader<RaftRouter<EK, ER>, EK>,
+        local_reader: LocalReader<EK, RaftRouter<EK, ER>>,
     ) -> ServerRaftStoreRouter<EK, ER> {
-        let local_reader = RefCell::new(reader);
         ServerRaftStoreRouter {
             router,
             local_reader,
@@ -239,19 +243,17 @@ impl<EK: KvEngine, ER: RaftEngine> RaftStoreRouter<EK> for ServerRaftStoreRouter
 
 impl<EK: KvEngine, ER: RaftEngine> LocalReadRouter<EK> for ServerRaftStoreRouter<EK, ER> {
     fn read(
-        &self,
+        &mut self,
         read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
     ) -> RaftStoreResult<()> {
-        let mut local_reader = self.local_reader.borrow_mut();
-        local_reader.read(read_id, req, cb);
+        self.local_reader.read(read_id, req, cb);
         Ok(())
     }
 
-    fn release_snapshot_cache(&self) {
-        let mut local_reader = self.local_reader.borrow_mut();
-        local_reader.release_snapshot_cache();
+    fn release_snapshot_cache(&mut self) {
+        self.local_reader.release_snapshot_cache();
     }
 }
 

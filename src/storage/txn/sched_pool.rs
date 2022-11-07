@@ -7,8 +7,9 @@ use std::{
 };
 
 use collections::HashMap;
-use file_system::{set_io_type, IOType};
+use file_system::{set_io_type, IoType};
 use kvproto::pdpb::QueryKind;
+use pd_client::{Feature, FeatureGate};
 use prometheus::local::*;
 use raftstore::store::WriteStats;
 use tikv_util::{
@@ -19,6 +20,7 @@ use tikv_util::{
 use crate::storage::{
     kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter, Statistics},
     metrics::*,
+    test_util::latest_feature_gate,
 };
 
 pub struct SchedLocalMetrics {
@@ -28,13 +30,15 @@ pub struct SchedLocalMetrics {
 }
 
 thread_local! {
-     static TLS_SCHED_METRICS: RefCell<SchedLocalMetrics> = RefCell::new(
+    static TLS_SCHED_METRICS: RefCell<SchedLocalMetrics> = RefCell::new(
         SchedLocalMetrics {
             local_scan_details: HashMap::default(),
             command_keyread_histogram_vec: KV_COMMAND_KEYREAD_HISTOGRAM_VEC.local(),
             local_write_stats:WriteStats::default(),
         }
     );
+
+    static TLS_FEATURE_GATE: RefCell<FeatureGate> = RefCell::new(latest_feature_gate());
 }
 
 #[derive(Clone)]
@@ -58,10 +62,12 @@ impl SchedPool {
         engine: E,
         pool_size: usize,
         reporter: R,
+        feature_gate: FeatureGate,
         name_prefix: &str,
     ) -> Self {
         let engine = Arc::new(Mutex::new(engine));
-        // for low cpu quota env, set the max-thread-count as 4 to allow potential cases that we need more thread than cpu num.
+        // for low cpu quota env, set the max-thread-count as 4 to allow potential cases
+        // that we need more thread than cpu num.
         let max_pool_size = std::cmp::max(
             pool_size,
             std::cmp::max(4, SysQuota::cpu_cores_quota() as usize),
@@ -73,7 +79,8 @@ impl SchedPool {
             // the tls_engine invariants.
             .after_start(move || {
                 set_tls_engine(engine.lock().unwrap().clone());
-                set_io_type(IOType::ForegroundWrite);
+                set_io_type(IoType::ForegroundWrite);
+                TLS_FEATURE_GATE.with(|c| *c.borrow_mut() = feature_gate.clone());
             })
             .before_stop(move || unsafe {
                 // Safety: we ensure the `set_` and `destroy_` calls use the same engine type.
@@ -132,4 +139,13 @@ pub fn tls_collect_keyread_histogram_vec(cmd: &str, count: f64) {
             .with_label_values(&[cmd])
             .observe(count);
     });
+}
+
+pub fn tls_can_enable(feature: Feature) -> bool {
+    TLS_FEATURE_GATE.with(|feature_gate| feature_gate.borrow().can_enable(feature))
+}
+
+#[cfg(test)]
+pub fn set_tls_feature_gate(feature_gate: FeatureGate) {
+    TLS_FEATURE_GATE.with(|f| *f.borrow_mut() = feature_gate);
 }

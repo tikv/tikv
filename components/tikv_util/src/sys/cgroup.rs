@@ -37,18 +37,20 @@ use procfs::process::{MountInfo, Process};
 // For more details about cgrop v2, PTAL
 // https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html.
 //
-// The above examples are implicitly based on a premise that paths in `/proc/self/cgroup`
-// can be appended to `/sys/fs/cgroup` directly to get the final paths. Generally it's
-// correct for Linux hosts but maybe wrong for containers. For containers, cgroup file systems
-// can be based on other mount points. For example:
+// The above examples are implicitly based on a premise that paths in
+// `/proc/self/cgroup` can be appended to `/sys/fs/cgroup` directly to get the
+// final paths. Generally it's correct for Linux hosts but maybe wrong for
+// containers. For containers, cgroup file systems can be based on other mount
+// points. For example:
 //
 // /proc/self/cgroup:
 //   4:memory:/path/to/the/controller
 // /proc/self/mountinfo:
-//   34 25 0:30 /path/to/the/controller /sys/fs/cgroup/memory relatime - cgroup cgroup memory
-// `path/to/the/controller` is possible to be not accessable in the container. However from the
-// `mountinfo` file we can know the path is mounted on `sys/fs/cgroup/memory`, then we can build
-// the absolute path based on the mountinfo file.
+//   34 25 0:30 /path/to/the/controller /sys/fs/cgroup/memory relatime - cgroup
+// cgroup memory `path/to/the/controller` is possible to be not accessable in
+// the container. However from the `mountinfo` file we can know the path is
+// mounted on `sys/fs/cgroup/memory`, then we can build the absolute path based
+// on the mountinfo file.
 //
 // For the format of the mountinfo file, PTAL https://man7.org/linux/man-pages/man5/proc.5.html.
 
@@ -175,10 +177,12 @@ fn is_cgroup2_unified_mode() -> Result<bool, String> {
 }
 
 // From cgroup spec:
-// "/proc/$PID/cgroup" lists a process’s cgroup membership. If legacy cgroup is in use in
-// the system, this file may contain multiple lines, one for each hierarchy.
+// "/proc/$PID/cgroup" lists a process’s cgroup membership. If legacy cgroup is
+// in use in the system, this file may contain multiple lines, one for each
+// hierarchy.
 //
-// The format is "<id>:<hierarchy>:<path>". For example, "10:cpuset:/test-cpuset".
+// The format is "<id>:<hierarchy>:<path>". For example,
+// "10:cpuset:/test-cpuset".
 fn parse_proc_cgroup_v1(lines: &str) -> HashMap<String, String> {
     let mut subsystems = HashMap::new();
     for line in lines.lines().map(|s| s.trim()).filter(|s| !s.is_empty()) {
@@ -251,11 +255,18 @@ fn cgroup_mountinfos_v2() -> HashMap<String, (String, PathBuf)> {
 }
 
 fn parse_mountinfos_v2(infos: Vec<MountInfo>) -> HashMap<String, (String, PathBuf)> {
-    let mut ret = HashMap::new();
-    let mut cg_infos = infos.into_iter().filter(|x| x.fs_type == "cgroup2");
-    if let Some(cg_info) = cg_infos.next() {
-        assert!(cg_infos.next().is_none()); // Only one item for cgroup-2.
-        ret.insert("".to_string(), (cg_info.root, cg_info.mount_point));
+    let mut ret: HashMap<String, (String, PathBuf)> = HashMap::new();
+    let cg_infos = infos.into_iter().filter(|x| x.fs_type == "cgroup2");
+    for info in cg_infos {
+        // Should only be one item for cgroup-2.
+        if let Some((root, mount_point)) = ret.insert("".to_string(), (info.root, info.mount_point))
+        {
+            warn!(
+                "Found multiple cgroup2 mountinfos, dropping {} {}",
+                root,
+                mount_point.display()
+            );
+        }
     }
     ret
 }
@@ -429,6 +440,36 @@ mod tests {
             .open(&format!("{}/mountinfo", dir))
             .unwrap();
         f.write_all(b"1663 1661 0:27 /../../../../../.. /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime - cgroup2 cgroup2 rw\n").unwrap();
+
+        let cgroups = parse_proc_cgroup_v2("0::/\n");
+        let mount_points = {
+            let infos = Process::new_with_root(PathBuf::from(dir))
+                .and_then(|x| x.mountinfo())
+                .unwrap();
+            parse_mountinfos_v2(infos)
+        };
+        let cgroup_sys = CGroupSys {
+            cgroups,
+            mount_points,
+            is_v2: true,
+        };
+
+        assert_eq!(cgroup_sys.memory_limit_in_bytes(), None);
+    }
+
+    #[test]
+    fn test_conflicting_mountinfo() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let dir = temp.path().to_str().unwrap();
+        std::fs::copy("/proc/self/stat", &format!("{}/stat", dir)).unwrap();
+
+        let mut f = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&format!("{}/mountinfo", dir))
+            .unwrap();
+        f.write_all(b"1663 1661 0:27 /../../../../../.. /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime - cgroup2 cgroup2 rw
+        1663 1661 0:27 /../../../../../.. /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime - cgroup2 cgroup2 rw").unwrap();
 
         let cgroups = parse_proc_cgroup_v2("0::/\n");
         let mount_points = {

@@ -5,9 +5,8 @@ use std::{iter::FromIterator, sync::Arc, time::Duration};
 use futures::executor::block_on;
 use kvproto::{metapb, pdpb};
 use pd_client::PdClient;
-use raftstore::store::util::find_peer;
 use test_raftstore::*;
-use tikv_util::{config::ReadableDuration, mpsc};
+use tikv_util::{config::ReadableDuration, mpsc, store::find_peer};
 
 #[test]
 fn test_unsafe_recovery_send_report() {
@@ -34,7 +33,8 @@ fn test_unsafe_recovery_send_report() {
     })
     .unwrap();
 
-    // Mannually makes an update, and wait for the apply to be triggered, to simulate "some entries are commited but not applied" scenario.
+    // Manually makes an update, and wait for the apply to be triggered, to
+    // simulate "some entries are committed but not applied" scenario.
     cluster.put(b"random_key2", b"random_val2").unwrap();
     apply_triggered_rx
         .recv_timeout(Duration::from_secs(1))
@@ -88,8 +88,8 @@ fn test_unsafe_recovery_execution_result_report() {
     cluster.must_transfer_leader(region.get_id(), store2_peer);
     cluster.put(b"random_key1", b"random_val1").unwrap();
 
-    // Split the region into 2, and remove one of them, so that we can test both region peer list
-    // update and region creation.
+    // Split the region into 2, and remove one of them, so that we can test both
+    // region peer list update and region creation.
     pd_client.must_split_region(
         region,
         pdpb::CheckPolicy::Usekey,
@@ -113,11 +113,9 @@ fn test_unsafe_recovery_execution_result_report() {
             true,
         );
         // marjority is lost, can't propose command successfully.
-        assert!(
-            cluster
-                .call_command_on_leader(req, Duration::from_millis(10))
-                .is_err()
-        );
+        cluster
+            .call_command_on_leader(req, Duration::from_millis(10))
+            .unwrap_err();
     }
 
     cluster.must_enter_force_leader(region2.get_id(), nodes[0], vec![nodes[1], nodes[2]]);
@@ -302,11 +300,9 @@ fn test_unsafe_recovery_demotion_reentrancy() {
             true,
         );
         // marjority is lost, can't propose command successfully.
-        assert!(
-            cluster
-                .call_command_on_leader(req, Duration::from_millis(10))
-                .is_err()
-        );
+        cluster
+            .call_command_on_leader(req, Duration::from_millis(10))
+            .unwrap_err();
     }
 
     cluster.must_enter_force_leader(region.get_id(), nodes[0], vec![nodes[1], nodes[2]]);
@@ -382,8 +378,8 @@ fn test_unsafe_recovery_create_destroy_reentrancy() {
     cluster.must_transfer_leader(region.get_id(), store2_peer);
     cluster.put(b"random_key1", b"random_val1").unwrap();
 
-    // Split the region into 2, and remove one of them, so that we can test both region peer list
-    // update and region creation.
+    // Split the region into 2, and remove one of them, so that we can test both
+    // region peer list update and region creation.
     pd_client.must_split_region(
         region,
         pdpb::CheckPolicy::Usekey,
@@ -407,11 +403,9 @@ fn test_unsafe_recovery_create_destroy_reentrancy() {
             true,
         );
         // marjority is lost, can't propose command successfully.
-        assert!(
-            cluster
-                .call_command_on_leader(req, Duration::from_millis(10))
-                .is_err()
-        );
+        cluster
+            .call_command_on_leader(req, Duration::from_millis(10))
+            .unwrap_err();
     }
 
     cluster.must_enter_force_leader(region2.get_id(), nodes[0], vec![nodes[1], nodes[2]]);

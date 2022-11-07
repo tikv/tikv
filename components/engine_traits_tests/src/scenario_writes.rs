@@ -10,7 +10,7 @@ use panic_hook::recover_safe;
 use super::engine_cfs;
 
 #[allow(clippy::enum_variant_names)]
-#[derive(Eq, PartialEq)]
+#[derive(PartialEq)]
 enum WriteScenario {
     NoCf,
     DefaultCf,
@@ -42,17 +42,20 @@ impl WriteScenarioEngine {
             WriteBatchNoCf => {
                 let mut wb = self.db.engine.write_batch();
                 wb.put(key, value)?;
-                wb.write()
+                wb.write()?;
+                Ok(())
             }
             WriteBatchDefaultCf => {
                 let mut wb = self.db.engine.write_batch();
                 wb.put_cf(CF_DEFAULT, key, value)?;
-                wb.write()
+                wb.write()?;
+                Ok(())
             }
             WriteBatchOtherCf => {
                 let mut wb = self.db.engine.write_batch();
                 wb.put_cf(CF_WRITE, key, value)?;
-                wb.write()
+                wb.write()?;
+                Ok(())
             }
         }
     }
@@ -66,17 +69,20 @@ impl WriteScenarioEngine {
             WriteBatchNoCf => {
                 let mut wb = self.db.engine.write_batch();
                 wb.delete(key)?;
-                wb.write()
+                wb.write()?;
+                Ok(())
             }
             WriteBatchDefaultCf => {
                 let mut wb = self.db.engine.write_batch();
                 wb.delete_cf(CF_DEFAULT, key)?;
-                wb.write()
+                wb.write()?;
+                Ok(())
             }
             WriteBatchOtherCf => {
                 let mut wb = self.db.engine.write_batch();
                 wb.delete_cf(CF_WRITE, key)?;
-                wb.write()
+                wb.write()?;
+                Ok(())
             }
         }
     }
@@ -90,22 +96,25 @@ impl WriteScenarioEngine {
             WriteBatchNoCf => {
                 let mut wb = self.db.engine.write_batch();
                 wb.delete_range(start, end)?;
-                wb.write()
+                wb.write()?;
+                Ok(())
             }
             WriteBatchDefaultCf => {
                 let mut wb = self.db.engine.write_batch();
                 wb.delete_range_cf(CF_DEFAULT, start, end)?;
-                wb.write()
+                wb.write()?;
+                Ok(())
             }
             WriteBatchOtherCf => {
                 let mut wb = self.db.engine.write_batch();
                 wb.delete_range_cf(CF_WRITE, start, end)?;
-                wb.write()
+                wb.write()?;
+                Ok(())
             }
         }
     }
 
-    fn get_value(&self, key: &[u8]) -> Result<Option<<KvTestEngine as Peekable>::DBVector>> {
+    fn get_value(&self, key: &[u8]) -> Result<Option<<KvTestEngine as Peekable>::DbVector>> {
         use WriteScenario::*;
         match self.scenario {
             NoCf | DefaultCf | WriteBatchNoCf | WriteBatchDefaultCf => {
@@ -213,8 +222,7 @@ scenario_test! { put_get {
 
 scenario_test! { delete_none {
     let db = write_scenario_engine();
-    let res = db.delete(b"foo");
-    assert!(res.is_ok());
+    db.delete(b"foo").unwrap();
 }}
 
 scenario_test! { delete {
@@ -280,9 +288,9 @@ scenario_test! { delete_range_reverse_range {
     db.put(b"c", b"").unwrap();
     db.put(b"d", b"").unwrap();
 
-    assert!(recover_safe(|| {
+    recover_safe(|| {
         db.delete_range(b"d", b"b").unwrap();
-    }).is_err());
+    }).unwrap_err();
 
     assert!(db.get_value(b"b").unwrap().is_some());
     assert!(db.get_value(b"c").unwrap().is_some());

@@ -1,8 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! People implementing RPN functions with fixed argument type and count don't necessarily
-//! need to understand how `Evaluator` and `RpnDef` work. There's a procedural macro called
-//! `rpn_fn` defined in `tidb_query_codegen` to help you create RPN functions. For example:
+//! People implementing RPN functions with fixed argument type and count don't
+//! necessarily need to understand how `Evaluator` and `RpnDef` work. There's a
+//! procedural macro called `rpn_fn` defined in `tidb_query_codegen` to help you
+//! create RPN functions. For example:
 //!
 //! ```ignore
 //! use tidb_query_codegen::rpn_fn;
@@ -13,9 +14,10 @@
 //! }
 //! ```
 //!
-//! You can still call the `foo` function directly; the macro preserves the original function
-//! It creates a `foo_fn_meta()` function (simply add `_fn_meta` to the original
-//! function name) which generates an `RpnFnMeta` struct.
+//! You can still call the `foo` function directly; the macro preserves the
+//! original function It creates a `foo_fn_meta()` function (simply add
+//! `_fn_meta` to the original function name) which generates an `RpnFnMeta`
+//! struct.
 //!
 //! For more information on the procedural macro, see the documentation in
 //! `components/tidb_query_codegen/src/rpn_function`.
@@ -96,7 +98,8 @@ impl<'a, T: EvaluableRef<'a>> ScalarArg<'a, T> {
 impl<'a, T: EvaluableRef<'a>> RpnFnArg for ScalarArg<'a, T> {
     type Type = Option<T>;
 
-    /// Gets the value in the given row. All rows of a `ScalarArg` share the same value.
+    /// Gets the value in the given row. All rows of a `ScalarArg` share the
+    /// same value.
     #[inline]
     fn get(&self, _row: usize) -> Option<T> {
         self.0.clone()
@@ -137,17 +140,19 @@ impl<'a, T: EvaluableRef<'a>, C: 'a + ChunkRef<'a, T>> RpnFnArg for VectorArg<'a
 
 /// Partial or complete argument definition of an RPN function.
 ///
-/// `ArgDef` is constructed at the beginning of evaluating an RPN function. The types of
-/// `RpnFnArg`s are determined at this stage. So there won't be dynamic dispatch or enum matches
-/// when the function is applied to each row of the input.
+/// `ArgDef` is constructed at the beginning of evaluating an RPN function. The
+/// types of `RpnFnArg`s are determined at this stage. So there won't be dynamic
+/// dispatch or enum matches when the function is applied to each row of the
+/// input.
 pub trait ArgDef: std::fmt::Debug {}
 
 /// RPN function argument definitions in the form of a linked list.
 ///
-/// For example, if an RPN function foo(Int, Real, Decimal) is applied to input of a scalar of
-/// integer, a vector of reals and a vector of decimals, the constructed `ArgDef` will be
-/// `Arg<ScalarArg<Int>, Arg<VectorValue<Real>, Arg<VectorValue<Decimal>, Null>>>`. `Null`
-/// indicates the end of the argument list.
+/// For example, if an RPN function foo(Int, Real, Decimal) is applied to input
+/// of a scalar of integer, a vector of reals and a vector of decimals, the
+/// constructed `ArgDef` will be `Arg<ScalarArg<Int>, Arg<VectorValue<Real>,
+/// Arg<VectorValue<Decimal>, Null>>>`. `Null` indicates the end of the argument
+/// list.
 #[derive(Debug)]
 pub struct Arg<A: RpnFnArg, Rem: ArgDef> {
     arg: A,
@@ -157,8 +162,8 @@ pub struct Arg<A: RpnFnArg, Rem: ArgDef> {
 impl<A: RpnFnArg, Rem: ArgDef> ArgDef for Arg<A, Rem> {}
 
 impl<A: RpnFnArg, Rem: ArgDef> Arg<A, Rem> {
-    /// Gets the value of the head argument in the given row and returns the remaining argument
-    /// list.
+    /// Gets the value of the head argument in the given row and returns the
+    /// remaining argument list.
     #[inline]
     pub fn extract(&self, row: usize) -> (A::Type, &Rem) {
         (self.arg.get(row), &self.rem)
@@ -179,16 +184,18 @@ impl ArgDef for Null {}
 
 /// A generic evaluator of an RPN function.
 ///
-/// For every RPN function, the evaluator should be created first. Then, call its `eval` method
-/// with the input to get the result vector.
+/// For every RPN function, the evaluator should be created first. Then, call
+/// its `eval` method with the input to get the result vector.
 ///
 /// There are two kinds of evaluators in general:
-/// - `ArgConstructor`: It's a provided `Evaluator`. It is used in the `rpn_fn` attribute macro
-///   to generate the `ArgDef`. The `def` parameter of its eval method is the already constructed
-///   `ArgDef`. If it is the outmost evaluator, `def` should be `Null`.
-/// - Custom evaluators which do the actual execution of the RPN function. The `def` parameter of
-///   its eval method is the constructed `ArgDef`. Implementors can then extract values from the
-///   arguments, execute the RPN function and fill the result vector.
+/// - `ArgConstructor`: It's a provided `Evaluator`. It is used in the `rpn_fn`
+///   attribute macro to generate the `ArgDef`. The `def` parameter of its eval
+///   method is the already constructed `ArgDef`. If it is the outmost
+///   evaluator, `def` should be `Null`.
+/// - Custom evaluators which do the actual execution of the RPN function. The
+///   `def` parameter of its eval method is the constructed `ArgDef`.
+///   Implementors can then extract values from the arguments, execute the RPN
+///   function and fill the result vector.
 pub trait Evaluator<'a> {
     fn eval(
         self,
@@ -271,7 +278,8 @@ pub fn validate_expr_return_type(expr: &Expr, et: EvalType) -> Result<()> {
     }
 }
 
-/// Validates whether the number of arguments of an expression node meets expectation.
+/// Validates whether the number of arguments of an expression node meets
+/// expectation.
 pub fn validate_expr_arguments_eq(expr: &Expr, args: usize) -> Result<()> {
     let received_args = expr.get_children().len();
     if received_args == args {
@@ -285,7 +293,8 @@ pub fn validate_expr_arguments_eq(expr: &Expr, args: usize) -> Result<()> {
     }
 }
 
-/// Validates whether the number of arguments of an expression node >= expectation.
+/// Validates whether the number of arguments of an expression node >=
+/// expectation.
 pub fn validate_expr_arguments_gte(expr: &Expr, args: usize) -> Result<()> {
     let received_args = expr.get_children().len();
     if received_args >= args {
@@ -299,7 +308,8 @@ pub fn validate_expr_arguments_gte(expr: &Expr, args: usize) -> Result<()> {
     }
 }
 
-/// Validates whether the number of arguments of an expression node <= expectation.
+/// Validates whether the number of arguments of an expression node <=
+/// expectation.
 pub fn validate_expr_arguments_lte(expr: &Expr, args: usize) -> Result<()> {
     let received_args = expr.get_children().len();
     if received_args <= args {

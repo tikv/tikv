@@ -32,7 +32,7 @@ fn test_node_async_fetch() {
     let mut before_states = HashMap::default();
 
     for (&id, engines) in &cluster.engines {
-        must_get_equal(engines.kv.as_inner(), b"k1", b"v1");
+        must_get_equal(&engines.kv, b"k1", b"v1");
         let mut state: RaftApplyState = engines
             .kv
             .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
@@ -88,7 +88,7 @@ fn test_node_async_fetch() {
     for i in 1..60u32 {
         let k = i.to_string().into_bytes();
         let v = k.clone();
-        must_get_equal(cluster.engines[&1].kv.as_inner(), &k, &v);
+        must_get_equal(&cluster.engines[&1].kv, &k, &v);
     }
 
     for i in 60..500u32 {
@@ -103,7 +103,7 @@ fn test_node_async_fetch() {
                 &cluster.engines,
                 &before_states,
                 1,
-                false, /*must_compacted*/
+                false, // must_compacted
             )
         {
             return;
@@ -113,7 +113,7 @@ fn test_node_async_fetch() {
         &cluster.engines,
         &before_states,
         1,
-        true, /*must_compacted*/
+        true, // must_compacted
     );
 }
 
@@ -256,7 +256,8 @@ fn test_node_compact_entry_cache() {
     // change one peer to learner
     cluster.pd_client.add_peer(1, new_learner_peer(5, 5));
 
-    // cause log lag and pause async fetch to check if entry cache is reserved for the learner
+    // cause log lag and pause async fetch to check if entry cache is reserved for
+    // the learner
     for i in 1..6 {
         let k = i.to_string().into_bytes();
         let v = k.clone();

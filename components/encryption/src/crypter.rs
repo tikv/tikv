@@ -2,7 +2,7 @@
 
 use byteorder::{BigEndian, ByteOrder};
 use derive_more::Deref;
-use engine_traits::EncryptionMethod as DBEncryptionMethod;
+use engine_traits::EncryptionMethod as EtEncryptionMethod;
 use kvproto::encryptionpb::EncryptionMethod;
 use openssl::symm::{self, Cipher as OCipher};
 use rand::{rngs::OsRng, RngCore};
@@ -10,30 +10,26 @@ use tikv_util::{box_err, impl_display_as_debug};
 
 use crate::{Error, Result};
 
-pub fn encryption_method_to_db_encryption_method(method: EncryptionMethod) -> DBEncryptionMethod {
+pub fn to_engine_encryption_method(method: EncryptionMethod) -> EtEncryptionMethod {
     match method {
-        EncryptionMethod::Plaintext => DBEncryptionMethod::Plaintext,
-        EncryptionMethod::Aes128Ctr => DBEncryptionMethod::Aes128Ctr,
-        EncryptionMethod::Aes192Ctr => DBEncryptionMethod::Aes192Ctr,
-        EncryptionMethod::Aes256Ctr => DBEncryptionMethod::Aes256Ctr,
-        EncryptionMethod::Sm4Ctr => DBEncryptionMethod::Sm4Ctr,
-        EncryptionMethod::Unknown => DBEncryptionMethod::Unknown,
+        EncryptionMethod::Plaintext => EtEncryptionMethod::Plaintext,
+        EncryptionMethod::Aes128Ctr => EtEncryptionMethod::Aes128Ctr,
+        EncryptionMethod::Aes192Ctr => EtEncryptionMethod::Aes192Ctr,
+        EncryptionMethod::Aes256Ctr => EtEncryptionMethod::Aes256Ctr,
+        EncryptionMethod::Sm4Ctr => EtEncryptionMethod::Sm4Ctr,
+        EncryptionMethod::Unknown => EtEncryptionMethod::Unknown,
     }
 }
 
-pub fn encryption_method_from_db_encryption_method(method: DBEncryptionMethod) -> EncryptionMethod {
+pub fn from_engine_encryption_method(method: EtEncryptionMethod) -> EncryptionMethod {
     match method {
-        DBEncryptionMethod::Plaintext => EncryptionMethod::Plaintext,
-        DBEncryptionMethod::Aes128Ctr => EncryptionMethod::Aes128Ctr,
-        DBEncryptionMethod::Aes192Ctr => EncryptionMethod::Aes192Ctr,
-        DBEncryptionMethod::Aes256Ctr => EncryptionMethod::Aes256Ctr,
-        DBEncryptionMethod::Sm4Ctr => EncryptionMethod::Sm4Ctr,
-        DBEncryptionMethod::Unknown => EncryptionMethod::Unknown,
+        EtEncryptionMethod::Plaintext => EncryptionMethod::Plaintext,
+        EtEncryptionMethod::Aes128Ctr => EncryptionMethod::Aes128Ctr,
+        EtEncryptionMethod::Aes192Ctr => EncryptionMethod::Aes192Ctr,
+        EtEncryptionMethod::Aes256Ctr => EncryptionMethod::Aes256Ctr,
+        EtEncryptionMethod::Sm4Ctr => EncryptionMethod::Sm4Ctr,
+        EtEncryptionMethod::Unknown => EncryptionMethod::Unknown,
     }
-}
-
-pub fn compat(method: EncryptionMethod) -> EncryptionMethod {
-    method
 }
 
 pub fn get_method_key_length(method: EncryptionMethod) -> usize {
@@ -153,7 +149,7 @@ impl<'k> AesGcmCrypter<'k> {
             cipher,
             &self.key.0,
             Some(self.iv.as_slice()),
-            &[], /* AAD */
+            &[], // AAD
             pt,
             &mut tag.0,
         )?;
@@ -166,7 +162,7 @@ impl<'k> AesGcmCrypter<'k> {
             cipher,
             &self.key.0,
             Some(self.iv.as_slice()),
-            &[], /* AAD */
+            &[], // AAD
             ct,
             &tag.0,
         )?;

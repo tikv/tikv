@@ -23,7 +23,8 @@ pub fn table_with_2_columns(rows: usize) -> (Table, Store<RocksEngine>) {
     (table, store)
 }
 
-/// Builds a fixture table, which contains specified number of columns: col0, col1, col2, ...
+/// Builds a fixture table, which contains specified number of columns: col0,
+/// col1, col2, ...
 pub fn table_with_multi_columns(rows: usize, columns: usize) -> (Table, Store<RocksEngine>) {
     let mut table = TableBuilder::new();
     for idx in 0..columns {
@@ -44,8 +45,8 @@ pub fn table_with_multi_columns(rows: usize, columns: usize) -> (Table, Store<Ro
     (table, store)
 }
 
-/// Builds a fixture table, which contains specified number of columns: col0, col1, col2, ...,
-/// but the first column does not present in data.
+/// Builds a fixture table, which contains specified number of columns: col0,
+/// col1, col2, ..., but the first column does not present in data.
 pub fn table_with_missing_column(rows: usize, columns: usize) -> (Table, Store<RocksEngine>) {
     let mut table = TableBuilder::new();
     for idx in 0..columns {
@@ -67,7 +68,8 @@ pub fn table_with_missing_column(rows: usize, columns: usize) -> (Table, Store<R
     (table, store)
 }
 
-/// Builds a fixture table, which contains three columns, id, foo, bar. Column bar is very long.
+/// Builds a fixture table, which contains three columns, id, foo, bar. Column
+/// bar is very long.
 pub fn table_with_long_column(rows: usize) -> (Table, Store<RocksEngine>) {
     let id = ColumnBuilder::new()
         .col_type(TYPE_LONG)

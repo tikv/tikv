@@ -3,7 +3,9 @@
 use engine_traits::{Error, RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch, Result};
 use kvproto::{
     metapb::Region,
-    raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
+    raft_serverpb::{
+        RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent, StoreRecoverState,
+    },
 };
 use raft::eraftpb::Entry;
 
@@ -50,6 +52,10 @@ impl RaftEngineReadOnly for PanicEngine {
     }
 
     fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>> {
+        panic!()
+    }
+
+    fn get_recover_state(&self) -> Result<Option<StoreRecoverState>> {
         panic!()
     }
 }
@@ -114,7 +120,11 @@ impl RaftEngine for PanicEngine {
         panic!()
     }
 
-    fn purge_expired_files(&self) -> Result<Vec<u64>> {
+    fn need_manual_purge(&self) -> bool {
+        panic!()
+    }
+
+    fn manual_purge(&self) -> Result<Vec<u64>> {
         panic!()
     }
 
@@ -143,6 +153,10 @@ impl RaftEngine for PanicEngine {
         F: FnMut(u64) -> std::result::Result<(), E>,
         E: From<Error>,
     {
+        panic!()
+    }
+
+    fn put_recover_state(&self, state: &StoreRecoverState) -> Result<()> {
         panic!()
     }
 }

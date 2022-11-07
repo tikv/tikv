@@ -8,7 +8,7 @@ use std::{
 
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
-use engine_traits::{Engines, ALL_CFS};
+use engine_traits::{Engines, ALL_CFS, CF_DEFAULT};
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::{
     coprocessor::CoprocessorHost,
@@ -21,9 +21,9 @@ use raftstore::{
 };
 use resource_metering::CollectorRegHandle;
 use tempfile::TempDir;
-use test_raftstore::TestPdClient;
+use test_pd_client::TestPdClient;
 use tikv::{
-    config::{ConfigController, Module, TiKvConfig},
+    config::{ConfigController, Module, TikvConfig},
     import::SstImporter,
 };
 use tikv_util::{
@@ -49,29 +49,16 @@ impl Transport for MockTransport {
 }
 
 fn create_tmp_engine(dir: &TempDir) -> Engines<RocksEngine, RocksEngine> {
-    let db = Arc::new(
-        engine_rocks::raw_util::new_engine(
-            dir.path().join("db").to_str().unwrap(),
-            None,
-            ALL_CFS,
-            None,
-        )
-        .unwrap(),
-    );
-    let raft_db = Arc::new(
-        engine_rocks::raw_util::new_engine(
-            dir.path().join("raft").to_str().unwrap(),
-            None,
-            &[],
-            None,
-        )
-        .unwrap(),
-    );
-    Engines::new(RocksEngine::from_db(db), RocksEngine::from_db(raft_db))
+    let db =
+        engine_rocks::util::new_engine(dir.path().join("db").to_str().unwrap(), ALL_CFS).unwrap();
+    let raft_db =
+        engine_rocks::util::new_engine(dir.path().join("raft").to_str().unwrap(), &[CF_DEFAULT])
+            .unwrap();
+    Engines::new(db, raft_db)
 }
 
 fn start_raftstore(
-    cfg: TiKvConfig,
+    cfg: TikvConfig,
     dir: &TempDir,
 ) -> (
     ConfigController,
@@ -124,6 +111,7 @@ fn start_raftstore(
             ConcurrencyManager::new(1.into()),
             CollectorRegHandle::new_for_test(),
             None,
+            None,
         )
         .unwrap();
 
@@ -155,7 +143,7 @@ where
 
 #[test]
 fn test_update_raftstore_config() {
-    let (mut config, _dir) = TiKvConfig::with_tmp().unwrap();
+    let (mut config, _dir) = TikvConfig::with_tmp().unwrap();
     config.validate().unwrap();
     let (cfg_controller, router, _, mut system) = start_raftstore(config.clone(), &_dir);
 
@@ -174,6 +162,7 @@ fn test_update_raftstore_config() {
         ("raftstore.apply-max-batch-size", "1234"),
         ("raftstore.store-max-batch-size", "4321"),
         ("raftstore.raft-entry-max-size", "32MiB"),
+        ("raftstore.apply-yield-write-size", "10KiB"),
     ]);
 
     cfg_controller.update(change).unwrap();
@@ -181,6 +170,7 @@ fn test_update_raftstore_config() {
     // config should be updated
     let mut raft_store = config.raft_store;
     raft_store.messages_per_tick = 12345;
+    raft_store.apply_yield_write_size = ReadableSize::kb(10);
     raft_store.raft_log_gc_threshold = 54321;
     raft_store.apply_batch_system.max_batch_size = Some(1234);
     raft_store.store_batch_system.max_batch_size = Some(4321);
@@ -204,7 +194,7 @@ fn test_update_raftstore_config() {
     ];
     for cfg in invalid_cfgs {
         let change = new_changes(vec![cfg]);
-        assert!(cfg_controller.update(change).is_err());
+        cfg_controller.update(change).unwrap_err();
 
         // update failed, original config should not be changed.
         validate_store_cfg(&raft_store);

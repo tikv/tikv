@@ -20,15 +20,16 @@ use crate::storage::{
     },
 };
 
-/// Read from an MVCC snapshot, i.e., a logical view of the database at a specific timestamp (the
-/// start_ts).
+/// Read from an MVCC snapshot, i.e., a logical view of the database at a
+/// specific timestamp (the start_ts).
 ///
 /// This represents the view of the database from a single transaction.
 ///
-/// Confusingly, there are two meanings of the word 'snapshot' here. In the name of the struct,
-/// 'snapshot' means an mvcc snapshot. In the type parameter bound (of `S`), 'snapshot' means a view
-/// of the underlying storage engine at a given point in time. This latter snapshot will include
-/// values for keys at multiple timestamps.
+/// Confusingly, there are two meanings of the word 'snapshot' here. In the name
+/// of the struct, 'snapshot' means an mvcc snapshot. In the type parameter
+/// bound (of `S`), 'snapshot' means a view of the underlying storage engine at
+/// a given point in time. This latter snapshot will include values for keys at
+/// multiple timestamps.
 pub struct SnapshotReader<S: EngineSnapshot> {
     pub reader: MvccReader<S>,
     pub start_ts: TimeStamp,
@@ -123,11 +124,15 @@ pub struct MvccReader<S: EngineSnapshot> {
     lock_cursor: Option<Cursor<S::Iter>>,
     write_cursor: Option<Cursor<S::Iter>>,
 
-    /// None means following operations are performed on a single user key, i.e.,
-    /// different versions of the same key. It can use prefix seek to speed up reads
-    /// from the write-cf.
+    lower_bound: Option<Key>,
+    upper_bound: Option<Key>,
+
+    /// None means following operations are performed on a single user key,
+    /// i.e., different versions of the same key. It can use prefix seek to
+    /// speed up reads from the write-cf.
     scan_mode: Option<ScanMode>,
-    // Records the current key for prefix seek. Will Reset the write cursor when switching to another key.
+    // Records the current key for prefix seek. Will Reset the write cursor when switching to
+    // another key.
     current_key: Option<Key>,
 
     fill_cache: bool,
@@ -147,6 +152,8 @@ impl<S: EngineSnapshot> MvccReader<S> {
             data_cursor: None,
             lock_cursor: None,
             write_cursor: None,
+            lower_bound: None,
+            upper_bound: None,
             scan_mode,
             current_key: None,
             fill_cache,
@@ -162,6 +169,8 @@ impl<S: EngineSnapshot> MvccReader<S> {
             data_cursor: None,
             lock_cursor: None,
             write_cursor: None,
+            lower_bound: None,
+            upper_bound: None,
             scan_mode,
             current_key: None,
             fill_cache: !ctx.get_not_fill_cache(),
@@ -195,7 +204,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
                 self.statistics.data.processed_keys += 1;
                 Ok(val)
             }
-            None => Err(default_not_found_error(key.to_raw()?, "get")),
+            None => Err(default_not_found_error(k.into_encoded(), "get")),
         }
     }
 
@@ -266,28 +275,31 @@ impl<S: EngineSnapshot> MvccReader<S> {
     }
 
     /// Return:
-    ///   (commit_ts, write_record) of the write record for `key` committed before or equal to`ts`
-    /// Post Condition:
-    ///   leave the write_cursor at the first record which key is less or equal to the `ts` encoded version of `key`
+    ///   (commit_ts, write_record) of the write record for `key` committed
+    /// before or equal to`ts` Post Condition:
+    ///   leave the write_cursor at the first record which key is less or equal
+    /// to the `ts` encoded version of `key`
     pub fn seek_write(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<(TimeStamp, Write)>> {
         // Get the cursor for write record
         //
-        // When it switches to another key in prefix seek mode, creates a new cursor for it
-        // because the current position of the cursor is seldom around `key`.
+        // When it switches to another key in prefix seek mode, creates a new cursor for
+        // it because the current position of the cursor is seldom around `key`.
         if self.scan_mode.is_none() && self.current_key.as_ref().map_or(true, |k| k != key) {
             self.current_key = Some(key.clone());
             self.write_cursor.take();
         }
         self.create_write_cursor()?;
         let cursor = self.write_cursor.as_mut().unwrap();
-        // find a `ts` encoded key which is less than the `ts` encoded version of the `key`
+        // find a `ts` encoded key which is less than the `ts` encoded version of the
+        // `key`
         let found = cursor.near_seek(&key.clone().append_ts(ts), &mut self.statistics.write)?;
         if !found {
             return Ok(None);
         }
         let write_key = cursor.key(&mut self.statistics.write);
         let commit_ts = Key::decode_ts_from(write_key)?;
-        // check whether the found written_key's "real key" part equals the `key` we want to find
+        // check whether the found written_key's "real key" part equals the `key` we
+        // want to find
         if !Key::is_user_key_eq(write_key, key.as_encoded()) {
             return Ok(None);
         }
@@ -296,17 +308,19 @@ impl<S: EngineSnapshot> MvccReader<S> {
         Ok(Some((commit_ts, write)))
     }
 
-    /// Gets the value of the specified key's latest version before specified `ts`.
+    /// Gets the value of the specified key's latest version before specified
+    /// `ts`.
     ///
-    /// It tries to ensure the write record's `gc_fence`'s ts, if any, greater than specified
-    /// `gc_fence_limit`. Pass `None` to `gc_fence_limit` to skip the check.
-    /// The caller must guarantee that there's no other `PUT` or `DELETE` versions whose `commit_ts`
-    /// is between the found version and the provided `gc_fence_limit` (`gc_fence_limit` is
-    /// inclusive).
+    /// It tries to ensure the write record's `gc_fence`'s ts, if any, greater
+    /// than specified `gc_fence_limit`. Pass `None` to `gc_fence_limit` to
+    /// skip the check. The caller must guarantee that there's no other `PUT` or
+    /// `DELETE` versions whose `commit_ts` is between the found version and
+    /// the provided `gc_fence_limit` (`gc_fence_limit` is inclusive).
     ///
-    /// For transactional reads, the `gc_fence_limit` must be provided to ensure the result is
-    /// correct. Generally, it should be the read_ts of the current transaction, which might be
-    /// different from the `ts` passed to this function.
+    /// For transactional reads, the `gc_fence_limit` must be provided to ensure
+    /// the result is correct. Generally, it should be the read_ts of the
+    /// current transaction, which might be different from the `ts` passed to
+    /// this function.
     ///
     /// Note that this function does not check for locks on `key`.
     fn get(
@@ -321,15 +335,17 @@ impl<S: EngineSnapshot> MvccReader<S> {
         })
     }
 
-    /// Gets the write record of the specified key's latest version before specified `ts`.
-    /// It tries to ensure the write record's `gc_fence`'s ts, if any, greater than specified
-    /// `gc_fence_limit`. Pass `None` to `gc_fence_limit` to skip the check.
-    /// The caller must guarantee that there's no other `PUT` or `DELETE` versions whose `commit_ts`
-    /// is between the found version and the provided `gc_fence_limit` (`gc_fence_limit` is
+    /// Gets the write record of the specified key's latest version before
+    /// specified `ts`. It tries to ensure the write record's `gc_fence`'s
+    /// ts, if any, greater than specified `gc_fence_limit`. Pass `None` to
+    /// `gc_fence_limit` to skip the check. The caller must guarantee that
+    /// there's no other `PUT` or `DELETE` versions whose `commit_ts` is between
+    /// the found version and the provided `gc_fence_limit` (`gc_fence_limit` is
     /// inclusive).
-    /// For transactional reads, the `gc_fence_limit` must be provided to ensure the result is
-    /// correct. Generally, it should be the read_ts of the current transaction, which might be
-    /// different from the `ts` passed to this function.
+    /// For transactional reads, the `gc_fence_limit` must be provided to ensure
+    /// the result is correct. Generally, it should be the read_ts of the
+    /// current transaction, which might be different from the `ts` passed to
+    /// this function.
     pub fn get_write(
         &mut self,
         key: &Key,
@@ -341,8 +357,8 @@ impl<S: EngineSnapshot> MvccReader<S> {
             .map(|(w, _)| w))
     }
 
-    /// Gets the write record of the specified key's latest version before specified `ts`, and
-    /// additionally the write record's `commit_ts`, if any.
+    /// Gets the write record of the specified key's latest version before
+    /// specified `ts`, and additionally the write record's `commit_ts`, if any.
     ///
     /// See also [`MvccReader::get_write`].
     pub fn get_write_with_commit_ts(
@@ -375,8 +391,8 @@ impl<S: EngineSnapshot> MvccReader<S> {
     }
 
     fn get_txn_commit_record(&mut self, key: &Key, start_ts: TimeStamp) -> Result<TxnCommitRecord> {
-        // It's possible a txn with a small `start_ts` has a greater `commit_ts` than a txn with
-        // a greater `start_ts` in pessimistic transaction.
+        // It's possible a txn with a small `start_ts` has a greater `commit_ts` than a
+        // txn with a greater `start_ts` in pessimistic transaction.
         // I.e., txn_1.commit_ts > txn_2.commit_ts > txn_2.start_ts > txn_1.start_ts.
         //
         // Scan all the versions from `TimeStamp::max()` to `start_ts`.
@@ -412,6 +428,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             let cursor = CursorBuilder::new(&self.snapshot, CF_DEFAULT)
                 .fill_cache(self.fill_cache)
                 .scan_mode(self.get_scan_mode(true))
+                .range(self.lower_bound.clone(), self.upper_bound.clone())
                 .build()?;
             self.data_cursor = Some(cursor);
         }
@@ -425,6 +442,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
                 // Only use prefix seek in non-scan mode.
                 .prefix_seek(self.scan_mode.is_none())
                 .scan_mode(self.get_scan_mode(true))
+                .range(self.lower_bound.clone(), self.upper_bound.clone())
                 .build()?;
             self.write_cursor = Some(cursor);
         }
@@ -436,6 +454,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             let cursor = CursorBuilder::new(&self.snapshot, CF_LOCK)
                 .fill_cache(self.fill_cache)
                 .scan_mode(self.get_scan_mode(true))
+                .range(self.lower_bound.clone(), self.upper_bound.clone())
                 .build()?;
             self.lock_cursor = Some(cursor);
         }
@@ -462,11 +481,12 @@ impl<S: EngineSnapshot> MvccReader<S> {
         Ok(None)
     }
 
-    /// Scan locks that satisfies `filter(lock)` returns true, from the given start key `start`.
-    /// At most `limit` locks will be returned. If `limit` is set to `0`, it means unlimited.
+    /// Scan locks that satisfies `filter(lock)` returns true in the key range
+    /// [start, end). At most `limit` locks will be returned. If `limit` is
+    /// set to `0`, it means unlimited.
     ///
-    /// The return type is `(locks, is_remain)`. `is_remain` indicates whether there MAY be
-    /// remaining locks that can be scanned.
+    /// The return type is `(locks, has_remain)`. `has_remain` indicates whether
+    /// there MAY be remaining locks that can be scanned.
     pub fn scan_locks<F>(
         &mut self,
         start: Option<&Key>,
@@ -487,11 +507,13 @@ impl<S: EngineSnapshot> MvccReader<S> {
             return Ok((vec![], false));
         }
         let mut locks = Vec::with_capacity(limit);
+        let mut has_remain = false;
         while cursor.valid()? {
             let key = Key::from_encoded_slice(cursor.key(&mut self.statistics.lock));
             if let Some(end) = end {
                 if key >= *end {
-                    return Ok((locks, false));
+                    has_remain = false;
+                    break;
                 }
             }
 
@@ -499,14 +521,117 @@ impl<S: EngineSnapshot> MvccReader<S> {
             if filter(&lock) {
                 locks.push((key, lock));
                 if limit > 0 && locks.len() == limit {
-                    return Ok((locks, true));
+                    has_remain = true;
+                    break;
                 }
             }
             cursor.next(&mut self.statistics.lock);
         }
         self.statistics.lock.processed_keys += locks.len();
-        // If we reach here, `cursor.valid()` is `false`, so there MUST be no more locks.
-        Ok((locks, false))
+        Ok((locks, has_remain))
+    }
+
+    /// Scan the writes to get all the latest keys with their corresponding
+    /// PUT/DELETE write records at the given version, if the version is not
+    /// specified, it will scan the latest version for each key, if the key
+    /// does not exist or is not visible at that point, an `Option::None` will
+    /// be placed. The return type is:
+    /// * `(Vec<(key, commit_ts, Option<write>)>, has_remain)`.
+    ///   - `key` is the encoded key without commit ts.
+    ///   - `commit_ts` is the latest commit ts of the key.
+    ///   - `write` is the PUT/DELETE write record at the given version.
+    ///   - `has_remain` indicates whether there MAY be remaining writes that
+    ///     can be scanned.
+    ///
+    /// This function is mainly used by
+    /// `txn::commands::FlashbackToVersionReadPhase`
+    /// and `txn::commands::FlashbackToVersion` to achieve the MVCC
+    /// overwriting.
+    pub fn scan_writes<F>(
+        &mut self,
+        start: Option<&Key>,
+        end: Option<&Key>,
+        version: Option<TimeStamp>,
+        filter: F,
+        limit: usize,
+    ) -> Result<(Vec<(Key, TimeStamp, Option<Write>)>, bool)>
+    where
+        F: Fn(&Key) -> bool,
+    {
+        self.create_write_cursor()?;
+        let cursor = self.write_cursor.as_mut().unwrap();
+        let ok = match start {
+            Some(x) => cursor.seek(x, &mut self.statistics.write)?,
+            None => cursor.seek_to_first(&mut self.statistics.write),
+        };
+        if !ok {
+            return Ok((vec![], false));
+        }
+        // Use the latest version as the default value if the version is not given.
+        let version = version.unwrap_or_else(TimeStamp::max);
+        let mut cur_key = None;
+        let mut key_writes = Vec::with_capacity(limit);
+        let mut has_remain = false;
+        while cursor.valid()? {
+            let key = Key::from_encoded_slice(cursor.key(&mut self.statistics.write));
+            if let Some(end) = end {
+                if key >= *end {
+                    has_remain = false;
+                    break;
+                }
+            }
+            let commit_ts = key.decode_ts()?;
+            let user_key = key.clone().truncate_ts()?;
+            // To make sure we only check each unique key once and `filter(&key)` returns
+            // true.
+            if (cur_key.is_some() && cur_key.clone().unwrap() == user_key) || !filter(&key) {
+                cursor.next(&mut self.statistics.write);
+                continue;
+            }
+            cur_key = Some(user_key.clone());
+
+            let mut write = None;
+            let version_key = user_key.clone().append_ts(version);
+            // Try to seek to the key with the specified version.
+            if cursor.near_seek(&version_key, &mut self.statistics.write)?
+                && Key::is_user_key_eq(
+                    cursor.key(&mut self.statistics.write),
+                    user_key.as_encoded(),
+                )
+            {
+                while cursor.valid()? {
+                    write =
+                        Some(WriteRef::parse(cursor.value(&mut self.statistics.write))?.to_owned());
+                    // Move to the next key.
+                    cursor.next(&mut self.statistics.write);
+                    match write.as_ref().unwrap().write_type {
+                        WriteType::Put | WriteType::Delete => {
+                            break;
+                        }
+                        WriteType::Lock | WriteType::Rollback => {
+                            // We should find the latest visible version after it.
+                            let key =
+                                Key::from_encoded_slice(cursor.key(&mut self.statistics.write));
+                            // Could not find the visible version, current cursor is on the next
+                            // key, so we set both `write` and `cur_key` to `None`.
+                            if key.truncate_ts()? != user_key {
+                                write = None;
+                                cur_key = None;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            key_writes.push((user_key, commit_ts, write));
+            if limit > 0 && key_writes.len() == limit {
+                has_remain = true;
+                break;
+            }
+        }
+        self.statistics.write.processed_keys += key_writes.len();
+        resource_metering::record_read_keys(key_writes.len() as u32);
+        Ok((key_writes, has_remain))
     }
 
     pub fn scan_keys(
@@ -613,25 +738,28 @@ impl<S: EngineSnapshot> MvccReader<S> {
             None => OldValue::None,
         })
     }
+
+    pub fn set_range(&mut self, lower: Option<Key>, upper: Option<Key>) {
+        self.lower_bound = lower;
+        self.upper_bound = upper;
+    }
 }
 
 #[cfg(test)]
 pub mod tests {
-    use std::{ops::Bound, sync::Arc, u64};
+    use std::{ops::Bound, u64};
 
     use concurrency_manager::ConcurrencyManager;
     use engine_rocks::{
-        properties::MvccPropertiesCollectorFactory,
-        raw::{ColumnFamilyOptions, DBOptions, DB},
-        raw_util::CFOptions,
-        Compat, RocksSnapshot,
+        properties::MvccPropertiesCollectorFactory, RocksCfOptions, RocksDbOptions, RocksEngine,
+        RocksSnapshot,
     };
     use engine_traits::{
-        IterOptions, Mutable, WriteBatch, WriteBatchExt, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT,
-        CF_WRITE,
+        CompactExt, IterOptions, MiscExt, Mutable, SyncMutable, WriteBatch, WriteBatchExt, ALL_CFS,
+        CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
     };
     use kvproto::{
-        kvrpcpb::{AssertionLevel, Context},
+        kvrpcpb::{AssertionLevel, Context, PrewriteRequestPessimisticAction::*},
         metapb::{Peer, Region},
     };
     use raftstore::store::RegionSnapshot;
@@ -649,20 +777,20 @@ pub mod tests {
     };
 
     pub struct RegionEngine {
-        db: Arc<DB>,
+        db: RocksEngine,
         region: Region,
     }
 
     impl RegionEngine {
-        pub fn new(db: &Arc<DB>, region: &Region) -> RegionEngine {
+        pub fn new(db: &RocksEngine, region: &Region) -> RegionEngine {
             RegionEngine {
-                db: Arc::clone(db),
+                db: db.clone(),
                 region: region.clone(),
             }
         }
 
         pub fn snapshot(&self) -> RegionSnapshot<RocksSnapshot> {
-            let db = self.db.c().clone();
+            let db = self.db.clone();
             RegionSnapshot::<RocksSnapshot>::from_raw(db, self.region.clone())
         }
 
@@ -740,7 +868,7 @@ pub mod tests {
                 &Self::txn_props(start_ts, pk, false),
                 m,
                 &None,
-                false,
+                SkipPessimisticCheck,
             )
             .unwrap();
             self.write(txn.into_modifies());
@@ -764,7 +892,7 @@ pub mod tests {
                 &Self::txn_props(start_ts, pk, true),
                 m,
                 &None,
-                true,
+                DoPessimisticCheck,
             )
             .unwrap();
             self.write(txn.into_modifies());
@@ -795,6 +923,8 @@ pub mod tests {
                 false,
                 TimeStamp::zero(),
                 true,
+                false,
+                false,
             )
             .unwrap();
             self.write(txn.into_modifies());
@@ -849,7 +979,7 @@ pub mod tests {
 
         pub fn write(&mut self, modifies: Vec<Modify>) {
             let db = &self.db;
-            let mut wb = db.c().write_batch();
+            let mut wb = db.write_batch();
             for rev in modifies {
                 match rev {
                     Modify::Put(cf, k, v) => {
@@ -879,22 +1009,20 @@ pub mod tests {
 
         pub fn flush(&mut self) {
             for cf in ALL_CFS {
-                let cf = engine_rocks::util::get_cf_handle(&self.db, cf).unwrap();
                 self.db.flush_cf(cf, true).unwrap();
             }
         }
 
         pub fn compact(&mut self) {
             for cf in ALL_CFS {
-                let cf = engine_rocks::util::get_cf_handle(&self.db, cf).unwrap();
-                self.db.compact_range_cf(cf, None, None);
+                self.db.compact_range(cf, None, None, false, 1).unwrap();
             }
         }
     }
 
-    pub fn open_db(path: &str, with_properties: bool) -> Arc<DB> {
-        let db_opts = DBOptions::new();
-        let mut cf_opts = ColumnFamilyOptions::new();
+    pub fn open_db(path: &str, with_properties: bool) -> RocksEngine {
+        let db_opt = RocksDbOptions::default();
+        let mut cf_opts = RocksCfOptions::default();
         cf_opts.set_write_buffer_size(32 * 1024 * 1024);
         if with_properties {
             cf_opts.add_table_properties_collector_factory(
@@ -903,12 +1031,12 @@ pub mod tests {
             );
         }
         let cfs_opts = vec![
-            CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
-            CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
-            CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
-            CFOptions::new(CF_WRITE, cf_opts),
+            (CF_DEFAULT, RocksCfOptions::default()),
+            (CF_RAFT, RocksCfOptions::default()),
+            (CF_LOCK, RocksCfOptions::default()),
+            (CF_WRITE, cf_opts),
         ];
-        Arc::new(engine_rocks::raw_util::new_engine_opt(path, db_opts, cfs_opts).unwrap())
+        engine_rocks::util::new_engine_opt(path, db_opt, cfs_opts).unwrap()
     }
 
     pub fn make_region(id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Region {
@@ -945,7 +1073,7 @@ pub mod tests {
         engine.put(&[12], 11, 12);
         engine.flush();
 
-        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db, region);
 
         let tests = vec![
             // set nothing.
@@ -972,7 +1100,7 @@ pub mod tests {
             iopt.set_hint_min_ts(min);
             iopt.set_hint_max_ts(max);
 
-            let mut iter = snap.iter_cf(CF_WRITE, iopt).unwrap();
+            let mut iter = snap.iter(CF_WRITE, iopt).unwrap();
 
             for (i, expect_ts) in res.iter().enumerate() {
                 if i == 0 {
@@ -1019,8 +1147,8 @@ pub mod tests {
         iopt.set_hint_min_ts(Bound::Included(1));
         iopt.set_hint_max_ts(Bound::Included(6));
 
-        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region);
-        let mut iter = snap.iter_cf(CF_WRITE, iopt).unwrap();
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db, region);
+        let mut iter = snap.iter(CF_WRITE, iopt).unwrap();
 
         // Must not omit the latest deletion of key1 to prevent seeing outdated record.
         assert_eq!(iter.seek_to_first().unwrap(), true);
@@ -1069,12 +1197,13 @@ pub mod tests {
         engine.prewrite_pessimistic_lock(m, k, 45);
         engine.commit(k, 45, 50);
 
-        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db, region);
         let mut reader = MvccReader::new(snap, None, false);
 
-        // Let's assume `50_45 PUT` means a commit version with start ts is 45 and commit ts
-        // is 50.
-        // Commit versions: [50_45 PUT, 45_40 PUT, 40_35 PUT, 30_25 PUT, 20_20 Rollback, 10_1 PUT, 5_5 Rollback].
+        // Let's assume `50_45 PUT` means a commit version with start ts is 45 and
+        // commit ts is 50.
+        // Commit versions: [50_45 PUT, 45_40 PUT, 40_35 PUT, 30_25 PUT, 20_20 Rollback,
+        // 10_1 PUT, 5_5 Rollback].
         let key = Key::from_raw(k);
         let overlapped_write = reader
             .get_txn_commit_record(&key, 55.into())
@@ -1082,8 +1211,8 @@ pub mod tests {
             .unwrap_none();
         assert!(overlapped_write.is_none());
 
-        // When no such record is found but a record of another txn has a write record with
-        // its commit_ts equals to current start_ts, it
+        // When no such record is found but a record of another txn has a write record
+        // with its commit_ts equals to current start_ts, it
         let overlapped_write = reader
             .get_txn_commit_record(&key, 50.into())
             .unwrap()
@@ -1180,7 +1309,7 @@ pub mod tests {
         engine.prewrite_pessimistic_lock(m, k, 1);
         engine.commit(k, 1, 4);
 
-        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db, region);
         let mut reader = MvccReader::new(snap, None, false);
 
         let (commit_ts, write_type) = reader
@@ -1238,10 +1367,11 @@ pub mod tests {
         engine.prewrite(m, k, 23);
         engine.commit(k, 23, 25);
 
-        // Let's assume `2_1 PUT` means a commit version with start ts is 1 and commit ts
-        // is 2.
-        // Commit versions: [25_23 PUT, 20_10 PUT, 17_15 PUT, 7_7 Rollback, 5_1 PUT, 3_3 Rollback].
-        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region.clone());
+        // Let's assume `2_1 PUT` means a commit version with start ts is 1 and commit
+        // ts is 2.
+        // Commit versions: [25_23 PUT, 20_10 PUT, 17_15 PUT, 7_7 Rollback, 5_1 PUT, 3_3
+        // Rollback].
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.clone(), region.clone());
         let mut reader = MvccReader::new(snap, None, false);
 
         let k = Key::from_raw(k);
@@ -1312,7 +1442,7 @@ pub mod tests {
         engine.prewrite(m2, k2, 1);
         engine.commit(k2, 1, 2);
 
-        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.clone(), region);
         let mut reader = MvccReader::new(snap, None, false);
 
         let (commit_ts, write) = reader
@@ -1334,7 +1464,7 @@ pub mod tests {
 
         // Test seek_write touches region's end.
         let region1 = make_region(1, vec![], Key::from_raw(b"k1").into_encoded());
-        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region1);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db, region1);
         let mut reader = MvccReader::new(snap, None, false);
 
         assert!(reader.seek_write(&k, 2.into()).unwrap().is_none());
@@ -1384,13 +1514,13 @@ pub mod tests {
         let m = Mutation::make_put(Key::from_raw(k), v.to_vec());
         engine.prewrite(m, k, 24);
 
-        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db, region);
         let mut reader = MvccReader::new(snap, None, false);
 
-        // Let's assume `2_1 PUT` means a commit version with start ts is 1 and commit ts
-        // is 2.
-        // Commit versions: [21_17 LOCK, 20_18 PUT, 15_13 LOCK, 14_12 PUT, 9_8 DELETE, 7_6 LOCK,
-        //                   5_5 Rollback, 2_1 PUT].
+        // Let's assume `2_1 PUT` means a commit version with start ts is 1 and commit
+        // ts is 2.
+        // Commit versions: [21_17 LOCK, 20_18 PUT, 15_13 LOCK, 14_12 PUT, 9_8 DELETE,
+        // 7_6 LOCK, 5_5 Rollback, 2_1 PUT].
         let key = Key::from_raw(k);
 
         assert!(reader.get_write(&key, 1.into(), None).unwrap().is_none());
@@ -1524,7 +1654,7 @@ pub mod tests {
                                limit,
                                expect_res: &[_],
                                expect_is_remain| {
-            let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region.clone());
+            let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.clone(), region.clone());
             let mut reader = MvccReader::new(snap, None, false);
             let res = reader
                 .scan_locks(
@@ -1596,6 +1726,385 @@ pub mod tests {
     }
 
     #[test]
+    fn test_scan_writes() {
+        let path = tempfile::Builder::new()
+            .prefix("_test_storage_mvcc_reader_scan_writes")
+            .tempdir()
+            .unwrap();
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![], vec![]);
+        let db = open_db(path, true);
+        let mut engine = RegionEngine::new(&db, &region);
+
+        // Prewrite and rollback k0.
+        engine.prewrite(
+            Mutation::make_put(Key::from_raw(b"k0"), b"v0@1".to_vec()),
+            b"k0",
+            1,
+        );
+        engine.rollback(b"k0", 1);
+        // Prewrite and commit k0 with a large ts.
+        engine.prewrite(
+            Mutation::make_put(Key::from_raw(b"k0"), b"v0@999".to_vec()),
+            b"k0",
+            999,
+        );
+        engine.commit(b"k0", 999, 1000);
+        // Prewrite and commit k1.
+        engine.prewrite(
+            Mutation::make_put(Key::from_raw(b"k1"), b"v1@1".to_vec()),
+            b"k1",
+            1,
+        );
+        engine.commit(b"k1", 1, 2);
+        engine.prewrite(
+            Mutation::make_put(Key::from_raw(b"k1"), b"v1@3".to_vec()),
+            b"k1",
+            3,
+        );
+        engine.commit(b"k1", 3, 4);
+        // Uncommitted prewrite k1.
+        engine.prewrite(
+            Mutation::make_put(Key::from_raw(b"k1"), b"v1@5".to_vec()),
+            b"k1",
+            5,
+        );
+
+        // Prewrite and commit k2.
+        engine.prewrite(
+            Mutation::make_put(Key::from_raw(b"k2"), b"v2@1".to_vec()),
+            b"k2",
+            1,
+        );
+        engine.commit(b"k2", 1, 2);
+        engine.prewrite(
+            Mutation::make_put(Key::from_raw(b"k2"), b"v2@3".to_vec()),
+            b"k2",
+            3,
+        );
+        engine.commit(b"k2", 3, 4);
+
+        // Prewrite and commit k3.
+        engine.prewrite(
+            Mutation::make_put(Key::from_raw(b"k3"), b"v3@5".to_vec()),
+            b"k3",
+            5,
+        );
+        engine.commit(b"k3", 5, 6);
+        // Prewrite and rollback k3.
+        engine.prewrite(
+            Mutation::make_put(Key::from_raw(b"k3"), b"v3@7".to_vec()),
+            b"k3",
+            7,
+        );
+        engine.rollback(b"k3", 7);
+        // Prewrite and commit k3.
+        engine.prewrite(
+            Mutation::make_put(Key::from_raw(b"k3"), b"v3@8".to_vec()),
+            b"k3",
+            8,
+        );
+        engine.commit(b"k3", 8, 9);
+
+        // Current MVCC keys in `CF_WRITE` should be:
+        // PUT      k0 -> v0@999
+        // ROLLBACK k0 -> v0@1
+        // PUT      k1 -> v1@3
+        // PUT      k1 -> v1@1
+        // PUT      k2 -> v2@3
+        // PUT      k2 -> v2@1
+        // PUT      k3 -> v3@8
+        // ROLLBACK k3 -> v3@7
+        // PUT      k3 -> v3@5
+
+        struct Case {
+            start_key: Option<Key>,
+            end_key: Option<Key>,
+            version: Option<u64>,
+            limit: usize,
+            expect_res: Vec<(Key, TimeStamp, Option<Write>)>,
+            expect_is_remain: bool,
+        }
+
+        let cases = vec![
+            // Get all latest writes with the unspecified version.
+            Case {
+                start_key: None,
+                end_key: None,
+                version: None,
+                limit: 4,
+                expect_res: vec![
+                    (
+                        Key::from_raw(b"k0"),
+                        1000.into(),
+                        Some(Write::new(
+                            WriteType::Put,
+                            999.into(),
+                            Some(b"v0@999".to_vec()),
+                        )),
+                    ),
+                    (
+                        Key::from_raw(b"k1"),
+                        4.into(),
+                        Some(Write::new(WriteType::Put, 3.into(), Some(b"v1@3".to_vec()))),
+                    ),
+                    (
+                        Key::from_raw(b"k2"),
+                        4.into(),
+                        Some(Write::new(WriteType::Put, 3.into(), Some(b"v2@3".to_vec()))),
+                    ),
+                    (
+                        Key::from_raw(b"k3"),
+                        9.into(),
+                        Some(Write::new(WriteType::Put, 8.into(), Some(b"v3@8".to_vec()))),
+                    ),
+                ],
+                expect_is_remain: true,
+            },
+            // k0 is invisible at version 9.
+            Case {
+                start_key: None,
+                end_key: None,
+                version: Some(9),
+                limit: 4,
+                expect_res: vec![
+                    (Key::from_raw(b"k0"), 1000.into(), None),
+                    (
+                        Key::from_raw(b"k1"),
+                        4.into(),
+                        Some(Write::new(WriteType::Put, 3.into(), Some(b"v1@3".to_vec()))),
+                    ),
+                    (
+                        Key::from_raw(b"k2"),
+                        4.into(),
+                        Some(Write::new(WriteType::Put, 3.into(), Some(b"v2@3".to_vec()))),
+                    ),
+                    (
+                        Key::from_raw(b"k3"),
+                        9.into(),
+                        Some(Write::new(WriteType::Put, 8.into(), Some(b"v3@8".to_vec()))),
+                    ),
+                ],
+                expect_is_remain: true,
+            },
+            // k3 has an old version write at version 8.
+            Case {
+                start_key: None,
+                end_key: None,
+                version: Some(8),
+                limit: 4,
+                expect_res: vec![
+                    (Key::from_raw(b"k0"), 1000.into(), None),
+                    (
+                        Key::from_raw(b"k1"),
+                        4.into(),
+                        Some(Write::new(WriteType::Put, 3.into(), Some(b"v1@3".to_vec()))),
+                    ),
+                    (
+                        Key::from_raw(b"k2"),
+                        4.into(),
+                        Some(Write::new(WriteType::Put, 3.into(), Some(b"v2@3".to_vec()))),
+                    ),
+                    (
+                        Key::from_raw(b"k3"),
+                        9.into(),
+                        Some(Write::new(WriteType::Put, 5.into(), Some(b"v3@5".to_vec()))),
+                    ),
+                ],
+                expect_is_remain: true,
+            },
+            Case {
+                start_key: None,
+                end_key: None,
+                version: Some(7),
+                limit: 4,
+                expect_res: vec![
+                    (Key::from_raw(b"k0"), 1000.into(), None),
+                    (
+                        Key::from_raw(b"k1"),
+                        4.into(),
+                        Some(Write::new(WriteType::Put, 3.into(), Some(b"v1@3".to_vec()))),
+                    ),
+                    (
+                        Key::from_raw(b"k2"),
+                        4.into(),
+                        Some(Write::new(WriteType::Put, 3.into(), Some(b"v2@3".to_vec()))),
+                    ),
+                    (
+                        Key::from_raw(b"k3"),
+                        9.into(),
+                        Some(Write::new(WriteType::Put, 5.into(), Some(b"v3@5".to_vec()))),
+                    ),
+                ],
+                expect_is_remain: true,
+            },
+            Case {
+                start_key: None,
+                end_key: None,
+                version: Some(6),
+                limit: 4,
+                expect_res: vec![
+                    (Key::from_raw(b"k0"), 1000.into(), None),
+                    (
+                        Key::from_raw(b"k1"),
+                        4.into(),
+                        Some(Write::new(WriteType::Put, 3.into(), Some(b"v1@3".to_vec()))),
+                    ),
+                    (
+                        Key::from_raw(b"k2"),
+                        4.into(),
+                        Some(Write::new(WriteType::Put, 3.into(), Some(b"v2@3".to_vec()))),
+                    ),
+                    (
+                        Key::from_raw(b"k3"),
+                        9.into(),
+                        Some(Write::new(WriteType::Put, 5.into(), Some(b"v3@5".to_vec()))),
+                    ),
+                ],
+                expect_is_remain: true,
+            },
+            // k3 doesn't exist at version 5.
+            Case {
+                start_key: None,
+                end_key: None,
+                version: Some(5),
+                limit: 4,
+                expect_res: vec![
+                    (Key::from_raw(b"k0"), 1000.into(), None),
+                    (
+                        Key::from_raw(b"k1"),
+                        4.into(),
+                        Some(Write::new(WriteType::Put, 3.into(), Some(b"v1@3".to_vec()))),
+                    ),
+                    (
+                        Key::from_raw(b"k2"),
+                        4.into(),
+                        Some(Write::new(WriteType::Put, 3.into(), Some(b"v2@3".to_vec()))),
+                    ),
+                    (Key::from_raw(b"k3"), 9.into(), None),
+                ],
+                expect_is_remain: true,
+            },
+            Case {
+                start_key: None,
+                end_key: None,
+                version: Some(4),
+                limit: 4,
+                expect_res: vec![
+                    (Key::from_raw(b"k0"), 1000.into(), None),
+                    (
+                        Key::from_raw(b"k1"),
+                        4.into(),
+                        Some(Write::new(WriteType::Put, 3.into(), Some(b"v1@3".to_vec()))),
+                    ),
+                    (
+                        Key::from_raw(b"k2"),
+                        4.into(),
+                        Some(Write::new(WriteType::Put, 3.into(), Some(b"v2@3".to_vec()))),
+                    ),
+                    (Key::from_raw(b"k3"), 9.into(), None),
+                ],
+                expect_is_remain: true,
+            },
+            // k1 and k2 have old version writes at version 3.
+            Case {
+                start_key: None,
+                end_key: None,
+                version: Some(3),
+                limit: 4,
+                expect_res: vec![
+                    (Key::from_raw(b"k0"), 1000.into(), None),
+                    (
+                        Key::from_raw(b"k1"),
+                        4.into(),
+                        Some(Write::new(WriteType::Put, 1.into(), Some(b"v1@1".to_vec()))),
+                    ),
+                    (
+                        Key::from_raw(b"k2"),
+                        4.into(),
+                        Some(Write::new(WriteType::Put, 1.into(), Some(b"v2@1".to_vec()))),
+                    ),
+                    (Key::from_raw(b"k3"), 9.into(), None),
+                ],
+                expect_is_remain: true,
+            },
+            Case {
+                start_key: None,
+                end_key: None,
+                version: Some(2),
+                limit: 4,
+                expect_res: vec![
+                    (Key::from_raw(b"k0"), 1000.into(), None),
+                    (
+                        Key::from_raw(b"k1"),
+                        4.into(),
+                        Some(Write::new(WriteType::Put, 1.into(), Some(b"v1@1".to_vec()))),
+                    ),
+                    (
+                        Key::from_raw(b"k2"),
+                        4.into(),
+                        Some(Write::new(WriteType::Put, 1.into(), Some(b"v2@1".to_vec()))),
+                    ),
+                    (Key::from_raw(b"k3"), 9.into(), None),
+                ],
+                expect_is_remain: true,
+            },
+            // All keys don't exist at version 1.
+            Case {
+                start_key: None,
+                end_key: None,
+                version: Some(1),
+                limit: 4,
+                expect_res: vec![
+                    (Key::from_raw(b"k0"), 1000.into(), None),
+                    (Key::from_raw(b"k1"), 4.into(), None),
+                    (Key::from_raw(b"k2"), 4.into(), None),
+                    (Key::from_raw(b"k3"), 9.into(), None),
+                ],
+                expect_is_remain: true,
+            },
+            // Test the limit.
+            Case {
+                start_key: None,
+                end_key: None,
+                version: Some(0),
+                limit: 1,
+                expect_res: vec![(Key::from_raw(b"k0"), 1000.into(), None)],
+                expect_is_remain: true,
+            },
+            Case {
+                start_key: None,
+                end_key: None,
+                version: Some(0),
+                limit: 5,
+                expect_res: vec![
+                    (Key::from_raw(b"k0"), 1000.into(), None),
+                    (Key::from_raw(b"k1"), 4.into(), None),
+                    (Key::from_raw(b"k2"), 4.into(), None),
+                    (Key::from_raw(b"k3"), 9.into(), None),
+                ],
+                expect_is_remain: false,
+            },
+        ];
+
+        for (idx, case) in cases.iter().enumerate() {
+            let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.clone(), region.clone());
+            let mut reader = MvccReader::new(snap, Some(ScanMode::Forward), false);
+            let res = reader
+                .scan_writes(
+                    case.start_key.as_ref(),
+                    case.end_key.as_ref(),
+                    case.version.map(Into::into),
+                    |_| true,
+                    case.limit,
+                )
+                .unwrap();
+            assert_eq!(res.0, case.expect_res, "case #{}", idx);
+            assert_eq!(res.1, case.expect_is_remain, "case #{}", idx);
+        }
+    }
+
+    #[test]
     fn test_load_data() {
         let path = tempfile::Builder::new()
             .prefix("_test_storage_mvcc_reader_load_data")
@@ -1655,7 +2164,10 @@ pub mod tests {
             },
             Case {
                 // write has no short_value, the reader has a cursor, got nothing
-                expected: Err(default_not_found_error(k.to_vec(), "get")),
+                expected: Err(default_not_found_error(
+                    Key::from_raw(k).append_ts(TimeStamp::new(3)).into_encoded(),
+                    "get",
+                )),
                 modifies: vec![Modify::Put(
                     CF_WRITE,
                     Key::from_raw(k).append_ts(TimeStamp::new(1)),
@@ -1681,7 +2193,10 @@ pub mod tests {
             },
             Case {
                 // write has no short_value, the reader has no cursor, got nothing
-                expected: Err(default_not_found_error(k.to_vec(), "get")),
+                expected: Err(default_not_found_error(
+                    Key::from_raw(k).append_ts(TimeStamp::new(5)).into_encoded(),
+                    "get",
+                )),
                 modifies: vec![],
                 scan_mode: None,
                 key: Key::from_raw(k),
@@ -1691,7 +2206,7 @@ pub mod tests {
 
         for case in cases {
             engine.write(case.modifies);
-            let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region.clone());
+            let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.clone(), region.clone());
             let mut reader = MvccReader::new(snap, case.scan_mode, false);
             let result = reader.load_data(&case.key, case.write);
             assert_eq!(format!("{:?}", result), format!("{:?}", case.expected));
@@ -1740,7 +2255,10 @@ pub mod tests {
                 // some write for `key` at `ts` exists, load data return Err
                 // todo: "some write for `key` at `ts` exists" should be checked by `test_get_write`
                 // "load data return Err" is checked by test_load_data
-                expected: Err(default_not_found_error(k.to_vec(), "get")),
+                expected: Err(default_not_found_error(
+                    Key::from_raw(k).append_ts(TimeStamp::new(2)).into_encoded(),
+                    "get",
+                )),
                 modifies: vec![Modify::Put(
                     CF_WRITE,
                     Key::from_raw(k).append_ts(TimeStamp::new(2)),
@@ -1779,7 +2297,7 @@ pub mod tests {
 
         for case in cases {
             engine.write(case.modifies);
-            let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region.clone());
+            let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.clone(), region.clone());
             let mut reader = MvccReader::new(snap, None, false);
             let result = reader.get(&case.key, case.ts, case.gc_fence_limit);
             assert_eq!(format!("{:?}", result), format!("{:?}", case.expected));
@@ -1920,7 +2438,7 @@ pub mod tests {
             },
         ];
         for (i, case) in cases.into_iter().enumerate() {
-            let engine = TestEngineBuilder::new().build().unwrap();
+            let mut engine = TestEngineBuilder::new().build().unwrap();
             let cm = ConcurrencyManager::new(42.into());
             let mut txn = MvccTxn::new(TimeStamp::new(10), cm.clone());
             for (write_record, put_ts) in case.written.iter() {
@@ -1951,8 +2469,9 @@ pub mod tests {
             }
         }
 
-        // Must return Oldvalue::None when prev_write_loaded is true and prev_write is None.
-        let engine = TestEngineBuilder::new().build().unwrap();
+        // Must return Oldvalue::None when prev_write_loaded is true and prev_write is
+        // None.
+        let mut engine = TestEngineBuilder::new().build().unwrap();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true);
         let prev_write_loaded = true;
@@ -1972,8 +2491,7 @@ pub mod tests {
     fn test_reader_prefix_seek() {
         let dir = tempfile::TempDir::new().unwrap();
         let builder = TestEngineBuilder::new().path(dir.path());
-        let db = builder.build().unwrap().kv_engine().get_sync_db();
-        let cf = engine_rocks::util::get_cf_handle(&db, CF_WRITE).unwrap();
+        let db = builder.build().unwrap().kv_engine().unwrap();
 
         let region = make_region(1, vec![], vec![]);
         let mut engine = RegionEngine::new(&db, &region);
@@ -1983,24 +2501,22 @@ pub mod tests {
             let commit_ts = (i * 2 + 1).into();
             let mut k = vec![b'z'];
             k.extend_from_slice(Key::from_raw(b"k1").append_ts(commit_ts).as_encoded());
-            use engine_rocks::raw::Writable;
-            engine.db.delete_cf(cf, &k).unwrap();
+            engine.db.delete_cf(CF_WRITE, &k).unwrap();
         }
         engine.flush();
 
-        #[allow(clippy::useless_vec)]
-        for (k, scan_mode, tombstones) in vec![
-            (b"k0", Some(ScanMode::Forward), 99),
+        for (k, scan_mode, tombstones) in &[
+            (b"k0" as &[u8], Some(ScanMode::Forward), 99),
             (b"k0", None, 0),
             (b"k1", Some(ScanMode::Forward), 99),
             (b"k1", None, 99),
             (b"k2", Some(ScanMode::Forward), 0),
             (b"k2", None, 0),
         ] {
-            let mut reader = MvccReader::new(engine.snapshot(), scan_mode, false);
+            let mut reader = MvccReader::new(engine.snapshot(), *scan_mode, false);
             let (k, ts) = (Key::from_raw(k), 199.into());
             reader.seek_write(&k, ts).unwrap();
-            assert_eq!(reader.statistics.write.seek_tombstone, tombstones);
+            assert_eq!(reader.statistics.write.seek_tombstone, *tombstones);
         }
     }
 }

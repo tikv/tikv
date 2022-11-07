@@ -12,7 +12,7 @@ use tikv::{
     server::ttl::check_ttl_and_compact_files,
     storage::{
         kv::{SnapContext, TestEngineBuilder},
-        lock_manager::DummyLockManager,
+        lock_manager::MockLockManager,
         raw::encoded::RawEncodeSnapshot,
         test_util::{expect_ok_callback, expect_value},
         Engine, Iterator, Snapshot, Statistics, TestStorageBuilder,
@@ -87,14 +87,14 @@ fn test_ttl_checker_impl<F: KvFormat>() {
     assert!(kvdb.get_value_cf(CF_DEFAULT, key4).unwrap().is_some());
     assert!(kvdb.get_value_cf(CF_DEFAULT, key5).unwrap().is_some());
 
-    let _ = check_ttl_and_compact_files(&kvdb, b"zr\0key1", b"zr\0key25", false);
+    check_ttl_and_compact_files(&kvdb, b"zr\0key1", b"zr\0key25", false);
     assert!(kvdb.get_value_cf(CF_DEFAULT, key1).unwrap().is_none());
     assert!(kvdb.get_value_cf(CF_DEFAULT, key2).unwrap().is_some());
     assert!(kvdb.get_value_cf(CF_DEFAULT, key3).unwrap().is_none());
     assert!(kvdb.get_value_cf(CF_DEFAULT, key4).unwrap().is_some());
     assert!(kvdb.get_value_cf(CF_DEFAULT, key5).unwrap().is_some());
 
-    let _ = check_ttl_and_compact_files(&kvdb, b"zr\0key2", b"zr\0key6", false);
+    check_ttl_and_compact_files(&kvdb, b"zr\0key2", b"zr\0key6", false);
     assert!(kvdb.get_value_cf(CF_DEFAULT, key1).unwrap().is_none());
     assert!(kvdb.get_value_cf(CF_DEFAULT, key2).unwrap().is_some());
     assert!(kvdb.get_value_cf(CF_DEFAULT, key3).unwrap().is_none());
@@ -176,7 +176,7 @@ fn test_ttl_snapshot() {
 fn test_ttl_snapshot_impl<F: KvFormat>() {
     fail::cfg("ttl_current_ts", "return(100)").unwrap();
     let dir = tempfile::TempDir::new().unwrap();
-    let engine = TestEngineBuilder::new()
+    let mut engine = TestEngineBuilder::new()
         .path(dir.path())
         .api_version(F::TAG)
         .build()
@@ -273,7 +273,7 @@ fn test_ttl_iterator() {
 fn test_ttl_iterator_impl<F: KvFormat>() {
     fail::cfg("ttl_current_ts", "return(100)").unwrap();
     let dir = tempfile::TempDir::new().unwrap();
-    let engine = TestEngineBuilder::new()
+    let mut engine = TestEngineBuilder::new()
         .path(dir.path())
         .api_version(F::TAG)
         .build()
@@ -349,7 +349,7 @@ fn test_ttl_iterator_impl<F: KvFormat>() {
     let snapshot = engine.snapshot(SnapContext::default()).unwrap();
     let ttl_snapshot = RawEncodeSnapshot::<_, F>::from_snapshot(snapshot);
     let mut iter = ttl_snapshot
-        .iter(IterOptions::new(None, None, false))
+        .iter(CF_DEFAULT, IterOptions::new(None, None, false))
         .unwrap();
     iter.seek_to_first().unwrap();
     assert_eq!(iter.key(), b"r\0key1");
@@ -394,7 +394,7 @@ fn test_stoarge_raw_batch_put_ttl() {
 fn test_stoarge_raw_batch_put_ttl_impl<F: KvFormat>() {
     fail::cfg("ttl_current_ts", "return(100)").unwrap();
 
-    let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager)
+    let storage = TestStorageBuilder::<_, _, F>::new(MockLockManager::new())
         .build()
         .unwrap();
     let (tx, rx) = channel();
