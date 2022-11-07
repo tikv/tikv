@@ -166,13 +166,13 @@ impl TxnEntry {
             TxnEntry::Prewrite {
                 lock: (_, value), ..
             } => {
-                let l = Lock::parse(&value).unwrap();
+                let l = Lock::parse(value).unwrap();
                 *value = l.set_last_change(TimeStamp::zero(), 0).to_bytes();
             }
             TxnEntry::Commit {
                 write: (_, value), ..
             } => {
-                let mut w = WriteRef::parse(&value).unwrap();
+                let mut w = WriteRef::parse(value).unwrap();
                 w.last_change_ts = TimeStamp::zero();
                 w.versions_to_last_change = 0;
                 *value = w.to_bytes();
