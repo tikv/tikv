@@ -56,6 +56,7 @@ pub const SNAPSHOT_CFS_ENUM_PAIR: &[(CfNames, CfName)] = &[
     (CfNames::write, CF_WRITE),
 ];
 pub const SNAPSHOT_VERSION: u64 = 2;
+pub const SNAPSHOT_VERSION_V2: u64 = 3;
 pub const IO_LIMITER_CHUNK_SIZE: usize = 4 * 1024;
 
 /// Name prefix for the self-generated snapshot file.
@@ -1480,6 +1481,29 @@ impl SnapManager {
         v.sort();
         v.dedup();
         Ok(v)
+    }
+
+    pub fn get_temp_path_for_build(&self, region_id: u64) -> PathBuf {
+        let sst_id = self.core.temp_sst_id.fetch_add(1, Ordering::SeqCst);
+        let filename = format!(
+            "{}_{}_{}{}",
+            SNAP_GEN_PREFIX, region_id, sst_id, TMP_FILE_SUFFIX
+        );
+        PathBuf::from(&self.core.base).join(&filename)
+    }
+
+    pub fn get_final_name_for_recv(&self, key: &SnapKey) -> PathBuf {
+        let prefix = format!("{}_{}", SNAP_REV_PREFIX, key);
+        PathBuf::from(&self.core.base).join(&prefix)
+    }
+
+    pub fn io_limiter(&self) -> &Limiter {
+        &self.core.limiter
+    }
+
+    pub fn get_final_name_for_build(&self, key: &SnapKey) -> PathBuf {
+        let prefix = format!("{}_{}", SNAP_GEN_PREFIX, key);
+        PathBuf::from(&self.core.base).join(&prefix)
     }
 
     pub fn get_temp_path_for_ingest(&self) -> String {

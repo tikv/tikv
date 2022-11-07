@@ -17,8 +17,10 @@ use raft::{eraftpb::Snapshot, GetEntriesContext};
 use tikv_util::{defer, error, info, time::Instant, worker::Runnable};
 
 use crate::store::{
-    util, RaftlogFetchResult, SnapEntry, SnapKey, SnapManager, MAX_INIT_ENTRY_COUNT,
-    worker::{SNAP_COUNTER, SNAP_HISTOGRAM}
+    snap::SNAPSHOT_VERSION_V2,
+    util,
+    worker::{SNAP_COUNTER, SNAP_HISTOGRAM},
+    RaftlogFetchResult, SnapEntry, SnapKey, SnapManager, MAX_INIT_ENTRY_COUNT,
 };
 
 pub enum ReadTask<EK> {
@@ -181,7 +183,7 @@ where
                     return;
                 }
                 let start = Instant::now();
-    
+
                 // the state should already checked in apply workers.
                 assert_ne!(region_state.get_state(), PeerState::Tombstone);
                 let key = SnapKey::new(region_id, last_applied_term, last_applied_index);
@@ -201,6 +203,7 @@ where
                 let mut snap_data = RaftSnapshotData::default();
                 snap_data.set_region(region_state.get_region().clone());
                 snap_data.mut_meta().set_for_balance(for_balance);
+                snap_data.set_version(SNAPSHOT_VERSION_V2);
                 if let Ok(v) = snap_data.write_to_bytes().map_err(|e| {
                     error!("fail to encode snapshot data"; "region_id" => region_id,  "snap_key" => ?key, "error" => ?e);
                     success = false;
@@ -220,9 +223,9 @@ where
                 if success {
                     SNAP_COUNTER.generate.success.inc();
                     SNAP_HISTOGRAM
-                    .generate
-                    .observe(start.saturating_elapsed_secs());
-                }else{
+                        .generate
+                        .observe(start.saturating_elapsed_secs());
+                } else {
                     SNAP_COUNTER.generate.fail.inc();
                 }
                 let res = GenSnapRes {

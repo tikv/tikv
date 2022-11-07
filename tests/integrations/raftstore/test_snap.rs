@@ -2,6 +2,7 @@
 
 use std::{
     fs,
+    io::Write,
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -16,6 +17,7 @@ use file_system::{IoOp, IoType};
 use futures::executor::block_on;
 use grpcio::Environment;
 use kvproto::raft_serverpb::*;
+use protobuf::Message as pMessage;
 use raft::eraftpb::{Message, MessageType, Snapshot};
 use raftstore::{store::*, Result};
 use rand::Rng;
@@ -514,13 +516,59 @@ fn test_inspected_snapshot() {
     assert_ne!(stats.fetch(IoType::Replication, IoOp::Write), 0);
 
     pd_client.must_remove_peer(1, new_peer(2, 2));
-    must_get_none(&cluster.get_engine(2), b"k2");
     assert_eq!(stats.fetch(IoType::LoadBalance, IoOp::Read), 0);
     assert_eq!(stats.fetch(IoType::LoadBalance, IoOp::Write), 0);
     pd_client.must_add_peer(1, new_peer(2, 2));
     must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
     assert_ne!(stats.fetch(IoType::LoadBalance, IoOp::Read), 0);
     assert_ne!(stats.fetch(IoType::LoadBalance, IoOp::Write), 0);
+}
+
+#[test]
+fn test_send_snapshot() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.server.snap_max_write_bytes_per_sec = ReadableSize(5 * 1024 * 1024);
+    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration(Duration::from_secs(100));
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+
+    cluster.must_put(b"key-0000", b"value");
+    let r = cluster.get_region(b"key-000");
+    let term = 1;
+    let idx = 5;
+    let key = SnapKey::new(r1, term, idx);
+    let mut snapshot = Snapshot::default();
+    let snap_mgr = cluster.get_snap_mgr(1);
+    let final_path = snap_mgr.get_final_name_for_build(&key);
+    assert!(fs::create_dir_all(final_path.as_path()).is_ok());
+    for i in 0..2 {
+        let mut f = fs::File::create(final_path.join(i.to_string())).unwrap();
+        assert!(f.write_all(format!("snapshot-{}", i).as_bytes()).is_ok());
+        assert!(f.sync_data().is_ok());
+    }
+    let mut snap_data = RaftSnapshotData::default();
+    snap_data.set_region(r.clone());
+    snap_data.mut_meta().set_for_balance(true);
+    snap_data.set_version(3);
+    let v = snap_data.write_to_bytes().unwrap();
+    snapshot.set_data(v.into());
+    let s1_addr = cluster.sim.rl().get_addr(1);
+    let sec_mgr = cluster.sim.rl().security_mgr.clone();
+
+    let snap_mgr = snap_mgr.clone();
+    let sec_mgr = sec_mgr.clone();
+    let s = snapshot.clone();
+    if let Err(e) = send_a_large_snapshot(snap_mgr, sec_mgr, &s1_addr, r1, s, idx, term) {
+        info!("send_a_large_snapshot fail: {}", e);
+    }
+
+    sleep_ms(500);
+    let snap_mgr = cluster.get_snap_mgr(1);
+    let final_path = snap_mgr.get_final_name_for_recv(&key);
+    let dir = fs::read_dir(final_path);
+    assert_eq!(2, dir.unwrap().count());
 }
 
 // Test snapshot generating and receiving can share one I/O limiter fairly.
