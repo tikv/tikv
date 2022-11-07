@@ -329,11 +329,11 @@ pub mod tests {
         must_get(&mut engine, k, ts, v);
         must_prewrite_delete(&mut engine, k, k, *ts.incr());
         must_commit(&mut engine, k, ts, *ts.incr());
-        // Since the key has been deleted, flashback to version 1 should not do
-        // anything.
+        // Though the key has been deleted, flashback to version 1 still needs to write
+        // a new `WriteType::Delete` with the flashback `commit_ts`.
         assert_eq!(
             must_flashback_to_version(&mut engine, k, 1, *ts.incr(), *ts.incr()),
-            0
+            1
         );
         must_get_none(&mut engine, k, ts);
     }
