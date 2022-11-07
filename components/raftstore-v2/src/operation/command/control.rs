@@ -118,8 +118,9 @@ impl ProposalControl {
         }
     }
 
-    /// Check if the proposal is conflict with proposed admin commands in
-    /// current term.
+    /// Check if a proposal is conflict with proposed admin commands in current
+    /// term. If the proposal is an admin command, then its type should be
+    /// passed, otherwise just provide `None`.
     ///
     /// Returns None if passing the epoch check, otherwise returns the last
     /// conflict conflict proposal meta.

@@ -22,14 +22,18 @@ pub struct SimpleWriteEncoder {
     buf: Vec<u8>,
     channels: Vec<CmdResChannel>,
     size_limit: usize,
-    likely_proposed: bool,
+    notify_proposed: bool,
 }
 
 impl SimpleWriteEncoder {
+    /// Create an encoder.
+    ///
+    /// If `notify_proposed` is true, channels will be called `notify_proposed`
+    /// when it's appended.
     pub fn new(
         mut req: RaftCmdRequest,
         size_limit: usize,
-        likely_proposed: bool,
+        notify_proposed: bool,
     ) -> Result<SimpleWriteEncoder, RaftCmdRequest> {
         if !Self::allow_request(&req) {
             return Err(req);
@@ -49,7 +53,7 @@ impl SimpleWriteEncoder {
             buf,
             channels: vec![],
             size_limit,
-            likely_proposed,
+            notify_proposed,
         })
     }
 
@@ -101,15 +105,15 @@ impl SimpleWriteEncoder {
 
     #[inline]
     pub fn add_response_channel(&mut self, mut ch: CmdResChannel) {
-        if self.likely_proposed {
+        if self.notify_proposed {
             ch.notify_proposed();
         }
         self.channels.push(ch);
     }
 
     #[inline]
-    pub fn likely_proposed(&self) -> bool {
-        self.likely_proposed
+    pub fn notify_proposed(&self) -> bool {
+        self.notify_proposed
     }
 
     #[inline]

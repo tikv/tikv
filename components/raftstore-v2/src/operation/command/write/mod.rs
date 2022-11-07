@@ -80,7 +80,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     pub fn propose_pending_writes<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
         if let Some(encoder) = self.simple_write_encoder_mut().take() {
-            let call_proposed_on_success = if encoder.likely_proposed() {
+            let call_proposed_on_success = if encoder.notify_proposed() {
                 // The request has pass conflict check and called all proposed callbacks.
                 false
             } else {
