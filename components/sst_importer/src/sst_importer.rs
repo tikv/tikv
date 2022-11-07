@@ -3,11 +3,9 @@
 use std::{
     borrow::Cow,
     collections::HashMap,
-    fs::File,
-    io::{self, prelude::*, BufReader},
+    io,
     ops::Bound,
     path::{Path, PathBuf},
-    rc::Rc,
     sync::Arc,
 };
 
@@ -23,7 +21,7 @@ use external_storage_export::{
     compression_reader_dispatcher, encrypt_wrap_reader, ExternalStorage, RestoreConfig,
 };
 use file_system::{get_io_rate_limiter, OpenOptions};
-use futures::{executor::ThreadPool, AsyncRead, AsyncReadExt};
+use futures::{executor::ThreadPool};
 use kvproto::{
     brpb::{CipherInfo, StorageBackend},
     import_sstpb::*,
@@ -32,10 +30,9 @@ use kvproto::{
 use tikv_util::{
     codec::stream_event::{EventIterator, Iterator as EIterator},
     stream::block_on_external_io,
-    sys::DiskExt,
     time::{Instant, Limiter},
 };
-use txn_types::{Key, Lock, TimeStamp, WriteRef};
+use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
     import_file::{ImportDir, ImportFile},
@@ -300,7 +297,7 @@ impl SstImporter {
 
     pub fn clear_kv_buff(&self, meta: &KvMeta) {
         let dst_name = format!("{}_{}", meta.get_name(), meta.get_range_offset());
-        self.file_locks.remove_if_mut(&dst_name, |k, v| {
+        self.file_locks.remove_if_mut(&dst_name, |_, v| {
             v.1 -= 1;
             v.1 == 0 as u64
         });

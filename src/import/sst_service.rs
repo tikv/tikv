@@ -3,7 +3,6 @@
 use std::{
     collections::HashMap,
     future::Future,
-    ops::Add,
     path::PathBuf,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -12,7 +11,7 @@ use std::{
 };
 
 use collections::HashSet;
-use engine_traits::{range, KvEngine, CF_DEFAULT, CF_WRITE};
+use engine_traits::{KvEngine, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IoType};
 use futures::{
     executor::{ThreadPool, ThreadPoolBuilder},
@@ -37,7 +36,7 @@ use raftstore::{
     store::{Callback, RaftCmdExtraOpts, RegionSnapshot},
 };
 use sst_importer::{error_inc, metrics::*, sst_meta_to_path, Config, Error, Result, SstImporter};
-use tidb_query_aggr::AggrFunctionStateUpdatePartial;
+
 use tikv_util::{
     config::ReadableSize,
     future::{create_stream_with_buffer, paired_future_callback},
