@@ -186,6 +186,12 @@ impl TiFlashObserver {
         let mut ssts_wrap = vec![];
         let mut sst_views = vec![];
 
+        info!("begin handle ingest sst";
+            "region" => ?ob_ctx.region(),
+            "index" => index,
+            "term" => term,
+        );
+
         for sst in ssts {
             let sst = &sst.meta;
             if sst.get_cf_name() == engine_traits::CF_LOCK {
@@ -623,7 +629,7 @@ impl RegionChangeObserver for TiFlashObserver {
             }
         };
         if should_persist {
-            info!(
+            debug!(
             "observe pre_persist, persist";
             "region_id" => ob_ctx.region().get_id(),
             "peer_id" => self.peer_id,

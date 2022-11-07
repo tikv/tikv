@@ -11,7 +11,6 @@ use tikv::{
 };
 use txn_types::TimeStamp;
 
-#[allow(clippy::new_without_default)]
 #[derive(Copy, Clone)]
 pub struct HackedLockManager {}
 
@@ -56,6 +55,7 @@ impl LockManagerTrait for HackedLockManager {
 }
 
 impl HackedLockManager {
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self {}
     }

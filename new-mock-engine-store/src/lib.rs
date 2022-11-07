@@ -122,12 +122,14 @@ impl EngineStoreServer {
         }
     }
 
+    // False alarm
+    #[allow(clippy::needless_collect)]
     pub fn restore(&mut self) {
         // TODO We should actually read from engine store's persistence.
         // However, since mock engine store don't persist itself,
         // we read from proxy instead.
         unsafe {
-            let region_ids = self.kvstore.keys().cloned().collect::<Vec<_>>();
+            let region_ids: Vec<u64> = self.kvstore.keys().cloned().collect();
             for region_id in region_ids.into_iter() {
                 load_from_db(self, region_id);
             }
@@ -160,7 +162,7 @@ pub fn make_new_region(
     maybe_store_id: Option<u64>,
 ) -> Region {
     let mut region = Region {
-        region: maybe_from_region.unwrap_or(Default::default()),
+        region: maybe_from_region.unwrap_or_default(),
         ..Default::default()
     };
     if let Some(store_id) = maybe_store_id {
@@ -261,7 +263,7 @@ unsafe fn write_to_db_data(
             let tikv_key = keys::data_key(k.as_slice());
             let cf_name = cf_to_name(cf.into());
             if !pending_remove.contains(&k) {
-                kv.rocks.put_cf(cf_name, &tikv_key.as_slice(), &v).unwrap();
+                kv.rocks.put_cf(cf_name, tikv_key.as_slice(), &v).unwrap();
             } else {
                 pending_remove.remove(&k);
             }
@@ -490,7 +492,7 @@ impl EngineStoreServerWrap {
                     }
                 }
                 // Do persist or not
-                let res = match req.get_cmd_type() {
+                match req.get_cmd_type() {
                     AdminCmdType::CompactLog => {
                         fail::fail_point!("no_persist_compact_log", |_| {
                             // Persist data, but don't persist meta.
@@ -506,8 +508,7 @@ impl EngineStoreServerWrap {
                         ffi_interfaces::EngineStoreApplyRes::Persist
                     }
                     _ => ffi_interfaces::EngineStoreApplyRes::Persist,
-                };
-                res
+                }
             };
 
         let res = match (*self.engine_store_server).kvstore.entry(region_id) {
@@ -535,24 +536,21 @@ impl EngineStoreServerWrap {
                 None
             }
         };
-        match res {
-            ffi_interfaces::EngineStoreApplyRes::Persist => {
-                // Persist tells ApplyDelegate to do a commit.
-                // So we also need a persist of actual data on engine-store' side.
-                if let Some(region) = region {
-                    if req.get_cmd_type() == AdminCmdType::CompactLog {
-                        // We already persist when fn_try_flush_data.
-                    } else {
-                        write_to_db_data(
-                            &mut (*self.engine_store_server),
-                            region,
-                            format!("admin {:?}", req),
-                        );
-                    }
+        if res == ffi_interfaces::EngineStoreApplyRes::Persist {
+            // Persist tells ApplyDelegate to do a commit.
+            // So we also need a persist of actual data on engine-store' side.
+            if let Some(region) = region {
+                if req.get_cmd_type() == AdminCmdType::CompactLog {
+                    // We already persist when fn_try_flush_data.
+                } else {
+                    write_to_db_data(
+                        &mut (*self.engine_store_server),
+                        region,
+                        format!("admin {:?}", req),
+                    );
                 }
             }
-            _ => (),
-        };
+        }
         res
     }
 
@@ -606,7 +604,7 @@ impl EngineStoreServerWrap {
             region.set_applied(header.index, header.term);
             if !proxy_compat {
                 // If we don't support new proxy
-                write_to_db_data(server, region, format!("write"));
+                write_to_db_data(server, region, "write".to_string());
             }
             ffi_interfaces::EngineStoreApplyRes::None
         };
@@ -709,6 +707,8 @@ enum RawCppPtrTypeImpl {
     WakerNotifier,
 }
 
+// TODO
+#[allow(clippy::from_over_into)]
 impl From<ffi_interfaces::RawCppPtrType> for RawCppPtrTypeImpl {
     fn from(o: ffi_interfaces::RawCppPtrType) -> Self {
         match o {
@@ -721,6 +721,8 @@ impl From<ffi_interfaces::RawCppPtrType> for RawCppPtrTypeImpl {
     }
 }
 
+// TODO remove this warn.
+#[allow(clippy::from_over_into)]
 impl Into<ffi_interfaces::RawCppPtrType> for RawCppPtrTypeImpl {
     fn into(self) -> ffi_interfaces::RawCppPtrType {
         match self {
@@ -781,7 +783,7 @@ unsafe extern "C" fn ffi_try_flush_data(
             write_to_db_data(
                 &mut (*store.engine_store_server),
                 region,
-                format!("fn_try_flush_data"),
+                "fn_try_flush_data".to_string(),
             );
         }
         b
@@ -789,7 +791,7 @@ unsafe extern "C" fn ffi_try_flush_data(
     write_to_db_data(
         &mut (*store.engine_store_server),
         region,
-        format!("fn_try_flush_data"),
+        "fn_try_flush_data".to_string(),
     );
     true as u8
 }
@@ -853,7 +855,7 @@ impl ProxyNotifier {
             {
                 let lock = self.mutex.lock().unwrap();
                 if !self.flag.load(std::sync::atomic::Ordering::Acquire) {
-                    let _ = self.cv.wait_timeout(lock, timeout);
+                    let _cv = self.cv.wait_timeout(lock, timeout);
                 }
             }
             self.flag.store(false, std::sync::atomic::Ordering::Release);
@@ -864,7 +866,7 @@ impl ProxyNotifier {
         // if flag from false -> true, then wake up.
         // if flag from true -> true, do nothing.
         if !self.flag.swap(true, std::sync::atomic::Ordering::AcqRel) {
-            let _ = self.mutex.lock().unwrap();
+            let _lock = self.mutex.lock().unwrap();
             self.cv.notify_one();
         }
     }
@@ -1050,6 +1052,8 @@ unsafe extern "C" fn ffi_pre_handle_snapshot(
     }
 }
 
+// In case of newly added cfs.
+#[allow(unreachable_patterns)]
 pub fn cf_to_name(cf: ffi_interfaces::ColumnFamilyType) -> &'static str {
     match cf {
         ffi_interfaces::ColumnFamilyType::Lock => CF_LOCK,

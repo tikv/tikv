@@ -21,7 +21,6 @@ use file_system::IoRateLimiter;
 use futures::executor::block_on;
 use kvproto::{
     errorpb::Error as PbError,
-    kvrpcpb::*,
     metapb::{self, PeerRole, RegionEpoch, StoreLabel},
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Request, *},
     raft_serverpb::RaftMessage,
@@ -625,6 +624,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         }
     }
 
+    #[allow(clippy::significant_drop_in_scrutinee)]
     pub fn add_send_filter<F: FilterFactory>(&self, factory: F) {
         let mut sim = self.sim.wl();
         for node_id in sim.get_node_ids() {

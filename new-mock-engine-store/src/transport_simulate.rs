@@ -157,6 +157,7 @@ impl<C> SimulateTransport<C> {
     }
 }
 
+#[allow(clippy::significant_drop_in_scrutinee)]
 fn filter_send<H>(
     filters: &Arc<RwLock<Vec<Box<dyn Filter>>>>,
     msg: RaftMessage,
@@ -184,7 +185,8 @@ where
             }
         }
     }
-    for filter in filters[..taken].iter().rev() {
+    let l = filters[..taken].iter().rev();
+    for filter in l {
         res = filter.after(res);
     }
     res
@@ -309,9 +311,9 @@ impl FilterFactory for PartitionFilterFactory {
                 node_ids: self.s2.clone(),
             })];
         }
-        return vec![Box::new(PartitionFilter {
+        vec![Box::new(PartitionFilter {
             node_ids: self.s1.clone(),
-        })];
+        })]
     }
 }
 
@@ -371,6 +373,7 @@ pub struct RegionPacketFilter {
     drop_type: Vec<MessageType>,
     skip_type: Vec<MessageType>,
     dropped_messages: Option<Arc<Mutex<Vec<RaftMessage>>>>,
+    #[allow(clippy::type_complexity)]
     msg_callback: Option<Arc<dyn Fn(&RaftMessage) + Send + Sync>>,
 }
 
@@ -773,6 +776,7 @@ impl RandomLatencyFilter {
 }
 
 impl Filter for RandomLatencyFilter {
+    #[allow(clippy::significant_drop_in_scrutinee)]
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         let mut to_send = vec![];
         let mut to_delay = vec![];

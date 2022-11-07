@@ -104,7 +104,6 @@ pub const DEFAULT_ENGINE_ADDR: &str = if cfg!(feature = "failpoints") {
     ""
 };
 
-const GIB: u64 = 1024 * 1024 * 1024;
 const MIB: u64 = 1024 * 1024;
 
 pub fn memory_limit_for_cf(is_raft_db: bool, cf: &str, total_mem: u64) -> ReadableSize {
@@ -261,6 +260,8 @@ pub struct ProxyConfig {
     pub import: ImportConfig,
 }
 
+/// We use custom default, in case of later non-ordinary config items.
+#[allow(clippy::derivable_impls)]
 impl Default for ProxyConfig {
     fn default() -> Self {
         ProxyConfig {
@@ -346,6 +347,7 @@ pub fn setup_default_tikv_config(default: &mut TikvConfig) {
 /// This function changes TiKV's config according to ProxyConfig.
 /// Add a case in `test_config_proxy_default_no_config_item` to guard this
 /// logic.
+#[allow(clippy::option_env_unwrap)]
 pub fn address_proxy_config(config: &mut TikvConfig, proxy_config: &ProxyConfig) {
     // We must add engine label to our TiFlash config
     {
@@ -356,6 +358,7 @@ pub fn address_proxy_config(config: &mut TikvConfig, proxy_config: &ProxyConfig)
 
     // If label is not setup in run_proxy(), we use 'ENGINE_LABEL_VALUE'.
     pub const DEFAULT_ENGINE_LABEL_KEY: &str = "engine";
+    // Note we will panic if there are no argments and no env.
     config
         .server
         .labels

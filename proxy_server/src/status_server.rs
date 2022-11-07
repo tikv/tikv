@@ -50,7 +50,10 @@ use tikv::{
         Result,
     },
 };
-use tikv_util::{logger::set_log_level, metrics::dump, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{
+    error, logger::set_log_level, metrics::dump, sys::thread::ThreadBuildWrapper,
+    timer::GLOBAL_TIMER_HANDLE,
+};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     runtime::{Builder, Handle, Runtime},
@@ -143,8 +146,8 @@ where
             .enable_all()
             .worker_threads(status_thread_pool_size)
             .thread_name("status-server")
-            .on_thread_start(|| debug!("Proxy's Status server started"))
-            .on_thread_stop(|| debug!("stopping status server"))
+            .after_start_wrapper(|| debug!("Proxy's Status server started"))
+            .before_stop_wrapper(|| debug!("stopping status server"))
             .build()?;
 
         let (tx, rx) = oneshot::channel::<()>();
