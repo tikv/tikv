@@ -166,6 +166,9 @@ fn test_witness_election_priority() {
     become_witness(&cluster, region.get_id(), &mut peer_on_store3);
     cluster.must_put(b"k0", b"v0");
 
+    // make sure logs are replicated to the witness
+    std::thread::sleep(Duration::from_millis(100));
+
     for _ in 1..10 {
         let node = cluster.leader_of_region(region.get_id()).unwrap().store_id;
         cluster.stop_node(node);
