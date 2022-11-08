@@ -67,6 +67,7 @@ pub struct Storage<EK: KvEngine, ER> {
     /// Snapshot part.
     snap_state: RefCell<SnapState>,
     gen_snap_task: RefCell<Box<Option<GenSnapTask>>>,
+    tablet_suffix: Option<u64>,
 }
 
 impl<EK: KvEngine, ER> Debug for Storage<EK, ER> {
@@ -187,6 +188,17 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             }
         };
 
+        let suffix = match region_state.get_state() {
+            PeerState::Tombstone | PeerState::Applying => None,
+            _ => {
+                if region_state.get_tablet_index() != 0 {
+                    Some(region_state.get_tablet_index())
+                } else {
+                    None
+                }
+            }
+        };
+
         Self::create(
             store_id,
             region_state,
@@ -196,6 +208,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             read_scheduler,
             true,
             logger,
+            suffix,
         )
         .map(Some)
     }
@@ -209,6 +222,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         read_scheduler: Scheduler<ReadTask<EK>>,
         persisted: bool,
         logger: &Logger,
+        suffix: Option<u64>,
     ) -> Result<Self> {
         let peer = find_peer(region_state.get_region(), store_id);
         let peer = match peer {
@@ -236,7 +250,20 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             logger,
             snap_state: RefCell::new(SnapState::Relax),
             gen_snap_task: RefCell::new(Box::new(None)),
+            tablet_suffix: suffix,
         })
+    }
+
+    pub fn tablet_suffix(&self) -> Option<u64> {
+        self.tablet_suffix
+    }
+
+    pub fn region_state_mut(&mut self) -> &mut RegionLocalState {
+        &mut self.region_state
+    }
+
+    pub fn get_region_id(&self) -> u64 {
+        return self.region().get_id();
     }
 
     #[inline]

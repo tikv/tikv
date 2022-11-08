@@ -20,15 +20,18 @@
 mod async_writer;
 mod snapshot;
 
-use std::cmp;
+use std::{cmp, sync::Arc};
 
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::{KvEngine, RaftEngine, TabletFactory};
 use error_code::ErrorCodeExt;
-use kvproto::raft_serverpb::RaftMessage;
+use kvproto::raft_serverpb::{PeerState, RaftMessage, RaftSnapshotData};
 use protobuf::Message as _;
-use raft::{eraftpb, Ready};
+use raft::{
+    eraftpb::{self, MessageType, Snapshot},
+    Ready,
+};
 use raftstore::store::{util, ExtraStates, FetchedLogs, Transport, WriteTask};
-use slog::{debug, error, trace, warn};
+use slog::{debug, error, info, trace, warn};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 
 pub use self::{
@@ -40,6 +43,7 @@ use crate::{
     fsm::PeerFsmDelegate,
     raft::{Peer, Storage},
     router::{ApplyTask, PeerTick},
+    Result,
 };
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
     /// Raft relies on periodic ticks to keep the state machine sync with other
@@ -405,6 +409,10 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let ever_persisted = self.ever_persisted();
 
         // TODO: handle snapshot
+        if !ready.snapshot().is_empty() {
+            let _ = self.apply_snapshot(ready.snapshot(), write_task, tablet_factory);
+            ever_persisted = false
+        }
 
         let entry_storage = self.entry_storage_mut();
         if !ready.entries().is_empty() {
@@ -422,5 +430,66 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             write_task.extra_write.set_v2(extra_states);
             self.set_ever_persisted();
         }
+    }
+
+    pub fn apply_snapshot(
+        &mut self,
+        snap: &Snapshot,
+        task: &mut WriteTask<EK, ER>,
+        tablet_factory: Arc<dyn TabletFactory<EK>>,
+    ) -> Result<()> {
+        let region_id = self.get_region_id();
+        info!(self.logger(),
+            "begin to apply snapshot";
+            "region_id"=> region_id,
+            "peer_id" => self.peer().get_id(),
+        );
+
+        let mut snap_data = RaftSnapshotData::default();
+        snap_data.merge_from_bytes(snap.get_data())?;
+
+        let region = snap_data.take_region();
+        if region.get_id() != region_id {
+            return Err(box_err!(
+                "mismatch region id {}!={}",
+                region_id,
+                region.get_id()
+            ));
+        }
+
+        let last_index = snap.get_metadata().get_index();
+        let last_term = snap.get_metadata().get_term();
+
+        self.region_state_mut().set_state(PeerState::Normal);
+        self.region_state_mut().set_region(region.clone());
+
+        self.entry_storage_mut()
+            .raft_state_mut()
+            .set_last_index(last_index);
+
+        self.entry_storage_mut().set_applied_term(last_term);
+        self.entry_storage_mut().set_last_term(last_term);
+        self.entry_storage_mut()
+            .apply_state_mut()
+            .set_applied_index(last_index);
+
+        self.entry_storage_mut().set_truncated_index(last_index);
+        self.entry_storage_mut().set_truncated_term(last_term);
+
+        info!(self.logger(),
+            "apply snapshot with state ok";
+            "region_id" => region_id,
+            "peer_id" => self.peer().get_id(),
+            "state" => ?self.entry_storage().apply_state(),
+        );
+
+        task.snapshot = Some((
+            region_id,
+            self.tablet_suffix().unwrap(),
+            // todo: fix the snapshot's recv dir
+            String::from("123"),
+            tablet_factory,
+        ));
+        Ok(())
     }
 }
