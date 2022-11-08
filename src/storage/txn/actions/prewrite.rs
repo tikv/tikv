@@ -454,8 +454,8 @@ impl<'a> PrewriteMutation<'a> {
             self.txn_props.txn_size,
             self.min_commit_ts,
         );
-        // Only Lock needs to record `last_change_ts` in its write record, write records
-        // of other types themselves are effective changes.
+        // Only Lock needs to record `last_change_ts` in its write record, Put or Delete
+        // records themselves are effective changes.
         if tls_can_enable(LAST_CHANGE_TS) && self.lock_type == Some(LockType::Lock) {
             lock = lock.set_last_change(self.last_change_ts, self.versions_to_last_change);
         }
