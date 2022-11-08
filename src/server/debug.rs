@@ -2288,4 +2288,16 @@ mod tests {
                 .get_api_version()
         )
     }
+
+    #[test]
+    fn test_compact() {
+        let bottommest_level_compaction = Some("skip").into();
+        let debugger = new_debugger();
+        let compact =
+            |db, cf| debugger.compact(db, cf, &[0], &[0xFF], 1, bottommest_level_compaction);
+        assert!(compact(DbType::Kv, CF_DEFAULT).is_ok());
+        assert!(compact(DbType::Kv, CF_LOCK).is_ok());
+        assert!(compact(DbType::Kv, CF_WRITE).is_ok());
+        assert!(compact(DbType::Raft, CF_DEFAULT).is_ok());
+    }
 }
