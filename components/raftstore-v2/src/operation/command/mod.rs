@@ -49,6 +49,7 @@ use tikv_util::{box_err, time::monotonic_raw_now};
 use crate::{
     batch::StoreContext,
     fsm::{ApplyFsm, ApplyResReporter, PeerFsmDelegate},
+    operation::GenSnapTask,
     raft::{Apply, Peer},
     router::{ApplyRes, ApplyTask, CmdResChannel, PeerMsg},
 };
@@ -120,8 +121,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let mailbox = store_ctx.router.mailbox(self.region_id()).unwrap();
         let tablet = self.tablet().clone();
         let logger = self.logger.clone();
-        let (apply_scheduler, mut apply_fsm) =
-            ApplyFsm::new(self.peer().clone(), region_state, mailbox, tablet, logger);
+        let read_scheduler = self.storage().read_scheduler();
+        let (apply_scheduler, mut apply_fsm) = ApplyFsm::new(
+            self.peer().clone(),
+            region_state,
+            mailbox,
+            tablet,
+            store_ctx.tablet_factory.clone(),
+            read_scheduler,
+            logger,
+        );
+
         store_ctx
             .apply_pool
             .spawn(async move { apply_fsm.handle_all_tasks().await })
@@ -173,17 +183,31 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    fn propose<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>, data: Vec<u8>) -> Result<u64> {
-        ctx.raft_metrics.propose.normal.inc();
+    fn propose<T>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        data: Vec<u8>,
+    ) -> Result<u64> {
+        self.propose_with_ctx(store_ctx, data, vec![])
+    }
+
+    #[inline]
+    fn propose_with_ctx<T>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        data: Vec<u8>,
+        proposal_ctx: Vec<u8>,
+    ) -> Result<u64> {
+        store_ctx.raft_metrics.propose.normal.inc();
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
-        if data.len() as u64 > ctx.cfg.raft_entry_max_size.0 {
+        if data.len() as u64 > store_ctx.cfg.raft_entry_max_size.0 {
             return Err(Error::RaftEntryTooLarge {
                 region_id: self.region_id(),
                 entry_size: data.len() as u64,
             });
         }
         let last_index = self.raft_group().raft.raft_log.last_index();
-        self.raft_group_mut().propose(vec![], data)?;
+        self.raft_group_mut().propose(proposal_ctx, data)?;
         if self.raft_group().raft.raft_log.last_index() == last_index {
             // The message is dropped silently, this usually due to leader absence
             // or transferring leader. Both cases can be considered as NotLeader error.
@@ -260,6 +284,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 AdminCmdResult::ConfChange(conf_change) => {
                     self.on_apply_res_conf_change(conf_change)
                 }
+                AdminCmdResult::SplitRegion(_) => unimplemented!(),
             }
         }
         self.raft_group_mut()
@@ -396,8 +421,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             let admin_req = req.get_admin_request();
             let (admin_resp, admin_result) = match req.get_admin_request().get_cmd_type() {
                 AdminCmdType::CompactLog => unimplemented!(),
-                AdminCmdType::Split => unimplemented!(),
-                AdminCmdType::BatchSplit => unimplemented!(),
+                AdminCmdType::Split => self.apply_split(admin_req, entry.index)?,
+                AdminCmdType::BatchSplit => self.apply_batch_split(admin_req, entry.index)?,
                 AdminCmdType::PrepareMerge => unimplemented!(),
                 AdminCmdType::CommitMerge => unimplemented!(),
                 AdminCmdType::RollbackMerge => unimplemented!(),
@@ -416,6 +441,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     return Err(box_err!("invalid admin command type"));
                 }
             };
+
             self.push_admin_result(admin_result);
             let mut resp = new_response(req.get_header());
             resp.set_admin_response(admin_resp);

@@ -39,7 +39,7 @@ use kvproto::{
     metapb::{PeerRole, Region, RegionEpoch},
     raft_cmdpb::{
         AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
-        RaftCmdRequest, RaftCmdResponse, Request,
+        RaftCmdRequest, RaftCmdResponse, Request, SplitRequest,
     },
     raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState},
 };
@@ -378,6 +378,7 @@ where
     perf_context: EK::PerfContext,
 
     yield_duration: Duration,
+    yield_msg_size: u64,
 
     store_id: u64,
     /// region_id -> (peer_id, is_splitting)
@@ -467,6 +468,7 @@ where
             use_delete_range: cfg.use_delete_range,
             perf_context: engine.get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply),
             yield_duration: cfg.apply_yield_duration.0,
+            yield_msg_size: cfg.apply_yield_write_size.0,
             delete_ssts: vec![],
             pending_delete_ssts: vec![],
             store_id,
@@ -635,7 +637,7 @@ where
             apply_state: delegate.apply_state.clone(),
             write_seqno: mem::take(&mut delegate.unfinished_write_seqno),
             exec_res: results,
-            metrics: delegate.metrics.clone(),
+            metrics: mem::take(&mut delegate.metrics),
             applied_term: delegate.applied_term,
             bucket_stat: delegate.buckets.clone().map(Box::new),
         });
@@ -1136,10 +1138,14 @@ where
                 && apply_ctx.host.pre_persist(&self.region, false, Some(&cmd))
             {
                 apply_ctx.commit(self);
-                if let Some(start) = self.handle_start.as_ref() {
-                    if start.saturating_elapsed() >= apply_ctx.yield_duration {
-                        return ApplyResult::Yield;
-                    }
+                if self.metrics.written_bytes >= apply_ctx.yield_msg_size
+                    || self
+                        .handle_start
+                        .as_ref()
+                        .map_or(Duration::ZERO, Instant::saturating_elapsed)
+                        >= apply_ctx.yield_duration
+                {
+                    return ApplyResult::Yield;
                 }
                 has_unflushed_data = false;
             }
@@ -1257,7 +1263,7 @@ where
         apply_ctx: &mut ApplyContext<EK>,
         index: u64,
         term: u64,
-        cmd: RaftCmdRequest,
+        req: RaftCmdRequest,
     ) -> ApplyResult<EK::Snapshot> {
         if index == 0 {
             panic!(
@@ -1267,11 +1273,10 @@ where
         }
 
         // Set sync log hint if the cmd requires so.
-        apply_ctx.sync_log_hint |= should_sync_log(&cmd);
+        apply_ctx.sync_log_hint |= should_sync_log(&req);
 
-        apply_ctx.host.pre_apply(&self.region, &cmd);
-        let (mut resp, exec_result, should_write) =
-            self.apply_raft_cmd(apply_ctx, index, term, &cmd);
+        apply_ctx.host.pre_apply(&self.region, &req);
+        let (mut cmd, exec_result, should_write) = self.apply_raft_cmd(apply_ctx, index, term, req);
         if let ApplyResult::WaitMergeSource(_) = exec_result {
             return exec_result;
         }
@@ -1285,9 +1290,8 @@ where
 
         // TODO: if we have exec_result, maybe we should return this callback too. Outer
         // store will call it after handing exec result.
-        cmd_resp::bind_term(&mut resp, self.term);
-        let cmd_cb = self.find_pending(index, term, is_conf_change_cmd(&cmd));
-        let cmd = Cmd::new(index, term, cmd, resp);
+        cmd_resp::bind_term(&mut cmd.response, self.term);
+        let cmd_cb = self.find_pending(index, term, is_conf_change_cmd(&cmd.request));
         apply_ctx
             .applied_batch
             .push(cmd_cb, cmd, &self.observe_info, self.region_id());
@@ -1315,8 +1319,8 @@ where
         ctx: &mut ApplyContext<EK>,
         index: u64,
         term: u64,
-        req: &RaftCmdRequest,
-    ) -> (RaftCmdResponse, ApplyResult<EK::Snapshot>, bool) {
+        req: RaftCmdRequest,
+    ) -> (Cmd, ApplyResult<EK::Snapshot>, bool) {
         // if pending remove, apply should be aborted already.
         assert!(!self.pending_remove);
 
@@ -1324,7 +1328,7 @@ where
         // E.g. `RaftApplyState` must not be changed.
 
         let mut origin_epoch = None;
-        let (resp, exec_result) = if ctx.host.pre_exec(&self.region, req, index, term) {
+        let (resp, exec_result) = if ctx.host.pre_exec(&self.region, &req, index, term) {
             // One of the observers want to filter execution of the command.
             let mut resp = RaftCmdResponse::default();
             if !req.get_header().get_uuid().is_empty() {
@@ -1336,7 +1340,7 @@ where
             ctx.exec_log_index = index;
             ctx.exec_log_term = term;
             ctx.kv_wb_mut().set_save_point();
-            let (resp, exec_result) = match self.exec_raft_cmd(ctx, req) {
+            let (resp, exec_result) = match self.exec_raft_cmd(ctx, &req) {
                 Ok(a) => {
                     ctx.kv_wb_mut().pop_save_point().unwrap();
                     if req.has_admin_request() {
@@ -1377,14 +1381,15 @@ where
             };
             (resp, exec_result)
         };
+
+        let cmd = Cmd::new(index, term, req, resp);
         if let ApplyResult::WaitMergeSource(_) = exec_result {
-            return (resp, exec_result, false);
+            return (cmd, exec_result, false);
         }
 
         self.apply_state.set_applied_index(index);
         self.applied_term = term;
 
-        let cmd = Cmd::new(index, term, req.clone(), resp.clone());
         let (modified_region, mut pending_handle_ssts) = match exec_result {
             ApplyResult::Res(ref e) => match e {
                 ExecResult::SplitRegion { ref derived, .. } => (Some(derived.clone()), None),
@@ -1392,7 +1397,7 @@ where
                 ExecResult::CommitMerge { ref region, .. } => (Some(region.clone()), None),
                 ExecResult::RollbackMerge { ref region, .. } => (Some(region.clone()), None),
                 ExecResult::IngestSst { ref ssts } => (None, Some(ssts.clone())),
-                ExecResult::SetFlashbackState { region } => (Some(region.clone()), None),
+                ExecResult::SetFlashbackState { ref region } => (Some(region.clone()), None),
                 _ => (None, None),
             },
             _ => (None, None),
@@ -1463,7 +1468,7 @@ where
             }
         }
         if let Some(epoch) = origin_epoch {
-            let cmd_type = req.get_admin_request().get_cmd_type();
+            let cmd_type = cmd.request.get_admin_request().get_cmd_type();
             let epoch_state = admin_cmd_epoch_lookup(cmd_type);
             // The change-epoch behavior **MUST BE** equal to the settings in
             // `admin_cmd_epoch_lookup`
@@ -1475,7 +1480,7 @@ where
                 panic!(
                     "{} apply admin cmd {:?} but epoch change is not expected, epoch state {:?}, before {:?}, after {:?}",
                     self.tag,
-                    req,
+                    cmd.request,
                     epoch_state,
                     epoch,
                     self.region.get_region_epoch()
@@ -1483,7 +1488,7 @@ where
             }
         }
 
-        (resp, exec_result, should_write)
+        (cmd, exec_result, should_write)
     }
 
     fn destroy(&mut self, apply_ctx: &mut ApplyContext<EK>) {
@@ -1897,6 +1902,39 @@ mod confchange_cmd_metric {
     pub fn inc_success(cct: ConfChangeType) {
         write_metric(cct, "success")
     }
+}
+
+pub fn validate_batch_split(req: &AdminRequest, region: &Region) -> Result<()> {
+    if req.get_splits().get_requests().is_empty() {
+        return Err(box_err!("missing split requests"));
+    }
+
+    let split_reqs: &[SplitRequest] = req.get_splits().get_requests();
+    let mut last_key = region.get_start_key();
+    for req in split_reqs {
+        let split_key = req.get_split_key();
+        if split_key.is_empty() {
+            return Err(box_err!("missing split key"));
+        }
+
+        if split_key <= last_key {
+            return Err(box_err!("invalid split request: {:?}", split_reqs));
+        }
+
+        if req.get_new_peer_ids().len() != region.get_peers().len() {
+            return Err(box_err!(
+                "invalid new peer id count, need {:?}, but got {:?}",
+                region.get_peers(),
+                req.get_new_peer_ids()
+            ));
+        }
+
+        last_key = req.get_split_key();
+    }
+
+    util::check_key_in_region_exclusive(last_key, region)?;
+
+    Ok(())
 }
 
 // Admin commands related.
@@ -2367,38 +2405,15 @@ where
 
         PEER_ADMIN_CMD_COUNTER.batch_split.all.inc();
 
-        let split_reqs = req.get_splits();
-        let right_derive = split_reqs.get_right_derive();
-        if split_reqs.get_requests().is_empty() {
-            return Err(box_err!("missing split requests"));
-        }
         let mut derived = self.region.clone();
-        let new_region_cnt = split_reqs.get_requests().len();
-        let mut regions = Vec::with_capacity(new_region_cnt + 1);
-        let mut keys: VecDeque<Vec<u8>> = VecDeque::with_capacity(new_region_cnt + 1);
-        for req in split_reqs.get_requests() {
-            let split_key = req.get_split_key();
-            if split_key.is_empty() {
-                return Err(box_err!("missing split key"));
-            }
-            if split_key
-                <= keys
-                    .back()
-                    .map_or_else(|| derived.get_start_key(), Vec::as_slice)
-            {
-                return Err(box_err!("invalid split request: {:?}", split_reqs));
-            }
-            if req.get_new_peer_ids().len() != derived.get_peers().len() {
-                return Err(box_err!(
-                    "invalid new peer id count, need {:?}, but got {:?}",
-                    derived.get_peers(),
-                    req.get_new_peer_ids()
-                ));
-            }
-            keys.push_back(split_key.to_vec());
-        }
+        validate_batch_split(req, &derived)?;
 
-        util::check_key_in_region(keys.back().unwrap(), &self.region)?;
+        let split_reqs = req.get_splits();
+        let mut keys: VecDeque<_> = split_reqs
+            .get_requests()
+            .iter()
+            .map(|req| req.get_split_key().to_vec())
+            .collect();
 
         info!(
             "split region";
@@ -2407,8 +2422,13 @@ where
             "region" => ?derived,
             "keys" => %KeysInfoFormatter(keys.iter()),
         );
+
+        let new_region_cnt = split_reqs.get_requests().len();
         let new_version = derived.get_region_epoch().get_version() + new_region_cnt as u64;
         derived.mut_region_epoch().set_version(new_version);
+
+        let right_derive = split_reqs.get_right_derive();
+        let mut regions = Vec::with_capacity(new_region_cnt + 1);
         // Note that the split requests only contain ids for new regions, so we need
         // to handle new regions and old region separately.
         if right_derive {
@@ -2423,6 +2443,7 @@ where
             regions.push(derived.clone());
         }
 
+        // Init split regions' meta info
         let mut new_split_regions: HashMap<u64, NewSplitPeer> = HashMap::default();
         for req in split_reqs.get_requests() {
             let mut new_region = Region::default();
@@ -2453,6 +2474,11 @@ where
             regions.push(derived.clone());
         }
 
+        // Generally, a peer is created in pending_create_peers when it is
+        // created by raft_message (or by split here) and removed from
+        // pending_create_peers when it has applied the snapshot. So, if the
+        // peer of the split region is already created by raft_message in
+        // pending_create_peers ,we decide to replace it.
         let mut replace_regions = HashSet::default();
         {
             let mut pending_create_peers = ctx.pending_create_peers.lock().unwrap();
@@ -2498,6 +2524,9 @@ where
                             self.tag, region_id, new_split_peer.peer_id, state
                         )
                     }
+                    // If the peer's state is already persisted, add some info in
+                    // new_split_peer.result so that we will skip this region in later
+                    // executions.
                     already_exist_regions.push((*region_id, new_split_peer.peer_id));
                     new_split_peer.result = Some(format!("state {:?} exist in kv engine", state));
                 }
@@ -2829,30 +2858,27 @@ where
         ctx: &mut ApplyContext<EK>,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
-        let region_id = self.region_id();
-        let region_state_key = keys::region_state_key(region_id);
-        let mut old_state = match ctx
-            .engine
-            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
-        {
-            Ok(Some(s)) => s,
-            _ => {
-                return Err(box_err!("failed to get region state of {}", region_id));
-            }
-        };
         let is_in_flashback = req.get_cmd_type() == AdminCmdType::PrepareFlashback;
-        old_state.mut_region().set_is_in_flashback(is_in_flashback);
+        // Modify the region meta in memory.
         let mut region = self.region.clone();
         region.set_is_in_flashback(is_in_flashback);
-        ctx.kv_wb_mut()
-            .put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &old_state)
-            .unwrap_or_else(|e| {
-                error!(
-                    "{} failed to change flashback state to {:?} for region {}: {:?}",
-                    self.tag, req, region_id, e
-                )
-            });
+        // Modify the `RegionLocalState` persisted in disk.
+        write_peer_state(ctx.kv_wb_mut(), &region, PeerState::Normal, None).unwrap_or_else(|e| {
+            panic!(
+                "{} failed to change the flashback state to {} for region {:?}: {:?}",
+                self.tag, is_in_flashback, region, e
+            )
+        });
 
+        match req.get_cmd_type() {
+            AdminCmdType::PrepareFlashback => {
+                PEER_ADMIN_CMD_COUNTER.prepare_flashback.success.inc();
+            }
+            AdminCmdType::FinishFlashback => {
+                PEER_ADMIN_CMD_COUNTER.finish_flashback.success.inc();
+            }
+            _ => unreachable!(),
+        }
         Ok((
             AdminResponse::default(),
             ApplyResult::Res(ExecResult::SetFlashbackState { region }),
@@ -3558,7 +3584,6 @@ where
             RAFT_ENTRIES_CACHES_GAUGE.sub(dangle_size as i64);
         }
 
-        self.delegate.metrics = ApplyMetrics::default();
         self.delegate.term = apply.term;
         if let Some(meta) = apply.bucket_meta.clone() {
             let buckets = self
@@ -4078,6 +4103,7 @@ where
                 }
                 _ => {}
             }
+            self.apply_ctx.yield_msg_size = incoming.apply_yield_write_size.0;
             update_cfg(&incoming.apply_batch_system);
         }
     }
@@ -4517,7 +4543,7 @@ mod tests {
     use tempfile::{Builder, TempDir};
     use test_sst_importer::*;
     use tikv_util::{
-        config::VersionTrack,
+        config::{ReadableSize, VersionTrack},
         store::{new_learner_peer, new_peer},
         worker::dummy_scheduler,
     };
@@ -5579,6 +5605,92 @@ mod tests {
     }
 
     #[test]
+    fn test_apply_yield_with_msg_size() {
+        let (_path, engine) = create_tmp_engine("test-apply-yield");
+        let (_import_dir, importer) = create_tmp_importer("test-apply-yield");
+        let obs = ApplyObserver::default();
+        let mut host = CoprocessorHost::<KvTestEngine>::default();
+        host.registry
+            .register_query_observer(1, BoxQueryObserver::new(obs));
+
+        let (tx, rx) = mpsc::channel();
+        let (region_scheduler, _) = dummy_scheduler();
+        let sender = Box::new(TestNotifier { tx });
+        let cfg = Arc::new(VersionTrack::new(Config::default()));
+        let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
+        let builder = super::Builder::<KvTestEngine> {
+            tag: "test-store".to_owned(),
+            cfg: cfg.clone(),
+            sender,
+            region_scheduler,
+            coprocessor_host: host,
+            importer,
+            engine,
+            router: router.clone(),
+            store_id: 1,
+            pending_create_peers,
+        };
+        system.spawn("test-handle-raft".to_owned(), builder);
+
+        let peer_id = 3;
+        let mut reg = Registration {
+            id: peer_id,
+            ..Default::default()
+        };
+        reg.region.set_id(1);
+        reg.region.mut_peers().push(new_peer(2, 3));
+        reg.region.set_end_key(b"k5".to_vec());
+        reg.region.mut_region_epoch().set_conf_ver(1);
+        reg.region.mut_region_epoch().set_version(3);
+        router.schedule_task(1, Msg::Registration(reg));
+
+        let schedule_apply = |idx: u64, count: usize, size: usize| {
+            let mut entries = Vec::with_capacity(count);
+            for i in 0..count {
+                let put_entry = EntryBuilder::new(idx + i as u64, 3)
+                    .put(format!("k{:03}", i).as_ref(), &vec![0; size - 4])
+                    .epoch(1, 3)
+                    .build();
+                entries.push(put_entry);
+            }
+            router.schedule_task(1, Msg::apply(apply(peer_id, 1, 3, entries, vec![])));
+        };
+
+        fn approximate_eq(a: u64, b: u64, delta: u64) {
+            assert!(
+                a >= b - delta && a <= b + delta,
+                "left: {}, right: {}, delta: {}",
+                a,
+                b,
+                delta
+            );
+        }
+
+        // schedule a batch with 512 keys and 64k total size will trigger 2 flush and
+        // yield.
+        schedule_apply(1, 512, 128);
+        let apply_res = fetch_apply_res(&rx);
+        approximate_eq(apply_res.metrics.written_bytes, 32768, 2048);
+        approximate_eq(apply_res.metrics.written_keys, 256, 15);
+        // the second part, note that resume apply not clean up the metrics
+        let apply_res = fetch_apply_res(&rx);
+        approximate_eq(apply_res.metrics.written_bytes, 32768, 2048);
+        approximate_eq(apply_res.metrics.written_keys, 256, 15);
+
+        // update apply yeild size to 64kb
+        _ = cfg.update(|c| {
+            c.apply_yield_write_size = ReadableSize::kb(64);
+            Ok::<(), ()>(())
+        });
+        // only trigger one time of
+        schedule_apply(513, 512, 128);
+        let apply_res = fetch_apply_res(&rx);
+        approximate_eq(apply_res.metrics.written_bytes, 65536, 4096);
+        approximate_eq(apply_res.metrics.written_keys, 512, 20);
+    }
+
+    #[test]
     fn test_handle_ingest_sst() {
         let (_path, engine) = create_tmp_engine("test-ingest");
         let (import_dir, importer) = create_tmp_importer("test-ingest");
@@ -6451,12 +6563,13 @@ mod tests {
             resp
         );
 
+        splits.mut_requests().clear();
         splits
             .mut_requests()
             .push(new_split_req(b"", 8, vec![9, 10, 11]));
         let resp = exec_split(&router, splits.clone());
-        // Empty key should be rejected.
-        assert!(error_msg(&resp).contains("missing"), "{:?}", resp);
+        // Empty key will not in any region exclusively.
+        assert!(error_msg(&resp).contains("missing split key"), "{:?}", resp);
 
         splits.mut_requests().clear();
         splits
@@ -6674,5 +6787,101 @@ mod tests {
 
         rx.recv_timeout(Duration::from_millis(500)).unwrap();
         system.shutdown();
+    }
+
+    fn new_batch_split_request(keys: Vec<Vec<u8>>) -> AdminRequest {
+        let mut req = AdminRequest::default();
+        req.set_cmd_type(AdminCmdType::BatchSplit);
+        for key in keys {
+            let mut split_req = SplitRequest::default();
+            split_req.set_split_key(key);
+            split_req.set_new_peer_ids(vec![1]);
+            req.mut_splits().mut_requests().push(split_req);
+        }
+        req
+    }
+
+    #[test]
+    fn test_validate_batch_split() {
+        let mut region = Region::default();
+        region.set_start_key(b"k05".to_vec());
+        region.set_end_key(b"k10".to_vec());
+        region.set_peers(vec![new_peer(1, 2)].into());
+
+        let missing_error = "missing split requests";
+        let invalid_error = "invalid split request";
+        let not_in_region_error = "not in region";
+        let empty_error = "missing split key";
+        let peer_id_error = "invalid new peer id count";
+
+        // case: split is deprecated
+        let mut req = AdminRequest::default();
+        req.set_cmd_type(AdminCmdType::Split);
+        let mut split_req = SplitRequest::default();
+        split_req.set_split_key(b"k06".to_vec());
+        req.set_split(split_req);
+        assert!(
+            validate_batch_split(&req, &region)
+                .unwrap_err()
+                .to_string()
+                .contains(missing_error)
+        );
+
+        // case: missing peer ids
+        let mut req = new_batch_split_request(vec![b"k07".to_vec()]);
+        req.mut_splits()
+            .mut_requests()
+            .get_mut(0)
+            .unwrap()
+            .new_peer_ids
+            .clear();
+        assert!(
+            validate_batch_split(&req, &region)
+                .unwrap_err()
+                .to_string()
+                .contains(peer_id_error)
+        );
+
+        let fail_cases = vec![
+            // case: default admin request should be rejected
+            (vec![], missing_error),
+            // case: empty split key
+            (vec![vec![]], empty_error),
+            // case: out of order split keys
+            (
+                vec![b"k07".to_vec(), b"k08".to_vec(), b"k06".to_vec()],
+                invalid_error,
+            ),
+            // case: split keys are not in region range
+            (
+                vec![b"k04".to_vec(), b"k07".to_vec(), b"k08".to_vec()],
+                invalid_error,
+            ),
+            // case: split keys are not in region range
+            (
+                vec![b"k06".to_vec(), b"k07".to_vec(), b"k11".to_vec()],
+                not_in_region_error,
+            ),
+            // case: duplicated split keys
+            (vec![b"k06".to_vec(), b"k06".to_vec()], invalid_error),
+        ];
+
+        for (split_keys, fail_str) in fail_cases {
+            let req = if split_keys.is_empty() {
+                AdminRequest::default()
+            } else {
+                new_batch_split_request(split_keys)
+            };
+            assert!(
+                validate_batch_split(&req, &region)
+                    .unwrap_err()
+                    .to_string()
+                    .contains(fail_str)
+            );
+        }
+
+        // case: pass the validation
+        let req = new_batch_split_request(vec![b"k06".to_vec(), b"k07".to_vec(), b"k08".to_vec()]);
+        validate_batch_split(&req, &region).unwrap();
     }
 }

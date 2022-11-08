@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    char::from_u32,
     path::Path,
     sync::*,
     thread,
@@ -42,6 +43,7 @@ use tikv::{
         gc_worker::sync_gc,
         service::{batch_commands_request, batch_commands_response},
     },
+    storage::txn::FLASHBACK_BATCH_SIZE,
 };
 use tikv_util::{
     config::ReadableSize,
@@ -598,12 +600,122 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
 }
 
 #[test]
+#[cfg(feature = "failpoints")]
+fn test_mvcc_flashback_failed_after_first_batch() {
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let mut ts = 0;
+    for i in 0..FLASHBACK_BATCH_SIZE * 2 {
+        // Meet the constraints of the alphabetical order for test
+        let k = format!("key@{}", from_u32(i as u32).unwrap()).into_bytes();
+        complete_data_commit(&client, &ctx, ts, k.clone(), b"value@0".to_vec());
+    }
+    ts += 3;
+    let check_ts = ts;
+    for i in 0..FLASHBACK_BATCH_SIZE * 2 {
+        let k = format!("key@{}", from_u32(i as u32).unwrap()).into_bytes();
+        complete_data_commit(&client, &ctx, ts, k.clone(), b"value@1".to_vec());
+    }
+    ts += 3;
+    // Flashback
+    fail::cfg("flashback_failed_after_first_batch", "return").unwrap();
+    fail::cfg("flashback_skip_1_key_in_write", "1*return").unwrap();
+    must_flashback_to_version(&client, ctx.clone(), check_ts, ts + 1, ts + 2);
+    fail::remove("flashback_skip_1_key_in_write");
+    fail::remove("flashback_failed_after_first_batch");
+    // skip for key@0
+    must_kv_read_equal(
+        &client,
+        ctx.clone(),
+        format!("key@{}", from_u32(0_u32).unwrap())
+            .as_bytes()
+            .to_vec(),
+        b"value@1".to_vec(),
+        ts + 2,
+    );
+    // The first batch of writes are flashbacked.
+    must_kv_read_equal(
+        &client,
+        ctx.clone(),
+        format!("key@{}", from_u32(1_u32).unwrap())
+            .as_bytes()
+            .to_vec(),
+        b"value@0".to_vec(),
+        ts + 2,
+    );
+    // Subsequent batches of writes are not flashbacked.
+    must_kv_read_equal(
+        &client,
+        ctx.clone(),
+        format!("key@{}", from_u32(FLASHBACK_BATCH_SIZE as u32 - 1).unwrap())
+            .as_bytes()
+            .to_vec(),
+        b"value@1".to_vec(),
+        ts + 2,
+    );
+    // Flashback batch 2.
+    fail::cfg("flashback_failed_after_first_batch", "return").unwrap();
+    must_flashback_to_version(&client, ctx.clone(), check_ts, ts + 1, ts + 2);
+    fail::remove("flashback_failed_after_first_batch");
+    // key@0 must be flahsbacked in the second batch firstly.
+    must_kv_read_equal(
+        &client,
+        ctx.clone(),
+        format!("key@{}", from_u32(0_u32).unwrap())
+            .as_bytes()
+            .to_vec(),
+        b"value@0".to_vec(),
+        ts + 2,
+    );
+    must_kv_read_equal(
+        &client,
+        ctx.clone(),
+        format!("key@{}", from_u32(FLASHBACK_BATCH_SIZE as u32 - 1).unwrap())
+            .as_bytes()
+            .to_vec(),
+        b"value@0".to_vec(),
+        ts + 2,
+    );
+    // 2 * (FLASHBACK_BATCH_SIZE - 1) - 1 keys are flashbacked.
+    must_kv_read_equal(
+        &client,
+        ctx.clone(),
+        format!(
+            "key@{}",
+            from_u32(2 * FLASHBACK_BATCH_SIZE as u32 - 3).unwrap()
+        )
+        .as_bytes()
+        .to_vec(),
+        b"value@1".to_vec(),
+        ts + 2,
+    );
+    // Flashback needs to be continued.
+    must_flashback_to_version(&client, ctx.clone(), check_ts, ts + 1, ts + 2);
+    // Flashback again to check if any error occurs :)
+    must_flashback_to_version(&client, ctx.clone(), check_ts, ts + 1, ts + 2);
+    ts += 2;
+    // Subsequent batches of writes are flashbacked.
+    must_kv_read_equal(
+        &client,
+        ctx,
+        format!(
+            "key@{}",
+            from_u32(2 * FLASHBACK_BATCH_SIZE as u32 - 3).unwrap()
+        )
+        .as_bytes()
+        .to_vec(),
+        b"value@0".to_vec(),
+        ts,
+    );
+}
+
+#[test]
 fn test_mvcc_flashback() {
     let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
     let mut ts = 0;
-    let k = b"key".to_vec();
-    for i in 0..10 {
+    // Need to write many batches.
+    for i in 0..2000 {
         let v = format!("value@{}", i).into_bytes();
+        let k = format!("key@{}", i % 1000).into_bytes();
         // Prewrite
         ts += 1;
         let prewrite_start_version = ts;
@@ -634,6 +746,7 @@ fn test_mvcc_flashback() {
         must_kv_read_equal(&client, ctx.clone(), k.clone(), v.clone(), ts)
     }
     // Prewrite to leave a lock.
+    let k = b"key@1".to_vec();
     ts += 1;
     let prewrite_start_version = ts;
     let mut mutation = Mutation::default();
@@ -651,19 +764,17 @@ fn test_mvcc_flashback() {
     let get_version = ts;
     let mut get_req = GetRequest::default();
     get_req.set_context(ctx.clone());
-    get_req.key = k.clone();
+    get_req.key = k;
     get_req.version = get_version;
     let get_resp = client.kv_get(&get_req).unwrap();
     assert!(!get_resp.has_region_error());
     assert!(get_resp.get_error().has_locked());
     assert!(get_resp.value.is_empty());
     // Flashback
-    let flashback_resp = must_flashback_to_version(&client, ctx.clone(), 5, ts + 1, ts + 2);
+    must_flashback_to_version(&client, ctx.clone(), 5, ts + 1, ts + 2);
     ts += 2;
-    assert!(!flashback_resp.has_region_error());
-    assert!(flashback_resp.get_error().is_empty());
     // Should not meet the lock and can not get the latest data any more.
-    must_kv_read_equal(&client, ctx, k, b"value@1".to_vec(), ts);
+    must_kv_read_equal(&client, ctx, b"key@1".to_vec(), b"value@1".to_vec(), ts);
 }
 
 #[test]
@@ -672,9 +783,7 @@ fn test_mvcc_flashback_block_rw() {
     let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
     fail::cfg("skip_finish_flashback_to_version", "return").unwrap();
     // Flashback
-    let flashback_resp = must_flashback_to_version(&client, ctx.clone(), 0, 1, 2);
-    assert!(!flashback_resp.has_region_error());
-    assert!(flashback_resp.get_error().is_empty());
+    must_flashback_to_version(&client, ctx.clone(), 0, 1, 2);
     // Try to read.
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
     // Get
@@ -712,9 +821,7 @@ fn test_mvcc_flashback_block_scheduling() {
     let (mut cluster, client, ctx) = must_new_cluster_and_kv_client();
     fail::cfg("skip_finish_flashback_to_version", "return").unwrap();
     // Flashback
-    let flashback_resp = must_flashback_to_version(&client, ctx, 0, 1, 2);
-    assert!(!flashback_resp.has_region_error());
-    assert!(flashback_resp.get_error().is_empty());
+    must_flashback_to_version(&client, ctx, 0, 1, 2);
     // Try to transfer leader.
     let transfer_leader_resp = cluster.try_transfer_leader(1, new_peer(2, 2));
     assert!(

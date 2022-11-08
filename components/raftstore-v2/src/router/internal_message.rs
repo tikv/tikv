@@ -1,13 +1,13 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::raft_serverpb::RegionLocalState;
 use raftstore::store::fsm::ChangePeer;
 
-use crate::operation::{AdminCmdResult, CommittedEntries};
+use crate::operation::{AdminCmdResult, CommittedEntries, GenSnapTask};
 
 #[derive(Debug)]
 pub enum ApplyTask {
     CommittedEntries(CommittedEntries),
+    Snapshot(GenSnapTask),
 }
 
 #[derive(Debug, Default)]
