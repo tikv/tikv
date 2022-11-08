@@ -565,7 +565,7 @@ impl ReadDelegate {
         debug!(
             "reject stale read by safe ts";
             "safe_ts" => safe_ts,
-            "read_ts" => read_ts
+            "read_ts" => read_ts,
             "region_id" => self.region.get_id(),
             "peer_id" => self.peer_id,
         );
