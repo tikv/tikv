@@ -566,6 +566,7 @@ where
         if self.config.raft_store.capacity.0 > 0 {
             capacity = cmp::min(capacity, self.config.raft_store.capacity.0);
         }
+        // reserve space for kv engine
         setup_reserved_space(
             false,
             &self.config.storage.data_dir,
@@ -575,7 +576,7 @@ where
         );
 
         let raft_data_dir = if self.config.raft_engine.enable {
-            self.config.raft_engine.config().dir.clone()
+            self.config.raft_engine.config().dir
         } else {
             self.config.raft_store.raftdb_path.clone()
         };
@@ -584,6 +585,7 @@ where
             path_in_diff_mount_point(&self.config.storage.data_dir, &raft_data_dir);
         if separated_raft_mount_path {
             let raft_disk_stats = fs2::statvfs(&raft_data_dir).unwrap();
+            // reserve space for raft engine if raft engine is deployed separately
             setup_reserved_space(
                 true,
                 &raft_data_dir,
