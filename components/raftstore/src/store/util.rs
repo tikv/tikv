@@ -1437,10 +1437,11 @@ impl RegionReadProgressCore {
         self.read_state.ts = cmp::min(source_safe_ts, target_safe_ts);
         info!(
             "reset safe_ts due to merge";
-            "tag" => &self.tag,
             "source_safe_ts" => source_safe_ts,
             "target_safe_ts" => target_safe_ts,
             "safe_ts" => self.read_state.ts,
+            "region_id" => self.region_id,
+            "peer_id" => self.peer_id,
         );
         if self.read_state.ts != target_safe_ts {
             Some(self.read_state.ts)
@@ -2153,7 +2154,7 @@ mod tests {
         }
 
         let cap = 10;
-        let rrp = RegionReadProgress::new(&Default::default(), 10, cap, "".to_owned());
+        let rrp = RegionReadProgress::new(&Default::default(), 10, cap, 1);
         for i in 1..=20 {
             rrp.update_safe_ts(i, i);
         }
