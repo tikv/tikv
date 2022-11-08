@@ -32,14 +32,9 @@ use hyper::service::{make_service_fn, service_fn};
 use hyper::{self, header, Body, Client, Method, Request, Response, Server, StatusCode, Uri};
 use hyper_openssl::HttpsConnector;
 use online_config::OnlineConfig;
-<<<<<<< HEAD
 use openssl::ssl::{
-    Ssl, SslAcceptor, SslConnector, SslConnectorBuilder, SslFiletype, SslMethod, SslVerifyMode,
-=======
-use openssl::{
-    ssl::{Ssl, SslAcceptor, SslContext, SslFiletype, SslMethod, SslVerifyMode},
-    x509::X509,
->>>>>>> 470370510f (status_server: reload TLS certificate on TLS errors (#12569))
+    Ssl, SslAcceptor, SslConnector, SslConnectorBuilder, SslContext, SslFiletype, SslMethod,
+    SslVerifyMode,
 };
 use openssl::x509::X509;
 use pd_client::{RpcClient, REQUEST_RECONNECT_INTERVAL};
