@@ -818,7 +818,13 @@ pub fn must_kv_read_equal(client: &TikvClient, ctx: Context, key: Vec<u8>, val: 
     assert_eq!(get_resp.take_value(), val);
 }
 
-pub fn complete_data_commit(client: &TikvClient, ctx: &Context, ts: &mut u64, k: Vec<u8>, v: Vec<u8>) {
+pub fn complete_data_commit(
+    client: &TikvClient,
+    ctx: &Context,
+    ts: &mut u64,
+    k: Vec<u8>,
+    v: Vec<u8>,
+) {
     // Prewrite
     let prewrite_start_version = *ts + 1;
     let mut mutation = Mutation::default();

@@ -339,7 +339,7 @@ fn test_mvcc_rollback_and_cleanup() {
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
 
     let mut ts = 0;
-    complete_data_commit(&client, &ctx, &mut ts, k.clone(), v.clone());
+    complete_data_commit(&client, &ctx, &mut ts, k.clone(), v);
 
     // Prewrite puts some locks.
     ts += 1;
