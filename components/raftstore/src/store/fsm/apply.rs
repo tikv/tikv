@@ -2291,6 +2291,7 @@ where
                             // The peer is already the requested role
                             || (role, change_type) == (PeerRole::Voter, ConfChangeType::AddNode)
                             || (role, change_type) == (PeerRole::Learner, ConfChangeType::AddLearnerNode)
+                            || exist_peer.get_is_witness() != peer.get_is_witness()
                     {
                         error!(
                             "can't add duplicated peer";
@@ -2306,19 +2307,6 @@ where
                             peer,
                             self.region,
                             exist_peer
-                        ));
-                    }
-                    if exist_peer.get_is_witness() != peer.get_is_witness() {
-                        error!(
-                            "can't switch witness in conf change";
-                            "region_id" => self.region_id(),
-                            "peer_id" => self.id(),
-                            "region" => ?&self.region
-                        );
-                        return Err(box_err!(
-                            "can't switch witness for peer {:?} of region {:?}",
-                            exist_peer,
-                            self.region
                         ));
                     }
                     match (role, change_type) {

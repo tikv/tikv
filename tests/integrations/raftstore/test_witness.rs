@@ -3,8 +3,12 @@
 use std::{iter::FromIterator, sync::Arc, time::Duration};
 
 use futures::executor::block_on;
-use kvproto::metapb;
+use kvproto::{
+    metapb,
+    raft_cmdpb::{ChangePeerRequest, RaftCmdRequest},
+};
 use pd_client::PdClient;
+use raft::eraftpb::ConfChangeType;
 use test_raftstore::*;
 use tikv_util::store::find_peer;
 
@@ -53,12 +57,53 @@ fn test_witness_split_merge() {
     assert!(find_peer(&after_merge, nodes[2]).unwrap().is_witness);
     must_get_none(&cluster.get_engine(3), b"k1");
     must_get_none(&cluster.get_engine(3), b"k2");
+
+// Test flow of witness conf change
+#[test]
+fn test_witness_conf_change() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+    let nodes = Vec::from_iter(cluster.get_node_ids());
+    assert_eq!(nodes.len(), 3);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.must_put(b"k1", b"v1");
+
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+    let peer_on_store1 = find_peer(&region, nodes[0]).unwrap();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1.clone());
+
+    // can't switch witness by conf change
+    let mut peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
+    let mut peer = peer_on_store3.clone();
+    peer.set_is_witness(true);
+    let mut cp = ChangePeerRequest::default();
+    cp.set_change_type(ConfChangeType::AddLearnerNode);
+    cp.set_peer(peer);
+    let admin_req = new_admin_request(
+        region.get_id(),
+        region.get_region_epoch(),
+        new_change_peer_v2_request(vec![cp]),
+    );
+    must_get_error_recovery_in_progress(&mut cluster, &region, admin_req);
+
+    // add a new witness peer
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), peer_on_store3.clone());
+    peer_on_store3.set_is_witness(true);
+    cluster
+        .pd_client
+        .must_add_peer(region.get_id(), peer_on_store3.clone());
+    std::thread::sleep(Duration::from_millis(100));
+    must_get_none(&cluster.get_engine(3), b"k1");
 }
 
-// TODO: add back when switch witness is supported
-// // Test flow of witness conf change
 // #[test]
-// fn test_witness_conf_change() {
+// // Test flow of switch witness
+// fn test_witness_switch_witness() {
 //     let mut cluster = new_server_cluster(0, 3);
 //     cluster.run();
 //     let nodes = Vec::from_iter(cluster.get_node_ids());
@@ -94,17 +139,6 @@ fn test_witness_split_merge() {
 //         .must_add_peer(region.get_id(), peer_on_store3.clone());
 //     std::thread::sleep(Duration::from_millis(100));
 //     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
-
-//     // add a new witness peer
-//     cluster
-//         .pd_client
-//         .must_remove_peer(region.get_id(), peer_on_store3.clone());
-//     peer_on_store3.set_is_witness(true);
-//     cluster
-//         .pd_client
-//         .must_add_peer(region.get_id(), peer_on_store3.clone());
-//     std::thread::sleep(Duration::from_millis(100));
-//     must_get_none(&cluster.get_engine(3), b"k1");
 // }
 
 // TODO: add back when switch witness is supported
@@ -352,14 +386,8 @@ fn test_witness_replica_read() {
 fn must_get_error_recovery_in_progress<T: Simulator>(
     cluster: &mut Cluster<T>,
     region: &metapb::Region,
-    cmd: kvproto::raft_cmdpb::Request,
+    req: RaftCmdRequest,
 ) {
-    let req = new_request(
-        region.get_id(),
-        region.get_region_epoch().clone(),
-        vec![cmd],
-        true,
-    );
     let resp = cluster
         .call_command_on_leader(req, Duration::from_millis(100))
         .unwrap();
@@ -395,7 +423,7 @@ fn test_witness_leader_down() {
 
     // the other follower is isolated
     cluster.add_send_filter(IsolationFilterFactory::new(3));
-    for i in 1..100 {
+    for i in 1..10 {
         cluster.must_put(format!("k{}", i).as_bytes(), format!("v{}", i).as_bytes());
     }
     // the leader is down
@@ -405,13 +433,28 @@ fn test_witness_leader_down() {
     cluster.clear_send_filters();
 
     // forbid writes
-    let put = new_put_cmd(b"k3", b"v3");
+    let put = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_put_cmd(b"k3", b"v3")],
+        true,
+    );
     must_get_error_recovery_in_progress(&mut cluster, &region, put);
     // forbid reads
-    let get = new_get_cmd(b"k1");
+    let get = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_get_cmd(b"k1")],
+        true,
+    );
     must_get_error_recovery_in_progress(&mut cluster, &region, get);
     // forbid read index
-    let read_index = new_read_index_cmd();
+    let read_index = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_read_index_cmd()],
+        true,
+    );
     must_get_error_recovery_in_progress(&mut cluster, &region, read_index);
 
     let peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
