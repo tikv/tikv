@@ -1201,23 +1201,24 @@ where
             // we should observe empty cmd, aka leader change,
             // read index during confchange, or other situations.
             apply_ctx.host.on_empty_cmd(&self.region, index, term);
+
+            // 1. When a peer become leader, it will send an empty entry.
+            // 2. When a leader tries to read index during transferring leader,
+            //    it will also propose an empty entry. But that entry will not contain
+            //    any associated callback. So no need to clear callback.
+            while let Some(mut cmd) = self.pending_cmds.pop_normal(u64::MAX, term - 1) {
+                if let Some(cb) = cmd.cb.take() {
+                    apply_ctx
+                        .applied_batch
+                        .push_cb(cb, cmd_resp::err_resp(Error::StaleCommand, term));
+                }
+            }
         }
 
         self.apply_state.set_applied_index(index);
         self.applied_term = term;
         assert!(term > 0);
 
-        // 1. When a peer become leader, it will send an empty entry.
-        // 2. When a leader tries to read index during transferring leader,
-        //    it will also propose an empty entry. But that entry will not contain
-        //    any associated callback. So no need to clear callback.
-        while let Some(mut cmd) = self.pending_cmds.pop_normal(u64::MAX, term - 1) {
-            if let Some(cb) = cmd.cb.take() {
-                apply_ctx
-                    .applied_batch
-                    .push_cb(cb, cmd_resp::err_resp(Error::StaleCommand, term));
-            }
-        }
         ApplyResult::None
     }
 
@@ -2305,6 +2306,19 @@ where
                             peer,
                             self.region,
                             exist_peer
+                        ));
+                    }
+                    if exist_peer.get_is_witness() != peer.get_is_witness() {
+                        error!(
+                            "can't switch witness in conf change";
+                            "region_id" => self.region_id(),
+                            "peer_id" => self.id(),
+                            "region" => ?&self.region
+                        );
+                        return Err(box_err!(
+                            "can't switch witness for peer {:?} of region {:?}",
+                            exist_peer,
+                            self.region
                         ));
                     }
                     match (role, change_type) {
