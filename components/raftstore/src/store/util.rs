@@ -934,24 +934,24 @@ pub fn check_conf_change(
             (ConfChangeType::RemoveNode, PeerRole::Voter) if kind != ConfChangeKind::Simple => {
                 return Err(box_err!("{:?}: can not remove voter directly", cp));
             }
-            (ConfChangeType::RemoveNode, _) => {}
-            (ConfChangeType::AddNode, PeerRole::Voter)
-            | (ConfChangeType::AddLearnerNode, PeerRole::Learner) => {
-                if let Some(p) = region
-                    .get_peers()
-                    .iter()
-                    .find(|p| p.get_id() == peer.get_id())
-                {
-                    if p.get_is_witness() != peer.get_is_witness() {
-                        return Err(box_err!(
-                            "invalid conf change request: {:?}, can not switch witness in conf change",
-                            cp
-                        ));
-                    }
-                }
-            }
+            (ConfChangeType::RemoveNode, _)
+            | (ConfChangeType::AddNode, PeerRole::Voter)
+            | (ConfChangeType::AddLearnerNode, PeerRole::Learner) => {}
             _ => {
                 return Err(box_err!("{:?}: op not match role", cp));
+            }
+        }
+
+        if let Some(p) = region
+            .get_peers()
+            .iter()
+            .find(|p| p.get_id() == peer.get_id())
+        {
+            if p.get_is_witness() != peer.get_is_witness() {
+                return Err(box_err!(
+                    "invalid conf change request: {:?}, can not switch witness in conf change",
+                    cp
+                ));
             }
         }
 
