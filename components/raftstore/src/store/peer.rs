@@ -4606,7 +4606,6 @@ where
             1 => peers.get(0).unwrap(),
             _ => peers.choose(&mut rand::thread_rng()).unwrap(),
         };
-        info!("propose transfer leader"; "region_id" => self.region_id, "peer_id" => self.peer.get_id(), "peer" => ?peer);
 
         let transferred = if peer.id == self.peer.id {
             false
