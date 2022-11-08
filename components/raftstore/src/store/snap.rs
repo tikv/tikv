@@ -150,6 +150,10 @@ impl SnapKey {
             snap,
         ))
     }
+
+    pub fn recv_path(&self) -> String {
+        format!("{}_{}", SNAP_REV_PREFIX, self)
+    }
 }
 
 impl Display for SnapKey {

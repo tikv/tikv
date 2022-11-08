@@ -8,8 +8,8 @@
 //! raft db and then invoking callback or sending msgs if any.
 
 use std::{
+    collections::HashSet,
     fmt, mem,
-    path::PathBuf,
     sync::Arc,
     thread::{self, JoinHandle},
 };
@@ -17,7 +17,7 @@ use std::{
 use collections::HashMap;
 use crossbeam::channel::{bounded, Receiver, Sender, TryRecvError};
 use engine_traits::{
-    KvEngine, PerfContext, PerfContextKind, RaftEngine, RaftLogBatch, TabletFactory, WriteBatch,
+    KvEngine, PerfContext, PerfContextKind, RaftEngine, RaftLogBatch, Result as EResult, WriteBatch,
     WriteOptions,
 };
 use error_code::ErrorCodeExt;
@@ -30,7 +30,7 @@ use raft::eraftpb::Entry;
 use tikv_util::{
     box_err,
     config::{Tracker, VersionTrack},
-    debug, info, slow_log,
+    debug, error, info, slow_log,
     sys::thread::StdThreadBuildWrapper,
     thd_name,
     time::{duration_to_sec, Instant},
@@ -59,7 +59,7 @@ const RAFT_WB_DEFAULT_SIZE: usize = 256 * 1024;
 
 /// Notify the event to the specified region.
 pub trait PersistedNotifier: Clone + Send + 'static {
-    fn notify(&self, region_id: u64, peer_id: u64, ready_number: u64);
+    fn notify(&self, region_id: u64, peer_id: u64, ready_number: u64, need_scheduled: bool);
 }
 
 impl<EK, ER> PersistedNotifier for RaftRouter<EK, ER>
@@ -67,7 +67,7 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn notify(&self, region_id: u64, peer_id: u64, ready_number: u64) {
+    fn notify(&self, region_id: u64, peer_id: u64, ready_number: u64, _: bool) {
         if let Err(e) = self.force_send(
             region_id,
             PeerMsg::Persisted {
@@ -171,7 +171,7 @@ where
     ready_number: u64,
     pub send_time: Instant,
     pub raft_wb: Option<ER::LogBatch>,
-    pub snapshot: Option<(u64, u64, String, Arc<dyn TabletFactory<EK>>)>,
+    pub snapshot: Option<Box<dyn FnOnce(u64) -> EResult<EK> + Send>>,
     pub entries: Vec<Entry>,
     pub cut_logs: Option<(u64, u64)>,
     pub raft_state: Option<RaftLocalState>,
@@ -202,13 +202,18 @@ where
         }
     }
 
-    pub fn apply_snapshot(&self) {
-        if let Some((region_id, suffix, path, tablet_factory)) = &self.snapshot {
-            info!("begin apply snapshot";"region_id"=>region_id);
-            let snap_path = PathBuf::from(path);
-            let _ = tablet_factory.load_tablet(&snap_path, *region_id, *suffix);
-            info!("apply snapshot finished";"region_id"=>region_id);
-        }
+    pub fn apply_snapshot(&mut self) -> bool {
+        if self.snapshot.is_some() {
+            let hook = std::mem::take(&mut self.snapshot).unwrap();
+            match hook(self.region_id) {
+                Ok(_) => return true,
+                Err(e) => {
+                    error!("load tablet failed";"error"=>?e,"region_id"=>self.region_id);
+                    return false;
+                }
+            };
+        };
+        false
     }
 
     pub fn has_data(&self) -> bool {
@@ -502,9 +507,6 @@ where
         if metrics.waterfall_metrics {
             let now = std::time::Instant::now();
             for task in &self.tasks {
-                if task.snapshot.is_some() {
-                    task.apply_snapshot();
-                }
                 for tracker in &task.trackers {
                     tracker.observe(now, &metrics.wf_before_write, |t| {
                         &mut t.metrics.wf_before_write_nanos
@@ -514,10 +516,14 @@ where
         }
     }
 
-    fn after_write_to_kv_db(&mut self, metrics: &StoreWriteMetrics) {
-        if metrics.waterfall_metrics {
-            let now = std::time::Instant::now();
-            for task in &self.tasks {
+    fn after_write_to_kv_db(&mut self, metrics: &StoreWriteMetrics) -> Option<HashSet<u64>> {
+        let mut applied_peers = HashSet::new();
+        let now = std::time::Instant::now();
+        for task in &mut self.tasks {
+            if task.apply_snapshot() {
+                applied_peers.insert(task.region_id);
+            }
+            if metrics.waterfall_metrics {
                 for tracker in &task.trackers {
                     tracker.observe(now, &metrics.wf_kvdb_end, |t| {
                         &mut t.metrics.wf_kvdb_end_nanos
@@ -525,6 +531,7 @@ where
                 }
             }
         }
+        Some(applied_peers)
     }
 
     fn after_write_to_raft_db(&mut self, metrics: &StoreWriteMetrics) {
@@ -722,10 +729,8 @@ where
                 write_kv_time = duration_to_sec(now.saturating_elapsed());
                 STORE_WRITE_KVDB_DURATION_HISTOGRAM.observe(write_kv_time);
             }
-
-            self.batch.after_write_to_kv_db(&self.metrics);
         }
-
+        let applied_peer = self.batch.after_write_to_kv_db(&self.metrics);
         fail_point!("raft_between_save");
 
         let mut write_raft_time = 0f64;
@@ -816,7 +821,12 @@ where
         let mut callback_time = 0f64;
         if notify {
             for (region_id, (peer_id, ready_number)) in &self.batch.readies {
-                self.notifier.notify(*region_id, *peer_id, *ready_number);
+                let mut need_scheduled = false;
+                if let Some(peers) = &applied_peer {
+                    need_scheduled = peers.contains(region_id);
+                }
+                self.notifier
+                    .notify(*region_id, *peer_id, *ready_number, need_scheduled);
             }
             now = Instant::now();
             callback_time = duration_to_sec(now.saturating_duration_since(now2));

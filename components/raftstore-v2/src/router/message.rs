@@ -135,6 +135,7 @@ pub enum PeerMsg {
     Persisted {
         peer_id: u64,
         ready_number: u64,
+        need_scheduled: bool,
     },
     QueryDebugInfo(DebugInfoChannel),
     /// A message that used to check if a flush is happened.
@@ -171,10 +172,11 @@ impl fmt::Debug for PeerMsg {
             PeerMsg::Persisted {
                 peer_id,
                 ready_number,
+                need_scheduled,
             } => write!(
                 fmt,
-                "Persisted peer_id {}, ready_number {}",
-                peer_id, ready_number
+                "Persisted peer_id {}, ready_number {},need_scheduled:{}",
+                peer_id, ready_number, need_scheduled
             ),
             PeerMsg::LogsFetched(fetched) => write!(fmt, "LogsFetched {:?}", fetched),
             PeerMsg::SnapshotGenerated(_) => write!(fmt, "SnapshotGenerated"),

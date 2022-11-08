@@ -145,6 +145,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             read_scheduler,
             false,
             logger,
+            Some(0),
         )
     }
 

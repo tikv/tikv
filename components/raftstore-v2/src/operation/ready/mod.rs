@@ -20,9 +20,9 @@
 mod async_writer;
 mod snapshot;
 
-use std::{cmp, sync::Arc};
+use std::{cmp, path::PathBuf, sync::Arc};
 
-use engine_traits::{KvEngine, RaftEngine, TabletFactory};
+use engine_traits::{KvEngine, MiscExt, RaftEngine, TabletFactory};
 use error_code::ErrorCodeExt;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RaftSnapshotData};
 use protobuf::Message as _;
@@ -30,9 +30,12 @@ use raft::{
     eraftpb::{self, MessageType, Snapshot},
     Ready,
 };
-use raftstore::store::{util, ExtraStates, FetchedLogs, Transport, WriteTask};
+use raftstore::store::{util, ExtraStates, FetchedLogs, SnapKey, Transport, WriteTask};
 use slog::{debug, error, info, trace, warn};
-use tikv_util::time::{duration_to_sec, monotonic_raw_now};
+use tikv_util::{
+    box_err,
+    time::{duration_to_sec, monotonic_raw_now},
+};
 
 pub use self::{
     async_writer::AsyncWriter,
@@ -317,7 +320,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let ready_number = ready.number();
         let mut write_task = WriteTask::new(self.region_id(), self.peer_id(), ready_number);
         self.storage_mut()
-            .handle_raft_ready(&mut ready, &mut write_task);
+            .handle_raft_ready(&mut ready, &mut write_task, ctx);
         if !ready.persisted_messages().is_empty() {
             write_task.messages = ready
                 .take_persisted_messages()
@@ -404,13 +407,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     /// Apply the ready to the storage. If there is any states need to be
     /// persisted, it will be written to `write_task`.
-    fn handle_raft_ready(&mut self, ready: &mut Ready, write_task: &mut WriteTask<EK, ER>) {
+    fn handle_raft_ready<T: Transport>(
+        &mut self,
+        ready: &mut Ready,
+        write_task: &mut WriteTask<EK, ER>,
+        ctx: &mut StoreContext<EK, ER, T>,
+    ) {
         let prev_raft_state = self.entry_storage().raft_state().clone();
         let ever_persisted = self.ever_persisted();
 
-        // TODO: handle snapshot
         if !ready.snapshot().is_empty() {
-            let _ = self.apply_snapshot(ready.snapshot(), write_task, tablet_factory);
+            let _ = self.apply_snapshot(ready.snapshot(), write_task, ctx.tablet_factory.clone());
             ever_persisted = false
         }
 
@@ -483,13 +490,18 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             "state" => ?self.entry_storage().apply_state(),
         );
 
-        task.snapshot = Some((
-            region_id,
-            self.tablet_suffix().unwrap(),
-            // todo: fix the snapshot's recv dir
-            String::from("123"),
-            tablet_factory,
-        ));
+        let key = SnapKey::new(region_id, last_term, last_index);
+        // todo: fix the snapshot more reasonable
+        let mut path = tablet_factory.tablets_path();
+        path.pop();
+        path.push("/snap");
+        path.push(key.recv_path());
+
+        let t = move |region_id: u64| {
+            tablet_factory.load_tablet(path.as_path(), region_id, self.tablet_suffix().unwrap())
+        };
+
+        task.snapshot = Some(Box::new(t));
         Ok(())
     }
 }
