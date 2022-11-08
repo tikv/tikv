@@ -530,36 +530,67 @@ where
         // enough space to do compaction and region migration when TiKV recover.
         // This file is created in data_dir rather than db_path, because we must not
         // increase store size of db_path.
+        fn setup_reserved_space(
+            for_raft_disk: bool,
+            data_dir: &String,
+            capacity: u64,
+            available: u64,
+            reserved_size: u64,
+        ) {
+            let mut reserve_space = reserved_size;
+            if reserved_size != 0 {
+                reserve_space = cmp::max((capacity as f64 * 0.05) as u64, reserved_size);
+            }
+            if for_raft_disk {
+                disk::set_raft_disk_reserved_space(reserve_space)
+            } else {
+                disk::set_disk_reserved_space(reserve_space)
+            }
+            let path = Path::new(data_dir).join(file_system::SPACE_PLACEHOLDER_FILE);
+            if let Err(e) = file_system::remove_file(&path) {
+                warn!("failed to remove space holder on starting: {}", e);
+            }
+
+            // place holder file size is 20% of total reserved space.
+            if available > reserve_space {
+                file_system::reserve_space_for_recover(data_dir, reserve_space / 5)
+                    .map_err(|e| panic!("Failed to reserve space for recovery: {}.", e))
+                    .unwrap();
+            } else {
+                warn!("no enough disk space left to create the place holder file");
+            }
+        }
+
         let disk_stats = fs2::statvfs(&self.config.storage.data_dir).unwrap();
         let mut capacity = disk_stats.total_space();
         if self.config.raft_store.capacity.0 > 0 {
             capacity = cmp::min(capacity, self.config.raft_store.capacity.0);
         }
-        let mut reserve_space = self.config.storage.reserve_space.0;
-        if self.config.storage.reserve_space.0 != 0 {
-            reserve_space = cmp::max(
-                (capacity as f64 * 0.05) as u64,
-                self.config.storage.reserve_space.0,
-            );
-        }
-        disk::set_disk_reserved_space(reserve_space);
-        let path =
-            Path::new(&self.config.storage.data_dir).join(file_system::SPACE_PLACEHOLDER_FILE);
-        if let Err(e) = file_system::remove_file(&path) {
-            warn!("failed to remove space holder on starting: {}", e);
-        }
+        setup_reserved_space(
+            false,
+            &self.config.storage.data_dir,
+            capacity,
+            disk_stats.available_space(),
+            self.config.storage.reserve_space.0,
+        );
 
-        let available = disk_stats.available_space();
-        // place holder file size is 20% of total reserved space.
-        if available > reserve_space {
-            file_system::reserve_space_for_recover(
-                &self.config.storage.data_dir,
-                reserve_space / 5,
-            )
-            .map_err(|e| panic!("Failed to reserve space for recovery: {}.", e))
-            .unwrap();
+        let raft_data_dir = if self.config.raft_engine.enable {
+            self.config.raft_engine.config().dir.clone()
         } else {
-            warn!("no enough disk space left to create the place holder file");
+            self.config.raft_store.raftdb_path.clone()
+        };
+
+        let separated_raft_mount_path =
+            path_in_diff_mount_point(&self.config.storage.data_dir, &raft_data_dir);
+        if separated_raft_mount_path {
+            let raft_disk_stats = fs2::statvfs(&raft_data_dir).unwrap();
+            setup_reserved_space(
+                true,
+                &raft_data_dir,
+                raft_disk_stats.total_space(),
+                raft_disk_stats.available_space(),
+                self.config.storage.reserve_raft_space.0,
+            );
         }
     }
 
@@ -1445,14 +1476,16 @@ where
         let store_path = self.store_path.clone();
         let snap_mgr = self.snap_mgr.clone().unwrap();
         let reserve_space = disk::get_disk_reserved_space();
-        if reserve_space == 0 {
+        let reserve_raft_space = disk::get_raft_disk_reserved_space();
+        if reserve_space == 0 || reserve_raft_space == 0 {
             info!("disk space checker not enabled");
             return;
         }
         let raft_path = engines.raft.get_engine_path().to_string();
-        let separate_raft_path = path_in_diff_mount_point(raft_path.as_str(), engines.kv.path());
-        let raft_engine_almost_full_percent =
-            self.config.raft_store.raft_engine_almost_full_percent;
+        let separated_raft_mount_path =
+            path_in_diff_mount_point(raft_path.as_str(), engines.kv.path());
+        let raft_almost_full_threshold = reserve_raft_space;
+        let raft_already_full_threshold = reserve_raft_space / 2;
 
         let almost_full_threshold = reserve_space;
         let already_full_threshold = reserve_space / 2;
@@ -1483,7 +1516,7 @@ where
                     .expect("get raft engine size");
 
                 let mut raft_disk_status = disk::DiskUsage::Normal;
-                if separate_raft_path {
+                if separated_raft_mount_path {
                     let raft_disk_stats = match fs2::statvfs(&raft_path) {
                         Err(e) => {
                             error!(
@@ -1499,12 +1532,10 @@ where
                     let mut raft_disk_available =
                         raft_disk_cap.checked_sub(raft_size).unwrap_or_default();
                     raft_disk_available = cmp::min(raft_disk_available, raft_disk_stats.available_space());
-                    raft_disk_status = if raft_disk_available * 100
-                        <= raft_disk_cap * ((100 - raft_engine_almost_full_percent) / 2)
+                    raft_disk_status = if raft_disk_available <= raft_already_full_threshold
                     {
                         disk::DiskUsage::AlreadyFull
-                    } else if raft_disk_available * 100
-                        <= raft_disk_cap * (100 - raft_engine_almost_full_percent)
+                    } else if raft_disk_available <= raft_almost_full_threshold
                     {
                         disk::DiskUsage::AlmostFull
                     } else {
@@ -1518,7 +1549,7 @@ where
                 let placeholder_size: u64 =
                     file_system::get_file_size(&placeholer_file_path).unwrap_or(0);
 
-                let used_size = if !separate_raft_path {
+                let used_size = if !separated_raft_mount_path {
                     snap_size + kv_size + raft_size + placeholder_size
                 } else {
                     snap_size + kv_size + placeholder_size
@@ -1549,12 +1580,12 @@ where
                 };
                 if prev_disk_status != cur_disk_status {
                     warn!(
-                        "disk usage {:?}->{:?} (raftdb usage: {:?}, kvdb usage: {:?}), seperate raftdb={}, kv available={},snap={},kv={},raft={},capacity={}",
+                        "disk usage {:?}->{:?} (raft engine usage: {:?}, kv engine usage: {:?}), seperated raft mount={}, kv available={}, snap={}, kv={}, raft={}, capacity={}",
                         prev_disk_status,
                         cur_disk_status,
                         raft_disk_status,
                         cur_kv_disk_status,
-                        separate_raft_path,
+                        separated_raft_mount_path,
                         available,
                         snap_size,
                         kv_size,

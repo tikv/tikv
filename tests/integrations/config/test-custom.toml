@@ -97,6 +97,7 @@ scheduler-worker-pool-size = 1
 scheduler-pending-write-threshold = "123KB"
 enable-async-apply-prewrite = true
 reserve-space = "10GB"
+reserve-raft-space = "2GB"
 enable-ttl = true
 ttl-check-poll-interval = "0s"
 
