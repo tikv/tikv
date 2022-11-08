@@ -6,7 +6,7 @@ mod split;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
     raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest},
-    raft_serverpb::PeerState,
+    raft_serverpb::{PeerState, RaftMessage},
 };
 use protobuf::Message;
 use raft::prelude::ConfChangeV2;
@@ -20,7 +20,7 @@ use raftstore::{
     Result,
 };
 use slog::info;
-pub use split::{AcrossPeerMsg, SplitRegionInitInfo, SplitResult};
+pub use split::{RegionSplitMsg, SplitRegionInitInfo, SplitResult};
 use tikv_util::box_err;
 
 use self::conf_change::ConfChangeResult;
@@ -34,6 +34,13 @@ use crate::{
 pub enum AdminCmdResult {
     SplitRegion(SplitResult),
     ConfChange(ConfChangeResult),
+}
+
+pub struct CreatePeer {
+    /// Empty raft message used to create an unitialized peer
+    pub raft_message: RaftMessage,
+    /// It contains the data needed to initalize a peer
+    pub split_region_info: SplitRegionInitInfo,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {

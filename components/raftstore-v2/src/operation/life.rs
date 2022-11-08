@@ -23,12 +23,12 @@ use raftstore::store::{util, ExtraStates, WriteTask};
 use slog::{debug, error, info};
 use tikv_util::store::find_peer;
 
-use super::AcrossPeerMsg;
+use super::{command::CreatePeer, RegionSplitMsg};
 use crate::{
     batch::StoreContext,
     fsm::{PeerFsm, Store},
     raft::{Peer, Storage},
-    router::{message::PeerCreation, PeerMsg},
+    router::PeerMsg,
 };
 
 /// When a peer is about to destroy, it becomes `WaitReady` first. If there is
@@ -98,17 +98,22 @@ impl Store {
     pub fn on_peer_creation<EK, ER, T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
-        msg: PeerCreation,
+        msg: Box<CreatePeer>,
     ) where
         EK: KvEngine,
         ER: RaftEngine,
     {
-        let region_id = msg.raft_message.get_region_id();
+        let CreatePeer {
+            raft_message,
+            split_region_info,
+        } = Box::into_inner(msg);
+
+        let region_id = raft_message.get_region_id();
         // It will create the peer if it is not existed
-        self.on_raft_message(ctx, msg.raft_message);
+        self.on_raft_message(ctx, Box::new(raft_message));
         ctx.router.force_send(
             region_id,
-            PeerMsg::AcrossPeerMsg(AcrossPeerMsg::SplitRegionInit(msg.split_region_info)),
+            PeerMsg::RegionSplitMsg(RegionSplitMsg::SplitRegionInit(Box::new(split_region_info))),
         );
     }
 

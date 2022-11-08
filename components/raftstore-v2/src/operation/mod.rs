@@ -10,6 +10,6 @@ pub use life::DestroyProgress;
 pub use ready::{AsyncWriter, GenSnapTask, SnapState};
 
 pub(crate) use self::{
-    command::{AcrossPeerMsg, SplitRegionInitInfo},
+    command::{CreatePeer, RegionSplitMsg, SplitRegionInitInfo},
     query::LocalReader,
 };

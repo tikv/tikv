@@ -61,9 +61,9 @@ use tikv_util::box_err;
 use crate::{
     batch::StoreContext,
     fsm::{ApplyResReporter, PeerFsmDelegate},
-    operation::AdminCmdResult,
+    operation::{command::admin::CreatePeer, AdminCmdResult},
     raft::{raft_config, write_initial_states, Apply, Peer, Storage},
-    router::{message::PeerCreation, ApplyRes, PeerMsg, StoreMsg},
+    router::{ApplyRes, PeerMsg, StoreMsg},
 };
 
 #[derive(Debug)]
@@ -97,7 +97,7 @@ pub struct SplitRegionInitResp {
     pub result: bool,
 }
 
-pub enum AcrossPeerMsg {
+pub enum RegionSplitMsg {
     SplitRegionInit(Box<SplitRegionInitInfo>),
     SplitRegionInitResp(Box<SplitRegionInitResp>),
 }
@@ -222,10 +222,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
             store_ctx
                 .router
-                .send_control(StoreMsg::PeerCreation(PeerCreation {
-                    raft_message: Box::new(raft_message),
-                    split_region_info: Box::new(init_info),
-                }));
+                .send_control(StoreMsg::CreatePeer(Box::new(CreatePeer {
+                    raft_message,
+                    split_region_info: init_info,
+                })));
         }
         drop(meta);
 
@@ -398,7 +398,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         store_ctx.router.force_send(
             parent_region_id,
-            PeerMsg::AcrossPeerMsg(AcrossPeerMsg::SplitRegionInitResp(Box::new(
+            PeerMsg::RegionSplitMsg(RegionSplitMsg::SplitRegionInitResp(Box::new(
                 SplitRegionInitResp {
                     parent_epoch,
                     child_region_id: region_id,
@@ -627,14 +627,14 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 }
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
-    pub fn on_across_peer_msg(&mut self, msg: AcrossPeerMsg) {
+    pub fn on_across_peer_msg(&mut self, msg: RegionSplitMsg) {
         match msg {
-            AcrossPeerMsg::SplitRegionInit(init_info) => {
+            RegionSplitMsg::SplitRegionInit(init_info) => {
                 self.fsm
                     .peer_mut()
                     .init_split_region(self.store_ctx, init_info);
             }
-            AcrossPeerMsg::SplitRegionInitResp(resp) => {
+            RegionSplitMsg::SplitRegionInitResp(resp) => {
                 self.fsm
                     .peer_mut()
                     .handle_peer_split_response(self.store_ctx, resp);
