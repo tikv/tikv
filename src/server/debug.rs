@@ -2291,13 +2291,11 @@ mod tests {
 
     #[test]
     fn test_compact() {
-        let bottommost_level_compaction = Some("skip").into();
         let debugger = new_debugger();
-        let compact =
-            |db, cf| debugger.compact(db, cf, &[0], &[0xFF], 1, bottommost_level_compaction);
-        assert!(compact(DbType::Kv, CF_DEFAULT).is_ok());
-        assert!(compact(DbType::Kv, CF_LOCK).is_ok());
-        assert!(compact(DbType::Kv, CF_WRITE).is_ok());
-        assert!(compact(DbType::Raft, CF_DEFAULT).is_ok());
+        let compact = |db, cf| debugger.compact(db, cf, &[0], &[0xFF], 1, Some("skip").into());
+        compact(DbType::Kv, CF_DEFAULT).unwrap();
+        compact(DbType::Kv, CF_LOCK).unwrap();
+        compact(DbType::Kv, CF_WRITE).unwrap();
+        compact(DbType::Raft, CF_DEFAULT).unwrap();
     }
 }
