@@ -4,7 +4,7 @@ use std::{
     cmp::{self, Ordering as CmpOrdering, Reverse},
     error::Error as StdError,
     fmt::{self, Display, Formatter},
-    io::{self, BufReader, ErrorKind, Read, Write},
+    io::{self, ErrorKind, Read, Write},
     path::{Path, PathBuf},
     result, str,
     sync::{
@@ -34,9 +34,7 @@ use protobuf::Message;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 use thiserror::Error;
 use tikv_util::{
-    box_err, box_try,
-    codec::bytes::CompactBytesFromFileDecoder,
-    debug, error, info,
+    box_err, box_try, debug, error, info,
     time::{duration_to_sec, Instant, Limiter},
     warn, HandyRwLock,
 };
@@ -671,7 +669,6 @@ impl Snapshot {
             "set_snapshot_meta total cf files count: {}",
             snapshot_meta.get_cf_files().len()
         );
-
         for cf_file in snapshot_meta.get_cf_files() {
             if current_cf.is_empty() {
                 current_cf = cf_file.get_cf();
@@ -696,7 +693,6 @@ impl Snapshot {
                 cf_file_count_from_meta.len()
             ));
         }
-
         let mut file_idx = 0;
         let mut cf_idx = 0;
         for meta in snapshot_meta.get_cf_files() {

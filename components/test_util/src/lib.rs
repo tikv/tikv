@@ -55,8 +55,6 @@ pub fn setup_for_ci() {
         if env::var("LOG_FILE").is_ok() {
             logging::init_log_for_test();
         }
-    } else {
-        logging::init_log_for_test();
     }
 
     if env::var("PANIC_ABORT").is_ok() {

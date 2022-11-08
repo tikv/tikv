@@ -184,7 +184,7 @@ ifeq ($(PROXY_FRAME_POINTER),1)
 build: ENABLE_FEATURES += pprof-fp
 endif
 build:
-	PROXY_ENABLE_FEATURES="${ENABLE_FEATURES}" ./build.sh
+	PROXY_ENABLE_FEATURES="${ENABLE_FEATURES}" ./proxy_scripts/build.sh
 
 debug: export PROXY_PROFILE=debug
 debug:
@@ -214,11 +214,11 @@ pre-format: unset-override
 	@cargo install --force -q cargo-sort
 
 ci_fmt_check:
-	M="fmt" ./ci_check.sh
+	M="fmt" ./proxy_scripts/ci_check.sh
 
 ci_test:
-	M="testold" ./ci_check.sh
-	M="testnew" ./ci_check.sh
+	M="testold" ./proxy_scripts/ci_check.sh
+	M="testnew" ./proxy_scripts/ci_check.sh
 	make debug
 
 gen_proxy_ffi: pre-format

@@ -499,9 +499,6 @@ where
     /// This call is valid only when it's between a `prepare_for` and
     /// `finish_for`.
     pub fn commit(&mut self, delegate: &mut ApplyDelegate<EK>) {
-        // TODO(tiflash): pending PR https://github.com/tikv/tikv/pull/12957.
-        // We always persist advanced apply state here.
-        // However, it should not be called from `handle_raft_entry_normal`.
         if delegate.last_flush_applied_index < delegate.apply_state.get_applied_index() {
             delegate.maybe_write_apply_state(self);
         }
@@ -509,6 +506,7 @@ where
     }
 
     fn commit_opt(&mut self, delegate: &mut ApplyDelegate<EK>, persistent: bool) {
+        delegate.update_metrics(self);
         if persistent {
             if let (_, Some(seqno)) = self.write_to_db() {
                 delegate.unfinished_write_seqno.push(seqno);
@@ -1130,10 +1128,6 @@ where
 
             if apply_ctx.yield_high_latency_operation && has_high_latency_operation(&cmd) {
                 self.priority = Priority::Low;
-                if apply_ctx.priority != Priority::Low {
-                    apply_ctx.commit(self);
-                    return ApplyResult::Yield;
-                }
             }
             let mut has_unflushed_data =
                 self.last_flush_applied_index != self.apply_state.get_applied_index();
@@ -1141,14 +1135,19 @@ where
                 || apply_ctx.kv_wb().should_write_to_engine())
                 && apply_ctx.host.pre_persist(&self.region, false, Some(&cmd))
             {
-                // TODO(tiflash) may write apply state twice here.
-                // Originally use only `commit_opt`.
                 apply_ctx.commit(self);
                 if let Some(start) = self.handle_start.as_ref() {
                     if start.saturating_elapsed() >= apply_ctx.yield_duration {
                         return ApplyResult::Yield;
                     }
                 }
+                has_unflushed_data = false;
+            }
+            if self.priority != apply_ctx.priority {
+                if has_unflushed_data {
+                    apply_ctx.commit(self);
+                }
+                return ApplyResult::Yield;
             }
 
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
@@ -1590,7 +1589,6 @@ where
             let uuid = req.get_header().get_uuid().to_vec();
             resp.mut_header().set_uuid(uuid);
         }
-
         resp.set_admin_response(response);
         Ok((resp, exec_result))
     }
@@ -1816,7 +1814,6 @@ where
                     e
                 )
             };
-
             engine
                 .delete_ranges_cf(cf, DeleteStrategy::DeleteFiles, &range)
                 .unwrap_or_else(|e| fail_f(e, DeleteStrategy::DeleteFiles));
@@ -1826,7 +1823,6 @@ where
             } else {
                 DeleteStrategy::DeleteByKey
             };
-
             // Delete all remaining keys.
             engine
                 .delete_ranges_cf(cf, strategy.clone(), &range)
@@ -2819,7 +2815,6 @@ where
 
         PEER_ADMIN_CMD_COUNTER.rollback_merge.success.inc();
         let resp = AdminResponse::default();
-
         Ok((
             resp,
             ApplyResult::Res(ExecResult::RollbackMerge {

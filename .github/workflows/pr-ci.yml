@@ -47,10 +47,10 @@ jobs:
       - name: format check
         run: |
           cd ${{github.workspace}}
-          M="fmt" ./ci_check.sh
+          M="fmt" ./proxy_scripts/ci_check.sh
       - name: test
         run: |
-          M="testold" ./ci_check.sh
+          M="testold" ./proxy_scripts/ci_check.sh
 
   build-check:
     runs-on: ubuntu-latest
@@ -90,7 +90,7 @@ jobs:
       - name: format check
         run: |
           cd ${{github.workspace}}
-          M="fmt" ./ci_check.sh
+          M="fmt" ./proxy_scripts/ci_check.sh
       - name: test
         run: |
-          M="testnew" ./ci_check.sh
+          M="testnew" ./proxy_scripts/ci_check.sh
