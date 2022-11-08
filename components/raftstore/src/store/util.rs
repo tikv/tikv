@@ -942,17 +942,16 @@ pub fn check_conf_change(
             }
         }
 
-        if let Some(p) = region
+        if region
             .get_peers()
             .iter()
             .find(|p| p.get_id() == peer.get_id())
+            .map_or(false, |p| p.get_is_witness() != peer.get_is_witness())
         {
-            if p.get_is_witness() != peer.get_is_witness() {
-                return Err(box_err!(
-                    "invalid conf change request: {:?}, can not switch witness in conf change",
-                    cp
-                ));
-            }
+            return Err(box_err!(
+                "invalid conf change request: {:?}, can not switch witness in conf change",
+                cp
+            ));
         }
 
         if !check_dup.insert(peer.get_id()) {
