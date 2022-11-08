@@ -627,7 +627,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 }
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
-    pub fn on_across_peer_msg(&mut self, msg: RegionSplitMsg) {
+    pub fn on_region_split_msg(&mut self, msg: RegionSplitMsg) {
         match msg {
             RegionSplitMsg::SplitRegionInit(init_info) => {
                 self.fsm
