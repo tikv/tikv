@@ -9,7 +9,7 @@
 
 use std::{
     fmt, mem,
-    path::PathBuf,
+    path::Path,
     sync::Arc,
     thread::{self, JoinHandle},
 };
@@ -171,7 +171,7 @@ where
     ready_number: u64,
     pub send_time: Instant,
     pub raft_wb: Option<ER::LogBatch>,
-    pub snapshot: Option<(u64, u64, String, Arc<dyn TabletFactory<EK>>)>,
+    pub snapshot: Option<(u64, u64, Box<Path>, Arc<dyn TabletFactory<EK>>)>,
     pub entries: Vec<Entry>,
     pub cut_logs: Option<(u64, u64)>,
     pub raft_state: Option<RaftLocalState>,
@@ -205,8 +205,7 @@ where
     pub fn apply_snapshot(&self) {
         if let Some((region_id, suffix, path, tablet_factory)) = &self.snapshot {
             info!("begin apply snapshot";"region_id"=>region_id);
-            let snap_path = PathBuf::from(path);
-            let _ = tablet_factory.load_tablet(&snap_path, *region_id, *suffix);
+            let _ = tablet_factory.load_tablet(path, *region_id, *suffix);
             info!("apply snapshot finished";"region_id"=>region_id);
         }
     }
@@ -502,9 +501,6 @@ where
         if metrics.waterfall_metrics {
             let now = std::time::Instant::now();
             for task in &self.tasks {
-                if task.snapshot.is_some() {
-                    task.apply_snapshot();
-                }
                 for tracker in &task.trackers {
                     tracker.observe(now, &metrics.wf_before_write, |t| {
                         &mut t.metrics.wf_before_write_nanos
@@ -518,6 +514,9 @@ where
         if metrics.waterfall_metrics {
             let now = std::time::Instant::now();
             for task in &self.tasks {
+                if task.snapshot.is_some() {
+                    task.apply_snapshot();
+                }
                 for tracker in &task.trackers {
                     tracker.observe(now, &metrics.wf_kvdb_end, |t| {
                         &mut t.metrics.wf_kvdb_end_nanos
