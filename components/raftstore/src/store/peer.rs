@@ -1079,7 +1079,7 @@ where
             skip_bcast_commit: true,
             pre_vote: cfg.prevote,
             max_committed_size_per_ready: MAX_COMMITTED_SIZE_PER_READY,
-            priority: if peer.is_witness { 0 } else { 1 },
+            // TODO: if peer.is_witness { 0 } else { 1 },
             ..Default::default()
         };
 
@@ -3112,8 +3112,9 @@ where
                 "after" => ?peer,
             );
             self.peer = peer;
-            self.raft_group
-                .set_priority(if self.peer.is_witness { 0 } else { 1 });
+            // TODO: set priority for witness
+            // self.raft_group
+            //     .set_priority(if self.peer.is_witness { 0 } else { 1 });
         };
 
         self.activate(ctx);
