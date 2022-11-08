@@ -513,7 +513,7 @@ mod tests {
             snap.get_metadata().get_term(),
             snap.get_metadata().get_index(),
         );
-        let checkpointer_path = mgr.get_path_for_tablet_checkpointer(&snap_key);
+        let checkpointer_path = mgr.get_tablet_checkpointer_path(&snap_key);
         assert!(checkpointer_path.exists());
 
         // Test cancel snapshot

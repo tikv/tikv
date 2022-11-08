@@ -1492,7 +1492,7 @@ impl SnapManager {
         path.to_str().unwrap().to_string()
     }
 
-    pub fn get_path_for_tablet_checkpointer(&self, key: &SnapKey) -> PathBuf {
+    pub fn get_tablet_checkpointer_path(&self, key: &SnapKey) -> PathBuf {
         let prefix = format!("{}_{}", SNAP_GEN_PREFIX, key);
         PathBuf::from(&self.core.base).join(&prefix)
     }

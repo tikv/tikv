@@ -235,7 +235,7 @@ fn create_checkpointer_for_snap<EK: KvEngine>(
     snap_key: &SnapKey,
     tablet: EK,
 ) -> bool {
-    let checkpointer_path = snap_mgr.get_path_for_tablet_checkpointer(snap_key);
+    let checkpointer_path = snap_mgr.get_tablet_checkpointer_path(snap_key);
     if checkpointer_path.as_path().exists() {
         // Remove the old checkpoint directly.
         let Ok (_) = std::fs::remove_dir_all(checkpointer_path.as_path()).map_err(|e| {

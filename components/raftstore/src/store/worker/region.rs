@@ -315,7 +315,7 @@ where
         } else {
             IoType::Replication
         });
-        
+
         if let Err(e) = self.generate_snap(
             region_id,
             last_applied_term,
