@@ -366,7 +366,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
             // First, send init msg to peer directly. Returning error means the peer is not
             // existed in which case we should redirect it to the store.
-            match store_ctx.router.force_send(region_id, peer_creation_msg) {
+            match store_ctx
+                .router
+                .force_send(new_region_id, peer_creation_msg)
+            {
                 Ok(_) => {}
                 Err(SendError(PeerMsg::RegionSplitMsg(RegionSplitMsg::SplitRegionInit(msg)))) => {
                     store_ctx.router.send_control(StoreMsg::CreatePeer(msg));
