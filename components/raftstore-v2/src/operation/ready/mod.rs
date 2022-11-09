@@ -418,7 +418,6 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
 
         if !ready.snapshot().is_empty() {
             let _ = self.apply_snapshot(ready.snapshot(), write_task, ctx.tablet_factory.clone());
-            ever_persisted = false
         }
 
         let entry_storage = self.entry_storage_mut();
@@ -497,7 +496,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         path.push("/snap");
         path.push(key.recv_path());
 
-        let t = move |region_id:u64| {
+        let t = move |region_id: u64| {
             tablet_factory.load_tablet(path.as_path(), region_id, self.tablet_suffix().unwrap())
         };
 
