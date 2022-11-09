@@ -106,7 +106,7 @@ where
     use futures::TryFutureExt;
     let r = tikv_util::stream::retry_ext(
         move || action().err_into::<RetryableEtcdError>(),
-        RetryExt::default().with_fail_hook(|err| println!("meet error {:?}", err)),
+        RetryExt::default().with_fail_hook(|err| println!("meet error {:?}", err.0)),
     )
     .await;
     r.map_err(|err| err.0.into())
