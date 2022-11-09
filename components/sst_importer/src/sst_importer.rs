@@ -6,7 +6,11 @@ use std::{
     io,
     ops::Bound,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
 };
 
 use dashmap::DashMap;
@@ -27,7 +31,9 @@ use kvproto::{
 };
 use tikv_util::{
     codec::stream_event::{EventIterator, Iterator as EIterator},
+    config::ReadableSize,
     stream::block_on_external_io,
+    sys::SysQuota,
     time::{Instant, Limiter},
 };
 use txn_types::{Key, TimeStamp, WriteRef};
@@ -48,7 +54,9 @@ pub struct SstImporter {
     // TODO: lift api_version as a type parameter.
     api_version: ApiVersion,
     compression_types: HashMap<CfName, SstCompressionType>,
-    file_locks: Arc<DashMap<String, (Arc<Vec<u8>>, u64)>>,
+    file_locks: Arc<DashMap<String, (Arc<Vec<u8>>, u64, Instant)>>,
+    mem_use: AtomicU64,
+    mem_limit: ReadableSize,
 }
 
 impl SstImporter {
@@ -59,6 +67,10 @@ impl SstImporter {
         api_version: ApiVersion,
     ) -> Result<SstImporter> {
         let switcher = ImportModeSwitcher::new(cfg);
+
+        let memory_limit = SysQuota::memory_limit_in_bytes() * (cfg.mem_ratio as u64) / 100;
+        info!("memory limit when apply"; "size" => ?memory_limit);
+
         Ok(SstImporter {
             dir: ImportDir::new(root)?,
             key_manager,
@@ -66,6 +78,8 @@ impl SstImporter {
             api_version,
             compression_types: HashMap::with_capacity(2),
             file_locks: Arc::new(DashMap::default()),
+            mem_use: AtomicU64::new(0),
+            mem_limit: ReadableSize(memory_limit),
         })
     }
 
@@ -293,11 +307,45 @@ impl SstImporter {
         Ok(())
     }
 
+    pub fn shrink_cache_by_tick(&self) {
+        let mut shrink_size: usize = 0;
+        let mut retain_size: usize = 0;
+
+        self.file_locks.retain(|_, (buff, refcnt, start)| {
+            let need_retain =
+                *refcnt > 0 as u64 || start.saturating_elapsed() < Duration::from_secs(60);
+            if need_retain {
+                retain_size += buff.len();
+            }else{
+                shrink_size += buff.len();
+            }
+            need_retain
+        });
+
+        self.dec_mem(shrink_size as _);
+        info!("shrink cache by tick"; "shrink size" => shrink_size, "retain size" => retain_size);
+    }
+
+    fn inc_mem_and_check(&self, meta: &KvMeta) -> bool {
+        let size = meta.get_length();
+        let old = self.mem_use.fetch_add(size, Ordering::Relaxed);
+
+        // If the memory is limited, roll backup the mem_use and return false.
+        if old + size > self.mem_limit.0 {
+            self.mem_use.fetch_sub(size, Ordering::Relaxed);
+            return false;
+        }
+        return true;
+    }
+
+    fn dec_mem(&self, size: u64) {
+        self.mem_use.fetch_sub(size, Ordering::Relaxed);
+    }
+
     pub fn clear_kv_buff(&self, meta: &KvMeta) {
         let dst_name = format!("{}_{}", meta.get_name(), meta.get_range_offset());
-        self.file_locks.remove_if_mut(&dst_name, |_, v| {
+        self.file_locks.entry(dst_name).and_modify(|v| {
             v.1 -= 1;
-            v.1 == 0 as u64
         });
     }
 
@@ -310,25 +358,36 @@ impl SstImporter {
         let start = Instant::now();
         let dst_name = format!("{}_{}", meta.get_name(), meta.get_range_offset());
 
-        let mut lock = self.file_locks.entry(dst_name).or_default();
-        let v = lock.value_mut();
-        if v.0.len() > 0 {
-            v.1 += 1;
-            return Ok(v.0.clone());
+        let mut lock =
+            self.file_locks
+                .entry(dst_name)
+                .or_insert((Arc::default(), 0, Instant::now()));
+        if lock.0.len() > 0 {
+            lock.1 += 1;
+            lock.2 = Instant::now();
+            return Ok(lock.0.clone());
         }
 
-        let sha256 = meta.get_sha256().to_vec();
-        let expected_sha256 = if !sha256.is_empty() {
-            Some(sha256)
-        } else {
-            None
+        if !self.inc_mem_and_check(meta) {
+            return Err(Error::ResourceNotEnough(String::from("memory is limited")));
+        }
+
+        let expected_sha256 = {
+            let sha256 = meta.get_sha256().to_vec();
+            if !sha256.is_empty() {
+                Some(sha256)
+            } else {
+                None
+            }
         };
         let file_length = meta.get_length();
-        let range_length = meta.get_range_length();
-        let range = if range_length == 0 {
-            None
-        } else {
-            Some((meta.get_range_offset(), range_length))
+        let range = {
+            let range_length = meta.get_range_length();
+            if range_length == 0 {
+                None
+            } else {
+                Some((meta.get_range_offset(), range_length))
+            }
         };
         let restore_config = external_storage_export::RestoreConfig {
             range,
@@ -344,7 +403,7 @@ impl SstImporter {
             speed_limiter,
             restore_config,
         )?;
-        *lock = (Arc::new(buff), 1);
+        *lock = (Arc::new(buff), 1, Instant::now());
 
         IMPORTER_DOWNLOAD_BYTES.observe(file_length as _);
         IMPORTER_APPLY_DURATION
@@ -443,7 +502,10 @@ impl SstImporter {
             return Ok(path.save);
         }
 
-        let lock = self.file_locks.entry(dst_name.to_string()).or_default();
+        let lock =
+            self.file_locks
+                .entry(dst_name.clone())
+                .or_insert((Arc::default(), 1, Instant::now()));
 
         if path.save.exists() {
             return Ok(path.save);

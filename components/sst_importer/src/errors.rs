@@ -122,6 +122,9 @@ pub enum Error {
         storage_api_version: ApiVersion,
         key: String,
     },
+
+    #[error("resource is not enough {0}")]
+    ResourceNotEnough(String),
 }
 
 impl Error {
@@ -181,6 +184,7 @@ impl ErrorCodeExt for Error {
             Error::TtlLenNotEqualsToPairs => error_code::sst_importer::TTL_LEN_NOT_EQUALS_TO_PAIRS,
             Error::IncompatibleApiVersion => error_code::sst_importer::INCOMPATIBLE_API_VERSION,
             Error::InvalidKeyMode { .. } => error_code::sst_importer::INVALID_KEY_MODE,
+            Error::ResourceNotEnough(_) => error_code::sst_importer::RESOURCE_NOT_ENOUTH,
         }
     }
 }

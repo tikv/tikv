@@ -5,6 +5,8 @@ use std::{
     future::Future,
     path::PathBuf,
     sync::{Arc, Mutex},
+    thread::sleep,
+    time::Duration,
 };
 
 use collections::HashSet;
@@ -93,6 +95,20 @@ where
             .create()
             .unwrap();
         importer.start_switch_mode_check(&threads, engine.clone());
+
+        let thread = ThreadPoolBuilder::new()
+            .pool_size(1)
+            .name_prefix("sst-importer")
+            .after_start_wrapper(move || {
+                tikv_alloc::add_thread_memory_accessor();
+                set_io_type(IoType::Import);
+            })
+            .before_stop_wrapper(move || tikv_alloc::remove_thread_memory_accessor())
+            .create()
+            .unwrap();
+
+        thread.spawn_ok(Self::tick(importer.clone()));
+
         ImportSstService {
             cfg,
             engine,
@@ -102,6 +118,13 @@ where
             limiter: Limiter::new(f64::INFINITY),
             task_slots: Arc::new(Mutex::new(HashSet::default())),
             raft_entry_max_size,
+        }
+    }
+
+    async fn tick(importer: Arc<SstImporter>) {
+        loop {
+            sleep(Duration::from_secs(5));
+            importer.shrink_cache_by_tick();
         }
     }
 
@@ -486,6 +509,7 @@ where
                     );
 
                     let buff = importer.do_read_kv_file(&meta, ext_storage.clone(), &limiter)?;
+                    defer!({ importer.clear_kv_buff(&meta) });
                     let r: Option<Range> = importer.do_apply_kv_file(
                         meta.get_start_key(),
                         meta.get_end_key(),
@@ -509,7 +533,6 @@ where
                             None => Some(r),
                         };
                     }
-                    importer.clear_kv_buff(&meta);
                 }
 
                 if !reqs_default.is_empty() {
