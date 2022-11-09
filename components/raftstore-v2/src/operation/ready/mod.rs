@@ -369,10 +369,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ctx: &mut StoreContext<EK, ER, T>,
         peer_id: u64,
         ready_number: u64,
+        need_scheduled: bool,
     ) {
         if peer_id != self.peer_id() {
             error!(self.logger, "peer id not matched"; "persisted_peer_id" => peer_id, "persisted_number" => ready_number);
             return;
+        }
+        if need_scheduled {
+            self.storage_mut().after_applied_snapshot();
+            self.schedule_apply_fsm(ctx);
         }
         let persisted_message = self
             .async_writer
@@ -438,6 +443,16 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         }
     }
 
+    pub fn after_applied_snapshot(&mut self) {
+        let mut entry = self.entry_storage_mut();
+        let term = entry.get_truncate_term();
+        let index = entry.get_truncate_index();
+        entry.set_applied_term(term);
+        entry.set_last_term(term);
+        entry.apply_state_mut().set_applied_index(index);
+        self.region_state_mut().set_tablet_index(index);
+    }
+
     pub fn apply_snapshot(
         &mut self,
         snap: &Snapshot,
@@ -467,17 +482,11 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let last_term = snap.get_metadata().get_term();
 
         self.region_state_mut().set_state(PeerState::Normal);
-        self.region_state_mut().set_region(region.clone());
+        self.region_state_mut().set_region(region);
 
         self.entry_storage_mut()
             .raft_state_mut()
             .set_last_index(last_index);
-
-        self.entry_storage_mut().set_applied_term(last_term);
-        self.entry_storage_mut().set_last_term(last_term);
-        self.entry_storage_mut()
-            .apply_state_mut()
-            .set_applied_index(last_index);
 
         self.entry_storage_mut().set_truncated_index(last_index);
         self.entry_storage_mut().set_truncated_term(last_term);
@@ -492,17 +501,11 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let key = SnapKey::new(region_id, last_term, last_index);
         // todo: fix the snapshot more reasonable
         let mut path = tablet_factory.tablets_path();
-        path.pop();
-        path.push("/snap");
-        path.push(key.recv_path());
+        key.get_snapshot_recv_path(&mut path);
 
-        let t = move |region_id: u64| {
-            tablet_factory.load_tablet(path.as_path(), region_id, self.tablet_suffix().unwrap())
-        };
-
-        task.snapshot = Some(Box::new(t));
-
-        // self.schedule_apply_fsm(ctx);
+        let hook =
+            move |region_id: u64| tablet_factory.load_tablet(path.as_path(), region_id, last_index);
+        task.add_after_write_hook(Some(Box::new(hook)));
         Ok(())
     }
 }

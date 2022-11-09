@@ -226,14 +226,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     peer_id,
                     ready_number,
                     need_scheduled,
-                } => {
-                    if need_scheduled {
-                        self.fsm.peer_mut().schedule_apply_fsm(self.store_ctx);
-                    }
-                    self.fsm
-                        .peer_mut()
-                        .on_persisted(self.store_ctx, peer_id, ready_number)
-                }
+                } => self.fsm.peer_mut().on_persisted(
+                    self.store_ctx,
+                    peer_id,
+                    ready_number,
+                    need_scheduled,
+                ),
                 PeerMsg::LogsFetched(fetched_logs) => {
                     self.fsm.peer_mut().on_logs_fetched(fetched_logs)
                 }

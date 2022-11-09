@@ -959,6 +959,16 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
     }
 
     #[inline]
+    pub fn get_truncate_index(&self) -> u64 {
+        self.apply_state.get_truncated_state().get_index()
+    }
+
+    #[inline]
+    pub fn get_truncate_term(&self) -> u64 {
+        self.apply_state.get_truncated_state().get_term()
+    }
+
+    #[inline]
     pub fn set_truncated_index(&mut self, index: u64) {
         self.apply_state.mut_truncated_state().set_index(index)
     }

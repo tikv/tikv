@@ -17,8 +17,8 @@ use std::{
 use collections::HashMap;
 use crossbeam::channel::{bounded, Receiver, Sender, TryRecvError};
 use engine_traits::{
-    KvEngine, PerfContext, PerfContextKind, RaftEngine, RaftLogBatch, Result as EResult, WriteBatch,
-    WriteOptions,
+    KvEngine, PerfContext, PerfContextKind, RaftEngine, RaftLogBatch, Result as EResult,
+    WriteBatch, WriteOptions,
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
@@ -171,7 +171,7 @@ where
     ready_number: u64,
     pub send_time: Instant,
     pub raft_wb: Option<ER::LogBatch>,
-    pub snapshot: Option<Box<dyn FnOnce(u64) -> EResult<EK> + Send>>,
+    pub after_write_hook: Option<Box<dyn FnOnce(u64) -> EResult<EK> + Send>>,
     pub entries: Vec<Entry>,
     pub cut_logs: Option<(u64, u64)>,
     pub raft_state: Option<RaftLocalState>,
@@ -198,13 +198,13 @@ where
             extra_write: ExtraWrite::None,
             messages: vec![],
             trackers: vec![],
-            snapshot: None,
+            after_write_hook: None,
         }
     }
 
-    pub fn apply_snapshot(&mut self) -> bool {
-        if self.snapshot.is_some() {
-            let hook = std::mem::take(&mut self.snapshot).unwrap();
+    pub fn on_after_write_to_kv_db(&mut self) -> bool {
+        if self.after_write_hook.is_some() {
+            let hook = std::mem::take(&mut self.after_write_hook).unwrap();
             match hook(self.region_id) {
                 Ok(_) => return true,
                 Err(e) => {
@@ -241,6 +241,13 @@ where
         }
 
         Ok(())
+    }
+
+    pub fn add_after_write_hook(
+        &mut self,
+        hook: Option<Box<dyn FnOnce(u64) -> EResult<EK> + Send>>,
+    ) {
+        self.after_write_hook = hook;
     }
 }
 
@@ -517,11 +524,11 @@ where
     }
 
     fn after_write_to_kv_db(&mut self, metrics: &StoreWriteMetrics) -> Option<HashSet<u64>> {
-        let mut applied_peers = HashSet::new();
+        let mut applied_regions = HashSet::new();
         let now = std::time::Instant::now();
         for task in &mut self.tasks {
-            if task.apply_snapshot() {
-                applied_peers.insert(task.region_id);
+            if task.on_after_write_to_kv_db() {
+                applied_regions.insert(task.region_id);
             }
             if metrics.waterfall_metrics {
                 for tracker in &task.trackers {
@@ -531,7 +538,7 @@ where
                 }
             }
         }
-        Some(applied_peers)
+        Some(applied_regions)
     }
 
     fn after_write_to_raft_db(&mut self, metrics: &StoreWriteMetrics) {
@@ -730,7 +737,7 @@ where
                 STORE_WRITE_KVDB_DURATION_HISTOGRAM.observe(write_kv_time);
             }
         }
-        let applied_peer = self.batch.after_write_to_kv_db(&self.metrics);
+        let applied_regions = self.batch.after_write_to_kv_db(&self.metrics);
         fail_point!("raft_between_save");
 
         let mut write_raft_time = 0f64;
@@ -822,8 +829,8 @@ where
         if notify {
             for (region_id, (peer_id, ready_number)) in &self.batch.readies {
                 let mut need_scheduled = false;
-                if let Some(peers) = &applied_peer {
-                    need_scheduled = peers.contains(region_id);
+                if let Some(regions) = &applied_regions {
+                    need_scheduled = regions.contains(region_id);
                 }
                 self.notifier
                     .notify(*region_id, *peer_id, *ready_number, need_scheduled);
