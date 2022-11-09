@@ -1479,7 +1479,7 @@ where
         let snap_mgr = self.snap_mgr.clone().unwrap();
         let reserve_space = disk::get_disk_reserved_space();
         let reserve_raft_space = disk::get_raft_disk_reserved_space();
-        if reserve_space == 0 || reserve_raft_space == 0 {
+        if reserve_space == 0 && reserve_raft_space == 0 {
             info!("disk space checker not enabled");
             return;
         }
