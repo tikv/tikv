@@ -95,27 +95,6 @@ pub fn must_get_cf_none(engine: &RocksEngine, cf: &str, key: &[u8]) {
     must_get(engine, cf, key, None);
 }
 
-pub fn must_peer_latest_applied<T: Simulator>(
-    cluster: &mut Cluster<T>,
-    region_id: u64,
-    peer: &metapb::Peer,
-) {
-    let leader = cluster.leader_of_region(region_id).unwrap();
-    for _ in 1..300 {
-        let leader_apply_idx = cluster.apply_state(region_id, leader.get_store_id());
-        let peer_apply_idx = cluster.apply_state(region_id, peer.get_store_id());
-        if leader_apply_idx == peer_apply_idx {
-            return;
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
-    panic!(
-        "can't wait peer {} of region {} applies latest log",
-        peer.get_id(),
-        region_id
-    )
-}
-
 pub fn must_region_cleared(engine: &Engines<RocksEngine, RaftTestEngine>, region: &metapb::Region) {
     let id = region.get_id();
     let state_key = keys::region_state_key(id);
