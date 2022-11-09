@@ -1,5 +1,16 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! PD Client V2
+//!
+//! In V1, the connection to PD and related states are all shared under a
+//! `RwLock`. The maintenance of these states are implemented in a
+//! decentralized way: each request will try to rebuild the connection on its
+//! own if it encounters a network error.
+//!
+//! In V2, the responsibility to maintain the connection is moved into one
+//! single long-running coroutine, namely [`reconnect_loop`]. Users of the
+//! connection subscribe changes instead of altering it themselves.
+
 use std::{
     collections::HashMap,
     pin::Pin,
@@ -75,7 +86,6 @@ impl RawClient {
         let members = self.members.clone();
         let direct_connected = self.target_info.direct_connected();
         slow_log!(start.saturating_elapsed(), "try reconnect pd");
-        // TODO: avoid constructing TimestampOracle for v2.
         let (channel, stub, target_info, members, _) = match ctx
             .connector
             .reconnect_pd(
@@ -118,6 +128,7 @@ impl RawClient {
     }
 }
 
+/// A shared [`RawClient`] with a local copy of cache.
 #[derive(Clone)]
 pub struct CachedRawClient {
     context: Arc<ConnectContext>,
