@@ -131,7 +131,7 @@ pub struct PrewriteResult {
     pub one_pc_commit_ts: TimeStamp,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 #[cfg_attr(test, derive(Default))]
 pub struct PessimisticLockParameters {
     pub pb_ctx: kvrpcpb::Context,

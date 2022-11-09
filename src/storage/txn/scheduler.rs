@@ -1565,7 +1565,7 @@ mod tests {
                 10.into(),
             )
             .into(),
-            commands::AcquirePessimisticLock::new_disallow_lock_with_conflict(
+            commands::AcquirePessimisticLock::new(
                 vec![(Key::from_raw(b"k"), false)],
                 b"k".to_vec(),
                 10.into(),
@@ -1576,6 +1576,7 @@ mod tests {
                 false,
                 TimeStamp::default(),
                 OldValues::default(),
+                false,
                 false,
                 false,
                 Context::default(),

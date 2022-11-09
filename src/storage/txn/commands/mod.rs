@@ -5,6 +5,7 @@
 #[macro_use]
 mod macros;
 pub(crate) mod acquire_pessimistic_lock;
+pub(crate) mod acquire_pessimistic_lock_resumed;
 pub(crate) mod atomic_store;
 pub(crate) mod check_secondary_locks;
 pub(crate) mod check_txn_status;
@@ -32,6 +33,7 @@ use std::{
 };
 
 pub use acquire_pessimistic_lock::AcquirePessimisticLock;
+pub use acquire_pessimistic_lock_resumed::AcquirePessimisticLockResumed;
 pub use atomic_store::RawAtomicStore;
 pub use check_secondary_locks::CheckSecondaryLocks;
 pub use check_txn_status::CheckTxnStatus;
@@ -81,6 +83,7 @@ pub enum Command {
     Prewrite(Prewrite),
     PrewritePessimistic(PrewritePessimistic),
     AcquirePessimisticLock(AcquirePessimisticLock),
+    AcquirePessimisticLockResumed(AcquirePessimisticLockResumed),
     Commit(Commit),
     Cleanup(Cleanup),
     Rollback(Rollback),
@@ -207,7 +210,7 @@ impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLock
             })
             .collect();
 
-        AcquirePessimisticLock::new_disallow_lock_with_conflict(
+        AcquirePessimisticLock::new(
             keys,
             req.take_primary_lock(),
             req.get_start_version().into(),
@@ -220,6 +223,7 @@ impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLock
             OldValues::default(),
             req.get_check_existence(),
             req.get_lock_only_if_exists(),
+            false,
             req.take_context(),
         )
     }
@@ -581,6 +585,7 @@ impl Command {
             Command::Prewrite(t) => t,
             Command::PrewritePessimistic(t) => t,
             Command::AcquirePessimisticLock(t) => t,
+            Command::AcquirePessimisticLockResumed(t) => t,
             Command::Commit(t) => t,
             Command::Cleanup(t) => t,
             Command::Rollback(t) => t,
@@ -606,6 +611,7 @@ impl Command {
             Command::Prewrite(t) => t,
             Command::PrewritePessimistic(t) => t,
             Command::AcquirePessimisticLock(t) => t,
+            Command::AcquirePessimisticLockResumed(t) => t,
             Command::Commit(t) => t,
             Command::Cleanup(t) => t,
             Command::Rollback(t) => t,

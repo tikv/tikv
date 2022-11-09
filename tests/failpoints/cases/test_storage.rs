@@ -669,7 +669,7 @@ fn test_async_apply_prewrite_impl<E: Engine, F: KvFormat>(
         let (tx, rx) = channel();
         storage
             .sched_txn_command(
-                commands::AcquirePessimisticLock::new_disallow_lock_with_conflict(
+                commands::AcquirePessimisticLock::new(
                     vec![(Key::from_raw(key), false)],
                     key.to_vec(),
                     start_ts,
@@ -680,6 +680,7 @@ fn test_async_apply_prewrite_impl<E: Engine, F: KvFormat>(
                     false,
                     0.into(),
                     OldValues::default(),
+                    false,
                     false,
                     false,
                     ctx.clone(),
@@ -1008,7 +1009,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine, F: KvFormat>(
         let (tx, rx) = channel();
         storage
             .sched_txn_command(
-                commands::AcquirePessimisticLock::new_disallow_lock_with_conflict(
+                commands::AcquirePessimisticLock::new(
                     vec![(Key::from_raw(key), false)],
                     key.to_vec(),
                     start_ts,
@@ -1019,6 +1020,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine, F: KvFormat>(
                     false,
                     0.into(),
                     OldValues::default(),
+                    false,
                     false,
                     false,
                     ctx.clone(),
