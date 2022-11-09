@@ -1038,15 +1038,13 @@ impl RpcClient {
         })
     }
 
-    pub fn create_report_region_buckets_stream<
-        S: Send + Stream<Item = ReportBucketsRequest> + 'static,
-    >(
+    pub fn create_report_region_buckets_stream(
         &mut self,
-        requests: S,
-    ) -> Result<()> {
+    ) -> Result<mpsc::UnboundedSender<ReportBucketsRequest>> {
+        let (tx, rx) = mpsc::unbounded();
         let mut raw_client = self.raw_client.clone();
         let mut reconnect = self.reconnect_tx.clone();
-        let mut requests = Box::pin(requests).map(|r| Ok((r, WriteFlags::default())));
+        let mut requests = Box::pin(rx).map(|r| Ok((r, WriteFlags::default())));
         self.raw_client.stub().spawn(async move {
             loop {
                 if let Err(e) = raw_client.wait_for_ready().await {
@@ -1082,20 +1080,21 @@ impl RpcClient {
                 }
             }
         });
-        Ok(())
+        Ok(tx)
     }
 
-    pub fn create_region_heartbeat_stream<
-        S: Send + Stream<Item = RegionHeartbeatRequest> + 'static,
-    >(
+    pub fn create_region_heartbeat_stream(
         &mut self,
-        requests: S,
-    ) -> Result<CachedDuplexResponse<RegionHeartbeatResponse>> {
+    ) -> Result<(
+        mpsc::UnboundedSender<RegionHeartbeatRequest>,
+        CachedDuplexResponse<RegionHeartbeatResponse>,
+    )> {
+        let (tx, rx) = mpsc::unbounded();
         let response_holder = Arc::new(std::sync::Mutex::new(None));
         let response_holder_clone = response_holder.clone();
         let mut raw_client = self.raw_client.clone();
         let mut reconnect = self.reconnect_tx.clone();
-        let mut requests = Box::pin(requests).map(|r| {
+        let mut requests = Box::pin(rx).map(|r| {
             fail::fail_point!("region_heartbeat_send_failed", |_| {
                 Err(grpcio::Error::RemoteStopped)
             });
@@ -1131,21 +1130,27 @@ impl RpcClient {
                 }
             }
         });
-        Ok(CachedDuplexResponse {
-            latest: response_holder,
-            cache: None,
-        })
+        Ok((
+            tx,
+            CachedDuplexResponse {
+                latest: response_holder,
+                cache: None,
+            },
+        ))
     }
 
-    pub fn create_tso_stream<S: Send + Stream<Item = TsoRequest> + 'static>(
+    pub fn create_tso_stream(
         &mut self,
-        requests: S,
-    ) -> Result<CachedDuplexResponse<TsoResponse>> {
+    ) -> Result<(
+        mpsc::UnboundedSender<TsoRequest>,
+        CachedDuplexResponse<TsoResponse>,
+    )> {
+        let (tx, rx) = mpsc::unbounded();
         let response_holder = Arc::new(std::sync::Mutex::new(None));
         let response_holder_clone = response_holder.clone();
         let mut raw_client = self.raw_client.clone();
         let mut reconnect = self.reconnect_tx.clone();
-        let mut requests = Box::pin(requests).map(|r| Ok((r, WriteFlags::default())));
+        let mut requests = Box::pin(rx).map(|r| Ok((r, WriteFlags::default())));
         self.raw_client.stub().spawn(async move {
             loop {
                 if let Err(e) = raw_client.wait_for_ready().await {
@@ -1174,10 +1179,13 @@ impl RpcClient {
                 }
             }
         });
-        Ok(CachedDuplexResponse {
-            latest: response_holder,
-            cache: None,
-        })
+        Ok((
+            tx,
+            CachedDuplexResponse {
+                latest: response_holder,
+                cache: None,
+            },
+        ))
     }
 }
 

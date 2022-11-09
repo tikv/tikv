@@ -10,7 +10,7 @@ use std::{
 };
 
 use error_code::ErrorCodeExt;
-use futures::{channel::mpsc, executor::block_on, SinkExt, StreamExt};
+use futures::{executor::block_on, SinkExt, StreamExt};
 use grpcio::{EnvBuilder, Error as GrpcError, RpcStatus, RpcStatusCode};
 use kvproto::{metapb, pdpb};
 use pd_client::{Error as PdError, Feature, PdClient, PdConnector, RpcClientV2};
@@ -21,8 +21,7 @@ use tokio::runtime::Builder;
 use txn_types::TimeStamp;
 
 fn must_get_tso(client: &mut RpcClientV2, count: u32) -> TimeStamp {
-    let (mut tx, rx) = mpsc::unbounded();
-    let mut responses = client.create_tso_stream(rx).unwrap();
+    let (mut tx, mut responses) = client.create_tso_stream().unwrap();
     let mut req = pdpb::TsoRequest::default();
     req.mut_header().cluster_id = client.cluster_id();
     req.count = count;
@@ -118,8 +117,7 @@ fn test_rpc_client() {
         prev_id = alloc_id;
     }
 
-    let (mut tx, rx) = mpsc::unbounded();
-    let mut responses = client.create_region_heartbeat_stream(rx).unwrap();
+    let (mut tx, mut responses) = client.create_region_heartbeat_stream().unwrap();
     let mut req = pdpb::RegionHeartbeatRequest::default();
     req.set_region(region.clone());
     req.set_leader(peer.clone());
@@ -450,8 +448,7 @@ fn test_pd_client_heartbeat_send_failed() {
 
     let mut client = new_client_v2(eps, None);
 
-    let (mut tx, rx) = mpsc::unbounded();
-    let mut responses = client.create_region_heartbeat_stream(rx).unwrap();
+    let (mut tx, mut responses) = client.create_region_heartbeat_stream().unwrap();
 
     let mut heartbeat_send_fail = |ok| {
         let mut region = metapb::Region::default();
@@ -502,8 +499,7 @@ fn test_region_heartbeat_on_leader_change() {
 
     let mut client = new_client_v2(eps, None);
 
-    let (mut tx, rx) = mpsc::unbounded();
-    let mut responses = client.create_region_heartbeat_stream(rx).unwrap();
+    let (mut tx, mut responses) = client.create_region_heartbeat_stream().unwrap();
 
     block_on(tx.send(pdpb::RegionHeartbeatRequest::default())).unwrap();
     block_on(tokio::time::timeout(
