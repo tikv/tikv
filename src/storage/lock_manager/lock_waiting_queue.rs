@@ -94,7 +94,7 @@ pub struct LockWaitEntry {
     pub lock_hash: u64,
     pub parameters: PessimisticLockParameters,
     // `parameters` provides parameter for a request, but `should_not_exist` is specified key-wise.
-    // Put it in a separated
+    // Put it in a separated field.
     pub should_not_exist: bool,
     pub lock_wait_token: LockWaitToken,
     pub legacy_wake_up_index: Option<usize>,

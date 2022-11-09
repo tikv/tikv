@@ -130,7 +130,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                         check_existence: self.check_existence,
                         is_first_lock: self.is_first_lock,
                         lock_only_if_exists: self.lock_only_if_exists,
-                        allow_lock_with_conflict: false,
+                        allow_lock_with_conflict: self.allow_lock_with_conflict,
                     };
                     let lock_info = WriteResultLockInfo::new(
                         lock_info,
