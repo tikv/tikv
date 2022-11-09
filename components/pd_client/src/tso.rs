@@ -30,13 +30,13 @@ use txn_types::TimeStamp;
 use crate::{metrics::PD_PENDING_TSO_REQUEST_GAUGE, Error, Result};
 
 /// It is an empirical value.
-pub const MAX_BATCH_SIZE: usize = 64;
+const MAX_BATCH_SIZE: usize = 64;
 
-pub const MAX_PENDING_COUNT: usize = 1 << 16;
+const MAX_PENDING_COUNT: usize = 1 << 16;
 
-pub struct TimestampRequest {
-    pub sender: oneshot::Sender<TimeStamp>,
-    pub count: u32,
+struct TimestampRequest {
+    sender: oneshot::Sender<TimeStamp>,
+    count: u32,
 }
 
 /// The timestamp oracle (TSO) which provides monotonically increasing
@@ -162,16 +162,16 @@ async fn run_tso(
     info!("TSO worker terminated"; "sender_cause" => ?send_res.err(), "receiver_cause" => ?recv_res.err());
 }
 
-pub struct RequestGroup {
+struct RequestGroup {
     tso_request: TsoRequest,
     requests: Vec<TimestampRequest>,
 }
 
-pub struct TsoRequestStream<'a> {
-    pub cluster_id: u64,
-    pub request_rx: &'a mut mpsc::Receiver<TimestampRequest>,
-    pub pending_requests: Rc<RefCell<VecDeque<RequestGroup>>>,
-    pub self_waker: Rc<AtomicWaker>,
+struct TsoRequestStream<'a> {
+    cluster_id: u64,
+    request_rx: &'a mut mpsc::Receiver<TimestampRequest>,
+    pending_requests: Rc<RefCell<VecDeque<RequestGroup>>>,
+    self_waker: Rc<AtomicWaker>,
 }
 
 impl<'a> Stream for TsoRequestStream<'a> {
@@ -218,7 +218,7 @@ impl<'a> Stream for TsoRequestStream<'a> {
     }
 }
 
-pub fn allocate_timestamps(
+fn allocate_timestamps(
     resp: &TsoResponse,
     pending_requests: &mut VecDeque<RequestGroup>,
 ) -> Result<()> {
