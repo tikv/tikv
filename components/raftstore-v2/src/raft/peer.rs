@@ -511,8 +511,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return false;
         }
 
-        // If last peer is the leader of the region before split, it'sintuitional for it
-        // to become the leader of new split region.
+        // If last peer is the leader of the region before split, it's intuitional for
+        // it to become the leader of new split region.
         let _ = self.raft_group.campaign();
         true
     }
