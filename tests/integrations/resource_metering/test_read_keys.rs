@@ -50,7 +50,7 @@ pub fn test_read_keys() {
         let (k, v) = (n.clone(), n);
 
         // Prewrite.
-        complete_data_commit(&client, &ctx, &mut ts, k.clone(), v.clone());
+        write_and_read_key(&client, &ctx, &mut ts, k.clone(), v.clone());
     }
 
     // PointGet

@@ -276,7 +276,7 @@ fn test_mvcc_basic() {
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
 
     let mut ts = 0;
-    complete_data_commit(&client, &ctx, &mut ts, k.clone(), v.clone());
+    write_and_read_key(&client, &ctx, &mut ts, k.clone(), v.clone());
 
     // Get
     ts += 1;
@@ -339,7 +339,7 @@ fn test_mvcc_rollback_and_cleanup() {
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
 
     let mut ts = 0;
-    complete_data_commit(&client, &ctx, &mut ts, k.clone(), v);
+    write_and_read_key(&client, &ctx, &mut ts, k.clone(), v);
 
     // Prewrite puts some locks.
     ts += 1;
@@ -555,14 +555,14 @@ fn test_mvcc_flashback_failed_after_first_batch() {
     for i in 0..FLASHBACK_BATCH_SIZE * 2 {
         // Meet the constraints of the alphabetical order for test
         let k = format!("key@{}", from_u32(i as u32).unwrap()).into_bytes();
-        complete_data_commit(&client, &ctx, &mut ts, k.clone(), b"value@0".to_vec());
+        write_and_read_key(&client, &ctx, &mut ts, k.clone(), b"value@0".to_vec());
         ts -= 3;
     }
     ts += 3;
     let check_ts = ts;
     for i in 0..FLASHBACK_BATCH_SIZE * 2 {
         let k = format!("key@{}", from_u32(i as u32).unwrap()).into_bytes();
-        complete_data_commit(&client, &ctx, &mut ts, k.clone(), b"value@1".to_vec());
+        write_and_read_key(&client, &ctx, &mut ts, k.clone(), b"value@1".to_vec());
         ts -= 3;
     }
     ts += 3;
@@ -666,7 +666,7 @@ fn test_mvcc_flashback() {
     for i in 0..2000 {
         let v = format!("value@{}", i).into_bytes();
         let k = format!("key@{}", i % 1000).into_bytes();
-        complete_data_commit(&client, &ctx, &mut ts, k.clone(), v.clone());
+        write_and_read_key(&client, &ctx, &mut ts, k.clone(), v.clone());
     }
     // Prewrite to leave a lock.
     let k = b"key@1".to_vec();
@@ -761,7 +761,7 @@ fn test_mvcc_flashback_unprepared() {
     let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
     let mut ts = 0;
-    complete_data_commit(&client, &ctx, &mut ts, k.clone(), v.clone());
+    write_and_read_key(&client, &ctx, &mut ts, k.clone(), v.clone());
     // Try to flashback without preparing first.
     let mut req = FlashbackToVersionRequest::default();
     req.set_context(ctx.clone());

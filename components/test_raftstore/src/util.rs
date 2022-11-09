@@ -818,7 +818,7 @@ pub fn must_kv_read_equal(client: &TikvClient, ctx: Context, key: Vec<u8>, val: 
     assert_eq!(get_resp.take_value(), val);
 }
 
-pub fn complete_data_commit(
+pub fn write_and_read_key(
     client: &TikvClient,
     ctx: &Context,
     ts: &mut u64,
