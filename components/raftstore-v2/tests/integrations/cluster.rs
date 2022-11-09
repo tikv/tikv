@@ -21,12 +21,15 @@ use engine_test::{
 use engine_traits::{OpenOptions, TabletFactory, ALL_CFS};
 use futures::executor::block_on;
 use kvproto::{
-    metapb::{self, Store},
-    raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, StatusCmdType},
+    metapb::{self, RegionEpoch, Store},
+    raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RaftMessage,
 };
 use pd_client::RpcClient;
-use raftstore::store::{region_meta::RegionMeta, Config, Transport, RAFT_INIT_LOG_INDEX};
+use raftstore::store::{
+    region_meta::{RegionLocalState, RegionMeta},
+    Config, Transport, RAFT_INIT_LOG_INDEX,
+};
 use raftstore_v2::{
     create_store_batch_system,
     router::{DebugInfoChannel, FlushChannel, PeerMsg, QueryResult, RaftRouter},
@@ -147,13 +150,29 @@ impl TestRouter {
     }
 
     pub fn region_detail(&self, region_id: u64) -> metapb::Region {
-        let mut req = self.new_request_for(region_id);
-        req.mut_status_request()
-            .set_cmd_type(StatusCmdType::RegionDetail);
-        let res = self.query(region_id, req).unwrap();
-        let status_resp = res.response().unwrap().get_status_response();
-        let detail = status_resp.get_region_detail();
-        detail.get_region().clone()
+        let RegionLocalState {
+            id,
+            start_key,
+            end_key,
+            epoch,
+            peers,
+            ..
+        } = self
+            .must_query_debug_info(region_id, Duration::from_secs(1))
+            .unwrap()
+            .region_state;
+        let mut region = metapb::Region::default();
+        region.set_id(id);
+        region.set_start_key(start_key);
+        region.set_end_key(end_key);
+        let mut region_epoch = RegionEpoch::default();
+        region_epoch.set_conf_ver(epoch.conf_ver);
+        region_epoch.set_version(epoch.version);
+        region.set_region_epoch(region_epoch);
+        for peer in peers {
+            region.mut_peers().push(new_peer(peer.store_id, peer.id));
+        }
+        region
     }
 }
 

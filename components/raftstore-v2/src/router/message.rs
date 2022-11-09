@@ -15,7 +15,7 @@ use super::{
     },
     ApplyRes,
 };
-use crate::operation::{CreatePeer, RegionSplitMsg, SplitRegionInitInfo};
+use crate::operation::{CreatePeer, RegionSplitMsg};
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
 #[repr(u8)]

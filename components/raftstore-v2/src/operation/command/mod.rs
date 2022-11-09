@@ -61,7 +61,6 @@ mod write;
 pub use admin::{AdminCmdResult, CreatePeer, RegionSplitMsg, SplitResult};
 pub use write::{SimpleWriteDecoder, SimpleWriteEncoder};
 
-pub use self::admin::SplitRegionInitInfo;
 use self::write::SimpleWrite;
 
 fn parse_at<M: Message + Default>(logger: &slog::Logger, buf: &[u8], index: u64, term: u64) -> M {

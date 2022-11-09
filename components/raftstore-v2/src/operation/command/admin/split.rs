@@ -76,21 +76,6 @@ pub struct SplitResult {
 }
 
 #[derive(Debug)]
-pub struct SplitRegionInitInfo {
-    pub parent_region_id: u64,
-    pub parent_epoch: RegionEpoch,
-    /// Split region
-    pub region: metapb::Region,
-    pub parent_is_leader: bool,
-    pub parent_stat: PeerStat,
-    pub approximate_size: Option<u64>,
-    pub approximate_keys: Option<u64>,
-    /// In-memory pessimistic locks that should be inherited from parent region
-    pub locks: PeerPessimisticLocks,
-    pub last_split_region: bool,
-}
-
-#[derive(Debug)]
 pub struct SplitRegionInitResp {
     pub parent_epoch: RegionEpoch,
     pub child_region_id: u64,
@@ -99,7 +84,7 @@ pub struct SplitRegionInitResp {
 }
 
 pub enum RegionSplitMsg {
-    SplitRegionInit(Box<SplitRegionInitInfo>),
+    SplitRegionInit(Box<CreatePeer>),
     SplitRegionInitResp(Box<SplitRegionInitResp>),
 }
 
@@ -117,7 +102,178 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let data = req.write_to_bytes().unwrap();
         self.propose_with_ctx(store_ctx, data, proposal_ctx.to_vec())
     }
+}
 
+impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
+    pub fn apply_split(
+        &mut self,
+        req: &AdminRequest,
+        log_index: u64,
+    ) -> Result<(AdminResponse, AdminCmdResult)> {
+        info!(
+            self.logger,
+            "split is deprecated, redirect to use batch split";
+        );
+        let split = req.get_split().to_owned();
+        let mut admin_req = AdminRequest::default();
+        admin_req
+            .mut_splits()
+            .set_right_derive(split.get_right_derive());
+        admin_req.mut_splits().mut_requests().push(split);
+        // This method is executed only when there are unapplied entries after being
+        // restarted. So there will be no callback, it's OK to return a response
+        // that does not matched with its request.
+        self.apply_batch_split(req, log_index)
+    }
+
+    pub fn apply_batch_split(
+        &mut self,
+        req: &AdminRequest,
+        log_index: u64,
+    ) -> Result<(AdminResponse, AdminCmdResult)> {
+        PEER_ADMIN_CMD_COUNTER.batch_split.all.inc();
+
+        let region = self.region_state().get_region();
+        let region_id = region.get_id();
+        validate_batch_split(req, self.region_state().get_region())?;
+
+        let mut boundaries: Vec<&[u8]> = Vec::default();
+        boundaries.push(self.region_state().get_region().get_start_key());
+        for req in req.get_splits().get_requests() {
+            boundaries.push(req.get_split_key());
+        }
+        boundaries.push(self.region_state().get_region().get_end_key());
+
+        info!(
+            self.logger,
+            "split region";
+            "region" => ?region,
+            "boundaries" => %KeysInfoFormatter(boundaries.iter()),
+        );
+
+        let split_reqs = req.get_splits();
+        let new_region_cnt = split_reqs.get_requests().len();
+        let new_version = region.get_region_epoch().get_version() + new_region_cnt as u64;
+
+        let mut derived_req = SplitRequest::default();
+        derived_req.new_region_id = region.id;
+        let derived_req = &[derived_req];
+
+        let right_derive = split_reqs.get_right_derive();
+        let reqs = if right_derive {
+            split_reqs.get_requests().iter().chain(derived_req)
+        } else {
+            derived_req.iter().chain(split_reqs.get_requests())
+        };
+
+        let regions: Vec<_> = boundaries
+            .array_windows::<2>()
+            .zip(reqs)
+            .map(|([start_key, end_key], req)| {
+                let mut new_region = Region::default();
+                new_region.set_id(req.get_new_region_id());
+                new_region.set_region_epoch(region.get_region_epoch().to_owned());
+                new_region.mut_region_epoch().set_version(new_version);
+                new_region.set_start_key(start_key.to_vec());
+                new_region.set_end_key(end_key.to_vec());
+                new_region.set_peers(region.get_peers().to_vec().into());
+                // If the `req` is the `derived_req`, the peers are already set correctly and
+                // the following loop will not be executed due to the empty `new_peer_ids` in
+                // the `derived_req`
+                for (peer, peer_id) in new_region
+                    .mut_peers()
+                    .iter_mut()
+                    .zip(req.get_new_peer_ids())
+                {
+                    peer.set_id(*peer_id);
+                }
+                new_region
+            })
+            .collect();
+
+        let derived_index = if right_derive { regions.len() - 1 } else { 0 };
+
+        // We will create checkpoint of the current tablet for both derived region and
+        // split regions. Before the creation, we should flush the writes and remove the
+        // write batch
+        self.flush();
+
+        // todo(SpadeA): Here: we use a temporary solution that we use checkpoint API to
+        // clone new tablets. It may cause large jitter as we need to flush the
+        // memtable. And more what is more important is that after removing WAL, the API
+        // will never flush.
+        // We will freeze the memtable rather than flush it in the following PR.
+        let tablet = self.tablet().clone();
+        let mut checkpointer = tablet.new_checkpointer().unwrap_or_else(|e| {
+            panic!(
+                "{:?} fails to create checkpoint object: {:?}",
+                self.logger.list(),
+                e
+            )
+        });
+
+        for new_region in &regions {
+            let new_region_id = new_region.id;
+            if new_region_id == region_id {
+                continue;
+            }
+
+            let split_temp_path = self.tablet_factory().tablet_path_with_prefix(
+                SPLIT_PREFIX,
+                new_region_id,
+                RAFT_INIT_LOG_INDEX,
+            );
+            checkpointer
+                .create_at(&split_temp_path, None, 0)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{:?} fails to create checkpoint with path {:?}: {:?}",
+                        self.logger.list(),
+                        split_temp_path,
+                        e
+                    )
+                });
+        }
+
+        let derived_path = self.tablet_factory().tablet_path(region_id, log_index);
+        checkpointer
+            .create_at(&derived_path, None, 0)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{:?} fails to create checkpoint with path {:?}: {:?}",
+                    self.logger.list(),
+                    derived_path,
+                    e
+                )
+            });
+        let tablet = self
+            .tablet_factory()
+            .open_tablet(region_id, Some(log_index), OpenOptions::default())
+            .unwrap();
+        // Remove the old write batch.
+        self.write_batch_mut().take();
+        self.publish_tablet(tablet);
+
+        self.region_state_mut()
+            .set_region(regions[derived_index].clone());
+        self.region_state_mut().set_tablet_index(log_index);
+
+        let mut resp = AdminResponse::default();
+        resp.mut_splits().set_regions(regions.clone().into());
+        PEER_ADMIN_CMD_COUNTER.batch_split.success.inc();
+
+        Ok((
+            resp,
+            AdminCmdResult::SplitRegion(SplitResult {
+                regions,
+                derived_index,
+                tablet_index: log_index,
+            }),
+        ))
+    }
+}
+
+impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_ready_split_region<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
@@ -209,23 +365,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             );
 
             self.split_progress_mut().insert(new_region_id, false);
-            let init_info = SplitRegionInitInfo {
-                region: new_region,
-                parent_region_id: region_id,
-                parent_epoch: derived_epoch.clone(),
-                parent_is_leader: self.is_leader(),
-                parent_stat: self.peer_stat().clone(),
-                approximate_keys: estimated_keys,
-                approximate_size: estimated_size,
-                locks,
-                last_split_region: last_region_id == new_region_id,
-            };
 
             store_ctx
                 .router
                 .send_control(StoreMsg::CreatePeer(Box::new(CreatePeer {
-                    raft_message,
-                    split_region_info: init_info,
+                    region: new_region,
+                    parent_region_id: region_id,
+                    parent_epoch: derived_epoch.clone(),
+                    parent_is_leader: self.is_leader(),
+                    parent_stat: self.peer_stat().clone(),
+                    approximate_keys: estimated_keys,
+                    approximate_size: estimated_size,
+                    locks,
+                    last_split_region: last_region_id == new_region_id,
                 })));
         }
         drop(meta);
@@ -234,9 +386,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn init_split_region<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
-        init_info: Box<SplitRegionInitInfo>,
+        init_info: Box<CreatePeer>,
     ) {
-        let SplitRegionInitInfo {
+        let CreatePeer {
             parent_region_id,
             parent_epoch,
             region,
@@ -422,175 +574,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             fail_point!("after_split", store_ctx.store_id == 3, |_| {});
         }
-    }
-}
-
-impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
-    pub fn apply_split(
-        &mut self,
-        req: &AdminRequest,
-        log_index: u64,
-    ) -> Result<(AdminResponse, AdminCmdResult)> {
-        info!(
-            self.logger,
-            "split is deprecated, redirect to use batch split";
-        );
-        let split = req.get_split().to_owned();
-        let mut admin_req = AdminRequest::default();
-        admin_req
-            .mut_splits()
-            .set_right_derive(split.get_right_derive());
-        admin_req.mut_splits().mut_requests().push(split);
-        // This method is executed only when there are unapplied entries after being
-        // restarted. So there will be no callback, it's OK to return a response
-        // that does not matched with its request.
-        self.apply_batch_split(req, log_index)
-    }
-
-    pub fn apply_batch_split(
-        &mut self,
-        req: &AdminRequest,
-        log_index: u64,
-    ) -> Result<(AdminResponse, AdminCmdResult)> {
-        PEER_ADMIN_CMD_COUNTER.batch_split.all.inc();
-
-        let region = self.region_state().get_region();
-        let region_id = region.get_id();
-        validate_batch_split(req, self.region_state().get_region())?;
-
-        let mut boundaries: Vec<&[u8]> = Vec::default();
-        boundaries.push(self.region_state().get_region().get_start_key());
-        for req in req.get_splits().get_requests() {
-            boundaries.push(req.get_split_key());
-        }
-        boundaries.push(self.region_state().get_region().get_end_key());
-
-        info!(
-            self.logger,
-            "split region";
-            "region" => ?region,
-            "boundaries" => %KeysInfoFormatter(boundaries.iter()),
-        );
-
-        let split_reqs = req.get_splits();
-        let new_region_cnt = split_reqs.get_requests().len();
-        let new_version = region.get_region_epoch().get_version() + new_region_cnt as u64;
-
-        let mut derived_req = SplitRequest::default();
-        derived_req.new_region_id = region.id;
-        let derived_req = &[derived_req];
-
-        let right_derive = split_reqs.get_right_derive();
-        let reqs = if right_derive {
-            split_reqs.get_requests().iter().chain(derived_req)
-        } else {
-            derived_req.iter().chain(split_reqs.get_requests())
-        };
-
-        let regions: Vec<_> = boundaries
-            .array_windows::<2>()
-            .zip(reqs)
-            .map(|([start_key, end_key], req)| {
-                let mut new_region = Region::default();
-                new_region.set_id(req.get_new_region_id());
-                new_region.set_region_epoch(region.get_region_epoch().to_owned());
-                new_region.mut_region_epoch().set_version(new_version);
-                new_region.set_start_key(start_key.to_vec());
-                new_region.set_end_key(end_key.to_vec());
-                new_region.set_peers(region.get_peers().to_vec().into());
-                // If the `req` is the `derived_req`, the peers are already set correctly and
-                // the following loop will not be executed due to the empty `new_peer_ids` in
-                // the `derived_req`
-                for (peer, peer_id) in new_region
-                    .mut_peers()
-                    .iter_mut()
-                    .zip(req.get_new_peer_ids())
-                {
-                    peer.set_id(*peer_id);
-                }
-                new_region
-            })
-            .collect();
-
-        let derived_index = if right_derive { regions.len() - 1 } else { 0 };
-
-        // We will create checkpoint of the current tablet for both derived region and
-        // split regions. Before the creation, we should flush the writes and remove the
-        // write batch
-        self.flush();
-
-        // todo(SpadeA): Here: we use a temporary solution that we use checkpoint API to
-        // clone new tablets. It may cause large jitter as we need to flush the
-        // memtable. And more what is more important is that after removing WAL, the API
-        // will never flush.
-        // We will freeze the memtable rather than flush it in the following PR.
-        let tablet = self.tablet().clone();
-        let mut checkpointer = tablet.new_checkpointer().unwrap_or_else(|e| {
-            panic!(
-                "{:?} fails to create checkpoint object: {:?}",
-                self.logger.list(),
-                e
-            )
-        });
-
-        for new_region in &regions {
-            let new_region_id = new_region.id;
-            if new_region_id == region_id {
-                continue;
-            }
-
-            let split_temp_path = self.tablet_factory().tablet_path_with_prefix(
-                SPLIT_PREFIX,
-                new_region_id,
-                RAFT_INIT_LOG_INDEX,
-            );
-            checkpointer
-                .create_at(&split_temp_path, None, 0)
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "{:?} fails to create checkpoint with path {:?}: {:?}",
-                        self.logger.list(),
-                        split_temp_path,
-                        e
-                    )
-                });
-        }
-
-        let derived_path = self.tablet_factory().tablet_path(region_id, log_index);
-        checkpointer
-            .create_at(&derived_path, None, 0)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{:?} fails to create checkpoint with path {:?}: {:?}",
-                    self.logger.list(),
-                    derived_path,
-                    e
-                )
-            });
-        let tablet = self
-            .tablet_factory()
-            .open_tablet(region_id, Some(log_index), OpenOptions::default())
-            .unwrap();
-        // Remove the old write batch.
-        self.write_batch_mut().take();
-        self.publish_tablet(tablet);
-
-        self.region_state_mut()
-            .set_region(regions[derived_index].clone());
-        self.region_state_mut().set_tablet_index(log_index);
-
-        let mut resp = AdminResponse::default();
-        resp.mut_splits().set_regions(regions.clone().into());
-        PEER_ADMIN_CMD_COUNTER.batch_split.success.inc();
-
-        Ok((
-            resp,
-            AdminCmdResult::SplitRegion(SplitResult {
-                regions,
-                derived_index,
-                tablet_index: log_index,
-            }),
-        ))
     }
 }
 
