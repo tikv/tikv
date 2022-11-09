@@ -11,10 +11,7 @@ use raftstore::{
     store::{Config, ReadDelegate, RegionReadProgressRegistry},
 };
 use slog::{o, Logger};
-use tikv_util::{
-    mpsc::{self, LooseBoundedSender, Receiver},
-    RingQueue,
-};
+use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 
 use crate::{
     batch::StoreContext,
