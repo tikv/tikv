@@ -31,6 +31,7 @@
 
 use std::collections::VecDeque;
 
+use crossbeam::channel::{SendError, TrySendError};
 use engine_traits::{
     Checkpointer, DeleteStrategy, KvEngine, OpenOptions, RaftEngine, RaftLogBatch, Range,
     TabletFactory, CF_DEFAULT, SPLIT_PREFIX,
@@ -83,9 +84,6 @@ pub struct CreatePeer {
     /// Split region
     pub region: metapb::Region,
     pub parent_is_leader: bool,
-    pub parent_stat: PeerStat,
-    pub approximate_size: Option<u64>,
-    pub approximate_keys: Option<u64>,
     /// In-memory pessimistic locks that should be inherited from parent region
     pub locks: PeerPessimisticLocks,
     pub last_split_region: bool,
@@ -101,7 +99,6 @@ pub struct SplitRegionInitResp {
 
 pub enum RegionSplitMsg {
     SplitRegionInit(Box<CreatePeer>),
-    SplitRegionInitResp(Box<SplitRegionInitResp>),
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -319,8 +316,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         // Roughly estimate the size and keys for new regions.
         let new_region_count = regions.len() as u64;
-        let estimated_size = self.approximate_size().map(|v| v / new_region_count);
-        let estimated_keys = self.approximate_keys().map(|v| v / new_region_count);
         let mut meta = store_ctx.store_meta.lock().unwrap();
         meta.set_region(
             derived.clone(),
@@ -330,27 +325,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         );
         self.post_split();
 
-        // It's not correct anymore, so set it to false to schedule a split
-        // check task.
-        self.set_may_skip_split_check(false);
-
-        let is_leader = self.is_leader();
-        if is_leader {
-            self.set_approximate_size(estimated_size);
-            self.set_approximate_keys(estimated_keys);
-            // todo: this may should be doing in handle_peer_split_response.
-            self.heartbeat_pd(store_ctx);
-
-            info!(
-                self.logger,
-                "notify pd with split";
-                "split_count" => regions.len(),
-            );
-
-            // todo: report to PD
-        }
-
-        assert!(self.split_progress_mut().is_empty());
         let last_key = enc_end_key(regions.last().unwrap());
         if meta.region_ranges.remove(&last_key).is_none() {
             panic!("{:?} original region should exist", self.logger.list());
@@ -380,21 +354,25 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     .clone(),
             );
 
-            self.split_progress_mut().insert(new_region_id, false);
-
-            store_ctx
-                .router
-                .send_control(StoreMsg::CreatePeer(Box::new(CreatePeer {
+            let peer_creation_msg =
+                PeerMsg::RegionSplitMsg(RegionSplitMsg::SplitRegionInit(Box::new(CreatePeer {
                     region: new_region,
                     parent_region_id: region_id,
                     parent_epoch: derived_epoch.clone(),
                     parent_is_leader: self.is_leader(),
-                    parent_stat: self.peer_stat().clone(),
-                    approximate_keys: estimated_keys,
-                    approximate_size: estimated_size,
                     locks,
                     last_split_region: last_region_id == new_region_id,
                 })));
+
+            // First, send init msg to peer directly. Returning error means the peer is not
+            // existed in which case we should redirect it to the store.
+            match store_ctx.router.force_send(region_id, peer_creation_msg) {
+                Ok(_) => {}
+                Err(SendError(PeerMsg::RegionSplitMsg(RegionSplitMsg::SplitRegionInit(msg)))) => {
+                    store_ctx.router.send_control(StoreMsg::CreatePeer(msg));
+                }
+                _ => unreachable!(),
+            }
         }
         drop(meta);
     }
@@ -409,9 +387,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             parent_epoch,
             region,
             parent_is_leader,
-            parent_stat,
-            approximate_keys,
-            approximate_size,
             locks,
             last_split_region,
         } = Box::into_inner(init_info);
@@ -489,25 +464,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.insert_peer_cache(p.clone());
         }
 
-        // New peer derive write flow from parent region,
-        // this will be used by balance write flow.
-        self.set_peer_stat(parent_stat);
-        let last_compacted_idx = self
-            .storage()
-            .apply_state()
-            .get_truncated_state()
-            .get_index()
-            + 1;
-        self.set_last_compacted_idx(last_compacted_idx);
-
         let campaigned = self.maybe_campaign(parent_is_leader);
         if campaigned {
             self.set_has_ready();
         }
 
         if parent_is_leader {
-            self.set_approximate_size(approximate_size);
-            self.set_approximate_keys(approximate_keys);
             *self.txn_ext().pessimistic_locks.write() = locks;
             // The new peer is likely to become leader, send a heartbeat immediately to
             // reduce client query miss.
@@ -542,53 +504,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // todo: check if the last region needs to split again
         }
 
-        store_ctx.router.force_send(
-            parent_region_id,
-            PeerMsg::RegionSplitMsg(RegionSplitMsg::SplitRegionInitResp(Box::new(
-                SplitRegionInitResp {
-                    parent_epoch,
-                    child_region_id: region_id,
-                    result: true,
-                },
-            ))),
-        );
-
         if need_schedule_apply_fsm {
             self.schedule_apply_fsm(store_ctx);
-        }
-    }
-
-    pub fn handle_peer_split_response<T>(
-        &mut self,
-        store_ctx: &mut StoreContext<EK, ER, T>,
-        resp: Box<SplitRegionInitResp>,
-    ) {
-        let SplitRegionInitResp {
-            parent_epoch,
-            child_region_id,
-            result,
-        } = Box::into_inner(resp);
-
-        assert_eq!(
-            parent_epoch,
-            *self
-                .storage()
-                .region_state()
-                .get_region()
-                .get_region_epoch()
-        );
-
-        let mut split_progress = self.split_progress_mut();
-        *split_progress.get_mut(&child_region_id).unwrap() = true;
-
-        if split_progress.values().all(|v| *v) {
-            // todo: split is done, persist region state
-            self.split_progress_mut().clear();
-
-            if self.is_leader() {
-                self.on_split_region_check_tick();
-            }
-            fail_point!("after_split", store_ctx.store_id == 3, |_| {});
         }
     }
 }
@@ -600,11 +517,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 self.fsm
                     .peer_mut()
                     .init_split_region(self.store_ctx, init_info);
-            }
-            RegionSplitMsg::SplitRegionInitResp(resp) => {
-                self.fsm
-                    .peer_mut()
-                    .handle_peer_split_response(self.store_ctx, resp);
             }
         }
     }

@@ -104,25 +104,22 @@ impl Store {
         ER: RaftEngine,
     {
         let region_id = msg.as_ref().region.id;
-        // Check whether the peer has been created before
-        if ctx.router.mailbox(region_id).is_none() {
-            let mut raft_msg = RaftMessage::default();
-            raft_msg.set_region_id(region_id);
-            raft_msg.set_region_epoch(msg.as_ref().region.get_region_epoch().clone());
-            raft_msg.mut_from_peer().set_id(raft::INVALID_ID);
-            raft_msg.set_to_peer(
-                msg.as_ref()
-                    .region
-                    .get_peers()
-                    .iter()
-                    .find(|p| p.get_store_id() == ctx.store_id)
-                    .unwrap()
-                    .clone(),
-            );
+        let mut raft_msg = RaftMessage::default();
+        raft_msg.set_region_id(region_id);
+        raft_msg.set_region_epoch(msg.as_ref().region.get_region_epoch().clone());
+        raft_msg.mut_from_peer().set_id(raft::INVALID_ID);
+        raft_msg.set_to_peer(
+            msg.as_ref()
+                .region
+                .get_peers()
+                .iter()
+                .find(|p| p.get_store_id() == ctx.store_id)
+                .unwrap()
+                .clone(),
+        );
 
-            // It will create the peer if it is not existed
-            self.on_raft_message(ctx, Box::new(raft_msg));
-        }
+        // It will create the peer if it is not existed
+        self.on_raft_message(ctx, Box::new(raft_msg));
 
         ctx.router.force_send(
             region_id,

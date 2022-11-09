@@ -62,30 +62,6 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
 
     destroy_progress: DestroyProgress,
 
-    /// Write Statistics for PD to schedule hot spot.
-    peer_stat: PeerStat,
-
-    // An inaccurate difference in region size since last reset.
-    /// It is used to decide whether split check is needed.
-    size_diff_hint: u64,
-    /// The count of deleted keys since last reset.
-    delete_keys_hint: u64,
-    /// Approximate size of the region.
-    approximate_size: Option<u64>,
-    /// Approximate keys of the region.
-    approximate_keys: Option<u64>,
-    /// Whether this region has scheduled a split check task. If we just
-    /// splitted  the region or ingested one file which may be overlapped
-    /// with the existed data, reset the flag so that the region can be
-    /// splitted again.
-    may_skip_split_check: bool,
-    // Recording whether the response of the split peer initialization of each region has been
-    // received
-    split_progress: HashMap<u64, bool>,
-    /// The index of last compacted raft log. It is used for the next compact
-    /// log task.
-    last_compacted_idx: u64,
-
     pub(crate) logger: Logger,
     pending_reads: ReadIndexQueue<QueryResChannel>,
     read_progress: Arc<RegionReadProgress>,
@@ -171,13 +147,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             destroy_progress: DestroyProgress::None,
             raft_group,
             logger,
-            peer_stat: PeerStat::default(),
-            last_compacted_idx: 0,
-            size_diff_hint: 0,
-            delete_keys_hint: 0,
-            approximate_keys: None,
-            approximate_size: None,
-            may_skip_split_check: false,
             pending_reads: ReadIndexQueue::new(tag),
             read_progress: Arc::new(RegionReadProgress::new(
                 &region,
@@ -189,13 +158,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 cfg.raft_store_max_leader_lease(),
                 cfg.renew_leader_lease_advance_duration(),
             ),
-            region_buckets: Some(BucketStat {
-                meta: Arc::default(),
-                stats: metapb::BucketStats::default(),
-                create_time: TiInstant::now(),
-            }),
+            region_buckets: None,
             last_region_buckets: None,
-            split_progress: HashMap::default(),
             txn_ext: Arc::default(),
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
         };
@@ -527,9 +491,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     #[inline]
     pub fn post_split(&mut self) {
-        // Reset delete_keys_hint and size_diff_hint.
-        self.delete_keys_hint = 0;
-        self.size_diff_hint = 0;
         self.reset_region_buckets();
     }
 
@@ -560,47 +521,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &self.txn_ext
     }
 
-    pub fn peer_stat(&self) -> &PeerStat {
-        &self.peer_stat
-    }
-
-    pub fn set_peer_stat(&mut self, peer_stat: PeerStat) {
-        self.peer_stat = peer_stat;
-    }
-
-    pub fn set_last_compacted_idx(&mut self, last_compacted_idx: u64) {
-        self.last_compacted_idx = last_compacted_idx;
-    }
-
-    pub fn approximate_size(&self) -> Option<u64> {
-        self.approximate_size
-    }
-
-    pub fn set_approximate_size(&mut self, approximate_size: Option<u64>) {
-        self.approximate_size = approximate_size;
-    }
-
-    pub fn approximate_keys(&self) -> Option<u64> {
-        self.approximate_keys
-    }
-
-    pub fn set_approximate_keys(&mut self, approximate_keys: Option<u64>) {
-        self.approximate_keys = approximate_keys;
-    }
-
-    pub fn set_may_skip_split_check(&mut self, may_skip_split_check: bool) {
-        self.may_skip_split_check = may_skip_split_check;
-    }
-
-    pub fn split_progress_mut(&mut self) -> &mut HashMap<u64, bool> {
-        &mut self.split_progress
-    }
-
     pub fn heartbeat_pd<T>(&self, store_ctx: &StoreContext<EK, ER, T>) {
-        // todo
-    }
-
-    pub fn on_split_region_check_tick(&self) {
         // todo
     }
 
