@@ -85,6 +85,7 @@ fn etcd_error_is_retryable(etcd_err: &EtcdError) -> bool {
     }
 }
 
+#[derive(Debug)]
 struct RetryableEtcdError(EtcdError);
 
 impl RetryError for RetryableEtcdError {
@@ -106,7 +107,7 @@ where
     use futures::TryFutureExt;
     let r = tikv_util::stream::retry_ext(
         move || action().err_into::<RetryableEtcdError>(),
-        RetryExt::default().with_fail_hook(|err| println!("meet error {:?}", err.0)),
+        RetryExt::default().with_fail_hook(|err| println!("meet error {:?}", err)),
     )
     .await;
     r.map_err(|err| err.0.into())
