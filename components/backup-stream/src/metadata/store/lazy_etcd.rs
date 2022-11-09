@@ -4,7 +4,7 @@ use std::{sync::Arc, time::Duration};
 
 use etcd_client::{ConnectOptions, Error as EtcdError, TlsOptions};
 use futures::Future;
-use tikv_util::stream::RetryError;
+use tikv_util::stream::{RetryError, RetryExt};
 use tokio::sync::OnceCell;
 
 use super::{etcd::EtcdSnapshot, EtcdStore, MetaStore};
@@ -104,7 +104,11 @@ where
     F: Future<Output = std::result::Result<T, EtcdError>>,
 {
     use futures::TryFutureExt;
-    let r = tikv_util::stream::retry(move || action().err_into::<RetryableEtcdError>()).await;
+    let r = tikv_util::stream::retry_ext(
+        move || action().err_into::<RetryableEtcdError>(),
+        RetryExt::default().with_fail_hook(|err| println!("meet error {:?}", err)),
+    )
+    .await;
     r.map_err(|err| err.0.into())
 }
 
