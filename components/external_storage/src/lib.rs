@@ -296,3 +296,81 @@ pub async fn read_external_storage_into_file(
 
     Ok(())
 }
+
+pub async fn read_external_storage_info_buff(
+    reader: &mut (dyn AsyncRead + Unpin),
+    speed_limiter: &Limiter,
+    expected_length: u64,
+    expected_sha256: Option<Vec<u8>>,
+) -> io::Result<Vec<u8>> {
+    // the minimum speed of reading data, in bytes/second.
+    // if reading speed is slower than this rate, we will stop with
+    // a "TimedOut" error.
+    // (at 8 KB/s for a 2 MB buffer, this means we timeout after 4m16s.)
+    let min_read_speed: usize = 8192;
+    let dur = Duration::from_secs((READ_BUF_SIZE / min_read_speed) as u64);
+    let mut output = Vec::new();
+    let mut buffer = vec![0u8; READ_BUF_SIZE];
+
+    loop {
+        // separate the speed limiting from actual reading so it won't
+        // affect the timeout calculation.
+        let bytes_read = timeout(dur, reader.read(&mut buffer))
+            .await
+            .map_err(|_| io::ErrorKind::TimedOut)??;
+        if bytes_read == 0 {
+            break;
+        }
+
+        speed_limiter.consume(bytes_read).await;
+        output.append(&mut buffer[..bytes_read].to_vec());
+    }
+
+    // check length of file
+    if expected_length > 0 && output.len() != expected_length as usize {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "downloaded size {}, expected {}",
+                output.len(),
+                expected_length
+            ),
+        ));
+    }
+    // check sha256 of file
+    if let Some(sha256) = expected_sha256 {
+        let mut hasher = Hasher::new(MessageDigest::sha256()).map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                format!("openssl hasher failed to init: {}", err),
+            )
+        })?;
+        hasher.update(&output).map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                format!("openssl hasher udpate failed: {}", err),
+            )
+        })?;
+
+        let cal_sha256 = hasher.finish().map_or_else(
+            |err| {
+                Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("openssl hasher finish failed: {}", err),
+                ))
+            },
+            |bytes| Ok(bytes.to_vec()),
+        )?;
+        if !sha256.eq(&cal_sha256) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "sha256 not match, expect: {:?}, calculate: {:?}",
+                    sha256, cal_sha256,
+                ),
+            ));
+        }
+    }
+
+    Ok(output)
+}

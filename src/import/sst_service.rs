@@ -462,6 +462,11 @@ where
                 let mut req_default_size = 0_u64;
                 let mut req_write_size = 0_u64;
                 let mut range: Option<Range> = None;
+                let ext_storage = {
+                    let inner =
+                        importer.create_external_storage(req.get_storage_backend(), false)?;
+                    Arc::new(inner)
+                };
 
                 for (i, meta) in metas.iter().enumerate() {
                     let (reqs, req_size) = if meta.get_cf() == CF_DEFAULT {
@@ -480,13 +485,12 @@ where
                         context.clone(),
                     );
 
-                    let temp_file =
-                        importer.do_download_kv_file(meta, req.get_storage_backend(), &limiter)?;
+                    let buff = importer.do_read_kv_file(&meta, ext_storage.clone(), &limiter)?;
                     let r: Option<Range> = importer.do_apply_kv_file(
                         meta.get_start_key(),
                         meta.get_end_key(),
                         meta.get_restore_ts(),
-                        temp_file,
+                        buff,
                         &rules[i],
                         &mut build_req_fn,
                     )?;
@@ -505,6 +509,7 @@ where
                             None => Some(r),
                         };
                     }
+                    importer.clear_kv_buff(&meta);
                 }
 
                 if !reqs_default.is_empty() {

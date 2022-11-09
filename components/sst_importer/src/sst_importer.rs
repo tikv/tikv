@@ -3,8 +3,7 @@
 use std::{
     borrow::Cow,
     collections::HashMap,
-    fs::File,
-    io::{self, prelude::*, BufReader},
+    io,
     ops::Bound,
     path::{Path, PathBuf},
     sync::Arc,
@@ -18,6 +17,7 @@ use engine_traits::{
     IterOptions, Iterator, KvEngine, RefIterable, SstCompressionType, SstExt, SstMetaInfo,
     SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
+use external_storage_export::{compression_reader_dispatcher, encrypt_wrap_reader, RestoreConfig};
 use file_system::{get_io_rate_limiter, OpenOptions};
 use futures::executor::ThreadPool;
 use kvproto::{
@@ -27,6 +27,7 @@ use kvproto::{
 };
 use tikv_util::{
     codec::stream_event::{EventIterator, Iterator as EIterator},
+    stream::block_on_external_io,
     time::{Instant, Limiter},
 };
 use txn_types::{Key, TimeStamp, WriteRef};
@@ -47,7 +48,7 @@ pub struct SstImporter {
     // TODO: lift api_version as a type parameter.
     api_version: ApiVersion,
     compression_types: HashMap<CfName, SstCompressionType>,
-    file_locks: Arc<DashMap<String, ()>>,
+    file_locks: Arc<DashMap<String, (Arc<Vec<u8>>, u64)>>,
 }
 
 impl SstImporter {
@@ -292,6 +293,135 @@ impl SstImporter {
         Ok(())
     }
 
+    pub fn clear_kv_buff(&self, meta: &KvMeta) {
+        let dst_name = format!("{}_{}", meta.get_name(), meta.get_range_offset());
+        self.file_locks.remove_if_mut(&dst_name, |_, v| {
+            v.1 -= 1;
+            v.1 == 0 as u64
+        });
+    }
+
+    pub fn do_read_kv_file(
+        &self,
+        meta: &KvMeta,
+        ext_storage: Arc<Box<dyn external_storage_export::ExternalStorage>>,
+        speed_limiter: &Limiter,
+    ) -> Result<Arc<Vec<u8>>> {
+        let start = Instant::now();
+        let dst_name = format!("{}_{}", meta.get_name(), meta.get_range_offset());
+
+        let mut lock = self.file_locks.entry(dst_name).or_default();
+        let v = lock.value_mut();
+        if v.0.len() > 0 {
+            v.1 += 1;
+            return Ok(v.0.clone());
+        }
+
+        let sha256 = meta.get_sha256().to_vec();
+        let expected_sha256 = if !sha256.is_empty() {
+            Some(sha256)
+        } else {
+            None
+        };
+        let file_length = meta.get_length();
+        let range_length = meta.get_range_length();
+        let range = if range_length == 0 {
+            None
+        } else {
+            Some((meta.get_range_offset(), range_length))
+        };
+        let restore_config = external_storage_export::RestoreConfig {
+            range,
+            compression_type: Some(meta.get_compression_type()),
+            expected_sha256,
+            file_crypter: None,
+        };
+
+        let buff = self.read_kv_files_from_external_storage(
+            file_length,
+            meta.get_name(),
+            ext_storage,
+            speed_limiter,
+            restore_config,
+        )?;
+        *lock = (Arc::new(buff), 1);
+
+        IMPORTER_DOWNLOAD_BYTES.observe(file_length as _);
+        IMPORTER_APPLY_DURATION
+            .with_label_values(&["download"])
+            .observe(start.saturating_elapsed().as_secs_f64());
+
+        Ok(lock.value().0.clone())
+    }
+
+    pub fn create_external_storage(
+        &self,
+        backend: &StorageBackend,
+        support_kms: bool,
+    ) -> Result<Box<dyn external_storage_export::ExternalStorage>> {
+        let ext_storage = external_storage_export::create_storage(backend, Default::default())?;
+        // kv-files needn't are decrypted with KMS when download currently because these
+        // files are not encrypted when log-backup. It is different from
+        // sst-files because sst-files is encrypted when saved with rocksdb env
+        // with KMS. to do: support KMS when log-backup and restore point.
+        let ext_storage: Box<dyn external_storage_export::ExternalStorage> = if support_kms {
+            if let Some(key_manager) = &self.key_manager {
+                Box::new(external_storage_export::EncryptedExternalStorage {
+                    key_manager: (*key_manager).clone(),
+                    storage: ext_storage,
+                }) as _
+            } else {
+                ext_storage as _
+            }
+        } else {
+            ext_storage as _
+        };
+        Ok(ext_storage)
+    }
+
+    fn read_kv_files_from_external_storage(
+        &self,
+        file_length: u64,
+        file_name: &str,
+        ext_storage: Arc<Box<dyn external_storage_export::ExternalStorage>>,
+        speed_limiter: &Limiter,
+        restore_config: RestoreConfig,
+    ) -> Result<Vec<u8>> {
+        let RestoreConfig {
+            range,
+            compression_type,
+            expected_sha256,
+            file_crypter,
+        } = restore_config;
+
+        let mut reader = {
+            let inner = if let Some((off, len)) = range {
+                ext_storage.read_part(file_name, off, len)
+            } else {
+                ext_storage.read(file_name)
+            };
+
+            let inner = compression_reader_dispatcher(compression_type, inner)?;
+            encrypt_wrap_reader(file_crypter, inner)?
+        };
+
+        let r = block_on_external_io(external_storage_export::read_external_storage_info_buff(
+            &mut reader,
+            speed_limiter,
+            file_length,
+            expected_sha256,
+        ));
+        let url = ext_storage.url()?.to_string();
+        let buff = r.map_err(|e| Error::CannotReadExternalStorage {
+            url: url.to_string(),
+            name: file_name.to_string(),
+            err: e,
+            local_path: PathBuf::default(),
+        })?;
+
+        Ok(buff)
+    }
+
     pub fn do_download_kv_file(
         &self,
         meta: &KvMeta,
@@ -336,10 +466,6 @@ impl SstImporter {
             src_name,
             path.temp.clone(),
             backend,
-            // kv-files needn't are decrypted with KMS when download currently because these files
-            // are not encrypted when log-backup. It is different from sst-files
-            // because sst-files is encrypted when saved with rocksdb env with KMS.
-            // to do: support KMS when log-backup and restore point.
             false,
             // don't support encrypt for now.
             speed_limiter,
@@ -370,22 +496,16 @@ impl SstImporter {
         Ok(path.save)
     }
 
-    pub fn do_apply_kv_file<P: AsRef<Path>>(
+    pub fn do_apply_kv_file(
         &self,
         start_key: &[u8],
         end_key: &[u8],
         restore_ts: u64,
-        file_path: P,
+        file_buff: Arc<Vec<u8>>,
         rewrite_rule: &RewriteRule,
         build_fn: &mut dyn FnMut(Vec<u8>, Vec<u8>),
     ) -> Result<Option<Range>> {
-        // iterator file and performs rewrites and apply.
-        let file = File::open(&file_path)?;
-        let mut reader = BufReader::new(file);
-        let mut buffer = Vec::new();
-        reader.read_to_end(&mut buffer)?;
-
-        let mut event_iter = EventIterator::new(buffer);
+        let mut event_iter = EventIterator::new(file_buff.as_slice());
 
         let old_prefix = rewrite_rule.get_old_key_prefix();
         let new_prefix = rewrite_rule.get_new_key_prefix();
@@ -467,8 +587,7 @@ impl SstImporter {
         }
         info!("build download request file done"; "total keys" => %total_key,
             "ts filtered keys" => %ts_not_expected,
-            "range filtered keys" => %not_in_range,
-            "file" => %file_path.as_ref().display());
+            "range filtered keys" => %not_in_range);
 
         let label = if perform_rewrite { "rewrite" } else { "normal" };
         IMPORTER_APPLY_DURATION
