@@ -215,13 +215,13 @@ impl Operator {
                     } else {
                         ConfChangeType::AddNode
                     };
-                    new_pd_change_peer(conf_change_type, peer.clone())
+                    new_pd_change_peer_v2(vec![change_peer(conf_change_type, peer.clone())])
                 } else {
                     pdpb::RegionHeartbeatResponse::default()
                 }
             }
             Operator::RemovePeer { ref peer, .. } => {
-                new_pd_change_peer(ConfChangeType::RemoveNode, peer.clone())
+                new_pd_change_peer_v2(vec![change_peer(ConfChangeType::RemoveNode, peer.clone())])
             }
             Operator::TransferLeader {
                 ref peer,

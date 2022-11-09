@@ -2489,12 +2489,14 @@ where
         // TODO: spin off the I/O code (delete_snapshot)
         let regions_to_destroy = match self.check_snapshot(&msg)? {
             Either::Left(key) => {
-                // If the snapshot file is not used again, then it's OK to
-                // delete them here. If the snapshot file will be reused when
-                // receiving, then it will fail to pass the check again, so
-                // missing snapshot files should not be noticed.
-                let s = self.ctx.snap_mgr.get_snapshot_for_applying(&key)?;
-                self.ctx.snap_mgr.delete_snapshot(&key, s.as_ref(), false);
+                if let Some(key) = key {
+                    // If the snapshot file is not used again, then it's OK to
+                    // delete them here. If the snapshot file will be reused when
+                    // receiving, then it will fail to pass the check again, so
+                    // missing snapshot files should not be noticed.
+                    let s = self.ctx.snap_mgr.get_snapshot_for_applying(&key)?;
+                    self.ctx.snap_mgr.delete_snapshot(&key, s.as_ref(), false);
+                }
                 return Ok(());
             }
             Either::Right(v) => v,
@@ -2956,16 +2958,55 @@ where
     // Returns `Vec<(u64, bool)>` indicated (source_region_id, merge_to_this_peer)
     // if the `msg` doesn't contain a snapshot or this snapshot doesn't conflict
     // with any other snapshots or regions. Otherwise a `SnapKey` is returned.
-    fn check_snapshot(&mut self, msg: &RaftMessage) -> Result<Either<SnapKey, Vec<(u64, bool)>>> {
+    fn check_snapshot(
+        &mut self,
+        msg: &RaftMessage,
+    ) -> Result<Either<Option<SnapKey>, Vec<(u64, bool)>>> {
         if !msg.get_message().has_snapshot() {
             return Ok(Either::Right(vec![]));
         }
 
         let region_id = msg.get_region_id();
         let snap = msg.get_message().get_snapshot();
-        let key = SnapKey::from_region_snap(region_id, snap);
         let mut snap_data = RaftSnapshotData::default();
         snap_data.merge_from_bytes(snap.get_data())?;
+
+        let key = if !snap_data.get_meta().get_for_witness() {
+            // Check if snapshot file exists.
+            // No need to get snapshot for witness, as witness's empty snapshot bypass
+            // snapshot manager.
+            let key = SnapKey::from_region_snap(region_id, snap);
+            self.ctx.snap_mgr.get_snapshot_for_applying(&key)?;
+            Some(key)
+        } else {
+            None
+        };
+
+        // If the index of snapshot is not newer than peer's apply index, it
+        // is possibly because there is witness -> non-witness switch, and the peer
+        // requests snapshot from leader but leader doesn't applies the switch yet.
+        // In that case, the snapshot is a witness snapshot whereas non-witness snapshot
+        // is expected.
+        if snap.get_metadata().get_index() < self.fsm.peer.get_store().applied_index()
+            && snap_data.get_meta().get_for_witness() != self.fsm.peer.is_witness()
+        {
+            info!(
+                "mismatch witness snapshot";
+                "region_id" => region_id,
+                "peer_id" => self.fsm.peer_id(),
+                "for_witness" => snap_data.get_meta().get_for_witness(),
+                "is_witness" => self.fsm.peer.is_witness(),
+                "index" => snap.get_metadata().get_index(),
+                "applied_index" => self.fsm.peer.get_store().applied_index(),
+            );
+            self.ctx
+                .raft_metrics
+                .message_dropped
+                .mismatch_witness_snapshot
+                .inc();
+            return Ok(Either::Left(key));
+        }
+
         let snap_region = snap_data.take_region();
         let peer_id = msg.get_to_peer().get_id();
         let snap_enc_start_key = enc_start_key(&snap_region);
@@ -3115,9 +3156,6 @@ where
             self.ctx.raft_metrics.message_dropped.region_overlap.inc();
             return Ok(Either::Left(key));
         }
-
-        // Check if snapshot file exists.
-        self.ctx.snap_mgr.get_snapshot_for_applying(&key)?;
 
         // WARNING: The checking code must be above this line.
         // Now all checking passed.
@@ -4955,6 +4993,16 @@ where
         let leader_id = self.fsm.peer.leader_id();
         let request = msg.get_requests();
 
+        // peer_id must be the same as peer's.
+        if let Err(e) = util::check_peer_id(msg, self.fsm.peer.peer_id()) {
+            self.ctx
+                .raft_metrics
+                .invalid_proposal
+                .mismatch_peer_id
+                .inc();
+            return Err(e);
+        }
+
         if self.fsm.peer.force_leader.is_some() {
             self.ctx.raft_metrics.invalid_proposal.force_leader.inc();
             // in force leader state, forbid requests to make the recovery progress less
@@ -4992,15 +5040,17 @@ where
             self.register_raft_base_tick();
             return Err(Error::NotLeader(region_id, leader));
         }
-        // peer_id must be the same as peer's.
-        if let Err(e) = util::check_peer_id(msg, self.fsm.peer.peer_id()) {
-            self.ctx
-                .raft_metrics
-                .invalid_proposal
-                .mismatch_peer_id
-                .inc();
-            return Err(e);
+
+        // Forbid requests when it's a witness unless it's transfer leader
+        if self.fsm.peer.is_witness()
+            && !(msg.has_admin_request()
+                && msg.get_admin_request().get_cmd_type() == AdminCmdType::TransferLeader)
+        {
+            self.ctx.raft_metrics.invalid_proposal.witness.inc();
+            // TODO: use a dedicated error type
+            return Err(Error::RecoveryInProgress(self.region_id()));
         }
+
         // check whether the peer is initialized.
         if !self.fsm.peer.is_initialized() {
             self.ctx
