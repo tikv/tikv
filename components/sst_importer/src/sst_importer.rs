@@ -18,6 +18,7 @@ use engine_traits::{
     IterOptions, Iterator, KvEngine, RefIterable, SstCompressionType, SstExt, SstMetaInfo,
     SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
+use external_storage_export::ExternalStorage;
 use file_system::{get_io_rate_limiter, OpenOptions};
 use futures::executor::ThreadPool;
 use kvproto::{
