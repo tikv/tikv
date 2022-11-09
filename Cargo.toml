@@ -231,6 +231,7 @@ resolver = "2"
 members = [
   "cmd/tikv-ctl",
   "cmd/tikv-server",
+  "cmd/tls-test",
   "components/api_version",
   "components/backup",
   "components/backup-stream",

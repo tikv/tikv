@@ -1,0 +1,17 @@
+[package]
+name = "tls-test"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+backup-stream = { path = "../../components/backup-stream" }
+clap = { version = "4.0.22", features = ["derive"] }
+rand = "0.8.5"
+security = { path = "../../components/security", features = ["tonic"] }
+tokio = { version = "1.21.2", features = ["rt", "rt-multi-thread"] }
+
+[build-dependencies]
+cc = "*"
+time = "*"

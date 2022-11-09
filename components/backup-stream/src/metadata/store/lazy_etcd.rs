@@ -15,6 +15,7 @@ const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 #[derive(Clone)]
 pub struct LazyEtcdClient(Arc<LazyEtcdClientInner>);
 
+#[derive(Debug)]
 pub struct ConnectionConfig {
     pub tls: Option<TlsOptions>,
     pub keep_alive_interval: Duration,
