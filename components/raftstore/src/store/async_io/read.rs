@@ -75,16 +75,12 @@ pub struct FetchedLogs {
     pub logs: Box<RaftlogFetchResult>,
 }
 
-#[derive(Debug)]
-pub struct GenSnapRes {
-    pub snapshot: Box<Snapshot>,
-    pub success: bool,
-}
+pub type GenSnapRes = Option<Box<Snapshot>>;
 
 /// A router for receiving fetched result.
 pub trait AsyncReadNotifier: Send {
     fn notify_logs_fetched(&self, region_id: u64, fetched: FetchedLogs);
-    fn notify_snapshot_generated(&self, region_id: u64, res: GenSnapRes);
+    fn notify_snapshot_generated(&self, region_id: u64, res: Option<Box<Snapshot>>);
 }
 
 pub struct ReadRunner<EK, ER, N>
@@ -117,6 +113,20 @@ impl<EK: KvEngine, ER: RaftEngine, N: AsyncReadNotifier> ReadRunner<EK, ER, N> {
     #[inline]
     fn snap_mgr(&self) -> &SnapManager {
         self.mgr.as_ref().unwrap()
+    }
+
+    fn create_checkpointer_for_snap(&self, snap_key: &SnapKey, tablet: EK) -> crate::Result<()> {
+        let checkpointer_path = self.snap_mgr().get_tablet_checkpointer_path(snap_key);
+        if checkpointer_path.as_path().exists() {
+            // Remove the old checkpoint directly.
+            std::fs::remove_dir_all(checkpointer_path.as_path())?;
+        }
+        // Here not checkpoint to a temporary directory first, the temporary directory
+        // logic already implemented in rocksdb.
+        let mut checkpointer = tablet.new_checkpointer()?;
+
+        checkpointer.create_at(checkpointer_path.as_path(), None, 0)?;
+        Ok(())
     }
 }
 
@@ -207,53 +217,20 @@ where
                 snap_data.mut_meta().set_for_balance(for_balance);
                 snapshot.set_data(snap_data.write_to_bytes().unwrap().into());
                 // create checkpointer.
-                let success = create_checkpointer_for_snap(self.snap_mgr(), &key, tablet);
-                if success {
+                let mut res = None;
+                if let Err(e) = self.create_checkpointer_for_snap(&key, tablet) {
+                    error!("failed to create checkpointer"; "region_id" => region_id, "error" => %e);
+                    SNAP_COUNTER.generate.fail.inc();
+                } else {
                     SNAP_COUNTER.generate.success.inc();
                     SNAP_HISTOGRAM
                         .generate
                         .observe(start.saturating_elapsed_secs());
-                } else {
-                    SNAP_COUNTER.generate.fail.inc();
+                    res = Some(Box::new(snapshot))
                 }
 
-                self.notifier.notify_snapshot_generated(
-                    region_id,
-                    GenSnapRes {
-                        snapshot: Box::new(snapshot),
-                        success,
-                    },
-                );
+                self.notifier.notify_snapshot_generated(region_id, res);
             }
         }
     }
-}
-
-/// Used for create checkpointer. return true if success.
-fn create_checkpointer_for_snap<EK: KvEngine>(
-    snap_mgr: &SnapManager,
-    snap_key: &SnapKey,
-    tablet: EK,
-) -> bool {
-    let checkpointer_path = snap_mgr.get_tablet_checkpointer_path(snap_key);
-    if checkpointer_path.as_path().exists() {
-        // Remove the old checkpoint directly.
-        let Ok (_) = std::fs::remove_dir_all(checkpointer_path.as_path()).map_err(|e| {
-            error!("failed to remove old checkpoint"; "path" => %checkpointer_path.as_path().display(), "err" => %e);
-            e
-        }) else { return false };
-    }
-    // Here not checkpoint to a temporary directory first, the temporary directory
-    // logic already implemented in rocksdb.
-    let Ok(mut checkpointer) = tablet.new_checkpointer().map_err(|e| {
-        error!("fail to create checkpointer"; "region_id" => snap_key.region_id,  "snap_key" => %snap_key, "error"=> %e);
-        e
-    }) else { return false };
-
-    let Ok(_) = checkpointer.create_at(checkpointer_path.as_path(), None,0)
-        .map_err(|e| {
-            error!("failed to create checkpoint"; "region_id" => snap_key.region_id, "snap_key" => %snap_key, "error" => %e); 
-            e
-        }) else { return false };
-    true
 }

@@ -277,11 +277,11 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     /// `Generated`.
     ///  TODO: make the snap state more clearer, the snapshot must be consumed.
     pub fn on_snapshot_generated(&self, res: GenSnapRes) -> bool {
-        if !res.success {
+        if res.is_none() {
             self.cancel_generating_snap(None);
             return false;
         }
-        let snap = res.snapshot;
+        let snap = res.unwrap();
         let mut snap_state = self.snap_state_mut();
         let SnapState::Generating {
             ref canceled,
