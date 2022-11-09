@@ -24,10 +24,6 @@
 //! - init_split_region: In normal cases, the uninitialized split region will be
 //!   created by the store, and here init it using the data sent from the parent
 //!   peer.
-//!
-//! Split finish:
-//! - handle_peer_split_response: If all split peers are initialized, the region
-//!   state of the parent peer can be persisted
 
 use std::collections::VecDeque;
 
@@ -78,7 +74,7 @@ pub struct SplitResult {
 
 // In split, parent peer wraps data in `CreatePeer` to create and initalize
 // split peers.
-pub struct CreatePeer {
+pub struct SplitInit {
     pub parent_region_id: u64,
     pub parent_epoch: RegionEpoch,
     /// Split region
@@ -87,18 +83,6 @@ pub struct CreatePeer {
     /// In-memory pessimistic locks that should be inherited from parent region
     pub locks: PeerPessimisticLocks,
     pub last_split_region: bool,
-}
-
-#[derive(Debug)]
-pub struct SplitRegionInitResp {
-    pub parent_epoch: RegionEpoch,
-    pub child_region_id: u64,
-    // FIXME: when it is false
-    pub result: bool,
-}
-
-pub enum RegionSplitMsg {
-    SplitRegionInit(Box<CreatePeer>),
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -294,7 +278,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         tablet_index: u64,
         regions: Vec<Region>,
     ) {
-        fail_point!("on_split", store_ctx.store_id == 3, |_| {});
+        fail_point!("on_split", self.peer().get_store_id() == 3, |_| {});
 
         let derived = &regions[derived_index];
         let derived_epoch = derived.get_region_epoch().clone();
@@ -342,27 +326,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 continue;
             }
 
-            let mut raft_message = self.prepare_raft_message();
-            raft_message.mut_from_peer().set_id(raft::INVALID_ID);
-            raft_message.set_region_id(new_region_id);
-            raft_message.set_to_peer(
-                new_region
-                    .get_peers()
-                    .iter()
-                    .find(|p| p.store_id == store_ctx.store_id)
-                    .unwrap()
-                    .clone(),
-            );
-
-            let peer_creation_msg =
-                PeerMsg::RegionSplitMsg(RegionSplitMsg::SplitRegionInit(Box::new(CreatePeer {
-                    region: new_region,
-                    parent_region_id: region_id,
-                    parent_epoch: derived_epoch.clone(),
-                    parent_is_leader: self.is_leader(),
-                    locks,
-                    last_split_region: last_region_id == new_region_id,
-                })));
+            let peer_creation_msg = PeerMsg::RegionSplitMsg(Box::new(SplitInit {
+                region: new_region,
+                parent_region_id: region_id,
+                parent_epoch: derived_epoch.clone(),
+                parent_is_leader: self.is_leader(),
+                locks,
+                last_split_region: last_region_id == new_region_id,
+            }));
 
             // First, send init msg to peer directly. Returning error means the peer is not
             // existed in which case we should redirect it to the store.
@@ -371,8 +342,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 .force_send(new_region_id, peer_creation_msg)
             {
                 Ok(_) => {}
-                Err(SendError(PeerMsg::RegionSplitMsg(RegionSplitMsg::SplitRegionInit(msg)))) => {
-                    store_ctx.router.send_control(StoreMsg::CreatePeer(msg));
+                Err(SendError(PeerMsg::RegionSplitMsg(msg))) => {
+                    store_ctx.router.send_control(StoreMsg::SplitInit(msg));
                 }
                 _ => unreachable!(),
             }
@@ -383,9 +354,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn init_split_region<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
-        init_info: Box<CreatePeer>,
+        init_info: Box<SplitInit>,
     ) {
-        let CreatePeer {
+        let SplitInit {
             parent_region_id,
             parent_epoch,
             region,
@@ -425,7 +396,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             });
 
             let storage = Storage::new_from_region(
-                store_ctx.store_id,
+                self.peer().get_store_id(),
                 &region,
                 store_ctx.engine.clone(),
                 store_ctx.read_scheduler.clone(),
@@ -509,18 +480,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         if need_schedule_apply_fsm {
             self.schedule_apply_fsm(store_ctx);
-        }
-    }
-}
-
-impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
-    pub fn on_region_split_msg(&mut self, msg: RegionSplitMsg) {
-        match msg {
-            RegionSplitMsg::SplitRegionInit(init_info) => {
-                self.fsm
-                    .peer_mut()
-                    .init_split_region(self.store_ctx, init_info);
-            }
         }
     }
 }

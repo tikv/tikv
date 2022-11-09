@@ -220,7 +220,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
                 PeerMsg::ApplyRes(res) => self.fsm.peer.on_apply_res(self.store_ctx, res),
-                PeerMsg::RegionSplitMsg(msg) => self.on_region_split_msg(msg),
+                PeerMsg::RegionSplitMsg(msg) => {
+                    self.fsm.peer.init_split_region(self.store_ctx, msg)
+                }
                 PeerMsg::Start => self.on_start(),
                 PeerMsg::Noop => unimplemented!(),
                 PeerMsg::Persisted {

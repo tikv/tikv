@@ -58,7 +58,7 @@ use crate::{
 mod admin;
 mod write;
 
-pub use admin::{AdminCmdResult, CreatePeer, RegionSplitMsg, SplitResult};
+pub use admin::{AdminCmdResult, SplitInit, SplitResult};
 pub use write::{SimpleWriteDecoder, SimpleWriteEncoder};
 
 use self::write::SimpleWrite;

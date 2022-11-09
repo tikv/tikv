@@ -176,10 +176,6 @@ where
             }
         }
 
-        debug!(self.logger,
-            "Fail to get snapshot from LocalReader for region";
-            "region_id" => region_id
-        );
         let mut err = errorpb::Error::default();
         err.set_message(format!(
             "Fail to get snapshot from LocalReader for region {}. \
@@ -550,7 +546,7 @@ mod tests {
             .unwrap();
         let factory = Arc::new(TestTabletFactoryV2::new(path.path(), ops, cf_opts));
 
-        let store_meta = Arc::new(Mutex::new(StoreMeta::default()));
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new()));
         let (mut reader, mut rx) = new_reader(store_id, store_meta.clone());
         let (mix_tx, mix_rx) = sync_channel(1);
         let handler = mock_raftstore(mix_rx);
@@ -745,7 +741,7 @@ mod tests {
         let factory = Arc::new(TestTabletFactoryV2::new(path.path(), ops, cf_opts));
 
         let store_meta =
-            StoreMetaDelegate::new(Arc::new(Mutex::new(StoreMeta::<KvTestEngine>::default())));
+            StoreMetaDelegate::new(Arc::new(Mutex::new(StoreMeta::<KvTestEngine>::new())));
 
         let tablet1;
         let tablet2;

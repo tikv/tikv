@@ -17,7 +17,7 @@ use raftstore::{
     Result,
 };
 use slog::info;
-pub use split::{CreatePeer, RegionSplitMsg, SplitResult};
+pub use split::{SplitInit, SplitResult};
 use tikv_util::box_err;
 
 use self::conf_change::ConfChangeResult;

@@ -23,7 +23,7 @@ use raftstore::store::{util, ExtraStates, WriteTask};
 use slog::{debug, error, info};
 use tikv_util::store::find_peer;
 
-use super::{command::CreatePeer, RegionSplitMsg};
+use super::command::SplitInit;
 use crate::{
     batch::StoreContext,
     fsm::{PeerFsm, Store},
@@ -98,7 +98,7 @@ impl Store {
     pub fn on_peer_creation<EK, ER, T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
-        msg: Box<CreatePeer>,
+        msg: Box<SplitInit>,
     ) where
         EK: KvEngine,
         ER: RaftEngine,
@@ -113,7 +113,7 @@ impl Store {
                 .region
                 .get_peers()
                 .iter()
-                .find(|p| p.get_store_id() == ctx.store_id)
+                .find(|p| p.get_store_id() == self.store_id())
                 .unwrap()
                 .clone(),
         );
@@ -121,10 +121,8 @@ impl Store {
         // It will create the peer if it is not existed
         self.on_raft_message(ctx, Box::new(raft_msg));
 
-        ctx.router.force_send(
-            region_id,
-            PeerMsg::RegionSplitMsg(RegionSplitMsg::SplitRegionInit(msg)),
-        );
+        ctx.router
+            .force_send(region_id, PeerMsg::RegionSplitMsg(msg));
     }
 
     /// When a message's recipient doesn't exist, it will be redirected to
