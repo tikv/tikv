@@ -497,11 +497,13 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         path.push("/snap");
         path.push(key.recv_path());
 
-        let t = move |region_id: u64| {
+        let t = move |region_id:u64| {
             tablet_factory.load_tablet(path.as_path(), region_id, self.tablet_suffix().unwrap())
         };
 
         task.snapshot = Some(Box::new(t));
+
+        // self.schedule_apply_fsm(ctx);
         Ok(())
     }
 }
