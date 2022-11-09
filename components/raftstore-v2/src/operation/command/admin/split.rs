@@ -62,7 +62,7 @@ use tikv_util::box_err;
 use crate::{
     batch::StoreContext,
     fsm::{ApplyResReporter, PeerFsmDelegate},
-    operation::{command::admin::CreatePeer, AdminCmdResult},
+    operation::AdminCmdResult,
     raft::{raft_config, write_initial_states, Apply, Peer, Storage},
     router::{ApplyRes, PeerMsg, StoreMsg},
 };
@@ -73,6 +73,22 @@ pub struct SplitResult {
     // The index of the derived region in `regions`
     pub derived_index: usize,
     pub tablet_index: u64,
+}
+
+// In split, parent peer wraps data in `CreatePeer` to create and initalize
+// split peers.
+pub struct CreatePeer {
+    pub parent_region_id: u64,
+    pub parent_epoch: RegionEpoch,
+    /// Split region
+    pub region: metapb::Region,
+    pub parent_is_leader: bool,
+    pub parent_stat: PeerStat,
+    pub approximate_size: Option<u64>,
+    pub approximate_keys: Option<u64>,
+    /// In-memory pessimistic locks that should be inherited from parent region
+    pub locks: PeerPessimisticLocks,
+    pub last_split_region: bool,
 }
 
 #[derive(Debug)]

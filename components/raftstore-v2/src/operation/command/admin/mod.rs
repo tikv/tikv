@@ -4,11 +4,7 @@ mod conf_change;
 mod split;
 
 use engine_traits::{KvEngine, RaftEngine};
-use kvproto::{
-    metapb::{self, RegionEpoch},
-    raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest},
-    raft_serverpb::{PeerState, RaftMessage},
-};
+use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest};
 use protobuf::Message;
 use raft::prelude::ConfChangeV2;
 use raftstore::{
@@ -17,12 +13,11 @@ use raftstore::{
         fsm::apply,
         msg::ErrorCallback,
         util::{ChangePeerI, ConfChangeKind},
-        PeerPessimisticLocks, PeerStat,
     },
     Result,
 };
 use slog::info;
-pub use split::{RegionSplitMsg, SplitResult};
+pub use split::{CreatePeer, RegionSplitMsg, SplitResult};
 use tikv_util::box_err;
 
 use self::conf_change::ConfChangeResult;
@@ -36,22 +31,6 @@ use crate::{
 pub enum AdminCmdResult {
     SplitRegion(SplitResult),
     ConfChange(ConfChangeResult),
-}
-
-// In split, parent peer wraps data in `CreatePeer` to create and initalize
-// split peers.
-pub struct CreatePeer {
-    pub parent_region_id: u64,
-    pub parent_epoch: RegionEpoch,
-    /// Split region
-    pub region: metapb::Region,
-    pub parent_is_leader: bool,
-    pub parent_stat: PeerStat,
-    pub approximate_size: Option<u64>,
-    pub approximate_keys: Option<u64>,
-    /// In-memory pessimistic locks that should be inherited from parent region
-    pub locks: PeerPessimisticLocks,
-    pub last_split_region: bool,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
