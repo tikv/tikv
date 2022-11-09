@@ -3,10 +3,7 @@
 use std::{iter::FromIterator, sync::Arc, time::Duration};
 
 use futures::executor::block_on;
-use kvproto::{
-    metapb,
-    raft_cmdpb::{ChangePeerRequest, RaftCmdRequest},
-};
+use kvproto::{metapb, raft_cmdpb::ChangePeerRequest, raft_serverpb::PeerState};
 use pd_client::PdClient;
 use raft::eraftpb::ConfChangeType;
 use test_raftstore::*;
@@ -17,6 +14,17 @@ fn become_witness(cluster: &Cluster<ServerCluster>, region_id: u64, peer: &mut m
     cluster.pd_client.must_add_peer(region_id, peer.clone());
     cluster.pd_client.must_remove_peer(region_id, peer.clone());
     peer.set_is_witness(true);
+    peer.set_id(peer.get_id() + 10);
+    cluster.pd_client.must_add_peer(region_id, peer.clone());
+    peer.set_role(metapb::PeerRole::Voter);
+    cluster.pd_client.must_add_peer(region_id, peer.clone());
+}
+
+fn become_non_witness(cluster: &Cluster<ServerCluster>, region_id: u64, peer: &mut metapb::Peer) {
+    peer.set_role(metapb::PeerRole::Learner);
+    cluster.pd_client.must_add_peer(region_id, peer.clone());
+    cluster.pd_client.must_remove_peer(region_id, peer.clone());
+    peer.set_is_witness(false);
     peer.set_id(peer.get_id() + 10);
     cluster.pd_client.must_add_peer(region_id, peer.clone());
     peer.set_role(metapb::PeerRole::Voter);
@@ -39,11 +47,19 @@ fn test_witness_split_merge() {
     let mut peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
     become_witness(&cluster, region.get_id(), &mut peer_on_store3);
 
+    let before = cluster
+        .apply_state(region.get_id(), nodes[2])
+        .get_applied_index();
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k2", b"v2");
     cluster.must_split(&region, b"k2");
     must_get_none(&cluster.get_engine(3), b"k1");
     must_get_none(&cluster.get_engine(3), b"k2");
+    // applied index of witness is updated
+    let after = cluster
+        .apply_state(region.get_id(), nodes[2])
+        .get_applied_index();
+    assert_eq!(after - before, 3);
 
     // the newly split peer should be witness as well
     let left = cluster.get_region(b"k1");
@@ -52,11 +68,42 @@ fn test_witness_split_merge() {
     assert!(find_peer(&left, nodes[2]).unwrap().is_witness);
     assert!(find_peer(&right, nodes[2]).unwrap().is_witness);
 
+    // merge
     pd_client.must_merge(left.get_id(), right.get_id());
     let after_merge = cluster.get_region(b"k1");
     assert!(find_peer(&after_merge, nodes[2]).unwrap().is_witness);
     must_get_none(&cluster.get_engine(3), b"k1");
     must_get_none(&cluster.get_engine(3), b"k2");
+    // epoch of witness is updated
+    assert_eq!(
+        cluster
+            .region_local_state(after_merge.get_id(), nodes[2])
+            .get_region()
+            .get_region_epoch(),
+        after_merge.get_region_epoch()
+    );
+
+    // split again
+    cluster.must_split(&after_merge, b"k2");
+    let left = cluster.get_region(b"k1");
+    let right = cluster.get_region(b"k2");
+    assert!(find_peer(&left, nodes[2]).unwrap().is_witness);
+    assert!(find_peer(&right, nodes[2]).unwrap().is_witness);
+
+    // can't merge with different witness location
+    let mut peer_on_store3 = find_peer(&left, nodes[2]).unwrap().clone();
+    become_non_witness(&cluster, left.get_id(), &mut peer_on_store3);
+    let left = cluster.get_region(b"k1");
+    let req = new_admin_request(
+        left.get_id(),
+        left.get_region_epoch(),
+        new_prepare_merge(right),
+    );
+    let resp = cluster
+        .call_command_on_leader(req, Duration::from_millis(100))
+        .unwrap();
+    assert!(resp.get_header().has_error());
+}
 
 // Test flow of witness conf change
 #[test]
@@ -82,12 +129,15 @@ fn test_witness_conf_change() {
     let mut cp = ChangePeerRequest::default();
     cp.set_change_type(ConfChangeType::AddLearnerNode);
     cp.set_peer(peer);
-    let admin_req = new_admin_request(
+    let req = new_admin_request(
         region.get_id(),
         region.get_region_epoch(),
         new_change_peer_v2_request(vec![cp]),
     );
-    must_get_error_recovery_in_progress(&mut cluster, &region, admin_req);
+    let resp = cluster
+        .call_command_on_leader(req, Duration::from_millis(100))
+        .unwrap();
+    assert!(resp.get_header().has_error());
 
     // add a new witness peer
     cluster
@@ -97,8 +147,26 @@ fn test_witness_conf_change() {
     cluster
         .pd_client
         .must_add_peer(region.get_id(), peer_on_store3.clone());
-    std::thread::sleep(Duration::from_millis(100));
     must_get_none(&cluster.get_engine(3), b"k1");
+    let region = cluster.get_region(b"k1");
+    assert_eq!(
+        cluster
+            .region_local_state(region.get_id(), nodes[2])
+            .get_region(),
+        &region
+    );
+
+    // remove a witness peer
+    let peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), peer_on_store3);
+    assert_eq!(
+        cluster
+            .region_local_state(region.get_id(), nodes[2])
+            .get_state(),
+        PeerState::Tombstone
+    );
 }
 
 // #[test]
@@ -386,8 +454,14 @@ fn test_witness_replica_read() {
 fn must_get_error_recovery_in_progress<T: Simulator>(
     cluster: &mut Cluster<T>,
     region: &metapb::Region,
-    req: RaftCmdRequest,
+    cmd: kvproto::raft_cmdpb::Request,
 ) {
+    let req = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![cmd],
+        true,
+    );
     let resp = cluster
         .call_command_on_leader(req, Duration::from_millis(100))
         .unwrap();
@@ -396,7 +470,9 @@ fn must_get_error_recovery_in_progress<T: Simulator>(
         &kvproto::errorpb::RecoveryInProgress {
             region_id: region.get_id(),
             ..Default::default()
-        }
+        },
+        "{:?}",
+        resp
     );
 }
 
@@ -433,28 +509,13 @@ fn test_witness_leader_down() {
     cluster.clear_send_filters();
 
     // forbid writes
-    let put = new_request(
-        region.get_id(),
-        region.get_region_epoch().clone(),
-        vec![new_put_cmd(b"k3", b"v3")],
-        true,
-    );
+    let put = new_put_cmd(b"k3", b"v3");
     must_get_error_recovery_in_progress(&mut cluster, &region, put);
     // forbid reads
-    let get = new_request(
-        region.get_id(),
-        region.get_region_epoch().clone(),
-        vec![new_get_cmd(b"k1")],
-        true,
-    );
+    let get = new_get_cmd(b"k1");
     must_get_error_recovery_in_progress(&mut cluster, &region, get);
     // forbid read index
-    let read_index = new_request(
-        region.get_id(),
-        region.get_region_epoch().clone(),
-        vec![new_read_index_cmd()],
-        true,
-    );
+    let read_index = new_read_index_cmd();
     must_get_error_recovery_in_progress(&mut cluster, &region, read_index);
 
     let peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
