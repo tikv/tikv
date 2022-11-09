@@ -59,7 +59,7 @@ fn test_witness_split_merge() {
     let after = cluster
         .apply_state(region.get_id(), nodes[2])
         .get_applied_index();
-    assert_eq!(after - before, 3);
+    assert!(after - before >= 3);
 
     // the newly split peer should be witness as well
     let left = cluster.get_region(b"k1");
@@ -149,6 +149,7 @@ fn test_witness_conf_change() {
         .must_add_peer(region.get_id(), peer_on_store3.clone());
     must_get_none(&cluster.get_engine(3), b"k1");
     let region = cluster.get_region(b"k1");
+    must_peer_latest_applied(&mut cluster, region.get_id(), &peer_on_store3);
     assert_eq!(
         cluster
             .region_local_state(region.get_id(), nodes[2])
@@ -161,6 +162,7 @@ fn test_witness_conf_change() {
     cluster
         .pd_client
         .must_remove_peer(region.get_id(), peer_on_store3);
+
     assert_eq!(
         cluster
             .region_local_state(region.get_id(), nodes[2])
@@ -525,5 +527,5 @@ fn test_witness_leader_down() {
         cluster.leader_of_region(region.get_id()).unwrap().store_id,
         nodes[2],
     );
-    assert_eq!(cluster.must_get(b"k99"), Some(b"v99".to_vec()));
+    assert_eq!(cluster.must_get(b"k9"), Some(b"v9".to_vec()));
 }
