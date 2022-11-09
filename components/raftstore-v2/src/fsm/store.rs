@@ -44,7 +44,7 @@ impl<E> StoreMeta<E>
 where
     E: KvEngine,
 {
-    pub fn new(vote_capacity: usize) -> StoreMeta<E> {
+    pub fn new() -> StoreMeta<E> {
         StoreMeta {
             store_id: None,
             region_ranges: BTreeMap::default(),
@@ -75,7 +75,7 @@ where
 
 impl<E: KvEngine> Default for StoreMeta<E> {
     fn default() -> Self {
-        Self::new(0)
+        Self::new()
     }
 }
 pub struct Store {

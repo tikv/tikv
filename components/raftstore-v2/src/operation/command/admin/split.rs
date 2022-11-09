@@ -9,7 +9,7 @@
 //!   are in ascending order).
 //!
 //! Execution:
-//! - exec_batch_split: Create and initialize metapb::region for split regions
+//! - apply_batch_split: Create and initialize metapb::region for split regions
 //!   and derived regions. Then, create checkpoints of the current talbet for
 //!   split regions and derived region to make tablet physical isolated. Update
 //!   the parent region's region state without persistency. Send the new regions
@@ -35,6 +35,7 @@ use engine_traits::{
     Checkpointer, DeleteStrategy, KvEngine, OpenOptions, RaftEngine, RaftLogBatch, Range,
     TabletFactory, CF_DEFAULT, SPLIT_PREFIX,
 };
+use fail::fail_point;
 use keys::enc_end_key;
 use kvproto::{
     metapb::{self, Region, RegionEpoch},
@@ -124,8 +125,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         tablet_index: u64,
         regions: Vec<Region>,
     ) {
+        fail_point!("on_split", store_ctx.store_id == 3, |_| {});
+
         let derived = &regions[derived_index];
-        let derived_id = derived.id;
         let derived_epoch = derived.get_region_epoch().clone();
         let region_id = derived.get_id();
 
@@ -135,12 +137,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // map.
         let region_locks = {
             let mut pessimistic_locks = self.txn_ext().pessimistic_locks.write();
-            info!(self.logger, "moving {} locks to new regions", pessimistic_locks.len(); "region_id"=> region_id);
+            info!(self.logger, "moving {} locks to new regions", pessimistic_locks.len(););
             // Update the version so the concurrent reader will fail due to EpochNotMatch
             // instead of PessimisticLockNotFound.
             pessimistic_locks.version = derived_epoch.get_version();
             pessimistic_locks.group_by_regions(&regions, derived)
         };
+        fail_point!("on_split_invalidate_locks");
 
         // Roughly estimate the size and keys for new regions.
         let new_region_count = regions.len() as u64;
@@ -169,8 +172,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             info!(
                 self.logger,
                 "notify pd with split";
-                "region_id" => self.region_id(),
-                "peer_id" => self.peer_id(),
                 "split_count" => regions.len(),
             );
 
@@ -210,7 +211,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.split_progress_mut().insert(new_region_id, false);
             let init_info = SplitRegionInitInfo {
                 region: new_region,
-                parent_region_id: derived_id,
+                parent_region_id: region_id,
                 parent_epoch: derived_epoch.clone(),
                 parent_is_leader: self.is_leader(),
                 parent_stat: self.peer_stat().clone(),
@@ -228,10 +229,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 })));
         }
         drop(meta);
-
-        if is_leader {
-            self.on_split_region_check_tick();
-        }
     }
 
     pub fn init_split_region<T>(
@@ -263,25 +260,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 .get_version();
 
         if !self.storage().is_initialized() || replace {
-            let mut wb = store_ctx.engine.log_batch(5);
-            write_initial_states(&mut wb, region.clone()).unwrap_or_else(|e| {
-                panic!(
-                    "{:?} fails to save split region {:?}: {:?}",
-                    self.logger.list(),
-                    region,
-                    e
-                )
-            });
-
-            // todo: need to do asynchronously?
-            store_ctx.engine.consume(&mut wb, true).unwrap_or_else(|e| {
-                panic!(
-                    "{:?} fails to consume the write: {:?}",
-                    self.logger.list(),
-                    e,
-                )
-            });
-
             let split_temp_path = store_ctx.tablet_factory.tablet_path_with_prefix(
                 SPLIT_PREFIX,
                 region_id,
@@ -300,9 +278,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 )
             });
 
-            let storage = Storage::new(
-                region_id,
+            let storage = Storage::new_from_region(
                 store_ctx.store_id,
+                &region,
                 store_ctx.engine.clone(),
                 store_ctx.read_scheduler.clone(),
                 &store_ctx.logger,
@@ -324,7 +302,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
             need_schedule_apply_fsm = true;
         } else {
-            // todo: when reaching here, it is much complexer.
+            // todo: when reaching here (peer is initalized before and cannot be replaced),
+            // it is much complexer.
             unimplemented!();
         }
 
@@ -333,7 +312,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         info!(
             self.logger,
             "init split region";
-            "region_id" => region_id,
             "region" => ?region,
         );
 
@@ -436,23 +414,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         *split_progress.get_mut(&child_region_id).unwrap() = true;
 
         if split_progress.values().all(|v| *v) {
-            // Split can be finished
-            let mut wb = store_ctx.engine.log_batch(10);
-            // Persist region state, so the tablet index points to the new tablet
-            let state = self.storage().region_state();
-            wb.put_region_state(self.region_id(), state)
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "{:?} fails to update region {:?}: {:?}",
-                        self.logger.list(),
-                        state,
-                        e
-                    )
-                });
-            // todo: need to do asynchronously?
-            store_ctx.engine.consume(&mut wb, true).unwrap();
-
+            // todo: split is done, persist region state
             self.split_progress_mut().clear();
+
+            if self.is_leader() {
+                self.on_split_region_check_tick();
+            }
+            fail_point!("after_split", store_ctx.store_id == 3, |_| {});
         }
     }
 }

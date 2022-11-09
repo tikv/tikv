@@ -2,7 +2,6 @@
 
 use std::{thread, time::Duration};
 
-use engine_traits::RaftEngineReadOnly;
 use futures::executor::block_on;
 use kvproto::{
     metapb, pdpb,
@@ -35,25 +34,14 @@ fn new_batch_split_region_request(
     req
 }
 
-fn must_split<F: Fn(u64) -> u64>(
-    region_id: u64,
-    req: RaftCmdRequest,
-    router: &mut TestRouter,
-    get_tablet_index: F,
-) {
-    let current_tablet_index = get_tablet_index(region_id);
+fn must_split(region_id: u64, req: RaftCmdRequest, router: &mut TestRouter) {
     let (msg, sub) = PeerMsg::raft_command(req);
     router.send(region_id, msg).unwrap();
     block_on(sub.result()).unwrap();
 
-    loop {
-        // Tablet index changed means the split has been finished
-        if current_tablet_index < get_tablet_index(region_id) {
-            return;
-        }
-
-        thread::sleep(Duration::from_millis(20));
-    }
+    // todo: when persistent implementation is ready, we can use tablet index of
+    // the parent to check whether the split is done. Now, just sleep a second.
+    thread::sleep(Duration::from_secs(1));
 }
 
 fn put(
@@ -100,10 +88,9 @@ fn must_put_error(store_id: u64, router: &mut TestRouter, region: &metapb::Regio
 
 // Split the region according to the parameters
 // return the updated original region
-fn split_region<F: Fn(u64) -> u64>(
+fn split_region(
     store_id: u64,
     router: &mut TestRouter,
-    get_tablet_index: F,
     region: metapb::Region,
     peer: metapb::Peer,
     split_region_id: u64,
@@ -128,7 +115,7 @@ fn split_region<F: Fn(u64) -> u64>(
     req.mut_requests().clear();
     req.set_admin_request(admin_req);
 
-    must_split(region_id, req, router, get_tablet_index);
+    must_split(region_id, req, router);
 
     let (left, right) = if !right_derive {
         (
@@ -170,15 +157,6 @@ fn test_split() {
     let region_id = 2;
     let peer = new_peer(store_id, 3);
     let region = router.region_detail(region_id);
-    let raft_engine = cluster.node(0).running_state().unwrap().raft_engine.clone();
-    let get_tablet_index = |region_id| -> u64 {
-        raft_engine
-            .get_region_state(region_id)
-            .unwrap()
-            .unwrap()
-            .tablet_index
-    };
-
     router.wait_applied_to_current_term(2, Duration::from_secs(3));
 
     // Region 2 ["", ""] peer(1, 3)
@@ -187,7 +165,6 @@ fn test_split() {
     let (left, right) = split_region(
         store_id,
         &mut router,
-        get_tablet_index,
         region,
         peer.clone(),
         1000,
@@ -204,7 +181,6 @@ fn test_split() {
     let _ = split_region(
         store_id,
         &mut router,
-        get_tablet_index,
         left,
         peer,
         1001,
@@ -221,7 +197,6 @@ fn test_split() {
     let _ = split_region(
         store_id,
         &mut router,
-        get_tablet_index,
         right,
         new_peer(store_id, 10),
         1002,
