@@ -1,15 +1,12 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cell::RefCell,
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     pin::Pin,
-    rc::Rc,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex as StdMutex,
     },
-    thread,
     time::Duration,
     u64,
 };
@@ -23,7 +20,7 @@ use futures::{
     select,
     sink::SinkExt,
     stream::{Stream, StreamExt},
-    task::{AtomicWaker, Context, Poll},
+    task::{Context, Poll},
 };
 use grpcio::{
     CallOption, Channel, ClientDuplexReceiver, ConnectivityState, EnvBuilder, Environment,
@@ -33,15 +30,13 @@ use kvproto::{
     metapb,
     pdpb::{
         self, GetMembersResponse, Member, PdClient as PdClientStub, RegionHeartbeatRequest,
-        RegionHeartbeatResponse, ReportBucketsRequest,
+        RegionHeartbeatResponse, ReportBucketsRequest, TsoRequest, TsoResponse,
     },
-    replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
+    replication_modepb::{ReplicationStatus, StoreDrAutoSyncStatus},
 };
 use security::SecurityManager;
 use tikv_util::{
-    box_err, error, info, slow_log,
-    sys::thread::StdThreadBuildWrapper,
-    thd_name,
+    box_err, error, info, slow_log, thd_name,
     time::{duration_to_sec, Instant},
     timer::GLOBAL_TIMER_HANDLE,
     warn,
@@ -52,13 +47,8 @@ use txn_types::TimeStamp;
 use super::{
     client::{CLIENT_PREFIX, CQ_COUNT},
     metrics::*,
-    tso::{
-        allocate_timestamps, TimestampRequest, TsoRequestStream,
-        MAX_BATCH_SIZE as TSO_MAX_BATCH_SIZE, MAX_PENDING_COUNT as TSO_MAX_PENDING_COUNT,
-    },
     util::{check_resp_header, PdConnector, TargetInfo},
-    BucketStat, Config, Error, FeatureGate, RegionInfo, RegionStat, Result, UnixSecs,
-    REQUEST_TIMEOUT,
+    Config, Error, FeatureGate, RegionInfo, Result, UnixSecs, REQUEST_TIMEOUT,
 };
 use crate::PdFuture;
 
@@ -259,16 +249,8 @@ pub struct RpcClient {
     cluster_id: u64,
     raw_client: CachedRawClient,
     feature_gate: FeatureGate,
+    reconnect_tx: mpsc::UnboundedSender<u64>,
     on_reconnect: CallbackHolder,
-
-    heartbeat_sender: mpsc::UnboundedSender<RegionHeartbeatRequest>,
-    heartbeat_response_holder: DuplexResponseHolder<RegionHeartbeatResponse>,
-    pending_heartbeat: Arc<AtomicU64>,
-
-    bucket_sender: mpsc::UnboundedSender<ReportBucketsRequest>,
-    pending_bucket: Arc<AtomicU64>,
-
-    tso_sender: tokio::sync::mpsc::Sender<TimestampRequest>,
 }
 
 impl RpcClient {
@@ -339,70 +321,17 @@ impl RpcClient {
             reconnect_rx,
         ));
 
-        let (heartbeat_sender, heartbeat_receiver) = mpsc::unbounded();
-        let pending_heartbeat = Arc::new(AtomicU64::new(0));
-        let heartbeat_response_holder = Arc::new(std::sync::Mutex::new(None));
-        raw_client.stub().spawn(heartbeat_loop(
-            raw_client.clone(),
-            heartbeat_receiver,
-            heartbeat_response_holder.clone(),
-            pending_heartbeat.clone(),
-            reconnect_tx.clone(),
-        ));
-
-        let (bucket_sender, bucket_receiver) = mpsc::unbounded();
-        let pending_bucket = Arc::new(AtomicU64::new(0));
-        raw_client.stub().spawn(bucket_loop(
-            raw_client.clone(),
-            bucket_receiver,
-            pending_bucket.clone(),
-            reconnect_tx.clone(),
-        ));
-
-        let (tso_tx, tso_rx) = tokio::sync::mpsc::channel::<TimestampRequest>(TSO_MAX_BATCH_SIZE);
-        let raw_client_clone = raw_client.clone();
-        // TODO: maybe move it to grpc thread pool.
-        thread::Builder::new()
-            .name("tso-worker".into())
-            .spawn_wrapper(move || {
-                block_on(tso_loop(cluster_id, raw_client_clone, tso_rx, reconnect_tx))
-            })
-            .expect("unable to create tso worker thread");
-
         Ok(Self {
             cluster_id,
             raw_client,
             feature_gate: Default::default(),
             on_reconnect,
-            heartbeat_sender,
-            heartbeat_response_holder,
-            pending_heartbeat,
-            bucket_sender,
-            pending_bucket,
-            tso_sender: tso_tx,
+            reconnect_tx,
         })
     }
 
     pub fn handle_reconnect<F: Fn() + Sync + Send + 'static>(&self, f: F) {
         *self.on_reconnect.lock().unwrap() = Some(Box::new(f));
-    }
-
-    pub fn handle_region_heartbeat_response<F>(&self, _: u64, f: F) -> PdFuture<()>
-    where
-        F: Fn(RegionHeartbeatResponse) + Send + 'static,
-    {
-        use futures::TryStreamExt;
-        let recv = CachedDuplexResponse {
-            latest: self.heartbeat_response_holder.clone(),
-            cache: None,
-        };
-        Box::pin(
-            recv.try_for_each(move |resp| {
-                f(resp);
-                futures::future::ready(Ok(()))
-            })
-            .map_err(|e| panic!("unexpected error: {:?}", e)),
-        )
     }
 
     #[inline]
@@ -426,6 +355,10 @@ impl RpcClient {
     /// Used in integration tests.
     pub fn reconnect(&mut self) -> Result<()> {
         block_on(self.raw_client.reconnect(true, &self.on_reconnect))
+    }
+
+    pub fn cluster_id(&self) -> u64 {
+        self.cluster_id
     }
 }
 
@@ -804,51 +737,6 @@ impl RpcClient {
         })
     }
 
-    pub fn region_heartbeat(
-        &mut self,
-        term: u64,
-        region: metapb::Region,
-        leader: metapb::Peer,
-        region_stat: RegionStat,
-        replication_status: Option<RegionReplicationStatus>,
-    ) -> PdFuture<()> {
-        PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["send"]).inc();
-
-        let mut req = RegionHeartbeatRequest::default();
-        req.set_term(term);
-        req.set_header(self.header());
-        req.set_region(region);
-        req.set_leader(leader);
-        req.set_down_peers(region_stat.down_peers.into());
-        req.set_pending_peers(region_stat.pending_peers.into());
-        req.set_bytes_written(region_stat.written_bytes);
-        req.set_keys_written(region_stat.written_keys);
-        req.set_bytes_read(region_stat.read_bytes);
-        req.set_keys_read(region_stat.read_keys);
-        req.set_query_stats(region_stat.query_stats);
-        req.set_approximate_size(region_stat.approximate_size);
-        req.set_approximate_keys(region_stat.approximate_keys);
-        req.set_cpu_usage(region_stat.cpu_usage);
-        if let Some(s) = replication_status {
-            req.set_replication_status(s);
-        }
-        let mut interval = pdpb::TimeInterval::default();
-        interval.set_start_timestamp(region_stat.last_report_ts.into_inner());
-        interval.set_end_timestamp(UnixSecs::now().into_inner());
-        req.set_interval(interval);
-
-        let last = self.pending_heartbeat.fetch_add(1, Ordering::Relaxed);
-        PD_PENDING_HEARTBEAT_GAUGE.set(last as i64 + 1);
-
-        let mut sender = self.heartbeat_sender.clone();
-        Box::pin(async move {
-            sender
-                .send(req)
-                .map_err(|e| Error::StreamDisconnect(e))
-                .await
-        }) as PdFuture<_>
-    }
-
     pub fn ask_split(&mut self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
         let timer = Instant::now();
 
@@ -1067,41 +955,6 @@ impl RpcClient {
         Ok(resp)
     }
 
-    pub fn get_tso(&self) -> PdFuture<TimeStamp> {
-        self.batch_get_tso(1)
-    }
-
-    pub fn batch_get_tso(&self, count: u32) -> PdFuture<TimeStamp> {
-        let timer = Instant::now();
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        let req = TimestampRequest { sender: tx, count };
-
-        let sender = self.tso_sender.clone();
-        Box::pin(async move {
-            sender
-                .send(req)
-                .map_err(|_| -> Error { box_err!("TimestampRequest channel is closed") })
-                .await?;
-            let with_timeout = GLOBAL_TIMER_HANDLE
-                .timeout(
-                    rx.compat(),
-                    std::time::Instant::now() + Duration::from_secs(REQUEST_TIMEOUT),
-                )
-                .compat();
-            let ts = with_timeout.await.map_err(|e| -> Error {
-                if e.is_timer() {
-                    box_err!("get timestamp timeout")
-                } else {
-                    box_err!("Timestamp channel is dropped")
-                }
-            })?;
-            PD_REQUEST_HISTOGRAM_VEC
-                .with_label_values(&["tso"])
-                .observe(duration_to_sec(timer.saturating_elapsed()));
-            Ok(ts)
-        })
-    }
-
     pub fn update_service_safe_point(
         &mut self,
         name: String,
@@ -1172,207 +1025,146 @@ impl RpcClient {
         })
     }
 
-    pub fn report_region_buckets(
+    pub fn create_report_region_buckets_stream<
+        S: Send + Stream<Item = ReportBucketsRequest> + 'static,
+    >(
         &mut self,
-        bucket_stat: &BucketStat,
-        period: Duration,
-    ) -> PdFuture<()> {
-        PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["send"]).inc();
+        requests: S,
+    ) -> Result<()> {
+        let mut raw_client = self.raw_client.clone();
+        let mut reconnect = self.reconnect_tx.clone();
+        let mut requests = Box::pin(requests).map(|r| Ok((r, WriteFlags::default())));
+        self.raw_client.stub().spawn(async move {
+            loop {
+                if let Err(e) = raw_client.wait_for_ready().await {
+                    warn!("failed to acquire client for ReportRegionBuckets stream"; "err" => ?e);
+                    let _ = GLOBAL_TIMER_HANDLE
+                        .delay(std::time::Instant::now() + Duration::from_secs(REQUEST_TIMEOUT))
+                        .compat()
+                        .await;
+                    continue;
+                }
+                let (mut bk_tx, bk_rx) = raw_client
+                    .stub()
+                    .report_buckets_opt(raw_client.call_option())
+                    .unwrap_or_else(|e| {
+                        panic!("fail to request PD {} err {:?}", "report_region_buckets", e)
+                    });
+                select! {
+                    send_res = bk_tx.send_all(&mut requests).fuse() => {
+                        if send_res.is_ok() {
+                            // requests are drained.
+                            break;
+                        } else {
+                            warn!("region buckets stream exited: {:?}", send_res);
+                        }
+                    }
+                    recv_res = bk_rx.fuse() => {
+                        warn!("region buckets stream exited: {:?}", recv_res);
+                    }
+                }
+                let _ = bk_tx.close().await;
+                if reconnect.send(raw_client.cache_version()).await.is_err() {
+                    break;
+                }
+            }
+        });
+        Ok(())
+    }
 
-        let mut buckets = metapb::Buckets::default();
-        buckets.set_region_id(bucket_stat.meta.region_id);
-        buckets.set_version(bucket_stat.meta.version);
-        buckets.set_keys(bucket_stat.meta.keys.clone().into());
-        buckets.set_period_in_ms(period.as_millis() as u64);
-        buckets.set_stats(bucket_stat.stats.clone());
-        let mut req = pdpb::ReportBucketsRequest::default();
-        req.set_header(self.header());
-        req.set_buckets(buckets);
-        req.set_region_epoch(bucket_stat.meta.region_epoch.clone());
-
-        let last = self.pending_bucket.fetch_add(1, Ordering::Relaxed);
-        PD_PENDING_BUCKETS_GAUGE.set(last as i64 + 1);
-
-        let mut sender = self.bucket_sender.clone();
-        Box::pin(async move {
-            sender
-                .send(req)
-                .map_err(|e| Error::StreamDisconnect(e))
-                .await?;
-            Ok(())
+    pub fn create_region_heartbeat_stream<
+        S: Send + Stream<Item = RegionHeartbeatRequest> + 'static,
+    >(
+        &mut self,
+        requests: S,
+    ) -> Result<CachedDuplexResponse<RegionHeartbeatResponse>> {
+        let response_holder = Arc::new(std::sync::Mutex::new(None));
+        let response_holder_clone = response_holder.clone();
+        let mut raw_client = self.raw_client.clone();
+        let mut reconnect = self.reconnect_tx.clone();
+        let mut requests = Box::pin(requests).map(|r| {
+            fail::fail_point!("region_heartbeat_send_failed", |_| {
+                Err(grpcio::Error::RemoteStopped)
+            });
+            Ok((r, WriteFlags::default()))
+        });
+        self.raw_client.stub().spawn(async move {
+            loop {
+                if let Err(e) = raw_client.wait_for_ready().await {
+                    warn!("failed to acquire client for RegionHeartbeat stream"; "err" => ?e);
+                    let _ = GLOBAL_TIMER_HANDLE
+                        .delay(std::time::Instant::now() + Duration::from_secs(REQUEST_TIMEOUT))
+                        .compat()
+                        .await;
+                    continue;
+                }
+                let (mut bk_tx, bk_rx) = raw_client
+                    .stub()
+                    .region_heartbeat_opt(raw_client.call_option())
+                    .unwrap_or_else(|e| {
+                        panic!("fail to request PD {} err {:?}", "region_heartbeat", e)
+                    });
+                *response_holder_clone.lock().unwrap() = Some(bk_rx);
+                let res = bk_tx.send_all(&mut requests).await;
+                if res.is_ok() {
+                    // requests are drained.
+                    break;
+                } else {
+                    warn!("region heartbeat stream exited"; "res" => ?res);
+                }
+                let _ = bk_tx.close().await;
+                if reconnect.send(raw_client.cache_version()).await.is_err() {
+                    break;
+                }
+            }
+        });
+        Ok(CachedDuplexResponse {
+            latest: response_holder,
+            cache: None,
         })
     }
-}
 
-async fn heartbeat_loop(
-    mut client: CachedRawClient,
-    requests: mpsc::UnboundedReceiver<RegionHeartbeatRequest>,
-    response_holder: DuplexResponseHolder<RegionHeartbeatResponse>,
-    pending: Arc<AtomicU64>,
-    mut reconnect: mpsc::UnboundedSender<u64>,
-) {
-    let mut last_report = u64::MAX;
-    let mut requests_with_flags = requests.map(|r| {
-        let last = pending.fetch_sub(1, Ordering::Relaxed);
-        // Sender will update pending at every send operation, so as long as
-        // pending task is increasing, pending count should be reported by
-        // sender.
-        if last + 10 < last_report || last == 1 {
-            PD_PENDING_HEARTBEAT_GAUGE.set(last as i64 - 1);
-            last_report = last;
-        }
-        if last > last_report {
-            last_report = last - 1;
-        }
-        fail::fail_point!("region_heartbeat_send_failed", |_| {
-            Err(grpcio::Error::RemoteStopped)
+    pub fn create_tso_stream<S: Send + Stream<Item = TsoRequest> + 'static>(
+        &mut self,
+        requests: S,
+    ) -> Result<CachedDuplexResponse<TsoResponse>> {
+        let response_holder = Arc::new(std::sync::Mutex::new(None));
+        let response_holder_clone = response_holder.clone();
+        let mut raw_client = self.raw_client.clone();
+        let mut reconnect = self.reconnect_tx.clone();
+        let mut requests = Box::pin(requests).map(|r| Ok((r, WriteFlags::default())));
+        self.raw_client.stub().spawn(async move {
+            loop {
+                if let Err(e) = raw_client.wait_for_ready().await {
+                    warn!("failed to acquire client for Tso stream"; "err" => ?e);
+                    let _ = GLOBAL_TIMER_HANDLE
+                        .delay(std::time::Instant::now() + Duration::from_secs(REQUEST_TIMEOUT))
+                        .compat()
+                        .await;
+                    continue;
+                }
+                let (mut bk_tx, bk_rx) = raw_client
+                    .stub()
+                    .tso_opt(raw_client.call_option())
+                    .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "tso", e));
+                *response_holder_clone.lock().unwrap() = Some(bk_rx);
+                let res = bk_tx.send_all(&mut requests).await;
+                if res.is_ok() {
+                    // requests are drained.
+                    break;
+                } else {
+                    warn!("tso exited"; "res" => ?res);
+                }
+                let _ = bk_tx.close().await;
+                if reconnect.send(raw_client.cache_version()).await.is_err() {
+                    break;
+                }
+            }
         });
-        Ok((r, WriteFlags::default().buffer_hint(false)))
-    });
-    loop {
-        if let Err(e) = client.wait_for_ready().await {
-            warn!("failed to acquire client for heartbeat stream"; "err" => ?e);
-            let _ = GLOBAL_TIMER_HANDLE
-                .delay(std::time::Instant::now() + Duration::from_secs(REQUEST_TIMEOUT))
-                .compat()
-                .await;
-            continue;
-        }
-        let (mut hb_tx, hb_rx) = client
-            .stub()
-            .region_heartbeat_opt(client.call_option())
-            .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_heartbeat", e));
-        *response_holder.lock().unwrap() = Some(hb_rx);
-        let send_res = hb_tx.send_all(&mut requests_with_flags).await;
-        if send_res.is_ok() {
-            break;
-        }
-        let _ = hb_tx.close().await;
-        reconnect.send(client.cache_version()).await.unwrap();
-    }
-}
-
-async fn bucket_loop(
-    mut client: CachedRawClient,
-    requests: mpsc::UnboundedReceiver<ReportBucketsRequest>,
-    pending: Arc<AtomicU64>,
-    mut reconnect: mpsc::UnboundedSender<u64>,
-) {
-    let mut last_report = u64::MAX;
-    let mut requests_with_flags = requests.map(|r| {
-        let last = pending.fetch_sub(1, Ordering::Relaxed);
-        // Sender will update pending at every send operation, so as long as
-        // pending task is increasing, pending count should be reported by
-        // sender.
-        if last + 10 < last_report || last == 1 {
-            PD_PENDING_BUCKETS_GAUGE.set(last as i64 - 1);
-            last_report = last;
-        }
-        if last > last_report {
-            last_report = last - 1;
-        }
-        Ok((r, WriteFlags::default()))
-    });
-    loop {
-        if let Err(e) = client.wait_for_ready().await {
-            warn!("failed to acquire client for bucket stream"; "err" => ?e);
-            let _ = GLOBAL_TIMER_HANDLE
-                .delay(std::time::Instant::now() + Duration::from_secs(REQUEST_TIMEOUT))
-                .compat()
-                .await;
-            continue;
-        }
-        let (mut bk_tx, bk_rx) = client
-            .stub()
-            .report_buckets_opt(client.call_option())
-            .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "report_buckets", e));
-        select! {
-            send_res = bk_tx.send_all(&mut requests_with_flags).fuse() => {
-                if send_res.is_ok() {
-                    // requests are drained.
-                    break;
-                } else {
-                    warn!("region buckets stream existed: {:?}", send_res);
-                }
-            }
-            recv_res = bk_rx.fuse() => {
-                warn!("region buckets stream existed: {:?}", recv_res);
-            }
-        }
-        let _ = bk_tx.close().await;
-        reconnect.send(client.cache_version()).await.unwrap();
-    }
-}
-
-async fn tso_loop(
-    cluster_id: u64,
-    mut client: CachedRawClient,
-    mut requests: tokio::sync::mpsc::Receiver<TimestampRequest>,
-    mut reconnect: mpsc::UnboundedSender<u64>,
-) {
-    // The `TimestampRequest`s which are waiting for the responses from the PD
-    // server
-    let pending_requests = Rc::new(RefCell::new(VecDeque::with_capacity(TSO_MAX_PENDING_COUNT)));
-
-    // When there are too many pending requests, the `send_request` future will
-    // refuse to fetch more requests from the bounded channel. This waker is
-    // used to wake up the sending future if the queue containing pending
-    // requests is no longer full.
-    let sending_future_waker = Rc::new(AtomicWaker::new());
-
-    let mut request_stream = TsoRequestStream {
-        cluster_id,
-        request_rx: &mut requests,
-        pending_requests: pending_requests.clone(),
-        self_waker: sending_future_waker.clone(),
-    }
-    .map(Ok);
-
-    loop {
-        if let Err(e) = client.wait_for_ready().await {
-            warn!("failed to acquire client for tso stream"; "err" => ?e);
-            let _ = GLOBAL_TIMER_HANDLE
-                .delay(std::time::Instant::now() + Duration::from_secs(REQUEST_TIMEOUT))
-                .compat()
-                .await;
-            continue;
-        }
-        let (mut tso_tx, mut tso_rx) = client
-            .stub()
-            .tso_opt(client.call_option())
-            .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_heartbeat", e));
-        let pending_requests = pending_requests.clone();
-        let sending_future_waker = sending_future_waker.clone();
-        let receive_and_handle_responses = async move {
-            while let Some(Ok(resp)) = tso_rx.next().await {
-                let mut pending_requests = pending_requests.borrow_mut();
-
-                // Wake up the sending future blocked by too many pending requests as we are
-                // consuming some of them here.
-                if pending_requests.len() >= TSO_MAX_PENDING_COUNT {
-                    sending_future_waker.wake();
-                }
-
-                allocate_timestamps(&resp, &mut pending_requests)?;
-                PD_PENDING_TSO_REQUEST_GAUGE.set(pending_requests.len() as i64);
-            }
-            Ok::<_, Error>(())
-        };
-        select! {
-            send_res = tso_tx.send_all(&mut request_stream).fuse() => {
-                if send_res.is_ok() {
-                    // requests are drained.
-                    break;
-                } else {
-                    warn!("tso stream closed: {:?}", send_res);
-                }
-            }
-            recv_res = receive_and_handle_responses.fuse() => {
-                warn!("tso stream closed: {:?}", recv_res);
-            }
-        }
-        let _ = tso_tx.close().await;
-        reconnect.send(client.cache_version()).await.unwrap();
+        Ok(CachedDuplexResponse {
+            latest: response_holder,
+            cache: None,
+        })
     }
 }
 

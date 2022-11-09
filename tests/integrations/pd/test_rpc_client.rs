@@ -3,23 +3,36 @@
 use std::{
     sync::{
         atomic::{AtomicUsize, Ordering},
-        mpsc, Arc,
+        Arc,
     },
     thread,
     time::Duration,
 };
 
 use error_code::ErrorCodeExt;
-use futures::executor::block_on;
+use futures::{channel::mpsc, executor::block_on, SinkExt, StreamExt};
 use grpcio::{EnvBuilder, Error as GrpcError, RpcStatus, RpcStatusCode};
 use kvproto::{metapb, pdpb};
-use pd_client::{Error as PdError, Feature, PdClient, PdConnector, RegionStat, RpcClientV2};
-use raftstore::store;
+use pd_client::{Error as PdError, Feature, PdClient, PdConnector, RpcClientV2};
 use security::{SecurityConfig, SecurityManager};
 use test_pd::{mocker::*, util::*, Server as MockServer};
 use tikv_util::config::ReadableDuration;
 use tokio::runtime::Builder;
 use txn_types::TimeStamp;
+
+fn must_get_tso(client: &mut RpcClientV2, count: u32) -> TimeStamp {
+    let (mut tx, rx) = mpsc::unbounded();
+    let mut responses = client.create_tso_stream(rx).unwrap();
+    let mut req = pdpb::TsoRequest::default();
+    req.mut_header().cluster_id = client.cluster_id();
+    req.count = count;
+    block_on(tx.send(req)).unwrap();
+    let resp = block_on(responses.next()).unwrap().unwrap();
+    let ts = resp.timestamp.unwrap();
+    let physical = ts.physical as u64;
+    let logical = ts.logical as u64;
+    TimeStamp::compose(physical, logical)
+}
 
 #[test]
 fn test_retry_rpc_client() {
@@ -44,6 +57,8 @@ fn test_rpc_client() {
     let eps_count = 1;
     let server = MockServer::new(eps_count);
     let eps = server.bind_addrs();
+    let rt = Builder::new_multi_thread().enable_time().build().unwrap();
+    let _guard = rt.handle().enter();
 
     let mut client = new_client_v2(eps.clone(), None);
     assert_ne!(client.get_cluster_id().unwrap(), 0);
@@ -89,10 +104,10 @@ fn test_rpc_client() {
         .unwrap();
     assert_eq!(tmp_region.get_id(), region.get_id());
 
-    let ts = block_on(client.get_tso()).unwrap();
+    let ts = must_get_tso(&mut client, 1);
     assert_ne!(ts, TimeStamp::zero());
 
-    let ts100 = block_on(client.batch_get_tso(100)).unwrap();
+    let ts100 = must_get_tso(&mut client, 100);
     assert_eq!(ts.logical() + 100, ts100.logical());
 
     let mut prev_id = 0;
@@ -103,24 +118,17 @@ fn test_rpc_client() {
         prev_id = alloc_id;
     }
 
-    let poller = Builder::new_multi_thread()
-        .thread_name(thd_name!("poller"))
-        .worker_threads(1)
-        .build()
-        .unwrap();
-    let (tx, rx) = mpsc::channel();
-    let f = client.handle_region_heartbeat_response(1, move |resp| {
-        let _ = tx.send(resp);
-    });
-    poller.spawn(f);
-    poller.spawn(client.region_heartbeat(
-        store::RAFT_INIT_LOG_TERM,
-        region.clone(),
-        peer.clone(),
-        RegionStat::default(),
-        None,
-    ));
-    rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    let (mut tx, rx) = mpsc::unbounded();
+    let mut responses = client.create_region_heartbeat_stream(rx).unwrap();
+    let mut req = pdpb::RegionHeartbeatRequest::default();
+    req.set_region(region.clone());
+    req.set_leader(peer.clone());
+    block_on(tx.send(req)).unwrap();
+    block_on(tokio::time::timeout(
+        Duration::from_secs(3),
+        responses.next(),
+    ))
+    .unwrap();
 
     let region_info = client.get_region_info(region_key).unwrap();
     assert_eq!(region_info.region, region);
@@ -433,32 +441,32 @@ fn test_pd_client_heartbeat_send_failed() {
     fail::cfg(pd_client_send_fail_fp, "return()").unwrap();
     let server = MockServer::with_case(1, Arc::new(AlreadyBootstrapped));
     let eps = server.bind_addrs();
-
-    let mut client = new_client_v2(eps, None);
-    let poller = Builder::new_multi_thread()
-        .thread_name(thd_name!("poller"))
+    let rt = Builder::new_multi_thread()
         .worker_threads(1)
+        .enable_all()
         .build()
         .unwrap();
-    let (tx, rx) = mpsc::channel();
-    let f =
-        client.handle_region_heartbeat_response(1, move |resp| tx.send(resp).unwrap_or_default());
-    poller.spawn(f);
+    let _guard = rt.handle().enter();
+
+    let mut client = new_client_v2(eps, None);
+
+    let (mut tx, rx) = mpsc::unbounded();
+    let mut responses = client.create_region_heartbeat_stream(rx).unwrap();
 
     let mut heartbeat_send_fail = |ok| {
         let mut region = metapb::Region::default();
         region.set_id(1);
-        poller.spawn(client.region_heartbeat(
-            store::RAFT_INIT_LOG_TERM,
-            region,
-            metapb::Peer::default(),
-            RegionStat::default(),
-            None,
+        let mut req = pdpb::RegionHeartbeatRequest::default();
+        req.set_region(region);
+        block_on(tx.send(req)).unwrap();
+
+        let rsp = block_on(tokio::time::timeout(
+            Duration::from_millis(100),
+            responses.next(),
         ));
-        let rsp = rx.recv_timeout(Duration::from_millis(100));
         if ok {
             assert!(rsp.is_ok());
-            assert_eq!(rsp.unwrap().get_region_id(), 1);
+            assert_eq!(rsp.unwrap().unwrap().unwrap().get_region_id(), 1);
         } else {
             rsp.unwrap_err();
         }
@@ -485,30 +493,26 @@ fn test_region_heartbeat_on_leader_change() {
     let eps_count = 3;
     let server = MockServer::with_case(eps_count, Arc::new(LeaderChange::new()));
     let eps = server.bind_addrs();
-
-    let mut client = new_client_v2(eps, None);
-    let poller = Builder::new_multi_thread()
-        .thread_name(thd_name!("poller"))
+    let rt = Builder::new_multi_thread()
         .worker_threads(1)
+        .enable_all()
         .build()
         .unwrap();
-    let (tx, rx) = mpsc::channel();
-    let f = client.handle_region_heartbeat_response(1, move |resp| {
-        tx.send(resp).unwrap();
-    });
-    poller.spawn(f);
-    let region = metapb::Region::default();
-    let peer = metapb::Peer::default();
-    let stat = RegionStat::default();
-    poller.spawn(client.region_heartbeat(
-        store::RAFT_INIT_LOG_TERM,
-        region.clone(),
-        peer.clone(),
-        stat.clone(),
-        None,
-    ));
-    rx.recv_timeout(LeaderChange::get_leader_interval())
-        .unwrap();
+    let _guard = rt.handle().enter();
+
+    let mut client = new_client_v2(eps, None);
+
+    let (mut tx, rx) = mpsc::unbounded();
+    let mut responses = client.create_region_heartbeat_stream(rx).unwrap();
+
+    block_on(tx.send(pdpb::RegionHeartbeatRequest::default())).unwrap();
+    block_on(tokio::time::timeout(
+        LeaderChange::get_leader_interval(),
+        responses.next(),
+    ))
+    .unwrap()
+    .unwrap()
+    .unwrap();
 
     let mut heartbeat_on_leader_change = |count| {
         let mut leader = client.get_leader();
@@ -524,15 +528,14 @@ fn test_region_heartbeat_on_leader_change() {
                 thread::sleep(LeaderChange::get_leader_interval());
             }
         }
-        poller.spawn(client.region_heartbeat(
-            store::RAFT_INIT_LOG_TERM,
-            region.clone(),
-            peer.clone(),
-            stat.clone(),
-            None,
-        ));
-        rx.recv_timeout(LeaderChange::get_leader_interval())
-            .unwrap();
+        block_on(tx.send(pdpb::RegionHeartbeatRequest::default())).unwrap();
+        block_on(tokio::time::timeout(
+            LeaderChange::get_leader_interval(),
+            responses.next(),
+        ))
+        .unwrap()
+        .unwrap()
+        .unwrap();
     };
 
     // Change PD leader once then heartbeat PD.
