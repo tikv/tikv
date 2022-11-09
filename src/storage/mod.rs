@@ -96,7 +96,7 @@ use tikv_util::{
 use tracker::{
     clear_tls_tracker_token, set_tls_tracker_token, with_tls_tracker, TrackedFuture, TrackerToken,
 };
-use txn_types::{Key, KvPair, Lock, LockType, OldValues, TimeStamp, TsSet, Value};
+use txn_types::{Key, KvPair, Lock, LockType, TimeStamp, TsSet, Value};
 
 pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
@@ -3353,7 +3353,6 @@ pub mod test_util {
             Some(WaitTimeout::Default),
             return_values,
             for_update_ts.next(),
-            OldValues::default(),
             check_existence,
             false,
             false,
@@ -8124,7 +8123,6 @@ mod tests {
                     Some(WaitTimeout::Millis(100)),
                     false,
                     21.into(),
-                    OldValues::default(),
                     false,
                     false,
                     false,
@@ -8217,7 +8215,6 @@ mod tests {
                             Some(WaitTimeout::Millis(5000)),
                             false,
                             (lock_ts + 1).into(),
-                            OldValues::default(),
                             false,
                             false,
                             false,
@@ -8803,7 +8800,6 @@ mod tests {
                     None,
                     false,
                     0.into(),
-                    OldValues::default(),
                     false,
                     false,
                     false,
@@ -8827,7 +8823,6 @@ mod tests {
                     None,
                     false,
                     0.into(),
-                    OldValues::default(),
                     false,
                     false,
                     false,
@@ -9058,7 +9053,6 @@ mod tests {
                 None,
                 false,
                 TimeStamp::new(12),
-                OldValues::default(),
                 false,
                 false,
                 false,
@@ -9085,7 +9079,6 @@ mod tests {
                 None,
                 false,
                 TimeStamp::new(12),
-                OldValues::default(),
                 false,
                 false,
                 false,

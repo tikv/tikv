@@ -56,7 +56,7 @@ pub use rollback::Rollback;
 use tikv_util::deadline::Deadline;
 use tracker::RequestType;
 pub use txn_heart_beat::TxnHeartBeat;
-use txn_types::{Key, OldValues, TimeStamp, Value, Write};
+use txn_types::{Key, TimeStamp, Value, Write};
 
 use crate::storage::{
     kv::WriteData,
@@ -220,7 +220,6 @@ impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLock
             WaitTimeout::from_encoded(req.get_wait_timeout()),
             req.get_return_values(),
             req.get_min_commit_ts().into(),
-            OldValues::default(),
             req.get_check_existence(),
             req.get_lock_only_if_exists(),
             false,

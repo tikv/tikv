@@ -46,7 +46,6 @@ command! {
             /// later read in the same transaction.
             return_values: bool,
             min_commit_ts: TimeStamp,
-            old_values: OldValues,
             check_existence: bool,
             lock_only_if_exists: bool,
             allow_lock_with_conflict: bool,
@@ -73,6 +72,7 @@ impl CommandExt for AcquirePessimisticLock {
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         if self.allow_lock_with_conflict && self.keys.len() > 1 {
+            // Currently multiple keys with `allow_lock_with_conflict` set is not supported.
             return Err(Error::from(ErrorInner::Other(box_err!(
                 "multiple keys in a single request with allowed_lock_with_conflict set is not allowed"
             ))));
@@ -91,13 +91,13 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         let mut encountered_locks = vec![];
         let need_old_value = context.extra_op == ExtraOp::ReadOldValue;
         let mut old_values = OldValues::default();
-        for (key, should_not_exist) in keys.iter() {
+        for (k, should_not_exist) in keys {
             match acquire_pessimistic_lock(
                 &mut txn,
                 &mut reader,
-                key.clone(),
+                k.clone(),
                 &self.primary,
-                *should_not_exist,
+                should_not_exist,
                 self.lock_ttl,
                 self.for_update_ts,
                 self.return_values,
@@ -110,7 +110,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                 Ok((key_res, old_value)) => {
                     res.push(key_res);
                     if old_value.resolved() {
-                        let key = key.clone().append_ts(txn.start_ts);
+                        let key = k.append_ts(txn.start_ts);
                         // MutationType is unknown in AcquirePessimisticLock stage.
                         let mutation_type = None;
                         old_values.insert(key, (old_value, mutation_type));
@@ -135,8 +135,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                     let lock_info = WriteResultLockInfo::new(
                         lock_info,
                         request_parameters,
-                        key.clone(),
-                        *should_not_exist,
+                        k,
+                        should_not_exist,
                     );
                     encountered_locks.push(lock_info);
                     // Do not lock previously succeeded keys.

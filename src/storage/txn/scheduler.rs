@@ -1492,7 +1492,7 @@ mod tests {
     use kvproto::kvrpcpb::{BatchRollbackRequest, CheckTxnStatusRequest, Context};
     use raftstore::store::{ReadStats, WriteStats};
     use tikv_util::{config::ReadableSize, future::paired_future_callback};
-    use txn_types::{Key, OldValues, TimeStamp};
+    use txn_types::{Key, TimeStamp};
 
     use super::*;
     use crate::storage::{
@@ -1575,7 +1575,6 @@ mod tests {
                 Some(WaitTimeout::Default),
                 false,
                 TimeStamp::default(),
-                OldValues::default(),
                 false,
                 false,
                 false,
