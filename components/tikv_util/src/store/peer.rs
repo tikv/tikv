@@ -16,6 +16,10 @@ pub fn find_peer_mut(region: &mut Region, store_id: u64) -> Option<&mut Peer> {
         .find(|p| p.get_store_id() == store_id)
 }
 
+pub fn find_peer_by_id(region: &Region, peer_id: u64) -> Option<&Peer> {
+    region.get_peers().iter().find(|&p| p.get_id() == peer_id)
+}
+
 pub fn remove_peer(region: &mut Region, store_id: u64) -> Option<Peer> {
     region
         .get_peers()
@@ -43,6 +47,15 @@ pub fn new_learner_peer(store_id: u64, peer_id: u64) -> Peer {
 
 pub fn is_learner(peer: &Peer) -> bool {
     peer.get_role() == PeerRole::Learner
+}
+
+pub fn new_witness_peer(store_id: u64, peer_id: u64) -> Peer {
+    let mut peer = Peer::default();
+    peer.set_store_id(store_id);
+    peer.set_id(peer_id);
+    peer.set_role(PeerRole::Voter);
+    peer.set_is_witness(true);
+    peer
 }
 
 #[cfg(test)]
