@@ -370,8 +370,8 @@ mod tests {
     };
     use raft::{eraftpb::Snapshot as RaftSnapshot, Error as RaftError, StorageError};
     use raftstore::store::{
-        AsyncReadNotifier, FetchedLogs, GenSnapRes, ReadRunner, ReadTask, SnapKey, SnapManager,
-        RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+        AsyncReadNotifier, FetchedLogs, GenSnapRes, ReadRunner, ReadTask, SnapKey,
+        TabletSnapManager, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
     };
     use slog::o;
     use tempfile::TempDir;
@@ -458,7 +458,7 @@ mod tests {
         write_initial_states(&mut wb, region.clone()).unwrap();
         assert!(!wb.is_empty());
         raft_engine.consume(&mut wb, true).unwrap();
-        let mgr = SnapManager::new(path.path().join("snap_dir").to_str().unwrap());
+        let mgr = TabletSnapManager::new(path.path().join("snap_dir").to_str().unwrap());
         mgr.init().unwrap();
         // building a tablet factory
         let ops = DbOptions::default();

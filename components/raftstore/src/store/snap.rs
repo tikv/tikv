@@ -1891,6 +1891,45 @@ impl SnapManagerBuilder {
     }
 }
 
+/// `TabletSnapManager` manager tablet snapshot and shared between raftstore v2.
+/// It's similar `SnapManager`, but simpler in tablet version.
+///
+///  TODO:
+///     - add Limiter to control send/recv speed
+///     - clean up expired tablet checkpointer
+#[derive(Clone)]
+pub struct TabletSnapManager {
+    // directory to store snapfile.
+    base: String,
+}
+
+impl TabletSnapManager {
+    pub fn new<T: Into<String>>(path: T) -> Self {
+        Self { base: path.into() }
+    }
+
+    pub fn init(&self) -> io::Result<()> {
+        // Initialize the directory if it doesn't exist.
+        let path = Path::new(&self.base);
+        if !path.exists() {
+            file_system::create_dir_all(path)?;
+            return Ok(());
+        }
+        if !path.is_dir() {
+            return Err(io::Error::new(
+                ErrorKind::Other,
+                format!("{} should be a directory", path.display()),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn get_tablet_checkpointer_path(&self, key: &SnapKey) -> PathBuf {
+        let prefix = format!("{}_{}", SNAP_GEN_PREFIX, key);
+        PathBuf::from(&self.base).join(&prefix)
+    }
+}
+
 #[cfg(test)]
 pub mod tests {
     use std::{

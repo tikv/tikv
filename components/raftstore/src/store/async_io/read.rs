@@ -15,12 +15,12 @@ use file_system::{IoType, WithIoType};
 use kvproto::raft_serverpb::{PeerState, RaftSnapshotData, RegionLocalState};
 use protobuf::Message;
 use raft::{eraftpb::Snapshot, GetEntriesContext};
-use tikv_util::{defer, error, info, time::Instant, worker::Runnable};
+use tikv_util::{error, info, time::Instant, worker::Runnable};
 
 use crate::store::{
     util,
     worker::metrics::{SNAP_COUNTER, SNAP_HISTOGRAM},
-    RaftlogFetchResult, SnapEntry, SnapKey, SnapManager, MAX_INIT_ENTRY_COUNT,
+    RaftlogFetchResult, SnapKey, TabletSnapManager, MAX_INIT_ENTRY_COUNT,
 };
 
 pub enum ReadTask<EK> {
@@ -91,7 +91,7 @@ where
 {
     notifier: N,
     raft_engine: ER,
-    mgr: Option<SnapManager>,
+    sanp_mgr: Option<TabletSnapManager>,
     _phantom: PhantomData<EK>,
 }
 
@@ -100,19 +100,19 @@ impl<EK: KvEngine, ER: RaftEngine, N: AsyncReadNotifier> ReadRunner<EK, ER, N> {
         ReadRunner {
             notifier,
             raft_engine,
-            mgr: None,
+            sanp_mgr: None,
             _phantom: PhantomData,
         }
     }
 
     #[inline]
-    pub fn set_snap_mgr(&mut self, mgr: SnapManager) {
-        self.mgr = Some(mgr);
+    pub fn set_snap_mgr(&mut self, mgr: TabletSnapManager) {
+        self.sanp_mgr = Some(mgr);
     }
 
     #[inline]
-    fn snap_mgr(&self) -> &SnapManager {
-        self.mgr.as_ref().unwrap()
+    fn snap_mgr(&self) -> &TabletSnapManager {
+        self.sanp_mgr.as_ref().unwrap()
     }
 
     fn create_checkpointer_for_snap(&self, snap_key: &SnapKey, tablet: EK) -> crate::Result<()> {
@@ -203,8 +203,6 @@ where
                 // the state should already checked in apply workers.
                 assert_ne!(region_state.get_state(), PeerState::Tombstone);
                 let key = SnapKey::new(region_id, last_applied_term, last_applied_index);
-                self.snap_mgr().register(key.clone(), SnapEntry::Generating);
-                defer!(self.snap_mgr().deregister(&key, &SnapEntry::Generating));
                 let mut snapshot = Snapshot::default();
                 // Set snapshot metadata.
                 snapshot.mut_metadata().set_index(key.idx);
