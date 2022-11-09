@@ -174,11 +174,13 @@ impl CachedRawClient {
 
     /// Increases global version only when a new connection is established.
     async fn reconnect(&mut self, force: bool, callback: &CallbackHolder) -> Result<()> {
-        let mut latest = self.latest.lock().await;
-        if latest.maybe_reconnect(&self.context, force).await? {
-            let latest_version = self.version.fetch_add(1, Ordering::AcqRel) + 1;
+        if self.cache.maybe_reconnect(&self.context, force).await? {
+            let latest_version = {
+                let mut latest = self.latest.lock().await;
+                *latest = self.cache.clone();
+                self.version.fetch_add(1, Ordering::AcqRel) + 1
+            };
             debug_assert!(self.cache_version < latest_version);
-            self.cache = latest.clone();
             self.cache_version = latest_version;
             if let Some(ref f) = *callback.lock().unwrap() {
                 f();
