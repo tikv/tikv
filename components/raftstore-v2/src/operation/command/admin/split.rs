@@ -338,15 +338,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         split_init: Box<SplitInit>,
     ) {
-        let SplitInit {
-            region,
-            parent_is_leader,
-            check_split,
-            locks,
-        } = Box::into_inner(split_init);
-
-        let region_id = region.id;
-        let replace = region.get_region_epoch().get_version()
+        let region_id = split_init.region.id;
+        let replace = split_init.region.get_region_epoch().get_version()
             > self
                 .storage()
                 .region_state()
@@ -377,7 +370,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
             let storage = Storage::with_split(
                 self.peer().get_store_id(),
-                &region,
+                &split_init.region,
                 store_ctx.engine.clone(),
                 store_ctx.read_scheduler.clone(),
                 &store_ctx.logger,
@@ -391,7 +384,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
             let mut raft_group = RawNode::new(&raft_cfg, storage, &self.logger).unwrap();
             // If this region has only one peer and I am the one, campaign directly.
-            if region.get_peers().len() == 1 {
+            if split_init.region.get_peers().len() == 1 {
                 raft_group.campaign().unwrap();
                 self.set_has_ready();
             }
@@ -407,21 +400,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         info!(
             self.logger,
             "init split region";
-            "region" => ?region,
+            "region" => ?split_init.region,
         );
 
         // todo: GlobalReplicationState
 
-        for p in region.get_peers() {
+        for p in split_init.region.get_peers() {
             self.insert_peer_cache(p.clone());
         }
 
-        if parent_is_leader {
+        if split_init.parent_is_leader {
             if self.maybe_campaign() {
                 self.set_has_ready();
             }
 
-            *self.txn_ext().pessimistic_locks.write() = locks;
+            *self.txn_ext().pessimistic_locks.write() = split_init.locks;
             // The new peer is likely to become leader, send a heartbeat immediately to
             // reduce client query miss.
             self.heartbeat_pd(store_ctx);
@@ -435,7 +428,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         drop(meta);
 
-        if check_split {
+        if split_init.check_split {
             // todo: check if the last region needs to split again
         }
 
