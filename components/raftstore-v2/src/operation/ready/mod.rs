@@ -24,8 +24,8 @@ use std::cmp;
 
 use engine_traits::{KvEngine, RaftEngine};
 use error_code::ErrorCodeExt;
-use kvproto::raft_serverpb::RaftMessage;
-use protobuf::Message as _;
+use kvproto::raft_serverpb::{ExtraMessageType, RaftMessage};
+use protobuf::{Message as _, RepeatedField};
 use raft::{eraftpb, Ready};
 use raftstore::store::{util, ExtraStates, FetchedLogs, Transport, WriteTask};
 use slog::{debug, error, trace, warn};
@@ -49,6 +49,50 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
             self.fsm.peer_mut().set_has_ready();
         }
         self.schedule_tick(PeerTick::Raft);
+    }
+
+    /// handle stale peer check
+    /// This is to send tombstone request for each pending remove peers
+    /// TODO: when transfer leader, snapshot, send the removing_peer information
+    /// to followers
+    pub fn on_stale_peer_check(&mut self) {
+        if !self.fsm.peer().is_leader() {
+            return;
+        }
+
+        // ideally tombstone_msg should be put inside the for loop.
+        // But it will violate the rust rule that fsm are both mut & immute borrowed
+        let mut tombstone_msg = self.fsm.peer().prepare_raft_message();
+        let pending_remove_peers = &mut self
+            .fsm
+            .peer_mut()
+            .storage_mut()
+            .region_state_mut()
+            .pending_remove_peers;
+        if pending_remove_peers.is_empty() {
+            self.schedule_tick(PeerTick::StalePeerCheck);
+            return;
+        }
+
+        let len = pending_remove_peers.len();
+        // in reverse order so that the entry can be safely removed if needed
+        for i in (0..len).rev() {
+            // send the peer a tombstone message to destroy itself.
+            let removing_peer = pending_remove_peers.get(i).unwrap();
+            tombstone_msg.set_to_peer(removing_peer.clone());
+            tombstone_msg.set_is_tombstone(true);
+            if let Err(_) = self.store_ctx.trans.send(tombstone_msg.clone()) {
+                if self
+                    .store_ctx
+                    .trans
+                    .is_tombstone_store(removing_peer.store_id)
+                {
+                    // the whole store is already tombstone
+                    pending_remove_peers.remove(i);
+                }
+            }
+        }
+        self.schedule_tick(PeerTick::StalePeerCheck);
     }
 }
 
@@ -106,8 +150,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
         }
         if msg.has_extra_msg() {
-            unimplemented!();
-            // return;
+            self.on_extra_message(*msg);
+            return;
         }
         // TODO: drop all msg append when the peer is uninitialized and has conflict
         // ranges with other peers.
@@ -116,6 +160,32 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             error!(self.logger, "raft step error"; "err" => ?e);
         }
         self.set_has_ready();
+    }
+
+    fn on_extra_message(&mut self, msg: RaftMessage) {
+        match msg.get_extra_msg().get_type() {
+            ExtraMessageType::MsgCheckStalePeerResponse => {
+                // the peer is already destroyed,remove it from pending_remove_peers
+                if self.is_leader() {
+                    let from_peer = msg.get_from_peer();
+                    let index = self
+                        .storage()
+                        .region_state()
+                        .get_pending_remove_peers()
+                        .iter()
+                        .position(|p| p.id == from_peer.id);
+                    if let Some(index) = index {
+                        self.storage_mut()
+                            .region_state_mut()
+                            .pending_remove_peers
+                            .remove(index);
+                    }
+                }
+            }
+            _ => {
+                unimplemented!();
+            }
+        }
     }
 
     /// Callback for fetching logs asynchronously.
@@ -139,7 +209,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     /// Partially filled a raft message that will be sent to other peer.
-    fn prepare_raft_message(&mut self) -> RaftMessage {
+    fn prepare_raft_message(&self) -> RaftMessage {
         let mut raft_msg = RaftMessage::new();
         raft_msg.set_region_id(self.region().id);
         raft_msg.set_from_peer(self.peer().clone());

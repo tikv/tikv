@@ -25,6 +25,8 @@ pub trait Transport: Send + Clone {
     fn need_flush(&self) -> bool;
 
     fn flush(&mut self);
+
+    fn is_tombstone_store(&self, store_id: u64) -> bool;
 }
 
 /// Routes message to target region.

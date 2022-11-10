@@ -117,7 +117,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// when the old apply scheduler is dropped.
     #[inline]
     pub fn schedule_apply_fsm<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
-        let region_state = self.storage().region_state().clone();
+        let mut region_state = self.storage().region_state().clone();
+        // apply fsm will return newly added pending remove peers if any
+        region_state.clear_pending_remove_peers();
         let mailbox = store_ctx.router.mailbox(self.region_id()).unwrap();
         let tablet = self.tablet().clone();
         let logger = self.logger.clone();
@@ -440,6 +442,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 AdminCmdType::InvalidAdmin => {
                     return Err(box_err!("invalid admin command type"));
                 }
+                AdminCmdType::BatchSwitchWitness => unimplemented!(),
             };
 
             self.push_admin_result(admin_result);

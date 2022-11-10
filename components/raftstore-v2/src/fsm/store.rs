@@ -5,7 +5,7 @@ use std::time::SystemTime;
 use batch_system::Fsm;
 use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
-use raftstore::store::{Config, ReadDelegate};
+use raftstore::store::{Config, ReadDelegate, Transport};
 use slog::{o, Logger};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 
@@ -122,7 +122,7 @@ pub struct StoreFsmDelegate<'a, EK: KvEngine, ER: RaftEngine, T> {
     store_ctx: &'a mut StoreContext<EK, ER, T>,
 }
 
-impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
+impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER, T> {
     pub fn new(fsm: &'a mut StoreFsm, store_ctx: &'a mut StoreContext<EK, ER, T>) -> Self {
         Self { fsm, store_ctx }
     }

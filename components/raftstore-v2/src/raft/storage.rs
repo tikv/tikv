@@ -97,6 +97,11 @@ impl<EK: KvEngine, ER> Storage<EK, ER> {
     }
 
     #[inline]
+    pub fn region_state_mut(&mut self) -> &mut RegionLocalState {
+        &mut self.region_state
+    }
+
+    #[inline]
     pub fn region(&self) -> &metapb::Region {
         self.region_state.get_region()
     }

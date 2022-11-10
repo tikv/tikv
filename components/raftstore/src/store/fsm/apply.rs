@@ -1586,6 +1586,7 @@ where
                 self.exec_flashback(ctx, request)
             }
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
+            AdminCmdType::BatchSwitchWitness => unimplemented!()
         }?;
         response.set_cmd_type(cmd_type);
 

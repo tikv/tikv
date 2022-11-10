@@ -17,9 +17,9 @@ use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
     metapb::Region,
-    raft_serverpb::{PeerState, RaftMessage},
+    raft_serverpb::{ExtraMessageType, PeerState, RaftMessage},
 };
-use raftstore::store::{util, ExtraStates, WriteTask};
+use raftstore::store::{util, ExtraStates, Transport, WriteTask};
 use slog::{debug, error, info};
 use tikv_util::store::find_peer;
 
@@ -100,6 +100,7 @@ impl Store {
     ) where
         EK: KvEngine,
         ER: RaftEngine,
+        T: Transport,
     {
         let region_id = msg.get_region_id();
         // The message can be sent when the peer is being created, so try send it first.
@@ -130,10 +131,27 @@ impl Store {
             ctx.raft_metrics.message_dropped.mismatch_region_epoch.inc();
             return;
         }
-        // TODO: maybe we need to ack the message to confirm the peer is destroyed.
         if msg.get_is_tombstone() || msg.has_merge_target() {
             // Target tombstone peer doesn't exist, so ignore it.
             ctx.raft_metrics.message_dropped.stale_msg.inc();
+
+            // Ack the message to confirm the peer is destroyed.
+            if msg.get_is_tombstone() {
+                let mut ack_msg = RaftMessage::new();
+                ack_msg.set_region_id(region_id);
+                ack_msg.set_from_peer(to_peer.clone());
+                ack_msg.set_to_peer(from_peer.clone());
+                ack_msg.set_region_epoch(msg.get_region_epoch().clone());
+                let extra_msg = ack_msg.mut_extra_msg();
+                extra_msg.set_type(ExtraMessageType::MsgCheckStalePeerResponse);
+                if let Err(e) = ctx.trans.send(ack_msg) {
+                    error!(self.logger(),
+                        "send check stale peer response message failed";
+                        "region_id" => region_id,
+                        "err" => ?e,
+                    );
+                }
+            }
             return;
         }
         let from_epoch = msg.get_region_epoch();

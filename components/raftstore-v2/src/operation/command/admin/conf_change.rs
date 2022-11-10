@@ -7,6 +7,8 @@
 //! - Apply after conf change is committed
 //! - Update raft state using the result of conf change
 
+use std::ops::DerefMut;
+
 use collections::HashSet;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
@@ -141,8 +143,29 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
 
         let remove_self = conf_change.region_state.get_state() == PeerState::Tombstone;
-        self.storage_mut()
-            .set_region_state(conf_change.region_state);
+        let mut region_state = conf_change.region_state;
+
+        // merge the pending remove peers
+        if !self
+            .storage_mut()
+            .region_state_mut()
+            .pending_remove_peers
+            .is_empty()
+        {
+            loop {
+                let peer = self
+                    .storage_mut()
+                    .region_state_mut()
+                    .pending_remove_peers
+                    .pop();
+                if peer.is_none() {
+                    break;
+                }
+                region_state.pending_remove_peers.push(peer.unwrap());
+            }
+        }
+
+        self.storage_mut().set_region_state(region_state);
         if self.is_leader() {
             info!(
                 self.logger,
@@ -210,6 +233,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         legacy: bool,
     ) -> Result<(AdminResponse, AdminCmdResult)> {
         let region = self.region_state().get_region();
+        let mut region_state = self.region_state().clone();
         let peer_id = self.peer().get_id();
         let change_kind = ConfChangeKind::confchange_kind(changes.len());
         info!(self.logger, "exec ConfChangeV2"; "kind" => ?change_kind, "legacy" => legacy, "epoch" => ?region.get_region_epoch());
@@ -225,9 +249,9 @@ impl<EK: KvEngine, R> Apply<EK, R> {
                 );
                 for cp in changes {
                     let res = if legacy {
-                        self.apply_single_change_legacy(cp, &mut new_region)
+                        self.apply_single_change_legacy(cp, &mut new_region, &mut region_state)
                     } else {
-                        self.apply_single_change(kind, cp, &mut new_region)
+                        self.apply_single_change(kind, cp, &mut new_region, &mut region_state)
                     };
                     if let Err(e) = res {
                         error!(self.logger, "failed to apply conf change"; 
@@ -250,8 +274,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             "current region" => ?new_region,
         );
         let my_id = self.peer().get_id();
-        let state = self.region_state_mut();
-        state.set_region(new_region.clone());
+        region_state.set_region(new_region.clone());
         let new_peer = new_region
             .get_peers()
             .iter()
@@ -261,7 +284,11 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             // A peer will reject any snapshot that doesn't include itself in the
             // configuration. So if it disappear from the configuration, it must
             // be removed by conf change.
-            state.set_state(PeerState::Tombstone);
+            region_state.set_state(PeerState::Tombstone);
+        }
+        *self.region_state_mut() = region_state.clone();
+        if region_state.get_state() == PeerState::Tombstone {
+            self.mark_tombstone();
         }
         let mut resp = AdminResponse::default();
         resp.mut_change_peer().set_region(new_region);
@@ -269,11 +296,8 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             index,
             conf_change: cc,
             changes: changes.to_vec(),
-            region_state: state.clone(),
+            region_state,
         };
-        if state.get_state() == PeerState::Tombstone {
-            self.mark_tombstone();
-        }
         if let Some(peer) = new_peer {
             self.set_peer(peer);
         }
@@ -310,6 +334,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         &self,
         cp: &ChangePeerRequest,
         region: &mut metapb::Region,
+        state: &mut RegionLocalState,
     ) -> Result<()> {
         let peer = cp.get_peer();
         let store_id = peer.get_store_id();
@@ -357,6 +382,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
                             p
                         ));
                     }
+                    state.mut_pending_remove_peers().push(peer.clone());
                 } else {
                     return Err(box_err!(
                         "remove missing peer {:?} from region {:?}",
@@ -397,6 +423,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         kind: ConfChangeKind,
         cp: &ChangePeerRequest,
         region: &mut metapb::Region,
+        state: &mut RegionLocalState,
     ) -> Result<()> {
         let (change_type, peer) = (cp.get_change_type(), cp.get_peer());
         let store_id = peer.get_store_id();
@@ -496,6 +523,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
                                 p
                             ));
                         }
+                        state.mut_pending_remove_peers().push(peer.clone());
                     }
                     None => unreachable!(),
                 }
