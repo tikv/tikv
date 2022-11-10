@@ -67,6 +67,8 @@ pub trait Charset {
     fn validate(bstr: &[u8]) -> Result<()>;
 
     fn decode_one(data: &[u8]) -> Option<(Self::Char, usize)>;
+
+    fn charset() -> crate::Charset;
 }
 
 pub trait Collator: 'static + std::marker::Send + std::marker::Sync + std::fmt::Debug {
