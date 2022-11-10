@@ -608,6 +608,28 @@ pub enum RaftCmd {
         /// Print info for all regions
         all_regions: bool,
 
+        #[structopt(long, default_value = "30")]
+        /// Limit the number of keys to scan
+        limit: usize,
+
+        #[structopt(long)]
+        /// Skip tombstone regions
+        skip_tombstone: bool,
+    },
+    /// print region info by key range
+    KeyRange {
+        #[structopt(long)]
+        /// hex start key
+        start: String,
+
+        #[structopt(long, default_value = "")]
+        /// hex end key
+        end: String,
+
+        #[structopt(long, default_value = "30")]
+        /// Limit the number of keys to scan
+        limit: usize,
+
         #[structopt(long)]
         /// Skip tombstone regions
         skip_tombstone: bool,
