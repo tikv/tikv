@@ -8,6 +8,7 @@ use crate::storage::{
         metrics::MVCC_CHECK_TXN_STATUS_COUNTER_VEC, reader::OverlappedWrite, ErrorInner, LockType,
         MvccTxn, ReleasedLock, Result, SnapshotReader, TxnCommitRecord,
     },
+    txn::{sched_pool::tls_can_enable, scheduler::LAST_CHANGE_TS},
     Snapshot, TxnStatus,
 };
 
@@ -134,7 +135,8 @@ pub fn check_txn_status_missing_lock(
 
             // Insert a Rollback to Write CF in case that a stale prewrite
             // command is received after a cleanup command.
-            if let Some(write) = action.construct_write(ts, overlapped_write) {
+            if let Some(mut write) = action.construct_write(ts, overlapped_write) {
+                update_last_change_for_rollback(reader, &mut write, &primary_key, ts)?;
                 txn.put_write(primary_key, ts, write.as_ref().to_bytes());
             }
             MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
@@ -168,7 +170,8 @@ pub fn rollback_lock(
 
     // Only the primary key of a pessimistic transaction needs to be protected.
     let protected: bool = is_pessimistic_txn && key.is_encoded_from(&lock.primary);
-    if let Some(write) = make_rollback(reader.start_ts, protected, overlapped_write) {
+    if let Some(mut write) = make_rollback(reader.start_ts, protected, overlapped_write) {
+        update_last_change_for_rollback(reader, &mut write, &key, lock.ts)?;
         txn.put_write(key.clone(), reader.start_ts, write.as_ref().to_bytes());
     }
 
@@ -187,6 +190,40 @@ pub fn collapse_prev_rollback(
     if let Some((commit_ts, write)) = reader.seek_write(key, reader.start_ts)? {
         if write.write_type == WriteType::Rollback && !write.as_ref().is_protected() {
             txn.delete_write(key.clone(), commit_ts);
+        }
+    }
+    Ok(())
+}
+
+/// Updates the last_change_ts of a new Rollback record.
+///
+/// When writing a new Rollback record, we don't always know about the
+/// information about the last change. So, we will call `seek_write` again to
+/// calculate the last_change_ts.
+///
+/// The `seek_write` here is usually cheap because this functions is typically
+/// called after `get_txn_commit_record` and `get_txn_commit_record` should have
+/// moved the cursor around the record we want.
+pub fn update_last_change_for_rollback(
+    reader: &mut SnapshotReader<impl Snapshot>,
+    write: &mut Write,
+    key: &Key,
+    ts: TimeStamp,
+) -> Result<()> {
+    // Also update the last_change_ts if we are writing an overlapped rollback to a
+    // LOCK record. Actually, because overlapped rollbacks are rare, it does not
+    // solve the inaccuracy caused by inserted rollback (and we don't intend it
+    // because it's uncommon). Just do it when it happens.
+    if tls_can_enable(LAST_CHANGE_TS)
+        && (write.write_type == WriteType::Lock || write.write_type == WriteType::Rollback)
+    {
+        if let Some((commit_ts, w)) = reader.seek_write(key, ts)? {
+            // Even with collapsed rollback, the deleted rollbacks will become tombstones
+            // which we probably need to skip them one by one. That's why we always use
+            // `next_last_change_info` here to calculate and count them in
+            // `versions_to_last_change`.
+            (write.last_change_ts, write.versions_to_last_change) =
+                w.next_last_change_info(commit_ts);
         }
     }
     Ok(())
