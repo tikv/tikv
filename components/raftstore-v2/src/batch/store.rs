@@ -69,6 +69,9 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub tablet_factory: Arc<dyn TabletFactory<EK>>,
     pub apply_pool: FuturePool,
     pub read_scheduler: Scheduler<ReadTask<EK>>,
+
+    /// Disk usage for the store itself.
+    pub self_disk_usage: DiskUsage,
 }
 
 /// A [`PollHandler`] that handles updates of [`StoreFsm`]s and [`PeerFsm`]s.

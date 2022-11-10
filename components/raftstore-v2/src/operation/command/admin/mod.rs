@@ -1,6 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod conf_change;
+mod leader_transfer;
 mod split;
 
 use engine_traits::{KvEngine, RaftEngine};
@@ -22,6 +23,7 @@ use raftstore::{
 use slog::info;
 pub use split::SplitResult;
 use tikv_util::box_err;
+use txn_types::WriteBatchFlags;
 
 use self::conf_change::ConfChangeResult;
 use crate::{
@@ -80,6 +82,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     "Split is deprecated. Please use BatchSplit instead."
                 )),
                 AdminCmdType::BatchSplit => self.propose_split(ctx, req),
+                AdminCmdType::TransferLeader => {
+                    // Containing TRANSFER_LEADER_PROPOSAL flag means the this transfer leader
+                    // request should be proposed to the raft group
+                    if WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
+                        .contains(WriteBatchFlags::TRANSFER_LEADER_PROPOSAL)
+                    {
+                        let data = req.write_to_bytes().unwrap();
+                        self.propose_with_ctx(ctx, data, vec![]);
+                    } else {
+                        if self.propose_transfer_leader(ctx, req, ch) {
+                            self.set_has_ready();
+                        }
+                        return;
+                    }
+                }
                 _ => unimplemented!(),
             }
         };

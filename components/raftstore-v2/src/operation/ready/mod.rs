@@ -26,7 +26,7 @@ use engine_traits::{KvEngine, RaftEngine};
 use error_code::ErrorCodeExt;
 use kvproto::raft_serverpb::RaftMessage;
 use protobuf::Message as _;
-use raft::{eraftpb, Ready};
+use raft::{eraftpb, prelude::MessageType, Ready};
 use raftstore::store::{util, ExtraStates, FetchedLogs, Transport, WriteTask};
 use slog::{debug, error, trace, warn};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
@@ -109,12 +109,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             unimplemented!();
             // return;
         }
+
         // TODO: drop all msg append when the peer is uninitialized and has conflict
         // ranges with other peers.
         self.insert_peer_cache(msg.take_from_peer());
-        if let Err(e) = self.raft_group_mut().step(msg.take_message()) {
+
+        if msg.get_message().get_msg_type() == MessageType::MsgTransferLeader {
+            self.on_transfer_leader_msg(ctx, msg.get_message(), msg.disk_usage)
+        } else if let Err(e) = self.raft_group_mut().step(msg.take_message()) {
             error!(self.logger, "raft step error"; "err" => ?e);
         }
+
         self.set_has_ready();
     }
 

@@ -4273,6 +4273,7 @@ name = "raftstore-v2"
 version = "0.1.0"
 dependencies = [
  "batch-system",
+ "bytes",
  "collections",
  "crossbeam",
  "engine_test",

@@ -418,6 +418,22 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.apply_scheduler = Some(apply_scheduler);
     }
 
+    /// Whether the snapshot is handling.
+    /// See the comments of `check_snap_status` for more details.
+    #[inline]
+    pub fn is_handling_snapshot(&self) -> bool {
+        // todo
+        return false;
+    }
+
+    /// Returns `true` if the raft group has replicated a snapshot but not
+    /// committed it yet.
+    #[inline]
+    pub fn has_pending_snapshot(&self) -> bool {
+        // todo
+        return false;
+    }
+
     pub fn generate_read_delegate(&self) -> ReadDelegate {
         let peer_id = self.peer().get_id();
 

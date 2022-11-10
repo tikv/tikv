@@ -51,6 +51,7 @@ tikv_util = { workspace = true }
 time = "0.1"
 tracker = { workspace = true }
 txn_types = { workspace = true }
+bytes = "1.0"
 
 [dev-dependencies]
 engine_test = { workspace = true }
