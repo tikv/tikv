@@ -20,20 +20,25 @@ use kvproto::{
     kvrpcpb::{self, KeyRange, LeaderInfo},
     metapb::{self, Peer, PeerRole, Region, RegionEpoch},
     raft_cmdpb::{AdminCmdType, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest},
-    raft_serverpb::RaftMessage,
+    raft_serverpb::{RaftMessage, RaftSnapshotData},
 };
 use protobuf::{self, Message};
 use raft::{
-    eraftpb::{self, ConfChangeType, ConfState, MessageType},
+    eraftpb::{self, ConfChangeType, ConfState, MessageType, Snapshot},
     Changer, RawNode, INVALID_INDEX,
 };
 use raft_proto::ConfChangeI;
-use tikv_util::{box_err, debug, info, store::region, time::monotonic_raw_now, Either};
+use tikv_util::{
+    box_err, debug, info,
+    store::{find_peer_by_id, region},
+    time::monotonic_raw_now,
+    Either,
+};
 use time::{Duration, Timespec};
 use txn_types::{TimeStamp, WriteBatchFlags};
 
 use super::{metrics::PEER_ADMIN_CMD_COUNTER_VEC, peer_storage, Config};
-use crate::{coprocessor::CoprocessorHost, Error, Result};
+use crate::{coprocessor::CoprocessorHost, store::snap::SNAPSHOT_VERSION, Error, Result};
 
 const INVALID_TIMESTAMP: u64 = u64::MAX;
 
@@ -123,6 +128,27 @@ pub fn is_initial_msg(msg: &eraftpb::Message) -> bool {
         || msg_type == MessageType::MsgRequestPreVote
         // the peer has not been known to this leader, it may exist or not.
         || (msg_type == MessageType::MsgHeartbeat && msg.get_commit() == INVALID_INDEX)
+}
+
+pub fn new_empty_snapshot(
+    region: Region,
+    applied_index: u64,
+    applied_term: u64,
+    for_witness: bool,
+) -> Snapshot {
+    let mut snapshot = Snapshot::default();
+    snapshot.mut_metadata().set_index(applied_index);
+    snapshot.mut_metadata().set_term(applied_term);
+    snapshot
+        .mut_metadata()
+        .set_conf_state(conf_state_from_region(&region));
+    let mut snap_data = RaftSnapshotData::default();
+    snap_data.set_region(region);
+    snap_data.set_file_size(0);
+    snap_data.set_version(SNAPSHOT_VERSION);
+    snap_data.mut_meta().set_for_witness(for_witness);
+    snapshot.set_data(snap_data.write_to_bytes().unwrap().into());
+    snapshot
 }
 
 const STR_CONF_CHANGE_ADD_NODE: &str = "AddNode";
@@ -869,6 +895,7 @@ impl<'a> ChangePeerI for &'a ChangePeerV2Request {
 pub fn check_conf_change(
     cfg: &Config,
     node: &RawNode<impl raft::Storage>,
+    region: &metapb::Region,
     leader: &metapb::Peer,
     change_peers: &[ChangePeerRequest],
     cc: &impl ConfChangeI,
@@ -913,6 +940,18 @@ pub fn check_conf_change(
             _ => {
                 return Err(box_err!("{:?}: op not match role", cp));
             }
+        }
+
+        if region
+            .get_peers()
+            .iter()
+            .find(|p| p.get_id() == peer.get_id())
+            .map_or(false, |p| p.get_is_witness() != peer.get_is_witness())
+        {
+            return Err(box_err!(
+                "invalid conf change request: {:?}, can not switch witness in conf change",
+                cp
+            ));
         }
 
         if !check_dup.insert(peer.get_id()) {
@@ -1122,9 +1161,19 @@ pub struct RegionReadProgress {
 }
 
 impl RegionReadProgress {
-    pub fn new(region: &Region, applied_index: u64, cap: usize, tag: String) -> RegionReadProgress {
+    pub fn new(
+        region: &Region,
+        applied_index: u64,
+        cap: usize,
+        peer_id: u64,
+    ) -> RegionReadProgress {
         RegionReadProgress {
-            core: Mutex::new(RegionReadProgressCore::new(region, applied_index, cap, tag)),
+            core: Mutex::new(RegionReadProgressCore::new(
+                region,
+                applied_index,
+                cap,
+                peer_id,
+            )),
             safe_ts: AtomicU64::from(0),
         }
     }
@@ -1283,7 +1332,7 @@ impl RegionReadProgress {
 
 #[derive(Debug)]
 pub struct RegionReadProgressCore {
-    tag: String,
+    peer_id: u64,
     region_id: u64,
     applied_index: u64,
     // A wrapper of `(apply_index, safe_ts)` item, where the `read_state.ts` is the peer's current
@@ -1355,17 +1404,24 @@ fn find_store_id(peer_list: &[Peer], peer_id: u64) -> Option<u64> {
 }
 
 impl RegionReadProgressCore {
-    fn new(region: &Region, applied_index: u64, cap: usize, tag: String) -> RegionReadProgressCore {
+    fn new(
+        region: &Region,
+        applied_index: u64,
+        cap: usize,
+        peer_id: u64,
+    ) -> RegionReadProgressCore {
+        // forbids stale read for witness
+        let is_witness = find_peer_by_id(region, peer_id).map_or(false, |p| p.is_witness);
         RegionReadProgressCore {
-            tag,
+            peer_id,
             region_id: region.get_id(),
             applied_index,
             read_state: ReadState::default(),
             leader_info: LocalLeaderInfo::new(region),
             pending_items: VecDeque::with_capacity(cap),
             last_merge_index: 0,
-            pause: false,
-            discard: false,
+            pause: is_witness,
+            discard: is_witness,
         }
     }
 
@@ -1380,10 +1436,11 @@ impl RegionReadProgressCore {
         self.read_state.ts = cmp::min(source_safe_ts, target_safe_ts);
         info!(
             "reset safe_ts due to merge";
-            "tag" => &self.tag,
             "source_safe_ts" => source_safe_ts,
             "target_safe_ts" => target_safe_ts,
             "safe_ts" => self.read_state.ts,
+            "region_id" => self.region_id,
+            "peer_id" => self.peer_id,
         );
         if self.read_state.ts != target_safe_ts {
             Some(self.read_state.ts)
@@ -2096,7 +2153,7 @@ mod tests {
         }
 
         let cap = 10;
-        let rrp = RegionReadProgress::new(&Default::default(), 10, cap, "".to_owned());
+        let rrp = RegionReadProgress::new(&Default::default(), 10, cap, 1);
         for i in 1..=20 {
             rrp.update_safe_ts(i, i);
         }
