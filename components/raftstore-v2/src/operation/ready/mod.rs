@@ -465,6 +465,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.proposal_control_mut().commit_to(commit_index, |cmd| {
             committed_prepare_merge |= cmd.cmd_type() == AdminCmdType::PrepareMerge
         });
+        // There are two types of operations that will change the ownership of a range:
+        // split and merge.
+        //
+        // - For split, after the split command is committed, it's
+        // possible that the same range is govened by different region on different
+        // nodes due to different apply progress. But because only the peers on the
+        // same node as old leader will campaign despite election timeout, so there
+        // will be no modification to the overlapped range until either the original
+        // leader apply the split command or an election timeout is passed since split
+        // is committed. We already forbid renewing lease after committing split, and
+        // original leader will update the reader delegate with latest epoch after
+        // applying split before the split peer starts campaign, so here the only thing
+        // we need to do is marking split is committed (which is done by `commit_to`
+        // above). It's correct to allow local read during split.
+        //
+        // - For merge, after the prepare merge command is committed, the target peers
+        // may apply commit merge at any time, so we need to forbid any type of read
+        // to avoid missing the modifications from target peers.
         if committed_prepare_merge {
             // After prepare_merge is committed and the leader broadcasts commit
             // index to followers, the leader can not know when the target region
