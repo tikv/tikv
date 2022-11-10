@@ -67,6 +67,8 @@ impl PartialEq for SnapState {
 
 pub struct GenSnapTask {
     region_id: u64,
+    // The snapshot will be sent to the peer.
+    to_peer: u64,
     // Fill it when you are going to generate the snapshot.
     // index used to check if the gen task should be canceled.
     index: Arc<AtomicU64>,
@@ -77,9 +79,15 @@ pub struct GenSnapTask {
 }
 
 impl GenSnapTask {
-    pub fn new(region_id: u64, index: Arc<AtomicU64>, canceled: Arc<AtomicBool>) -> GenSnapTask {
+    pub fn new(
+        region_id: u64,
+        to_peer: u64,
+        index: Arc<AtomicU64>,
+        canceled: Arc<AtomicBool>,
+    ) -> GenSnapTask {
         GenSnapTask {
             region_id,
+            to_peer,
             index,
             canceled,
             for_balance: false,
@@ -134,6 +142,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         snap_task.index.store(last_applied_index, Ordering::SeqCst);
         let gen_tablet_sanp_task = ReadTask::GenTabletSnapshot {
             region_id: snap_task.region_id,
+            to_peer: snap_task.to_peer,
             tablet: self.tablet().clone(),
             region_state: self.region_state().clone(),
             last_applied_term,
@@ -197,7 +206,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             index: index.clone(),
         };
 
-        let task = GenSnapTask::new(self.region().get_id(), index, canceled);
+        let task = GenSnapTask::new(self.region().get_id(), to, index, canceled);
         let mut gen_snap_task = self.gen_snap_task_mut();
         assert!(gen_snap_task.is_none());
         *gen_snap_task = Box::new(Some(task));

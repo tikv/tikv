@@ -1492,11 +1492,6 @@ impl SnapManager {
         path.to_str().unwrap().to_string()
     }
 
-    pub fn get_tablet_checkpointer_path(&self, key: &SnapKey) -> PathBuf {
-        let prefix = format!("{}_{}", SNAP_GEN_PREFIX, key);
-        PathBuf::from(&self.core.base).join(&prefix)
-    }
-
     #[inline]
     pub fn has_registered(&self, key: &SnapKey) -> bool {
         self.core.registry.rl().contains_key(key)
@@ -1891,6 +1886,42 @@ impl SnapManagerBuilder {
     }
 }
 
+#[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub struct TabletSnapKey {
+    pub region_id: u64,
+    pub to_peer: u64,
+    pub term: u64,
+    pub idx: u64,
+}
+
+impl TabletSnapKey {
+    #[inline]
+    pub fn new(region_id: u64, to_peer: u64, term: u64, idx: u64) -> TabletSnapKey {
+        TabletSnapKey {
+            region_id,
+            to_peer,
+            term,
+            idx,
+        }
+    }
+
+    pub fn from_region_snap(region_id: u64, to_peer: u64, snap: &RaftSnapshot) -> TabletSnapKey {
+        let index = snap.get_metadata().get_index();
+        let term = snap.get_metadata().get_term();
+        TabletSnapKey::new(region_id, to_peer, term, index)
+    }
+}
+
+impl Display for TabletSnapKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}_{}_{}_{}",
+            self.region_id, self.to_peer, self.term, self.idx
+        )
+    }
+}
+
 /// `TabletSnapManager` manager tablet snapshot and shared between raftstore v2.
 /// It's similar `SnapManager`, but simpler in tablet version.
 ///
@@ -1924,7 +1955,7 @@ impl TabletSnapManager {
         Ok(())
     }
 
-    pub fn get_tablet_checkpointer_path(&self, key: &SnapKey) -> PathBuf {
+    pub fn get_tablet_checkpointer_path(&self, key: &TabletSnapKey) -> PathBuf {
         let prefix = format!("{}_{}", SNAP_GEN_PREFIX, key);
         PathBuf::from(&self.base).join(&prefix)
     }

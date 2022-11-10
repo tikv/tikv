@@ -20,7 +20,7 @@ use tikv_util::{error, info, time::Instant, worker::Runnable};
 use crate::store::{
     util,
     worker::metrics::{SNAP_COUNTER, SNAP_HISTOGRAM},
-    RaftlogFetchResult, SnapKey, TabletSnapManager, MAX_INIT_ENTRY_COUNT,
+    RaftlogFetchResult, TabletSnapKey, TabletSnapManager, MAX_INIT_ENTRY_COUNT,
 };
 
 pub enum ReadTask<EK> {
@@ -37,6 +37,7 @@ pub enum ReadTask<EK> {
     // GenTabletSnapshot is used to generate tablet snapshot.
     GenTabletSnapshot {
         region_id: u64,
+        to_peer: u64,
         tablet: EK,
         region_state: RegionLocalState,
         last_applied_term: u64,
@@ -62,8 +63,10 @@ impl<EK> fmt::Display for ReadTask<EK> {
                 "Fetch Raft Logs [region: {}, low: {}, high: {}, max_size: {}] for sending with context {:?}, tried: {}, term: {}",
                 region_id, low, high, max_size, context, tried_cnt, term,
             ),
-            ReadTask::GenTabletSnapshot { region_id, .. } => {
-                write!(f, "Snapshot gen for {}", region_id)
+            ReadTask::GenTabletSnapshot {
+                region_id, to_peer, ..
+            } => {
+                write!(f, "Snapshot gen for {}, to peer {}", region_id, to_peer)
             }
         }
     }
@@ -115,7 +118,11 @@ impl<EK: KvEngine, ER: RaftEngine, N: AsyncReadNotifier> ReadRunner<EK, ER, N> {
         self.sanp_mgr.as_ref().unwrap()
     }
 
-    fn create_checkpointer_for_snap(&self, snap_key: &SnapKey, tablet: EK) -> crate::Result<()> {
+    fn create_checkpointer_for_snap(
+        &self,
+        snap_key: &TabletSnapKey,
+        tablet: EK,
+    ) -> crate::Result<()> {
         let checkpointer_path = self.snap_mgr().get_tablet_checkpointer_path(snap_key);
         if checkpointer_path.as_path().exists() {
             // Remove the old checkpoint directly.
@@ -181,6 +188,7 @@ where
 
             ReadTask::GenTabletSnapshot {
                 region_id,
+                to_peer,
                 tablet,
                 region_state,
                 last_applied_term,
@@ -202,11 +210,10 @@ where
                 });
                 // the state should already checked in apply workers.
                 assert_ne!(region_state.get_state(), PeerState::Tombstone);
-                let key = SnapKey::new(region_id, last_applied_term, last_applied_index);
                 let mut snapshot = Snapshot::default();
                 // Set snapshot metadata.
-                snapshot.mut_metadata().set_index(key.idx);
-                snapshot.mut_metadata().set_term(key.term);
+                snapshot.mut_metadata().set_term(last_applied_term);
+                snapshot.mut_metadata().set_index(last_applied_index);
                 let conf_state = util::conf_state_from_region(region_state.get_region());
                 snapshot.mut_metadata().set_conf_state(conf_state);
                 // Set snapshot data.
@@ -214,9 +221,11 @@ where
                 snap_data.set_region(region_state.get_region().clone());
                 snap_data.mut_meta().set_for_balance(for_balance);
                 snapshot.set_data(snap_data.write_to_bytes().unwrap().into());
+
                 // create checkpointer.
+                let snap_key = TabletSnapKey::from_region_snap(region_id, to_peer, &snapshot);
                 let mut res = None;
-                if let Err(e) = self.create_checkpointer_for_snap(&key, tablet) {
+                if let Err(e) = self.create_checkpointer_for_snap(&snap_key, tablet) {
                     error!("failed to create checkpointer"; "region_id" => region_id, "error" => %e);
                     SNAP_COUNTER.generate.fail.inc();
                 } else {

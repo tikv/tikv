@@ -370,7 +370,7 @@ mod tests {
     };
     use raft::{eraftpb::Snapshot as RaftSnapshot, Error as RaftError, StorageError};
     use raftstore::store::{
-        AsyncReadNotifier, FetchedLogs, GenSnapRes, ReadRunner, ReadTask, SnapKey,
+        AsyncReadNotifier, FetchedLogs, GenSnapRes, ReadRunner, ReadTask, TabletSnapKey,
         TabletSnapManager, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
     };
     use slog::o;
@@ -494,7 +494,7 @@ mod tests {
         );
 
         // Test get snapshot
-        let snap = s.snapshot(0, 0);
+        let snap = s.snapshot(0, 7);
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
@@ -508,11 +508,7 @@ mod tests {
         assert_eq!(snap.get_metadata().get_index(), 0);
         assert_eq!(snap.get_metadata().get_term(), 0);
         assert_eq!(snap.get_data().is_empty(), false);
-        let snap_key = SnapKey::new(
-            4,
-            snap.get_metadata().get_term(),
-            snap.get_metadata().get_index(),
-        );
+        let snap_key = TabletSnapKey::from_region_snap(4, 7, &snap);
         let checkpointer_path = mgr.get_tablet_checkpointer_path(&snap_key);
         assert!(checkpointer_path.exists());
 

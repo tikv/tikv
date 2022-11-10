@@ -70,7 +70,7 @@ pub use self::{
         check_abort, copy_snapshot,
         snap_io::{apply_sst_cf_file, build_sst_cf_file_list},
         ApplyOptions, CfFile, Error as SnapError, SnapEntry, SnapKey, SnapManager,
-        SnapManagerBuilder, Snapshot, SnapshotStatistics, TabletSnapManager,
+        SnapManagerBuilder, Snapshot, SnapshotStatistics, TabletSnapKey, TabletSnapManager,
     },
     transport::{CasualRouter, ProposalRouter, SignificantRouter, StoreRouter, Transport},
     txn_ext::{LocksStatus, PeerPessimisticLocks, PessimisticLockPair, TxnExt},
