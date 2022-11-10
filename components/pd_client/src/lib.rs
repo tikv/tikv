@@ -1,4 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
+
+#![feature(generic_associated_types)]
+
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
@@ -25,7 +28,7 @@ use txn_types::TimeStamp;
 
 pub use self::{
     client::RpcClient,
-    client_v2::RpcClient as RpcClientV2,
+    client_v2::{PdClient as PdClientV2, RpcClient as RpcClientV2},
     config::Config,
     errors::{Error, Result},
     feature_gate::{Feature, FeatureGate},

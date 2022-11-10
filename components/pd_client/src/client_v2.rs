@@ -13,6 +13,7 @@
 
 use std::{
     collections::HashMap,
+    fmt::Debug,
     pin::Pin,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -29,7 +30,7 @@ use futures::{
     executor::block_on,
     future::{FutureExt, TryFutureExt},
     select,
-    sink::SinkExt,
+    sink::{Sink, SinkExt},
     stream::{Stream, StreamExt},
     task::{Context, Poll},
 };
@@ -231,7 +232,7 @@ pub struct CachedDuplexResponse<T> {
     cache: Option<ClientDuplexReceiver<T>>,
 }
 
-impl<T: std::fmt::Debug> Stream for CachedDuplexResponse<T> {
+impl<T: Debug> Stream for CachedDuplexResponse<T> {
     type Item = Result<T>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -375,719 +376,125 @@ impl RpcClient {
     }
 }
 
-impl RpcClient {
-    pub fn load_global_config(&mut self, list: Vec<String>) -> PdFuture<HashMap<String, String>> {
-        use kvproto::pdpb::LoadGlobalConfigRequest;
-        let mut req = LoadGlobalConfigRequest::new();
-        req.set_names(list.into());
-        let mut raw_client = self.raw_client.clone();
-        Box::pin(async move {
-            raw_client.wait_for_ready().await?;
-            let fut = raw_client.stub().load_global_config_async(&req)?;
-            match fut.await {
-                Ok(grpc_response) => {
-                    let mut res = HashMap::with_capacity(grpc_response.get_items().len());
-                    for c in grpc_response.get_items() {
-                        if c.has_error() {
-                            error!("failed to load global config with key {:?}", c.get_error());
-                        } else {
-                            res.insert(c.get_name().to_owned(), c.get_value().to_owned());
-                        }
-                    }
-                    Ok(res)
-                }
-                Err(err) => Err(box_err!("{:?}", err)),
-            }
-        })
-    }
+pub trait PdClient {
+    type RequestChannel<R>: Sink<R>;
+    type ResponseChannel<R: Debug>: Stream<Item = Result<R>>;
 
-    pub fn watch_global_config(
+    fn create_region_heartbeat_stream(
         &mut self,
-    ) -> Result<grpcio::ClientSStreamReceiver<pdpb::WatchGlobalConfigResponse>> {
-        use kvproto::pdpb::WatchGlobalConfigRequest;
-        let req = WatchGlobalConfigRequest::default();
-        block_on(self.raw_client.wait_for_ready())?;
-        Ok(self.raw_client.stub().watch_global_config(&req)?)
-    }
+    ) -> Result<(
+        Self::RequestChannel<RegionHeartbeatRequest>,
+        Self::ResponseChannel<RegionHeartbeatResponse>,
+    )>;
 
-    pub fn get_cluster_id(&self) -> Result<u64> {
-        Ok(self.cluster_id)
-    }
+    fn create_report_region_buckets_stream(
+        &mut self,
+    ) -> Result<Self::RequestChannel<ReportBucketsRequest>>;
 
-    pub fn bootstrap_cluster(
+    fn create_tso_stream(
+        &mut self,
+    ) -> Result<(
+        Self::RequestChannel<TsoRequest>,
+        Self::ResponseChannel<TsoResponse>,
+    )>;
+
+    fn load_global_config(&mut self, list: Vec<String>) -> PdFuture<HashMap<String, String>>;
+
+    fn watch_global_config(
+        &mut self,
+    ) -> Result<grpcio::ClientSStreamReceiver<pdpb::WatchGlobalConfigResponse>>;
+
+    fn get_cluster_id(&self) -> Result<u64>;
+
+    fn bootstrap_cluster(
         &mut self,
         stores: metapb::Store,
         region: metapb::Region,
-    ) -> Result<Option<ReplicationStatus>> {
-        let _timer = PD_REQUEST_HISTOGRAM_VEC
-            .with_label_values(&["bootstrap_cluster"])
-            .start_coarse_timer();
+    ) -> Result<Option<ReplicationStatus>>;
 
-        let mut req = pdpb::BootstrapRequest::default();
-        req.set_header(self.header());
-        req.set_store(stores);
-        req.set_region(region);
+    fn is_cluster_bootstrapped(&mut self) -> Result<bool>;
 
-        block_on(self.raw_client.wait_for_ready())?;
-        let mut resp = self.raw_client.stub().bootstrap_opt(
-            &req,
-            self.raw_client
-                .call_option()
-                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-        )?;
-        check_resp_header(resp.get_header())?;
-        Ok(resp.replication_status.take())
-    }
+    fn alloc_id(&mut self) -> Result<u64>;
 
-    pub fn is_cluster_bootstrapped(&mut self) -> Result<bool> {
-        let _timer = PD_REQUEST_HISTOGRAM_VEC
-            .with_label_values(&["is_cluster_bootstrapped"])
-            .start_coarse_timer();
+    fn is_recovering_marked(&mut self) -> Result<bool>;
 
-        let mut req = pdpb::IsBootstrappedRequest::default();
-        req.set_header(self.header());
+    fn put_store(&mut self, store: metapb::Store) -> Result<Option<ReplicationStatus>>;
 
-        block_on(self.raw_client.wait_for_ready())?;
-        let resp = self.raw_client.stub().is_bootstrapped_opt(
-            &req,
-            self.raw_client
-                .call_option()
-                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-        )?;
-        check_resp_header(resp.get_header())?;
+    fn get_store_and_stats(&mut self, store_id: u64)
+    -> PdFuture<(metapb::Store, pdpb::StoreStats)>;
 
-        Ok(resp.get_bootstrapped())
-    }
+    fn get_store(&mut self, store_id: u64) -> Result<metapb::Store>;
 
-    pub fn alloc_id(&mut self) -> Result<u64> {
-        let _timer = PD_REQUEST_HISTOGRAM_VEC
-            .with_label_values(&["alloc_id"])
-            .start_coarse_timer();
+    fn get_store_async(&mut self, store_id: u64) -> PdFuture<metapb::Store>;
 
-        let mut req = pdpb::AllocIdRequest::default();
-        req.set_header(self.header());
+    fn get_store_stats_async(&mut self, store_id: u64) -> PdFuture<pdpb::StoreStats>;
 
-        block_on(self.raw_client.wait_for_ready())?;
-        let resp = self.raw_client.stub().alloc_id_opt(
-            &req,
-            self.raw_client
-                .call_option()
-                .timeout(Duration::from_secs(10)),
-        )?;
-        check_resp_header(resp.get_header())?;
+    fn get_all_stores(&mut self, exclude_tombstone: bool) -> Result<Vec<metapb::Store>>;
 
-        let id = resp.get_id();
-        if id == 0 {
-            return Err(box_err!("pd alloc weird id 0"));
-        }
-        Ok(id)
-    }
+    fn get_cluster_config(&mut self) -> Result<metapb::Cluster>;
 
-    pub fn is_recovering_marked(&mut self) -> Result<bool> {
-        let _timer = PD_REQUEST_HISTOGRAM_VEC
-            .with_label_values(&["is_recovering_marked"])
-            .start_coarse_timer();
-
-        let mut req = pdpb::IsSnapshotRecoveringRequest::default();
-        req.set_header(self.header());
-
-        block_on(self.raw_client.wait_for_ready())?;
-        let resp = self.raw_client.stub().is_snapshot_recovering_opt(
-            &req,
-            self.raw_client
-                .call_option()
-                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-        )?;
-        check_resp_header(resp.get_header())?;
-
-        Ok(resp.get_marked())
-    }
-
-    pub fn put_store(&mut self, store: metapb::Store) -> Result<Option<ReplicationStatus>> {
-        let _timer = PD_REQUEST_HISTOGRAM_VEC
-            .with_label_values(&["put_store"])
-            .start_coarse_timer();
-
-        let mut req = pdpb::PutStoreRequest::default();
-        req.set_header(self.header());
-        req.set_store(store);
-
-        block_on(self.raw_client.wait_for_ready())?;
-        let mut resp = self.raw_client.stub().put_store_opt(
-            &req,
-            self.raw_client
-                .call_option()
-                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-        )?;
-        check_resp_header(resp.get_header())?;
-
-        Ok(resp.replication_status.take())
-    }
-
-    pub fn get_store_and_stats(
-        &mut self,
-        store_id: u64,
-    ) -> PdFuture<(metapb::Store, pdpb::StoreStats)> {
-        let timer = Instant::now();
-
-        let mut req = pdpb::GetStoreRequest::default();
-        req.set_header(self.header());
-        req.set_store_id(store_id);
-
-        let mut raw_client = self.raw_client.clone();
-        Box::pin(async move {
-            raw_client.wait_for_ready().await?;
-            let mut resp = raw_client
-                .stub()
-                .get_store_async_opt(
-                    &req,
-                    raw_client
-                        .call_option()
-                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-                )
-                .unwrap_or_else(|e| {
-                    panic!("fail to request PD {} err {:?}", "get_store_and_stats", e);
-                })
-                .await?;
-            PD_REQUEST_HISTOGRAM_VEC
-                .with_label_values(&["get_store_and_stats"])
-                .observe(duration_to_sec(timer.saturating_elapsed()));
-            check_resp_header(resp.get_header())?;
-            let store = resp.take_store();
-            if store.get_state() != metapb::StoreState::Tombstone {
-                Ok((store, resp.take_stats()))
-            } else {
-                Err(Error::StoreTombstone(format!("{:?}", store)))
-            }
-        })
-    }
-
-    pub fn get_store(&mut self, store_id: u64) -> Result<metapb::Store> {
-        let (store, _) = block_on(self.get_store_and_stats(store_id))?;
-        Ok(store)
-    }
-
-    pub fn get_store_async(&mut self, store_id: u64) -> PdFuture<metapb::Store> {
-        self.get_store_and_stats(store_id).map_ok(|x| x.0).boxed()
-    }
-
-    pub fn get_store_stats_async(&mut self, store_id: u64) -> PdFuture<pdpb::StoreStats> {
-        self.get_store_and_stats(store_id).map_ok(|x| x.1).boxed()
-    }
-
-    pub fn get_all_stores(&mut self, exclude_tombstone: bool) -> Result<Vec<metapb::Store>> {
-        let _timer = PD_REQUEST_HISTOGRAM_VEC
-            .with_label_values(&["get_all_stores"])
-            .start_coarse_timer();
-
-        let mut req = pdpb::GetAllStoresRequest::default();
-        req.set_header(self.header());
-        req.set_exclude_tombstone_stores(exclude_tombstone);
-
-        block_on(self.raw_client.wait_for_ready())?;
-        let mut resp = self.raw_client.stub().get_all_stores_opt(
-            &req,
-            self.raw_client
-                .call_option()
-                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-        )?;
-        check_resp_header(resp.get_header())?;
-
-        Ok(resp.take_stores().into())
-    }
-
-    pub fn get_cluster_config(&mut self) -> Result<metapb::Cluster> {
-        let _timer = PD_REQUEST_HISTOGRAM_VEC
-            .with_label_values(&["get_cluster_config"])
-            .start_coarse_timer();
-
-        let mut req = pdpb::GetClusterConfigRequest::default();
-        req.set_header(self.header());
-
-        block_on(self.raw_client.wait_for_ready())?;
-        let mut resp = self.raw_client.stub().get_cluster_config_opt(
-            &req,
-            self.raw_client
-                .call_option()
-                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-        )?;
-        check_resp_header(resp.get_header())?;
-
-        Ok(resp.take_cluster())
-    }
-
-    pub fn get_region_and_leader(
+    fn get_region_and_leader(
         &mut self,
         key: &[u8],
-    ) -> PdFuture<(metapb::Region, Option<metapb::Peer>)> {
-        let _timer = PD_REQUEST_HISTOGRAM_VEC
-            .with_label_values(&["get_region"])
-            .start_coarse_timer();
+    ) -> PdFuture<(metapb::Region, Option<metapb::Peer>)>;
 
-        let mut req = pdpb::GetRegionRequest::default();
-        req.set_header(self.header());
-        req.set_region_key(key.to_vec());
+    fn get_region(&mut self, key: &[u8]) -> Result<metapb::Region>;
 
-        let mut raw_client = self.raw_client.clone();
-        Box::pin(async move {
-            raw_client.wait_for_ready().await?;
-            let mut resp = raw_client
-                .stub()
-                .get_region_async_opt(
-                    &req,
-                    raw_client
-                        .call_option()
-                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-                )
-                .unwrap_or_else(|e| {
-                    panic!("fail to request PD {} err {:?}", "get_region_async_opt", e)
-                })
-                .await?;
-            check_resp_header(resp.get_header())?;
-            let region = if resp.has_region() {
-                resp.take_region()
-            } else {
-                return Err(Error::RegionNotFound(req.region_key));
-            };
-            let leader = if resp.has_leader() {
-                Some(resp.take_leader())
-            } else {
-                None
-            };
-            Ok((region, leader))
-        })
-    }
+    fn get_region_info(&mut self, key: &[u8]) -> Result<RegionInfo>;
 
-    pub fn get_region(&mut self, key: &[u8]) -> Result<metapb::Region> {
-        block_on(self.get_region_and_leader(key)).map(|x| x.0)
-    }
+    fn get_region_async(&mut self, key: &[u8]) -> PdFuture<metapb::Region>;
 
-    pub fn get_region_info(&mut self, key: &[u8]) -> Result<RegionInfo> {
-        block_on(self.get_region_and_leader(key)).map(|x| RegionInfo::new(x.0, x.1))
-    }
+    fn get_region_info_async(&mut self, key: &[u8]) -> PdFuture<RegionInfo>;
 
-    pub fn get_region_async(&mut self, key: &[u8]) -> PdFuture<metapb::Region> {
-        self.get_region_and_leader(key).map_ok(|x| x.0).boxed()
-    }
+    fn get_region_by_id(&mut self, region_id: u64) -> PdFuture<Option<metapb::Region>>;
 
-    pub fn get_region_info_async(&mut self, key: &[u8]) -> PdFuture<RegionInfo> {
-        self.get_region_and_leader(key)
-            .map_ok(|x| RegionInfo::new(x.0, x.1))
-            .boxed()
-    }
-
-    pub fn get_region_by_id(&mut self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
-        let timer = Instant::now();
-
-        let mut req = pdpb::GetRegionByIdRequest::default();
-        req.set_header(self.header());
-        req.set_region_id(region_id);
-
-        let mut raw_client = self.raw_client.clone();
-        Box::pin(async move {
-            raw_client.wait_for_ready().await?;
-            let mut resp = raw_client
-                .stub()
-                .get_region_by_id_async_opt(
-                    &req,
-                    raw_client
-                        .call_option()
-                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-                )
-                .unwrap_or_else(|e| {
-                    panic!("fail to request PD {} err {:?}", "get_region_by_id", e);
-                })
-                .await?;
-            PD_REQUEST_HISTOGRAM_VEC
-                .with_label_values(&["get_region_by_id"])
-                .observe(duration_to_sec(timer.saturating_elapsed()));
-            check_resp_header(resp.get_header())?;
-            if resp.has_region() {
-                Ok(Some(resp.take_region()))
-            } else {
-                Ok(None)
-            }
-        })
-    }
-
-    pub fn get_region_leader_by_id(
+    fn get_region_leader_by_id(
         &mut self,
         region_id: u64,
-    ) -> PdFuture<Option<(metapb::Region, metapb::Peer)>> {
-        let timer = Instant::now();
+    ) -> PdFuture<Option<(metapb::Region, metapb::Peer)>>;
 
-        let mut req = pdpb::GetRegionByIdRequest::default();
-        req.set_header(self.header());
-        req.set_region_id(region_id);
+    fn ask_split(&mut self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse>;
 
-        let mut raw_client = self.raw_client.clone();
-        Box::pin(async move {
-            raw_client.wait_for_ready().await?;
-            let mut resp = raw_client
-                .stub()
-                .get_region_by_id_async_opt(
-                    &req,
-                    raw_client
-                        .call_option()
-                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-                )
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "fail to request PD {} err {:?}",
-                        "get_region_leader_by_id", e
-                    );
-                })
-                .await?;
-            PD_REQUEST_HISTOGRAM_VEC
-                .with_label_values(&["get_region_leader_by_id"])
-                .observe(duration_to_sec(timer.saturating_elapsed()));
-            check_resp_header(resp.get_header())?;
-            if resp.has_region() && resp.has_leader() {
-                Ok(Some((resp.take_region(), resp.take_leader())))
-            } else {
-                Ok(None)
-            }
-        })
-    }
-
-    pub fn ask_split(&mut self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
-        let timer = Instant::now();
-
-        let mut req = pdpb::AskSplitRequest::default();
-        req.set_header(self.header());
-        req.set_region(region);
-
-        let mut raw_client = self.raw_client.clone();
-        Box::pin(async move {
-            raw_client.wait_for_ready().await?;
-            let resp = raw_client
-                .stub()
-                .ask_split_async_opt(
-                    &req,
-                    raw_client
-                        .call_option()
-                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-                )
-                .unwrap_or_else(|e| {
-                    panic!("fail to request PD {} err {:?}", "ask_split", e);
-                })
-                .await?;
-            PD_REQUEST_HISTOGRAM_VEC
-                .with_label_values(&["ask_split"])
-                .observe(duration_to_sec(timer.saturating_elapsed()));
-            check_resp_header(resp.get_header())?;
-            Ok(resp)
-        })
-    }
-
-    pub fn ask_batch_split(
+    fn ask_batch_split(
         &mut self,
         region: metapb::Region,
         count: usize,
-    ) -> PdFuture<pdpb::AskBatchSplitResponse> {
-        let timer = Instant::now();
+    ) -> PdFuture<pdpb::AskBatchSplitResponse>;
 
-        let mut req = pdpb::AskBatchSplitRequest::default();
-        req.set_header(self.header());
-        req.set_region(region);
-        req.set_split_count(count as u32);
-
-        let mut raw_client = self.raw_client.clone();
-        Box::pin(async move {
-            raw_client.wait_for_ready().await?;
-            let resp = raw_client
-                .stub()
-                .ask_batch_split_async_opt(
-                    &req,
-                    raw_client
-                        .call_option()
-                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-                )
-                .unwrap_or_else(|e| {
-                    panic!("fail to request PD {} err {:?}", "ask_batch_split", e);
-                })
-                .await?;
-            PD_REQUEST_HISTOGRAM_VEC
-                .with_label_values(&["ask_batch_split"])
-                .observe(duration_to_sec(timer.saturating_elapsed()));
-            check_resp_header(resp.get_header())?;
-            Ok(resp)
-        })
-    }
-
-    pub fn store_heartbeat(
+    fn store_heartbeat(
         &mut self,
-        mut stats: pdpb::StoreStats,
+        stats: pdpb::StoreStats,
         store_report: Option<pdpb::StoreReport>,
         dr_autosync_status: Option<StoreDrAutoSyncStatus>,
-    ) -> PdFuture<pdpb::StoreHeartbeatResponse> {
-        let timer = Instant::now();
+    ) -> PdFuture<pdpb::StoreHeartbeatResponse>;
 
-        let mut req = pdpb::StoreHeartbeatRequest::default();
-        req.set_header(self.header());
-        stats
-            .mut_interval()
-            .set_end_timestamp(UnixSecs::now().into_inner());
-        req.set_stats(stats);
-        if let Some(report) = store_report {
-            req.set_store_report(report);
-        }
-        if let Some(status) = dr_autosync_status {
-            req.set_dr_autosync_status(status);
-        }
+    fn report_batch_split(&mut self, regions: Vec<metapb::Region>) -> PdFuture<()>;
 
-        let mut raw_client = self.raw_client.clone();
-        let feature_gate = self.feature_gate.clone();
-        Box::pin(async move {
-            raw_client.wait_for_ready().await?;
-            let resp = raw_client
-                .stub()
-                .store_heartbeat_async_opt(
-                    &req,
-                    raw_client
-                        .call_option()
-                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-                )
-                .unwrap_or_else(|e| {
-                    panic!("fail to request PD {} err {:?}", "store_heartbeat", e);
-                })
-                .await?;
-            PD_REQUEST_HISTOGRAM_VEC
-                .with_label_values(&["store_heartbeat"])
-                .observe(duration_to_sec(timer.saturating_elapsed()));
-            check_resp_header(resp.get_header())?;
-            match feature_gate.set_version(resp.get_cluster_version()) {
-                Err(_) => warn!("invalid cluster version: {}", resp.get_cluster_version()),
-                Ok(true) => info!("set cluster version to {}", resp.get_cluster_version()),
-                _ => {}
-            };
-            Ok(resp)
-        })
-    }
+    fn scatter_region(&mut self, region: RegionInfo) -> Result<()>;
 
-    pub fn report_batch_split(&mut self, regions: Vec<metapb::Region>) -> PdFuture<()> {
-        let timer = Instant::now();
+    fn get_gc_safe_point(&mut self) -> PdFuture<u64>;
 
-        let mut req = pdpb::ReportBatchSplitRequest::default();
-        req.set_header(self.header());
-        req.set_regions(regions.into());
+    fn get_operator(&mut self, region_id: u64) -> Result<pdpb::GetOperatorResponse>;
 
-        let mut raw_client = self.raw_client.clone();
-        Box::pin(async move {
-            raw_client.wait_for_ready().await?;
-            let resp = raw_client
-                .stub()
-                .report_batch_split_async_opt(
-                    &req,
-                    raw_client
-                        .call_option()
-                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-                )
-                .unwrap_or_else(|e| {
-                    panic!("fail to request PD {} err {:?}", "report_batch_split", e);
-                })
-                .await?;
-            PD_REQUEST_HISTOGRAM_VEC
-                .with_label_values(&["report_batch_split"])
-                .observe(duration_to_sec(timer.saturating_elapsed()));
-            check_resp_header(resp.get_header())?;
-            Ok(())
-        })
-    }
-
-    pub fn scatter_region(&mut self, mut region: RegionInfo) -> Result<()> {
-        let _timer = PD_REQUEST_HISTOGRAM_VEC
-            .with_label_values(&["scatter_region"])
-            .start_coarse_timer();
-
-        let mut req = pdpb::ScatterRegionRequest::default();
-        req.set_header(self.header());
-        req.set_region_id(region.get_id());
-        if let Some(leader) = region.leader.take() {
-            req.set_leader(leader);
-        }
-        req.set_region(region.region);
-
-        block_on(self.raw_client.wait_for_ready())?;
-        let resp = self.raw_client.stub().scatter_region_opt(
-            &req,
-            self.raw_client
-                .call_option()
-                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-        )?;
-        check_resp_header(resp.get_header())
-    }
-
-    pub fn get_gc_safe_point(&mut self) -> PdFuture<u64> {
-        let timer = Instant::now();
-
-        let mut req = pdpb::GetGcSafePointRequest::default();
-        req.set_header(self.header());
-
-        let mut raw_client = self.raw_client.clone();
-        Box::pin(async move {
-            raw_client.wait_for_ready().await?;
-            let resp = raw_client
-                .stub()
-                .get_gc_safe_point_async_opt(
-                    &req,
-                    raw_client
-                        .call_option()
-                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-                )
-                .unwrap_or_else(|e| {
-                    panic!("fail to request PD {} err {:?}", "get_gc_saft_point", e);
-                })
-                .await?;
-            PD_REQUEST_HISTOGRAM_VEC
-                .with_label_values(&["get_gc_saft_point"])
-                .observe(duration_to_sec(timer.saturating_elapsed()));
-            check_resp_header(resp.get_header())?;
-            Ok(resp.get_safe_point())
-        })
-    }
-
-    pub fn get_operator(&mut self, region_id: u64) -> Result<pdpb::GetOperatorResponse> {
-        let _timer = PD_REQUEST_HISTOGRAM_VEC
-            .with_label_values(&["get_operator"])
-            .start_coarse_timer();
-
-        let mut req = pdpb::GetOperatorRequest::default();
-        req.set_header(self.header());
-        req.set_region_id(region_id);
-
-        block_on(self.raw_client.wait_for_ready())?;
-        let resp = self.raw_client.stub().get_operator_opt(
-            &req,
-            self.raw_client
-                .call_option()
-                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-        )?;
-        check_resp_header(resp.get_header())?;
-
-        Ok(resp)
-    }
-
-    pub fn update_service_safe_point(
+    fn update_service_safe_point(
         &mut self,
         name: String,
         safe_point: TimeStamp,
         ttl: Duration,
-    ) -> PdFuture<()> {
-        let timer = Instant::now();
-        let mut req = pdpb::UpdateServiceGcSafePointRequest::default();
-        req.set_header(self.header());
-        req.set_service_id(name.into());
-        req.set_ttl(ttl.as_secs() as _);
-        req.set_safe_point(safe_point.into_inner());
+    ) -> PdFuture<()>;
 
-        let mut raw_client = self.raw_client.clone();
-        Box::pin(async move {
-            raw_client.wait_for_ready().await?;
-            let resp = raw_client
-                .stub()
-                .update_service_gc_safe_point_async_opt(
-                    &req,
-                    raw_client
-                        .call_option()
-                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-                )
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "fail to request PD {} err {:?}",
-                        "update_service_safe_point", e
-                    );
-                })
-                .await?;
-            PD_REQUEST_HISTOGRAM_VEC
-                .with_label_values(&["update_service_safe_point"])
-                .observe(duration_to_sec(timer.saturating_elapsed()));
-            check_resp_header(resp.get_header())?;
-            Ok(())
-        })
-    }
+    fn report_min_resolved_ts(&mut self, store_id: u64, min_resolved_ts: u64) -> PdFuture<()>;
+}
 
-    pub fn report_min_resolved_ts(&mut self, store_id: u64, min_resolved_ts: u64) -> PdFuture<()> {
-        let timer = Instant::now();
+impl PdClient for RpcClient {
+    type RequestChannel<R> = mpsc::UnboundedSender<R>;
+    type ResponseChannel<R: Debug> = CachedDuplexResponse<R>;
 
-        let mut req = pdpb::ReportMinResolvedTsRequest::default();
-        req.set_header(self.header());
-        req.set_store_id(store_id);
-        req.set_min_resolved_ts(min_resolved_ts);
-
-        let mut raw_client = self.raw_client.clone();
-        Box::pin(async move {
-            raw_client.wait_for_ready().await?;
-            let resp = raw_client
-                .stub()
-                .report_min_resolved_ts_async_opt(
-                    &req,
-                    raw_client
-                        .call_option()
-                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-                )
-                .unwrap_or_else(|e| {
-                    panic!("fail to request PD {} err {:?}", "min_resolved_ts", e);
-                })
-                .await?;
-            PD_REQUEST_HISTOGRAM_VEC
-                .with_label_values(&["min_resolved_ts"])
-                .observe(duration_to_sec(timer.saturating_elapsed()));
-            check_resp_header(resp.get_header())?;
-            Ok(())
-        })
-    }
-
-    pub fn create_report_region_buckets_stream(
-        &mut self,
-    ) -> Result<mpsc::UnboundedSender<ReportBucketsRequest>> {
-        let (tx, rx) = mpsc::unbounded();
-        let mut raw_client = self.raw_client.clone();
-        let mut reconnect = self.reconnect_tx.clone();
-        let mut requests = Box::pin(rx).map(|r| Ok((r, WriteFlags::default())));
-        self.raw_client.stub().spawn(async move {
-            loop {
-                if let Err(e) = raw_client.wait_for_ready().await {
-                    warn!("failed to acquire client for ReportRegionBuckets stream"; "err" => ?e);
-                    let _ = GLOBAL_TIMER_HANDLE
-                        .delay(std::time::Instant::now() + Duration::from_secs(REQUEST_TIMEOUT))
-                        .compat()
-                        .await;
-                    continue;
-                }
-                let (mut bk_tx, bk_rx) = raw_client
-                    .stub()
-                    .report_buckets_opt(raw_client.call_option())
-                    .unwrap_or_else(|e| {
-                        panic!("fail to request PD {} err {:?}", "report_region_buckets", e)
-                    });
-                select! {
-                    send_res = bk_tx.send_all(&mut requests).fuse() => {
-                        if send_res.is_ok() {
-                            // requests are drained.
-                            break;
-                        } else {
-                            warn!("region buckets stream exited: {:?}", send_res);
-                        }
-                    }
-                    recv_res = bk_rx.fuse() => {
-                        warn!("region buckets stream exited: {:?}", recv_res);
-                    }
-                }
-                let _ = bk_tx.close().await;
-                if reconnect.send(raw_client.cache_version()).await.is_err() {
-                    break;
-                }
-            }
-        });
-        Ok(tx)
-    }
-
-    pub fn create_region_heartbeat_stream(
+    fn create_region_heartbeat_stream(
         &mut self,
     ) -> Result<(
-        mpsc::UnboundedSender<RegionHeartbeatRequest>,
-        CachedDuplexResponse<RegionHeartbeatResponse>,
+        Self::RequestChannel<RegionHeartbeatRequest>,
+        Self::ResponseChannel<RegionHeartbeatResponse>,
     )> {
         let (tx, rx) = mpsc::unbounded();
         let response_holder = Arc::new(std::sync::Mutex::new(None));
@@ -1139,11 +546,56 @@ impl RpcClient {
         ))
     }
 
-    pub fn create_tso_stream(
+    fn create_report_region_buckets_stream(
+        &mut self,
+    ) -> Result<Self::RequestChannel<ReportBucketsRequest>> {
+        let (tx, rx) = mpsc::unbounded();
+        let mut raw_client = self.raw_client.clone();
+        let mut reconnect = self.reconnect_tx.clone();
+        let mut requests = Box::pin(rx).map(|r| Ok((r, WriteFlags::default())));
+        self.raw_client.stub().spawn(async move {
+            loop {
+                if let Err(e) = raw_client.wait_for_ready().await {
+                    warn!("failed to acquire client for ReportRegionBuckets stream"; "err" => ?e);
+                    let _ = GLOBAL_TIMER_HANDLE
+                        .delay(std::time::Instant::now() + Duration::from_secs(REQUEST_TIMEOUT))
+                        .compat()
+                        .await;
+                    continue;
+                }
+                let (mut bk_tx, bk_rx) = raw_client
+                    .stub()
+                    .report_buckets_opt(raw_client.call_option())
+                    .unwrap_or_else(|e| {
+                        panic!("fail to request PD {} err {:?}", "report_region_buckets", e)
+                    });
+                select! {
+                    send_res = bk_tx.send_all(&mut requests).fuse() => {
+                        if send_res.is_ok() {
+                            // requests are drained.
+                            break;
+                        } else {
+                            warn!("region buckets stream exited: {:?}", send_res);
+                        }
+                    }
+                    recv_res = bk_rx.fuse() => {
+                        warn!("region buckets stream exited: {:?}", recv_res);
+                    }
+                }
+                let _ = bk_tx.close().await;
+                if reconnect.send(raw_client.cache_version()).await.is_err() {
+                    break;
+                }
+            }
+        });
+        Ok(tx)
+    }
+
+    fn create_tso_stream(
         &mut self,
     ) -> Result<(
-        mpsc::UnboundedSender<TsoRequest>,
-        CachedDuplexResponse<TsoResponse>,
+        Self::RequestChannel<TsoRequest>,
+        Self::ResponseChannel<TsoResponse>,
     )> {
         let (tx, rx) = mpsc::unbounded();
         let response_holder = Arc::new(std::sync::Mutex::new(None));
@@ -1186,6 +638,668 @@ impl RpcClient {
                 cache: None,
             },
         ))
+    }
+
+    fn load_global_config(&mut self, list: Vec<String>) -> PdFuture<HashMap<String, String>> {
+        use kvproto::pdpb::LoadGlobalConfigRequest;
+        let mut req = LoadGlobalConfigRequest::new();
+        req.set_names(list.into());
+        let mut raw_client = self.raw_client.clone();
+        Box::pin(async move {
+            raw_client.wait_for_ready().await?;
+            let fut = raw_client.stub().load_global_config_async(&req)?;
+            match fut.await {
+                Ok(grpc_response) => {
+                    let mut res = HashMap::with_capacity(grpc_response.get_items().len());
+                    for c in grpc_response.get_items() {
+                        if c.has_error() {
+                            error!("failed to load global config with key {:?}", c.get_error());
+                        } else {
+                            res.insert(c.get_name().to_owned(), c.get_value().to_owned());
+                        }
+                    }
+                    Ok(res)
+                }
+                Err(err) => Err(box_err!("{:?}", err)),
+            }
+        })
+    }
+
+    fn watch_global_config(
+        &mut self,
+    ) -> Result<grpcio::ClientSStreamReceiver<pdpb::WatchGlobalConfigResponse>> {
+        use kvproto::pdpb::WatchGlobalConfigRequest;
+        let req = WatchGlobalConfigRequest::default();
+        block_on(self.raw_client.wait_for_ready())?;
+        Ok(self.raw_client.stub().watch_global_config(&req)?)
+    }
+
+    fn get_cluster_id(&self) -> Result<u64> {
+        Ok(self.cluster_id)
+    }
+
+    fn bootstrap_cluster(
+        &mut self,
+        stores: metapb::Store,
+        region: metapb::Region,
+    ) -> Result<Option<ReplicationStatus>> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["bootstrap_cluster"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::BootstrapRequest::default();
+        req.set_header(self.header());
+        req.set_store(stores);
+        req.set_region(region);
+
+        block_on(self.raw_client.wait_for_ready())?;
+        let mut resp = self.raw_client.stub().bootstrap_opt(
+            &req,
+            self.raw_client
+                .call_option()
+                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+        )?;
+        check_resp_header(resp.get_header())?;
+        Ok(resp.replication_status.take())
+    }
+
+    fn is_cluster_bootstrapped(&mut self) -> Result<bool> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["is_cluster_bootstrapped"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::IsBootstrappedRequest::default();
+        req.set_header(self.header());
+
+        block_on(self.raw_client.wait_for_ready())?;
+        let resp = self.raw_client.stub().is_bootstrapped_opt(
+            &req,
+            self.raw_client
+                .call_option()
+                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+        )?;
+        check_resp_header(resp.get_header())?;
+
+        Ok(resp.get_bootstrapped())
+    }
+
+    fn alloc_id(&mut self) -> Result<u64> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["alloc_id"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::AllocIdRequest::default();
+        req.set_header(self.header());
+
+        block_on(self.raw_client.wait_for_ready())?;
+        let resp = self.raw_client.stub().alloc_id_opt(
+            &req,
+            self.raw_client
+                .call_option()
+                .timeout(Duration::from_secs(10)),
+        )?;
+        check_resp_header(resp.get_header())?;
+
+        let id = resp.get_id();
+        if id == 0 {
+            return Err(box_err!("pd alloc weird id 0"));
+        }
+        Ok(id)
+    }
+
+    fn is_recovering_marked(&mut self) -> Result<bool> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["is_recovering_marked"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::IsSnapshotRecoveringRequest::default();
+        req.set_header(self.header());
+
+        block_on(self.raw_client.wait_for_ready())?;
+        let resp = self.raw_client.stub().is_snapshot_recovering_opt(
+            &req,
+            self.raw_client
+                .call_option()
+                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+        )?;
+        check_resp_header(resp.get_header())?;
+
+        Ok(resp.get_marked())
+    }
+
+    fn put_store(&mut self, store: metapb::Store) -> Result<Option<ReplicationStatus>> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["put_store"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::PutStoreRequest::default();
+        req.set_header(self.header());
+        req.set_store(store);
+
+        block_on(self.raw_client.wait_for_ready())?;
+        let mut resp = self.raw_client.stub().put_store_opt(
+            &req,
+            self.raw_client
+                .call_option()
+                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+        )?;
+        check_resp_header(resp.get_header())?;
+
+        Ok(resp.replication_status.take())
+    }
+
+    fn get_store_and_stats(
+        &mut self,
+        store_id: u64,
+    ) -> PdFuture<(metapb::Store, pdpb::StoreStats)> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::GetStoreRequest::default();
+        req.set_header(self.header());
+        req.set_store_id(store_id);
+
+        let mut raw_client = self.raw_client.clone();
+        Box::pin(async move {
+            raw_client.wait_for_ready().await?;
+            let mut resp = raw_client
+                .stub()
+                .get_store_async_opt(
+                    &req,
+                    raw_client
+                        .call_option()
+                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+                )
+                .unwrap_or_else(|e| {
+                    panic!("fail to request PD {} err {:?}", "get_store_and_stats", e);
+                })
+                .await?;
+            PD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["get_store_and_stats"])
+                .observe(duration_to_sec(timer.saturating_elapsed()));
+            check_resp_header(resp.get_header())?;
+            let store = resp.take_store();
+            if store.get_state() != metapb::StoreState::Tombstone {
+                Ok((store, resp.take_stats()))
+            } else {
+                Err(Error::StoreTombstone(format!("{:?}", store)))
+            }
+        })
+    }
+
+    fn get_store(&mut self, store_id: u64) -> Result<metapb::Store> {
+        let (store, _) = block_on(self.get_store_and_stats(store_id))?;
+        Ok(store)
+    }
+
+    fn get_store_async(&mut self, store_id: u64) -> PdFuture<metapb::Store> {
+        self.get_store_and_stats(store_id).map_ok(|x| x.0).boxed()
+    }
+
+    fn get_store_stats_async(&mut self, store_id: u64) -> PdFuture<pdpb::StoreStats> {
+        self.get_store_and_stats(store_id).map_ok(|x| x.1).boxed()
+    }
+
+    fn get_all_stores(&mut self, exclude_tombstone: bool) -> Result<Vec<metapb::Store>> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["get_all_stores"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::GetAllStoresRequest::default();
+        req.set_header(self.header());
+        req.set_exclude_tombstone_stores(exclude_tombstone);
+
+        block_on(self.raw_client.wait_for_ready())?;
+        let mut resp = self.raw_client.stub().get_all_stores_opt(
+            &req,
+            self.raw_client
+                .call_option()
+                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+        )?;
+        check_resp_header(resp.get_header())?;
+
+        Ok(resp.take_stores().into())
+    }
+
+    fn get_cluster_config(&mut self) -> Result<metapb::Cluster> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["get_cluster_config"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::GetClusterConfigRequest::default();
+        req.set_header(self.header());
+
+        block_on(self.raw_client.wait_for_ready())?;
+        let mut resp = self.raw_client.stub().get_cluster_config_opt(
+            &req,
+            self.raw_client
+                .call_option()
+                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+        )?;
+        check_resp_header(resp.get_header())?;
+
+        Ok(resp.take_cluster())
+    }
+
+    fn get_region_and_leader(
+        &mut self,
+        key: &[u8],
+    ) -> PdFuture<(metapb::Region, Option<metapb::Peer>)> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["get_region"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::GetRegionRequest::default();
+        req.set_header(self.header());
+        req.set_region_key(key.to_vec());
+
+        let mut raw_client = self.raw_client.clone();
+        Box::pin(async move {
+            raw_client.wait_for_ready().await?;
+            let mut resp = raw_client
+                .stub()
+                .get_region_async_opt(
+                    &req,
+                    raw_client
+                        .call_option()
+                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+                )
+                .unwrap_or_else(|e| {
+                    panic!("fail to request PD {} err {:?}", "get_region_async_opt", e)
+                })
+                .await?;
+            check_resp_header(resp.get_header())?;
+            let region = if resp.has_region() {
+                resp.take_region()
+            } else {
+                return Err(Error::RegionNotFound(req.region_key));
+            };
+            let leader = if resp.has_leader() {
+                Some(resp.take_leader())
+            } else {
+                None
+            };
+            Ok((region, leader))
+        })
+    }
+
+    fn get_region(&mut self, key: &[u8]) -> Result<metapb::Region> {
+        block_on(self.get_region_and_leader(key)).map(|x| x.0)
+    }
+
+    fn get_region_info(&mut self, key: &[u8]) -> Result<RegionInfo> {
+        block_on(self.get_region_and_leader(key)).map(|x| RegionInfo::new(x.0, x.1))
+    }
+
+    fn get_region_async(&mut self, key: &[u8]) -> PdFuture<metapb::Region> {
+        self.get_region_and_leader(key).map_ok(|x| x.0).boxed()
+    }
+
+    fn get_region_info_async(&mut self, key: &[u8]) -> PdFuture<RegionInfo> {
+        self.get_region_and_leader(key)
+            .map_ok(|x| RegionInfo::new(x.0, x.1))
+            .boxed()
+    }
+
+    fn get_region_by_id(&mut self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::GetRegionByIdRequest::default();
+        req.set_header(self.header());
+        req.set_region_id(region_id);
+
+        let mut raw_client = self.raw_client.clone();
+        Box::pin(async move {
+            raw_client.wait_for_ready().await?;
+            let mut resp = raw_client
+                .stub()
+                .get_region_by_id_async_opt(
+                    &req,
+                    raw_client
+                        .call_option()
+                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+                )
+                .unwrap_or_else(|e| {
+                    panic!("fail to request PD {} err {:?}", "get_region_by_id", e);
+                })
+                .await?;
+            PD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["get_region_by_id"])
+                .observe(duration_to_sec(timer.saturating_elapsed()));
+            check_resp_header(resp.get_header())?;
+            if resp.has_region() {
+                Ok(Some(resp.take_region()))
+            } else {
+                Ok(None)
+            }
+        })
+    }
+
+    fn get_region_leader_by_id(
+        &mut self,
+        region_id: u64,
+    ) -> PdFuture<Option<(metapb::Region, metapb::Peer)>> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::GetRegionByIdRequest::default();
+        req.set_header(self.header());
+        req.set_region_id(region_id);
+
+        let mut raw_client = self.raw_client.clone();
+        Box::pin(async move {
+            raw_client.wait_for_ready().await?;
+            let mut resp = raw_client
+                .stub()
+                .get_region_by_id_async_opt(
+                    &req,
+                    raw_client
+                        .call_option()
+                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+                )
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "fail to request PD {} err {:?}",
+                        "get_region_leader_by_id", e
+                    );
+                })
+                .await?;
+            PD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["get_region_leader_by_id"])
+                .observe(duration_to_sec(timer.saturating_elapsed()));
+            check_resp_header(resp.get_header())?;
+            if resp.has_region() && resp.has_leader() {
+                Ok(Some((resp.take_region(), resp.take_leader())))
+            } else {
+                Ok(None)
+            }
+        })
+    }
+
+    fn ask_split(&mut self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::AskSplitRequest::default();
+        req.set_header(self.header());
+        req.set_region(region);
+
+        let mut raw_client = self.raw_client.clone();
+        Box::pin(async move {
+            raw_client.wait_for_ready().await?;
+            let resp = raw_client
+                .stub()
+                .ask_split_async_opt(
+                    &req,
+                    raw_client
+                        .call_option()
+                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+                )
+                .unwrap_or_else(|e| {
+                    panic!("fail to request PD {} err {:?}", "ask_split", e);
+                })
+                .await?;
+            PD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["ask_split"])
+                .observe(duration_to_sec(timer.saturating_elapsed()));
+            check_resp_header(resp.get_header())?;
+            Ok(resp)
+        })
+    }
+
+    fn ask_batch_split(
+        &mut self,
+        region: metapb::Region,
+        count: usize,
+    ) -> PdFuture<pdpb::AskBatchSplitResponse> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::AskBatchSplitRequest::default();
+        req.set_header(self.header());
+        req.set_region(region);
+        req.set_split_count(count as u32);
+
+        let mut raw_client = self.raw_client.clone();
+        Box::pin(async move {
+            raw_client.wait_for_ready().await?;
+            let resp = raw_client
+                .stub()
+                .ask_batch_split_async_opt(
+                    &req,
+                    raw_client
+                        .call_option()
+                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+                )
+                .unwrap_or_else(|e| {
+                    panic!("fail to request PD {} err {:?}", "ask_batch_split", e);
+                })
+                .await?;
+            PD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["ask_batch_split"])
+                .observe(duration_to_sec(timer.saturating_elapsed()));
+            check_resp_header(resp.get_header())?;
+            Ok(resp)
+        })
+    }
+
+    fn store_heartbeat(
+        &mut self,
+        mut stats: pdpb::StoreStats,
+        store_report: Option<pdpb::StoreReport>,
+        dr_autosync_status: Option<StoreDrAutoSyncStatus>,
+    ) -> PdFuture<pdpb::StoreHeartbeatResponse> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::StoreHeartbeatRequest::default();
+        req.set_header(self.header());
+        stats
+            .mut_interval()
+            .set_end_timestamp(UnixSecs::now().into_inner());
+        req.set_stats(stats);
+        if let Some(report) = store_report {
+            req.set_store_report(report);
+        }
+        if let Some(status) = dr_autosync_status {
+            req.set_dr_autosync_status(status);
+        }
+
+        let mut raw_client = self.raw_client.clone();
+        let feature_gate = self.feature_gate.clone();
+        Box::pin(async move {
+            raw_client.wait_for_ready().await?;
+            let resp = raw_client
+                .stub()
+                .store_heartbeat_async_opt(
+                    &req,
+                    raw_client
+                        .call_option()
+                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+                )
+                .unwrap_or_else(|e| {
+                    panic!("fail to request PD {} err {:?}", "store_heartbeat", e);
+                })
+                .await?;
+            PD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["store_heartbeat"])
+                .observe(duration_to_sec(timer.saturating_elapsed()));
+            check_resp_header(resp.get_header())?;
+            match feature_gate.set_version(resp.get_cluster_version()) {
+                Err(_) => warn!("invalid cluster version: {}", resp.get_cluster_version()),
+                Ok(true) => info!("set cluster version to {}", resp.get_cluster_version()),
+                _ => {}
+            };
+            Ok(resp)
+        })
+    }
+
+    fn report_batch_split(&mut self, regions: Vec<metapb::Region>) -> PdFuture<()> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::ReportBatchSplitRequest::default();
+        req.set_header(self.header());
+        req.set_regions(regions.into());
+
+        let mut raw_client = self.raw_client.clone();
+        Box::pin(async move {
+            raw_client.wait_for_ready().await?;
+            let resp = raw_client
+                .stub()
+                .report_batch_split_async_opt(
+                    &req,
+                    raw_client
+                        .call_option()
+                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+                )
+                .unwrap_or_else(|e| {
+                    panic!("fail to request PD {} err {:?}", "report_batch_split", e);
+                })
+                .await?;
+            PD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["report_batch_split"])
+                .observe(duration_to_sec(timer.saturating_elapsed()));
+            check_resp_header(resp.get_header())?;
+            Ok(())
+        })
+    }
+
+    fn scatter_region(&mut self, mut region: RegionInfo) -> Result<()> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["scatter_region"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::ScatterRegionRequest::default();
+        req.set_header(self.header());
+        req.set_region_id(region.get_id());
+        if let Some(leader) = region.leader.take() {
+            req.set_leader(leader);
+        }
+        req.set_region(region.region);
+
+        block_on(self.raw_client.wait_for_ready())?;
+        let resp = self.raw_client.stub().scatter_region_opt(
+            &req,
+            self.raw_client
+                .call_option()
+                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+        )?;
+        check_resp_header(resp.get_header())
+    }
+
+    fn get_gc_safe_point(&mut self) -> PdFuture<u64> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::GetGcSafePointRequest::default();
+        req.set_header(self.header());
+
+        let mut raw_client = self.raw_client.clone();
+        Box::pin(async move {
+            raw_client.wait_for_ready().await?;
+            let resp = raw_client
+                .stub()
+                .get_gc_safe_point_async_opt(
+                    &req,
+                    raw_client
+                        .call_option()
+                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+                )
+                .unwrap_or_else(|e| {
+                    panic!("fail to request PD {} err {:?}", "get_gc_saft_point", e);
+                })
+                .await?;
+            PD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["get_gc_saft_point"])
+                .observe(duration_to_sec(timer.saturating_elapsed()));
+            check_resp_header(resp.get_header())?;
+            Ok(resp.get_safe_point())
+        })
+    }
+
+    fn get_operator(&mut self, region_id: u64) -> Result<pdpb::GetOperatorResponse> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["get_operator"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::GetOperatorRequest::default();
+        req.set_header(self.header());
+        req.set_region_id(region_id);
+
+        block_on(self.raw_client.wait_for_ready())?;
+        let resp = self.raw_client.stub().get_operator_opt(
+            &req,
+            self.raw_client
+                .call_option()
+                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+        )?;
+        check_resp_header(resp.get_header())?;
+
+        Ok(resp)
+    }
+
+    fn update_service_safe_point(
+        &mut self,
+        name: String,
+        safe_point: TimeStamp,
+        ttl: Duration,
+    ) -> PdFuture<()> {
+        let timer = Instant::now();
+        let mut req = pdpb::UpdateServiceGcSafePointRequest::default();
+        req.set_header(self.header());
+        req.set_service_id(name.into());
+        req.set_ttl(ttl.as_secs() as _);
+        req.set_safe_point(safe_point.into_inner());
+
+        let mut raw_client = self.raw_client.clone();
+        Box::pin(async move {
+            raw_client.wait_for_ready().await?;
+            let resp = raw_client
+                .stub()
+                .update_service_gc_safe_point_async_opt(
+                    &req,
+                    raw_client
+                        .call_option()
+                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+                )
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "fail to request PD {} err {:?}",
+                        "update_service_safe_point", e
+                    );
+                })
+                .await?;
+            PD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["update_service_safe_point"])
+                .observe(duration_to_sec(timer.saturating_elapsed()));
+            check_resp_header(resp.get_header())?;
+            Ok(())
+        })
+    }
+
+    fn report_min_resolved_ts(&mut self, store_id: u64, min_resolved_ts: u64) -> PdFuture<()> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::ReportMinResolvedTsRequest::default();
+        req.set_header(self.header());
+        req.set_store_id(store_id);
+        req.set_min_resolved_ts(min_resolved_ts);
+
+        let mut raw_client = self.raw_client.clone();
+        Box::pin(async move {
+            raw_client.wait_for_ready().await?;
+            let resp = raw_client
+                .stub()
+                .report_min_resolved_ts_async_opt(
+                    &req,
+                    raw_client
+                        .call_option()
+                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+                )
+                .unwrap_or_else(|e| {
+                    panic!("fail to request PD {} err {:?}", "min_resolved_ts", e);
+                })
+                .await?;
+            PD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["min_resolved_ts"])
+                .observe(duration_to_sec(timer.saturating_elapsed()));
+            check_resp_header(resp.get_header())?;
+            Ok(())
+        })
     }
 }
 

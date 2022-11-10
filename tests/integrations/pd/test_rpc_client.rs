@@ -13,7 +13,7 @@ use error_code::ErrorCodeExt;
 use futures::{executor::block_on, SinkExt, StreamExt};
 use grpcio::{EnvBuilder, Error as GrpcError, RpcStatus, RpcStatusCode};
 use kvproto::{metapb, pdpb};
-use pd_client::{Error as PdError, Feature, PdClient, PdConnector, RpcClientV2};
+use pd_client::{Error as PdError, Feature, PdClientV2, PdConnector, RpcClientV2};
 use security::{SecurityConfig, SecurityManager};
 use test_pd::{mocker::*, util::*, Server as MockServer};
 use tikv_util::config::ReadableDuration;
@@ -549,7 +549,7 @@ fn test_periodical_update() {
     let eps = server.bind_addrs();
 
     let counter = Arc::new(AtomicUsize::new(0));
-    let client = new_client_with_update_interval(eps, None, ReadableDuration::secs(3));
+    let mut client = new_client_v2_with_update_interval(eps, None, ReadableDuration::secs(3));
     let counter1 = Arc::clone(&counter);
     client.handle_reconnect(move || {
         counter1.fetch_add(1, Ordering::SeqCst);
