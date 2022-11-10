@@ -2566,9 +2566,6 @@ pub struct CdcConfig {
     // Deprecated! preserved for compatibility check.
     #[online_config(skip)]
     #[doc(hidden)]
-    pub raw_min_ts_outlier_threshold: ReadableDuration,
-    #[online_config(skip)]
-    #[doc(hidden)]
     #[serde(skip_serializing)]
     pub old_value_cache_size: usize,
 }
@@ -2591,8 +2588,6 @@ impl Default for CdcConfig {
             sink_memory_quota: ReadableSize::mb(512),
             // 512MB memory for old value cache.
             old_value_cache_memory_quota: ReadableSize::mb(512),
-            // Trigger raw region outlier judgement if resolved_ts's lag is over 60s.
-            raw_min_ts_outlier_threshold: ReadableDuration::secs(60),
             // Deprecated! preserved for compatibility check.
             old_value_cache_size: 0,
         }
@@ -2633,14 +2628,6 @@ impl CdcConfig {
                 default_cfg.incremental_scan_ts_filter_ratio
             );
             self.incremental_scan_ts_filter_ratio = default_cfg.incremental_scan_ts_filter_ratio;
-        }
-        if self.raw_min_ts_outlier_threshold.is_zero() {
-            warn!(
-                "cdc.raw_min_ts_outlier_threshold should be larger than 0,
-                change it to {}",
-                default_cfg.raw_min_ts_outlier_threshold
-            );
-            self.raw_min_ts_outlier_threshold = default_cfg.raw_min_ts_outlier_threshold;
         }
         Ok(())
     }
