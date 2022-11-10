@@ -9,19 +9,30 @@ use crate::storage::{
         metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
         ErrorInner, MvccTxn, Result as MvccResult, SnapshotReader,
     },
-    txn::actions::check_data_constraint::check_data_constraint,
+    txn::{
+        actions::check_data_constraint::check_data_constraint, sched_pool::tls_can_enable,
+        scheduler::LAST_CHANGE_TS,
+    },
+    types::PessimisticLockKeyResult,
     Snapshot,
 };
 
 /// Acquires pessimistic lock on a single key. Optionally reads the previous
 /// value by the way.
 ///
-/// When `need_value` is set, the first return value will be the previous value
-/// of the key (possibly `None`). When `need_value` is not set but
-/// `need_check_existence` is set, the first return value will be an empty value
-/// (`Some(vec![])`) if the key exists before or `None` if not. If neither
-/// `need_value` nor `need_check_existence` is set, the first return value is
-/// always `None`.
+/// When `need_value` is set, the first return value will be
+/// `PessimisticLockKeyResult::Value`. When `need_value` is not set but
+/// `need_check_existence` is set, the first return value will be
+/// `PessimisticLockKeyResult::Existence`. If neither `need_value` nor
+/// `need_check_existence` is set, the first return value will be
+/// `PessimisticLockKeyResult::Empty`.
+///
+/// If `allow_lock_with_conflict` is set, and the lock is acquired successfully
+/// ignoring a write conflict, the first return value will be
+/// `PessimisticLockKeyResult::LockedWithConflict` no matter how `need_value`
+/// and `need_check_existence` are set, and the `for_update_ts` in
+/// the actually-written lock will be equal to the `commit_ts` of the latest
+/// Write record found on the key.
 ///
 /// The second return value will also contains the previous value of the key if
 /// `need_old_value` is set, or `OldValue::Unspecified` otherwise.
@@ -32,13 +43,14 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     primary: &[u8],
     should_not_exist: bool,
     lock_ttl: u64,
-    for_update_ts: TimeStamp,
+    mut for_update_ts: TimeStamp,
     need_value: bool,
     need_check_existence: bool,
     min_commit_ts: TimeStamp,
     need_old_value: bool,
     lock_only_if_exists: bool,
-) -> MvccResult<(Option<Value>, OldValue)> {
+    allow_lock_with_conflict: bool,
+) -> MvccResult<(PessimisticLockKeyResult, OldValue)> {
     fail_point!("acquire_pessimistic_lock", |err| Err(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts).into()
     ));
@@ -54,9 +66,10 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         }
         .into());
     }
-    // Update max_ts for Insert operation to guarantee linearizability and snapshot
-    // isolation
-    if should_not_exist {
+    // If any of `should_not_exist`, `need_value`, `need_check_existence` is set,
+    // it infers a read to the value, in which case max_ts need to be updated to
+    // guarantee the linearizability and snapshot isolation.
+    if should_not_exist || need_value || need_check_existence {
         txn.concurrency_manager.update_max_ts(for_update_ts);
     }
 
@@ -64,7 +77,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     // `need_check_existence` and `need_old_value` are both set, we also load
     // the value even if `need_value` is false, so that it avoids
     // `load_old_value` doing repeated work.
-    let need_load_value = need_value || (need_check_existence && need_old_value);
+    let mut need_load_value = need_value || (need_check_existence && need_old_value);
 
     fn load_old_value<S: Snapshot>(
         need_old_value: bool,
@@ -90,19 +103,6 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         }
     }
 
-    /// Returns proper result according to the loaded value (if any) the
-    /// specified settings.
-    #[inline]
-    fn ret_val(need_value: bool, need_check_existence: bool, val: Option<Value>) -> Option<Value> {
-        if need_value {
-            val
-        } else if need_check_existence {
-            val.map(|_| vec![])
-        } else {
-            None
-        }
-    }
-
     let mut val = None;
     if let Some(lock) = reader.load_lock(&key)? {
         if lock.ts != reader.start_ts {
@@ -116,6 +116,32 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             }
             .into());
         }
+
+        let locked_with_conflict_ts =
+            if allow_lock_with_conflict && for_update_ts < lock.for_update_ts {
+                // If the key is already locked by the same transaction with larger
+                // for_update_ts, and the current request has
+                // `allow_lock_with_conflict` set, we must consider
+                // these possibilities:
+                // * If a previous request successfully locked the key with conflict, but the
+                //   response is lost due to some errors such as RPC failures. In this case, we
+                //   return like the current request's result is locked_with_conflict, for
+                //   idempotency concern.
+                // * The key is locked by a newer request with larger for_update_ts, and the
+                //   current request is stale. We can't distinguish this case with the above
+                //   one, but we don't need to handle this case since no one would need the
+                //   current request's result anymore.
+
+                // Load value if locked_with_conflict, so that when the client (TiDB) need to
+                // read the value during statement retry, it will be possible to read the value
+                // from cache instead of RPC.
+                need_load_value = true;
+                for_update_ts = lock.for_update_ts;
+                Some(lock.for_update_ts)
+            } else {
+                None
+            };
+
         if need_load_value {
             val = reader.get(&key, for_update_ts)?;
         } else if need_check_existence {
@@ -142,6 +168,8 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 ttl: lock_ttl,
                 for_update_ts,
                 min_commit_ts,
+                last_change_ts: lock.last_change_ts,
+                versions_to_last_change: lock.versions_to_last_change,
             };
             txn.put_pessimistic_lock(key, lock);
         } else {
@@ -149,11 +177,23 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 .acquire_pessimistic_lock
                 .inc();
         }
-        return Ok((ret_val(need_value, need_check_existence, val), old_value));
+        return Ok((
+            PessimisticLockKeyResult::new_success(
+                need_value,
+                need_check_existence,
+                locked_with_conflict_ts,
+                val,
+            ),
+            old_value,
+        ));
     }
+
+    let mut locked_with_conflict_ts = None;
 
     // Following seek_write read the previous write.
     let (prev_write_loaded, mut prev_write) = (true, None);
+    let mut last_change_ts = TimeStamp::zero();
+    let mut versions_to_last_change = 0;
     if let Some((commit_ts, write)) = reader.seek_write(&key, TimeStamp::max())? {
         // Find a previous write.
         if need_old_value {
@@ -168,15 +208,22 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             MVCC_CONFLICT_COUNTER
                 .acquire_pessimistic_lock_conflict
                 .inc();
-            return Err(ErrorInner::WriteConflict {
-                start_ts: reader.start_ts,
-                conflict_start_ts: write.start_ts,
-                conflict_commit_ts: commit_ts,
-                key: key.into_raw()?,
-                primary: primary.to_vec(),
-                reason: WriteConflictReason::PessimisticRetry,
+            if allow_lock_with_conflict {
+                // TODO: New metrics.
+                locked_with_conflict_ts = Some(commit_ts);
+                for_update_ts = commit_ts;
+                need_load_value = true;
+            } else {
+                return Err(ErrorInner::WriteConflict {
+                    start_ts: reader.start_ts,
+                    conflict_start_ts: write.start_ts,
+                    conflict_commit_ts: commit_ts,
+                    key: key.into_raw()?,
+                    primary: primary.to_vec(),
+                    reason: WriteConflictReason::PessimisticRetry,
+                }
+                .into());
             }
-            .into());
         }
 
         // Handle rollback.
@@ -211,10 +258,21 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             }
         }
 
-        // Check data constraint when acquiring pessimistic lock.
-        check_data_constraint(reader, should_not_exist, &write, commit_ts, &key)?;
+        // Check data constraint when acquiring pessimistic lock. But in case we are
+        // going to lock it with write conflict, we do not check it since the
+        // statement will then retry.
+        if locked_with_conflict_ts.is_none() {
+            check_data_constraint(reader, should_not_exist, &write, commit_ts, &key)?;
+        }
 
-        if need_value || need_check_existence {
+        if tls_can_enable(LAST_CHANGE_TS) {
+            (last_change_ts, versions_to_last_change) = write.next_last_change_info(commit_ts);
+        }
+
+        // Load value if locked_with_conflict, so that when the client (TiDB) need to
+        // read the value during statement retry, it will be possible to read the value
+        // from cache instead of RPC.
+        if need_value || need_check_existence || locked_with_conflict_ts.is_some() {
             val = match write.write_type {
                 // If it's a valid Write, no need to read again.
                 WriteType::Put
@@ -256,16 +314,26 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         ttl: lock_ttl,
         for_update_ts,
         min_commit_ts,
+        last_change_ts,
+        versions_to_last_change,
     };
 
-    // When lock_only_if_exists is false, always accquire pessimitic lock, otherwise
+    // When lock_only_if_exists is false, always acquire pessimistic lock, otherwise
     // do it when val exists
     if !lock_only_if_exists || val.is_some() {
         txn.put_pessimistic_lock(key, lock);
     }
     // TODO don't we need to commit the modifies in txn?
 
-    Ok((ret_val(need_value, need_check_existence, val), old_value))
+    Ok((
+        PessimisticLockKeyResult::new_success(
+            need_value,
+            need_check_existence,
+            locked_with_conflict_ts,
+            val,
+        ),
+        old_value,
+    ))
 }
 
 pub mod tests {
@@ -273,7 +341,7 @@ pub mod tests {
     use kvproto::kvrpcpb::Context;
     #[cfg(test)]
     use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
-    use txn_types::TimeStamp;
+    use txn_types::{Lock, TimeStamp};
 
     use super::*;
     use crate::storage::{
@@ -291,6 +359,70 @@ pub mod tests {
         txn::tests::*,
         TestEngineBuilder,
     };
+
+    #[cfg(test)]
+    pub fn acquire_pessimistic_lock_allow_lock_with_conflict<E: Engine>(
+        engine: &mut E,
+        key: &[u8],
+        pk: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        for_update_ts: impl Into<TimeStamp>,
+        need_value: bool,
+        need_check_existence: bool,
+    ) -> MvccResult<PessimisticLockKeyResult> {
+        let ctx = Context::default();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let cm = ConcurrencyManager::new(0.into());
+        let start_ts = start_ts.into();
+        let mut txn = MvccTxn::new(start_ts, cm);
+        let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+        let res = acquire_pessimistic_lock(
+            &mut txn,
+            &mut reader,
+            Key::from_raw(key),
+            pk,
+            false,
+            1,
+            for_update_ts.into(),
+            need_value,
+            need_check_existence,
+            0.into(),
+            false,
+            false,
+            true,
+        );
+        if res.is_ok() {
+            let modifies = txn.into_modifies();
+            if !modifies.is_empty() {
+                engine
+                    .write(&ctx, WriteData::from_modifies(modifies))
+                    .unwrap();
+            }
+        }
+        res.map(|r| r.0)
+    }
+
+    #[cfg(test)]
+    pub fn must_succeed_allow_lock_with_conflict<E: Engine>(
+        engine: &mut E,
+        key: &[u8],
+        pk: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        for_update_ts: impl Into<TimeStamp>,
+        need_value: bool,
+        need_check_existence: bool,
+    ) -> PessimisticLockKeyResult {
+        acquire_pessimistic_lock_allow_lock_with_conflict(
+            engine,
+            key,
+            pk,
+            start_ts,
+            for_update_ts,
+            need_value,
+            need_check_existence,
+        )
+        .unwrap()
+    }
 
     pub fn must_succeed_impl<E: Engine>(
         engine: &mut E,
@@ -325,6 +457,7 @@ pub mod tests {
             min_commit_ts,
             false,
             lock_only_if_exists,
+            false,
         )
         .unwrap();
         let modifies = txn.into_modifies();
@@ -333,7 +466,19 @@ pub mod tests {
                 .write(&ctx, WriteData::from_modifies(modifies))
                 .unwrap();
         }
-        res.0
+        // TODO: Adapt to new interface
+        match res.0 {
+            PessimisticLockKeyResult::Value(v) => v,
+            PessimisticLockKeyResult::Existence(e) => {
+                if e {
+                    Some(vec![])
+                } else {
+                    None
+                }
+            }
+            PessimisticLockKeyResult::Empty => None,
+            res => panic!("unexpected result: {:?}", res),
+        }
     }
 
     pub fn must_succeed<E: Engine>(
@@ -494,6 +639,7 @@ pub mod tests {
             min_commit_ts,
             false,
             lock_only_if_exists,
+            false,
         )
         .unwrap_err()
     }
@@ -503,13 +649,14 @@ pub mod tests {
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
         for_update_ts: impl Into<TimeStamp>,
-    ) {
+    ) -> Lock {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true);
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts.into());
         assert_eq!(lock.for_update_ts, for_update_ts.into());
         assert_eq!(lock.lock_type, LockType::Pessimistic);
+        lock
     }
 
     #[test]
@@ -1100,6 +1247,7 @@ pub mod tests {
                         min_commit_ts,
                         need_old_value,
                         false,
+                        false,
                     )
                     .unwrap();
                     assert_eq!(old_value, OldValue::None);
@@ -1151,6 +1299,7 @@ pub mod tests {
             min_commit_ts,
             need_old_value,
             false,
+            false,
         )
         .unwrap();
         assert_eq!(
@@ -1184,6 +1333,7 @@ pub mod tests {
             false,
             min_commit_ts,
             true,
+            false,
             false,
         )
         .unwrap();
@@ -1227,6 +1377,7 @@ pub mod tests {
                             *need_check_existence,
                             min_commit_ts,
                             need_old_value,
+                            false,
                             false,
                         )?;
                         Ok(old_value)
@@ -1281,6 +1432,7 @@ pub mod tests {
             min_commit_ts,
             need_old_value,
             false,
+            false,
         )
         .unwrap_err();
 
@@ -1314,6 +1466,7 @@ pub mod tests {
             check_existence,
             min_commit_ts,
             need_old_value,
+            false,
             false,
         )
         .unwrap_err();
@@ -1459,5 +1612,214 @@ pub mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_calculate_last_change_ts() {
+        use engine_traits::CF_WRITE;
+        use pd_client::FeatureGate;
+
+        use crate::storage::txn::sched_pool::set_tls_feature_gate;
+
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"k";
+
+        let feature_gate = FeatureGate::default();
+        feature_gate.set_version("6.4.0").unwrap();
+        set_tls_feature_gate(feature_gate.clone());
+
+        // Latest version is a PUT, but last_change_ts is enabled with cluster version
+        // higher than 6.5.0.
+        let write = Write::new(WriteType::Put, 15.into(), Some(b"value".to_vec()));
+        engine
+            .put_cf(
+                Default::default(),
+                CF_WRITE,
+                Key::from_raw(key).append_ts(20.into()),
+                write.as_ref().to_bytes(),
+            )
+            .unwrap();
+        must_succeed(&mut engine, key, key, 10, 30);
+        let lock = must_pessimistic_locked(&mut engine, key, 10, 30);
+        assert_eq!(lock.last_change_ts, TimeStamp::zero());
+        assert_eq!(lock.versions_to_last_change, 0);
+        pessimistic_rollback::tests::must_success(&mut engine, key, 10, 30);
+        // Set cluster version to 6.5.0, last_change_ts should work now.
+        feature_gate.set_version("6.5.0").unwrap();
+        must_succeed(&mut engine, key, key, 10, 30);
+        let lock = must_pessimistic_locked(&mut engine, key, 10, 30);
+        assert_eq!(lock.last_change_ts, 20.into());
+        assert_eq!(lock.versions_to_last_change, 1);
+        pessimistic_rollback::tests::must_success(&mut engine, key, 10, 30);
+
+        // Latest version is a DELETE
+        let write = Write::new(WriteType::Delete, 40.into(), None);
+        engine
+            .put_cf(
+                Default::default(),
+                CF_WRITE,
+                Key::from_raw(key).append_ts(50.into()),
+                write.as_ref().to_bytes(),
+            )
+            .unwrap();
+        must_succeed(&mut engine, key, key, 60, 70);
+        let lock = must_pessimistic_locked(&mut engine, key, 60, 70);
+        assert_eq!(lock.last_change_ts, 50.into());
+        assert_eq!(lock.versions_to_last_change, 1);
+        pessimistic_rollback::tests::must_success(&mut engine, key, 60, 70);
+
+        // Latest version is a LOCK without last_change_ts
+        let write = Write::new(WriteType::Lock, 70.into(), None);
+        engine
+            .put_cf(
+                Default::default(),
+                CF_WRITE,
+                Key::from_raw(key).append_ts(75.into()),
+                write.as_ref().to_bytes(),
+            )
+            .unwrap();
+        must_succeed(&mut engine, key, key, 80, 80);
+        let lock = must_pessimistic_locked(&mut engine, key, 80, 80);
+        assert!(lock.last_change_ts.is_zero());
+        assert_eq!(lock.versions_to_last_change, 0);
+        pessimistic_rollback::tests::must_success(&mut engine, key, 80, 80);
+
+        // Latest version is a ROLLBACK without last_change_ts
+        let write = Write::new(WriteType::Lock, 90.into(), None);
+        engine
+            .put_cf(
+                Default::default(),
+                CF_WRITE,
+                Key::from_raw(key).append_ts(90.into()),
+                write.as_ref().to_bytes(),
+            )
+            .unwrap();
+        must_succeed(&mut engine, key, key, 95, 95);
+        let lock = must_pessimistic_locked(&mut engine, key, 95, 95);
+        assert!(lock.last_change_ts.is_zero());
+        assert_eq!(lock.versions_to_last_change, 0);
+        pessimistic_rollback::tests::must_success(&mut engine, key, 95, 95);
+
+        // Latest version is a LOCK with last_change_ts
+        let write = Write::new(WriteType::Lock, 100.into(), None).set_last_change(40.into(), 4);
+        engine
+            .put_cf(
+                Default::default(),
+                CF_WRITE,
+                Key::from_raw(key).append_ts(110.into()),
+                write.as_ref().to_bytes(),
+            )
+            .unwrap();
+        must_succeed(&mut engine, key, key, 120, 130);
+        let lock = must_pessimistic_locked(&mut engine, key, 120, 130);
+        assert_eq!(lock.last_change_ts, 40.into());
+        assert_eq!(lock.versions_to_last_change, 5);
+        pessimistic_rollback::tests::must_success(&mut engine, key, 120, 130);
+
+        // Latest version is a ROLLBACK with last_change_ts
+        let write = Write::new(WriteType::Rollback, 120.into(), None).set_last_change(40.into(), 5);
+        engine
+            .put_cf(
+                Default::default(),
+                CF_WRITE,
+                Key::from_raw(key).append_ts(120.into()),
+                write.as_ref().to_bytes(),
+            )
+            .unwrap();
+        must_succeed(&mut engine, key, key, 140, 140);
+        let lock = must_pessimistic_locked(&mut engine, key, 140, 140);
+        assert_eq!(lock.last_change_ts, 40.into());
+        assert_eq!(lock.versions_to_last_change, 6);
+        pessimistic_rollback::tests::must_success(&mut engine, key, 140, 140);
+    }
+
+    #[test]
+    fn test_lock_with_conflict() {
+        use pessimistic_rollback::tests::must_success as must_pessimistic_rollback;
+
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+
+        must_prewrite_put(&mut engine, b"k1", b"v1", b"k1", 10);
+        must_commit(&mut engine, b"k1", 10, 20);
+
+        // Normal cases.
+        must_succeed_allow_lock_with_conflict(&mut engine, b"k1", b"k1", 10, 30, false, false)
+            .assert_empty();
+        must_pessimistic_rollback(&mut engine, b"k1", 10, 30);
+        must_unlocked(&mut engine, b"k1");
+
+        must_succeed_allow_lock_with_conflict(&mut engine, b"k1", b"k1", 10, 30, false, true)
+            .assert_existence(true);
+        must_pessimistic_rollback(&mut engine, b"k1", 10, 30);
+        must_unlocked(&mut engine, b"k1");
+
+        must_succeed_allow_lock_with_conflict(&mut engine, b"k1", b"k1", 10, 30, true, false)
+            .assert_value(Some(b"v1"));
+        must_pessimistic_rollback(&mut engine, b"k1", 10, 30);
+        must_unlocked(&mut engine, b"k1");
+
+        must_succeed_allow_lock_with_conflict(&mut engine, b"k1", b"k1", 10, 30, true, true)
+            .assert_value(Some(b"v1"));
+        must_pessimistic_rollback(&mut engine, b"k1", 10, 30);
+        must_unlocked(&mut engine, b"k1");
+
+        // Conflicting cases.
+        for &(need_value, need_check_existence) in
+            &[(false, false), (false, true), (true, false), (true, true)]
+        {
+            must_succeed_allow_lock_with_conflict(
+                &mut engine,
+                b"k1",
+                b"k1",
+                10,
+                15,
+                need_value,
+                need_check_existence,
+            )
+            .assert_locked_with_conflict(Some(b"v1"), 20);
+            must_pessimistic_locked(&mut engine, b"k1", 10, 20);
+            must_pessimistic_rollback(&mut engine, b"k1", 10, 20);
+            must_unlocked(&mut engine, b"k1");
+        }
+
+        // Idempotency
+        must_succeed_allow_lock_with_conflict(&mut engine, b"k1", b"k1", 10, 50, false, false)
+            .assert_empty();
+        must_succeed_allow_lock_with_conflict(&mut engine, b"k1", b"k1", 10, 40, false, false)
+            .assert_locked_with_conflict(Some(b"v1"), 50);
+        must_succeed_allow_lock_with_conflict(&mut engine, b"k1", b"k1", 10, 15, false, false)
+            .assert_locked_with_conflict(Some(b"v1"), 50);
+        must_pessimistic_locked(&mut engine, b"k1", 10, 50);
+        must_pessimistic_rollback(&mut engine, b"k1", 10, 50);
+        must_unlocked(&mut engine, b"k1");
+
+        // Lock waiting.
+        must_succeed_allow_lock_with_conflict(&mut engine, b"k1", b"k1", 10, 50, false, false)
+            .assert_empty();
+        let err = acquire_pessimistic_lock_allow_lock_with_conflict(
+            &mut engine,
+            b"k1",
+            b"k1",
+            11,
+            55,
+            false,
+            false,
+        )
+        .unwrap_err();
+        assert!(matches!(err, MvccError(box ErrorInner::KeyIsLocked(_))));
+        let err = acquire_pessimistic_lock_allow_lock_with_conflict(
+            &mut engine,
+            b"k1",
+            b"k1",
+            9,
+            9,
+            false,
+            false,
+        )
+        .unwrap_err();
+        assert!(matches!(err, MvccError(box ErrorInner::KeyIsLocked(_))));
+        must_pessimistic_locked(&mut engine, b"k1", 10, 50);
+        must_pessimistic_rollback(&mut engine, b"k1", 10, 50);
+        must_unlocked(&mut engine, b"k1");
     }
 }

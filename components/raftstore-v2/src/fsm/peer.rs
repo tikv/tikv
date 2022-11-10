@@ -40,7 +40,7 @@ impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
     pub fn new(
         cfg: &Config,
         tablet_factory: &dyn TabletFactory<EK>,
-        storage: Storage<ER>,
+        storage: Storage<EK, ER>,
     ) -> Result<SenderFsmPair<EK, ER>> {
         let peer = Peer::new(cfg, tablet_factory, storage)?;
         info!(peer.logger, "create peer");
@@ -229,8 +229,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     .fsm
                     .peer_mut()
                     .on_persisted(self.store_ctx, peer_id, ready_number),
-                PeerMsg::FetchedLogs(fetched_logs) => {
-                    self.fsm.peer_mut().on_fetched_logs(fetched_logs)
+                PeerMsg::LogsFetched(fetched_logs) => {
+                    self.fsm.peer_mut().on_logs_fetched(fetched_logs)
+                }
+                PeerMsg::SnapshotGenerated(snap_res) => {
+                    self.fsm.peer_mut().on_snapshot_generated(snap_res)
                 }
                 PeerMsg::QueryDebugInfo(ch) => self.fsm.peer_mut().on_query_debug_info(ch),
                 #[cfg(feature = "testexport")]

@@ -1,10 +1,11 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod conf_change;
+mod split;
 
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
-    raft_cmdpb::{AdminRequest, RaftCmdRequest},
+    raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest},
     raft_serverpb::PeerState,
 };
 use protobuf::Message;
@@ -19,6 +20,7 @@ use raftstore::{
     Result,
 };
 use slog::info;
+pub use split::SplitResult;
 use tikv_util::box_err;
 
 use self::conf_change::ConfChangeResult;
@@ -30,6 +32,7 @@ use crate::{
 
 #[derive(Debug)]
 pub enum AdminCmdResult {
+    SplitRegion(SplitResult),
     ConfChange(ConfChangeResult),
 }
 
@@ -72,7 +75,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.propose_conf_change(ctx, req)
         } else {
             // propose other admin command.
-            unimplemented!()
+            match cmd_type {
+                AdminCmdType::Split => Err(box_err!(
+                    "Split is deprecated. Please use BatchSplit instead."
+                )),
+                AdminCmdType::BatchSplit => self.propose_split(ctx, req),
+                _ => unimplemented!(),
+            }
         };
         if let Err(e) = &res {
             info!(
