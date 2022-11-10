@@ -457,7 +457,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreRouter<EK, ER> {
     ) -> std::result::Result<(), TrySendError<Box<RaftMessage>>> {
         let id = msg.get_region_id();
         let peer_msg = PeerMsg::RaftMessage(msg);
-        let store_msg = match self.try_send(id, peer_msg) {
+        let store_msg = match self.router.try_send(id, peer_msg) {
             Either::Left(Ok(())) => return Ok(()),
             Either::Left(Err(TrySendError::Full(PeerMsg::RaftMessage(m)))) => {
                 return Err(TrySendError::Full(m));
@@ -468,7 +468,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreRouter<EK, ER> {
             Either::Right(PeerMsg::RaftMessage(m)) => StoreMsg::RaftMessage(m),
             _ => unreachable!(),
         };
-        match self.send_control(store_msg) {
+        match self.router.send_control(store_msg) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(StoreMsg::RaftMessage(m))) => Err(TrySendError::Full(m)),
             Err(TrySendError::Disconnected(StoreMsg::RaftMessage(m))) => {

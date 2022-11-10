@@ -15,7 +15,10 @@ use raft::{
     eraftpb::{ConfState, Entry, Snapshot},
     GetEntriesContext, RaftState, INVALID_ID,
 };
-use raftstore::store::{util, EntryStorage, ReadTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
+use raftstore::store::{
+    util, util::new_empty_snapshot, EntryStorage, ReadTask, WriteTask, RAFT_INIT_LOG_INDEX,
+    RAFT_INIT_LOG_TERM,
+};
 use slog::{info, o, Logger};
 use tikv_util::{box_err, store::find_peer, worker::Scheduler};
 
@@ -453,6 +456,58 @@ mod tests {
         let ts = apply_state.get_truncated_state();
         assert_eq!(ts.get_index(), RAFT_INIT_LOG_INDEX);
         assert_eq!(ts.get_term(), RAFT_INIT_LOG_TERM);
+    }
+
+    #[test]
+    fn test_apply_snapshot() {
+        let region = new_region();
+        let path = TempDir::new().unwrap();
+        let raft_engine =
+            engine_test::raft::new_engine(&format!("{}", path.path().join("raft").display()), None)
+                .unwrap();
+        let mut wb = raft_engine.log_batch(10);
+        write_initial_states(&mut wb, region.clone()).unwrap();
+        assert!(!wb.is_empty());
+        raft_engine.consume(&mut wb, true).unwrap();
+        // building a tablet factory
+        let ops = DbOptions::default();
+        let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
+        let factory = Arc::new(TestTabletFactoryV2::new(
+            path.path().join("tablet").as_path(),
+            ops,
+            cf_opts,
+        ));
+        let mut worker = Worker::new("test-read-worker").lazy_build("test-read-worker");
+        let sched = worker.scheduler();
+        let logger = slog_global::borrow_global().new(o!());
+        let mut s = Storage::new(4, 6, raft_engine.clone(), sched.clone(), &logger.clone())
+            .unwrap()
+            .unwrap();
+
+        let snapshot = new_empty_snapshot(region.clone(), 10, 1, false);
+        let mut task = WriteTask::new(region.get_id(), 5, 0);
+        s.apply_snapshot(&snapshot, &mut task, factory.clone())
+            .unwrap();
+
+        // It can be set before load tablet.
+        assert_eq!(PeerState::Normal, s.region_state().get_state());
+        assert_eq!(10, s.entry_storage().get_truncate_index());
+        assert_eq!(1, s.entry_storage().get_truncate_term());
+        assert_eq!(10, s.entry_storage().raft_state().last_index);
+        // This index can't be set before load tablet.
+        assert_ne!(10, s.entry_storage().applied_index());
+        assert_ne!(1, s.entry_storage().last_term());
+        assert_ne!(1, s.entry_storage().applied_term());
+        assert_ne!(10, s.region_state().get_tablet_index());
+        assert!(task.after_write_hook.is_some());
+        // todo: load tablet should be failed because the snapshot is not correct.
+        task.after_write_hook.unwrap()(1).unwrap_err();
+
+        s.after_applied_snapshot();
+        assert_eq!(10, s.entry_storage().applied_index());
+        assert_eq!(1, s.entry_storage().last_term());
+        assert_eq!(1, s.entry_storage().applied_term());
+        assert_eq!(10, s.region_state().get_tablet_index());
     }
 
     #[test]
