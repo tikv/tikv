@@ -324,14 +324,6 @@ pub mod tests {
 
     #[test]
     fn test_inherit_last_change_info_from_lock() {
-        use pd_client::FeatureGate;
-
-        use crate::storage::txn::sched_pool::set_tls_feature_gate;
-
-        let feature_gate = FeatureGate::default();
-        feature_gate.set_version("6.5.0").unwrap();
-        set_tls_feature_gate(feature_gate);
-
         let mut engine = TestEngineBuilder::new().build().unwrap();
 
         let k = b"k";
