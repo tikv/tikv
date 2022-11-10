@@ -22,6 +22,7 @@ use raft::eraftpb::{Message, MessageType, Snapshot};
 use raftstore::{store::*, Result};
 use rand::Rng;
 use security::SecurityManager;
+use tempfile::TempDir;
 use test_raftstore::*;
 use tikv::server::snap::send_snap;
 use tikv_util::{config::*, time::Instant, HandyRwLock};
@@ -540,11 +541,11 @@ fn test_send_snapshot() {
     let idx = 5;
     let key = SnapKey::new(r1, term, idx);
     let mut snapshot = Snapshot::default();
-    let snap_mgr = cluster.get_snap_mgr(1);
-    let final_path = snap_mgr.get_final_name_for_build(&key);
-    fs::create_dir_all(final_path.as_path()).unwrap();
+    let snap_dir = TempDir::new().unwrap();
+    let final_send_path = key.get_snapshot_send_path(snap_dir.path());
+    fs::create_dir_all(final_send_path.as_path()).unwrap();
     for i in 0..2 {
-        let mut f = fs::File::create(final_path.join(i.to_string())).unwrap();
+        let mut f = fs::File::create(final_send_path.join(i.to_string())).unwrap();
         f.write_all(format!("snapshot-{}", i).as_bytes()).unwrap();
         f.sync_data().unwrap();
     }
@@ -552,19 +553,26 @@ fn test_send_snapshot() {
     snap_data.set_region(r);
     snap_data.mut_meta().set_for_balance(true);
     snap_data.set_version(3);
+    let mut files = Vec::with_capacity(1);
+    let mut file = SnapshotCfFile::default();
+    file.set_cf(snap_dir.path().to_str().unwrap().to_owned());
+    files.push(file);
+    snap_data.mut_meta().set_cf_files(files.into());
+
     let v = snap_data.write_to_bytes().unwrap();
     snapshot.set_data(v.into());
     let s1_addr = cluster.sim.rl().get_addr(1);
     let sec_mgr = cluster.sim.rl().security_mgr.clone();
     let s = snapshot.clone();
-    if let Err(e) = send_a_large_snapshot(snap_mgr, sec_mgr, &s1_addr, r1, s, idx, term) {
+    if let Err(e) =
+        send_a_large_snapshot(cluster.get_snap_mgr(1), sec_mgr, &s1_addr, r1, s, idx, term)
+    {
         info!("send_a_large_snapshot fail: {}", e);
     }
 
-    sleep_ms(500);
-    let snap_mgr = cluster.get_snap_mgr(1);
-    let final_path = snap_mgr.get_final_name_for_recv(&key);
-    let dir = fs::read_dir(final_path);
+    sleep_ms(100);
+    let final_recv_path = key.get_snapshot_recv_path(snap_dir.path());
+    let dir = fs::read_dir(final_recv_path);
     assert_eq!(2, dir.unwrap().count());
 }
 

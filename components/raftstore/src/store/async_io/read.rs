@@ -12,7 +12,7 @@ use std::{
 use engine_traits::{Checkpointer, KvEngine, RaftEngine};
 use fail::fail_point;
 use file_system::{IoType, WithIoType};
-use kvproto::raft_serverpb::{PeerState, RaftSnapshotData, RegionLocalState};
+use kvproto::raft_serverpb::{PeerState, RaftSnapshotData, RegionLocalState, SnapshotCfFile};
 use protobuf::Message;
 use raft::{eraftpb::Snapshot, GetEntriesContext};
 use tikv_util::{error, info, time::Instant, worker::Runnable};
@@ -210,10 +210,20 @@ where
                 snapshot.mut_metadata().set_term(key.term);
                 let conf_state = util::conf_state_from_region(region_state.get_region());
                 snapshot.mut_metadata().set_conf_state(conf_state);
+
+                // set meta
+                let mut files = Vec::with_capacity(1);
+                let mut file = SnapshotCfFile::default();
+                file.set_cf(self.snap_mgr().get_base().to_owned());
+                files.push(file);
+
                 // Set snapshot data.
                 let mut snap_data = RaftSnapshotData::default();
                 snap_data.set_region(region_state.get_region().clone());
+
                 snap_data.mut_meta().set_for_balance(for_balance);
+                snap_data.mut_meta().set_cf_files(files.into());
+                snap_data.set_version(SNAPSHOT_VERSION_V2);
                 snapshot.set_data(snap_data.write_to_bytes().unwrap().into());
                 // create checkpointer.
                 let mut res = None;
@@ -227,7 +237,6 @@ where
                         .observe(start.saturating_elapsed_secs());
                     res = Some(Box::new(snapshot))
                 }
-
                 self.notifier.notify_snapshot_generated(region_id, res);
             }
         }

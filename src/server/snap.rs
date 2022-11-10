@@ -169,7 +169,7 @@ where
     let context_key = context.key.clone();
     snap_mgr.register(context.key.clone(), SnapEntry::Receiving);
     defer!(snap_mgr.deregister(&context_key, &SnapEntry::Receiving));
-    let path = snap_mgr.get_temp_path_for_build(context.key.region_id);
+    let path = context_key.get_snapshot_recv_tmp_path(context.snap_dir.as_ref().unwrap());
     fs::create_dir_all(&path)?;
     let limiter = snap_mgr.io_limiter();
     loop {
@@ -207,7 +207,7 @@ where
         f.sync_data()?;
     }
 
-    let final_path = snap_mgr.get_final_name_for_recv(&context.key);
+    let final_path = context_key.get_snapshot_recv_path(context.snap_dir.as_ref().unwrap());
     fs::rename(&path, final_path)?;
     context.finish(raft_router)
 }
@@ -307,7 +307,17 @@ async fn send_snap_files(
     key: SnapKey,
 ) -> Result<u64> {
     let limiter = mgr.io_limiter();
-    let path = mgr.get_final_name_for_build(&key);
+    let snapshot = msg.get_message().get_snapshot();
+    let mut snap_data = RaftSnapshotData::default();
+    snap_data.merge_from_bytes(snapshot.get_data())?;
+    let base_dir = snap_data
+        .get_meta()
+        .get_cf_files()
+        .first()
+        .unwrap()
+        .get_cf();
+
+    let path = key.get_snapshot_send_path(base_dir);
     let files = fs::read_dir(&path)?
         .map(|d| Ok(d?.path()))
         .collect::<Result<Vec<_>>>()?;
@@ -350,7 +360,6 @@ async fn send_snap_files(
         }
         info!("sent snap file finish"; "file" => %path.display(), "size" => file_size, "sent" => size);
     }
-
     sender.close().await?;
     Ok(total_sent)
 }
@@ -362,6 +371,7 @@ struct RecvSnapContext {
     io_type: IoType,
     start: Instant,
     version: u64,
+    snap_dir: Option<String>,
 }
 
 impl RecvSnapContext {
@@ -373,25 +383,26 @@ impl RecvSnapContext {
         }
 
         let meta = head.take_message();
-        let key = match SnapKey::from_snap(meta.get_message().get_snapshot()) {
+        let snapshot = meta.get_message().get_snapshot();
+        let key = match SnapKey::from_snap(snapshot) {
             Ok(k) => k,
             Err(e) => return Err(box_err!("failed to create snap key: {:?}", e)),
         };
 
-        let data = meta.get_message().get_snapshot().get_data();
-        let mut snapshot = RaftSnapshotData::default();
-        snapshot.merge_from_bytes(data)?;
-        let io_type = if snapshot.get_meta().get_for_balance() {
+        let data = snapshot.get_data();
+        let mut snapshot_data = RaftSnapshotData::default();
+        snapshot_data.merge_from_bytes(data)?;
+        let version = snapshot_data.get_version();
+        let snapshot_meta = snapshot_data.take_meta();
+        let io_type = if snapshot_meta.get_for_balance() {
             IoType::LoadBalance
         } else {
             IoType::Replication
         };
         let _with_io_type = WithIoType::new(io_type);
-        let version = snapshot.get_version();
-        println!("recv snapshot chunk, version:{}", version);
-        let snap = {
+        let (file, snap_dir) = {
             if version != SNAPSHOT_VERSION_V2 {
-                let s = match snap_mgr.get_snapshot_for_receiving(&key, snapshot.take_meta()) {
+                let s = match snap_mgr.get_snapshot_for_receiving(&key, snapshot_meta) {
                     Ok(s) => s,
                     Err(e) => {
                         return Err(box_err!("{} failed to create snapshot file: {:?}", key, e));
@@ -400,22 +411,29 @@ impl RecvSnapContext {
                 if s.exists() {
                     let p = s.path();
                     info!("snapshot file already exists, skip receiving"; "snap_key" => %key, "file" => p);
-                    None
+                    (None, None)
                 } else {
-                    Some(s)
+                    (Some(s), None)
                 }
             } else {
-                None
+                let snap_dir = snapshot_meta
+                    .get_cf_files()
+                    .first()
+                    .unwrap()
+                    .get_cf()
+                    .to_owned();
+                (None, Some(snap_dir))
             }
         };
 
         Ok(RecvSnapContext {
             key,
-            file: snap,
+            file,
             raft_msg: meta,
             io_type,
             start: Instant::now(),
             version,
+            snap_dir,
         })
     }
 
@@ -448,7 +466,6 @@ fn recv_snap<R: RaftStoreRouter<impl KvEngine> + 'static>(
         let mut stream = stream.map_err(Error::from);
         let head = stream.next().await.transpose()?;
         let context = RecvSnapContext::new(head, &snap_mgr)?;
-
         if context.version == SNAPSHOT_VERSION_V2 {
             recv_snap_files(stream, snap_mgr, raft_router, context).await?;
         } else {
@@ -594,7 +611,6 @@ where
                     cb(Err(Error::Other("Too many sending snapshot tasks".into())));
                     return;
                 }
-                println!("send snapshot,region_id:{}", region_id);
                 SNAP_TASK_COUNTER_STATIC.send.inc();
 
                 let env = Arc::clone(&self.env);
@@ -605,10 +621,7 @@ where
                 let send_task = send_snap(env, mgr, security_mgr, &self.cfg.clone(), &addr, msg);
                 let task = async move {
                     let res = match send_task {
-                        Err(e) => {
-                            eprintln!("send snapshot failed {}", e);
-                            Err(e)
-                        }
+                        Err(e) => Err(e),
                         Ok(f) => f.await,
                     };
                     match res {
@@ -620,12 +633,10 @@ where
                                 "size" => stat.total_size,
                                 "duration" => ?stat.elapsed
                             );
-                            println!("sent snapshot finished");
                             cb(Ok(()));
                         }
                         Err(e) => {
                             error!("failed to send snap"; "to_addr" => addr, "region_id" => region_id, "err" => ?e);
-                            eprintln!("send snapshot failed {}", e);
                             cb(Err(e));
                         }
                     };

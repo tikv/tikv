@@ -151,6 +151,24 @@ impl SnapKey {
             snap,
         ))
     }
+
+    pub fn get_snapshot_send_path<T: Into<PathBuf>>(&self, base_dir: T) -> PathBuf {
+        let send_path = base_dir.into();
+        let prefix = format!("{}_{}", SNAP_GEN_PREFIX, self);
+        send_path.join(prefix)
+    }
+
+    pub fn get_snapshot_recv_tmp_path<T: Into<PathBuf>>(&self, base_dir: T) -> PathBuf {
+        let send_path = base_dir.into();
+        let prefix = format!("{}_{}{}", SNAP_REV_PREFIX, self, TMP_FILE_SUFFIX);
+        send_path.join(prefix)
+    }
+
+    pub fn get_snapshot_recv_path<T: Into<PathBuf>>(&self, base_dir: T) -> PathBuf {
+        let send_path = base_dir.into();
+        let prefix = format!("{}_{}", SNAP_REV_PREFIX, self);
+        send_path.join(prefix)
+    }
 }
 
 impl Display for SnapKey {
@@ -1948,9 +1966,12 @@ impl TabletSnapManager {
         Ok(())
     }
 
+    pub fn get_base(&self) -> &str {
+        &self.base
+    }
+
     pub fn get_tablet_checkpointer_path(&self, key: &SnapKey) -> PathBuf {
-        let prefix = format!("{}_{}", SNAP_GEN_PREFIX, key);
-        PathBuf::from(&self.base).join(&prefix)
+        key.get_snapshot_send_path(&self.base)
     }
 }
 
