@@ -128,12 +128,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             destroy_progress: DestroyProgress::None,
             raft_group,
             logger,
-            pending_reads: ReadIndexQueue::new(tag.clone()),
+            pending_reads: ReadIndexQueue::new(tag),
             read_progress: Arc::new(RegionReadProgress::new(
                 &region,
                 applied_index,
                 REGION_READ_PROGRESS_CAP,
-                tag,
+                peer_id,
             )),
             leader_lease: Lease::new(
                 cfg.raft_store_max_leader_lease(),
