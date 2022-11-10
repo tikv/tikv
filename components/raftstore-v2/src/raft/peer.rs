@@ -506,13 +506,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
-    pub fn maybe_campaign(&mut self, parent_is_leader: bool) -> bool {
+    pub fn maybe_campaign(&mut self) -> bool {
         if self.region().get_peers().len() <= 1 {
             // The peer campaigned when it was created, no need to do it again.
-            return false;
-        }
-
-        if !parent_is_leader {
             return false;
         }
 

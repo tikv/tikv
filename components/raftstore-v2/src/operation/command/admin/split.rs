@@ -73,11 +73,10 @@ pub struct SplitResult {
     pub tablet_index: u64,
 }
 pub struct SplitInit {
-    pub parent_region_id: u64,
-    pub parent_is_leader: bool,
-    pub check_split: bool,
     /// Split region
     pub region: metapb::Region,
+    pub check_split: bool,
+    pub parent_is_leader: bool,
 
     /// In-memory pessimistic locks that should be inherited from parent region
     pub locks: PeerPessimisticLocks,
@@ -314,20 +313,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 continue;
             }
 
-            let peer_creation_msg = PeerMsg::SplitInit(Box::new(SplitInit {
+            let split_init = PeerMsg::SplitInit(Box::new(SplitInit {
                 region: new_region,
-                parent_region_id: region_id,
                 parent_is_leader: self.is_leader(),
-                locks,
                 check_split: last_region_id == new_region_id,
+                locks,
             }));
 
             // First, send init msg to peer directly. Returning error means the peer is not
             // existed in which case we should redirect it to the store.
-            match store_ctx
-                .router
-                .force_send(new_region_id, peer_creation_msg)
-            {
+            match store_ctx.router.force_send(new_region_id, split_init) {
                 Ok(_) => {}
                 Err(SendError(PeerMsg::SplitInit(msg))) => {
                     store_ctx.router.send_control(StoreMsg::SplitInit(msg));
@@ -341,19 +336,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_split_init<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
-        init_info: Box<SplitInit>,
+        split_init: Box<SplitInit>,
     ) {
         let SplitInit {
-            parent_region_id,
             region,
             parent_is_leader,
+            check_split,
             locks,
-            check_split: last_split_region,
-        } = Box::into_inner(init_info);
+        } = Box::into_inner(split_init);
 
-        let mut need_schedule_apply_fsm = false;
         let region_id = region.id;
-
         let replace = region.get_region_epoch().get_version()
             > self
                 .storage()
@@ -368,18 +360,20 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 region_id,
                 RAFT_INIT_LOG_INDEX,
             );
-            let tablet_path = store_ctx
+
+            let tablet = store_ctx
                 .tablet_factory
-                .tablet_path(region_id, RAFT_INIT_LOG_INDEX);
-            std::fs::rename(&split_temp_path, &tablet_path).unwrap_or_else(|e| {
-                panic!(
-                    "{:?} fails to rename from tablet path {:?} to normal path {:?} :{:?}",
-                    self.logger.list(),
-                    split_temp_path,
-                    tablet_path,
-                    e
-                )
-            });
+                .load_tablet(&split_temp_path, region_id, RAFT_INIT_LOG_INDEX)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{:?} fails to load tablet {:?} :{:?}",
+                        self.logger.list(),
+                        split_temp_path,
+                        e
+                    )
+                });
+
+            self.tablet_mut().set(tablet);
 
             let storage = Storage::with_split(
                 self.peer().get_store_id(),
@@ -402,8 +396,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 self.set_has_ready();
             }
             self.set_raft_group(raft_group);
-
-            need_schedule_apply_fsm = true;
         } else {
             // todo: when reaching here (peer is initalized before and cannot be replaced),
             // it is much complexer.
@@ -424,27 +416,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.insert_peer_cache(p.clone());
         }
 
-        let campaigned = self.maybe_campaign(parent_is_leader);
-        if campaigned {
-            self.set_has_ready();
-        }
-
         if parent_is_leader {
+            if self.maybe_campaign() {
+                self.set_has_ready();
+            }
+
             *self.txn_ext().pessimistic_locks.write() = locks;
             // The new peer is likely to become leader, send a heartbeat immediately to
             // reduce client query miss.
             self.heartbeat_pd(store_ctx);
         }
-
-        let mut tablet = store_ctx
-            .tablet_factory
-            .open_tablet(
-                region_id,
-                Some(RAFT_INIT_LOG_INDEX),
-                OpenOptions::default().set_create(true),
-            )
-            .unwrap();
-        self.tablet_mut().set(tablet);
 
         meta.tablet_caches.insert(region_id, self.tablet().clone());
         meta.readers
@@ -454,13 +435,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         drop(meta);
 
-        if last_split_region {
+        if check_split {
             // todo: check if the last region needs to split again
         }
 
-        if need_schedule_apply_fsm {
-            self.schedule_apply_fsm(store_ctx);
-        }
+        self.schedule_apply_fsm(store_ctx);
     }
 }
 

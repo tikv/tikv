@@ -95,7 +95,7 @@ impl Store {
     /// 1. create an uninitialized peer if not existed before
     /// 2. initialize the peer by the information sent from parent peer
     #[inline]
-    pub fn on_peer_creation<EK, ER, T>(
+    pub fn on_split_init<EK, ER, T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
         msg: Box<SplitInit>,
@@ -118,11 +118,10 @@ impl Store {
                 .clone(),
         );
 
-        // It will create the peer if it is not existed
+        // It will create the peer if it does not exist
         self.on_raft_message(ctx, Box::new(raft_msg));
 
-        ctx.router
-            .force_send(region_id, PeerMsg::SplitInit(msg));
+        ctx.router.force_send(region_id, PeerMsg::SplitInit(msg));
     }
 
     /// When a message's recipient doesn't exist, it will be redirected to
