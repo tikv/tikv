@@ -37,6 +37,7 @@ use keys::enc_end_key;
 use kvproto::{
     metapb::{self, Region, RegionEpoch},
     raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, SplitRequest},
+    raft_serverpb::RegionLocalState,
 };
 use protobuf::Message;
 use raft::RawNode;
@@ -71,18 +72,15 @@ pub struct SplitResult {
     pub derived_index: usize,
     pub tablet_index: u64,
 }
-
-// In split, parent peer wraps data in `CreatePeer` to create and initalize
-// split peers.
 pub struct SplitInit {
     pub parent_region_id: u64,
-    pub parent_epoch: RegionEpoch,
+    pub parent_is_leader: bool,
+    pub check_split: bool,
     /// Split region
     pub region: metapb::Region,
-    pub parent_is_leader: bool,
+
     /// In-memory pessimistic locks that should be inherited from parent region
     pub locks: PeerPessimisticLocks,
-    pub last_split_region: bool,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -309,30 +307,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         );
         self.post_split();
 
-        let last_key = enc_end_key(regions.last().unwrap());
-        if meta.region_ranges.remove(&last_key).is_none() {
-            panic!("{:?} original region should exist", self.logger.list());
-        }
         let last_region_id = regions.last().unwrap().get_id();
         for (new_region, locks) in regions.into_iter().zip(region_locks) {
             let new_region_id = new_region.get_id();
-
             if new_region_id == region_id {
-                let not_exist = meta
-                    .region_ranges
-                    .insert(enc_end_key(&new_region), new_region_id)
-                    .is_none();
-                assert!(not_exist, "[region {}] should not exist", new_region_id);
                 continue;
             }
 
-            let peer_creation_msg = PeerMsg::RegionSplitMsg(Box::new(SplitInit {
+            let peer_creation_msg = PeerMsg::SplitInit(Box::new(SplitInit {
                 region: new_region,
                 parent_region_id: region_id,
-                parent_epoch: derived_epoch.clone(),
                 parent_is_leader: self.is_leader(),
                 locks,
-                last_split_region: last_region_id == new_region_id,
+                check_split: last_region_id == new_region_id,
             }));
 
             // First, send init msg to peer directly. Returning error means the peer is not
@@ -342,7 +329,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 .force_send(new_region_id, peer_creation_msg)
             {
                 Ok(_) => {}
-                Err(SendError(PeerMsg::RegionSplitMsg(msg))) => {
+                Err(SendError(PeerMsg::SplitInit(msg))) => {
                     store_ctx.router.send_control(StoreMsg::SplitInit(msg));
                 }
                 _ => unreachable!(),
@@ -351,18 +338,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         drop(meta);
     }
 
-    pub fn init_split_region<T>(
+    pub fn on_split_init<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
         init_info: Box<SplitInit>,
     ) {
         let SplitInit {
             parent_region_id,
-            parent_epoch,
             region,
             parent_is_leader,
             locks,
-            last_split_region,
+            check_split: last_split_region,
         } = Box::into_inner(init_info);
 
         let mut need_schedule_apply_fsm = false;
@@ -395,7 +381,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 )
             });
 
-            let storage = Storage::new_from_region(
+            let storage = Storage::with_split(
                 self.peer().get_store_id(),
                 &region,
                 store_ctx.engine.clone(),
@@ -421,7 +407,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         } else {
             // todo: when reaching here (peer is initalized before and cannot be replaced),
             // it is much complexer.
-            unimplemented!();
+            return;
         }
 
         let mut meta = store_ctx.store_meta.lock().unwrap();
@@ -461,12 +447,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.tablet_mut().set(tablet);
 
         meta.tablet_caches.insert(region_id, self.tablet().clone());
-        meta.regions.insert(region_id, region.clone());
-        let not_exist = meta
-            .region_ranges
-            .insert(enc_end_key(&region), region_id)
-            .is_none();
-        assert!(not_exist, "[region {}] should not exist", region_id);
         meta.readers
             .insert(region_id, self.generate_read_delegate());
         meta.region_read_progress

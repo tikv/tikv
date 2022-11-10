@@ -131,7 +131,7 @@ pub enum PeerMsg {
     /// Start the FSM.
     Start,
     /// Messages from peer to peer in the same store
-    RegionSplitMsg(Box<SplitInit>),
+    SplitInit(Box<SplitInit>),
     /// A message only used to notify a peer.
     Noop,
     /// A message that indicates an asynchronous write has finished.
@@ -170,7 +170,7 @@ impl fmt::Debug for PeerMsg {
             },
             PeerMsg::ApplyRes(res) => write!(fmt, "ApplyRes {:?}", res),
             PeerMsg::Start => write!(fmt, "Startup"),
-            PeerMsg::RegionSplitMsg(_) => {
+            PeerMsg::SplitInit(_) => {
                 write!(fmt, "Across peer msg")
             }
             PeerMsg::Noop => write!(fmt, "Noop"),

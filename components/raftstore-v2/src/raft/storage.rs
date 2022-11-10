@@ -102,16 +102,6 @@ impl<EK: KvEngine, ER> Storage<EK, ER> {
     }
 
     #[inline]
-    pub fn set_region(&mut self, region: metapb::Region) {
-        self.region_state.set_region(region);
-    }
-
-    #[inline]
-    pub fn set_tablet_index(&mut self, tablet_index: u64) {
-        self.region_state.set_tablet_index(tablet_index);
-    }
-
-    #[inline]
     pub fn peer(&self) -> &metapb::Peer {
         &self.peer
     }
@@ -210,11 +200,11 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         .map(Some)
     }
 
-    /// Creates a new storage.
+    /// Creates a new storage for split peer.
     ///
     /// Except for region local state which uses the `region` provided with the
     /// inital tablet index, all uses the inital states.
-    pub fn new_from_region(
+    pub fn with_split(
         store_id: u64,
         region: &metapb::Region,
         engine: ER,

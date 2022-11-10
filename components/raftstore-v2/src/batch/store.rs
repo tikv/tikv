@@ -281,8 +281,6 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                 };
                 let (sender, peer_fsm) = PeerFsm::new(&cfg, &*self.tablet_factory, storage)?;
                 let region = peer_fsm.as_ref().peer().region().clone();
-                meta.region_ranges.insert(enc_end_key(&region), region_id);
-                meta.regions.insert(region_id, region);
                 meta.region_read_progress
                     .insert(region_id, peer_fsm.as_ref().peer().read_progress().clone());
 

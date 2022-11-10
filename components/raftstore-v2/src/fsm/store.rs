@@ -25,10 +25,6 @@ where
     E: KvEngine,
 {
     pub store_id: Option<u64>,
-    /// region_end_key -> region_id
-    pub region_ranges: BTreeMap<Vec<u8>, u64>,
-    /// region_id -> region
-    pub regions: HashMap<u64, Region>,
     /// region_id -> reader
     pub readers: HashMap<u64, ReadDelegate>,
     /// region_id -> tablet cache
@@ -44,8 +40,6 @@ where
     pub fn new() -> StoreMeta<E> {
         StoreMeta {
             store_id: None,
-            region_ranges: BTreeMap::default(),
-            regions: HashMap::default(),
             readers: HashMap::default(),
             tablet_caches: HashMap::default(),
             region_read_progress: RegionReadProgressRegistry::new(),
@@ -60,11 +54,6 @@ where
         reason: RegionChangeReason,
         tablet_index: u64,
     ) {
-        let prev = self.regions.insert(region.get_id(), region.clone());
-        if prev.map_or(true, |r| r.get_id() != region.get_id()) {
-            // TODO: may not be a good idea to panic when holding a lock.
-            panic!("{:?} region corrupted", peer.logger.list());
-        }
         let reader = self.readers.get_mut(&region.get_id()).unwrap();
         peer.set_region(reader, region, reason, tablet_index);
     }

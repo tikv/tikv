@@ -5,7 +5,7 @@ use std::{mem, sync::Arc};
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory};
-use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb};
+use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
 use raft::{RawNode, StateRole};
 use raftstore::{
@@ -213,8 +213,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // not expired, it may not renew lease.
             self.leader_lease.expire();
         }
-        self.storage_mut().set_region(region.clone());
-        self.storage_mut().set_tablet_index(tablet_index);
+
+        let mut region_state = RegionLocalState::default();
+        region_state.set_region(region.clone());
+        region_state.set_tablet_index(tablet_index);
+        region_state.set_state(self.storage().region_state().get_state());
+        self.storage_mut().set_region_state(region_state);
+
         let progress = ReadProgress::region(region);
         // Always update read delegate's region to avoid stale region info after a
         // follower becoming a leader.

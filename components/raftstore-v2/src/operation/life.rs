@@ -122,7 +122,7 @@ impl Store {
         self.on_raft_message(ctx, Box::new(raft_msg));
 
         ctx.router
-            .force_send(region_id, PeerMsg::RegionSplitMsg(msg));
+            .force_send(region_id, PeerMsg::SplitInit(msg));
     }
 
     /// When a message's recipient doesn't exist, it will be redirected to
