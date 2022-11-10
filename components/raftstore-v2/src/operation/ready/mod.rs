@@ -30,7 +30,10 @@ use raft::{
     eraftpb::{self, MessageType, Snapshot},
     Ready,
 };
-use raftstore::store::{util, ExtraStates, FetchedLogs, SnapKey, Transport, WriteTask};
+use raftstore::{
+    coprocessor::ApplySnapshotObserver,
+    store::{util, ExtraStates, FetchedLogs, SnapKey, Transport, WriteTask},
+};
 use slog::{debug, error, info, trace, warn};
 use tikv_util::{
     box_err,
@@ -499,9 +502,12 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         );
 
         let key = SnapKey::new(region_id, last_term, last_index);
-        // todo: fix the snapshot more reasonable
-        let mut path = tablet_factory.tablets_path();
-        key.get_snapshot_recv_path(&mut path);
+        let mut path = tablet_factory
+            .tablets_path()
+            .as_path()
+            .join("snap")
+            .as_path()
+            .join(key.get_snapshot_recv_path());
 
         let hook =
             move |region_id: u64| tablet_factory.load_tablet(path.as_path(), region_id, last_index);

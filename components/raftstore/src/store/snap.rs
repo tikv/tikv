@@ -151,10 +151,8 @@ impl SnapKey {
         ))
     }
 
-    pub fn get_snapshot_recv_path(&self, path: &mut PathBuf) {
-        let suffix = format!("{}_{}", SNAP_REV_PREFIX, self);
-        path.push("snap");
-        path.push(suffix);
+    pub fn get_snapshot_recv_path(&self) -> String {
+        format!("{}_{}", SNAP_REV_PREFIX, self)
     }
 }
 
