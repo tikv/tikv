@@ -1518,7 +1518,7 @@ where
                     .expect("get raft engine size");
 
                 let mut raft_disk_status = disk::DiskUsage::Normal;
-                if separated_raft_mount_path {
+                if separated_raft_mount_path && reserve_raft_space != 0 {
                     let raft_disk_stats = match fs2::statvfs(&raft_path) {
                         Err(e) => {
                             error!(
