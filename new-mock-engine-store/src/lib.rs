@@ -603,7 +603,7 @@ impl EngineStoreServerWrap {
             // Advance apply index, but do not persist
             region.set_applied(header.index, header.term);
             if !proxy_compat {
-                // If we don't support new proxy
+                // If we don't support new proxy, we persist everytime.
                 write_to_db_data(server, region, "write".to_string());
             }
             ffi_interfaces::EngineStoreApplyRes::None

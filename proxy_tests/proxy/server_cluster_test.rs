@@ -96,10 +96,9 @@ fn test_safe_ts_basic() {
     suite.stop();
 }
 
-use std::{error::Error, fs::File, io::Write, net::SocketAddr, sync::Arc};
+use std::{error::Error, net::SocketAddr, sync::Arc};
 
 use hyper::{body, Client, StatusCode, Uri};
-use kvproto::recoverdatapb::RegionMeta;
 use proxy_server::status_server::StatusServer;
 use security::SecurityConfig;
 use tikv::config::ConfigController;

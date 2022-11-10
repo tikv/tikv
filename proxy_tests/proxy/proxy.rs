@@ -34,7 +34,9 @@ pub use raftstore::coprocessor::ConsistencyCheckMethod;
 pub use test_raftstore::new_peer;
 pub use tikv_util::{
     config::{ReadableDuration, ReadableSize},
+    store::find_peer,
     time::Duration,
+    HandyRwLock,
 };
 
 // TODO Need refactor if moved to raft-engine
@@ -302,104 +304,199 @@ pub fn disable_auto_gen_compact_log(cluster: &mut Cluster<NodeCluster>) {
     cluster.cfg.raft_store.raft_log_gc_threshold = 10000;
 }
 
-#[test]
-fn test_kv_write() {
-    let (mut cluster, _pd_client) = new_mock_cluster(0, 3);
-
-    cluster.cfg.proxy_compat = false;
-    // No persist will be triggered by CompactLog
-    fail::cfg("no_persist_compact_log", "return").unwrap();
-    let _ = cluster.run();
-
-    cluster.must_put(b"k0", b"v0");
-    // check_key(&cluster, b"k0", b"v0", Some(false), Some(false), None);
-
-    // We can read initial raft state, since we don't persist meta either.
-    let r1 = cluster.get_region(b"k0").get_id();
-    let prev_states = collect_all_states(&mut cluster, r1);
-
-    for i in 1..10 {
-        let k = format!("k{}", i);
-        let v = format!("v{}", i);
-        cluster.must_put(k.as_bytes(), v.as_bytes());
+pub fn compare_states<F: Fn(&States, &States)>(
+    prev_states: &HashMap<u64, States>,
+    new_states: &HashMap<u64, States>,
+    f: F,
+) {
+    for i in prev_states.keys() {
+        let old = prev_states.get(i).unwrap();
+        let new = new_states.get(i).unwrap();
+        f(old, new);
     }
+}
 
-    // Since we disable all observers, we can get nothing in either memory and disk.
-    for i in 0..10 {
-        let k = format!("k{}", i);
-        let v = format!("v{}", i);
-        check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), None, None);
-    }
+pub fn must_unaltered_memory_apply_term(
+    prev_states: &HashMap<u64, States>,
+    new_states: &HashMap<u64, States>,
+) {
+    let f = |old: &States, new: &States| {
+        assert_eq!(old.in_memory_applied_term, new.in_memory_applied_term);
+    };
+    compare_states(prev_states, new_states, f);
+}
 
-    let new_states = collect_all_states(&mut cluster, r1);
-    for id in cluster.engines.keys() {
-        assert_ne!(
-            &prev_states.get(id).unwrap().in_memory_apply_state,
-            &new_states.get(id).unwrap().in_memory_apply_state
-        );
+pub fn must_altered_memory_apply_term(
+    prev_states: &HashMap<u64, States>,
+    new_states: &HashMap<u64, States>,
+) {
+    let f = |old: &States, new: &States| {
+        assert_ne!(old.in_memory_applied_term, new.in_memory_applied_term);
+    };
+    compare_states(prev_states, new_states, f);
+}
+
+pub fn must_unaltered_memory_apply_state(
+    prev_states: &HashMap<u64, States>,
+    new_states: &HashMap<u64, States>,
+) {
+    let f = |old: &States, new: &States| {
+        assert_eq!(old.in_memory_apply_state, new.in_memory_apply_state);
+    };
+    compare_states(prev_states, new_states, f);
+}
+
+pub fn must_altered_memory_apply_state(
+    prev_states: &HashMap<u64, States>,
+    new_states: &HashMap<u64, States>,
+) {
+    let f = |old: &States, new: &States| {
+        assert_ne!(old.in_memory_apply_state, new.in_memory_apply_state);
+    };
+    compare_states(prev_states, new_states, f);
+}
+
+pub fn must_altered_memory_apply_index(
+    prev_states: &HashMap<u64, States>,
+    new_states: &HashMap<u64, States>,
+    apply_index_advanced: u64,
+) {
+    let f = |old: &States, new: &States| {
         assert_eq!(
-            &prev_states.get(id).unwrap().in_disk_apply_state,
-            &new_states.get(id).unwrap().in_disk_apply_state
+            old.in_memory_apply_state.get_applied_index() + apply_index_advanced,
+            new.in_memory_apply_state.get_applied_index()
         );
-    }
+    };
+    compare_states(prev_states, new_states, f);
+}
 
-    debug!("now CompactLog can persist");
-    fail::remove("no_persist_compact_log");
-
-    let prev_states = collect_all_states(&mut cluster, r1);
-    // Write more after we force persist when CompactLog.
-    for i in 20..30 {
-        let k = format!("k{}", i);
-        let v = format!("v{}", i);
-        cluster.must_put(k.as_bytes(), v.as_bytes());
-    }
-
-    // We can read from mock-store's memory, we are not sure if we can read from
-    // disk, since there may be or may not be a CompactLog.
-    for i in 20..30 {
-        let k = format!("k{}", i);
-        let v = format!("v{}", i);
-        check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), None, None);
-    }
-
-    // Force a compact log to persist.
-    let region_r = cluster.get_region("k1".as_bytes());
-    let region_id = region_r.get_id();
-    let compact_log = test_raftstore::new_compact_log_request(100, 10);
-    let req =
-        test_raftstore::new_admin_request(region_id, region_r.get_region_epoch(), compact_log);
-    let res = cluster
-        .call_command_on_leader(req, Duration::from_secs(3))
-        .unwrap();
-    assert!(res.get_header().has_error(), "{:?}", res);
-
-    for i in 20..30 {
-        let k = format!("k{}", i);
-        let v = format!("v{}", i);
-        check_key(
-            &cluster,
-            k.as_bytes(),
-            v.as_bytes(),
-            Some(true),
-            Some(true),
-            None,
+pub fn must_altered_disk_apply_index(
+    prev_states: &HashMap<u64, States>,
+    new_states: &HashMap<u64, States>,
+    apply_index_advanced: u64,
+) {
+    let f = |old: &States, new: &States| {
+        assert_eq!(
+            old.in_disk_apply_state.get_applied_index() + apply_index_advanced,
+            new.in_disk_apply_state.get_applied_index()
         );
-    }
+    };
+    compare_states(prev_states, new_states, f);
+}
 
-    let new_states = collect_all_states(&mut cluster, r1);
+pub fn must_apply_index_advanced_diff(
+    prev_states: &HashMap<u64, States>,
+    new_states: &HashMap<u64, States>,
+    memory_more_advanced: u64,
+) {
+    let f = |old: &States, new: &States| {
+        let gap = new.in_memory_apply_state.get_applied_index()
+            - old.in_memory_apply_state.get_applied_index();
+        let gap2 = new.in_disk_apply_state.get_applied_index()
+            - old.in_disk_apply_state.get_applied_index();
+        assert_eq!(gap, gap2 + memory_more_advanced);
+    };
+    compare_states(prev_states, new_states, f);
+}
 
-    // apply_state is changed in memory, and persisted.
-    for id in cluster.engines.keys() {
+pub fn must_unaltered_disk_apply_state(
+    prev_states: &HashMap<u64, States>,
+    new_states: &HashMap<u64, States>,
+) {
+    let f = |old: &States, new: &States| {
+        assert_eq!(old.in_disk_apply_state, new.in_disk_apply_state);
+    };
+    compare_states(prev_states, new_states, f);
+}
+
+pub fn must_altered_disk_apply_state(
+    prev_states: &HashMap<u64, States>,
+    new_states: &HashMap<u64, States>,
+) {
+    let f = |old: &States, new: &States| {
+        assert_ne!(old.in_disk_apply_state, new.in_disk_apply_state);
+    };
+    compare_states(prev_states, new_states, f);
+}
+
+pub fn must_altered_memory_truncated_state(
+    prev_states: &HashMap<u64, States>,
+    new_states: &HashMap<u64, States>,
+) {
+    let f = |old: &States, new: &States| {
         assert_ne!(
-            &prev_states.get(id).unwrap().in_memory_apply_state,
-            &new_states.get(id).unwrap().in_memory_apply_state
+            old.in_memory_apply_state.get_truncated_state(),
+            new.in_memory_apply_state.get_truncated_state()
         );
-        assert_ne!(
-            &prev_states.get(id).unwrap().in_disk_apply_state,
-            &new_states.get(id).unwrap().in_disk_apply_state
-        );
-    }
+    };
+    compare_states(prev_states, new_states, f);
+}
 
-    fail::remove("no_persist_compact_log");
-    cluster.shutdown();
+pub fn must_unaltered_memory_truncated_state(
+    prev_states: &HashMap<u64, States>,
+    new_states: &HashMap<u64, States>,
+) {
+    let f = |old: &States, new: &States| {
+        assert_eq!(
+            old.in_memory_apply_state.get_truncated_state(),
+            new.in_memory_apply_state.get_truncated_state()
+        );
+    };
+    compare_states(prev_states, new_states, f);
+}
+
+pub fn must_altered_disk_truncated_state(
+    prev_states: &HashMap<u64, States>,
+    new_states: &HashMap<u64, States>,
+) {
+    let f = |old: &States, new: &States| {
+        assert_ne!(
+            old.in_disk_apply_state.get_truncated_state(),
+            new.in_disk_apply_state.get_truncated_state()
+        );
+    };
+    compare_states(prev_states, new_states, f);
+}
+
+pub fn must_unaltered_disk_truncated_state(
+    prev_states: &HashMap<u64, States>,
+    new_states: &HashMap<u64, States>,
+) {
+    let f = |old: &States, new: &States| {
+        assert_eq!(
+            old.in_disk_apply_state.get_truncated_state(),
+            new.in_disk_apply_state.get_truncated_state()
+        );
+    };
+    compare_states(prev_states, new_states, f);
+}
+
+// Must wait until all nodes satisfy cond given by `pref`.
+pub fn must_wait_until_cond_states(
+    cluster: &Cluster<NodeCluster>,
+    region_id: u64,
+    prev_states: &HashMap<u64, States>,
+    pred: &dyn Fn(&States, &States) -> bool,
+) -> HashMap<u64, States> {
+    let mut retry = 0;
+    loop {
+        let new_states = collect_all_states(&cluster, region_id);
+        let mut ok = true;
+        for i in prev_states.keys() {
+            let old = prev_states.get(i).unwrap();
+            let new = new_states.get(i).unwrap();
+            if !pred(old, new) {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            break new_states;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        retry += 1;
+        if retry >= 30 {
+            panic!("states not as expect after timeout")
+        }
+    }
 }

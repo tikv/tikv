@@ -7,8 +7,10 @@
 #[macro_use]
 extern crate slog_global;
 
+mod config;
 mod flashback;
 mod normal;
 mod proxy;
 mod server_cluster_test;
 mod util;
+mod write;
