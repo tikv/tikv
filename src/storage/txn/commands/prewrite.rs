@@ -2516,10 +2516,6 @@ mod tests {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
 
-        let feature_gate = FeatureGate::default();
-        feature_gate.set_version("6.5.0").unwrap();
-        set_tls_feature_gate(feature_gate);
-
         let key = b"k";
         let value = b"v";
         must_prewrite_put(&mut engine, key, value, key, 10);
@@ -2605,10 +2601,6 @@ mod tests {
 
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
-
-        let feature_gate = FeatureGate::default();
-        feature_gate.set_version("6.5.0").unwrap();
-        set_tls_feature_gate(feature_gate);
 
         let key = b"k";
         let value = b"v";
