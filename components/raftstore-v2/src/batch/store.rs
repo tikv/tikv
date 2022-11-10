@@ -22,7 +22,7 @@ use kvproto::{
 use raft::INVALID_ID;
 use raftstore::store::{
     fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, ReadRunner, ReadTask,
-    SnapManagerBuilder, StoreWriters, Transport, WriteSenders,
+    StoreWriters, TabletSnapManager, Transport, WriteSenders,
 };
 use slog::Logger;
 use tikv_util::{
@@ -375,7 +375,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             .store_writers
             .spawn(store_id, raft_engine.clone(), None, router, &trans, &cfg)?;
 
-        let snap_mgr = SnapManagerBuilder::default().build(
+        let snap_mgr = TabletSnapManager::new(
             tablet_factory
                 .tablets_path()
                 .join(Path::new("snap"))

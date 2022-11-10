@@ -33,7 +33,7 @@ use kvproto::raft_serverpb::{RaftSnapshotData, RegionLocalState};
 use protobuf::Message;
 use raft::eraftpb::Snapshot;
 use raftstore::store::{metrics::STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER, GenSnapRes, ReadTask};
-use slog::{error, info};
+use slog::{error, info, warn};
 use tikv_util::{box_try, worker::Scheduler};
 
 use crate::{
@@ -115,6 +115,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     /// Will schedule a task to read worker and then generate a snapshot
     /// asynchronously.
     pub fn schedule_gen_snapshot(&mut self, snap_task: GenSnapTask) {
+        // Do not generate, the peer is removed.
         if self.tombstone() {
             snap_task.canceled.store(true, Ordering::SeqCst);
             error!(
@@ -277,11 +278,11 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     /// `Generated`.
     ///  TODO: make the snap state more clearer, the snapshot must be consumed.
     pub fn on_snapshot_generated(&self, res: GenSnapRes) -> bool {
-        if !res.success {
+        if res.is_none() {
             self.cancel_generating_snap(None);
             return false;
         }
-        let snap = res.snapshot;
+        let snap = res.unwrap();
         let mut snap_state = self.snap_state_mut();
         let SnapState::Generating {
             ref canceled,
@@ -289,6 +290,12 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
          } = *snap_state else { return false };
 
         if snap.get_metadata().get_index() < index.load(Ordering::SeqCst) {
+            warn!(
+                self.logger(),
+                "snapshot is staled, skip";
+                "snap index" => snap.get_metadata().get_index(),
+                "required index" => index.load(Ordering::SeqCst),
+            );
             return false;
         }
         // Should changed `SnapState::Generated` to `SnapState::Relax` when the

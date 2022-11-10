@@ -9,18 +9,19 @@ use std::{
     },
 };
 
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::{Checkpointer, KvEngine, RaftEngine};
 use fail::fail_point;
+use file_system::{IoType, WithIoType};
 use kvproto::raft_serverpb::{PeerState, RaftSnapshotData, RegionLocalState};
 use protobuf::Message;
 use raft::{eraftpb::Snapshot, GetEntriesContext};
-use tikv_util::{defer, error, info, time::Instant, worker::Runnable};
+use tikv_util::{error, info, time::Instant, worker::Runnable};
 
 use crate::store::{
     snap::SNAPSHOT_VERSION_V2,
     util,
-    worker::{SNAP_COUNTER, SNAP_HISTOGRAM},
-    RaftlogFetchResult, SnapEntry, SnapKey, SnapManager, MAX_INIT_ENTRY_COUNT,
+    worker::metrics::{SNAP_COUNTER, SNAP_HISTOGRAM},
+    RaftlogFetchResult, SnapKey, TabletSnapManager, MAX_INIT_ENTRY_COUNT,
 };
 
 pub enum ReadTask<EK> {
@@ -75,16 +76,12 @@ pub struct FetchedLogs {
     pub logs: Box<RaftlogFetchResult>,
 }
 
-#[derive(Debug)]
-pub struct GenSnapRes {
-    pub snapshot: Box<Snapshot>,
-    pub success: bool,
-}
+pub type GenSnapRes = Option<Box<Snapshot>>;
 
 /// A router for receiving fetched result.
 pub trait AsyncReadNotifier: Send {
     fn notify_logs_fetched(&self, region_id: u64, fetched: FetchedLogs);
-    fn notify_snapshot_generated(&self, region_id: u64, res: GenSnapRes);
+    fn notify_snapshot_generated(&self, region_id: u64, res: Option<Box<Snapshot>>);
 }
 
 pub struct ReadRunner<EK, ER, N>
@@ -95,7 +92,7 @@ where
 {
     notifier: N,
     raft_engine: ER,
-    mgr: Option<SnapManager>,
+    sanp_mgr: Option<TabletSnapManager>,
     _phantom: PhantomData<EK>,
 }
 
@@ -104,19 +101,33 @@ impl<EK: KvEngine, ER: RaftEngine, N: AsyncReadNotifier> ReadRunner<EK, ER, N> {
         ReadRunner {
             notifier,
             raft_engine,
-            mgr: None,
+            sanp_mgr: None,
             _phantom: PhantomData,
         }
     }
 
     #[inline]
-    pub fn set_snap_mgr(&mut self, mgr: SnapManager) {
-        self.mgr = Some(mgr);
+    pub fn set_snap_mgr(&mut self, mgr: TabletSnapManager) {
+        self.sanp_mgr = Some(mgr);
     }
 
     #[inline]
-    fn snap_mgr(&self) -> &SnapManager {
-        self.mgr.as_ref().unwrap()
+    fn snap_mgr(&self) -> &TabletSnapManager {
+        self.sanp_mgr.as_ref().unwrap()
+    }
+
+    fn create_checkpointer_for_snap(&self, snap_key: &SnapKey, tablet: EK) -> crate::Result<()> {
+        let checkpointer_path = self.snap_mgr().get_tablet_checkpointer_path(snap_key);
+        if checkpointer_path.as_path().exists() {
+            // Remove the old checkpoint directly.
+            std::fs::remove_dir_all(checkpointer_path.as_path())?;
+        }
+        // Here not checkpoint to a temporary directory first, the temporary directory
+        // logic already implemented in rocksdb.
+        let mut checkpointer = tablet.new_checkpointer()?;
+
+        checkpointer.create_at(checkpointer_path.as_path(), None, 0)?;
+        Ok(())
     }
 }
 
@@ -178,60 +189,45 @@ where
                 canceled,
                 for_balance,
             } => {
+                SNAP_COUNTER.generate.start.inc();
                 if canceled.load(Ordering::Relaxed) {
                     info!("generate snap is canceled"; "region_id" => region_id);
+                    SNAP_COUNTER.generate.abort.inc();
                     return;
                 }
                 let start = Instant::now();
-
+                let _io_type_guard = WithIoType::new(if for_balance {
+                    IoType::LoadBalance
+                } else {
+                    IoType::Replication
+                });
                 // the state should already checked in apply workers.
                 assert_ne!(region_state.get_state(), PeerState::Tombstone);
                 let key = SnapKey::new(region_id, last_applied_term, last_applied_index);
-                self.snap_mgr().register(key.clone(), SnapEntry::Generating);
-                defer!(self.snap_mgr().deregister(&key, &SnapEntry::Generating));
-
-                let mut success = true;
                 let mut snapshot = Snapshot::default();
                 // Set snapshot metadata.
                 snapshot.mut_metadata().set_index(key.idx);
                 snapshot.mut_metadata().set_term(key.term);
-
                 let conf_state = util::conf_state_from_region(region_state.get_region());
                 snapshot.mut_metadata().set_conf_state(conf_state);
-
                 // Set snapshot data.
                 let mut snap_data = RaftSnapshotData::default();
                 snap_data.set_region(region_state.get_region().clone());
                 snap_data.mut_meta().set_for_balance(for_balance);
-                snap_data.set_version(SNAPSHOT_VERSION_V2);
-                if let Ok(v) = snap_data.write_to_bytes().map_err(|e| {
-                    error!("fail to encode snapshot data"; "region_id" => region_id,  "snap_key" => ?key, "error" => ?e);
-                    success = false;
-                    e
-                }) {
-                    snapshot.set_data(v.into());
-                }
-
-                let checkpoint_path = self.snap_mgr().get_path_for_tablet_checkpoint(&key);
-                _ = tablet
-                    .checkpoint_to(std::slice::from_ref(&checkpoint_path), 0)
-                    .map_err(|e| {
-                        error!("failed to create checkpoint"; "region_id" => region_id, "snap_key" => ?key, "error" => ?e); 
-                        success = false;
-                        e
-                });
-                if success {
+                snapshot.set_data(snap_data.write_to_bytes().unwrap().into());
+                // create checkpointer.
+                let mut res = None;
+                if let Err(e) = self.create_checkpointer_for_snap(&key, tablet) {
+                    error!("failed to create checkpointer"; "region_id" => region_id, "error" => %e);
+                    SNAP_COUNTER.generate.fail.inc();
+                } else {
                     SNAP_COUNTER.generate.success.inc();
                     SNAP_HISTOGRAM
                         .generate
                         .observe(start.saturating_elapsed_secs());
-                } else {
-                    SNAP_COUNTER.generate.fail.inc();
+                    res = Some(Box::new(snapshot))
                 }
-                let res = GenSnapRes {
-                    snapshot: Box::new(snapshot),
-                    success,
-                };
+
                 self.notifier.notify_snapshot_generated(region_id, res);
             }
         }
