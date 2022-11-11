@@ -41,6 +41,7 @@ use crate::{
     raft::{Peer, Storage},
     router::{ApplyTask, PeerTick},
 };
+
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
     /// Raft relies on periodic ticks to keep the state machine sync with other
     /// peers.

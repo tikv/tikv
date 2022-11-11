@@ -71,6 +71,7 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub tablet_factory: Arc<dyn TabletFactory<EK>>,
     pub apply_pool: FuturePool,
     pub read_scheduler: Scheduler<ReadTask<EK>>,
+    pub pd_scheduler: Scheduler<PdTask>,
 }
 
 /// A [`PollHandler`] that handles updates of [`StoreFsm`]s and [`PeerFsm`]s.
@@ -330,6 +331,7 @@ where
             tablet_factory: self.tablet_factory.clone(),
             apply_pool: self.apply_pool.clone(),
             read_scheduler: self.read_scheduler.clone(),
+            pd_scheduler: self.pd_scheduler.clone(),
         };
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
         StorePoller::new(poll_ctx, cfg_tracker)

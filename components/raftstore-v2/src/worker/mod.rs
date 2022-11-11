@@ -2,4 +2,4 @@
 
 mod pd;
 
-pub use pd::{Runner as PdRunner, Task as PdTask};
+pub use pd::{HeartbeatTask as PdHeartbeatTask, Runner as PdRunner, Task as PdTask};
