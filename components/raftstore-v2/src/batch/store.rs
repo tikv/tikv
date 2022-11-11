@@ -18,6 +18,7 @@ use kvproto::{
     metapb::Store,
     raft_serverpb::{PeerState, RaftMessage},
 };
+use pd_client::PdClient;
 use raft::INVALID_ID;
 use raftstore::store::{
     fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, ReadRunner, ReadTask,
@@ -42,6 +43,7 @@ use crate::{
     fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate, StoreMeta},
     raft::Storage,
     router::{PeerMsg, PeerTick, StoreMsg},
+    worker::{PdRunner, PdTask},
     Error, Result,
 };
 
@@ -216,6 +218,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     trans: T,
     router: StoreRouter<EK, ER>,
     read_scheduler: Scheduler<ReadTask<EK>>,
+    pd_scheduler: Scheduler<PdTask>,
     write_senders: WriteSenders<EK, ER>,
     apply_pool: FuturePool,
     logger: Logger,
@@ -231,6 +234,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         trans: T,
         router: StoreRouter<EK, ER>,
         read_scheduler: Scheduler<ReadTask<EK>>,
+        pd_scheduler: Scheduler<PdTask>,
         store_writers: &mut StoreWriters<EK, ER>,
         logger: Logger,
         store_meta: Arc<Mutex<StoreMeta<EK>>>,
@@ -253,6 +257,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             trans,
             router,
             read_scheduler,
+            pd_scheduler,
             apply_pool,
             logger,
             write_senders: store_writers.senders(),
@@ -336,6 +341,7 @@ where
 struct Workers<EK: KvEngine, ER: RaftEngine> {
     /// Worker for fetching raft logs asynchronously
     async_read_worker: Worker,
+    pd_worker: Worker,
     store_writers: StoreWriters<EK, ER>,
 }
 
@@ -343,6 +349,7 @@ impl<EK: KvEngine, ER: RaftEngine> Default for Workers<EK, ER> {
     fn default() -> Self {
         Self {
             async_read_worker: Worker::new("async-read-worker"),
+            pd_worker: Worker::new("pd-worker"),
             store_writers: StoreWriters::default(),
         }
     }
@@ -356,19 +363,26 @@ pub struct StoreSystem<EK: KvEngine, ER: RaftEngine> {
 }
 
 impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
-    pub fn start<T>(
+    pub fn start<T, C>(
         &mut self,
         store_id: u64,
         cfg: Arc<VersionTrack<Config>>,
         raft_engine: ER,
         tablet_factory: Arc<dyn TabletFactory<EK>>,
         trans: T,
+        pd_client: Arc<C>,
         router: &StoreRouter<EK, ER>,
         store_meta: Arc<Mutex<StoreMeta<EK>>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
+        C: PdClient + 'static,
     {
+        let router_clone = router.clone();
+        // pd_client.handle_reconnect(move || {
+        //     router_clone.broadcast_normal(|| PeerMsg::HeartbeatPd);
+        // });
+
         let mut workers = Workers::default();
         workers
             .store_writers
@@ -376,6 +390,17 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         let read_scheduler = workers.async_read_worker.start(
             "async-read-worker",
             ReadRunner::new(router.clone(), raft_engine.clone()),
+        );
+        let pd_scheduler = workers.pd_worker.start(
+            "pd-worker",
+            PdRunner::new(
+                pd_client,
+                raft_engine.clone(),
+                tablet_factory.clone(),
+                router.clone(),
+                workers.pd_worker.remote(),
+                self.logger.clone(),
+            ),
         );
 
         let mut builder = StorePollerBuilder::new(
@@ -386,6 +411,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             trans,
             router.clone(),
             read_scheduler,
+            pd_scheduler,
             &mut workers.store_writers,
             self.logger.clone(),
             store_meta.clone(),

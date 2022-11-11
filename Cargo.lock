@@ -4280,15 +4280,18 @@ dependencies = [
  "error_code",
  "fail",
  "file_system",
+ "fs2",
  "futures 0.3.15",
  "keys",
  "kvproto",
  "log_wrappers",
  "pd_client",
+ "prometheus",
  "protobuf",
  "raft",
  "raft-proto",
  "raftstore",
+ "resource_metering",
  "slog",
  "slog-global",
  "smallvec",
@@ -4299,6 +4302,7 @@ dependencies = [
  "time",
  "tracker",
  "txn_types",
+ "yatp",
 ]
 
 [[package]]
