@@ -15,6 +15,7 @@ use engine_traits::{Engines, KvEngine, RaftEngine, TabletFactory};
 use file_system::{set_io_type, IoType};
 use futures::{compat::Future01CompatExt, FutureExt};
 use kvproto::{
+    disk_usage::DiskUsage,
     metapb::Store,
     raft_serverpb::{PeerState, RaftMessage},
 };
@@ -328,6 +329,7 @@ where
             tablet_factory: self.tablet_factory.clone(),
             apply_pool: self.apply_pool.clone(),
             read_scheduler: self.read_scheduler.clone(),
+            self_disk_usage: DiskUsage::Normal,
         };
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
         StorePoller::new(poll_ctx, cfg_tracker)

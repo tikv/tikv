@@ -11,3 +11,4 @@ mod test_conf_change;
 mod test_life;
 mod test_read;
 mod test_status;
+mod test_transfer_leader;

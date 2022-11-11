@@ -3,22 +3,34 @@
 use std::cmp::Ordering;
 
 use bytes::Bytes;
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::{KvEngine, RaftEngine, CF_LOCK};
+use fail::fail_point;
 use kvproto::{
     disk_usage::DiskUsage,
     metapb,
-    raft_cmdpb::{AdminCmdType, RaftCmdRequest, TransferLeaderRequest},
+    raft_cmdpb::{
+        AdminCmdType, AdminRequest, AdminResponse, CmdType, PutRequest, RaftCmdRequest, Request,
+        TransferLeaderRequest,
+    },
 };
+use parking_lot::RwLockWriteGuard;
 use raft::{eraftpb, ProgressState, Storage};
-use raftstore::store::{
-    fsm::new_admin_request, make_transfer_leader_response, TRANSFER_LEADER_COMMAND_REPLY_CTX,
+use raftstore::{
+    store::{
+        fsm::new_admin_request, make_transfer_leader_response, metrics::PEER_ADMIN_CMD_COUNTER,
+        LocksStatus, TRANSFER_LEADER_COMMAND_REPLY_CTX,
+    },
+    Result,
 };
+use rand::prelude::SliceRandom;
 use slog::info;
 use txn_types::WriteBatchFlags;
 
+use super::AdminCmdResult;
 use crate::{
     batch::StoreContext,
-    raft::Peer,
+    fsm::ApplyResReporter,
+    raft::{Apply, Peer},
     router::{CmdResChannel, PeerMsg},
 };
 
@@ -45,14 +57,22 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ///     Leader will send a MsgTransferLeader to follower.
     /// 2. execute_transfer_leader on follower
     ///     If follower passes all necessary checks, it will reply an
-    ///     ACK with type MsgTransferLeader and its promised persistent index.
+    ///     ACK with type MsgTransferLeader and its promised applied index.
     /// 3. ready_to_transfer_leader on leader:
     ///     Leader checks if it's appropriate to transfer leadership. If it
     ///     does, it calls raft transfer_leader API to do the remaining work.
     ///
+    /// Additional steps when there are remaining pessimistic
+    /// locks to propose (detected in function on_transfer_leader_msg).
+    ///    1. Leader firstly proposes pessimistic locks and then proposes a
+    ///       TransferLeader command.
+    ///    2. ack_transfer_leader_msg on follower again:
+    ///        The follower applies the TransferLeader command and replies an
+    ///        ACK with special context TRANSFER_LEADER_COMMAND_REPLY_CTX.
+    ///
     /// See also: tikv/rfcs#37.
     pub fn propose_transfer_leader<T>(
-        &self,
+        &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
         req: RaftCmdRequest,
         ch: CmdResChannel,
@@ -114,7 +134,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         // Broadcast heartbeat to make sure followers commit the entries immediately.
         // It's only necessary to ping the target peer, but ping all for simplicity.
-        self.raft_group().ping();
+        self.raft_group_mut().ping();
 
         let mut msg = eraftpb::Message::new();
         msg.set_to(peer.get_id());
@@ -130,7 +150,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // log is always its current term. Not just set term because raft library
         // forbids setting it for MsgTransferLeader messages.
         msg.set_log_term(self.term());
-        self.raft_group().raft.msgs.push(msg);
+        self.raft_group_mut().raft.msgs.push(msg);
         true
     }
 
@@ -166,7 +186,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
                 None => {
                     self.propose_pending_command(ctx);
-                    if self.propose_locks_before_transfer_leader(msg) {
+                    if self.propose_locks_before_transfer_leader(ctx, msg) {
                         // If some pessimistic locks are just proposed, we propose another
                         // TransferLeader command instead of transferring leader immediately.
                         info!(
@@ -184,11 +204,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         cmd.mut_admin_request()
                             .set_cmd_type(AdminCmdType::TransferLeader);
                         cmd.mut_admin_request().mut_transfer_leader().set_peer(from);
-                        let (PeerMsg::RaftCommand(req), sub) = PeerMsg::raft_command(cmd);
-                        self.on_admin_command(ctx, req.request, req.ch);
+                        if let (PeerMsg::RaftCommand(req), sub) = PeerMsg::raft_command(cmd) {
+                            self.on_admin_command(ctx, req.request, req.ch);
+                        } else {
+                            unreachable!();
+                        }
                     } else {
-                        self.transfer_leader(&from);
-                        // self.wait_data_peers.clear();
+                        info!(
+                            self.logger,
+                            "transfer leader";
+                            "peer" => ?from,
+                        );
+                        self.raft_group_mut().transfer_leader(from.get_id());
                     }
                 }
             }
@@ -230,7 +257,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if reply_cmd {
             msg.set_context(Bytes::from_static(TRANSFER_LEADER_COMMAND_REPLY_CTX));
         }
-        self.raft_group().raft.msgs.push(msg);
+        self.raft_group_mut().raft.msgs.push(msg);
     }
 
     fn ready_to_transfer_leader<T>(
@@ -265,7 +292,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return Some("pending conf change");
         }
 
-        if self.storage().last_index() >= index + ctx.cfg.leader_transfer_max_log_lag {
+        if self.storage().last_index().unwrap_or_default()
+            >= index + ctx.cfg.leader_transfer_max_log_lag
+        {
             return Some("log gap");
         }
         None
@@ -277,9 +306,122 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     //   unavailable time caused by waiting for the transferee catching up logs.
     // - Make transferring leader strictly after write commands that executes before
     //   proposing the locks, preventing unexpected lock loss.
-    fn propose_locks_before_transfer_leader(&mut self, msg: &eraftpb::Message) -> bool {
-        false
-    }
+    fn propose_locks_before_transfer_leader<T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        msg: &eraftpb::Message,
+    ) -> bool {
+        // 1. Disable in-memory pessimistic locks.
 
-    fn transfer_leader(&mut self, peer: &metapb::Peer) {}
+        // Clone to make borrow checker happy when registering ticks.
+        let txn_ext = self.txn_ext().clone();
+        let mut pessimistic_locks = txn_ext.pessimistic_locks.write();
+
+        // If the message context == TRANSFER_LEADER_COMMAND_REPLY_CTX, the message
+        // is a reply to a transfer leader command before. If the locks status remain
+        // in the TransferringLeader status, we can safely initiate transferring leader
+        // now.
+        // If it's not in TransferringLeader status now, it is probably because several
+        // ticks have passed after proposing the locks in the last time and we
+        // reactivate the memory locks. Then, we should propose the locks again.
+        if msg.get_context() == TRANSFER_LEADER_COMMAND_REPLY_CTX
+            && pessimistic_locks.status == LocksStatus::TransferringLeader
+        {
+            return false;
+        }
+
+        // If it is not writable, it's probably because it's a retried TransferLeader
+        // and the locks have been proposed. But we still need to return true to
+        // propose another TransferLeader command. Otherwise, some write requests that
+        // have marked some locks as deleted will fail because raft rejects more
+        // proposals.
+        // It is OK to return true here if it's in other states like MergingRegion or
+        // NotLeader. In those cases, the locks will fail to propose and nothing will
+        // happen.
+        if !pessimistic_locks.is_writable() {
+            return true;
+        }
+        pessimistic_locks.status = LocksStatus::TransferringLeader;
+        self.set_reactivate_memory_lock_ticks(0);
+        self.register_reactivate_memory_lock_tick();
+
+        // 2. Propose pessimistic locks
+        if pessimistic_locks.is_empty() {
+            return false;
+        }
+        // FIXME: Raft command has size limit. Either limit the total size of
+        // pessimistic locks in a region, or split commands here.
+        let mut cmd = RaftCmdRequest::default();
+        {
+            // Downgrade to a read guard, do not block readers in the scheduler as far as
+            // possible.
+            let pessimistic_locks = RwLockWriteGuard::downgrade(pessimistic_locks);
+            fail_point!("invalidate_locks_before_transfer_leader");
+            for (key, (lock, deleted)) in &*pessimistic_locks {
+                if *deleted {
+                    continue;
+                }
+                let mut put = PutRequest::default();
+                put.set_cf(CF_LOCK.to_string());
+                put.set_key(key.as_encoded().to_owned());
+                put.set_value(lock.to_lock().to_bytes());
+                let mut req = Request::default();
+                req.set_cmd_type(CmdType::Put);
+                req.set_put(put);
+                cmd.mut_requests().push(req);
+            }
+        }
+        if cmd.get_requests().is_empty() {
+            // If the map is not empty but all locks are deleted, it is possible that a
+            // write command has just marked locks deleted but not proposed yet.
+            // It might cause that command to fail if we skip proposing the
+            // extra TransferLeader command here.
+            return true;
+        }
+        cmd.mut_header().set_region_id(self.region_id());
+        cmd.mut_header()
+            .set_region_epoch(self.region().get_region_epoch().clone());
+        cmd.mut_header().set_peer(self.peer().clone());
+        info!(
+            self.logger,
+            "propose {} locks before transferring leader", cmd.get_requests().len();
+        );
+        let (PeerMsg::RaftCommand(req), sub) = PeerMsg::raft_command(cmd) else {unreachable!()};
+        self.on_admin_command(ctx, req.request, req.ch);
+        true
+    }
+}
+
+impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
+    pub fn apply_transfer_leader(
+        &mut self,
+        req: &AdminRequest,
+        term: u64,
+    ) -> Result<(AdminResponse, AdminCmdResult)> {
+        PEER_ADMIN_CMD_COUNTER.transfer_leader.all.inc();
+        let resp = AdminResponse::default();
+
+        let peer = req.get_transfer_leader().get_peer();
+        // Only execute TransferLeader if the expected new leader is self.
+        if peer.get_id() == self.peer().get_id() {
+            Ok((resp, AdminCmdResult::TransferLeader(term)))
+        } else {
+            Ok((resp, AdminCmdResult::None))
+        }
+    }
+}
+
+impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    pub fn on_transfer_leader<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>, term: u64) {
+        // If the term has changed between proposing and executing the TransferLeader
+        // request, ignore it because this request may be stale.
+        if term != self.term() {
+            return;
+        }
+
+        // Reply to leader that it is ready to transfer leader now.
+        self.execute_transfer_leader(ctx, self.leader_id(), DiskUsage::Normal, true);
+
+        self.set_has_ready();
+    }
 }

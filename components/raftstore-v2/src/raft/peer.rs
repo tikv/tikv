@@ -58,6 +58,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// Transaction extensions related to this peer.
     txn_ext: Arc<TxnExt>,
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+    reactivate_memory_lock_ticks: usize,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -142,6 +143,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             region_buckets: None,
             txn_ext: Arc::default(),
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
+            reactivate_memory_lock_ticks: 0,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -423,7 +425,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn is_handling_snapshot(&self) -> bool {
         // todo
-        return false;
+        false
     }
 
     /// Returns `true` if the raft group has replicated a snapshot but not
@@ -431,7 +433,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn has_pending_snapshot(&self) -> bool {
         // todo
-        return false;
+        false
+    }
+
+    pub fn txn_ext(&self) -> &Arc<TxnExt> {
+        &self.txn_ext
+    }
+
+    pub fn set_reactivate_memory_lock_ticks(&mut self, tick: usize) {
+        self.reactivate_memory_lock_ticks = tick;
+    }
+
+    pub fn register_reactivate_memory_lock_tick(&mut self) {
+        // todo
     }
 
     pub fn generate_read_delegate(&self) -> ReadDelegate {

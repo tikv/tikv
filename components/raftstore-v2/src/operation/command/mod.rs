@@ -284,10 +284,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         for admin_res in apply_res.admin_result {
             match admin_res {
+                AdminCmdResult::None => unreachable!(),
                 AdminCmdResult::ConfChange(conf_change) => {
                     self.on_apply_res_conf_change(conf_change)
                 }
                 AdminCmdResult::SplitRegion(_) => unimplemented!(),
+                AdminCmdResult::TransferLeader(term) => self.on_transfer_leader(ctx, term),
             }
         }
         self.raft_group_mut()
@@ -429,7 +431,9 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 AdminCmdType::PrepareMerge => unimplemented!(),
                 AdminCmdType::CommitMerge => unimplemented!(),
                 AdminCmdType::RollbackMerge => unimplemented!(),
-                AdminCmdType::TransferLeader => unreachable!(),
+                AdminCmdType::TransferLeader => {
+                    self.apply_transfer_leader(admin_req, entry.term)?
+                }
                 AdminCmdType::ChangePeer => {
                     self.apply_conf_change(entry.get_index(), admin_req, conf_change.unwrap())?
                 }
@@ -445,7 +449,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 }
             };
 
-            self.push_admin_result(admin_result);
+            match admin_result {
+                AdminCmdResult::None => (),
+                _ => self.push_admin_result(admin_result),
+            }
             let mut resp = new_response(req.get_header());
             resp.set_admin_response(admin_resp);
             Ok(resp)
