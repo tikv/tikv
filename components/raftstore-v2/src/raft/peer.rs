@@ -202,16 +202,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if self.region().get_region_epoch().get_version() < region.get_region_epoch().get_version()
         {
             // Epoch version changed, disable read on the local reader for this region.
-            //
-            // The difference of `expire` and `expire_remote_lease` is that `expire` expires
-            // lease both in local reader and raftstore while
-            // `expire_remote_lease` only expires the lease in local reader.
-            //
-            // V1 calls `expire_remote_lease` while here v2 calls `expire`. This
-            // difference is due to v2 only performs read by local reader and
-            // raftstore is just a place to renew the lease. If the lease in raftstore is
-            // not expired, it may not renew lease.
-            self.leader_lease.expire();
+            self.leader_lease.expire_remote_lease();
         }
 
         let mut region_state = RegionLocalState::default();
@@ -224,6 +215,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // Always update read delegate's region to avoid stale region info after a
         // follower becoming a leader.
         self.maybe_update_read_progress(reader, progress);
+
+        if self.is_leader() {
+            // Unlike v1, we should renew remote lease if it's leader. This is because v2
+            // only provides read in local reader which requires passing the lease check. If
+            // lease check fails, it sends query to raftstore to make it renew the remote
+            // lease. However, raftstore will answer immediately if the `bound` in
+            // `leader_lease` is valid, so the remote lease will not be updated.
+            if let Some(progress) = self
+                .leader_lease
+                .maybe_new_remote_lease(self.term())
+                .map(ReadProgress::leader_lease)
+            {
+                self.maybe_update_read_progress(reader, progress);
+            }
+        }
 
         // Update leader info
         self.read_progress

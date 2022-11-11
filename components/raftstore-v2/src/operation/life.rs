@@ -103,14 +103,15 @@ impl Store {
         EK: KvEngine,
         ER: RaftEngine,
     {
-        let region_id = msg.as_ref().region.id;
-        let mut raft_msg = RaftMessage::default();
+        let region_id = msg.region.id;
+        let mut raft_msg = Box::new(RaftMessage::default());
         raft_msg.set_region_id(region_id);
-        raft_msg.set_region_epoch(msg.as_ref().region.get_region_epoch().clone());
+        raft_msg.set_region_epoch(msg.region.get_region_epoch().clone());
+        // Set the peer_id be INVALID_ID so that the message will not be sent to the
+        // peer after the creation.
         raft_msg.mut_from_peer().set_id(raft::INVALID_ID);
         raft_msg.set_to_peer(
-            msg.as_ref()
-                .region
+            msg.region
                 .get_peers()
                 .iter()
                 .find(|p| p.get_store_id() == self.store_id())
@@ -119,7 +120,7 @@ impl Store {
         );
 
         // It will create the peer if it does not exist
-        self.on_raft_message(ctx, Box::new(raft_msg));
+        self.on_raft_message(ctx, raft_msg);
 
         ctx.router.force_send(region_id, PeerMsg::SplitInit(msg));
     }

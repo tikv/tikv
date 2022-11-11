@@ -17,8 +17,8 @@
 //!
 //! On Apply Result:
 //! - on_ready_split_region: Update the relevant in memory meta info of the
-//!   parent peer, and wrap and send to the store the relevant info needed to
-//!   create and initialize the split regions.
+//!   parent peer, then send to the store the relevant info needed to create and
+//!   initialize the split regions.
 //!
 //! Split peer creation and initlization:
 //! - init_split_region: In normal cases, the uninitialized split region will be
