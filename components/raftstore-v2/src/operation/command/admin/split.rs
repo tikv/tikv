@@ -326,7 +326,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             match store_ctx.router.force_send(new_region_id, split_init) {
                 Ok(_) => {}
                 Err(SendError(PeerMsg::SplitInit(msg))) => {
-                    store_ctx.router.send_control(StoreMsg::SplitInit(msg));
+                    store_ctx
+                        .router
+                        .force_send_control(StoreMsg::SplitInit(msg))
+                        .unwrap_or_else(|e| {
+                            panic!(
+                                "{:?} fails to send split peer intialization msg to store : {:?}",
+                                self.logger.list(),
+                                e
+                            )
+                        });
                 }
                 _ => unreachable!(),
             }
@@ -608,7 +617,7 @@ mod test {
         region_state.set_region(region.clone());
         region_state.set_tablet_index(5);
 
-        let (read_scheduler, rx) = dummy_scheduler();
+        let (read_scheduler, _rx) = dummy_scheduler();
         let (reporter, _) = MockReporter::new();
         let mut apply = Apply::new(
             region

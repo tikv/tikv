@@ -122,7 +122,16 @@ impl Store {
         // It will create the peer if it does not exist
         self.on_raft_message(ctx, raft_msg);
 
-        ctx.router.force_send(region_id, PeerMsg::SplitInit(msg));
+        ctx.router
+            .force_send(region_id, PeerMsg::SplitInit(msg))
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{:?} fail to send split peer initialization msg to region with id {:?}: {:?}",
+                    self.logger().list(),
+                    region_id,
+                    e
+                )
+            });
     }
 
     /// When a message's recipient doesn't exist, it will be redirected to
