@@ -3,7 +3,7 @@
 use std::{borrow::ToOwned, error::Error, str, str::FromStr, u64};
 
 use server::setup::initial_logger;
-use tikv::config::TikvConfig;
+use tikv::{config::TikvConfig, server::debug::RegionInfo};
 
 const LOG_DIR: &str = "./ctl-engine-info-log";
 
@@ -60,6 +60,24 @@ pub fn convert_gbmb(mut bytes: u64) -> String {
 pub fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
     println!("{}: {}", prefix, e);
     tikv_util::logger::exit_process_gracefully(-1);
+}
+
+// Check if the region is in the specified range
+pub fn included_region_in_range(r: &RegionInfo, start_key: &Vec<u8>, end_key: &Vec<u8>) -> bool {
+    let region = r
+        .region_local_state
+        .as_ref()
+        .map(|s| s.get_region().clone())
+        .unwrap();
+    if !end_key.is_empty() && region.get_start_key() >= end_key.as_slice() {
+        return false;
+    }
+    if start_key.as_slice() >= region.get_start_key()
+        && (region.get_end_key().is_empty() || start_key.as_slice() < region.get_end_key())
+    {
+        return true;
+    }
+    false
 }
 
 #[cfg(test)]

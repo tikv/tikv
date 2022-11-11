@@ -39,7 +39,6 @@ pub const METRICS_ROCKSDB_KV: &str = "rocksdb_kv";
 pub const METRICS_ROCKSDB_RAFT: &str = "rocksdb_raft";
 pub const METRICS_JEMALLOC: &str = "jemalloc";
 pub const LOCK_FILE_ERROR: &str = "IO error: While lock file";
-const DEFAULT_REGION_INFO_LIMIT: usize = 10240;
 
 type MvccInfoStream = Pin<Box<dyn Stream<Item = Result<(Vec<u8>, MvccInfo), String>>>>;
 
@@ -157,12 +156,9 @@ pub trait DebugExecutor {
         region_ids: Option<Vec<u64>>,
         start_key: &Vec<u8>,
         end_key: &Vec<u8>,
-        mut limit: usize,
+        limit: usize,
         skip_tombstone: bool,
     ) {
-        if limit > DEFAULT_REGION_INFO_LIMIT {
-            limit = DEFAULT_REGION_INFO_LIMIT;
-        }
         let region_ids = region_ids.unwrap_or_else(|| self.get_all_regions_in_store());
         let mut region_objects = serde_json::map::Map::new();
         for region_id in region_ids {
@@ -173,31 +169,12 @@ pub trait DebugExecutor {
             if skip_tombstone {
                 let region_state = r.region_local_state.as_ref();
                 if region_state.map_or(false, |s| s.get_state() == PeerState::Tombstone) {
-                    return;
+                    continue;
                 }
             }
-            // Check if the region is in the specified range
-            fn contains(r: &RegionInfo, start_key: &Vec<u8>, end_key: &Vec<u8>) -> bool {
-                let region = r
-                    .region_local_state
-                    .clone()
-                    .map(|s| s.get_region().clone())
-                    .unwrap();
-                if !end_key.is_empty() && region.get_start_key() >= end_key.as_slice() {
-                    return false;
-                }
-                if start_key.as_slice() >= region.get_start_key()
-                    && (region.get_end_key().is_empty()
-                        || start_key.as_slice() < region.get_end_key())
-                {
-                    return true;
-                }
-                false
-            }
-            if !start_key.is_empty() && !contains(&r, start_key, end_key) {
+            if !start_key.is_empty() && !included_region_in_range(&r, start_key, end_key) {
                 continue;
             }
-
             let region_object = json!({
                 "region_id": region_id,
                 "region_local_state": r.region_local_state.map(|s| {

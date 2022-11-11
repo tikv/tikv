@@ -615,7 +615,7 @@ pub enum RaftCmd {
         /// hex end key
         end: String,
 
-        #[structopt(long, default_value = "30")]
+        #[structopt(long, default_value = "0", max_values = 10240)]
         /// Limit the number of keys to scan
         limit: usize,
 
