@@ -30,9 +30,10 @@ use grpcio::{
     RpcStatusCode, WriteFlags,
 };
 use kvproto::{
-    raft_serverpb::{Done, RaftMessage},
+    raft_serverpb::{Done, RaftMessage, RaftSnapshotData},
     tikvpb::{BatchRaftMessage, TikvClient},
 };
+use protobuf::Message;
 use raft::SnapshotStatus;
 use raftstore::{errors::DiscardReason, router::RaftStoreRouter};
 use security::SecurityManager;
@@ -483,11 +484,17 @@ where
                 None => return,
             };
             if msg.get_message().has_snapshot() {
-                self.send_snapshot_sock(msg);
-                continue;
-            } else {
-                self.buffer.push(msg);
+                let mut snapshot = RaftSnapshotData::default();
+                snapshot
+                    .merge_from_bytes(msg.get_message().get_snapshot().get_data())
+                    .unwrap();
+                // Witness's snapshot must be empty, no need to send snapshot files
+                if !snapshot.get_meta().get_for_witness() {
+                    self.send_snapshot_sock(msg);
+                    continue;
+                }
             }
+            self.buffer.push(msg);
         }
     }
 }
