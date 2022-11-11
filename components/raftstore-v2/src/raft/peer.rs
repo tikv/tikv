@@ -32,7 +32,7 @@ use super::{storage::Storage, Apply};
 use crate::{
     batch::StoreContext,
     fsm::{ApplyFsm, ApplyScheduler},
-    operation::{AsyncWriter, DestroyProgress, SimpleWriteEncoder},
+    operation::{AsyncWriter, DestroyProgress, ProposalControl, SimpleWriteEncoder},
     router::{CmdResChannel, QueryResChannel},
     tablet::CachedTablet,
     Result,
@@ -74,6 +74,9 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// Transaction extensions related to this peer.
     txn_ext: Arc<TxnExt>,
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+
+    /// Check whether this proposal can be proposed based on its epoch.
+    proposal_control: ProposalControl,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -144,6 +147,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             last_region_buckets: None,
             txn_ext: Arc::default(),
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
+            proposal_control: ProposalControl::new(0),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -155,6 +159,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             peer.raft_group.campaign()?;
             peer.set_has_ready();
         }
+        let term = peer.term();
+        peer.proposal_control.maybe_update_term(term);
 
         Ok(peer)
     }
@@ -389,18 +395,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     #[inline]
     // TODO
-    pub fn is_splitting(&self) -> bool {
-        false
-    }
-
-    #[inline]
-    // TODO
-    pub fn is_merging(&self) -> bool {
-        false
-    }
-
-    #[inline]
-    // TODO
     pub fn has_force_leader(&self) -> bool {
         false
     }
@@ -453,24 +447,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn proposals(&self) -> &ProposalQueue<Vec<CmdResChannel>> {
         &self.proposals
-    }
-
-    #[inline]
-    pub fn ready_to_handle_read(&self) -> bool {
-        // TODO: It may cause read index to wait a long time.
-
-        // There may be some values that are not applied by this leader yet but the old
-        // leader, if applied_term isn't equal to current term.
-        self.applied_to_current_term()
-            // There may be stale read if the old leader splits really slow,
-            // the new region may already elected a new leader while
-            // the old leader still think it owns the split range.
-            && !self.is_splitting()
-            // There may be stale read if a target leader is in another store and
-            // applied commit merge, written new values, but the sibling peer in
-            // this store does not apply commit merge, so the leader is not ready
-            // to read, until the merge is rollbacked.
-            && !self.is_merging()
     }
 
     pub fn apply_scheduler(&self) -> &ApplyScheduler {
@@ -527,5 +503,23 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.read_progress().clone(),
             self.region_buckets.as_ref().map(|b| b.meta.clone()),
         )
+    }
+
+    #[inline]
+    pub fn proposal_control_mut(&mut self) -> &mut ProposalControl {
+        &mut self.proposal_control
+    }
+
+    #[inline]
+    pub fn proposal_control(&self) -> &ProposalControl {
+        &self.proposal_control
+    }
+
+    #[inline]
+    pub fn proposal_control_advance_apply(&mut self, apply_index: u64) {
+        let region = self.raft_group.store().region();
+        let term = self.term();
+        self.proposal_control
+            .advance_apply(apply_index, term, region);
     }
 }
