@@ -14,7 +14,6 @@ use crossbeam::channel::{Sender, TrySendError};
 use engine_traits::{Engines, KvEngine, RaftEngine, TabletFactory};
 use file_system::{set_io_type, IoType};
 use futures::{compat::Future01CompatExt, FutureExt};
-use keys::enc_end_key;
 use kvproto::{
     metapb::Store,
     raft_serverpb::{PeerState, RaftMessage},
@@ -280,7 +279,6 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                     None => return Ok(()),
                 };
                 let (sender, peer_fsm) = PeerFsm::new(&cfg, &*self.tablet_factory, storage)?;
-                let region = peer_fsm.as_ref().peer().region().clone();
                 meta.region_read_progress
                     .insert(region_id, peer_fsm.as_ref().peer().read_progress().clone());
 

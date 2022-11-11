@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::BTreeMap, time::SystemTime};
+use std::time::SystemTime;
 
 use batch_system::Fsm;
 use collections::HashMap;
@@ -44,18 +44,6 @@ where
             tablet_caches: HashMap::default(),
             region_read_progress: RegionReadProgressRegistry::new(),
         }
-    }
-
-    #[inline]
-    pub fn set_region<ER: RaftEngine>(
-        &mut self,
-        region: Region,
-        peer: &mut Peer<E, ER>,
-        reason: RegionChangeReason,
-        tablet_index: u64,
-    ) {
-        let reader = self.readers.get_mut(&region.get_id()).unwrap();
-        peer.set_region(reader, region, reason, tablet_index);
     }
 }
 

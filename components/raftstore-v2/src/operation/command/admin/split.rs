@@ -8,7 +8,7 @@
 //! - Nothing special except for validating batch split requests (ex: split keys
 //!   are in ascending order).
 //!
-//! Execution:
+//! Apply:
 //! - apply_batch_split: Create and initialize metapb::region for split regions
 //!   and derived regions. Then, create checkpoints of the current talbet for
 //!   split regions and derived region to make tablet physical isolated. Update
@@ -21,7 +21,7 @@
 //!   initialize the split regions.
 //!
 //! Split peer creation and initlization:
-//! - init_split_region: In normal cases, the uninitialized split region will be
+//! - on_split_init: In normal cases, the uninitialized split region will be
 //!   created by the store, and here init it using the data sent from the parent
 //!   peer.
 
@@ -30,7 +30,7 @@ use std::collections::VecDeque;
 use crossbeam::channel::{SendError, TrySendError};
 use engine_traits::{
     Checkpointer, DeleteStrategy, KvEngine, OpenOptions, RaftEngine, RaftLogBatch, Range,
-    TabletFactory, CF_DEFAULT, SPLIT_PREFIX,
+    CF_DEFAULT, SPLIT_PREFIX,
 };
 use fail::fail_point;
 use keys::enc_end_key;
@@ -42,15 +42,12 @@ use kvproto::{
 use protobuf::Message;
 use raft::RawNode;
 use raftstore::{
-    coprocessor::{
-        split_observer::{is_valid_split_key, strip_timestamp_if_exists},
-        RegionChangeReason,
-    },
+    coprocessor::RegionChangeReason,
     store::{
         fsm::apply::validate_batch_split,
         metrics::PEER_ADMIN_CMD_COUNTER,
         util::{self, KeysInfoFormatter},
-        PeerPessimisticLocks, PeerStat, ProposalContext, Transport, RAFT_INIT_LOG_INDEX,
+        PeerPessimisticLocks, PeerStat, ProposalContext, RAFT_INIT_LOG_INDEX,
     },
     Result,
 };
@@ -61,7 +58,7 @@ use crate::{
     batch::StoreContext,
     fsm::{ApplyResReporter, PeerFsmDelegate},
     operation::AdminCmdResult,
-    raft::{raft_config, write_initial_states, Apply, Peer, Storage},
+    raft::{write_initial_states, Apply, Peer, Storage},
     router::{ApplyRes, PeerMsg, StoreMsg},
 };
 
@@ -297,13 +294,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         // Roughly estimate the size and keys for new regions.
         let new_region_count = regions.len() as u64;
-        let mut meta = store_ctx.store_meta.lock().unwrap();
-        meta.set_region(
-            derived.clone(),
-            self,
-            RegionChangeReason::Split,
-            tablet_index,
-        );
+        {
+            let mut meta = store_ctx.store_meta.lock().unwrap();
+            let reader = meta.readers.get_mut(&derived.get_id()).unwrap();
+            self.set_region(
+                reader,
+                derived.clone(),
+                RegionChangeReason::Split,
+                tablet_index,
+            );
+        }
+
         self.post_split();
 
         let last_region_id = regions.last().unwrap().get_id();
@@ -330,7 +331,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 _ => unreachable!(),
             }
         }
-        drop(meta);
     }
 
     pub fn on_split_init<T>(
@@ -380,7 +380,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
             let applied_index = storage.apply_state().get_applied_index();
             let peer_id = storage.peer().get_id();
-            let raft_cfg = raft_config(peer_id, applied_index, &store_ctx.cfg);
+            let raft_cfg = store_ctx.cfg.new_raft_config(peer_id, applied_index);
 
             let mut raft_group = RawNode::new(&raft_cfg, storage, &self.logger).unwrap();
             // If this region has only one peer and I am the one, campaign directly.
@@ -449,7 +449,7 @@ mod test {
         kv::TestTabletFactoryV2,
         raft,
     };
-    use engine_traits::{CfOptionsExt, Peekable, WriteBatch, ALL_CFS};
+    use engine_traits::{CfOptionsExt, Peekable, TabletFactory, WriteBatch, ALL_CFS};
     use futures::channel::mpsc::unbounded;
     use kvproto::{
         metapb::RegionEpoch,
