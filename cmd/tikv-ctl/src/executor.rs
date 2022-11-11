@@ -194,7 +194,7 @@ pub trait DebugExecutor {
                 }
                 false
             }
-            if let Some(ref start_key) = start_key && !contains(&r, start_key, &end_key) {
+            if let Some(ref start_key) = start_key && !start_key.is_empty() && !contains(&r, start_key, &end_key) {
                 continue;
             }
 

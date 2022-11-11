@@ -592,7 +592,6 @@ pub enum RaftCmd {
         #[structopt(
             short = "r",
             aliases = &["region"],
-            required_unless = "all-regions",
             conflicts_with = "all-regions",
             use_delimiter = true,
             require_delimiter = true,
@@ -604,21 +603,11 @@ pub enum RaftCmd {
         // `regions` must be None when `all_regions` is present,
         // so we left `all_regions` unused.
         #[allow(dead_code)]
-        #[structopt(long, required_unless = "regions", conflicts_with = "regions")]
+        #[structopt(long, conflicts_with = "regions")]
         /// Print info for all regions
         all_regions: bool,
 
-        #[structopt(long, default_value = "30")]
-        /// Limit the number of keys to scan
-        limit: usize,
-
-        #[structopt(long)]
-        /// Skip tombstone regions
-        skip_tombstone: bool,
-    },
-    /// print region info by key range
-    KeyRange {
-        #[structopt(long)]
+        #[structopt(long, default_value = "")]
         /// hex start key
         start: String,
 
