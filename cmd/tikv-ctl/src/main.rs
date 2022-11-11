@@ -281,8 +281,8 @@ fn main() {
                         let end_key = from_hex(&end).unwrap();
                         debug_executor.dump_region_info(
                             regions,
-                            Some(start_key),
-                            Some(end_key),
+                            &start_key,
+                            &end_key,
                             limit,
                             skip_tombstone,
                         );

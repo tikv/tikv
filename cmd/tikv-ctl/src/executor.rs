@@ -155,8 +155,8 @@ pub trait DebugExecutor {
     fn dump_region_info(
         &self,
         region_ids: Option<Vec<u64>>,
-        start_key: Option<Vec<u8>>,
-        end_key: Option<Vec<u8>>,
+        start_key: &Vec<u8>,
+        end_key: &Vec<u8>,
         mut limit: usize,
         skip_tombstone: bool,
     ) {
@@ -177,13 +177,13 @@ pub trait DebugExecutor {
                 }
             }
             // Check if the region is in the specified range
-            fn contains(r: &RegionInfo, start_key: &Vec<u8>, end_key: &Option<Vec<u8>>) -> bool {
+            fn contains(r: &RegionInfo, start_key: &Vec<u8>, end_key: &Vec<u8>) -> bool {
                 let region = r
                     .region_local_state
                     .clone()
                     .map(|s| s.get_region().clone())
                     .unwrap();
-                if let Some(end_key) = end_key && !end_key.is_empty() && region.get_start_key() >= end_key.as_slice() {
+                if !end_key.is_empty() && region.get_start_key() >= end_key.as_slice() {
                     return false;
                 }
                 if start_key.as_slice() >= region.get_start_key()
@@ -194,7 +194,7 @@ pub trait DebugExecutor {
                 }
                 false
             }
-            if let Some(ref start_key) = start_key && !start_key.is_empty() && !contains(&r, start_key, &end_key) {
+            if !start_key.is_empty() && !contains(&r, start_key, end_key) {
                 continue;
             }
 
