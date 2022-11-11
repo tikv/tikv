@@ -67,7 +67,8 @@ fn test_snap_without_read_index() {
     req.mut_requests().push(request_inner);
     let res = router.query(region_id, req.clone()).unwrap();
     let resp = res.read().unwrap();
-    // When it becomes leader, it will get a lease automatically because of empty entry.
+    // When it becomes leader, it will get a lease automatically because of empty
+    // entry.
     assert_eq!(resp.read_index, 0);
 
     // run with header read_quorum
