@@ -366,6 +366,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         trans: T,
         router: &StoreRouter<EK, ER>,
         store_meta: Arc<Mutex<StoreMeta<EK>>>,
+        snap_mgr: TabletSnapManager,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -375,15 +376,6 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             .store_writers
             .spawn(store_id, raft_engine.clone(), None, router, &trans, &cfg)?;
 
-        let snap_mgr = TabletSnapManager::new(
-            tablet_factory
-                .tablets_path()
-                .join(Path::new("snap"))
-                .to_str()
-                .unwrap()
-                .to_owned(),
-        );
-        snap_mgr.init()?;
         let mut read_runner = ReadRunner::new(router.clone(), raft_engine.clone());
         read_runner.set_snap_mgr(snap_mgr);
         let read_scheduler = workers

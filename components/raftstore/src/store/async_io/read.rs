@@ -118,11 +118,7 @@ impl<EK: KvEngine, ER: RaftEngine, N: AsyncReadNotifier> ReadRunner<EK, ER, N> {
         self.sanp_mgr.as_ref().unwrap()
     }
 
-    fn create_checkpointer_for_snap(
-        &self,
-        snap_key: &TabletSnapKey,
-        tablet: EK,
-    ) -> crate::Result<()> {
+    fn generate_snap(&self, snap_key: &TabletSnapKey, tablet: EK) -> crate::Result<()> {
         let checkpointer_path = self.snap_mgr().get_tablet_checkpointer_path(snap_key);
         if checkpointer_path.as_path().exists() {
             // Remove the old checkpoint directly.
@@ -225,7 +221,7 @@ where
                 // create checkpointer.
                 let snap_key = TabletSnapKey::from_region_snap(region_id, to_peer, &snapshot);
                 let mut res = None;
-                if let Err(e) = self.create_checkpointer_for_snap(&snap_key, tablet) {
+                if let Err(e) = self.generate_snap(&snap_key, tablet) {
                     error!("failed to create checkpointer"; "region_id" => region_id, "error" => %e);
                     SNAP_COUNTER.generate.fail.inc();
                 } else {
