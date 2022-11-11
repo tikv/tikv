@@ -13,8 +13,12 @@ use std::{
 };
 
 use engine_rocks::{RocksDbVector, RocksEngineIterator, RocksSnapshot};
-use engine_traits::{IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable};
+use engine_traits::{
+    Checkpointable, Checkpointer, Error, IterOptions, Iterable, KvEngine, Peekable, ReadOptions,
+    Result, SyncMutable,
+};
 use rocksdb::{Writable, DB};
+use tikv_util::box_err;
 
 use crate::{r2e, util::get_cf_handle};
 
@@ -245,5 +249,28 @@ impl SyncMutable for RocksEngine {
     fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         // do nothing
         Ok(())
+    }
+}
+
+pub struct TiFlashCheckpointer {}
+
+impl Checkpointable for RocksEngine {
+    type Checkpointer = TiFlashCheckpointer;
+
+    fn new_checkpointer(&self) -> Result<Self::Checkpointer> {
+        Err(Error::Other("TiFlash don't support Checkpointable".into()))
+    }
+}
+
+impl Checkpointer for TiFlashCheckpointer {
+    fn create_at(
+        &mut self,
+        db_out_dir: &Path,
+        titan_out_dir: Option<&Path>,
+        log_size_for_flush: u64,
+    ) -> Result<()> {
+        Err(Error::Other(
+            "TiFlash don't support Checkpointer::create_at".into(),
+        ))
     }
 }
