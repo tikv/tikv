@@ -13,14 +13,14 @@
 use std::cmp;
 
 use batch_system::BasicMailbox;
-use crossbeam::channel::TrySendError;
+use crossbeam::channel::{SendError, TrySendError};
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
     metapb::Region,
     raft_serverpb::{PeerState, RaftMessage},
 };
 use raftstore::store::{util, ExtraStates, WriteTask};
-use slog::{debug, error, info};
+use slog::{debug, error, info, warn};
 use tikv_util::store::find_peer;
 
 use super::command::SplitInit;
@@ -107,9 +107,6 @@ impl Store {
         let mut raft_msg = Box::new(RaftMessage::default());
         raft_msg.set_region_id(region_id);
         raft_msg.set_region_epoch(msg.region.get_region_epoch().clone());
-        // Set the peer_id be INVALID_ID so that the message will not be sent to the
-        // peer after the creation.
-        raft_msg.mut_from_peer().set_id(raft::INVALID_ID);
         raft_msg.set_to_peer(
             msg.region
                 .get_peers()
@@ -122,16 +119,13 @@ impl Store {
         // It will create the peer if it does not exist
         self.on_raft_message(ctx, raft_msg);
 
-        ctx.router
-            .force_send(region_id, PeerMsg::SplitInit(msg))
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{:?} fail to send split peer initialization msg to region with id {:?}: {:?}",
-                    self.logger().list(),
-                    region_id,
-                    e
-                )
-            });
+        if let Err(SendError(m)) = ctx.router.force_send(region_id, PeerMsg::SplitInit(msg)) {
+            warn!(
+                self.logger(),
+                "Split peer is destroyed before sending the intialization msg";
+                "split init msg" => ?m,
+            )
+        }
     }
 
     /// When a message's recipient doesn't exist, it will be redirected to

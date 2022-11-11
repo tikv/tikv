@@ -171,7 +171,7 @@ impl fmt::Debug for PeerMsg {
             PeerMsg::ApplyRes(res) => write!(fmt, "ApplyRes {:?}", res),
             PeerMsg::Start => write!(fmt, "Startup"),
             PeerMsg::SplitInit(_) => {
-                write!(fmt, "Across peer msg")
+                write!(fmt, "Split initialization")
             }
             PeerMsg::Noop => write!(fmt, "Noop"),
             PeerMsg::Persisted {
@@ -202,7 +202,7 @@ impl fmt::Debug for StoreMsg {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             StoreMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
-            StoreMsg::SplitInit(_) => write!(fmt, "Peer Creation"),
+            StoreMsg::SplitInit(_) => write!(fmt, "Split initialization"),
             StoreMsg::Tick(tick) => write!(fmt, "StoreTick {:?}", tick),
             StoreMsg::Start => write!(fmt, "Start store"),
         }

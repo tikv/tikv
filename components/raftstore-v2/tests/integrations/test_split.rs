@@ -44,24 +44,8 @@ fn must_split(region_id: u64, req: RaftCmdRequest, router: &mut TestRouter) {
     thread::sleep(Duration::from_secs(1));
 }
 
-fn put(
-    store_id: u64,
-    router: &mut TestRouter,
-    region: &metapb::Region,
-    key: &[u8],
-) -> RaftCmdResponse {
-    let mut req = RaftCmdRequest::default();
-    req.mut_header().set_region_id(region.id);
-    req.mut_header()
-        .set_region_epoch(region.get_region_epoch().clone());
-    req.mut_header().set_peer(
-        region
-            .get_peers()
-            .iter()
-            .find(|p| p.get_store_id() == store_id)
-            .unwrap()
-            .clone(),
-    );
+fn put(router: &mut TestRouter, region_id: u64, key: &[u8]) -> RaftCmdResponse {
+    let mut req = router.new_request_for(region_id);
 
     let mut put_req = Request::default();
     put_req.set_cmd_type(CmdType::Put);
@@ -70,26 +54,15 @@ fn put(
     req.mut_requests().push(put_req);
 
     let (msg, mut sub) = PeerMsg::raft_command(req.clone());
-    router.send(region.id, msg).unwrap();
+    router.send(region_id, msg).unwrap();
     assert!(block_on(sub.wait_proposed()));
     assert!(block_on(sub.wait_committed()));
     block_on(sub.result()).unwrap()
 }
 
-fn must_put_succeed(store_id: u64, router: &mut TestRouter, region: &metapb::Region, key: &[u8]) {
-    let resp = put(store_id, router, region, key);
-    assert!(!resp.get_header().has_error(), "{:?}", resp);
-}
-
-fn must_put_error(store_id: u64, router: &mut TestRouter, region: &metapb::Region, key: &[u8]) {
-    let resp = put(store_id, router, region, key);
-    assert!(resp.get_header().get_error().has_key_not_in_region());
-}
-
 // Split the region according to the parameters
 // return the updated original region
 fn split_region(
-    store_id: u64,
     router: &mut TestRouter,
     region: metapb::Region,
     peer: metapb::Peer,
@@ -131,13 +104,17 @@ fn split_region(
 
     // The end key of left region is `split_key`
     // So writing `right_key` will fail
-    must_put_error(store_id, router, &left, right_key);
+    let resp = put(router, left.id, right_key);
+    assert!(resp.get_header().has_error(), "{:?}", resp);
     // But `left_key` should succeed
-    must_put_succeed(store_id, router, &left, left_key);
+    let resp = put(router, left.id, left_key);
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
 
     // Mirror of above case
-    must_put_error(store_id, router, &right, left_key);
-    must_put_succeed(store_id, router, &right, right_key);
+    let resp = put(router, right.id, left_key);
+    assert!(resp.get_header().has_error(), "{:?}", resp);
+    let resp = put(router, right.id, right_key);
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
 
     assert_eq!(left.get_end_key(), split_key);
     assert_eq!(right.get_start_key(), split_key);
@@ -163,7 +140,6 @@ fn test_split() {
     //   -> Region 2    ["", "k22"] peer(1, 3)
     //      Region 1000 ["k22", ""] peer(1, 10)
     let (left, right) = split_region(
-        store_id,
         &mut router,
         region,
         peer.clone(),
@@ -179,7 +155,6 @@ fn test_split() {
     //   -> Region 2    ["", "k11"]    peer(1, 3)
     //      Region 1001 ["k11", "k22"] peer(1, 11)
     let _ = split_region(
-        store_id,
         &mut router,
         left,
         peer,
@@ -195,7 +170,6 @@ fn test_split() {
     //   -> Region 1000 ["k22", "k33"] peer(1, 10)
     //      Region 1002 ["k33", ""]    peer(1, 12)
     let _ = split_region(
-        store_id,
         &mut router,
         right,
         new_peer(store_id, 10),
