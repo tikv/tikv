@@ -404,38 +404,38 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
 
-        let mut meta = store_ctx.store_meta.lock().unwrap();
+        {
+            let mut meta = store_ctx.store_meta.lock().unwrap();
 
-        info!(
-            self.logger,
-            "init split region";
-            "region" => ?split_init.region,
-        );
+            info!(
+                self.logger,
+                "init split region";
+                "region" => ?split_init.region,
+            );
 
-        // todo: GlobalReplicationState
+            // todo: GlobalReplicationState
 
-        for p in split_init.region.get_peers() {
-            self.insert_peer_cache(p.clone());
-        }
-
-        if split_init.parent_is_leader {
-            if self.maybe_campaign() {
-                self.set_has_ready();
+            for p in split_init.region.get_peers() {
+                self.insert_peer_cache(p.clone());
             }
 
-            *self.txn_ext().pessimistic_locks.write() = split_init.locks;
-            // The new peer is likely to become leader, send a heartbeat immediately to
-            // reduce client query miss.
-            self.heartbeat_pd(store_ctx);
+            if split_init.parent_is_leader {
+                if self.maybe_campaign() {
+                    self.set_has_ready();
+                }
+
+                *self.txn_ext().pessimistic_locks.write() = split_init.locks;
+                // The new peer is likely to become leader, send a heartbeat immediately to
+                // reduce client query miss.
+                self.heartbeat_pd(store_ctx);
+            }
+
+            meta.tablet_caches.insert(region_id, self.tablet().clone());
+            meta.readers
+                .insert(region_id, self.generate_read_delegate());
+            meta.region_read_progress
+                .insert(region_id, self.read_progress().clone());
         }
-
-        meta.tablet_caches.insert(region_id, self.tablet().clone());
-        meta.readers
-            .insert(region_id, self.generate_read_delegate());
-        meta.region_read_progress
-            .insert(region_id, self.read_progress().clone());
-
-        drop(meta);
 
         if split_init.check_split {
             // todo: check if the last region needs to split again
