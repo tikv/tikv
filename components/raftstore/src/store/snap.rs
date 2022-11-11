@@ -1886,6 +1886,81 @@ impl SnapManagerBuilder {
     }
 }
 
+#[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub struct TabletSnapKey {
+    pub region_id: u64,
+    pub to_peer: u64,
+    pub term: u64,
+    pub idx: u64,
+}
+
+impl TabletSnapKey {
+    #[inline]
+    pub fn new(region_id: u64, to_peer: u64, term: u64, idx: u64) -> TabletSnapKey {
+        TabletSnapKey {
+            region_id,
+            to_peer,
+            term,
+            idx,
+        }
+    }
+
+    pub fn from_region_snap(region_id: u64, to_peer: u64, snap: &RaftSnapshot) -> TabletSnapKey {
+        let index = snap.get_metadata().get_index();
+        let term = snap.get_metadata().get_term();
+        TabletSnapKey::new(region_id, to_peer, term, index)
+    }
+}
+
+impl Display for TabletSnapKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}_{}_{}_{}",
+            self.region_id, self.to_peer, self.term, self.idx
+        )
+    }
+}
+
+/// `TabletSnapManager` manager tablet snapshot and shared between raftstore v2.
+/// It's similar `SnapManager`, but simpler in tablet version.
+///
+///  TODO:
+///     - add Limiter to control send/recv speed
+///     - clean up expired tablet checkpointer
+#[derive(Clone)]
+pub struct TabletSnapManager {
+    // directory to store snapfile.
+    base: String,
+}
+
+impl TabletSnapManager {
+    pub fn new<T: Into<String>>(path: T) -> Self {
+        Self { base: path.into() }
+    }
+
+    pub fn init(&self) -> io::Result<()> {
+        // Initialize the directory if it doesn't exist.
+        let path = Path::new(&self.base);
+        if !path.exists() {
+            file_system::create_dir_all(path)?;
+            return Ok(());
+        }
+        if !path.is_dir() {
+            return Err(io::Error::new(
+                ErrorKind::Other,
+                format!("{} should be a directory", path.display()),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn get_tablet_checkpointer_path(&self, key: &TabletSnapKey) -> PathBuf {
+        let prefix = format!("{}_{}", SNAP_GEN_PREFIX, key);
+        PathBuf::from(&self.base).join(&prefix)
+    }
+}
+
 #[cfg(test)]
 pub mod tests {
     use std::{
