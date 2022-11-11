@@ -55,9 +55,11 @@ use crate::{
 };
 
 mod admin;
+mod control;
 mod write;
 
 pub use admin::AdminCmdResult;
+pub use control::ProposalControl;
 pub use write::{SimpleWriteDecoder, SimpleWriteEncoder};
 
 use self::write::SimpleWrite;
@@ -220,18 +222,28 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    fn enqueue_pending_proposal<T>(
+    pub fn post_propose_command<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
-        mut proposal: Proposal<Vec<CmdResChannel>>,
+        res: Result<u64>,
+        ch: Vec<CmdResChannel>,
+        call_proposed_on_success: bool,
     ) {
-        let applied_to_current_term = self.applied_to_current_term();
-        if applied_to_current_term {
+        let idx = match res {
+            Ok(i) => i,
+            Err(e) => {
+                ch.report_error(cmd_resp::err_resp(e, self.term()));
+                return;
+            }
+        };
+        let mut proposal = Proposal::new(idx, self.term(), ch);
+        if call_proposed_on_success {
             proposal.cb.notify_proposed();
         }
-        proposal.must_pass_epoch_check = applied_to_current_term;
+        proposal.must_pass_epoch_check = self.applied_to_current_term();
         proposal.propose_time = Some(*ctx.current_time.get_or_insert_with(monotonic_raw_now));
         self.proposals_mut().push(proposal);
+        self.set_has_ready();
     }
 
     #[inline]
@@ -292,6 +304,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         self.raft_group_mut()
             .advance_apply_to(apply_res.applied_index);
+        self.proposal_control_advance_apply(apply_res.applied_index);
         let is_leader = self.is_leader();
         let progress_to_be_updated = self.entry_storage().applied_term() != apply_res.applied_term;
         let entry_storage = self.entry_storage_mut();

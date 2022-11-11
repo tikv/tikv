@@ -68,9 +68,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ch.report_error(resp);
             return;
         }
-        // To maintain propose order, we need to make pending proposal first.
-        self.propose_pending_command(ctx);
         let cmd_type = req.get_admin_request().get_cmd_type();
+        if let Some(conflict) = self.proposal_control_mut().check_conflict(Some(cmd_type)) {
+            conflict.delay_channel(ch);
+            return;
+        }
+        // To maintain propose order, we need to make pending proposal first.
+        self.propose_pending_writes(ctx);
         let res = if apply::is_conf_change_cmd(&req) {
             self.propose_conf_change(ctx, req)
         } else {
@@ -83,14 +87,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 _ => unimplemented!(),
             }
         };
-        if let Err(e) = &res {
-            info!(
-                self.logger,
-                "failed to propose admin command";
-                "cmd_type" => ?cmd_type,
-                "error" => ?e,
-            );
+        match &res {
+            Ok(index) => self
+                .proposal_control_mut()
+                .record_proposed_admin(cmd_type, *index),
+            Err(e) => {
+                info!(
+                    self.logger,
+                    "failed to propose admin command";
+                    "cmd_type" => ?cmd_type,
+                    "error" => ?e,
+                );
+            }
         }
-        self.post_propose_write(ctx, res, vec![ch]);
+        self.post_propose_command(ctx, res, vec![ch], true);
     }
 }
