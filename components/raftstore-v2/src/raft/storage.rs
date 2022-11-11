@@ -370,8 +370,8 @@ mod tests {
     };
     use raft::{eraftpb::Snapshot as RaftSnapshot, Error as RaftError, StorageError};
     use raftstore::store::{
-        AsyncReadNotifier, FetchedLogs, ReadRunner, ReadTask, RAFT_INIT_LOG_INDEX,
-        RAFT_INIT_LOG_TERM,
+        AsyncReadNotifier, FetchedLogs, GenSnapRes, ReadRunner, ReadTask, TabletSnapKey,
+        TabletSnapManager, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
     };
     use slog::o;
     use tempfile::TempDir;
@@ -382,11 +382,11 @@ mod tests {
 
     #[derive(Clone)]
     pub struct TestRouter {
-        ch: SyncSender<Box<Snapshot>>,
+        ch: SyncSender<GenSnapRes>,
     }
 
     impl TestRouter {
-        pub fn new() -> (Self, Receiver<Box<Snapshot>>) {
+        pub fn new() -> (Self, Receiver<GenSnapRes>) {
             let (tx, rx) = sync_channel(1);
             (Self { ch: tx }, rx)
         }
@@ -397,8 +397,8 @@ mod tests {
             unreachable!();
         }
 
-        fn notify_snapshot_generated(&self, _region_id: u64, snapshot: Box<Snapshot>) {
-            self.ch.send(snapshot).unwrap();
+        fn notify_snapshot_generated(&self, _region_id: u64, res: GenSnapRes) {
+            self.ch.send(res).unwrap();
         }
     }
 
@@ -458,6 +458,8 @@ mod tests {
         write_initial_states(&mut wb, region.clone()).unwrap();
         assert!(!wb.is_empty());
         raft_engine.consume(&mut wb, true).unwrap();
+        let mgr = TabletSnapManager::new(path.path().join("snap_dir").to_str().unwrap());
+        mgr.init().unwrap();
         // building a tablet factory
         let ops = DbOptions::default();
         let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
@@ -478,7 +480,9 @@ mod tests {
             .unwrap()
             .unwrap();
         let (router, rx) = TestRouter::new();
-        worker.start(ReadRunner::new(router.clone(), raft_engine));
+        let mut read_runner = ReadRunner::new(router.clone(), raft_engine);
+        read_runner.set_snap_mgr(mgr.clone());
+        worker.start(read_runner);
         // setup peer applyer
         let mut apply = Apply::new(
             region.get_peers()[0].clone(),
@@ -490,8 +494,8 @@ mod tests {
             logger,
         );
 
-        // test get snapshot
-        let snap = s.snapshot(0, 0);
+        // Test get snapshot
+        let snap = s.snapshot(0, 7);
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
@@ -504,11 +508,13 @@ mod tests {
         };
         assert_eq!(snap.get_metadata().get_index(), 0);
         assert_eq!(snap.get_metadata().get_term(), 0);
-        assert!(snap.get_data().is_empty());
+        assert_eq!(snap.get_data().is_empty(), false);
+        let snap_key = TabletSnapKey::from_region_snap(4, 7, &snap);
+        let checkpointer_path = mgr.get_tablet_checkpointer_path(&snap_key);
+        assert!(checkpointer_path.exists());
 
-        // test cancel snapshot
+        // Test cancel snapshot
         let snap = s.snapshot(0, 0);
-        let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         apply.schedule_gen_snapshot(gen_task);
@@ -516,6 +522,24 @@ mod tests {
         s.cancel_generating_snap(None);
         assert_eq!(*s.snap_state.borrow(), SnapState::Relax);
 
-        // TODO: add test get twice snapshot and cancel once
+        // Test get twice snapshot and cancel once.
+        // get snapshot a
+        let snap = s.snapshot(0, 0);
+        assert_eq!(snap.unwrap_err(), unavailable);
+        let gen_task_a = s.gen_snap_task.borrow_mut().take().unwrap();
+        apply.set_apply_progress(1, 5);
+        apply.schedule_gen_snapshot(gen_task_a);
+        let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        s.cancel_generating_snap(None);
+        // cancel get snapshot a, try get snaphsot b
+        let snap = s.snapshot(0, 0);
+        assert_eq!(snap.unwrap_err(), unavailable);
+        let gen_task_b = s.gen_snap_task.borrow_mut().take().unwrap();
+        apply.set_apply_progress(10, 5);
+        apply.schedule_gen_snapshot(gen_task_b);
+        // on snapshot a and b
+        assert_eq!(s.on_snapshot_generated(res), false);
+        let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(s.on_snapshot_generated(res), true);
     }
 }
