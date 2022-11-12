@@ -422,6 +422,7 @@ fn default_txn_props(
         need_old_value: false,
         is_retry_request: false,
         assertion_level: AssertionLevel::Off,
+        txn_source: 0,
     }
 }
 

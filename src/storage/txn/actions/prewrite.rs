@@ -172,6 +172,7 @@ pub struct TransactionProperties<'a> {
     pub need_old_value: bool,
     pub is_retry_request: bool,
     pub assertion_level: AssertionLevel,
+    pub txn_source: u8,
 }
 
 impl<'a> TransactionProperties<'a> {
@@ -453,7 +454,7 @@ impl<'a> PrewriteMutation<'a> {
             self.txn_props.for_update_ts(),
             self.txn_props.txn_size,
             self.min_commit_ts,
-        );
+        ).set_txn_source(self.txn_props.txn_source);
         // Only Lock needs to record `last_change_ts` in its write record, Put or Delete
         // records themselves are effective changes.
         if tls_can_enable(LAST_CHANGE_TS) && self.lock_type == Some(LockType::Lock) {
@@ -518,7 +519,7 @@ impl<'a> PrewriteMutation<'a> {
             primary: self.txn_props.primary.to_vec(),
             reason,
         }
-        .into())
+            .into())
     }
 
     fn check_assertion<S: Snapshot>(
@@ -795,6 +796,7 @@ pub mod tests {
             need_old_value: false,
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
+            txn_source: 0,
         }
     }
 
@@ -821,6 +823,7 @@ pub mod tests {
             need_old_value: true,
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
+            txn_source: 0,
         }
     }
 
@@ -950,7 +953,7 @@ pub mod tests {
             &Some(vec![]),
             SkipPessimisticCheck,
         )
-        .unwrap();
+            .unwrap();
         assert!(min_ts > props.start_ts);
         assert!(min_ts >= props.min_commit_ts);
         assert!(min_ts < 41.into());
@@ -1008,7 +1011,7 @@ pub mod tests {
                 &Some(vec![b"k4".to_vec()]),
                 SkipPessimisticCheck,
             )
-            .unwrap();
+                .unwrap();
             assert!(min_ts > 44.into());
             assert!(min_ts < 50.into());
             txn.take_guards();
@@ -1133,6 +1136,7 @@ pub mod tests {
                 need_old_value: true,
                 is_retry_request: false,
                 assertion_level: AssertionLevel::Off,
+                txn_source: 0,
             },
             Mutation::make_check_not_exists(Key::from_raw(key)),
             &None,
@@ -1165,6 +1169,7 @@ pub mod tests {
             need_old_value: true,
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
+            txn_source: 0,
         };
         // calculated commit_ts = 43 ≤ 50, ok
         let (_, old_value) = prewrite(
@@ -1215,6 +1220,7 @@ pub mod tests {
             need_old_value: true,
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
+            txn_source: 0,
         };
         // calculated commit_ts = 43 ≤ 50, ok
         let (_, old_value) = prewrite(
@@ -1324,6 +1330,7 @@ pub mod tests {
             need_old_value: true,
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
+            txn_source: 0,
         };
 
         let cases = vec![
@@ -1384,6 +1391,7 @@ pub mod tests {
             need_old_value: true,
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
+            txn_source: 0,
         };
 
         let cases: Vec<_> = vec![
@@ -1655,6 +1663,7 @@ pub mod tests {
                 need_old_value: true,
                 is_retry_request: false,
                 assertion_level: AssertionLevel::Off,
+                txn_source: 0,
             };
             let snapshot = engine.snapshot(Default::default()).unwrap();
             let cm = ConcurrencyManager::new(start_ts);
@@ -1709,6 +1718,7 @@ pub mod tests {
             need_old_value: true,
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
+            txn_source: 0,
         };
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let cm = ConcurrencyManager::new(start_ts);
@@ -1850,6 +1860,7 @@ pub mod tests {
                     need_old_value: true,
                     is_retry_request: false,
                     assertion_level: AssertionLevel::Off,
+                    txn_source: 0,
                 };
                 let (_, old_value) = prewrite(
                     &mut txn,
@@ -1886,6 +1897,7 @@ pub mod tests {
                     need_old_value: true,
                     is_retry_request: false,
                     assertion_level: AssertionLevel::Off,
+                    txn_source: 0,
                 };
                 let (_, old_value) = prewrite(
                     &mut txn,
