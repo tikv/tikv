@@ -60,6 +60,17 @@ pub enum Task {
         msg: RaftMessage,
         cb: Callback,
     },
+
+    TabletRecv {
+        stream: RequestStream<SnapshotChunk>,
+        sink: ClientStreamingSink<Done>,
+    },
+    TabletSend {
+        addr: String,
+        msg: RaftMessage,
+        cb: Callback,
+    },
+
     RefreshConfigEvent,
     Validate(Box<dyn FnOnce(&Config) + Send>),
 }
@@ -73,6 +84,10 @@ impl Display for Task {
             } => write!(f, "Send Snap[to: {}, snap: {:?}]", addr, msg),
             Task::RefreshConfigEvent => write!(f, "Refresh configuration"),
             Task::Validate(_) => write!(f, "Validate snap worker config"),
+            Task::TabletRecv { .. } => write!(f, "tablet Recv"),
+            Task::TabletSend {
+                ref addr, ref msg, ..
+            } => write!(f, "Send Tablet Snap[to: {}, snap: {:?}]", addr, msg),
         }
     }
 }
@@ -487,6 +502,12 @@ where
                 };
 
                 self.pool.spawn(task);
+            }
+            Task::TabletRecv { .. } => {
+                unimplemented!();
+            }
+            Task::TabletSend { .. } => {
+                unimplemented!();
             }
             Task::RefreshConfigEvent => {
                 self.refresh_cfg();

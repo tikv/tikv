@@ -35,7 +35,11 @@ use kvproto::{
 };
 use protobuf::Message;
 use raft::SnapshotStatus;
-use raftstore::{errors::DiscardReason, router::RaftStoreRouter};
+use raftstore::{
+    errors::DiscardReason,
+    router::RaftStoreRouter,
+    store::snap::{SNAPSHOT_VERSION, TABLET_SNAPSHOT_VERSION},
+};
 use security::SecurityManager;
 use tikv_util::{
     config::{Tracker, VersionTrack},
@@ -453,7 +457,7 @@ where
         }
     }
 
-    fn send_snapshot_sock(&self, msg: RaftMessage) {
+    fn send_snapshot_sock(&self, msg: RaftMessage, version: u64) {
         let rep = self.new_snapshot_reporter(&msg);
         let cb = Box::new(move |res: Result<_, _>| {
             if res.is_err() {
@@ -462,11 +466,25 @@ where
                 rep.report(SnapshotStatus::Finish);
             }
         });
-        if let Err(e) = self.snap_scheduler.schedule(SnapTask::Send {
-            addr: self.addr.clone(),
-            msg,
-            cb,
-        }) {
+
+        let task = {
+            match version {
+                TABLET_SNAPSHOT_VERSION => SnapTask::TabletSend {
+                    addr: self.addr.clone(),
+                    msg,
+                    cb,
+                },
+                SNAPSHOT_VERSION => SnapTask::Send {
+                    addr: self.addr.clone(),
+                    msg,
+                    cb,
+                },
+                other => {
+                    panic!("unknown version:{}", other)
+                }
+            }
+        };
+        if let Err(e) = self.snap_scheduler.schedule(task) {
             if let SnapTask::Send { cb, .. } = e.into_inner() {
                 error!(
                     "channel is unavailable, failed to schedule snapshot";
@@ -488,9 +506,10 @@ where
                 snapshot
                     .merge_from_bytes(msg.get_message().get_snapshot().get_data())
                     .unwrap();
+                let version = snapshot.get_version();
                 // Witness's snapshot must be empty, no need to send snapshot files
                 if !snapshot.get_meta().get_for_witness() {
-                    self.send_snapshot_sock(msg);
+                    self.send_snapshot_sock(msg, version);
                     continue;
                 }
             }

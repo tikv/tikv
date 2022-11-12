@@ -361,7 +361,14 @@ where
 
     fn run(&mut self, task: Task) {
         match task {
-            Task::Recv { stream, sink } => {
+            Task::Send { .. } => {
+                unimplemented!();
+            }
+
+            Task::Recv { .. } => {
+                unimplemented!();
+            }
+            Task::TabletRecv { stream, sink } => {
                 let task_num = self.recving_count.load(Ordering::SeqCst);
                 if task_num >= self.cfg.concurrent_recv_snap_limit {
                     warn!("too many recving snapshot tasks, ignore");
@@ -390,7 +397,7 @@ where
                 };
                 self.pool.spawn(task);
             }
-            Task::Send { addr, msg, cb } => {
+            Task::TabletSend { addr, msg, cb } => {
                 let region_id = msg.get_region_id();
                 if self.sending_count.load(Ordering::SeqCst) >= self.cfg.concurrent_send_snap_limit
                 {
