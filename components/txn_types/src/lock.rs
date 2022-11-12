@@ -180,10 +180,7 @@ impl Lock {
 
     #[inline]
     #[must_use]
-    pub fn set_txn_source(
-        mut self,
-        source: u8,
-    ) -> Self {
+    pub fn set_txn_source(mut self, source: u8) -> Self {
         self.txn_source = source;
         self
     }
@@ -345,7 +342,11 @@ impl Lock {
                     last_change_ts = number::decode_u64(&mut b)?.into();
                     versions_to_last_change = number::decode_var_u64(&mut b)?;
                 }
-                TXN_SOURCE_PREFIX => txn_source = b.read_u8().map_err(|_| Error::from(ErrorInner::BadFormatWrite))?,
+                TXN_SOURCE_PREFIX => {
+                    txn_source = b
+                        .read_u8()
+                        .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?
+                }
                 _ => {
                     // To support forward compatibility, all fields should be serialized in order
                     // and stop parsing if meets an unknown byte.
@@ -390,7 +391,8 @@ impl Lock {
         info.set_use_async_commit(self.use_async_commit);
         info.set_min_commit_ts(self.min_commit_ts.into_inner());
         info.set_secondaries(self.secondaries.into());
-        // The client does not care about last_change_ts, versions_to_last_version and txn_source.
+        // The client does not care about last_change_ts, versions_to_last_version and
+        // txn_source.
         info
     }
 

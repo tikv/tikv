@@ -454,7 +454,8 @@ impl<'a> PrewriteMutation<'a> {
             self.txn_props.for_update_ts(),
             self.txn_props.txn_size,
             self.min_commit_ts,
-        ).set_txn_source(self.txn_props.txn_source);
+        )
+        .set_txn_source(self.txn_props.txn_source);
         // Only Lock needs to record `last_change_ts` in its write record, Put or Delete
         // records themselves are effective changes.
         if tls_can_enable(LAST_CHANGE_TS) && self.lock_type == Some(LockType::Lock) {
@@ -519,7 +520,7 @@ impl<'a> PrewriteMutation<'a> {
             primary: self.txn_props.primary.to_vec(),
             reason,
         }
-            .into())
+        .into())
     }
 
     fn check_assertion<S: Snapshot>(
@@ -953,7 +954,7 @@ pub mod tests {
             &Some(vec![]),
             SkipPessimisticCheck,
         )
-            .unwrap();
+        .unwrap();
         assert!(min_ts > props.start_ts);
         assert!(min_ts >= props.min_commit_ts);
         assert!(min_ts < 41.into());
@@ -1011,7 +1012,7 @@ pub mod tests {
                 &Some(vec![b"k4".to_vec()]),
                 SkipPessimisticCheck,
             )
-                .unwrap();
+            .unwrap();
             assert!(min_ts > 44.into());
             assert!(min_ts < 50.into());
             txn.take_guards();

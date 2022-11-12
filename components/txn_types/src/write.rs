@@ -248,10 +248,7 @@ impl Write {
 
     #[inline]
     #[must_use]
-    pub fn set_txn_source(
-        mut self,
-        source: u8,
-    ) -> Self {
+    pub fn set_txn_source(mut self, source: u8) -> Self {
         self.txn_source = source;
         self
     }
@@ -375,7 +372,11 @@ impl WriteRef<'_> {
                     last_change_ts = number::decode_u64(&mut b)?.into();
                     versions_to_last_change = number::decode_var_u64(&mut b)?;
                 }
-                TXN_SOURCE_PREFIX => txn_source = b.read_u8().map_err(|_| Error::from(ErrorInner::BadFormatWrite))?,
+                TXN_SOURCE_PREFIX => {
+                    txn_source = b
+                        .read_u8()
+                        .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?
+                }
                 _ => {
                     // To support forward compatibility, all fields should be serialized in order
                     // and stop parsing if meets an unknown byte.
