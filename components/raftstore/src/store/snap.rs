@@ -1959,6 +1959,15 @@ impl TabletSnapManager {
         let prefix = format!("{}_{}", SNAP_GEN_PREFIX, key);
         PathBuf::from(&self.base).join(&prefix)
     }
+
+    pub fn get_final_name_for_recv(&self, key: &TabletSnapKey) -> PathBuf {
+        let prefix = format!("{}_{}", SNAP_REV_PREFIX, key);
+        PathBuf::from(&self.base).join(&prefix)
+    }
+    pub fn get_tmp_name_for_recv(&self, key: &TabletSnapKey) -> PathBuf {
+        let prefix = format!("{}_{}{}", SNAP_REV_PREFIX, key, TMP_FILE_SUFFIX);
+        PathBuf::from(&self.base).join(&prefix)
+    }
 }
 
 #[cfg(test)]

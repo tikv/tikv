@@ -262,6 +262,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
             Arc::clone(&cfg),
         );
         self.snap_worker.start(snap_runner);
+        // todo: need to init gen tablet snap handler if necessary
 
         let mut grpc_server = self.builder_or_server.take().unwrap().right().unwrap();
         info!("listening on addr"; "addr" => &self.local_addr);
