@@ -1,6 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
-    fmt::{self, Display, Formatter},
     fs::{self, File},
     io::{Read, Write},
     marker::PhantomData,
@@ -186,15 +185,11 @@ pub fn send_snap(
     let channel = security_mgr.connect(cb, addr);
     let client = TikvClient::new(channel);
     let (sink, receiver) = client.snapshot()?;
-    let tablet_key = TabletSnapKey::from_region_snap(
-        msg.get_region_id(),
-        msg.get_to_peer().get_id(),
-        msg.get_message().get_snapshot(),
-    );
     let send_task = async move {
         let sink = sink.sink_map_err(Error::from);
         let total_size = send_snap_files(&mgr, sink, msg, key.clone()).await?;
         let recv_result = receiver.map_err(Error::from).await;
+        send_timer.observe_duration();
         drop(client);
         match recv_result {
             Ok(_) => {
@@ -338,11 +333,7 @@ where
 
     fn refresh_cfg(&mut self) {
         if let Some(incoming) = self.cfg_tracker.any_new() {
-            let limit = if incoming.snap_max_write_bytes_per_sec.0 > 0 {
-                incoming.snap_max_write_bytes_per_sec.0 as f64
-            } else {
-                f64::INFINITY
-            };
+            // todo: need to check limit
             let max_total_size = if incoming.snap_max_total_size.0 > 0 {
                 incoming.snap_max_total_size.0
             } else {
