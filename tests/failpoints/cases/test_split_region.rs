@@ -945,6 +945,7 @@ fn test_split_pessimistic_locks_with_concurrent_prewrite() {
         min_commit_ts: (commit_ts + 10).into(),
         last_change_ts: 5.into(),
         versions_to_last_change: 3,
+        txn_source: 0,
     };
     let lock_c = PessimisticLock {
         primary: b"c".to_vec().into_boxed_slice(),
@@ -954,6 +955,7 @@ fn test_split_pessimistic_locks_with_concurrent_prewrite() {
         min_commit_ts: (commit_ts + 10).into(),
         last_change_ts: 5.into(),
         versions_to_last_change: 3,
+        txn_source: 0,
     };
     {
         let mut locks = txn_ext.pessimistic_locks.write();

@@ -326,6 +326,7 @@ mod tests {
             min_commit_ts: 110.into(),
             last_change_ts: 105.into(),
             versions_to_last_change: 2,
+            txn_source: 0,
         }
     }
 
@@ -428,6 +429,7 @@ mod tests {
                         min_commit_ts: 20.into(),
                         last_change_ts: 5.into(),
                         versions_to_last_change: 2,
+                        txn_source: 0,
                     },
                     deleted,
                 ),
