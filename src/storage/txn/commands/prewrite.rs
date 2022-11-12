@@ -849,7 +849,8 @@ fn handle_1pc_locks(txn: &mut MvccTxn, commit_ts: TimeStamp) -> ReleasedLocks {
             txn.start_ts,
             lock.short_value,
         )
-        .set_last_change(lock.last_change_ts, lock.versions_to_last_change);
+        .set_last_change(lock.last_change_ts, lock.versions_to_last_change)
+        .set_txn_source(lock.txn_source);
         // Transactions committed with 1PC should be impossible to overwrite rollback
         // records.
         txn.put_write(key.clone(), commit_ts, write.as_ref().to_bytes());

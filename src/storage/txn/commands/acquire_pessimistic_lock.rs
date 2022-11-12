@@ -105,6 +105,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                 need_old_value,
                 self.lock_only_if_exists,
                 false,
+                ctx.get_txn_source() as u8,
             ) {
                 Ok((key_res, old_value)) => {
                     res.as_mut().unwrap().push(key_res);

@@ -34,6 +34,7 @@ const MIN_COMMIT_TS_PREFIX: u8 = b'c';
 const ASYNC_COMMIT_PREFIX: u8 = b'a';
 const ROLLBACK_TS_PREFIX: u8 = b'r';
 const LAST_CHANGE_PREFIX: u8 = b'l';
+const TXN_SOURCE_PREFIX: u8 = b's';
 
 impl LockType {
     pub fn from_mutation(mutation: &Mutation) -> Option<LockType> {
@@ -92,6 +93,8 @@ pub struct Lock {
     /// The number of versions that need skipping from the latest version to
     /// find the latest PUT/DELETE record
     pub versions_to_last_change: u64,
+    /// The source of this txn.
+    pub txn_source: u8,
 }
 
 impl std::fmt::Debug for Lock {
@@ -117,6 +120,7 @@ impl std::fmt::Debug for Lock {
             .field("rollback_ts", &self.rollback_ts)
             .field("last_change_ts", &self.last_change_ts)
             .field("versions_to_last_change", &self.versions_to_last_change)
+            .field("txn_source", &self.txn_source)
             .finish()
     }
 }
@@ -146,6 +150,7 @@ impl Lock {
             rollback_ts: Vec::default(),
             last_change_ts: TimeStamp::zero(),
             versions_to_last_change: 0,
+            txn_source: 0,
         }
     }
 
@@ -170,6 +175,16 @@ impl Lock {
     ) -> Self {
         self.last_change_ts = last_change_ts;
         self.versions_to_last_change = versions_to_last_change;
+        self
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn set_txn_source(
+        mut self,
+        source: u8,
+    ) -> Self {
+        self.txn_source = source;
         self
     }
 
@@ -215,6 +230,10 @@ impl Lock {
             b.encode_u64(self.last_change_ts.into_inner()).unwrap();
             b.encode_var_u64(self.versions_to_last_change).unwrap();
         }
+        if self.txn_source > 0 {
+            b.push(TXN_SOURCE_PREFIX);
+            b.push(self.txn_source);
+        }
         b
     }
 
@@ -246,6 +265,9 @@ impl Lock {
         }
         if !self.last_change_ts.is_zero() {
             size += 1 + size_of::<u64>() + MAX_VAR_U64_LEN;
+        }
+        if self.txn_source > 0 {
+            size += 2;
         }
         size
     }
@@ -285,6 +307,7 @@ impl Lock {
         let mut rollback_ts = Vec::new();
         let mut last_change_ts = TimeStamp::zero();
         let mut versions_to_last_change = 0;
+        let mut txn_source = 0;
         while !b.is_empty() {
             match b.read_u8()? {
                 SHORT_VALUE_PREFIX => {
@@ -322,6 +345,7 @@ impl Lock {
                     last_change_ts = number::decode_u64(&mut b)?.into();
                     versions_to_last_change = number::decode_var_u64(&mut b)?;
                 }
+                TXN_SOURCE_PREFIX => txn_source = b.read_u8()?,
                 _ => {
                     // To support forward compatibility, all fields should be serialized in order
                     // and stop parsing if meets an unknown byte.
@@ -339,7 +363,8 @@ impl Lock {
             txn_size,
             min_commit_ts,
         )
-        .set_last_change(last_change_ts, versions_to_last_change);
+        .set_last_change(last_change_ts, versions_to_last_change)
+        .set_txn_source(txn_source);
         if use_async_commit {
             lock = lock.use_async_commit(secondaries);
         }
@@ -365,7 +390,7 @@ impl Lock {
         info.set_use_async_commit(self.use_async_commit);
         info.set_min_commit_ts(self.min_commit_ts.into_inner());
         info.set_secondaries(self.secondaries.into());
-        // The client does not care about last_change_ts and versions_to_last_version.
+        // The client does not care about last_change_ts, versions_to_last_version and txn_source.
         info
     }
 
@@ -475,6 +500,7 @@ pub struct PessimisticLock {
 
     pub last_change_ts: TimeStamp,
     pub versions_to_last_change: u64,
+    pub txn_source: u8,
 }
 
 impl PessimisticLock {
@@ -490,6 +516,7 @@ impl PessimisticLock {
             self.min_commit_ts,
         )
         .set_last_change(self.last_change_ts, self.versions_to_last_change)
+        .set_txn_source(self.txn_source)
     }
 
     // Same with `to_lock` but does not copy the primary key.
@@ -505,6 +532,7 @@ impl PessimisticLock {
             self.min_commit_ts,
         )
         .set_last_change(self.last_change_ts, self.versions_to_last_change)
+        .set_txn_source(self.txn_source)
     }
 
     pub fn memory_size(&self) -> usize {
@@ -522,6 +550,7 @@ impl std::fmt::Debug for PessimisticLock {
             .field("min_commit_ts", &self.min_commit_ts)
             .field("last_change_ts", &self.last_change_ts)
             .field("versions_to_last_change", &self.versions_to_last_change)
+            .field("txn_source", &self.txn_source)
             .finish()
     }
 }
@@ -1041,6 +1070,7 @@ mod tests {
             min_commit_ts: 20.into(),
             last_change_ts: 8.into(),
             versions_to_last_change: 2,
+            txn_source: 0,
         };
         let expected_lock = Lock {
             lock_type: LockType::Pessimistic,
@@ -1056,6 +1086,7 @@ mod tests {
             rollback_ts: vec![],
             last_change_ts: 8.into(),
             versions_to_last_change: 2,
+            txn_source: 0,
         };
         assert_eq!(pessimistic_lock.to_lock(), expected_lock);
         assert_eq!(pessimistic_lock.into_lock(), expected_lock);
@@ -1071,6 +1102,7 @@ mod tests {
             min_commit_ts: 20.into(),
             last_change_ts: 8.into(),
             versions_to_last_change: 2,
+            txn_source: 0,
         };
         assert_eq!(
             format!("{:?}", pessimistic_lock),
@@ -1099,6 +1131,7 @@ mod tests {
             min_commit_ts: 20.into(),
             last_change_ts: 8.into(),
             versions_to_last_change: 2,
+            txn_source: 0,
         };
         // 7 bytes for primary key, 16 bytes for Box<[u8]>, and 6 8-byte integers.
         assert_eq!(lock.memory_size(), 7 + 16 + 6 * 8);
