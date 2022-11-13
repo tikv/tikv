@@ -28,13 +28,16 @@ use std::{
     },
 };
 
-use engine_traits::{KvEngine, RaftEngine};
-use kvproto::raft_serverpb::{RaftSnapshotData, RegionLocalState};
+use engine_traits::{KvEngine, RaftEngine, TabletFactory};
+use kvproto::raft_serverpb::{PeerState, RaftSnapshotData, RegionLocalState};
 use protobuf::Message;
 use raft::eraftpb::Snapshot;
-use raftstore::store::{metrics::STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER, GenSnapRes, ReadTask};
+use raftstore::store::{
+    metrics::STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER, GenSnapRes, ReadTask, TabletSnapKey,
+    TabletSnapManager, WriteTask,
+};
 use slog::{error, info, warn};
-use tikv_util::{box_try, worker::Scheduler};
+use tikv_util::{box_err, box_try, worker::Scheduler};
 
 use crate::{
     fsm::ApplyResReporter,
@@ -312,5 +315,72 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         // should be reset.
         *snap_state = SnapState::Generated(snap);
         true
+    }
+
+    pub fn after_applied_snapshot(&mut self) {
+        println!("after applied snapshot");
+        let mut entry = self.entry_storage_mut();
+        let term = entry.get_truncate_term();
+        let index = entry.get_truncate_index();
+        entry.set_applied_term(term);
+        entry.set_last_term(term);
+        entry.apply_state_mut().set_applied_index(index);
+        self.region_state_mut().set_tablet_index(index);
+    }
+
+    pub fn apply_snapshot(
+        &mut self,
+        snap: &Snapshot,
+        task: &mut WriteTask<EK, ER>,
+        snap_mgr: TabletSnapManager,
+        tablet_factory: Arc<dyn TabletFactory<EK>>,
+    ) -> Result<()> {
+        let region_id = self.get_region_id();
+        let peer_id = self.peer().get_id();
+        info!(self.logger(),
+            "begin to apply snapshot";
+            "region_id"=> region_id,
+            "peer_id" => peer_id,
+        );
+
+        let mut snap_data = RaftSnapshotData::default();
+        snap_data.merge_from_bytes(snap.get_data())?;
+
+        let region = snap_data.take_region();
+        if region.get_id() != region_id {
+            return Err(box_err!(
+                "mismatch region id {}!={}",
+                region_id,
+                region.get_id()
+            ));
+        }
+
+        let last_index = snap.get_metadata().get_index();
+        let last_term = snap.get_metadata().get_term();
+
+        self.region_state_mut().set_state(PeerState::Normal);
+        self.region_state_mut().set_region(region);
+
+        self.entry_storage_mut()
+            .raft_state_mut()
+            .set_last_index(last_index);
+
+        self.entry_storage_mut().set_truncated_index(last_index);
+        self.entry_storage_mut().set_truncated_term(last_term);
+
+        info!(self.logger(),
+            "apply snapshot with state ok";
+            "region_id" => region_id,
+            "peer_id" => peer_id,
+            "state" => ?self.entry_storage().apply_state(),
+        );
+
+        let key = TabletSnapKey::new(region_id, peer_id, last_term, last_index);
+        let mut path = snap_mgr.get_recv_tablet_path(&key);
+
+        let hook =
+            move |region_id: u64| tablet_factory.load_tablet(path.as_path(), region_id, last_index);
+        task.add_after_write_hook(Some(Box::new(hook)));
+        Ok(())
     }
 }

@@ -22,14 +22,29 @@ mod snapshot;
 
 use std::{cmp, path::PathBuf, sync::Arc};
 
-use engine_traits::{KvEngine, MiscExt, RaftEngine, TabletFactory};
+use engine_traits::{KvEngine, MiscExt, OpenOptions, RaftEngine, TabletFactory};
 use error_code::ErrorCodeExt;
-use kvproto::{raft_cmdpb::AdminCmdType, raft_serverpb::RaftMessage};
+use kvproto::{
+    raft_cmdpb::AdminCmdType,
+    raft_serverpb::{PeerState, RaftMessage, RaftSnapshotData},
+};
 use protobuf::Message as _;
-use raft::{eraftpb, Ready, StateRole};
-use raftstore::store::{util, ExtraStates, FetchedLogs, ReadProgress, Transport, WriteTask};
-use slog::{debug, error, trace, warn};
-use tikv_util::time::{duration_to_sec, monotonic_raw_now};
+use raft::{
+    eraftpb::{self, MessageType, Snapshot},
+    Ready, StateRole,
+};
+use raftstore::{
+    coprocessor::ApplySnapshotObserver,
+    store::{
+        util, ExtraStates, FetchedLogs, ReadProgress, SnapKey, TabletSnapKey, TabletSnapManager,
+        Transport, WriteTask,
+    },
+};
+use slog::{debug, error, info, trace, warn};
+use tikv_util::{
+    box_err,
+    time::{duration_to_sec, monotonic_raw_now},
+};
 
 pub use self::{
     async_writer::AsyncWriter,
@@ -387,6 +402,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         if need_scheduled {
             self.storage_mut().after_applied_snapshot();
+            let suffix = self.storage().raft_state().last_index;
+            let region_id = self.storage().get_region_id();
+            let tablet = ctx
+                .tablet_factory
+                .open_tablet(region_id, Some(suffix), OpenOptions::default())
+                .unwrap();
+            self.tablet_mut().set(tablet);
             self.schedule_apply_fsm(ctx);
         }
         let persisted_message = self
@@ -515,7 +537,12 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let ever_persisted = self.ever_persisted();
 
         if !ready.snapshot().is_empty() {
-            let _ = self.apply_snapshot(ready.snapshot(), write_task, ctx.tablet_factory.clone());
+            let _ = self.apply_snapshot(
+                ready.snapshot(),
+                write_task,
+                ctx.snap_mgr.clone(),
+                ctx.tablet_factory.clone(),
+            );
         }
 
         let entry_storage = self.entry_storage_mut();
@@ -534,74 +561,5 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             write_task.extra_write.set_v2(extra_states);
             self.set_ever_persisted();
         }
-    }
-
-    pub fn after_applied_snapshot(&mut self) {
-        let mut entry = self.entry_storage_mut();
-        let term = entry.get_truncate_term();
-        let index = entry.get_truncate_index();
-        entry.set_applied_term(term);
-        entry.set_last_term(term);
-        entry.apply_state_mut().set_applied_index(index);
-        self.region_state_mut().set_tablet_index(index);
-    }
-
-    pub fn apply_snapshot(
-        &mut self,
-        snap: &Snapshot,
-        task: &mut WriteTask<EK, ER>,
-        tablet_factory: Arc<dyn TabletFactory<EK>>,
-    ) -> Result<()> {
-        let region_id = self.get_region_id();
-        info!(self.logger(),
-            "begin to apply snapshot";
-            "region_id"=> region_id,
-            "peer_id" => self.peer().get_id(),
-        );
-
-        let mut snap_data = RaftSnapshotData::default();
-        snap_data.merge_from_bytes(snap.get_data())?;
-
-        let region = snap_data.take_region();
-        if region.get_id() != region_id {
-            return Err(box_err!(
-                "mismatch region id {}!={}",
-                region_id,
-                region.get_id()
-            ));
-        }
-
-        let last_index = snap.get_metadata().get_index();
-        let last_term = snap.get_metadata().get_term();
-
-        self.region_state_mut().set_state(PeerState::Normal);
-        self.region_state_mut().set_region(region);
-
-        self.entry_storage_mut()
-            .raft_state_mut()
-            .set_last_index(last_index);
-
-        self.entry_storage_mut().set_truncated_index(last_index);
-        self.entry_storage_mut().set_truncated_term(last_term);
-
-        info!(self.logger(),
-            "apply snapshot with state ok";
-            "region_id" => region_id,
-            "peer_id" => self.peer().get_id(),
-            "state" => ?self.entry_storage().apply_state(),
-        );
-
-        let key = SnapKey::new(region_id, last_term, last_index);
-        let mut path = tablet_factory
-            .tablets_path()
-            .as_path()
-            .join("snap")
-            .as_path()
-            .join(key.get_snapshot_recv_path());
-
-        let hook =
-            move |region_id: u64| tablet_factory.load_tablet(path.as_path(), region_id, last_index);
-        task.add_after_write_hook(Some(Box::new(hook)));
-        Ok(())
     }
 }
