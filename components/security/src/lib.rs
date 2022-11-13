@@ -70,6 +70,23 @@ fn load_key(tag: &str, path: &str) -> Result<Vec<u8>, Box<dyn Error>> {
 
 type CertResult = Result<(Vec<u8>, Vec<u8>, Vec<u8>), Box<dyn Error>>;
 
+type Pem = Box<[u8]>;
+
+pub struct Secret(pub Pem);
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Secret").finish()
+    }
+}
+
+#[derive(Debug)]
+pub struct ClientSuite {
+    pub ca: Pem,
+    pub client_cert: Pem,
+    pub client_key: Secret,
+}
+
 impl SecurityConfig {
     /// Validates ca, cert and private key.
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
@@ -122,6 +139,15 @@ impl SecurityManager {
         Ok(SecurityManager {
             cfg: Arc::new(cfg.clone()),
         })
+    }
+
+    pub fn client_suite(&self) -> ClientSuite {
+        let (ca, cert, key) = self.cfg.load_certs().unwrap_or_default();
+        ClientSuite {
+            ca: ca.into_boxed_slice(),
+            client_cert: cert.into_boxed_slice(),
+            client_key: Secret(key.into_boxed_slice()),
+        }
     }
 
     #[cfg(feature = "tonic")]

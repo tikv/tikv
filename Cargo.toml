@@ -299,7 +299,7 @@ members = [
   "fuzz/fuzzer-libfuzzer",
   "tests",
 ]
-default-members = ["cmd/tikv-server", "cmd/tikv-ctl"]
+default-members = ["cmd/tikv-server", "cmd/tikv-ctl", "cmd/tls-test"]
 
 [workspace.dependencies]
 api_version = { path = "components/api_version" }

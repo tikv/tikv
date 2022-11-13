@@ -41,7 +41,7 @@ fn main() {
     let ccfg = ConnectionConfig {
         keep_alive_interval: Duration::from_secs(3),
         keep_alive_timeout: Duration::from_secs(10),
-        tls: security_mgr.tonic_tls_config(),
+        tls: Some(security_mgr.client_suite()),
     };
     println!("using connection config = {:?}", ccfg);
     let etcd_cli = LazyEtcdClient::new(cfg.endpoints.as_slice(), ccfg);

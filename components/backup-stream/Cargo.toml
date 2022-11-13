@@ -32,13 +32,16 @@ engine_traits = { workspace = true }
 error_code = { workspace = true }
 # We cannot update the etcd-client to latest version because of the cyclic requirement.
 # Also we need wait until https://github.com/etcdv3/etcd-client/pull/43/files to be merged.
-etcd-client = { git = "https://github.com/pingcap/etcd-client", rev = "e0321a1990ee561cf042973666c0db61c8d82364", features = ["pub-response-field", "tls"] }
+etcd-client = { git = "https://github.com/pingcap/etcd-client", rev = "4bdcd7e965e62919a8e2eb350d3e89c3af6731cf", features = ["pub-response-field", "tls-openssl"] }
 external_storage = { workspace = true }
 external_storage_export = { workspace = true }
 fail = "0.5"
 file_system = { workspace = true }
 futures = "0.3"
 futures-io = "0.3"
+
+# Fixing ahash cyclic dep: https://github.com/tkaitchuck/ahash/issues/95
+indexmap = "=1.6.2"
 
 grpcio = { workspace = true }
 hex = "0.4"
@@ -65,10 +68,11 @@ tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread", "macros", "time", "sync"] }
 tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["compat"] } 
-tonic = "0.5"
+tonic = "0.8"
 txn_types = { workspace = true }
 uuid = "0.8"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+security = { path = "../security"}
 
 [dev-dependencies]
 async-trait = "0.1"

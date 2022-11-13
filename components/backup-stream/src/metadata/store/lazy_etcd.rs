@@ -2,7 +2,7 @@
 
 use std::{sync::Arc, time::Duration};
 
-use etcd_client::{ConnectOptions, Error as EtcdError, TlsOptions};
+use etcd_client::{ConnectOptions, Error as EtcdError, OpenSslClientConfig};
 use futures::Future;
 use tikv_util::stream::{RetryError, RetryExt};
 use tokio::sync::OnceCell;
@@ -17,7 +17,7 @@ pub struct LazyEtcdClient(Arc<LazyEtcdClientInner>);
 
 #[derive(Debug)]
 pub struct ConnectionConfig {
-    pub tls: Option<TlsOptions>,
+    pub tls: Option<security::ClientSuite>,
     pub keep_alive_interval: Duration,
     pub keep_alive_timeout: Duration,
 }
@@ -27,12 +27,15 @@ impl ConnectionConfig {
     fn to_connection_options(&self) -> ConnectOptions {
         let mut opts = ConnectOptions::new();
         if let Some(tls) = &self.tls {
-            opts = opts.with_tls(tls.clone())
+            opts = opts.with_openssl_tls(
+                OpenSslClientConfig::default()
+                    .ca_cert_pem(&tls.ca)
+                    .client_cert_pem_and_key(&tls.client_cert, &tls.client_key.0),
+            )
         }
         opts = opts
             .with_keep_alive(self.keep_alive_interval, self.keep_alive_timeout)
-            .with_timeout(RPC_TIMEOUT)
-            .keep_alive_while_idle(false);
+            .with_timeout(RPC_TIMEOUT);
 
         opts
     }
@@ -69,7 +72,9 @@ fn etcd_error_is_retryable(etcd_err: &EtcdError) -> bool {
         EtcdError::InvalidArgs(_)
         | EtcdError::InvalidUri(_)
         | EtcdError::Utf8Error(_)
-        | EtcdError::InvalidHeaderValue(_) => false,
+        | EtcdError::InvalidHeaderValue(_)
+        | EtcdError::EndpointError(_)
+        | EtcdError::OpenSsl(_) => false,
         EtcdError::TransportError(_)
         | EtcdError::IoError(_)
         | EtcdError::WatchError(_)
