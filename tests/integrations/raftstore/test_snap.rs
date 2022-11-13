@@ -522,7 +522,56 @@ fn test_inspected_snapshot() {
     assert_ne!(stats.fetch(IoType::LoadBalance, IoOp::Read), 0);
     assert_ne!(stats.fetch(IoType::LoadBalance, IoOp::Write), 0);
 }
+#[test]
+fn test_send_snapshot() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.server.snap_max_write_bytes_per_sec = ReadableSize(5 * 1024 * 1024);
+    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration(Duration::from_secs(100));
 
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+
+    cluster.must_put(b"key-0000", b"value");
+    let r = cluster.get_region(b"key-000");
+    let term = 1;
+    let idx = 5;
+    let key = SnapKey::new(r1, term, idx);
+    let mut snapshot = Snapshot::default();
+    let snap_dir = TempDir::new().unwrap();
+    let final_send_path = key.get_snapshot_send_path(snap_dir.path());
+    fs::create_dir_all(final_send_path.as_path()).unwrap();
+    for i in 0..2 {
+        let mut f = fs::File::create(final_send_path.join(i.to_string())).unwrap();
+        f.write_all(format!("snapshot-{}", i).as_bytes()).unwrap();
+        f.sync_data().unwrap();
+    }
+    let mut snap_data = RaftSnapshotData::default();
+    snap_data.set_region(r);
+    snap_data.mut_meta().set_for_balance(true);
+    snap_data.set_version(3);
+    let mut files = Vec::with_capacity(1);
+    let mut file = SnapshotCfFile::default();
+    file.set_cf(snap_dir.path().to_str().unwrap().to_owned());
+    files.push(file);
+    snap_data.mut_meta().set_cf_files(files.into());
+
+    let v = snap_data.write_to_bytes().unwrap();
+    snapshot.set_data(v.into());
+    let s1_addr = cluster.sim.rl().get_addr(1);
+    let sec_mgr = cluster.sim.rl().security_mgr.clone();
+    let s = snapshot.clone();
+    if let Err(e) =
+        send_a_large_snapshot(cluster.get_snap_mgr(1), sec_mgr, &s1_addr, r1, s, idx, term)
+    {
+        info!("send_a_large_snapshot fail: {}", e);
+    }
+
+    sleep_ms(100);
+    let final_recv_path = key.get_snapshot_recv_path(snap_dir.path());
+    let dir = fs::read_dir(final_recv_path);
+    assert_eq!(2, dir.unwrap().count());
+}
 // Test snapshot generating and receiving can share one I/O limiter fairly.
 // 1. Bootstrap a 1 Region, 1 replica cluster;
 // 2. Add a peer on store 2 for the Region, so that there is a snapshot received

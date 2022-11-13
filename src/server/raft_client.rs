@@ -432,6 +432,7 @@ struct AsyncRaftSender<R, M, B, E> {
     buffer: B,
     router: R,
     snap_scheduler: Scheduler<SnapTask>,
+    tablet_scheduler: Scheduler<SnapTask>,
     addr: String,
     flush_timeout: Option<Delay>,
     _engine: PhantomData<E>,
@@ -467,24 +468,17 @@ where
             }
         });
 
-        let task = {
-            match version {
-                TABLET_SNAPSHOT_VERSION => SnapTask::TabletSend {
-                    addr: self.addr.clone(),
-                    msg,
-                    cb,
-                },
-                SNAPSHOT_VERSION => SnapTask::Send {
-                    addr: self.addr.clone(),
-                    msg,
-                    cb,
-                },
-                other => {
-                    panic!("unknown version:{}", other)
-                }
-            }
+        let task = SnapTask::Send {
+            addr: self.addr.clone(),
+            msg,
+            cb,
         };
-        if let Err(e) = self.snap_scheduler.schedule(task) {
+        let result = match version {
+            SNAPSHOT_VERSION => self.snap_scheduler.schedule(task),
+            TABLET_SNAPSHOT_VERSION => self.tablet_scheduler.schedule(task),
+            other => panic!("unknown version:{}", other),
+        };
+        if let Err(e) = result {
             if let SnapTask::Send { cb, .. } = e.into_inner() {
                 error!(
                     "channel is unavailable, failed to schedule snapshot";
@@ -632,6 +626,7 @@ pub struct ConnectionBuilder<S, R> {
     resolver: S,
     router: R,
     snap_scheduler: Scheduler<SnapTask>,
+    tablet_scheduler: Scheduler<SnapTask>,
     loads: Arc<ThreadLoadPool>,
 }
 
@@ -643,6 +638,7 @@ impl<S, R> ConnectionBuilder<S, R> {
         resolver: S,
         router: R,
         snap_scheduler: Scheduler<SnapTask>,
+        tablet_scheduler: Scheduler<SnapTask>,
         loads: Arc<ThreadLoadPool>,
     ) -> ConnectionBuilder<S, R> {
         ConnectionBuilder {
@@ -652,6 +648,7 @@ impl<S, R> ConnectionBuilder<S, R> {
             resolver,
             router,
             snap_scheduler,
+            tablet_scheduler,
             loads,
         }
     }
@@ -752,6 +749,7 @@ where
                 buffer: BatchMessageBuffer::new(&self.builder.cfg, self.builder.loads.clone()),
                 router: self.builder.router.clone(),
                 snap_scheduler: self.builder.snap_scheduler.clone(),
+                tablet_scheduler: self.builder.tablet_scheduler.clone(),
                 addr,
                 flush_timeout: None,
                 _engine: PhantomData::<E>,
@@ -777,6 +775,7 @@ where
                 buffer: MessageBuffer::new(),
                 router: self.builder.router.clone(),
                 snap_scheduler: self.builder.snap_scheduler.clone(),
+                tablet_scheduler: self.builder.tablet_scheduler.clone(),
                 addr,
                 flush_timeout: None,
                 _engine: PhantomData::<E>,

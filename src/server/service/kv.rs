@@ -88,6 +88,8 @@ pub struct Service<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockMan
     ch: T,
     // For handling snapshot.
     snap_scheduler: Scheduler<SnapTask>,
+    // For handling tablet snapshot.
+    tablet_scheduler: Scheduler<SnapTask>,
     // For handling `CheckLeader` request.
     check_leader_scheduler: Scheduler<CheckLeaderTask>,
 
@@ -117,6 +119,7 @@ impl<
             copr_v2: self.copr_v2.clone(),
             ch: self.ch.clone(),
             snap_scheduler: self.snap_scheduler.clone(),
+            tablet_scheduler: self.tablet_scheduler.clone(),
             check_leader_scheduler: self.check_leader_scheduler.clone(),
             enable_req_batch: self.enable_req_batch,
             grpc_thread_load: self.grpc_thread_load.clone(),
@@ -138,6 +141,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
         copr_v2: coprocessor_v2::Endpoint,
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
+        tablet_scheduler: Scheduler<SnapTask>,
         check_leader_scheduler: Scheduler<CheckLeaderTask>,
         grpc_thread_load: Arc<ThreadLoadPool>,
         enable_req_batch: bool,
@@ -152,6 +156,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
             copr_v2,
             ch,
             snap_scheduler,
+            tablet_scheduler,
             check_leader_scheduler,
             enable_req_batch,
             grpc_thread_load,
@@ -873,6 +878,24 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
     ) {
         let task = SnapTask::Recv { stream, sink };
         if let Err(e) = self.snap_scheduler.schedule(task) {
+            let err_msg = format!("{}", e);
+            let sink = match e.into_inner() {
+                SnapTask::Recv { sink, .. } => sink,
+                _ => unreachable!(),
+            };
+            let status = RpcStatus::with_message(RpcStatusCode::RESOURCE_EXHAUSTED, err_msg);
+            ctx.spawn(sink.fail(status).map(|_| ()));
+        }
+    }
+
+    fn tablet_snapshot(
+        &mut self,
+        ctx: RpcContext<'_>,
+        stream: RequestStream<SnapshotChunk>,
+        sink: ClientStreamingSink<Done>,
+    ) {
+        let task = SnapTask::Recv { stream, sink };
+        if let Err(e) = self.tablet_scheduler.schedule(task) {
             let err_msg = format!("{}", e);
             let sink = match e.into_inner() {
                 SnapTask::Recv { sink, .. } => sink,

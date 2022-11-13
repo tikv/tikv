@@ -184,7 +184,7 @@ pub fn send_snap(
 
     let channel = security_mgr.connect(cb, addr);
     let client = TikvClient::new(channel);
-    let (sink, receiver) = client.snapshot()?;
+    let (sink, receiver) = client.tablet_snapshot()?;
     let send_task = async move {
         let sink = sink.sink_map_err(Error::from);
         let total_size = send_snap_files(&mgr, sink, msg, key.clone()).await?;
@@ -215,21 +215,11 @@ fn recv_snap<R: RaftStoreRouter<impl KvEngine> + 'static>(
     snap_mgr: TabletSnapManager,
     raft_router: R,
 ) -> impl Future<Output = Result<()>> {
-    // let recv_task = async move {
-    // let mut stream = stream.map_err(Error::from);
-    // let head = stream.next().await.transpose()?;
-    // let context = RecvTabletSnapContext::new(head)?;
-    // let recv_task = recv_snap_files(stream, snap_mgr, raft_router, context);
-
-    // Ok(())
-    // };
-
     let recv_task = async move {
         let mut stream = stream.map_err(Error::from);
         let head = stream.next().await.transpose()?;
         let context = RecvTabletSnapContext::new(head)?;
-        let context_key = context.key.clone();
-        let path = snap_mgr.get_tmp_name_for_recv(&context_key);
+        let path = snap_mgr.get_tmp_name_for_recv(&context.key);
         fs::create_dir_all(&path)?;
         loop {
             fail_point!("receiving_snapshot_net_error", |_| {
@@ -265,7 +255,7 @@ fn recv_snap<R: RaftStoreRouter<impl KvEngine> + 'static>(
             f.sync_data()?;
         }
 
-        let final_path = snap_mgr.get_final_name_for_recv(&context_key);
+        let final_path = snap_mgr.get_final_name_for_recv(&context.key);
         fs::rename(&path, final_path)?;
         context.finish(raft_router)
     };
@@ -361,14 +351,7 @@ where
 
     fn run(&mut self, task: Task) {
         match task {
-            Task::Send { .. } => {
-                unimplemented!();
-            }
-
-            Task::Recv { .. } => {
-                unimplemented!();
-            }
-            Task::TabletRecv { stream, sink } => {
+            Task::Recv { stream, sink } => {
                 let task_num = self.recving_count.load(Ordering::SeqCst);
                 if task_num >= self.cfg.concurrent_recv_snap_limit {
                     warn!("too many recving snapshot tasks, ignore");
@@ -397,7 +380,7 @@ where
                 };
                 self.pool.spawn(task);
             }
-            Task::TabletSend { addr, msg, cb } => {
+            Task::Send { addr, msg, cb } => {
                 let region_id = msg.get_region_id();
                 if self.sending_count.load(Ordering::SeqCst) >= self.cfg.concurrent_send_snap_limit
                 {
