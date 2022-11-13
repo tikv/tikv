@@ -101,6 +101,7 @@ pub trait Simulator {
     fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
     fn get_snap_mgr(&self, node_id: u64) -> &SnapManager;
+    fn get_tablet_snap_mgr(&self, node_id: u64) -> &TabletSnapManager;
     fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RaftTestEngine>>;
     fn add_send_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
     fn clear_send_filters(&mut self, node_id: u64);
@@ -1367,6 +1368,10 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn get_snap_mgr(&self, node_id: u64) -> SnapManager {
         self.sim.rl().get_snap_mgr(node_id).clone()
+    }
+
+    pub fn get_tablet_snap_mgr(&self, node_id: u64) -> TabletSnapManager {
+        self.sim.rl().get_tablet_snap_mgr(node_id).clone()
     }
 
     pub fn clear_send_filters(&mut self) {

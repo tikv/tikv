@@ -453,7 +453,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 AdminCmdType::VerifyHash => unimplemented!(),
                 AdminCmdType::PrepareFlashback => unimplemented!(),
                 AdminCmdType::FinishFlashback => unimplemented!(),
-                AdminCmdType::InvalidAdmin => {
+                AdminCmdType::InvalidAdmin | AdminCmdType::BatchSwitchWitness => {
                     return Err(box_err!("invalid admin command type"));
                 }
             };

@@ -582,6 +582,7 @@ mod tests {
                 addr: Arc::clone(&addr),
             },
             SnapManager::new(""),
+            TabletSnapManager::new(""),
             gc_worker,
             check_leader_scheduler,
             env,

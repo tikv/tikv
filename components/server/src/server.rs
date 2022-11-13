@@ -1056,6 +1056,7 @@ where
             engines.engines.clone(),
             server.transport(),
             snap_mgr,
+            tablet_snap_mgr,
             pd_worker,
             engines.store_meta.clone(),
             self.coprocessor_host.clone().unwrap(),
