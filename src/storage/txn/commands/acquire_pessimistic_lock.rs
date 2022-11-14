@@ -3,7 +3,7 @@
 // #[PerformanceCriticalPath]
 use kvproto::kvrpcpb::ExtraOp;
 use tikv_kv::Modify;
-use txn_types::{Key, OldValues, TimeStamp, TxnExtra};
+use txn_types::{insert_old_value_if_resolved, Key, OldValues, TimeStamp, TxnExtra};
 
 use crate::storage::{
     kv::WriteData,
@@ -109,12 +109,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             ) {
                 Ok((key_res, old_value)) => {
                     res.push(key_res);
-                    if old_value.resolved() {
-                        let key = k.append_ts(txn.start_ts);
-                        // MutationType is unknown in AcquirePessimisticLock stage.
-                        let mutation_type = None;
-                        old_values.insert(key, (old_value, mutation_type));
-                    }
+                    // MutationType is unknown in AcquirePessimisticLock stage.
+                    insert_old_value_if_resolved(&mut old_values, k, txn.start_ts, old_value, None);
                 }
                 Err(MvccError(box MvccErrorInner::KeyIsLocked(lock_info))) => {
                     let request_parameters = PessimisticLockParameters {

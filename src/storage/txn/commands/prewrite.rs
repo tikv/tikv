@@ -14,7 +14,10 @@ use kvproto::kvrpcpb::{
     PrewriteRequestPessimisticAction::{self, *},
 };
 use tikv_kv::SnapshotExt;
-use txn_types::{Key, Mutation, OldValue, OldValues, TimeStamp, TxnExtra, Write, WriteType};
+use txn_types::{
+    insert_old_value_if_resolved, Key, Mutation, OldValue, OldValues, TimeStamp, TxnExtra, Write,
+    WriteType,
+};
 
 use super::ReaderWithStats;
 use crate::storage::{
@@ -568,11 +571,13 @@ impl<K: PrewriteKind> Prewriter<K> {
                     if need_min_commit_ts && final_min_commit_ts < ts {
                         final_min_commit_ts = ts;
                     }
-                    if old_value.resolved() {
-                        let key = key.append_ts(txn.start_ts);
-                        self.old_values
-                            .insert(key, (old_value, Some(mutation_type)));
-                    }
+                    insert_old_value_if_resolved(
+                        &mut self.old_values,
+                        key,
+                        txn.start_ts,
+                        old_value,
+                        Some(mutation_type),
+                    );
                 }
                 Ok((..)) => {
                     // If it needs min_commit_ts but min_commit_ts is zero, the lock

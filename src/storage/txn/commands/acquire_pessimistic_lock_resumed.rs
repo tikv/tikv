@@ -2,7 +2,7 @@
 
 // #[PerformanceCriticalPath]
 use kvproto::kvrpcpb::ExtraOp;
-use txn_types::{Key, OldValues};
+use txn_types::{insert_old_value_if_resolved, Key, OldValues};
 
 use crate::storage::{
     lock_manager::{lock_waiting_queue::LockWaitEntry, LockManager, LockWaitToken},
@@ -123,12 +123,14 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
                 Ok((key_res, old_value)) => {
                     res.push(key_res);
                     new_locked_keys.push((params.start_ts, key.clone()));
-                    if old_value.resolved() {
-                        let key = key.append_ts(txn.start_ts);
-                        // MutationType is unknown in AcquirePessimisticLock stage.
-                        let mutation_type = None;
-                        old_values.insert(key, (old_value, mutation_type));
-                    }
+
+                    insert_old_value_if_resolved(
+                        &mut old_values,
+                        key,
+                        params.start_ts,
+                        old_value,
+                        None,
+                    );
                 }
                 Err(MvccError(box MvccErrorInner::KeyIsLocked(lock_info))) => {
                     let mut lock_info =
