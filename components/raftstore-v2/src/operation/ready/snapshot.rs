@@ -32,8 +32,8 @@ use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_serverpb::{RaftSnapshotData, RegionLocalState};
 use protobuf::Message;
 use raft::eraftpb::Snapshot;
-use raftstore::store::{metrics::STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER, ReadTask};
-use slog::{error, info};
+use raftstore::store::{metrics::STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER, GenSnapRes, ReadTask};
+use slog::{error, info, warn};
 use tikv_util::{box_try, worker::Scheduler};
 
 use crate::{
@@ -68,6 +68,8 @@ impl PartialEq for SnapState {
 
 pub struct GenSnapTask {
     region_id: u64,
+    // The snapshot will be sent to the peer.
+    to_peer: u64,
     // Fill it when you are going to generate the snapshot.
     // index used to check if the gen task should be canceled.
     index: Arc<AtomicU64>,
@@ -78,9 +80,15 @@ pub struct GenSnapTask {
 }
 
 impl GenSnapTask {
-    pub fn new(region_id: u64, index: Arc<AtomicU64>, canceled: Arc<AtomicBool>) -> GenSnapTask {
+    pub fn new(
+        region_id: u64,
+        to_peer: u64,
+        index: Arc<AtomicU64>,
+        canceled: Arc<AtomicBool>,
+    ) -> GenSnapTask {
         GenSnapTask {
             region_id,
+            to_peer,
             index,
             canceled,
             for_balance: false,
@@ -101,7 +109,7 @@ impl Debug for GenSnapTask {
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
-    pub fn on_snapshot_generated(&mut self, snapshot: Box<Snapshot>) {
+    pub fn on_snapshot_generated(&mut self, snapshot: GenSnapRes) {
         if self.storage_mut().on_snapshot_generated(snapshot) {
             self.raft_group_mut().ping();
             self.set_has_ready();
@@ -115,6 +123,15 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     /// Will schedule a task to read worker and then generate a snapshot
     /// asynchronously.
     pub fn schedule_gen_snapshot(&mut self, snap_task: GenSnapTask) {
+        // Do not generate, the peer is removed.
+        if self.tombstone() {
+            snap_task.canceled.store(true, Ordering::SeqCst);
+            error!(
+                self.logger,
+                "cancel generating snapshot because it's already destroyed";
+            );
+            return;
+        }
         // Flush before do snapshot.
         if snap_task.canceled.load(Ordering::SeqCst) {
             return;
@@ -126,6 +143,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         snap_task.index.store(last_applied_index, Ordering::SeqCst);
         let gen_tablet_sanp_task = ReadTask::GenTabletSnapshot {
             region_id: snap_task.region_id,
+            to_peer: snap_task.to_peer,
             tablet: self.tablet().clone(),
             region_state: self.region_state().clone(),
             last_applied_term,
@@ -189,7 +207,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             index: index.clone(),
         };
 
-        let task = GenSnapTask::new(self.region().get_id(), index, canceled);
+        let task = GenSnapTask::new(self.region().get_id(), to, index, canceled);
         let mut gen_snap_task = self.gen_snap_task_mut();
         assert!(gen_snap_task.is_none());
         *gen_snap_task = Box::new(Some(task));
@@ -268,7 +286,12 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     /// Try to switch snap state to generated. only `Generating` can switch to
     /// `Generated`.
     ///  TODO: make the snap state more clearer, the snapshot must be consumed.
-    pub fn on_snapshot_generated(&self, snap: Box<Snapshot>) -> bool {
+    pub fn on_snapshot_generated(&self, res: GenSnapRes) -> bool {
+        if res.is_none() {
+            self.cancel_generating_snap(None);
+            return false;
+        }
+        let snap = res.unwrap();
         let mut snap_state = self.snap_state_mut();
         let SnapState::Generating {
             ref canceled,
@@ -276,6 +299,12 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
          } = *snap_state else { return false };
 
         if snap.get_metadata().get_index() < index.load(Ordering::SeqCst) {
+            warn!(
+                self.logger(),
+                "snapshot is staled, skip";
+                "snap index" => snap.get_metadata().get_index(),
+                "required index" => index.load(Ordering::SeqCst),
+            );
             return false;
         }
         // Should changed `SnapState::Generated` to `SnapState::Relax` when the

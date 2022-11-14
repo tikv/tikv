@@ -56,6 +56,7 @@ make_static_metric! {
         channel_full,
         cache_miss,
         safe_ts,
+        witness,
     }
 
     pub struct LocalReadRejectCounter : LocalIntCounter {

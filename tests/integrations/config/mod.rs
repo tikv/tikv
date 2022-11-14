@@ -790,7 +790,6 @@ fn test_serde_custom_tikv_config() {
         tso_worker_threads: 2,
         old_value_cache_memory_quota: ReadableSize::mb(14),
         sink_memory_quota: ReadableSize::mb(7),
-        raw_min_ts_outlier_threshold: ReadableDuration::secs(60),
     };
     value.resolved_ts = ResolvedTsConfig {
         enable: true,

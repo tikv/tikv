@@ -301,7 +301,6 @@ pub fn new_transfer_leader_cmd(peer: metapb::Peer) -> AdminRequest {
     cmd
 }
 
-#[allow(dead_code)]
 pub fn new_prepare_merge(target_region: metapb::Region) -> AdminRequest {
     let mut cmd = AdminRequest::default();
     cmd.set_cmd_type(AdminCmdType::PrepareMerge);
