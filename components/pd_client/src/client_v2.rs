@@ -25,12 +25,11 @@ use std::{
 
 use fail::fail_point;
 use futures::{
-    channel::mpsc,
     compat::Future01CompatExt,
     executor::block_on,
     future::{FutureExt, TryFutureExt},
     select,
-    sink::{Sink, SinkExt},
+    sink::SinkExt,
     stream::{Stream, StreamExt},
     task::{Context, Poll},
 };
@@ -41,14 +40,16 @@ use grpcio::{
 use kvproto::{
     metapb,
     pdpb::{
-        self, GetMembersResponse, Member, PdClient as PdClientStub, RegionHeartbeatRequest,
+        self, GetMembersResponse, PdClient as PdClientStub, RegionHeartbeatRequest,
         RegionHeartbeatResponse, ReportBucketsRequest, TsoRequest, TsoResponse,
     },
     replication_modepb::{ReplicationStatus, StoreDrAutoSyncStatus},
 };
 use security::SecurityManager;
 use tikv_util::{
-    box_err, error, info, slow_log, thd_name,
+    box_err, error, info,
+    mpsc::future as mpsc,
+    slow_log, thd_name,
     time::{duration_to_sec, Instant},
     timer::GLOBAL_TIMER_HANDLE,
     warn,
@@ -221,8 +222,9 @@ impl CachedRawClient {
         self.cache.target_info.call_option()
     }
 
+    #[cfg(feature = "testexport")]
     #[inline]
-    fn leader(&self) -> Member {
+    fn leader(&self) -> pdpb::Member {
         self.cache.members.get_leader().clone()
     }
 }
@@ -263,7 +265,7 @@ pub struct RpcClient {
     cluster_id: u64,
     raw_client: CachedRawClient,
     feature_gate: FeatureGate,
-    reconnect_tx: mpsc::UnboundedSender<u64>,
+    reconnect_tx: mpsc::Sender<u64>,
     on_reconnect: CallbackHolder,
 }
 
@@ -327,7 +329,7 @@ impl RpcClient {
     }
 
     fn build_from_raw(cluster_id: u64, raw_client: CachedRawClient) -> Result<Self> {
-        let (reconnect_tx, reconnect_rx) = mpsc::unbounded();
+        let (reconnect_tx, reconnect_rx) = mpsc::unbounded(mpsc::WakePolicy::Immediately);
         let on_reconnect: CallbackHolder = Default::default();
         raw_client.stub().spawn(reconnect_loop(
             raw_client.clone(),
@@ -344,7 +346,7 @@ impl RpcClient {
         })
     }
 
-    pub fn handle_reconnect<F: Fn() + Sync + Send + 'static>(&self, f: F) {
+    pub fn set_on_reconnect<F: Fn() + Sync + Send + 'static>(&self, f: F) {
         *self.on_reconnect.lock().unwrap() = Some(Box::new(f));
     }
 
@@ -355,18 +357,18 @@ impl RpcClient {
         header
     }
 
-    /// Used in integration tests.
+    #[cfg(feature = "testexport")]
     pub fn feature_gate(&self) -> &FeatureGate {
         &self.feature_gate
     }
 
-    /// Used in integration tests.
-    pub fn get_leader(&mut self) -> Member {
+    #[cfg(feature = "testexport")]
+    pub fn get_leader(&mut self) -> pdpb::Member {
         block_on(self.raw_client.wait_for_ready()).unwrap();
         self.raw_client.leader()
     }
 
-    /// Used in integration tests.
+    #[cfg(feature = "testexport")]
     pub fn reconnect(&mut self) -> Result<()> {
         block_on(self.raw_client.reconnect(true, &self.on_reconnect))
     }
@@ -377,26 +379,25 @@ impl RpcClient {
 }
 
 pub trait PdClient {
-    type RequestChannel<R>: Sink<R>;
     type ResponseChannel<R: Debug>: Stream<Item = Result<R>>;
 
     fn create_region_heartbeat_stream(
         &mut self,
+        wake_policy: mpsc::WakePolicy,
     ) -> Result<(
-        Self::RequestChannel<RegionHeartbeatRequest>,
+        mpsc::Sender<RegionHeartbeatRequest>,
         Self::ResponseChannel<RegionHeartbeatResponse>,
     )>;
 
     fn create_report_region_buckets_stream(
         &mut self,
-    ) -> Result<Self::RequestChannel<ReportBucketsRequest>>;
+        wake_policy: mpsc::WakePolicy,
+    ) -> Result<mpsc::Sender<ReportBucketsRequest>>;
 
     fn create_tso_stream(
         &mut self,
-    ) -> Result<(
-        Self::RequestChannel<TsoRequest>,
-        Self::ResponseChannel<TsoResponse>,
-    )>;
+        wake_policy: mpsc::WakePolicy,
+    ) -> Result<(mpsc::Sender<TsoRequest>, Self::ResponseChannel<TsoResponse>)>;
 
     fn load_global_config(&mut self, list: Vec<String>) -> PdFuture<HashMap<String, String>>;
 
@@ -487,20 +488,20 @@ pub trait PdClient {
 }
 
 impl PdClient for RpcClient {
-    type RequestChannel<R> = mpsc::UnboundedSender<R>;
     type ResponseChannel<R: Debug> = CachedDuplexResponse<R>;
 
     fn create_region_heartbeat_stream(
         &mut self,
+        wake_policy: mpsc::WakePolicy,
     ) -> Result<(
-        Self::RequestChannel<RegionHeartbeatRequest>,
+        mpsc::Sender<RegionHeartbeatRequest>,
         Self::ResponseChannel<RegionHeartbeatResponse>,
     )> {
-        let (tx, rx) = mpsc::unbounded();
+        let (tx, rx) = mpsc::unbounded(wake_policy);
         let response_holder = Arc::new(std::sync::Mutex::new(None));
         let response_holder_clone = response_holder.clone();
         let mut raw_client = self.raw_client.clone();
-        let mut reconnect = self.reconnect_tx.clone();
+        let reconnect = self.reconnect_tx.clone();
         let mut requests = Box::pin(rx).map(|r| {
             fail::fail_point!("region_heartbeat_send_failed", |_| {
                 Err(grpcio::Error::RemoteStopped)
@@ -511,10 +512,9 @@ impl PdClient for RpcClient {
             loop {
                 if let Err(e) = raw_client.wait_for_ready().await {
                     warn!("failed to acquire client for RegionHeartbeat stream"; "err" => ?e);
-                    let _ = GLOBAL_TIMER_HANDLE
-                        .delay(std::time::Instant::now() + Duration::from_secs(REQUEST_TIMEOUT))
-                        .compat()
-                        .await;
+                    if reconnect.send(raw_client.cache_version()).is_err() {
+                        break;
+                    }
                     continue;
                 }
                 let (mut bk_tx, bk_rx) = raw_client
@@ -532,7 +532,7 @@ impl PdClient for RpcClient {
                     warn!("region heartbeat stream exited"; "res" => ?res);
                 }
                 let _ = bk_tx.close().await;
-                if reconnect.send(raw_client.cache_version()).await.is_err() {
+                if reconnect.send(raw_client.cache_version()).is_err() {
                     break;
                 }
             }
@@ -548,19 +548,19 @@ impl PdClient for RpcClient {
 
     fn create_report_region_buckets_stream(
         &mut self,
-    ) -> Result<Self::RequestChannel<ReportBucketsRequest>> {
-        let (tx, rx) = mpsc::unbounded();
+        wake_policy: mpsc::WakePolicy,
+    ) -> Result<mpsc::Sender<ReportBucketsRequest>> {
+        let (tx, rx) = mpsc::unbounded(wake_policy);
         let mut raw_client = self.raw_client.clone();
-        let mut reconnect = self.reconnect_tx.clone();
+        let reconnect = self.reconnect_tx.clone();
         let mut requests = Box::pin(rx).map(|r| Ok((r, WriteFlags::default())));
         self.raw_client.stub().spawn(async move {
             loop {
                 if let Err(e) = raw_client.wait_for_ready().await {
                     warn!("failed to acquire client for ReportRegionBuckets stream"; "err" => ?e);
-                    let _ = GLOBAL_TIMER_HANDLE
-                        .delay(std::time::Instant::now() + Duration::from_secs(REQUEST_TIMEOUT))
-                        .compat()
-                        .await;
+                    if reconnect.send(raw_client.cache_version()).is_err() {
+                        break;
+                    }
                     continue;
                 }
                 let (mut bk_tx, bk_rx) = raw_client
@@ -583,7 +583,7 @@ impl PdClient for RpcClient {
                     }
                 }
                 let _ = bk_tx.close().await;
-                if reconnect.send(raw_client.cache_version()).await.is_err() {
+                if reconnect.send(raw_client.cache_version()).is_err() {
                     break;
                 }
             }
@@ -593,24 +593,21 @@ impl PdClient for RpcClient {
 
     fn create_tso_stream(
         &mut self,
-    ) -> Result<(
-        Self::RequestChannel<TsoRequest>,
-        Self::ResponseChannel<TsoResponse>,
-    )> {
-        let (tx, rx) = mpsc::unbounded();
+        wake_policy: mpsc::WakePolicy,
+    ) -> Result<(mpsc::Sender<TsoRequest>, Self::ResponseChannel<TsoResponse>)> {
+        let (tx, rx) = mpsc::unbounded(wake_policy);
         let response_holder = Arc::new(std::sync::Mutex::new(None));
         let response_holder_clone = response_holder.clone();
         let mut raw_client = self.raw_client.clone();
-        let mut reconnect = self.reconnect_tx.clone();
+        let reconnect = self.reconnect_tx.clone();
         let mut requests = Box::pin(rx).map(|r| Ok((r, WriteFlags::default())));
         self.raw_client.stub().spawn(async move {
             loop {
                 if let Err(e) = raw_client.wait_for_ready().await {
                     warn!("failed to acquire client for Tso stream"; "err" => ?e);
-                    let _ = GLOBAL_TIMER_HANDLE
-                        .delay(std::time::Instant::now() + Duration::from_secs(REQUEST_TIMEOUT))
-                        .compat()
-                        .await;
+                    if reconnect.send(raw_client.cache_version()).is_err() {
+                        break;
+                    }
                     continue;
                 }
                 let (mut bk_tx, bk_rx) = raw_client
@@ -626,7 +623,7 @@ impl PdClient for RpcClient {
                     warn!("tso exited"; "res" => ?res);
                 }
                 let _ = bk_tx.close().await;
-                if reconnect.send(raw_client.cache_version()).await.is_err() {
+                if reconnect.send(raw_client.cache_version()).is_err() {
                     break;
                 }
             }
@@ -1306,7 +1303,7 @@ impl PdClient for RpcClient {
 async fn reconnect_loop(
     mut client: CachedRawClient,
     on_reconnect: CallbackHolder,
-    mut reconnect: mpsc::UnboundedReceiver<u64>,
+    mut reconnect: mpsc::Receiver<u64>,
 ) {
     let interval = Duration::from_secs(REQUEST_TIMEOUT);
     loop {
@@ -1319,21 +1316,17 @@ async fn reconnect_loop(
         }
         let state = ConnectivityState::GRPC_CHANNEL_READY;
         select! {
-            _ = client.channel().wait_for_state_change(state, interval).fuse() => {
-                let force = client.channel().check_connectivity_state(true) == ConnectivityState::GRPC_CHANNEL_SHUTDOWN;
-                if let Err(e) = client.reconnect(force, &on_reconnect).await {
-                    warn!("failed to reconnect pd"; "err" => ?e);
-                }
-            },
-            v = reconnect.next() => {
-                if v.is_none() {
-                    break;
-                } else if v.unwrap() == client.cache_version() {
-                    if let Err(e) = client.reconnect(true, &on_reconnect).await {
-                        warn!("failed to reconnect pd when requested"; "err" => ?e);
-                    }
+            _ = client.channel().wait_for_state_change(state, interval).fuse() => {},
+            v = reconnect.next().fuse() => {
+                if v.is_none() || v.unwrap() < client.cache_version() {
+                    continue;
                 }
             }
+        }
+        let force = client.channel().check_connectivity_state(true)
+            == ConnectivityState::GRPC_CHANNEL_SHUTDOWN;
+        if let Err(e) = client.reconnect(force, &on_reconnect).await {
+            warn!("failed to reconnect pd"; "err" => ?e);
         }
     }
 }
