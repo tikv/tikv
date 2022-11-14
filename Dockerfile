@@ -105,6 +105,9 @@ FROM pingcap/alpine-glibc
 COPY --from=builder /tikv/target/release/tikv-server /tikv-server
 COPY --from=builder /tikv/target/release/tikv-ctl /tikv-ctl
 
+RUN apk add --no-cache \
+    curl
+
 EXPOSE 20160 20180
 
 ENTRYPOINT ["/tikv-server"]
