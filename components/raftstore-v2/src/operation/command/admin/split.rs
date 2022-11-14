@@ -71,12 +71,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         mut req: RaftCmdRequest,
     ) -> Result<u64> {
         validate_batch_split(req.mut_admin_request(), self.region())?;
-        let mut proposal_ctx = ProposalContext::empty();
-        proposal_ctx.insert(ProposalContext::SYNC_LOG);
-        proposal_ctx.insert(ProposalContext::SPLIT);
-
+        // We rely on ConflictChecker to detect conflicts, so no need to set proposal
+        // context.
         let data = req.write_to_bytes().unwrap();
-        self.propose_with_ctx(store_ctx, data, proposal_ctx.to_vec())
+        self.propose(store_ctx, data)
     }
 }
 

@@ -2,6 +2,7 @@
 
 use std::{
     ops::{Deref, DerefMut},
+    path::Path,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -22,7 +23,7 @@ use pd_client::PdClient;
 use raft::INVALID_ID;
 use raftstore::store::{
     fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, ReadRunner, ReadTask,
-    StoreWriters, Transport, WriteSenders,
+    StoreWriters, TabletSnapManager, Transport, WriteSenders,
 };
 use slog::Logger;
 use tikv_util::{
@@ -375,6 +376,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         pd_client: Arc<C>,
         router: &StoreRouter<EK, ER>,
         store_meta: Arc<Mutex<StoreMeta<EK>>>,
+        snap_mgr: TabletSnapManager,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -389,10 +391,13 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         workers
             .store_writers
             .spawn(store_id, raft_engine.clone(), None, router, &trans, &cfg)?;
-        let read_scheduler = workers.async_read_worker.start(
-            "async-read-worker",
-            ReadRunner::new(router.clone(), raft_engine.clone()),
-        );
+
+        let mut read_runner = ReadRunner::new(router.clone(), raft_engine.clone());
+        read_runner.set_snap_mgr(snap_mgr);
+        let read_scheduler = workers
+            .async_read_worker
+            .start("async-read-worker", read_runner);
+
         let pd_scheduler = workers.pd_worker.start(
             "pd-worker",
             PdRunner::new(
