@@ -466,7 +466,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn reset_region_buckets(&mut self) {
         if self.region_buckets.is_some() {
             self.last_region_buckets = self.region_buckets.take();
-            self.region_buckets = None;
         }
     }
 
