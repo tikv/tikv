@@ -2,6 +2,7 @@
 
 // #[PerformanceCriticalPath]
 use kvproto::kvrpcpb::ExtraOp;
+use tikv_kv::Modify;
 use txn_types::{Key, OldValues, TimeStamp, TxnExtra};
 
 use crate::storage::{
@@ -85,7 +86,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             context.statistics,
         );
 
-        let mut written_rows = 0;
         let total_keys = keys.len();
         let mut res = PessimisticLockResults::with_capacity(total_keys);
         let mut encountered_locks = vec![];
@@ -115,7 +115,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                         let mutation_type = None;
                         old_values.insert(key, (old_value, mutation_type));
                     }
-                    written_rows += 1;
                 }
                 Err(MvccError(box MvccErrorInner::KeyIsLocked(lock_info))) => {
                     let request_parameters = PessimisticLockParameters {
@@ -142,7 +141,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                     // Do not lock previously succeeded keys.
                     txn.clear();
                     res.0.clear();
-                    written_rows = 0;
                     res.push(PessimisticLockKeyResult::Waiting);
                     break;
                 }
@@ -172,29 +170,35 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             }
         }
 
+        let rows = if res.is_ok() { total_keys } else { 0 };
+
         let pr = ProcessResult::PessimisticLockRes { res };
 
-        let to_be_write = if written_rows > 0 {
-            let extra = TxnExtra {
-                old_values,
-                // One pc status is unknown in AcquirePessimisticLock stage.
-                one_pc: false,
-                for_flashback: false,
-            };
-            WriteData::new(modifies, extra)
-        } else {
-            WriteData::default()
-        };
+        let to_be_write = make_write_data(modifies, old_values);
 
         Ok(WriteResult {
             ctx,
             to_be_write,
-            rows: written_rows,
+            rows,
             pr,
             lock_info: encountered_locks,
             released_locks: ReleasedLocks::new(),
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnProposed,
         })
+    }
+}
+
+pub(super) fn make_write_data(modifies: Vec<Modify>, old_values: OldValues) -> WriteData {
+    if !modifies.is_empty() {
+        let extra = TxnExtra {
+            old_values,
+            // One pc status is unknown in AcquirePessimisticLock stage.
+            one_pc: false,
+            for_flashback: false,
+        };
+        WriteData::new(modifies, extra)
+    } else {
+        WriteData::default()
     }
 }

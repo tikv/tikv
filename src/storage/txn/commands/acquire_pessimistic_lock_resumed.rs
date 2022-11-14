@@ -2,17 +2,17 @@
 
 // #[PerformanceCriticalPath]
 use kvproto::kvrpcpb::ExtraOp;
-use txn_types::{Key, OldValues, TxnExtra};
+use txn_types::{Key, OldValues};
 
 use crate::storage::{
-    kv::WriteData,
     lock_manager::{lock_waiting_queue::LockWaitEntry, LockManager, LockWaitToken},
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader},
     txn::{
         acquire_pessimistic_lock,
         commands::{
-            Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand,
-            WriteContext, WriteResult, WriteResultLockInfo,
+            acquire_pessimistic_lock::make_write_data, Command, CommandExt, ReleasedLocks,
+            ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
+            WriteResultLockInfo,
         },
         Error, Result,
     },
@@ -65,13 +65,13 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
         let mut txn = None;
         let mut reader: Option<SnapshotReader<S>> = None;
 
-        let mut written_rows = 0;
-        let mut res = PessimisticLockResults::with_capacity(self.items.len());
+        let total_keys = self.items.len();
+        let mut res = PessimisticLockResults::with_capacity(total_keys);
         let mut encountered_locks = vec![];
         let need_old_value = context.extra_op == ExtraOp::ReadOldValue;
         let mut old_values = OldValues::default();
 
-        let mut new_locked_keys = Vec::with_capacity(self.items.len());
+        let mut new_locked_keys = Vec::with_capacity(total_keys);
 
         for item in self.items.into_iter() {
             let ResumedPessimisticLockItem {
@@ -86,25 +86,21 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
                 .as_ref()
                 .map_or(true, |t: &MvccTxn| t.start_ts != params.start_ts)
             {
-                if let Some(txn) = txn {
-                    if !txn.is_empty() {
-                        modifies.extend(txn.into_modifies());
-                    }
-                }
-                txn = Some(MvccTxn::new(
+                if let Some(prev_txn) = txn.replace(MvccTxn::new(
                     params.start_ts,
                     context.concurrency_manager.clone(),
-                ));
+                )) {
+                    modifies.extend(prev_txn.into_modifies());
+                }
                 // TODO: Is it possible to reuse the same reader but change the start_ts stored
                 // in it?
-                if let Some(mut reader) = reader {
-                    context.statistics.add(&reader.take_statistics());
-                }
-                reader = Some(SnapshotReader::new_with_ctx(
+                if let Some(mut prev_reader) = reader.replace(SnapshotReader::new_with_ctx(
                     params.start_ts,
                     snapshot.clone(),
                     &self.ctx,
-                ));
+                )) {
+                    context.statistics.add(&prev_reader.take_statistics());
+                }
             }
             let txn = txn.as_mut().unwrap();
             let reader = reader.as_mut().unwrap();
@@ -133,7 +129,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
                         let mutation_type = None;
                         old_values.insert(key, (old_value, mutation_type));
                     }
-                    written_rows += 1;
                 }
                 Err(MvccError(box MvccErrorInner::KeyIsLocked(lock_info))) => {
                     let mut lock_info =
@@ -160,22 +155,12 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
         }
 
         let pr = ProcessResult::PessimisticLockRes { res: Ok(res) };
-        let to_be_write = if written_rows > 0 {
-            let extra = TxnExtra {
-                old_values,
-                // One pc status is unknown in AcquirePessimisticLock stage.
-                one_pc: false,
-                for_flashback: false,
-            };
-            WriteData::new(modifies, extra)
-        } else {
-            WriteData::default()
-        };
+        let to_be_write = make_write_data(modifies, old_values);
 
         Ok(WriteResult {
             ctx: self.ctx,
             to_be_write,
-            rows: written_rows,
+            rows: total_keys,
             pr,
             lock_info: encountered_locks,
             released_locks: ReleasedLocks::new(),
