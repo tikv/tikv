@@ -332,7 +332,7 @@ mod tests {
                 Collation::Binary,
                 Collation::Utf8Mb4Bin,
                 Collation::Utf8Mb4Bin,
-                Some(0),
+                Some(1),
             ),
         ];
         for (target, pattern, escape, collation, target_collation, pattern_collation, expected) in
