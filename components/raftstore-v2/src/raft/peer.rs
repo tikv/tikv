@@ -482,6 +482,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         true
     }
 
+    #[inline]
     pub fn txn_ext(&self) -> &Arc<TxnExt> {
         &self.txn_ext
     }
