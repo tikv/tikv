@@ -1098,23 +1098,42 @@ mod test {
 
     fn default_req(key: &[u8], val: &[u8], start_ts: u64) -> Request {
         let (k, v) = default(key, val, start_ts);
-        req(k, v, CF_DEFAULT)
+        req(k, v, CF_DEFAULT, CmdType::Put)
     }
 
     fn write_req(key: &[u8], ty: WriteType, commit_ts: u64, start_ts: u64) -> Request {
         let (k, v) = write(key, ty, commit_ts, start_ts);
-        req(k, v, CF_WRITE)
+        let cmd_type = if ty == WriteType::Delete {
+            CmdType::Delete
+        } else {
+            CmdType::Put
+        };
+
+        req(k, v, CF_WRITE, cmd_type)
     }
 
-    fn req(k: Vec<u8>, v: Vec<u8>, cf: &str) -> Request {
+    fn req(k: Vec<u8>, v: Vec<u8>, cf: &str, cmd_type: CmdType) -> Request {
         let mut req = Request::default();
-        let mut put = PutRequest::default();
+        req.set_cmd_type(cmd_type);
 
-        put.set_key(k);
-        put.set_value(v);
-        put.set_cf(cf.to_string());
-        req.set_cmd_type(CmdType::Put);
-        req.set_put(put);
+        match cmd_type {
+            CmdType::Put => {
+                let mut put = PutRequest::default();
+                put.set_key(k);
+                put.set_value(v);
+                put.set_cf(cf.to_string());
+
+                req.set_put(put)
+            }
+            CmdType::Delete => {
+                let mut del = DeleteRequest::default();
+                del.set_cf(cf.to_string());
+                del.set_key(k);
+
+                req.set_delete(del);
+            }
+            _ => panic!("invalid input cmd_type"),
+        }
         req
     }
 
@@ -1123,21 +1142,22 @@ mod test {
         #[derive(Debug)]
         struct Case {
             cf: &'static str,
+            is_delete: bool,
             mutations: Vec<(Vec<u8>, Vec<u8>)>,
             expected_reqs: Vec<Request>,
         }
 
         fn run_case(c: &Case) {
-            let mut v = vec![];
-            let mut coll = RequestCollector::from_cf(c.cf);
+            let mut cmds = vec![];
+            let mut reqs = RequestCollector::from_cf(c.cf);
             let mut req_size = 0_u64;
 
             let mut builder = build_apply_request(
                 &mut req_size,
                 1024,
-                &mut coll,
-                &mut v,
-                false,
+                &mut reqs,
+                &mut cmds,
+                c.is_delete,
                 c.cf,
                 Context::new(),
             );
@@ -1146,12 +1166,12 @@ mod test {
                 builder(k, v);
             }
             drop(builder);
-            if !coll.is_empty() {
-                let cmd = make_request(&mut coll, Context::new());
-                v.push(cmd);
+            if !reqs.is_empty() {
+                let cmd = make_request(&mut reqs, Context::new());
+                cmds.push(cmd);
             }
 
-            let mut req1: HashMap<_, _> = v
+            let mut req1: HashMap<_, _> = cmds
                 .into_iter()
                 .flat_map(|mut x| x.take_requests().into_iter())
                 .map(|req| {
@@ -1170,12 +1190,13 @@ mod test {
         let cases = vec![
             Case {
                 cf: CF_WRITE,
+                is_delete: false,
                 mutations: vec![
                     write(b"foo", Lock, 42, 41),
                     write(b"foo", Put, 40, 39),
                     write(b"bar", Put, 38, 37),
                     write(b"baz", Put, 34, 31),
-                    write(b"bar", Delete, 28, 17),
+                    write(b"bar", Put, 28, 17),
                 ],
                 expected_reqs: vec![
                     write_req(b"foo", Put, 40, 39),
@@ -1184,7 +1205,23 @@ mod test {
                 ],
             },
             Case {
+                cf: CF_WRITE,
+                is_delete: true,
+                mutations: vec![
+                    write(b"foo", Delete, 40, 39),
+                    write(b"bar", Delete, 38, 37),
+                    write(b"baz", Delete, 34, 31),
+                    write(b"bar", Delete, 28, 17),
+                ],
+                expected_reqs: vec![
+                    write_req(b"foo", Delete, 40, 39),
+                    write_req(b"bar", Delete, 38, 37),
+                    write_req(b"baz", Delete, 34, 31),
+                ],
+            },
+            Case {
                 cf: CF_DEFAULT,
+                is_delete: false,
                 mutations: vec![
                     default(b"aria", b"The planet where flowers bloom.", 123),
                     default(
@@ -1192,6 +1229,7 @@ mod test {
                         b"Even a small breeze can still bring small happiness.",
                         178,
                     ),
+                    default(b"beyond", b"Calling your name.", 278),
                     default(b"beyond", b"Calling your name.", 278),
                 ],
                 expected_reqs: vec![
