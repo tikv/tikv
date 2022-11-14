@@ -10,7 +10,7 @@ use tikv_util::{store::QueryStats, time::UnixSecs};
 
 use super::Runner;
 
-pub struct Task {
+pub struct HeartbeatTask {
     pub term: u64,
     pub region: metapb::Region,
     pub peer: metapb::Peer,
@@ -50,7 +50,7 @@ where
     ER: RaftEngine,
     T: PdClient + 'static,
 {
-    pub fn handle_heartbeat(&mut self, task: Task) {
+    pub fn handle_heartbeat(&mut self, task: HeartbeatTask) {
         // HACK! In order to keep the compatible of protos, we use 0 to identify
         // the size uninitialized regions, and use 1 to identify the empty regions.
         //

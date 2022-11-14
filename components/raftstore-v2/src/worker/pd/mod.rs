@@ -21,7 +21,7 @@ mod heartbeat;
 mod split;
 mod store_heartbeat;
 
-pub use heartbeat::Task as HeartbeatTask;
+pub use heartbeat::HeartbeatTask;
 
 use crate::{batch::StoreRouter, router::PeerMsg};
 
