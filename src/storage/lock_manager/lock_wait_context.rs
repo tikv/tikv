@@ -10,9 +10,6 @@
 //! timeout. [`LockWaitContext`] is therefore used to share the necessary state
 //! of a single `AcquirePessimisticLock` request, and ensuring the internal
 //! callback for returning response through RPC is called at most only once.
-//!
-//! Note: The corresponding implementation in `WaiterManager` is not yet
-//! implemented, and this mod is currently not used yet.
 
 use std::{convert::TryInto, result::Result, sync::Arc};
 
@@ -25,7 +22,8 @@ use crate::storage::{
         lock_waiting_queue::{LockWaitQueues, PessimisticLockKeyCallback},
         LockManager, LockWaitToken,
     },
-    Error as StorageError, PessimisticLockRes, ProcessResult, StorageCallback,
+    types::PessimisticLockKeyResult,
+    Error as StorageError, ProcessResult, StorageCallback,
 };
 
 pub struct LockWaitContextInner {
@@ -127,7 +125,11 @@ impl<L: LockManager> LockWaitContext<L> {
         }
     }
 
-    fn finish_request(&self, result: Result<PessimisticLockRes, SharedError>, is_canceling: bool) {
+    fn finish_request(
+        &self,
+        result: Result<PessimisticLockKeyResult, SharedError>,
+        is_canceling: bool,
+    ) {
         if is_canceling {
             let entry = self
                 .lock_wait_queues
@@ -138,10 +140,9 @@ impl<L: LockManager> LockWaitContext<L> {
                 return;
             }
         } else {
-            // TODO: Uncomment this after the corresponding change of
-            // `LockManager` is done. self.lock_wait_queues.
-            // get_lock_mgr()     .remove_lock_wait(ctx_inner.
-            // lock_wait_token);
+            self.lock_wait_queues
+                .get_lock_mgr()
+                .remove_lock_wait(self.shared_states.lock_wait_token);
         }
 
         // When this is executed, the waiter is either woken up from the queue or
@@ -172,16 +173,16 @@ mod tests {
 
     use super::*;
     use crate::storage::{
-        lock_manager::{lock_waiting_queue::LockWaitEntry, DummyLockManager},
+        lock_manager::{lock_waiting_queue::LockWaitEntry, MockLockManager},
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{Error as TxnError, ErrorInner as TxnErrorInner},
-        types::PessimisticLockParameters,
+        types::{PessimisticLockParameters, PessimisticLockResults},
         ErrorInner as StorageErrorInner, Result as StorageResult,
     };
 
     fn create_storage_cb() -> (
         StorageCallback,
-        Receiver<StorageResult<StorageResult<PessimisticLockRes>>>,
+        Receiver<StorageResult<StorageResult<PessimisticLockResults>>>,
     ) {
         let (tx, rx) = channel();
         let cb = StorageCallback::PessimisticLock(Box::new(move |r| tx.send(r).unwrap()));
@@ -194,10 +195,10 @@ mod tests {
     ) -> (
         LockWaitToken,
         LockWaitContext<impl LockManager>,
-        Receiver<StorageResult<StorageResult<PessimisticLockRes>>>,
+        Receiver<StorageResult<StorageResult<PessimisticLockResults>>>,
     ) {
         let (cb, rx) = create_storage_cb();
-        let token = LockWaitToken(Some(1));
+        let token = lock_wait_queues.get_lock_mgr().allocate_token();
         let ctx = LockWaitContext::new(key.clone(), lock_wait_queues.clone(), token, cb, false);
         (token, ctx, rx)
     }
@@ -226,7 +227,7 @@ mod tests {
 
         // TODO: Use `ProxyLockMgr` to check the correctness of the `remove_lock_wait`
         // invocation.
-        let lock_wait_queues = LockWaitQueues::new(DummyLockManager {});
+        let lock_wait_queues = LockWaitQueues::new(MockLockManager::new());
 
         let (_, ctx, rx) = create_test_lock_wait_ctx(&key, &lock_wait_queues);
         // Nothing happens currently.

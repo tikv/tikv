@@ -56,7 +56,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Cleanup {
             context.statistics,
         );
 
-        let mut released_locks = ReleasedLocks::new(self.start_ts, TimeStamp::zero());
+        let mut released_locks = ReleasedLocks::new();
         // The rollback must be protected, see more on
         // [issue #7364](https://github.com/tikv/tikv/issues/7364)
         released_locks.push(cleanup(
@@ -66,7 +66,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Cleanup {
             self.current_ts,
             true,
         )?);
-        released_locks.wake_up(context.lock_mgr);
 
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
         write_data.set_allowed_on_disk_almost_full();
@@ -76,6 +75,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Cleanup {
             rows: 1,
             pr: ProcessResult::Res,
             lock_info: None,
+            released_locks,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
         })

@@ -924,6 +924,7 @@ pub mod tests {
                 TimeStamp::zero(),
                 true,
                 false,
+                false,
             )
             .unwrap();
             self.write(txn.into_modifies());
@@ -1394,7 +1395,8 @@ pub mod tests {
 
         let (commit_ts, write) = reader.seek_write(&k, 20.into()).unwrap().unwrap();
         assert_eq!(commit_ts, 20.into());
-        assert_eq!(write, Write::new(WriteType::Lock, 10.into(), None));
+        assert_eq!(write.write_type, WriteType::Lock);
+        assert_eq!(write.start_ts, 10.into());
         assert_eq!(reader.statistics.write.seek, 1);
         assert_eq!(reader.statistics.write.next, 1);
 
@@ -2005,7 +2007,7 @@ pub mod tests {
                 ],
                 expect_is_remain: true,
             },
-            // k1 and k2 have old version writes at version 8.
+            // k1 and k2 have old version writes at version 3.
             Case {
                 start_key: None,
                 end_key: None,

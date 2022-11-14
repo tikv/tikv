@@ -272,7 +272,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
         false
     }
 
-    fn tablet_path(&self, _id: u64, _suffix: u64) -> PathBuf {
+    fn tablet_path_with_prefix(&self, _prefix: &str, _id: u64, _suffix: u64) -> PathBuf {
         self.kv_engine_path()
     }
 

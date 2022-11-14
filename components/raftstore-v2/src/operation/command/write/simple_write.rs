@@ -3,8 +3,10 @@
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request};
 use protobuf::{CodedInputStream, Message, SingularPtrField};
+use raftstore::store::WriteCallback;
+use slog::Logger;
 
-use crate::router::CmdResChannel;
+use crate::{operation::command::parse_at, router::CmdResChannel};
 
 // MAGIC number to hint simple write codec is used. If it's a protobuf message,
 // the first one or several bytes are for field tag, which can't be zero.
@@ -20,12 +22,18 @@ pub struct SimpleWriteEncoder {
     buf: Vec<u8>,
     channels: Vec<CmdResChannel>,
     size_limit: usize,
+    notify_proposed: bool,
 }
 
 impl SimpleWriteEncoder {
+    /// Create an encoder.
+    ///
+    /// If `notify_proposed` is true, channels will be called `notify_proposed`
+    /// when it's appended.
     pub fn new(
         mut req: RaftCmdRequest,
         size_limit: usize,
+        notify_proposed: bool,
     ) -> Result<SimpleWriteEncoder, RaftCmdRequest> {
         if !Self::allow_request(&req) {
             return Err(req);
@@ -45,6 +53,7 @@ impl SimpleWriteEncoder {
             buf,
             channels: vec![],
             size_limit,
+            notify_proposed,
         })
     }
 
@@ -95,8 +104,23 @@ impl SimpleWriteEncoder {
     }
 
     #[inline]
-    pub fn add_response_channel(&mut self, ch: CmdResChannel) {
+    pub fn add_response_channel(&mut self, mut ch: CmdResChannel) {
+        if self.notify_proposed {
+            ch.notify_proposed();
+        }
         self.channels.push(ch);
+    }
+
+    #[inline]
+    pub fn notify_proposed(&self) -> bool {
+        self.notify_proposed
+    }
+
+    #[inline]
+    pub fn header(&self) -> &RaftRequestHeader {
+        self.header
+            .as_ref()
+            .unwrap_or_else(|| RaftRequestHeader::default_instance())
     }
 }
 
@@ -135,22 +159,32 @@ pub struct SimpleWriteDecoder<'a> {
 }
 
 impl<'a> SimpleWriteDecoder<'a> {
-    pub fn new(buf: &'a [u8]) -> Result<SimpleWriteDecoder<'a>, RaftCmdRequest> {
+    pub fn new(
+        logger: &Logger,
+        buf: &'a [u8],
+        index: u64,
+        term: u64,
+    ) -> Result<SimpleWriteDecoder<'a>, RaftCmdRequest> {
         match buf.first().cloned() {
             Some(MAGIC_PREFIX) => {
                 let mut is = CodedInputStream::from_bytes(&buf[1..]);
-                let header = is.read_message().unwrap();
+                let header = match is.read_message() {
+                    Ok(h) => h,
+                    Err(e) => panic!(
+                        "{:?} data corrupted at [{}] {}: {:?}",
+                        logger.list(),
+                        term,
+                        index,
+                        e
+                    ),
+                };
                 let read = is.pos();
                 Ok(SimpleWriteDecoder {
                     header,
                     buf: &buf[1 + read as usize..],
                 })
             }
-            _ => {
-                let mut req = RaftCmdRequest::new();
-                req.merge_from_bytes(buf).unwrap();
-                Err(req)
-            }
+            _ => Err(parse_at(logger, buf, index, term)),
         }
     }
 
@@ -346,6 +380,8 @@ fn decode<'a>(buf: &mut &'a [u8]) -> Option<SimpleWrite<'a>> {
 
 #[cfg(test)]
 mod tests {
+    use slog::o;
+
     use super::*;
 
     #[test]
@@ -369,7 +405,7 @@ mod tests {
         delete_req.set_key(delete_key.clone());
         cmd.mut_requests().push(req);
 
-        let mut encoder = SimpleWriteEncoder::new(cmd.clone(), usize::MAX).unwrap();
+        let mut encoder = SimpleWriteEncoder::new(cmd.clone(), usize::MAX, false).unwrap();
         cmd.clear_requests();
 
         req = Request::default();
@@ -392,7 +428,8 @@ mod tests {
 
         encoder.amend(cmd.clone()).unwrap();
         let (bytes, _) = encoder.encode();
-        let mut decoder = SimpleWriteDecoder::new(&bytes).unwrap();
+        let logger = slog_global::borrow_global().new(o!());
+        let mut decoder = SimpleWriteDecoder::new(&logger, &bytes, 0, 0).unwrap();
         assert_eq!(decoder.header(), cmd.get_header());
         let write = decoder.next().unwrap();
         let SimpleWrite::Put(put) = write else { panic!("should be put") };
@@ -457,9 +494,10 @@ mod tests {
         let mut req = Request::default();
         req.set_cmd_type(CmdType::Invalid);
         invalid_cmd.mut_requests().push(req);
-        let fallback = SimpleWriteEncoder::new(invalid_cmd.clone(), usize::MAX).unwrap_err();
+        let fallback = SimpleWriteEncoder::new(invalid_cmd.clone(), usize::MAX, false).unwrap_err();
         let bytes = fallback.write_to_bytes().unwrap();
-        let decoded = SimpleWriteDecoder::new(&bytes).unwrap_err();
+        let logger = slog_global::borrow_global().new(o!());
+        let decoded = SimpleWriteDecoder::new(&logger, &bytes, 0, 0).unwrap_err();
         assert_eq!(decoded, invalid_cmd);
 
         let mut valid_cmd = RaftCmdRequest::default();
@@ -471,7 +509,7 @@ mod tests {
         put_req.set_key(b"key".to_vec());
         put_req.set_value(b"".to_vec());
         valid_cmd.mut_requests().push(req);
-        let mut encoder = SimpleWriteEncoder::new(valid_cmd.clone(), usize::MAX).unwrap();
+        let mut encoder = SimpleWriteEncoder::new(valid_cmd.clone(), usize::MAX, false).unwrap();
         // Only simple write command can be batched.
         encoder.amend(invalid_cmd.clone()).unwrap_err();
         let mut valid_cmd2 = valid_cmd.clone();
@@ -480,7 +518,7 @@ mod tests {
         encoder.amend(valid_cmd2).unwrap_err();
 
         let (bytes, _) = encoder.encode();
-        let mut decoder = SimpleWriteDecoder::new(&bytes).unwrap();
+        let mut decoder = SimpleWriteDecoder::new(&logger, &bytes, 0, 0).unwrap();
         assert_eq!(decoder.header(), valid_cmd.get_header());
         let req = decoder.next().unwrap();
         let SimpleWrite::Put(put) = req else { panic!("should be put") };

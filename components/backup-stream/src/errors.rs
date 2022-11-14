@@ -132,14 +132,14 @@ macro_rules! annotate {
 
 impl Error {
     pub fn report(&self, context: impl Display) {
-        warn!("backup stream meet error"; "context" => %context, "err" => %self);
+        warn!("backup stream meet error"; "context" => %context, "err" => %self, "verbose_err" => ?self);
         metrics::STREAM_ERROR
             .with_label_values(&[self.kind()])
             .inc()
     }
 
     pub fn report_fatal(&self) {
-        error!(%self; "backup stream meet fatal error");
+        error!(%self; "backup stream meet fatal error"; "verbose" => ?self, );
         metrics::STREAM_FATAL_ERROR
             .with_label_values(&[self.kind()])
             .inc()
