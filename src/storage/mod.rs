@@ -9760,7 +9760,6 @@ mod tests {
                         min_commit_ts: 11.into(),
                         last_change_ts: TimeStamp::zero(),
                         versions_to_last_change: 0,
-                        txn_source: 0,
                     },
                     false
                 )

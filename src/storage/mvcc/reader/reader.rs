@@ -926,7 +926,6 @@ pub mod tests {
                 true,
                 false,
                 false,
-                0,
             )
             .unwrap();
             self.write(txn.into_modifies());

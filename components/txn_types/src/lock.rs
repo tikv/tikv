@@ -93,7 +93,8 @@ pub struct Lock {
     /// The number of versions that need skipping from the latest version to
     /// find the latest PUT/DELETE record
     pub versions_to_last_change: u64,
-    /// The source of this txn.
+    /// The source of this txn. It is used by ticdc, if the value is 0 ticdc will sync the kv change event
+    /// to downstream, if it is not 0, ticdc may ignore this change event. 
     pub txn_source: u8,
 }
 
@@ -502,7 +503,6 @@ pub struct PessimisticLock {
 
     pub last_change_ts: TimeStamp,
     pub versions_to_last_change: u64,
-    pub txn_source: u8,
 }
 
 impl PessimisticLock {
@@ -518,7 +518,6 @@ impl PessimisticLock {
             self.min_commit_ts,
         )
         .set_last_change(self.last_change_ts, self.versions_to_last_change)
-        .set_txn_source(self.txn_source)
     }
 
     // Same with `to_lock` but does not copy the primary key.
@@ -534,7 +533,6 @@ impl PessimisticLock {
             self.min_commit_ts,
         )
         .set_last_change(self.last_change_ts, self.versions_to_last_change)
-        .set_txn_source(self.txn_source)
     }
 
     pub fn memory_size(&self) -> usize {
@@ -552,7 +550,6 @@ impl std::fmt::Debug for PessimisticLock {
             .field("min_commit_ts", &self.min_commit_ts)
             .field("last_change_ts", &self.last_change_ts)
             .field("versions_to_last_change", &self.versions_to_last_change)
-            .field("txn_source", &self.txn_source)
             .finish()
     }
 }
@@ -1072,7 +1069,6 @@ mod tests {
             min_commit_ts: 20.into(),
             last_change_ts: 8.into(),
             versions_to_last_change: 2,
-            txn_source: 0,
         };
         let expected_lock = Lock {
             lock_type: LockType::Pessimistic,
@@ -1104,7 +1100,6 @@ mod tests {
             min_commit_ts: 20.into(),
             last_change_ts: 8.into(),
             versions_to_last_change: 2,
-            txn_source: 0,
         };
         assert_eq!(
             format!("{:?}", pessimistic_lock),
@@ -1133,7 +1128,6 @@ mod tests {
             min_commit_ts: 20.into(),
             last_change_ts: 8.into(),
             versions_to_last_change: 2,
-            txn_source: 0,
         };
         // 7 bytes for primary key, 16 bytes for Box<[u8]>, and 6 8-byte integers.
         assert_eq!(lock.memory_size(), 7 + 16 + 6 * 8 + 8);

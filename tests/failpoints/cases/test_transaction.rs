@@ -568,7 +568,6 @@ fn test_concurrent_write_after_transfer_leader_invalidates_locks() {
         min_commit_ts: 30.into(),
         last_change_ts: 5.into(),
         versions_to_last_change: 3,
-        txn_source: 0,
     };
     txn_ext
         .pessimistic_locks

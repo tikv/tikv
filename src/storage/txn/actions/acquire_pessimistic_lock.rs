@@ -50,7 +50,6 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     need_old_value: bool,
     lock_only_if_exists: bool,
     allow_lock_with_conflict: bool,
-    txn_source: u8,
 ) -> MvccResult<(PessimisticLockKeyResult, OldValue)> {
     fail_point!("acquire_pessimistic_lock", |err| Err(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts).into()
@@ -171,7 +170,6 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 min_commit_ts,
                 last_change_ts: lock.last_change_ts,
                 versions_to_last_change: lock.versions_to_last_change,
-                txn_source: lock.txn_source,
             };
             txn.put_pessimistic_lock(key, lock);
         } else {
@@ -318,7 +316,6 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         min_commit_ts,
         last_change_ts,
         versions_to_last_change,
-        txn_source,
     };
 
     // When lock_only_if_exists is false, always acquire pessimistic lock, otherwise
@@ -393,7 +390,6 @@ pub mod tests {
             false,
             false,
             true,
-            0,
         );
         if res.is_ok() {
             let modifies = txn.into_modifies();
@@ -462,7 +458,6 @@ pub mod tests {
             false,
             lock_only_if_exists,
             false,
-            0,
         )
         .unwrap();
         let modifies = txn.into_modifies();
@@ -645,7 +640,6 @@ pub mod tests {
             false,
             lock_only_if_exists,
             false,
-            0,
         )
         .unwrap_err()
     }
@@ -1254,7 +1248,6 @@ pub mod tests {
                         need_old_value,
                         false,
                         false,
-                        0,
                     )
                     .unwrap();
                     assert_eq!(old_value, OldValue::None);
@@ -1307,7 +1300,6 @@ pub mod tests {
             need_old_value,
             false,
             false,
-            0,
         )
         .unwrap();
         assert_eq!(
@@ -1343,7 +1335,6 @@ pub mod tests {
             true,
             false,
             false,
-            0,
         )
         .unwrap();
         assert_eq!(
@@ -1388,7 +1379,6 @@ pub mod tests {
                             need_old_value,
                             false,
                             false,
-                            0,
                         )?;
                         Ok(old_value)
                     });
@@ -1443,7 +1433,6 @@ pub mod tests {
             need_old_value,
             false,
             false,
-            0,
         )
         .unwrap_err();
 
@@ -1479,7 +1468,6 @@ pub mod tests {
             need_old_value,
             false,
             false,
-            0,
         )
         .unwrap_err();
     }
