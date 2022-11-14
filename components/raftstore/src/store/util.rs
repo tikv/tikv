@@ -28,7 +28,6 @@ use raft::{
     Changer, RawNode, INVALID_INDEX,
 };
 use raft_proto::ConfChangeI;
-use slog_global::error;
 use tikv_util::{
     box_err, debug, info,
     store::{find_peer_by_id, region},
