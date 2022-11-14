@@ -382,10 +382,13 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         T: Transport + 'static,
         C: PdClient + 'static,
     {
-        let router_clone = router.clone();
-        // pd_client.handle_reconnect(move || {
-        //     router_clone.broadcast_normal(|| PeerMsg::HeartbeatPd);
-        // });
+        let sync_router = Mutex::new(router.clone());
+        pd_client.handle_reconnect(move || {
+            sync_router
+                .lock()
+                .unwrap()
+                .broadcast_normal(|| PeerMsg::Tick(PeerTick::PdHeartbeat));
+        });
 
         let mut workers = Workers::default();
         workers
