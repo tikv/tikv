@@ -71,7 +71,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
-    pub fn heartbeat_pd<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
+    pub fn heartbeat_pd<T>(&mut self, ctx: &StoreContext<EK, ER, T>) {
         let task = PdTask::Heartbeat(PdHeartbeatTask {
             term: self.term(),
             region: self.region().clone(),
