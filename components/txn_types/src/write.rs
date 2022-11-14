@@ -549,6 +549,7 @@ mod tests {
             Write::new(WriteType::Put, 456.into(), Some(b"short_value".to_vec()))
                 .set_overlapped_rollback(true, Some(421397468076048385.into())),
             Write::new(WriteType::Lock, 456.into(), None).set_last_change(345.into(), 11),
+            Write::new(WriteType::Lock, 456.into(), None).set_txn_source(1),
         ];
         for (i, write) in writes.drain(..).enumerate() {
             let v = write.as_ref().to_bytes();

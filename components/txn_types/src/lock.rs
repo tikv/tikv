@@ -769,6 +769,18 @@ mod tests {
                 8.into(),
             )
             .set_last_change(4.into(), 2),
+            Lock::new(
+                LockType::Lock,
+                b"pk".to_vec(),
+                1.into(),
+                10,
+                None,
+                6.into(),
+                16,
+                8.into(),
+            )
+            .set_last_change(4.into(), 2),
+            .set_txn_source(1),
         ];
         for (i, lock) in locks.drain(..).enumerate() {
             let v = lock.to_bytes();
