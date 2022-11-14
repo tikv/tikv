@@ -4,8 +4,7 @@ use std::{
     collections::HashMap,
     future::Future,
     path::PathBuf,
-    sync::{        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
 };
 
 use collections::HashSet;
@@ -904,9 +903,9 @@ enum RequestCollector {
     /// This is used for write CF because resolved ts observer hates duplicated
     /// key in the same request.
     RetainLastTs(HashMap<Vec<u8>, (Request, u64)>),
-    /// Collector favor that simple collect all items.
-    /// This is used for default CF.
-    KeepAll(Vec<Request>),
+    /// Collector favor that simple collect all items, and it do not contains
+    /// duplicated key-value. This is used for default CF.
+    KeepAll(HashMap<Vec<u8>, Request>),
 }
 
 impl RequestCollector {
@@ -922,9 +921,9 @@ impl RequestCollector {
     }
 
     fn accept(&mut self, req: Request) {
+        let k = key_from_request(&req);
         match self {
             RequestCollector::RetainLastTs(ref mut reqs) => {
-                let k = key_from_request(&req);
                 let (encoded_key, ts) = match Key::split_on_ts_for(k) {
                     Ok(k) => k,
                     Err(err) => {
@@ -940,7 +939,9 @@ impl RequestCollector {
                     reqs.insert(encoded_key.to_owned(), (req, ts.into_inner()));
                 }
             }
-            RequestCollector::KeepAll(ref mut a) => a.push(req),
+            RequestCollector::KeepAll(ref mut reqs) => {
+                reqs.insert(k.to_owned(), req);
+            }
         }
     }
 
@@ -949,7 +950,7 @@ impl RequestCollector {
             RequestCollector::RetainLastTs(ref mut reqs) => {
                 reqs.drain().map(|(_, (req, _))| req).collect()
             }
-            RequestCollector::KeepAll(ref mut reqs) => std::mem::take(reqs),
+            RequestCollector::KeepAll(ref mut reqs) => reqs.drain().map(|(_, req)| req).collect(),
         }
     }
 
