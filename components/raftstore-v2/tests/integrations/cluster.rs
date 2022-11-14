@@ -28,7 +28,7 @@ use kvproto::{
 use pd_client::RpcClient;
 use raftstore::store::{
     region_meta::{RegionLocalState, RegionMeta},
-    Config, Transport, RAFT_INIT_LOG_INDEX,
+    Config, TabletSnapManager, Transport, RAFT_INIT_LOG_INDEX,
 };
 use raftstore_v2::{
     create_store_batch_system,
@@ -235,7 +235,7 @@ impl RunningState {
 
         let router = RaftRouter::new(store_id, router);
         let store_meta = router.store_meta().clone();
-
+        let snap_mgr = TabletSnapManager::new(path.join("tablets_snap").to_str().unwrap());
         system
             .start(
                 store_id,
@@ -245,6 +245,7 @@ impl RunningState {
                 transport.clone(),
                 router.store_router(),
                 store_meta.clone(),
+                snap_mgr,
             )
             .unwrap();
 

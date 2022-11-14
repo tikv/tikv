@@ -6,7 +6,7 @@ use std::fmt;
 use engine_traits::Snapshot;
 use kvproto::{raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
 use raft::eraftpb::Snapshot as RaftSnapshot;
-use raftstore::store::{metrics::RaftEventDurationType, FetchedLogs};
+use raftstore::store::{metrics::RaftEventDurationType, FetchedLogs, GenSnapRes};
 use tikv_util::time::Instant;
 
 use super::{
@@ -127,7 +127,7 @@ pub enum PeerMsg {
     /// Result of applying committed entries. The message can't be lost.
     ApplyRes(ApplyRes),
     LogsFetched(FetchedLogs),
-    SnapshotGenerated(Box<RaftSnapshot>),
+    SnapshotGenerated(GenSnapRes),
     /// Start the FSM.
     Start,
     /// Messages from peer to peer in the same store
