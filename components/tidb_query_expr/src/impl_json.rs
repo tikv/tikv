@@ -215,7 +215,7 @@ fn json_valid(args: &[ScalarValueRef]) -> Result<Option<Int>> {
             EvalType::Json => args[0].as_json().and(Some(1)),
             EvalType::Bytes => match args[0].as_bytes() {
                 Some(p) => {
-                    let tmp_str = std::str::from_utf8(p).map_err(tidb_query_datatype::codec::Error::from).unwrap();
+                    let tmp_str = std::str::from_utf8(p).map_err(tidb_query_datatype::codec::Error::from)?;
                     let json: serde_json::error::Result<Json> = serde_json::from_str(tmp_str);
                     Some(json.is_ok() as Int)
                 }
