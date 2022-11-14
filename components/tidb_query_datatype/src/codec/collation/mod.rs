@@ -42,6 +42,32 @@ macro_rules! match_template_collator {
 }
 
 #[macro_export]
+macro_rules! match_template_multiple_collators {
+    ((), (), $($tail:tt)*) => {
+        $($tail)*
+    };
+    (($first:tt), ($match_exprs:tt), $($tail:tt)*) => {
+        match_template_multiple_collators! {
+            ($first,), ($match_exprs,), $($tail)*
+        }
+    };
+    (($first:tt, $($t:tt)*), ($first_match_expr:tt, $($match_exprs:tt)*), $($tail:tt)*) => {{
+        #[allow(unused_imports)]
+        use $crate::codec::collation::collator::*;
+
+        match_template_collator! {
+            $first, match $first_match_expr {
+                Collation::$first => {
+                    match_template_multiple_collators! {
+                        ($($t)*), ($($match_exprs)*), $($tail)*
+                    }
+                }
+            }
+        }
+    }};
+}
+
+#[macro_export]
 macro_rules! match_template_charset {
      ($t:tt, $($tail:tt)*) => {{
          #[allow(unused_imports)]
