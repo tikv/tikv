@@ -971,10 +971,30 @@ fn test_merge_isolated_not_in_merge_learner() {
     pd_client.must_remove_peer(left.get_id(), new_learner_peer(2, 2));
 
     pd_client.must_add_peer(left.get_id(), new_peer(3, 3));
-    pd_client.must_remove_peer(left.get_id(), left_on_store1);
+    pd_client.must_joint_confchange(
+        left.get_id(),
+        vec![(
+            ConfChangeType::AddLearnerNode,
+            new_learner_peer(left_on_store1.get_store_id(), left_on_store1.get_id()),
+        )],
+    );
+    pd_client.must_remove_peer(
+        left.get_id(),
+        new_learner_peer(left_on_store1.get_store_id(), left_on_store1.get_id()),
+    );
 
     pd_client.must_add_peer(right.get_id(), new_peer(3, 4));
-    pd_client.must_remove_peer(right.get_id(), right_on_store1);
+    pd_client.must_joint_confchange(
+        right.get_id(),
+        vec![(
+            ConfChangeType::AddLearnerNode,
+            new_learner_peer(right_on_store1.get_store_id(), right_on_store1.get_id()),
+        )],
+    );
+    pd_client.must_remove_peer(
+        right.get_id(),
+        new_learner_peer(right_on_store1.get_store_id(), right_on_store1.get_id()),
+    );
 
     pd_client.must_merge(left.get_id(), right.get_id());
     // Add a new learner on store 2 to trigger peer 2 send check-stale-peer msg to
@@ -1066,10 +1086,30 @@ fn test_merge_isolated_not_in_merge_learner_2() {
     cluster.stop_node(2);
 
     pd_client.must_add_peer(left.get_id(), new_peer(3, 3));
-    pd_client.must_remove_peer(left.get_id(), left_on_store1);
+    pd_client.must_joint_confchange(
+        left.get_id(),
+        vec![(
+            ConfChangeType::AddLearnerNode,
+            new_learner_peer(left_on_store1.get_store_id(), left_on_store1.get_id()),
+        )],
+    );
+    pd_client.must_remove_peer(
+        left.get_id(),
+        new_learner_peer(left_on_store1.get_store_id(), left_on_store1.get_id()),
+    );
 
     pd_client.must_add_peer(right.get_id(), new_peer(3, 4));
-    pd_client.must_remove_peer(right.get_id(), right_on_store1);
+    pd_client.must_joint_confchange(
+        right.get_id(),
+        vec![(
+            ConfChangeType::AddLearnerNode,
+            new_learner_peer(right_on_store1.get_store_id(), right_on_store1.get_id()),
+        )],
+    );
+    pd_client.must_remove_peer(
+        right.get_id(),
+        new_learner_peer(right_on_store1.get_store_id(), right_on_store1.get_id()),
+    );
     // The peer list of peer 2 is (1001, 1), (2, 2)
     pd_client.must_remove_peer(left.get_id(), new_learner_peer(2, 2));
 

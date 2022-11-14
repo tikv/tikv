@@ -9,15 +9,15 @@ use std::{
     time::Duration,
 };
 
-use kvproto::metapb::Region;
-use raft::StateRole;
+use kvproto::metapb::{PeerRole, Region};
+use raft::{eraftpb::ConfChangeType, StateRole};
 use raftstore::coprocessor::{
     BoxRegionChangeObserver, Coprocessor, ObserverContext, RegionChangeEvent, RegionChangeObserver,
     RegionChangeReason,
 };
 use test_raftstore::{new_node_cluster, Cluster, NodeCluster};
 use tikv_util::{
-    store::{find_peer, new_peer},
+    store::{find_peer, new_learner_peer, new_peer},
     HandyRwLock,
 };
 
@@ -170,10 +170,29 @@ fn test_region_change_observer_impl(mut cluster: Cluster<NodeCluster>) {
     assert_eq!(merge_update.0.get_peers().len(), 2);
     let r = merge_update.0.get_id();
 
-    pd_client.must_remove_peer(r, find_peer(&merge_update.0, 1).unwrap().clone());
+    // Since there are only two voters, change the voter into a learner firstly
+    // and then remove the learner.
+    pd_client.must_joint_confchange(
+        r,
+        vec![(
+            ConfChangeType::AddLearnerNode,
+            new_learner_peer(
+                find_peer(&merge_update.0, 1).unwrap().get_store_id(),
+                find_peer(&merge_update.0, 1).unwrap().get_id(),
+            ),
+        )],
+    );
+    let change_peer_update = receiver.recv().unwrap();
+    assert_eq!(
+        change_peer_update.1,
+        RegionChangeEvent::Update(RegionChangeReason::ChangePeer)
+    );
+    assert!(find_peer(&change_peer_update.0, 1).unwrap().get_role() == PeerRole::Learner);
 
+    pd_client.must_remove_peer(r, find_peer(&change_peer_update.0, 1).unwrap().clone());
     let remove_peer_update = receiver.recv().unwrap();
-    // After being removed from the region's peers, an update is triggered at first.
+    // After the learner being removed from the region's peers, an update is
+    // triggered at first.
     assert_eq!(
         remove_peer_update.1,
         RegionChangeEvent::Update(RegionChangeReason::ChangePeer)
