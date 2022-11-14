@@ -2366,16 +2366,6 @@ mod delta_entry_tests {
 
     #[test]
     fn test_mess() {
-        use pd_client::FeatureGate;
-
-        use crate::storage::txn::sched_pool::set_tls_feature_gate;
-
-        // Set version to 6.5.0 to enable last_change_ts.
-        // TODO: Remove this after TiKV version reaches 6.5
-        let feature_gate = FeatureGate::default();
-        feature_gate.set_version("6.5.0").unwrap();
-        set_tls_feature_gate(feature_gate);
-
         // TODO: non-pessimistic lock should be returned enven if its ts < from_ts.
         // (key, lock, [commit1, commit2, ...])
         // Values ends with 'L' will be made larger than `SHORT_VALUE_MAX_LEN` so it
@@ -2454,12 +2444,6 @@ mod delta_entry_tests {
                         let last_write = writes.last();
                         let max_commit_ts =
                             last_write.map(|(_, commit_ts, ..)| *commit_ts).unwrap_or(0);
-                        let (mut last_change_ts, mut versions_to_last_change) = (0,0);
-                        // TODO: Remove `*lock_type == LockType::Pessimistic` after calculating last_change_ts for prewrite.
-                        if *lock_type == LockType::Pessimistic &&
-                            let Some((_, commit_ts, WriteType::Put | WriteType::Delete, _)) = last_write {
-                            (last_change_ts, versions_to_last_change) = (*commit_ts, 1);
-                        }
                         let for_update_ts = std::cmp::max(*ts, max_commit_ts + 1);
 
                         if *ts <= to_ts {
@@ -2470,7 +2454,6 @@ mod delta_entry_tests {
                                 .for_update_ts(for_update_ts.into())
                                 .primary(key)
                                 .value(&value)
-                                .last_change(last_change_ts.into(), versions_to_last_change)
                                 .build_prewrite(*lock_type, is_short_value(&value));
                             entries_of_key.push(entry);
                         }
@@ -2610,10 +2593,12 @@ mod delta_entry_tests {
             // Do assertions one by one so that if it fails it won't print too long panic
             // message.
             for i in 0..std::cmp::max(actual.len(), expected.len()) {
+                // We don't care about last_change_ts here. Use a trick to ignore them.
+                let actual_erased = actual[i].erasing_last_change_ts();
                 assert_eq!(
-                    actual[i], expected[i],
+                    actual_erased, expected[i],
                     "item {} not match: expected {:?}, but got {:?}",
-                    i, &expected[i], &actual[i]
+                    i, &expected[i], &actual_erased
                 );
             }
         };

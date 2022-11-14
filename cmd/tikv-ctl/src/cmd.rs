@@ -558,7 +558,11 @@ pub enum Cmd {
         version: u64,
     },
     /// Control for Raft Engine
-    RaftEngineCtl { args: Vec<String> },
+    /// Usage: tikv-ctl raft-engine-ctl -- --help
+    RaftEngineCtl {
+        #[structopt(last = true)]
+        args: Vec<String>,
+    },
     #[structopt(external_subcommand)]
     External(Vec<String>),
 }

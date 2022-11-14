@@ -151,14 +151,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub(crate) fn maybe_renew_leader_lease(
         &mut self,
         ts: Timespec,
-        store_meta: &mut Arc<Mutex<StoreMeta<EK>>>,
+        store_meta: &Mutex<StoreMeta<EK>>,
         progress: Option<ReadProgress>,
     ) {
         // A nonleader peer should never has leader lease.
         let read_progress = if !should_renew_lease(
             self.is_leader(),
-            self.is_splitting(),
-            self.is_merging(),
+            self.proposal_control().is_splitting(),
+            self.proposal_control().is_merging(),
             self.has_force_leader(),
         ) {
             None
@@ -186,7 +186,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     // TODO: remove this block of code when snapshot is done; add the logic into
     // on_persist_snapshot.
-    pub(crate) fn add_reader_if_necessary(&mut self, store_meta: &mut Arc<Mutex<StoreMeta<EK>>>) {
+    pub(crate) fn add_reader_if_necessary(&mut self, store_meta: &Mutex<StoreMeta<EK>>) {
         let mut meta = store_meta.lock().unwrap();
         // TODO: remove this block of code when snapshot is done; add the logic into
         // on_persist_snapshot.
