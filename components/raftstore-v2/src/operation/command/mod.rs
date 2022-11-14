@@ -464,6 +464,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 AdminCmdType::InvalidAdmin => {
                     return Err(box_err!("invalid admin command type"));
                 }
+                AdminCmdType::BatchSwitchWitness => unimplemented!(),
             };
 
             self.push_admin_result(admin_result);
