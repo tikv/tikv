@@ -93,8 +93,9 @@ pub struct Lock {
     /// The number of versions that need skipping from the latest version to
     /// find the latest PUT/DELETE record
     pub versions_to_last_change: u64,
-    /// The source of this txn. It is used by ticdc, if the value is 0 ticdc will sync the kv change event
-    /// to downstream, if it is not 0, ticdc may ignore this change event. 
+    /// The source of this txn. It is used by ticdc, if the value is 0 ticdc
+    /// will sync the kv change event to downstream, if it is not 0, ticdc
+    /// may ignore this change event.
     pub txn_source: u8,
 }
 
@@ -779,7 +780,7 @@ mod tests {
                 16,
                 8.into(),
             )
-            .set_last_change(4.into(), 2),
+            .set_last_change(4.into(), 2)
             .set_txn_source(1),
         ];
         for (i, lock) in locks.drain(..).enumerate() {
