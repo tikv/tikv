@@ -344,9 +344,7 @@ impl Lock {
                     versions_to_last_change = number::decode_var_u64(&mut b)?;
                 }
                 TXN_SOURCE_PREFIX => {
-                    txn_source = b
-                        .read_u8()
-                        .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?
+                    txn_source = b.read_u8()?;
                 }
                 _ => {
                     // To support forward compatibility, all fields should be serialized in order
