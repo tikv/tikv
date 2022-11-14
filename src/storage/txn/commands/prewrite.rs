@@ -1076,6 +1076,42 @@ mod tests {
     }
 
     #[test]
+    fn test_prewrite_1pc_with_txn_source() {
+        use crate::storage::mvcc::tests::{must_get, must_get_commit_ts, must_unlocked};
+
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let cm = concurrency_manager::ConcurrencyManager::new(1.into());
+
+        let key = b"k";
+        let value = b"v";
+        let mutations = vec![Mutation::make_put(Key::from_raw(key), value.to_vec())];
+
+        let mut statistics = Statistics::default();
+        let mut ctx = Context::default();
+        ctx.set_txn_source(1);
+        let cmd = Prewrite::new(
+            mutations,
+            key.to_vec(),
+            TimeStamp::from(10),
+            0,
+            false,
+            0,
+            TimeStamp::default(),
+            TimeStamp::from(15),
+            None,
+            true,
+            AssertionLevel::Off,
+            ctx,
+        );
+        prewrite_command(&mut engine, cm, &mut statistics, cmd).unwrap();
+
+        must_unlocked(&mut engine, key);
+        must_get(&mut engine, key, 12, value);
+        must_get_commit_ts(&mut engine, key, 10, 11);
+        must_get_txn_source(&mut engine, key, 11, 1);
+    }
+
+    #[test]
     fn test_prewrite_1pc() {
         use crate::storage::mvcc::tests::{must_get, must_get_commit_ts, must_unlocked};
 
