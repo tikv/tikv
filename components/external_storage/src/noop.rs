@@ -1,9 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::marker::Unpin;
-
 use async_trait::async_trait;
-use futures_io::AsyncRead;
 use tokio::io;
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 

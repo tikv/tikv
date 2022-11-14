@@ -1630,6 +1630,7 @@ where
                 self.exec_flashback(ctx, request)
             }
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
+            _ => unreachable!(),
         }?;
         response.set_cmd_type(cmd_type);
 
