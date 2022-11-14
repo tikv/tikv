@@ -1,7 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::max;
-use std::time::Duration;
+use std::{cmp::max, time::Duration};
 
 use engine_traits::{RaftEngine, WriteBatch, WriteBatchExt};
 use kvproto::{metapb, raft_serverpb::PeerState};
@@ -12,9 +11,9 @@ use raftstore::store::{
 use test_raftstore::*;
 use tikv_alloc::{activate_prof, deactivate_prof, dump_prof};
 use tikv_util::{
-    time::Instant,
     config::GIB,
     sys::{cpu_time::ProcessStat, get_global_memory_usage, record_global_memory_usage},
+    time::Instant,
 };
 
 /// Create a new cluster with specified number of nodes and regions.
@@ -53,12 +52,11 @@ fn new_cluster_with_many_regions(node_count: usize, region_count: u64) -> Cluste
         engines.sync_kv().unwrap();
         engines.raft.consume(&mut raft_wb, true).unwrap();
     }
-    run_all_nodes(&mut cluster, node_count);
     cluster
 }
 
 fn run_all_nodes(cluster: &mut Cluster<NodeCluster>, node_count: usize) {
-    for i in 1..node_count+1 {
+    for i in 1..node_count + 1 {
         cluster.run_node(i as u64).unwrap();
     }
 }
@@ -74,17 +72,50 @@ fn print_memory_usage(message: &str) {
 }
 
 fn test_memory_usage_with_region_count(node_count: u64, region_count: u64) {
-    let cluster = new_cluster_with_many_regions(node_count as usize, region_count);
+    let mut cluster = new_cluster_with_many_regions(node_count as usize, region_count);
+    run_all_nodes(&mut cluster, node_count as usize);
 
     println!("wait for all regions to report heartbeat");
     let timer = Instant::now();
-    while cluster.pd_client.get_regions_number() < region_count as usize{
+    while cluster.pd_client.get_regions_number() < region_count as usize {
         std::thread::sleep(std::time::Duration::from_millis(100));
         if timer.saturating_elapsed() > Duration::from_secs(max(5, region_count / 200)) {
             panic!("wait for all regions to report heartbeat timeout");
         }
     }
     print_memory_usage(format!("memory usage with {} regions", region_count).as_str());
+}
+
+/// Test the store start time of a cluster with many regions.
+/// One test shows that it takes 8.5s to start with 10k regions,
+/// and it takes 48s when the region count is 50k.
+///
+/// Note that the total start time of a tikv instance mainly consists of
+/// 1. the time to start the storage (raft-engine + rocksdb)
+/// 2. the time to start the raftstore
+fn test_store_start_time_with_region_count(region_count: u64) {
+    let node_count = 3;
+    let mut cluster = new_cluster_with_many_regions(node_count, region_count);
+    let now = Instant::now();
+    run_all_nodes(&mut cluster, node_count as usize);
+    println!(
+        "It takes {} seconds to start {} nodes with {} regions",
+        now.saturating_elapsed_secs(),
+        node_count,
+        region_count
+    );
+}
+
+#[ignore]
+#[test]
+fn test_store_start_time_with_10k() {
+    test_start_time_with_region_count(10_000);
+}
+
+#[ignore]
+#[test]
+fn test_store_start_time_with_50k() {
+    test_start_time_with_region_count(50_000);
 }
 
 #[ignore]
@@ -116,10 +147,6 @@ fn test_memory_usage_with_30k_regions() {
 fn test_memory_usage_with_50k_regions() {
     test_memory_usage_with_region_count(1, 50_000);
 }
-
-
-
-
 
 //     let mut stats = ProcessStat::cur_proc_stat().unwrap();
 //     activate_prof().unwrap();
