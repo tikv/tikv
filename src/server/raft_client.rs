@@ -35,11 +35,7 @@ use kvproto::{
 };
 use protobuf::Message;
 use raft::SnapshotStatus;
-use raftstore::{
-    errors::DiscardReason,
-    router::RaftStoreRouter,
-    store::snap::{SNAPSHOT_VERSION, TABLET_SNAPSHOT_VERSION},
-};
+use raftstore::{errors::DiscardReason, router::RaftStoreRouter};
 use security::SecurityManager;
 use tikv_util::{
     config::{Tracker, VersionTrack},
@@ -432,7 +428,6 @@ struct AsyncRaftSender<R, M, B, E> {
     buffer: B,
     router: R,
     snap_scheduler: Scheduler<SnapTask>,
-    tablet_scheduler: Scheduler<SnapTask>,
     addr: String,
     flush_timeout: Option<Delay>,
     _engine: PhantomData<E>,
@@ -458,7 +453,7 @@ where
         }
     }
 
-    fn send_snapshot_sock(&self, msg: RaftMessage, version: u64) {
+    fn send_snapshot_sock(&self, msg: RaftMessage) {
         let rep = self.new_snapshot_reporter(&msg);
         let cb = Box::new(move |res: Result<_, _>| {
             if res.is_err() {
@@ -467,18 +462,11 @@ where
                 rep.report(SnapshotStatus::Finish);
             }
         });
-
-        let task = SnapTask::Send {
+        if let Err(e) = self.snap_scheduler.schedule(SnapTask::Send {
             addr: self.addr.clone(),
             msg,
             cb,
-        };
-        let result = match version {
-            SNAPSHOT_VERSION => self.snap_scheduler.schedule(task),
-            TABLET_SNAPSHOT_VERSION => self.tablet_scheduler.schedule(task),
-            other => panic!("unknown version:{}", other),
-        };
-        if let Err(e) = result {
+        }) {
             if let SnapTask::Send { cb, .. } = e.into_inner() {
                 error!(
                     "channel is unavailable, failed to schedule snapshot";
@@ -500,10 +488,9 @@ where
                 snapshot
                     .merge_from_bytes(msg.get_message().get_snapshot().get_data())
                     .unwrap();
-                let version = snapshot.get_version();
                 // Witness's snapshot must be empty, no need to send snapshot files
                 if !snapshot.get_meta().get_for_witness() {
-                    self.send_snapshot_sock(msg, version);
+                    self.send_snapshot_sock(msg);
                     continue;
                 }
             }
@@ -626,7 +613,6 @@ pub struct ConnectionBuilder<S, R> {
     resolver: S,
     router: R,
     snap_scheduler: Scheduler<SnapTask>,
-    tablet_scheduler: Scheduler<SnapTask>,
     loads: Arc<ThreadLoadPool>,
 }
 
@@ -638,7 +624,6 @@ impl<S, R> ConnectionBuilder<S, R> {
         resolver: S,
         router: R,
         snap_scheduler: Scheduler<SnapTask>,
-        tablet_scheduler: Scheduler<SnapTask>,
         loads: Arc<ThreadLoadPool>,
     ) -> ConnectionBuilder<S, R> {
         ConnectionBuilder {
@@ -648,7 +633,6 @@ impl<S, R> ConnectionBuilder<S, R> {
             resolver,
             router,
             snap_scheduler,
-            tablet_scheduler,
             loads,
         }
     }
@@ -749,7 +733,6 @@ where
                 buffer: BatchMessageBuffer::new(&self.builder.cfg, self.builder.loads.clone()),
                 router: self.builder.router.clone(),
                 snap_scheduler: self.builder.snap_scheduler.clone(),
-                tablet_scheduler: self.builder.tablet_scheduler.clone(),
                 addr,
                 flush_timeout: None,
                 _engine: PhantomData::<E>,
@@ -775,7 +758,6 @@ where
                 buffer: MessageBuffer::new(),
                 router: self.builder.router.clone(),
                 snap_scheduler: self.builder.snap_scheduler.clone(),
-                tablet_scheduler: self.builder.tablet_scheduler.clone(),
                 addr,
                 flush_timeout: None,
                 _engine: PhantomData::<E>,

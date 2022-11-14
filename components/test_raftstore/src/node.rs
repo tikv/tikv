@@ -48,7 +48,7 @@ use super::*;
 use crate::Config;
 
 pub struct ChannelTransportCore {
-    snap_paths: HashMap<u64, (SnapManager, TempDir, TabletSnapManager)>,
+    snap_paths: HashMap<u64, (SnapManager, TempDir)>,
     routers: HashMap<u64, SimulateTransport<ServerRaftStoreRouter<RocksEngine, RaftTestEngine>>>,
 }
 
@@ -154,7 +154,6 @@ pub struct NodeCluster {
     pd_client: Arc<TestPdClient>,
     nodes: HashMap<u64, Node<TestPdClient, RocksEngine, RaftTestEngine>>,
     snap_mgrs: HashMap<u64, SnapManager>,
-    tablet_snap_mgrs: HashMap<u64, TabletSnapManager>,
     cfg_controller: Option<ConfigController>,
     simulate_trans: HashMap<u64, SimulateChannelTransport>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
@@ -169,7 +168,6 @@ impl NodeCluster {
             pd_client,
             nodes: HashMap::default(),
             snap_mgrs: HashMap::default(),
-            tablet_snap_mgrs: HashMap::default(),
             cfg_controller: None,
             simulate_trans: HashMap::default(),
             concurrency_managers: HashMap::default(),
@@ -257,7 +255,7 @@ impl Simulator for NodeCluster {
             None,
         );
 
-        let (snap_mgr, snap_mgr_path, tablet_snap_mgr) = if node_id == 0
+        let (snap_mgr, snap_mgr_path) = if node_id == 0
             || !self
                 .trans
                 .core
@@ -274,18 +272,14 @@ impl Simulator for NodeCluster {
                 .max_per_file_size(cfg.raft_store.max_snapshot_file_raw_size.0)
                 .enable_multi_snapshot_files(true)
                 .build(tmp.path().to_str().unwrap());
-            let tablet_snap_mgr = TabletSnapManager::new(tmp.path().to_str().unwrap());
-            tablet_snap_mgr.init().unwrap();
-            (snap_mgr, Some(tmp), tablet_snap_mgr)
+            (snap_mgr, Some(tmp))
         } else {
             let trans = self.trans.core.lock().unwrap();
-            let &(ref snap_mgr, _, ref tablet_snap_mgr) = &trans.snap_paths[&node_id];
-            (snap_mgr.clone(), None, tablet_snap_mgr.clone())
+            let &(ref snap_mgr, _) = &trans.snap_paths[&node_id];
+            (snap_mgr.clone(), None)
         };
 
         self.snap_mgrs.insert(node_id, snap_mgr.clone());
-        self.tablet_snap_mgrs
-            .insert(node_id, tablet_snap_mgr.clone());
 
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
@@ -373,7 +367,7 @@ impl Simulator for NodeCluster {
                 .lock()
                 .unwrap()
                 .snap_paths
-                .insert(node_id, (snap_mgr, tmp, tablet_snap_mgr));
+                .insert(node_id, (snap_mgr, tmp));
         }
 
         let router = ServerRaftStoreRouter::new(router, local_reader);
@@ -401,10 +395,6 @@ impl Simulator for NodeCluster {
 
     fn get_snap_mgr(&self, node_id: u64) -> &SnapManager {
         self.snap_mgrs.get(&node_id).unwrap()
-    }
-
-    fn get_tablet_snap_mgr(&self, node_id: u64) -> &TabletSnapManager {
-        self.tablet_snap_mgrs.get(&node_id).unwrap()
     }
 
     fn stop_node(&mut self, node_id: u64) {

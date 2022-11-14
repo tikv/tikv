@@ -78,7 +78,6 @@ use raftstore::{
         memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
         AutoSplitController, CheckLeaderRunner, GlobalReplicationState, LocalReader, SnapManager,
         SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
-        TabletSnapManager,
     },
     RaftRouterCompactedEventSender,
 };
@@ -811,16 +810,6 @@ where
             )
             .build(snap_path);
 
-        // Create tablet snapshot manager, server.
-        let tablet_snap_path = self
-            .store_path
-            .join(Path::new("tablets_snap"))
-            .to_str()
-            .unwrap()
-            .to_owned();
-        let tablet_snap_mgr = TabletSnapManager::new(tablet_snap_path);
-        tablet_snap_mgr.init().unwrap();
-
         // Create coprocessor endpoint.
         let cop_read_pool_handle = if self.config.readpool.coprocessor.use_unified_pool() {
             unified_read_pool.as_ref().unwrap().handle()
@@ -928,7 +917,6 @@ where
             self.router.clone(),
             self.resolver.clone(),
             snap_mgr.clone(),
-            tablet_snap_mgr.clone(),
             gc_worker.clone(),
             check_leader_scheduler,
             self.env.clone(),
@@ -1056,7 +1044,6 @@ where
             engines.engines.clone(),
             server.transport(),
             snap_mgr,
-            tablet_snap_mgr,
             pd_worker,
             engines.store_meta.clone(),
             self.coprocessor_host.clone().unwrap(),

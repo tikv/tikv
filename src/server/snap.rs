@@ -60,7 +60,6 @@ pub enum Task {
         msg: RaftMessage,
         cb: Callback,
     },
-
     RefreshConfigEvent,
     Validate(Box<dyn FnOnce(&Config) + Send>),
 }

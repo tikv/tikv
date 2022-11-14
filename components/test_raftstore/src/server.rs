@@ -39,7 +39,6 @@ use raftstore::{
         msg::RaftCmdExtraOpts,
         AutoSplitController, Callback, CheckLeaderRunner, LocalReader, RegionSnapshot, SnapManager,
         SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
-        TabletSnapManager,
     },
     Result,
 };
@@ -152,7 +151,6 @@ pub struct ServerCluster {
     pub txn_extra_schedulers: HashMap<u64, Arc<dyn TxnExtraScheduler>>,
     snap_paths: HashMap<u64, TempDir>,
     snap_mgrs: HashMap<u64, SnapManager>,
-    tablet_snap_mgrs: HashMap<u64, TabletSnapManager>,
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient<AddressMap, RaftStoreBlackHole, RocksEngine>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
@@ -173,7 +171,6 @@ impl ServerCluster {
         // We don't actually need to handle snapshot message, just create a dead worker
         // to make it compile.
         let worker = LazyWorker::new("snap-worker");
-        let tablet_worker = LazyWorker::new("tablet-worker");
         let conn_builder = ConnectionBuilder::new(
             env.clone(),
             Arc::default(),
@@ -181,7 +178,6 @@ impl ServerCluster {
             map.clone(),
             RaftStoreBlackHole,
             worker.scheduler(),
-            tablet_worker.scheduler(),
             Arc::new(ThreadLoadPool::with_threshold(usize::MAX)),
         );
         let raft_client = RaftClient::new(conn_builder);
@@ -195,7 +191,6 @@ impl ServerCluster {
             importers: HashMap::default(),
             snap_paths: HashMap::default(),
             snap_mgrs: HashMap::default(),
-            tablet_snap_mgrs: HashMap::default(),
             pending_services: HashMap::default(),
             coprocessor_hooks: HashMap::default(),
             health_services: HashMap::default(),
@@ -461,14 +456,8 @@ impl ServerCluster {
             .encryption_key_manager(key_manager)
             .max_per_file_size(cfg.raft_store.max_snapshot_file_raw_size.0)
             .enable_multi_snapshot_files(true)
-            .build(tmp_str.clone());
+            .build(tmp_str);
         self.snap_mgrs.insert(node_id, snap_mgr.clone());
-
-        let tablet_snap_mgr = TabletSnapManager::new(tmp_str);
-        tablet_snap_mgr.init().unwrap();
-        self.tablet_snap_mgrs
-            .insert(node_id, tablet_snap_mgr.clone());
-
         let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         let cop_read_pool = ReadPool::from(coprocessor::readpool_impl::build_read_pool_for_test(
@@ -538,7 +527,6 @@ impl ServerCluster {
                 sim_router.clone(),
                 resolver.clone(),
                 snap_mgr.clone(),
-                tablet_snap_mgr.clone(),
                 gc_worker.clone(),
                 check_leader_scheduler.clone(),
                 self.env.clone(),
@@ -689,10 +677,6 @@ impl Simulator for ServerCluster {
 
     fn get_snap_mgr(&self, node_id: u64) -> &SnapManager {
         self.snap_mgrs.get(&node_id).unwrap()
-    }
-
-    fn get_tablet_snap_mgr(&self, node_id: u64) -> &TabletSnapManager {
-        self.tablet_snap_mgrs.get(&node_id).unwrap()
     }
 
     fn stop_node(&mut self, node_id: u64) {

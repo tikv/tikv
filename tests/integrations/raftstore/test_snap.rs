@@ -2,7 +2,6 @@
 
 use std::{
     fs,
-    io::Write,
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -17,17 +16,13 @@ use file_system::{IoOp, IoType};
 use futures::executor::block_on;
 use grpcio::Environment;
 use kvproto::raft_serverpb::*;
-use protobuf::Message as pMessage;
 use raft::eraftpb::{Message, MessageType, Snapshot};
-use raftstore::{
-    store::{snap::TABLET_SNAPSHOT_VERSION, *},
-    Result,
-};
+use raftstore::{store::*, Result};
 use rand::Rng;
 use security::SecurityManager;
 use test_raftstore::*;
-use tikv::server::{snap::send_snap, tablet_snap::send_snap as tablet_send};
-use tikv_util::{config::*, store::new_peer, time::Instant, HandyRwLock};
+use tikv::server::snap::send_snap;
+use tikv_util::{config::*, time::Instant, HandyRwLock};
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>, max_snapshot_file_size: u64) {
     cluster.cfg.rocksdb.titan.enabled = true;
@@ -528,49 +523,6 @@ fn test_inspected_snapshot() {
     assert_ne!(stats.fetch(IoType::LoadBalance, IoOp::Write), 0);
 }
 
-#[test]
-fn test_send_tablet_snapshot() {
-    let mut cluster = new_server_cluster(0, 3);
-    let (term, idx) = (1, 5);
-    cluster.cfg.server.snap_max_write_bytes_per_sec = ReadableSize(5 * 1024 * 1024);
-    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration(Duration::from_secs(100));
-    let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_operator();
-    let r1 = cluster.run_conf_change();
-    cluster.must_put(b"key-0000", b"value");
-    let r = cluster.get_region(b"key-000");
-
-    let snap_mgr = cluster.get_tablet_snap_mgr(1);
-    let key = TabletSnapKey::new(r1, 10, term, idx);
-    let mut snapshot = Snapshot::default();
-    let final_send_path = snap_mgr.get_tablet_checkpointer_path(&key);
-    fs::create_dir_all(final_send_path.as_path()).unwrap();
-    for i in 0..2 {
-        let mut f = fs::File::create(final_send_path.join(i.to_string())).unwrap();
-        f.write(format!("snapshot-{}", i).as_bytes()).unwrap();
-        f.sync_data().unwrap();
-    }
-
-    let mut snap_data = RaftSnapshotData::default();
-    snap_data.set_region(r);
-    snap_data.mut_meta().set_for_balance(true);
-    snap_data.set_version(TABLET_SNAPSHOT_VERSION);
-    let v = snap_data.write_to_bytes().unwrap();
-    snapshot.set_data(v.into());
-    snapshot.mut_metadata().term = term;
-    snapshot.mut_metadata().index = idx;
-
-    let s1_addr = cluster.sim.rl().get_addr(2);
-    let sec_mgr = cluster.sim.rl().security_mgr.clone();
-    if let Err(e) = send_tablet_files(snap_mgr, sec_mgr, &s1_addr, r1, snapshot) {
-        info!("send tablet snapshot fail: {}", e);
-    }
-
-    let recv_snap_mgr = cluster.get_tablet_snap_mgr(2);
-    let final_recv_path = recv_snap_mgr.get_final_name_for_recv(&key);
-    let dir = fs::read_dir(final_recv_path);
-    assert_eq!(2, dir.unwrap().count());
-}
 // Test snapshot generating and receiving can share one I/O limiter fairly.
 // 1. Bootstrap a 1 Region, 1 replica cluster;
 // 2. Add a peer on store 2 for the Region, so that there is a snapshot received
@@ -670,30 +622,6 @@ fn test_gen_during_heavy_recv() {
     assert_eq!(cluster.get_snap_mgr(2).stats().receiving_count, 0);
     drop(cluster);
     let _ = th.join();
-}
-
-fn send_tablet_files(
-    mgr: TabletSnapManager,
-    security_mgr: Arc<SecurityManager>,
-    addr: &str,
-    region_id: u64,
-    snap: Snapshot,
-) -> std::result::Result<(), String> {
-    // Construct a raft message.
-    let mut msg = RaftMessage::default();
-    msg.region_id = region_id;
-    msg.mut_message().set_snapshot(snap);
-    msg.set_to_peer(new_peer(10, 10));
-
-    let env = Arc::new(Environment::new(1));
-    let cfg = tikv::server::Config::default();
-    block_on(async {
-        tablet_send(env, mgr, security_mgr, &cfg, addr, msg)
-            .unwrap()
-            .await
-            .map(|_| ())
-            .map_err(|e| format!("{:?}", e))
-    })
 }
 
 fn send_a_large_snapshot(

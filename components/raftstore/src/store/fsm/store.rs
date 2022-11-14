@@ -102,7 +102,6 @@ use crate::{
         },
         Callback, CasualMessage, GlobalReplicationState, InspectedRaftMessage, MergeResultKind,
         PdTask, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapManager, StoreMsg, StoreTick,
-        TabletSnapManager,
     },
     Error, Result,
 };
@@ -1466,7 +1465,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         trans: T,
         pd_client: Arc<C>,
         mgr: SnapManager,
-        tablet_mgr: TabletSnapManager,
         pd_worker: LazyWorker<PdTask<EK, ER>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         mut coprocessor_host: CoprocessorHost<EK>,
@@ -1523,7 +1521,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             refresh_config_worker: LazyWorker::new("refreash-config-worker"),
         };
         mgr.init()?;
-        tablet_mgr.init()?;
         let region_runner = RegionRunner::new(
             engines.kv.clone(),
             mgr.clone(),

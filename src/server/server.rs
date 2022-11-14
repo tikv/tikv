@@ -15,7 +15,7 @@ use grpcio_health::{create_health, HealthService, ServingStatus};
 use kvproto::tikvpb::*;
 use raftstore::{
     router::RaftStoreRouter,
-    store::{CheckLeaderTask, SnapManager, TabletSnapManager},
+    store::{CheckLeaderTask, SnapManager},
 };
 use security::SecurityManager;
 use tikv_util::{
@@ -35,7 +35,6 @@ use super::{
     resolve::StoreAddrResolver,
     service::*,
     snap::{Runner as SnapHandler, Task as SnapTask},
-    tablet_snap::TabletRunner as TabletHandler,
     transport::ServerTransport,
     Config, Error, Result,
 };
@@ -73,10 +72,8 @@ pub struct Server<T: RaftStoreRouter<E::Local> + 'static, S: StoreAddrResolver +
     raft_router: T,
     // For sending/receiving snapshots.
     snap_mgr: SnapManager,
-    // for sending/receiving tablet snapshots,
-    tablet_snap_mgr: TabletSnapManager,
     snap_worker: LazyWorker<SnapTask>,
-    tablet_worker: LazyWorker<SnapTask>,
+
     // Currently load statistics is done in the thread.
     stats_pool: Option<Runtime>,
     grpc_thread_load: Arc<ThreadLoadPool>,
@@ -100,7 +97,6 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
         raft_router: T,
         resolver: S,
         snap_mgr: SnapManager,
-        tablet_snap_mgr: TabletSnapManager,
         gc_worker: GcWorker<E, T>,
         check_leader_scheduler: Scheduler<CheckLeaderTask>,
         env: Arc<Environment>,
@@ -129,9 +125,6 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
         let snap_worker = Worker::new("snap-handler");
         let lazy_worker = snap_worker.lazy_build("snap-handler");
 
-        let tablet_worker = Worker::new("tablet-handler");
-        let lazy_tablet_worker = tablet_worker.lazy_build("tablet-handler");
-
         let proxy = Proxy::new(security_mgr.clone(), &env, Arc::new(cfg.value().clone()));
         let kv_service = KvService::new(
             store_id,
@@ -141,7 +134,6 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
             copr_v2,
             raft_router.clone(),
             lazy_worker.scheduler(),
-            lazy_tablet_worker.scheduler(),
             check_leader_scheduler,
             Arc::clone(&grpc_thread_load),
             cfg.value().enable_request_batch,
@@ -180,7 +172,6 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
             resolver,
             raft_router.clone(),
             lazy_worker.scheduler(),
-            lazy_tablet_worker.scheduler(),
             grpc_thread_load.clone(),
         );
         let raft_client = RaftClient::new(conn_builder);
@@ -196,9 +187,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
             trans,
             raft_router,
             snap_mgr,
-            tablet_snap_mgr,
             snap_worker: lazy_worker,
-            tablet_worker: lazy_tablet_worker,
             stats_pool,
             grpc_thread_load,
             yatp_read_pool,
@@ -269,20 +258,11 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
             Arc::clone(&self.env),
             self.snap_mgr.clone(),
             self.raft_router.clone(),
-            security_mgr.clone(),
-            Arc::clone(&cfg),
-        );
-
-        let tablet_snap_runner = TabletHandler::new(
-            Arc::clone(&self.env),
-            self.tablet_snap_mgr.clone(),
-            self.raft_router.clone(),
             security_mgr,
             Arc::clone(&cfg),
         );
         self.snap_worker.start(snap_runner);
-        // todo: need to init gen tablet snap handler if necessary
-        self.tablet_worker.start(tablet_snap_runner);
+
         let mut grpc_server = self.builder_or_server.take().unwrap().right().unwrap();
         info!("listening on addr"; "addr" => &self.local_addr);
         grpc_server.start();
@@ -582,7 +562,6 @@ mod tests {
                 addr: Arc::clone(&addr),
             },
             SnapManager::new(""),
-            TabletSnapManager::new(""),
             gc_worker,
             check_leader_scheduler,
             env,

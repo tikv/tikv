@@ -184,7 +184,7 @@ pub fn send_snap(
 
     let channel = security_mgr.connect(cb, addr);
     let client = TikvClient::new(channel);
-    let (sink, receiver) = client.tablet_snapshot()?;
+    let (sink, receiver) = client.snapshot()?;
     let send_task = async move {
         let sink = sink.sink_map_err(Error::from);
         let total_size = send_snap_files(&mgr, sink, msg, key.clone()).await?;

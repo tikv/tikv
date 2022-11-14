@@ -67,7 +67,6 @@ where
     let cfg = Arc::new(VersionTrack::new(config));
     let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let worker = LazyWorker::new("test-raftclient");
-    let tablet_worker = LazyWorker::new("test-tablet-raftclient");
     let loads = Arc::new(ThreadLoadPool::with_threshold(1000));
     let builder = ConnectionBuilder::new(
         env,
@@ -76,7 +75,6 @@ where
         resolver,
         router,
         worker.scheduler(),
-        tablet_worker.scheduler(),
         loads,
     );
     RaftClient::new(builder)
