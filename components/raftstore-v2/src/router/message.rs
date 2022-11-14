@@ -3,8 +3,10 @@
 // #[PerformanceCriticalPath]
 use std::fmt;
 
+use engine_traits::Snapshot;
 use kvproto::{raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
-use raftstore::store::{metrics::RaftEventDurationType, FetchedLogs};
+use raft::eraftpb::Snapshot as RaftSnapshot;
+use raftstore::store::{metrics::RaftEventDurationType, FetchedLogs, GenSnapRes};
 use tikv_util::time::Instant;
 
 use super::{
@@ -123,7 +125,8 @@ pub enum PeerMsg {
     Tick(PeerTick),
     /// Result of applying committed entries. The message can't be lost.
     ApplyRes(ApplyRes),
-    FetchedLogs(FetchedLogs),
+    LogsFetched(FetchedLogs),
+    SnapshotGenerated(GenSnapRes),
     /// Start the FSM.
     Start,
     /// A message only used to notify a peer.
@@ -134,6 +137,9 @@ pub enum PeerMsg {
         ready_number: u64,
     },
     QueryDebugInfo(DebugInfoChannel),
+    /// A message that used to check if a flush is happened.
+    #[cfg(feature = "testexport")]
+    WaitFlush(super::FlushChannel),
 }
 
 impl PeerMsg {
@@ -170,8 +176,11 @@ impl fmt::Debug for PeerMsg {
                 "Persisted peer_id {}, ready_number {}",
                 peer_id, ready_number
             ),
-            PeerMsg::FetchedLogs(fetched) => write!(fmt, "FetchedLogs {:?}", fetched),
+            PeerMsg::LogsFetched(fetched) => write!(fmt, "LogsFetched {:?}", fetched),
+            PeerMsg::SnapshotGenerated(_) => write!(fmt, "SnapshotGenerated"),
             PeerMsg::QueryDebugInfo(_) => write!(fmt, "QueryDebugInfo"),
+            #[cfg(feature = "testexport")]
+            PeerMsg::WaitFlush(_) => write!(fmt, "FlushMessages"),
         }
     }
 }

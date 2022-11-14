@@ -18,7 +18,7 @@ use time::Timespec;
 use super::{storage::Storage, Apply};
 use crate::{
     fsm::{ApplyFsm, ApplyScheduler},
-    operation::{AsyncWriter, DestroyProgress, SimpleWriteEncoder},
+    operation::{AsyncWriter, DestroyProgress, ProposalControl, SimpleWriteEncoder},
     router::{CmdResChannel, QueryResChannel},
     tablet::CachedTablet,
     Result,
@@ -28,7 +28,7 @@ const REGION_READ_PROGRESS_CAP: usize = 128;
 
 /// A peer that delegates commands between state machine and raft.
 pub struct Peer<EK: KvEngine, ER: RaftEngine> {
-    raft_group: RawNode<Storage<ER>>,
+    raft_group: RawNode<Storage<EK, ER>>,
     tablet: CachedTablet<EK>,
     /// We use a cache for looking up peers. Not all peers exist in region's
     /// peer list, for example, an isolated peer may need to send/receive
@@ -58,6 +58,9 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// Transaction extensions related to this peer.
     txn_ext: Arc<TxnExt>,
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+
+    /// Check whether this proposal can be proposed based on its epoch.
+    proposal_control: ProposalControl,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -67,7 +70,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn new(
         cfg: &Config,
         tablet_factory: &dyn TabletFactory<EK>,
-        storage: Storage<ER>,
+        storage: Storage<EK, ER>,
     ) -> Result<Self> {
         let logger = storage.logger().clone();
 
@@ -128,12 +131,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             destroy_progress: DestroyProgress::None,
             raft_group,
             logger,
-            pending_reads: ReadIndexQueue::new(tag.clone()),
+            pending_reads: ReadIndexQueue::new(tag),
             read_progress: Arc::new(RegionReadProgress::new(
                 &region,
                 applied_index,
                 REGION_READ_PROGRESS_CAP,
-                tag,
+                peer_id,
             )),
             leader_lease: Lease::new(
                 cfg.raft_store_max_leader_lease(),
@@ -142,6 +145,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             region_buckets: None,
             txn_ext: Arc::default(),
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
+            proposal_control: ProposalControl::new(0),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -153,6 +157,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             peer.raft_group.campaign()?;
             peer.set_has_ready();
         }
+        let term = peer.term();
+        peer.proposal_control.maybe_update_term(term);
 
         Ok(peer)
     }
@@ -178,13 +184,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn storage(&self) -> &Storage<ER> {
+    pub fn storage(&self) -> &Storage<EK, ER> {
         self.raft_group.store()
     }
 
     #[inline]
     pub fn read_progress(&self) -> &Arc<RegionReadProgress> {
         &self.read_progress
+    }
+
+    #[inline]
+    pub fn read_progress_mut(&mut self) -> &mut Arc<RegionReadProgress> {
+        &mut self.read_progress
     }
 
     #[inline]
@@ -198,7 +209,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn storage_mut(&mut self) -> &mut Storage<ER> {
+    pub fn storage_mut(&mut self) -> &mut Storage<EK, ER> {
         self.raft_group.mut_store()
     }
 
@@ -213,12 +224,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn entry_storage(&self) -> &EntryStorage<ER> {
+    pub fn entry_storage(&self) -> &EntryStorage<EK, ER> {
         self.raft_group.store().entry_storage()
     }
 
     #[inline]
-    pub fn entry_storage_mut(&mut self) -> &mut EntryStorage<ER> {
+    pub fn entry_storage_mut(&mut self) -> &mut EntryStorage<EK, ER> {
         self.raft_group.mut_store().entry_storage_mut()
     }
 
@@ -233,12 +244,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn raft_group(&self) -> &RawNode<Storage<ER>> {
+    pub fn raft_group(&self) -> &RawNode<Storage<EK, ER>> {
         &self.raft_group
     }
 
     #[inline]
-    pub fn raft_group_mut(&mut self) -> &mut RawNode<Storage<ER>> {
+    pub fn raft_group_mut(&mut self) -> &mut RawNode<Storage<EK, ER>> {
         &mut self.raft_group
     }
 
@@ -320,18 +331,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     #[inline]
     // TODO
-    pub fn is_splitting(&self) -> bool {
-        false
-    }
-
-    #[inline]
-    // TODO
-    pub fn is_merging(&self) -> bool {
-        false
-    }
-
-    #[inline]
-    // TODO
     pub fn has_force_leader(&self) -> bool {
         false
     }
@@ -382,6 +381,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
+    pub fn proposals(&self) -> &ProposalQueue<Vec<CmdResChannel>> {
+        &self.proposals
+    }
+
     pub fn apply_scheduler(&self) -> &ApplyScheduler {
         self.apply_scheduler.as_ref().unwrap()
     }
@@ -404,5 +407,23 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.read_progress().clone(),
             self.region_buckets.as_ref().map(|b| b.meta.clone()),
         )
+    }
+
+    #[inline]
+    pub fn proposal_control_mut(&mut self) -> &mut ProposalControl {
+        &mut self.proposal_control
+    }
+
+    #[inline]
+    pub fn proposal_control(&self) -> &ProposalControl {
+        &self.proposal_control
+    }
+
+    #[inline]
+    pub fn proposal_control_advance_apply(&mut self, apply_index: u64) {
+        let region = self.raft_group.store().region();
+        let term = self.term();
+        self.proposal_control
+            .advance_apply(apply_index, term, region);
     }
 }

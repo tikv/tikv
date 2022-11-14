@@ -221,6 +221,13 @@ impl<Res> BaseSubscriber<Res> {
     pub async fn result(self) -> Option<Res> {
         WaitResult { core: &self.core }.await
     }
+
+    /// Test if the result is ready without any polling.
+    #[inline]
+    pub fn has_result(&self) -> bool {
+        let e = self.core.event.load(Ordering::Relaxed);
+        check_bit(e, fired_bit_of(PAYLOAD_EVENT)).is_some()
+    }
 }
 
 unsafe impl<Res: Send> Send for BaseSubscriber<Res> {}
@@ -416,6 +423,11 @@ impl fmt::Debug for QueryResChannel {
 
 pub type DebugInfoChannel = BaseChannel<RegionMeta>;
 pub type DebugInfoSubscriber = BaseSubscriber<RegionMeta>;
+
+#[cfg(feature = "testexport")]
+pub type FlushChannel = BaseChannel<()>;
+#[cfg(feature = "testexport")]
+pub type FlushSubscriber = BaseSubscriber<()>;
 
 #[cfg(test)]
 mod tests {
