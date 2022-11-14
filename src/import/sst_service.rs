@@ -1210,4 +1210,67 @@ mod test {
             run_case(&case);
         }
     }
+
+    #[test]
+    fn test_request_collector_with_write_cf() {
+        let mut request_collector = RequestCollector::from_cf(CF_WRITE);
+        assert_eq!(request_collector.is_empty(), true);
+        let reqs = vec![
+            write_req(b"foo", WriteType::Put, 40, 39),
+            write_req(b"aar", WriteType::Put, 38, 37),
+            write_req(b"foo", WriteType::Put, 34, 31),
+            write_req(b"zzz", WriteType::Put, 41, 40),
+        ];
+        let reqs_result = vec![
+            write_req(b"aar", WriteType::Put, 38, 37),
+            write_req(b"foo", WriteType::Put, 40, 39),
+            write_req(b"zzz", WriteType::Put, 41, 40),
+        ];
+
+        for req in reqs {
+            request_collector.accept(req);
+        }
+        assert_eq!(request_collector.is_empty(), false);
+        let mut reqs = request_collector.drain();
+        reqs.sort_by(|r1, r2| {
+            let k1 = key_from_request(r1);
+            let k2 = key_from_request(r2);
+            k1.cmp(k2)
+        });
+        assert_eq!(reqs, reqs_result);
+        assert_eq!(request_collector.is_empty(), true);
+    }
+
+    #[test]
+    fn test_request_collector_with_default_cf() {
+        let mut request_collector = RequestCollector::from_cf(CF_DEFAULT);
+        assert_eq!(request_collector.is_empty(), true);
+        let reqs = vec![
+            default_req(b"foo", b"", 39),
+            default_req(b"zzz", b"", 40),
+            default_req(b"foo", b"", 37),
+            default_req(b"foo", b"", 39),
+        ];
+        let reqs_result = vec![
+            default_req(b"foo", b"", 37),
+            default_req(b"foo", b"", 39),
+            default_req(b"zzz", b"", 40),
+        ];
+
+        for req in reqs {
+            request_collector.accept(req);
+        }
+        assert_eq!(request_collector.is_empty(), false);
+        let mut reqs = request_collector.drain();
+        reqs.sort_by(|r1, r2| {
+            let k1 = key_from_request(r1);
+            let (k1, ts1) = Key::split_on_ts_for(k1).unwrap();
+            let k2 = key_from_request(r2);
+            let (k2, ts2) = Key::split_on_ts_for(k2).unwrap();
+
+            k1.cmp(k2).then(ts1.cmp(&ts2))
+        });
+        assert_eq!(reqs, reqs_result);
+        assert_eq!(request_collector.is_empty(), true);
+    }
 }
