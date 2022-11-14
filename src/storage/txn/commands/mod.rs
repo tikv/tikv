@@ -654,6 +654,7 @@ impl Command {
             Command::Prewrite(t) => t.process_write(snapshot, context),
             Command::PrewritePessimistic(t) => t.process_write(snapshot, context),
             Command::AcquirePessimisticLock(t) => t.process_write(snapshot, context),
+            Command::AcquirePessimisticLockResumed(t) => t.process_write(snapshot, context),
             Command::Commit(t) => t.process_write(snapshot, context),
             Command::Cleanup(t) => t.process_write(snapshot, context),
             Command::Rollback(t) => t.process_write(snapshot, context),
