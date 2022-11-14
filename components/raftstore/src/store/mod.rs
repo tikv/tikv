@@ -30,6 +30,7 @@ mod worker;
 pub use self::msg::PeerInternalStat;
 pub use self::{
     async_io::{
+        read::{AsyncReadNotifier, FetchedLogs, GenSnapRes, ReadRunner, ReadTask},
         write::{
             ExtraStates, PersistedNotifier, StoreWriters, Worker as WriteWorker, WriteMsg,
             WriteTask,
@@ -69,18 +70,17 @@ pub use self::{
         check_abort, copy_snapshot,
         snap_io::{apply_sst_cf_file, build_sst_cf_file_list},
         ApplyOptions, CfFile, Error as SnapError, SnapEntry, SnapKey, SnapManager,
-        SnapManagerBuilder, Snapshot, SnapshotStatistics,
+        SnapManagerBuilder, Snapshot, SnapshotStatistics, TabletSnapKey, TabletSnapManager,
     },
     transport::{CasualRouter, ProposalRouter, SignificantRouter, StoreRouter, Transport},
     txn_ext::{LocksStatus, PeerPessimisticLocks, PessimisticLockPair, TxnExt},
     util::{RegionReadProgress, RegionReadProgressRegistry},
     worker::{
-        AutoSplitController, Bucket, BucketRange, CachedReadDelegate, CheckLeaderRunner,
-        CheckLeaderTask, FetchedLogs, FlowStatistics, FlowStatsReporter, KeyEntry,
-        LocalReadContext, LocalReader, LocalReaderCore, LogFetchedNotifier, PdTask,
-        RaftlogFetchRunner, RaftlogFetchTask, ReadDelegate, ReadExecutor, ReadExecutorProvider,
-        ReadProgress, ReadStats, RefreshConfigTask, RegionTask, SplitCheckRunner, SplitCheckTask,
-        SplitConfig, SplitConfigManager, StoreMetaDelegate, TrackVer, WriteStats,
-        TLS_LOCAL_READ_METRICS,
+        metrics::TLS_LOCAL_READ_METRICS, AutoSplitController, Bucket, BucketRange,
+        CachedReadDelegate, CheckLeaderRunner, CheckLeaderTask, FlowStatistics, FlowStatsReporter,
+        KeyEntry, LocalReadContext, LocalReader, LocalReaderCore, PdTask, ReadDelegate,
+        ReadExecutor, ReadExecutorProvider, ReadProgress, ReadStats, RefreshConfigTask, RegionTask,
+        SplitCheckRunner, SplitCheckTask, SplitConfig, SplitConfigManager, StoreMetaDelegate,
+        TrackVer, WriteStats,
     },
 };

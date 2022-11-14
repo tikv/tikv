@@ -886,6 +886,8 @@ pub mod test_util {
         pub commit_ts: TimeStamp,
         pub for_update_ts: TimeStamp,
         pub old_value: OldValue,
+        pub last_change_ts: TimeStamp,
+        pub versions_to_last_change: u64,
     }
 
     impl Default for EntryBuilder {
@@ -898,6 +900,8 @@ pub mod test_util {
                 commit_ts: 0.into(),
                 for_update_ts: 0.into(),
                 old_value: OldValue::None,
+                last_change_ts: TimeStamp::zero(),
+                versions_to_last_change: 0,
             }
         }
     }
@@ -931,6 +935,15 @@ pub mod test_util {
             self.old_value = OldValue::value(old_value.to_owned());
             self
         }
+        pub fn last_change(
+            &mut self,
+            last_change_ts: TimeStamp,
+            versions_to_last_change: u64,
+        ) -> &mut Self {
+            self.last_change_ts = last_change_ts;
+            self.versions_to_last_change = versions_to_last_change;
+            self
+        }
         pub fn build_commit(&self, wt: WriteType, is_short_value: bool) -> TxnEntry {
             let write_key = Key::from_raw(&self.key).append_ts(self.commit_ts);
             let (key, value, short) = if is_short_value {
@@ -949,7 +962,8 @@ pub mod test_util {
                     None,
                 )
             };
-            let write_value = Write::new(wt, self.start_ts, short);
+            let write_value = Write::new(wt, self.start_ts, short)
+                .set_last_change(self.last_change_ts, self.versions_to_last_change);
             TxnEntry::Commit {
                 default: (key, value),
                 write: (write_key.into_encoded(), write_value.as_ref().to_bytes()),
@@ -984,7 +998,8 @@ pub mod test_util {
                 self.for_update_ts,
                 0,
                 0.into(),
-            );
+            )
+            .set_last_change(self.last_change_ts, self.versions_to_last_change);
             TxnEntry::Prewrite {
                 default: (key, value),
                 lock: (lock_key.into_encoded(), lock_value.to_bytes()),
@@ -2426,11 +2441,9 @@ mod delta_entry_tests {
                     let mut entries_of_key = vec![];
 
                     if let Some((ts, lock_type, value)) = lock {
-                        let max_commit_ts = writes
-                            .last()
-                            .cloned()
-                            .map(|(_, commit_ts, ..)| commit_ts)
-                            .unwrap_or(0);
+                        let last_write = writes.last();
+                        let max_commit_ts =
+                            last_write.map(|(_, commit_ts, ..)| *commit_ts).unwrap_or(0);
                         let for_update_ts = std::cmp::max(*ts, max_commit_ts + 1);
 
                         if *ts <= to_ts {
@@ -2580,10 +2593,12 @@ mod delta_entry_tests {
             // Do assertions one by one so that if it fails it won't print too long panic
             // message.
             for i in 0..std::cmp::max(actual.len(), expected.len()) {
+                // We don't care about last_change_ts here. Use a trick to ignore them.
+                let actual_erased = actual[i].erasing_last_change_ts();
                 assert_eq!(
-                    actual[i], expected[i],
+                    actual_erased, expected[i],
                     "item {} not match: expected {:?}, but got {:?}",
-                    i, &expected[i], &actual[i]
+                    i, &expected[i], &actual_erased
                 );
             }
         };

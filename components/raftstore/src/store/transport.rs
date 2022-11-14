@@ -8,7 +8,7 @@ use engine_traits::{KvEngine, RaftEngine, Snapshot};
 use kvproto::raft_serverpb::RaftMessage;
 use tikv_util::{error, warn};
 
-use super::worker::{FetchedLogs, LogFetchedNotifier};
+use super::{AsyncReadNotifier, FetchedLogs, GenSnapRes};
 use crate::{
     store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg, StoreMsg},
     DiscardReason, Error, Result,
@@ -173,10 +173,15 @@ where
     }
 }
 
-impl<EK: KvEngine, ER: RaftEngine> LogFetchedNotifier for RaftRouter<EK, ER> {
+impl<EK: KvEngine, ER: RaftEngine> AsyncReadNotifier for RaftRouter<EK, ER> {
     #[inline]
-    fn notify(&self, region_id: u64, fetched: FetchedLogs) {
+    fn notify_logs_fetched(&self, region_id: u64, fetched: FetchedLogs) {
         // Ignore region not found as it may be removed.
         let _ = self.significant_send(region_id, SignificantMsg::RaftlogFetched(fetched));
+    }
+
+    #[inline]
+    fn notify_snapshot_generated(&self, _region_id: u64, _snapshot: GenSnapRes) {
+        unreachable!()
     }
 }
