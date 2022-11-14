@@ -229,7 +229,7 @@ impl Lock {
             b.encode_u64(self.last_change_ts.into_inner()).unwrap();
             b.encode_var_u64(self.versions_to_last_change).unwrap();
         }
-        if self.txn_source > 0 {
+        if self.txn_source != 0 {
             b.push(TXN_SOURCE_PREFIX);
             b.push(self.txn_source);
         }
@@ -265,7 +265,7 @@ impl Lock {
         if !self.last_change_ts.is_zero() {
             size += 1 + size_of::<u64>() + MAX_VAR_U64_LEN;
         }
-        if self.txn_source > 0 {
+        if self.txn_source != 0 {
             size += 2;
         }
         size
