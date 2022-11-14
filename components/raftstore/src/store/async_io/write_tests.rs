@@ -60,7 +60,7 @@ struct TestNotifier {
 }
 
 impl PersistedNotifier for TestNotifier {
-    fn notify(&self, region_id: u64, peer_id: u64, ready_number: u64, _: bool) {
+    fn notify(&self, region_id: u64, peer_id: u64, ready_number: u64) {
         self.tx.send((region_id, (peer_id, ready_number))).unwrap()
     }
 }

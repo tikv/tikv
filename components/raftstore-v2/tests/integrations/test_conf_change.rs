@@ -58,7 +58,6 @@ fn test_add_learner() {
     raft_msg.set_region_id(region_id);
     raft_msg.set_to_peer(learner_peer.clone());
     raft_msg.set_from_peer(leader_peer.clone());
-    // let epoch = meta.region_state.epoch.clone();
 
     let raft_message = raft_msg.mut_message();
     raft_message.set_msg_type(raft::prelude::MessageType::MsgAppendResponse);

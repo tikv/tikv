@@ -394,13 +394,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ctx: &mut StoreContext<EK, ER, T>,
         peer_id: u64,
         ready_number: u64,
-        need_scheduled: bool,
     ) {
         if peer_id != self.peer_id() {
             error!(self.logger, "peer id not matched"; "persisted_peer_id" => peer_id, "persisted_number" => ready_number);
             return;
         }
-        if need_scheduled {
+        let (persisted_message, has_snapshot) =
+            self.async_writer
+                .on_persisted(ctx, ready_number, &self.logger);
+        if has_snapshot {
             self.storage_mut().after_applied_snapshot();
             let suffix = self.storage().raft_state().last_index;
             let region_id = self.storage().get_region_id();
@@ -411,9 +413,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.tablet_mut().set(tablet);
             self.schedule_apply_fsm(ctx);
         }
-        let persisted_message = self
-            .async_writer
-            .on_persisted(ctx, ready_number, &self.logger);
         for msgs in persisted_message {
             for msg in msgs {
                 self.send_raft_message(ctx, msg);
