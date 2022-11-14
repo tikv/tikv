@@ -207,7 +207,7 @@ fn quote(bytes: BytesRef) -> Result<Option<Bytes>> {
 #[rpn_fn(nullable, raw_varg, min_args = 1, max_args = 1)]
 #[inline]
 fn json_valid(args: &[ScalarValueRef]) -> Result<Option<Int>> {
-    assert!(!args.is_empty() && args.len() == 1);
+    assert_eq!(args.len(), 1);
     let received_et = args[0].eval_type();
     let r = match args[0].to_owned().is_none() {
         true => None,
@@ -215,7 +215,7 @@ fn json_valid(args: &[ScalarValueRef]) -> Result<Option<Int>> {
             EvalType::Json => args[0].as_json().and(Some(1)),
             EvalType::Bytes => match args[0].as_bytes() {
                 Some(p) => {
-                    let tmp_str = std::str::from_utf8(p).unwrap();
+                    let tmp_str = std::str::from_utf8(p).map_err(tidb_query_datatype::codec::Error::from).unwrap();
                     let json: serde_json::error::Result<Json> = serde_json::from_str(tmp_str);
                     Some(json.is_ok() as Int)
                 }
