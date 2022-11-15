@@ -320,10 +320,10 @@ impl<S: ExternalStorage> ExternalStorage for EncryptedExternalStorage<S> {
     async fn write(&self, name: &str, reader: UnpinReader, content_length: u64) -> io::Result<()> {
         self.storage.write(name, reader, content_length).await
     }
-    fn read(&self, name: &str) -> ExternalData {
+    fn read(&self, name: &str) -> ExternalData<'_> {
         self.storage.read(name)
     }
-    fn read_part(&self, name: &str, off: u64, len: u64) -> ExternalData {
+    fn read_part(&self, name: &str, off: u64, len: u64) -> ExternalData<'_> {
         self.storage.read_part(name, off, len)
     }
     async fn restore(
@@ -380,11 +380,11 @@ impl<Blob: BlobStorage> ExternalStorage for BlobStore<Blob> {
             .await
     }
 
-    fn read(&self, name: &str) -> ExternalData {
+    fn read(&self, name: &str) -> ExternalData<'_> {
         (**self).get(name)
     }
 
-    fn read_part(&self, name: &str, off: u64, len: u64) -> ExternalData {
+    fn read_part(&self, name: &str, off: u64, len: u64) -> ExternalData<'_> {
         (**self).get_part(name, off, len)
     }
 }

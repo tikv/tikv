@@ -131,11 +131,11 @@ impl ExternalStorage for HdfsStorage {
         }
     }
 
-    fn read(&self, _name: &str) -> ExternalData {
+    fn read(&self, _name: &str) -> ExternalData<'_> {
         unimplemented!("currently only HDFS export is implemented")
     }
 
-    fn read_part(&self, _name: &str, _off: u64, _len: u64) -> ExternalData {
+    fn read_part(&self, _name: &str, _off: u64, _len: u64) -> ExternalData<'_> {
         unimplemented!("currently only HDFS export is implemented")
     }
 }

@@ -91,7 +91,7 @@ where
             .before_stop_wrapper(move || tikv_alloc::remove_thread_memory_accessor())
             .build()
             .unwrap();
-        importer.start_switch_mode_check(threads.handle().clone(), engine.clone());
+        importer.start_switch_mode_check(threads.handle(), engine.clone());
         ImportSstService {
             cfg,
             engine,

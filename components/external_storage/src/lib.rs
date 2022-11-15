@@ -109,10 +109,10 @@ pub trait ExternalStorage: 'static + Send + Sync {
     async fn write(&self, name: &str, reader: UnpinReader, content_length: u64) -> io::Result<()>;
 
     /// Read all contents of the given path.
-    fn read(&self, name: &str) -> ExternalData;
+    fn read(&self, name: &str) -> ExternalData<'_>;
 
     /// Read part of contents of the given path.
-    fn read_part(&self, name: &str, off: u64, len: u64) -> ExternalData;
+    fn read_part(&self, name: &str, off: u64, len: u64) -> ExternalData<'_>;
 
     /// Read from external storage and restore to the given path
     async fn restore(
@@ -173,11 +173,11 @@ impl ExternalStorage for Arc<dyn ExternalStorage> {
         (**self).write(name, reader, content_length).await
     }
 
-    fn read(&self, name: &str) -> ExternalData {
+    fn read(&self, name: &str) -> ExternalData<'_> {
         (**self).read(name)
     }
 
-    fn read_part(&self, name: &str, off: u64, len: u64) -> ExternalData {
+    fn read_part(&self, name: &str, off: u64, len: u64) -> ExternalData<'_> {
         (**self).read_part(name, off, len)
     }
 }
@@ -196,11 +196,11 @@ impl ExternalStorage for Box<dyn ExternalStorage> {
         self.as_ref().write(name, reader, content_length).await
     }
 
-    fn read(&self, name: &str) -> ExternalData {
+    fn read(&self, name: &str) -> ExternalData<'_> {
         self.as_ref().read(name)
     }
 
-    fn read_part(&self, name: &str, off: u64, len: u64) -> ExternalData {
+    fn read_part(&self, name: &str, off: u64, len: u64) -> ExternalData<'_> {
         self.as_ref().read_part(name, off, len)
     }
 }
