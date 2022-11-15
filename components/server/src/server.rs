@@ -473,7 +473,7 @@ where
         let cur_port = cur_addr.port();
         let lock_dir = get_lock_dir();
 
-        let search_base = env::temp_dir().join(&lock_dir);
+        let search_base = env::temp_dir().join(lock_dir);
         file_system::create_dir_all(&search_base)
             .unwrap_or_else(|_| panic!("create {} failed", search_base.display()));
 
@@ -542,7 +542,7 @@ where
         disk::set_disk_reserved_space(reserve_space);
         let path =
             Path::new(&self.config.storage.data_dir).join(file_system::SPACE_PLACEHOLDER_FILE);
-        if let Err(e) = file_system::remove_file(&path) {
+        if let Err(e) = file_system::remove_file(path) {
             warn!("failed to remove space holder on starting: {}", e);
         }
 
@@ -1480,7 +1480,7 @@ where
                     .join(Path::new(file_system::SPACE_PLACEHOLDER_FILE));
 
                 let placeholder_size: u64 =
-                    file_system::get_file_size(&placeholer_file_path).unwrap_or(0);
+                    file_system::get_file_size(placeholer_file_path).unwrap_or(0);
 
                 let used_size = snap_size + kv_size + raft_size + placeholder_size;
                 let capacity = if config_disk_capacity == 0 || disk_cap < config_disk_capacity {
