@@ -104,7 +104,7 @@ impl Store {
         ER: RaftEngine,
     {
         let region_id = msg.region.id;
-        let mut raft_msg = Box::<kvproto::raft_serverpb::RaftMessage>::default();
+        let mut raft_msg = Box::<RaftMessage>::default();
         raft_msg.set_region_id(region_id);
         raft_msg.set_region_epoch(msg.region.get_region_epoch().clone());
         raft_msg.set_to_peer(

@@ -4,7 +4,10 @@ use std::{assert_matches::assert_matches, time::Duration};
 
 use engine_traits::{OpenOptions, Peekable, TabletFactory};
 use futures::executor::block_on;
-use kvproto::raft_cmdpb::{CmdType, Request};
+use kvproto::{
+    raft_cmdpb::{CmdType, Request},
+    raft_serverpb::RaftMessage,
+};
 use raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
 use raftstore_v2::router::PeerMsg;
 use tikv_util::store::new_peer;
@@ -93,7 +96,7 @@ fn test_basic_write() {
     );
 
     // Make it step down and follower should reject write.
-    let mut msg = Box::<kvproto::raft_serverpb::RaftMessage>::default();
+    let mut msg = Box::<RaftMessage>::default();
     msg.set_region_id(2);
     msg.set_to_peer(new_peer(1, 3));
     msg.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
