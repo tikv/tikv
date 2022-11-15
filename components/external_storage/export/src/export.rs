@@ -183,7 +183,9 @@ fn create_backend_inner(
         Backend::Hdfs(hdfs) => {
             Box::new(HdfsStorage::new(&hdfs.remote, backend_config.hdfs_config)?)
         }
-        Backend::Noop(_) => Box::new(NoopStorage::default()) as Box<dyn ExternalStorage>,
+        Backend::Noop(_) => {
+            Box::<external_storage::NoopStorage>::default() as Box<dyn ExternalStorage>
+        }
         #[cfg(feature = "cloud-aws")]
         Backend::S3(config) => {
             let mut s = S3Storage::from_input(config.clone())?;
@@ -352,7 +354,7 @@ impl ExternalStorage for EncryptedExternalStorage {
             compression_reader_dispatcher(compression_type, inner)?
         };
         let file_writer: &mut dyn Write =
-            &mut self.key_manager.create_file_for_write(&restore_name)?;
+            &mut self.key_manager.create_file_for_write(restore_name)?;
         let min_read_speed: usize = 8192;
         let mut input = encrypt_wrap_reader(file_crypter, reader)?;
 

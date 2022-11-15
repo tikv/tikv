@@ -384,8 +384,8 @@ impl WaitTable {
 
     fn to_wait_for_entries(&self) -> Vec<WaitForEntry> {
         self.waiter_pool
-            .iter()
-            .map(|(_, waiter)| {
+            .values()
+            .map(|waiter| {
                 let mut wait_for_entry = WaitForEntry::default();
                 wait_for_entry.set_txn(waiter.start_ts.into_inner());
                 wait_for_entry.set_wait_for_txn(waiter.wait_info.lock_digest.ts.into_inner());

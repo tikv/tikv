@@ -94,7 +94,7 @@ impl CGroupSys {
                     } else {
                         format!("{}/memory.limit_in_bytes", path.to_str().unwrap())
                     };
-                    return read_to_string(&path)
+                    return read_to_string(path)
                         .map(|x| parse_memory_max(x.trim()))
                         .ok()
                         .flatten();
@@ -112,7 +112,7 @@ impl CGroupSys {
             if let Some((root, mount_point)) = self.mount_points.get(component) {
                 if let Some(path) = build_path(group, root, mount_point) {
                     let path = format!("{}/cpuset.cpus", path.to_str().unwrap());
-                    if let Ok(s) = read_to_string(&path) {
+                    if let Ok(s) = read_to_string(path) {
                         return parse_cpu_cores(s.trim());
                     }
                 }
@@ -131,14 +131,14 @@ impl CGroupSys {
                 if let Some(path) = build_path(group, root, mount_point) {
                     if self.is_v2 {
                         let path = format!("{}/cpu.max", path.to_str().unwrap());
-                        if let Ok(buffer) = read_to_string(&path) {
+                        if let Ok(buffer) = read_to_string(path) {
                             return parse_cpu_quota_v2(buffer.trim());
                         }
                     } else {
                         let path1 = format!("{}/cpu.cfs_quota_us", path.to_str().unwrap());
                         let path2 = format!("{}/cpu.cfs_period_us", path.to_str().unwrap());
                         if let (Ok(buffer1), Ok(buffer2)) =
-                            (read_to_string(&path1), read_to_string(&path2))
+                            (read_to_string(path1), read_to_string(path2))
                         {
                             return parse_cpu_quota_v1(buffer1.trim(), buffer2.trim());
                         }
@@ -356,7 +356,7 @@ fn parse_cpu_quota_v1(line1: &str, line2: &str) -> Option<f64> {
         if max > 0.0 {
             if let Ok(period) = line2.parse::<f64>() {
                 if period > 0.0 {
-                    return Some(max as f64 / period as f64);
+                    return Some(max / period);
                 }
             }
         } else {
@@ -385,11 +385,11 @@ mod tests {
     fn test_parse_mountinfos_without_cgroup() {
         let temp = tempfile::TempDir::new().unwrap();
         let dir = temp.path().to_str().unwrap();
-        std::fs::copy("/proc/self/stat", &format!("{}/stat", dir)).unwrap();
+        std::fs::copy("/proc/self/stat", format!("{}/stat", dir)).unwrap();
         let mut f = OpenOptions::new()
             .create(true)
             .write(true)
-            .open(&format!("{}/mountinfo", dir))
+            .open(format!("{}/mountinfo", dir))
             .unwrap();
         f.write_all(b"").unwrap();
 
@@ -402,12 +402,12 @@ mod tests {
     fn test_cpuset_cpu_cpuacct() {
         let temp = tempfile::TempDir::new().unwrap();
         let dir = temp.path().to_str().unwrap();
-        std::fs::copy("/proc/self/stat", &format!("{}/stat", dir)).unwrap();
+        std::fs::copy("/proc/self/stat", format!("{}/stat", dir)).unwrap();
 
         let mut f = OpenOptions::new()
             .create(true)
             .write(true)
-            .open(&format!("{}/mountinfo", dir))
+            .open(format!("{}/mountinfo", dir))
             .unwrap();
         f.write_all(b"30 26 0:27 / /sys/fs/cgroup/cpuset,cpu,cpuacct rw,nosuid,nodev,noexec,relatime shared:11 - cgroup cgroup rw,cpuset,cpu,cpuacct\n").unwrap();
 
@@ -432,12 +432,12 @@ mod tests {
     fn test_mountinfo_with_relative_path() {
         let temp = tempfile::TempDir::new().unwrap();
         let dir = temp.path().to_str().unwrap();
-        std::fs::copy("/proc/self/stat", &format!("{}/stat", dir)).unwrap();
+        std::fs::copy("/proc/self/stat", format!("{}/stat", dir)).unwrap();
 
         let mut f = OpenOptions::new()
             .create(true)
             .write(true)
-            .open(&format!("{}/mountinfo", dir))
+            .open(format!("{}/mountinfo", dir))
             .unwrap();
         f.write_all(b"1663 1661 0:27 /../../../../../.. /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime - cgroup2 cgroup2 rw\n").unwrap();
 
@@ -461,12 +461,12 @@ mod tests {
     fn test_conflicting_mountinfo() {
         let temp = tempfile::TempDir::new().unwrap();
         let dir = temp.path().to_str().unwrap();
-        std::fs::copy("/proc/self/stat", &format!("{}/stat", dir)).unwrap();
+        std::fs::copy("/proc/self/stat", format!("{}/stat", dir)).unwrap();
 
         let mut f = OpenOptions::new()
             .create(true)
             .write(true)
-            .open(&format!("{}/mountinfo", dir))
+            .open(format!("{}/mountinfo", dir))
             .unwrap();
         f.write_all(b"1663 1661 0:27 /../../../../../.. /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime - cgroup2 cgroup2 rw
         1663 1661 0:27 /../../../../../.. /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime - cgroup2 cgroup2 rw").unwrap();
@@ -491,12 +491,12 @@ mod tests {
     fn test_cgroup_without_mountinfo() {
         let temp = tempfile::TempDir::new().unwrap();
         let dir = temp.path().to_str().unwrap();
-        std::fs::copy("/proc/self/stat", &format!("{}/stat", dir)).unwrap();
+        std::fs::copy("/proc/self/stat", format!("{}/stat", dir)).unwrap();
 
         let mut f = OpenOptions::new()
             .create(true)
             .write(true)
-            .open(&format!("{}/mountinfo", dir))
+            .open(format!("{}/mountinfo", dir))
             .unwrap();
         f.write_all(b"1663 1661 0:27 /../../../../../.. /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime - cgroup cgroup rw\n").unwrap();
 

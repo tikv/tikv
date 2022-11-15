@@ -101,7 +101,7 @@ impl ExternalStorage for HdfsStorage {
         }
         cmd_with_args.extend([&cmd_path, "dfs", "-put", "-", path]);
         info!("calling hdfs"; "cmd" => ?cmd_with_args);
-        let mut hdfs_cmd = Command::new(&cmd_with_args[0])
+        let mut hdfs_cmd = Command::new(cmd_with_args[0])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
