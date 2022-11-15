@@ -1,4 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::{
     fs::{self, File},
     io::{Read, Write},
@@ -432,5 +433,18 @@ where
                 f(&self.cfg);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{self, Write};
+
+    #[test]
+    fn test_send_tablet() {
+        let buffer = vec![1, 2, 3, 5, 8];
+        let sink = io::sink();
+        let num_bytes = sink.write(&buffer).unwrap();
+        assert_eq!(num_bytes, 5);
     }
 }
