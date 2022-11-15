@@ -228,6 +228,7 @@ impl<EK: KvEngine, ER: RaftEngine> PersistedNotifier for StoreRouter<EK, ER> {
                 "failed to send noop to trigger persisted ready";
                 "region_id" => region_id,
                 "peer_id" => peer_id,
+                "ready_number" => ready_number,
                 "error" => ?e,
             );
         }

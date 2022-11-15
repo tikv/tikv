@@ -369,14 +369,11 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let key = TabletSnapKey::new(region_id, peer_id, last_term, last_index);
         let mut path = snap_mgr.get_recv_tablet_path(&key);
 
-        // In multi rocksDB version, the major cost of applying snapshot is that rename
-        // the recv directory, it becomes very cheap and doesn't need to executing it
-        // in async. so the action of loading tablet can be putted into the write task,
-        // The hook will be called after writing to the db by order.
-        // In single rocksDB version, the cost of apply snapshot is that ingest sst the
-        // DB, so it needs some time to executing it.
+        // The snapshot require no additional processing such as ingest them to DB, but
+        // it should load it into the factory after it persisted.
         let hook = move || tablet_factory.load_tablet(path.as_path(), region_id, last_index);
-        task.add_after_write_hook(Some(Box::new(hook)));
+        task.after_write_hook = (Some(Box::new(hook)));
+        task.has_snapshot = true;
         Ok(())
     }
 }

@@ -170,6 +170,7 @@ where
     ready_number: u64,
     pub send_time: Instant,
     pub raft_wb: Option<ER::LogBatch>,
+    // after_write_hook will be called after write to db.
     pub after_write_hook: Option<Box<dyn FnOnce() -> EResult<EK> + Send>>,
     pub entries: Vec<Entry>,
     pub cut_logs: Option<(u64, u64)>,
@@ -237,11 +238,6 @@ where
         }
 
         Ok(())
-    }
-
-    pub fn add_after_write_hook(&mut self, hook: Option<Box<dyn FnOnce() -> EResult<EK> + Send>>) {
-        self.after_write_hook = hook;
-        self.has_snapshot = true;
     }
 }
 
