@@ -11,4 +11,4 @@ pub use command::{
 pub use life::DestroyProgress;
 pub use ready::{AsyncWriter, GenSnapTask, SnapState};
 
-pub(crate) use self::query::LocalReader;
+pub(crate) use self::{command::SplitInit, query::LocalReader};
