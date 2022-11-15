@@ -75,10 +75,10 @@ pub struct RestoreConfig {
 }
 
 /// a reader dispatcher for different compression type.
-pub fn compression_reader_dispatcher<'a>(
+pub fn compression_reader_dispatcher(
     compression_type: Option<CompressionType>,
-    inner: ExternalData<'a>,
-) -> io::Result<ExternalData<'a>> {
+    inner: ExternalData<'_>,
+) -> io::Result<ExternalData<'_>> {
     match compression_type {
         Some(c) => match c {
             // The log files generated from TiKV v6.2.0 use the default value (0).
@@ -207,10 +207,10 @@ impl ExternalStorage for Box<dyn ExternalStorage> {
 
 /// Wrap the reader with file_crypter.
 /// Return the reader directly if file_crypter is None.
-pub fn encrypt_wrap_reader<'a>(
+pub fn encrypt_wrap_reader(
     file_crypter: Option<FileEncryptionInfo>,
-    reader: ExternalData<'a>,
-) -> io::Result<ExternalData<'a>> {
+    reader: ExternalData<'_>,
+) -> io::Result<ExternalData<'_>> {
     let input = match file_crypter {
         Some(x) => Box::new(DecrypterReader::new(
             reader,
