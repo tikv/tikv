@@ -579,14 +579,15 @@ impl<S: EngineSnapshot> MvccReader<S> {
                     break;
                 }
             }
-            let user_key = key.clone().truncate_ts()?;
             let commit_ts = key.decode_ts()?;
+            let user_key = key.truncate_ts()?;
             // To make sure we only check each unique user key once and the filter returns
             // true.
-            let should_skip = (cur_key.is_some() && cur_key.clone().unwrap() == user_key)
-                || !filter(&user_key, commit_ts);
-            cur_key = Some(user_key.clone());
-            if should_skip {
+            let is_same_user_key = cur_key.as_ref() == Some(&user_key);
+            if !is_same_user_key {
+                cur_key = Some(user_key.clone());
+            }
+            if is_same_user_key || !filter(&user_key, commit_ts) {
                 cursor.next(&mut self.statistics.write);
                 continue;
             }
