@@ -34,11 +34,11 @@ use tokio::runtime::{Handle, Runtime};
 use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
+    caching::cache_map::CacheMap,
     import_file::{ImportDir, ImportFile},
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     metrics::*,
     sst_writer::{RawSstWriter, TxnSstWriter},
-    storage_cache::StorageCache,
     Config, Error, Result,
 };
 
@@ -66,7 +66,7 @@ pub struct SstImporter {
     compression_types: HashMap<CfName, SstCompressionType>,
     file_locks: Arc<DashMap<String, ()>>,
 
-    cached_storage: StorageCache,
+    cached_storage: CacheMap<StorageBackend>,
     download_rt: Runtime,
 }
 
@@ -78,7 +78,7 @@ impl SstImporter {
         api_version: ApiVersion,
     ) -> Result<SstImporter> {
         let switcher = ImportModeSwitcher::new(cfg);
-        let cached_storage = StorageCache::default();
+        let cached_storage = CacheMap::default();
         let download_rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -107,7 +107,7 @@ impl SstImporter {
         }
     }
 
-    pub fn start_switch_mode_check<E: KvEngine>(&self, executor: Handle, db: E) {
+    pub fn start_switch_mode_check<E: KvEngine>(&self, executor: &Handle, db: E) {
         self.switcher.start(executor, db);
     }
 
