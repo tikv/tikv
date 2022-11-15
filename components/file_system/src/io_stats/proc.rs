@@ -225,7 +225,7 @@ mod tests {
             .write(true)
             .create(true)
             .custom_flags(O_DIRECT)
-            .open(&file_path)
+            .open(file_path)
             .unwrap();
         let w = vec![A512::default(); 8];
         let base_local_bytes = id.fetch_io_bytes().unwrap();

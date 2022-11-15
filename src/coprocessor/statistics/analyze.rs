@@ -843,7 +843,7 @@ impl<S: Snapshot> SampleBuilder<S> {
                 .map_or_else(|| 0_usize, |req| req.get_top_n_size() as usize),
             common_handle_col_ids: common_handle_ids,
             columns_info,
-            analyze_common_handle: common_handle_req != None,
+            analyze_common_handle: common_handle_req.is_some(),
         })
     }
 
@@ -1116,7 +1116,7 @@ impl AnalyzeSamplingResult {
 
 impl Default for AnalyzeSamplingResult {
     fn default() -> Self {
-        AnalyzeSamplingResult::new(Box::new(ReservoirRowSampleCollector::default()))
+        AnalyzeSamplingResult::new(Box::<ReservoirRowSampleCollector>::default())
     }
 }
 

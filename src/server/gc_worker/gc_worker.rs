@@ -492,7 +492,7 @@ where
                             "versions" => gc_info.found_versions,
                         );
                     }
-                    if gc_info.deleted_versions as usize >= GC_LOG_DELETED_VERSION_THRESHOLD {
+                    if gc_info.deleted_versions >= GC_LOG_DELETED_VERSION_THRESHOLD {
                         debug!(
                             "GC deleted plenty versions for a key";
                             "key" => %key,

@@ -19,11 +19,7 @@ fn bench_batch_tso_list_pop(c: &mut Criterion) {
                 batch_list.flush();
                 for i in 0..CAPACITY {
                     batch_list
-                        .push(
-                            batch_size as u32,
-                            TimeStamp::compose(i as u64, batch_size),
-                            false,
-                        )
+                        .push(batch_size as u32, TimeStamp::compose(i, batch_size), false)
                         .unwrap();
                 }
             },
