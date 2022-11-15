@@ -9,7 +9,8 @@ use pd_client::BucketStat;
 use raft::{RawNode, StateRole};
 use raftstore::store::{
     util::{Lease, RegionReadProgress},
-    Config, EntryStorage, ProposalQueue, ReadDelegate, ReadIndexQueue, TrackVer, TxnExt,
+    Config, EntryStorage, LocksStatus, ProposalQueue, ReadDelegate, ReadIndexQueue, TrackVer,
+    TxnExt,
 };
 use slog::Logger;
 use tikv_util::{box_err, config::ReadableSize};
@@ -58,7 +59,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// Transaction extensions related to this peer.
     txn_ext: Arc<TxnExt>,
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
-    reactivate_memory_lock_ticks: usize,
+    need_register_reactivate_memory_lock_tick: bool,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -143,7 +144,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             region_buckets: None,
             txn_ext: Arc::default(),
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
-            reactivate_memory_lock_ticks: 0,
+            need_register_reactivate_memory_lock_tick: false,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -439,12 +440,23 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &self.txn_ext
     }
 
-    pub fn set_reactivate_memory_lock_ticks(&mut self, tick: usize) {
-        self.reactivate_memory_lock_ticks = tick;
+    pub fn set_need_register_reactivate_memory_lock_tick(&mut self) {
+        self.need_register_reactivate_memory_lock_tick = true;
     }
 
-    pub fn register_reactivate_memory_lock_tick(&mut self) {
-        // todo
+    /// Returns `true` if we need to register ReactivateMemoryLock tick
+    /// It will be set to false when it is called
+    pub fn need_register_reactivate_memory_lock_tick(&mut self) -> bool {
+        let ret = self.need_register_reactivate_memory_lock_tick;
+        self.need_register_reactivate_memory_lock_tick = false;
+        ret
+    }
+
+    pub fn activate_in_memory_pessimistic_locks(&mut self) {
+        let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
+        pessimistic_locks.status = LocksStatus::Normal;
+        pessimistic_locks.term = self.term();
+        pessimistic_locks.version = self.region().get_region_epoch().get_version();
     }
 
     pub fn generate_read_delegate(&self) -> ReadDelegate {

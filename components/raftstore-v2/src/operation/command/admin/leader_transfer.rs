@@ -18,7 +18,7 @@ use raft::{eraftpb, ProgressState, Storage};
 use raftstore::{
     store::{
         fsm::new_admin_request, make_transfer_leader_response, metrics::PEER_ADMIN_CMD_COUNTER,
-        LocksStatus, TRANSFER_LEADER_COMMAND_REPLY_CTX,
+        LocksStatus, Transport, TRANSFER_LEADER_COMMAND_REPLY_CTX,
     },
     Result,
 };
@@ -29,9 +29,9 @@ use txn_types::WriteBatchFlags;
 use super::AdminCmdResult;
 use crate::{
     batch::StoreContext,
-    fsm::ApplyResReporter,
+    fsm::{ApplyResReporter, PeerFsmDelegate},
     raft::{Apply, Peer},
-    router::{CmdResChannel, PeerMsg},
+    router::{CmdResChannel, PeerMsg, PeerTick},
 };
 
 fn get_transfer_leader_cmd(msg: &RaftCmdRequest) -> Option<&TransferLeaderRequest> {
@@ -335,8 +335,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return true;
         }
         pessimistic_locks.status = LocksStatus::TransferringLeader;
-        self.set_reactivate_memory_lock_ticks(0);
-        self.register_reactivate_memory_lock_tick();
+        self.set_need_register_reactivate_memory_lock_tick();
 
         // 2. Propose pessimistic locks
         if pessimistic_locks.is_empty() {
