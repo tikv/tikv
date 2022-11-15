@@ -384,8 +384,8 @@ impl FromStr for ReadableDuration {
         if dur.is_sign_negative() {
             return Err("duration should be positive.".to_owned());
         }
-        let secs = dur as u64 / SECOND as u64;
-        let micros = (dur as u64 % SECOND as u64) as u32 * 1_000;
+        let secs = dur as u64 / SECOND;
+        let micros = (dur as u64 % SECOND) as u32 * 1_000;
         Ok(ReadableDuration(Duration::new(secs, micros)))
     }
 }
@@ -1554,7 +1554,7 @@ impl RaftDataStateMachine {
                 fs::remove_dir_all(&trash).unwrap();
             } else {
                 info!("Removing file"; "path" => %path.display());
-                fs::remove_file(&path).unwrap();
+                fs::remove_file(path).unwrap();
                 Self::sync_dir(path.parent().unwrap());
             }
         }
@@ -1571,11 +1571,11 @@ impl RaftDataStateMachine {
         if !path.exists() || !path.is_dir() {
             return false;
         }
-        fs::read_dir(&path).unwrap().next().is_some()
+        fs::read_dir(path).unwrap().next().is_some()
     }
 
     fn sync_dir(dir: &Path) {
-        fs::File::open(&dir).and_then(|d| d.sync_all()).unwrap();
+        fs::File::open(dir).and_then(|d| d.sync_all()).unwrap();
     }
 }
 

@@ -429,7 +429,7 @@ mod tests {
         assert_eq!(format!("{:?}", v), "[]");
         assert!(v.is_empty());
 
-        v.push(&[0xAA, 0x0, 0xB]);
+        v.push([0xAA, 0x0, 0xB]);
         assert_eq!(v.len(), 1);
         assert_eq!(v.total_len(), 3);
         assert!(!v.is_empty());
@@ -475,7 +475,7 @@ mod tests {
         assert!(v.is_empty());
         assert_eq!(format!("{:?}", v), "[]");
 
-        v.push(&[0xCA, 0xB]);
+        v.push([0xCA, 0xB]);
         assert_eq!(v.len(), 1);
         assert_eq!(v.total_len(), 2);
         assert!(!v.is_empty());
@@ -488,8 +488,8 @@ mod tests {
         assert!(v.is_empty());
         assert_eq!(format!("{:?}", v), "[]");
 
-        v.push(&[0xCA, 0xB]);
-        v.push(&[]);
+        v.push([0xCA, 0xB]);
+        v.push([]);
         assert_eq!(v.len(), 2);
         assert_eq!(v.total_len(), 2);
         assert!(!v.is_empty());
@@ -503,8 +503,8 @@ mod tests {
         assert_eq!(v[0], [0xCA, 0xB]);
         assert_eq!(format!("{:?}", v), "[CA0B]");
 
-        v.push(&[]);
-        v.push(&[]);
+        v.push([]);
+        v.push([]);
         assert_eq!(v.len(), 3);
         assert_eq!(v.total_len(), 2);
         assert!(!v.is_empty());
@@ -513,7 +513,7 @@ mod tests {
         assert!(v[2].is_empty());
         assert_eq!(format!("{:?}", v), "[CA0B, null, null]");
 
-        v.push(&[0xC]);
+        v.push([0xC]);
         assert_eq!(v.len(), 4);
         assert_eq!(v.total_len(), 3);
         assert!(!v.is_empty());
@@ -540,7 +540,7 @@ mod tests {
         assert!(v[1].is_empty());
         assert_eq!(format!("{:?}", v), "[null, null]");
 
-        v.push(&[0xAC, 0xBB, 0x00]);
+        v.push([0xAC, 0xBB, 0x00]);
         assert_eq!(v.len(), 3);
         assert_eq!(v.total_len(), 3);
         assert!(!v.is_empty());
@@ -561,7 +561,7 @@ mod tests {
         assert_eq!(v[1], [0xAC, 0xBB, 0x00]);
         assert_eq!(format!("{:?}", v), "[null, ACBB00]");
 
-        v.push(&[]);
+        v.push([]);
         assert_eq!(v.len(), 3);
         assert_eq!(v.total_len(), 3);
         assert!(!v.is_empty());
@@ -590,12 +590,12 @@ mod tests {
         assert!(v.is_empty());
         assert_eq!(format!("{:?}", v), "[]");
 
-        v.push(&[0xA]);
-        v.push(&[0xB]);
-        v.push(&[0xC]);
-        v.push(&[0xD, 0xE]);
-        v.push(&[]);
-        v.push(&[]);
+        v.push([0xA]);
+        v.push([0xB]);
+        v.push([0xC]);
+        v.push([0xD, 0xE]);
+        v.push([]);
+        v.push([]);
         assert_eq!(v.len(), 6);
         assert_eq!(v.total_len(), 5);
         assert!(!v.is_empty());
@@ -630,7 +630,7 @@ mod tests {
     #[test]
     fn test_copy_from() {
         let mut v1 = BufferVec::new();
-        v1.push(&[]);
+        v1.push([]);
         v1.push(&[0xAA, 0xBB, 0x0C]);
         v1.push(&[]);
         v1.push(&[0x00]);

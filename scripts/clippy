@@ -23,7 +23,7 @@ CLIPPY_LINTS=(
     -A clippy::module_inception  \
     -A clippy::should_implement_trait \
     -A clippy::too_many_arguments \
-    -A clippy::blacklisted_name \
+    -A clippy::disallowed_names \
     -A clippy::redundant_closure \
     -A clippy::field_reassign_with_default \
     -A clippy::wrong_self_convention \
@@ -47,5 +47,5 @@ CLIPPY_LINTS=(
 )
 
 cargo clippy --workspace \
-    --exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
+    --fix --exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
     --no-default-features --features "${TIKV_ENABLE_FEATURES}" "$@" -- "${CLIPPY_LINTS[@]}"
