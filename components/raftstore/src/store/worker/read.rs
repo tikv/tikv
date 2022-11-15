@@ -817,13 +817,15 @@ where
         // be performed.
         let is_in_flashback = delegate.region.is_in_flashback;
         if let Err(e) = util::check_flashback_state(is_in_flashback, req, region_id) {
-            match e {
-                Error::FlashbackNotPrepared(_) => TLS_LOCAL_READ_METRICS
-                    .with(|m| m.borrow_mut().reject_reason.flashback_not_prepared.inc()),
-                Error::FlashbackInProgress(_) => TLS_LOCAL_READ_METRICS
-                    .with(|m| m.borrow_mut().reject_reason.flashback_in_progress.inc()),
+            TLS_LOCAL_READ_METRICS.with(|m| match e {
+                Error::FlashbackNotPrepared(_) => {
+                    m.borrow_mut().reject_reason.flashback_not_prepared.inc()
+                }
+                Error::FlashbackInProgress(_) => {
+                    m.borrow_mut().reject_reason.flashback_in_progress.inc()
+                }
                 _ => unreachable!(),
-            }
+            });
             debug!("rejected by flashback state"; "is_in_flashback" => is_in_flashback, "tag" => &delegate.tag);
             return Ok(None);
         }
