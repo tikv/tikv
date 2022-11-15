@@ -51,7 +51,6 @@ impl<'a> DownloadExt<'a> {
     pub fn cache_key(self, key: &'a str) -> Self {
         Self {
             cache_key: Some(key),
-            ..self
         }
     }
 }
