@@ -647,7 +647,7 @@ mod tests {
 
         let mut ctx = EvalContext::default();
         let col_ids: Vec<_> = row.iter().map(|(&id, _)| id).collect();
-        let col_values: Vec<_> = row.iter().map(|(_, v)| v.clone()).collect();
+        let col_values: Vec<_> = row.values().cloned().collect();
         let mut col_encoded: HashMap<_, _> = row
             .iter()
             .map(|(k, v)| {

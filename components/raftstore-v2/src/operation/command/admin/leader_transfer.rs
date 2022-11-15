@@ -178,7 +178,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     );
                 }
                 None => {
-                    self.propose_pending_command(ctx);
+                    self.propose_pending_writes(ctx);
                     if self.propose_locks_before_transfer_leader(ctx, msg) {
                         // If some pessimistic locks are just proposed, we propose another
                         // TransferLeader command instead of transferring leader immediately.

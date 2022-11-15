@@ -426,7 +426,7 @@ pub fn reserve_space_for_recover<P: AsRef<Path>>(data_dir: P, file_size: u64) ->
         delete_file_if_exist(&path)?;
     }
     fn do_reserve(dir: &Path, path: &Path, file_size: u64) -> io::Result<()> {
-        let f = File::create(&path)?;
+        let f = File::create(path)?;
         f.allocate(file_size)?;
         f.sync_all()?;
         sync_dir(dir)
@@ -483,7 +483,7 @@ mod tests {
 
         // Ensure it works for non-existent file.
         let non_existent_file = dir_path.join("non_existent_file");
-        get_file_size(&non_existent_file).unwrap_err();
+        get_file_size(non_existent_file).unwrap_err();
     }
 
     #[test]
@@ -504,7 +504,7 @@ mod tests {
         assert_eq!(file_exists(&existent_file), true);
 
         let non_existent_file = dir_path.join("non_existent_file");
-        assert_eq!(file_exists(&non_existent_file), false);
+        assert_eq!(file_exists(non_existent_file), false);
     }
 
     #[test]
@@ -525,7 +525,7 @@ mod tests {
         assert_eq!(file_exists(&existent_file), false);
 
         let non_existent_file = dir_path.join("non_existent_file");
-        delete_file_if_exist(&non_existent_file).unwrap();
+        delete_file_if_exist(non_existent_file).unwrap();
     }
 
     fn gen_rand_file<P: AsRef<Path>>(path: P, size: usize) -> u32 {

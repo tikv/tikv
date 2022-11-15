@@ -1190,7 +1190,7 @@ pub mod tests {
             fsm::apply::compact_raft_log,
             initial_region, prepare_bootstrap_cluster,
             worker::{make_region_worker_raftstore_cfg, RegionRunner, RegionTask},
-            AsyncReadNotifier, FetchedLogs,
+            AsyncReadNotifier, FetchedLogs, GenSnapRes,
         },
     };
 
@@ -1429,7 +1429,7 @@ pub mod tests {
             self.ch.send(fetched_logs).unwrap();
         }
 
-        fn notify_snapshot_generated(&self, _region_id: u64, _snapshot: Box<Snapshot>) {
+        fn notify_snapshot_generated(&self, _region_id: u64, _res: GenSnapRes) {
             unreachable!();
         }
     }
