@@ -448,12 +448,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     // latency.
                     self.raft_group_mut().skip_bcast_commit(false);
 
+                    // Init the in-memory pessimistic lock table when the peer becomes leader.
+                    self.activate_in_memory_pessimistic_locks();
+
                     // Exit entry cache warmup state when the peer becomes leader.
                     self.entry_storage_mut().clear_entry_cache_warmup_state();
                 }
                 StateRole::Follower => {
                     self.leader_lease_mut().expire();
                     self.storage_mut().cancel_generating_snap(None);
+                    self.clear_in_memory_pessimistic_locks();
                 }
                 _ => {}
             }

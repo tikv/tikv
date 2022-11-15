@@ -494,6 +494,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         pessimistic_locks.version = self.region().get_region_epoch().get_version();
     }
 
+    pub fn clear_in_memory_pessimistic_locks(&mut self) {
+        let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
+        pessimistic_locks.status = LocksStatus::NotLeader;
+        pessimistic_locks.clear();
+        pessimistic_locks.term = self.term();
+        pessimistic_locks.version = self.region().get_region_epoch().get_version();
+    }
+
     #[inline]
     pub fn post_split(&mut self) {
         self.reset_region_buckets();
