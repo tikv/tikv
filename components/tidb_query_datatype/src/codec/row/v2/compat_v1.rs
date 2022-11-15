@@ -73,6 +73,7 @@ pub trait V1CompatibleEncoder: DatumFlagAndPayloadEncoder {
             FieldTypeTp::VarChar
             | FieldTypeTp::VarString
             | FieldTypeTp::String
+            | FieldTypeTp::Geometry
             | FieldTypeTp::TinyBlob
             | FieldTypeTp::MediumBlob
             | FieldTypeTp::LongBlob

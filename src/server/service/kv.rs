@@ -1779,24 +1779,26 @@ fn future_flashback_to_version<
             Err(e) => Err(e),
             Ok(_) => f.await?,
         };
-        fail_point!("skip_finish_flashback_to_version", |_| {
-            Ok(FlashbackToVersionResponse::default())
-        });
-        // Send an `AdminCmdType::FinishFlashback` to unset the persistence state
-        // in `RegionLocalState` and region's meta, and when that
-        // admin cmd is applied, will update the memory
-        // state of the flashback
-        send_flashback_msg::<T, E>(
-            &raft_router,
-            req.get_context(),
-            AdminCmdType::FinishFlashback,
-        )
-        .await?;
         let mut resp = FlashbackToVersionResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
             resp.set_error(format!("{}", e));
+        } else {
+            // Only finish flashback when Flashback executed successfully.
+            fail_point!("skip_finish_flashback_to_version", |_| {
+                Ok(FlashbackToVersionResponse::default())
+            });
+            // Send an `AdminCmdType::FinishFlashback` to unset the persistence state
+            // in `RegionLocalState` and region's meta, and when that
+            // admin cmd is applied, will update the memory
+            // state of the flashback
+            send_flashback_msg::<T, E>(
+                &raft_router,
+                req.get_context(),
+                AdminCmdType::FinishFlashback,
+            )
+            .await?;
         }
         Ok(resp)
     }

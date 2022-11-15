@@ -95,6 +95,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         util::check_conf_change(
             &ctx.cfg,
             self.raft_group(),
+            self.region(),
             self.peer(),
             changes.as_ref(),
             &cc,

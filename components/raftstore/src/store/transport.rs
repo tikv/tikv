@@ -6,10 +6,9 @@ use std::sync::mpsc;
 use crossbeam::channel::{SendError, TrySendError};
 use engine_traits::{KvEngine, RaftEngine, Snapshot};
 use kvproto::raft_serverpb::RaftMessage;
-use raft::eraftpb::Snapshot as RaftSnapshot;
 use tikv_util::{error, warn};
 
-use super::{AsyncReadNotifier, FetchedLogs};
+use super::{AsyncReadNotifier, FetchedLogs, GenSnapRes};
 use crate::{
     store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg, StoreMsg},
     DiscardReason, Error, Result,
@@ -182,7 +181,7 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncReadNotifier for RaftRouter<EK, ER> {
     }
 
     #[inline]
-    fn notify_snapshot_generated(&self, _region_id: u64, _snapshot: Box<RaftSnapshot>) {
+    fn notify_snapshot_generated(&self, _region_id: u64, _snapshot: GenSnapRes) {
         unreachable!()
     }
 }

@@ -23,6 +23,7 @@
 
 #![allow(unused)]
 #![feature(let_else)]
+#![feature(array_windows)]
 
 mod batch;
 mod bootstrap;

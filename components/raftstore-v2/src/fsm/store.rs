@@ -5,12 +5,17 @@ use std::time::SystemTime;
 use batch_system::Fsm;
 use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
-use raftstore::store::{Config, ReadDelegate};
+use kvproto::{metapb::Region, raft_serverpb::RaftMessage};
+use raftstore::{
+    coprocessor::RegionChangeReason,
+    store::{Config, ReadDelegate, RegionReadProgressRegistry},
+};
 use slog::{o, Logger};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 
 use crate::{
     batch::StoreContext,
+    raft::Peer,
     router::{StoreMsg, StoreTick},
     tablet::CachedTablet,
 };
@@ -24,6 +29,8 @@ where
     pub readers: HashMap<u64, ReadDelegate>,
     /// region_id -> tablet cache
     pub tablet_caches: HashMap<u64, CachedTablet<E>>,
+    /// region_id -> `RegionReadProgress`
+    pub region_read_progress: RegionReadProgressRegistry,
 }
 
 impl<E> StoreMeta<E>
@@ -35,6 +42,7 @@ where
             store_id: None,
             readers: HashMap::default(),
             tablet_caches: HashMap::default(),
+            region_read_progress: RegionReadProgressRegistry::new(),
         }
     }
 }
@@ -149,6 +157,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
                 StoreMsg::Start => self.on_start(),
                 StoreMsg::Tick(tick) => self.on_tick(tick),
                 StoreMsg::RaftMessage(msg) => self.fsm.store.on_raft_message(self.store_ctx, msg),
+                StoreMsg::SplitInit(msg) => self.fsm.store.on_split_init(self.store_ctx, msg),
             }
         }
     }

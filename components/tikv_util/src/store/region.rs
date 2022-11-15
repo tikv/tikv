@@ -32,9 +32,26 @@ pub fn region_on_same_stores(lhs: &Region, rhs: &Region) -> bool {
     // Because every store can only have one replica for the same region,
     // so just one round check is enough.
     lhs.get_peers().iter().all(|lp| {
-        rhs.get_peers()
+        rhs.get_peers().iter().any(|rp| {
+            rp.get_store_id() == lp.get_store_id()
+                && rp.get_role() == lp.get_role()
+                && rp.get_is_witness() == lp.get_is_witness()
+        })
+    })
+}
+
+/// Check if the given region exists on stores, by checking whether any one of
+/// the peers belonging to this region exist on the given stores.
+pub fn region_on_stores(region: &Region, store_ids: &Vec<u64>) -> bool {
+    if store_ids.is_empty() {
+        return true;
+    }
+    // If one of peers in this region exists on any on in `store_ids`, it shows that
+    // the region exists on the given stores.
+    region.get_peers().iter().any(|p| {
+        store_ids
             .iter()
-            .any(|rp| rp.get_store_id() == lp.get_store_id() && rp.get_role() == lp.get_role())
+            .any(|store_id| *store_id == p.get_store_id())
     })
 }
 

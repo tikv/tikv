@@ -42,7 +42,9 @@ pub use commit::Commit;
 pub use compare_and_swap::RawCompareAndSwap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 pub use flashback_to_version::FlashbackToVersion;
-pub use flashback_to_version_read_phase::FlashbackToVersionReadPhase;
+pub use flashback_to_version_read_phase::{
+    new_flashback_to_version_read_phase_cmd, FlashbackToVersionReadPhase, FlashbackToVersionState,
+};
 use kvproto::kvrpcpb::*;
 pub use mvcc_by_key::MvccByKey;
 pub use mvcc_by_start_ts::MvccByStartTs;
@@ -356,13 +358,12 @@ impl From<MvccGetByStartTsRequest> for TypedCommand<Option<(Key, MvccInfo)>> {
 
 impl From<FlashbackToVersionRequest> for TypedCommand<()> {
     fn from(mut req: FlashbackToVersionRequest) -> Self {
-        FlashbackToVersionReadPhase::new(
+        new_flashback_to_version_read_phase_cmd(
             req.get_start_ts().into(),
             req.get_commit_ts().into(),
             req.get_version().into(),
-            Some(Key::from_raw(req.get_end_key())),
-            Some(Key::from_raw(req.get_start_key())),
-            Some(Key::from_raw(req.get_start_key())),
+            Key::from_raw(req.get_start_key()),
+            Key::from_raw(req.get_end_key()),
             req.take_context(),
         )
     }

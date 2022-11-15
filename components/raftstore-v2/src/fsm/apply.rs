@@ -11,7 +11,7 @@ use std::{
 
 use batch_system::{Fsm, FsmScheduler, Mailbox};
 use crossbeam::channel::TryRecvError;
-use engine_traits::KvEngine;
+use engine_traits::{KvEngine, TabletFactory};
 use futures::{Future, StreamExt};
 use kvproto::{metapb, raft_serverpb::RegionLocalState};
 use raftstore::store::ReadTask;
@@ -65,6 +65,7 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
         region_state: RegionLocalState,
         res_reporter: R,
         remote_tablet: CachedTablet<EK>,
+        tablet_factory: Arc<dyn TabletFactory<EK>>,
         read_scheduler: Scheduler<ReadTask<EK>>,
         logger: Logger,
     ) -> (ApplyScheduler, Self) {
@@ -74,6 +75,7 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
             region_state,
             res_reporter,
             remote_tablet,
+            tablet_factory,
             read_scheduler,
             logger,
         );
