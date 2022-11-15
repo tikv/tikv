@@ -12,5 +12,6 @@ mod test_basic_write;
 mod test_conf_change;
 mod test_life;
 mod test_read;
+mod test_region_heartbeat;
 mod test_split;
 mod test_status;

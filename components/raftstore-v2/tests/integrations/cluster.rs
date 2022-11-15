@@ -300,6 +300,10 @@ impl TestNode {
         &self.running_state().unwrap().factory
     }
 
+    pub fn pd_client(&self) -> &Arc<RpcClient> {
+        &self.pd_client
+    }
+
     fn stop(&mut self) {
         if let Some(state) = std::mem::take(&mut self.running_state) {
             let mut meta = state.store_meta.lock().unwrap();
