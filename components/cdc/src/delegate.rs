@@ -634,7 +634,7 @@ impl Delegate {
         let always_sink_entries: Vec<EventRow> = entries
             .iter()
             .filter(|x| x.txn_source == 0)
-            .map(|x| x.clone())
+            .cloned()
             .collect::<Vec<EventRow>>();
         let always_sink_is_empty = always_sink_entries.is_empty();
 
@@ -670,12 +670,12 @@ impl Delegate {
             if downstream.ignore_cdc_written && always_sink_is_empty {
                 return Ok(());
             }
-            let event;
-            if downstream.ignore_cdc_written {
-                event = always_sink_change_data_event.clone();
+
+            let event = if downstream.ignore_cdc_written {
+                always_sink_change_data_event.clone()
             } else {
-                event = change_data_event.clone();
-            }
+                change_data_event.clone()
+            };
             // Do not force send for real time change data events.
             let force_send = false;
             downstream.sink_event(event, force_send)
