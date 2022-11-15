@@ -426,7 +426,7 @@ pub fn reserve_space_for_recover<P: AsRef<Path>>(data_dir: P, file_size: u64) ->
         delete_file_if_exist(&path)?;
     }
     fn do_reserve(dir: &Path, path: &Path, file_size: u64) -> io::Result<()> {
-        let f = File::create(&path)?;
+        let f = File::create(path)?;
         f.allocate(file_size)?;
         f.sync_all()?;
         sync_dir(dir)
