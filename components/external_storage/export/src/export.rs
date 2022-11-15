@@ -30,19 +30,15 @@ pub use external_storage::{
     read_external_storage_into_file, ExternalStorage, LocalStorage, NoopStorage, RestoreConfig,
     UnpinReader,
 };
-use futures_io::AsyncRead;
 #[cfg(feature = "cloud-gcp")]
 pub use gcp::{Config as GcsConfig, GcsStorage};
 pub use kvproto::brpb::StorageBackend_oneof_backend as Backend;
 #[cfg(any(feature = "cloud-gcp", feature = "cloud-aws", feature = "cloud-azure"))]
 use kvproto::brpb::{AzureBlobStorage, Gcs, S3};
 use kvproto::brpb::{CloudDynamic, Noop, StorageBackend};
+use tikv_util::time::{Instant, Limiter};
 #[cfg(feature = "cloud-storage-dylib")]
 use tikv_util::warn;
-use tikv_util::{
-    stream::block_on_external_io,
-    time::{Instant, Limiter},
-};
 
 #[cfg(feature = "cloud-storage-dylib")]
 use crate::dylib;

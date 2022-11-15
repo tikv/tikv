@@ -3,14 +3,13 @@
 use std::{
     fs::File as StdFile,
     io::{self, BufReader, Read, Seek},
-    marker::Unpin,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
 use async_trait::async_trait;
 use futures::io::AllowStdIo;
-use futures_io::AsyncRead;
+
 use futures_util::stream::TryStreamExt;
 use rand::Rng;
 use tikv_util::stream::error_stream;

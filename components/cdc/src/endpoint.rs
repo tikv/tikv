@@ -1399,7 +1399,10 @@ mod tests {
 
     #[test]
     fn test_api_version_check() {
-        let cfg = CdcConfig::default();
+        let mut cfg = CdcConfig::default();
+        // To make the case more stable.
+        cfg.min_ts_interval = ReadableDuration(Duration::from_secs(1));
+
         let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
         suite.add_region(1, 100);
         let quota = crate::channel::MemoryQuota::new(usize::MAX);
@@ -1539,7 +1542,7 @@ mod tests {
             }
             let diff = cfg.diff(&updated_cfg);
             ep.run(Task::ChangeConfig(diff));
-            assert_eq!(ep.config.min_ts_interval, ReadableDuration::secs(1));
+            assert_eq!(ep.config.min_ts_interval, ReadableDuration::millis(200));
             assert_eq!(ep.config.hibernate_regions_compatible, true);
 
             {

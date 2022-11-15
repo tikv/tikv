@@ -26,7 +26,7 @@ use futures_util::AsyncReadExt;
 use kvproto::brpb::CompressionType;
 use openssl::hash::{Hasher, MessageDigest};
 use tikv_util::{
-    stream::{block_on_external_io, READ_BUF_SIZE},
+    stream::{READ_BUF_SIZE},
     time::{Instant, Limiter},
 };
 use tokio::time::timeout;

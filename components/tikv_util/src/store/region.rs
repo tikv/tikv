@@ -32,9 +32,11 @@ pub fn region_on_same_stores(lhs: &Region, rhs: &Region) -> bool {
     // Because every store can only have one replica for the same region,
     // so just one round check is enough.
     lhs.get_peers().iter().all(|lp| {
-        rhs.get_peers()
-            .iter()
-            .any(|rp| rp.get_store_id() == lp.get_store_id() && rp.get_role() == lp.get_role())
+        rhs.get_peers().iter().any(|rp| {
+            rp.get_store_id() == lp.get_store_id()
+                && rp.get_role() == lp.get_role()
+                && rp.get_is_witness() == lp.get_is_witness()
+        })
     })
 }
 
