@@ -814,7 +814,7 @@ mod check_data_dir {
                 }
                 let ent = &*ent;
                 let cur_dir = CStr::from_ptr(ent.mnt_dir).to_str().unwrap();
-                if path.starts_with(&cur_dir) && cur_dir.len() >= fs.mnt_dir.len() {
+                if path.starts_with(cur_dir) && cur_dir.len() >= fs.mnt_dir.len() {
                     fs.tp = CStr::from_ptr(ent.mnt_type).to_str().unwrap().to_owned();
                     fs.opts = CStr::from_ptr(ent.mnt_opts).to_str().unwrap().to_owned();
                     fs.fsname = CStr::from_ptr(ent.mnt_fsname).to_str().unwrap().to_owned();
@@ -844,7 +844,7 @@ mod check_data_dir {
         let block_dir = "/sys/block";
         let mut device_dir = format!("{}/{}", block_dir, dev);
         if !Path::new(&device_dir).exists() {
-            let dir = fs::read_dir(&block_dir).map_err(|e| {
+            let dir = fs::read_dir(block_dir).map_err(|e| {
                 ConfigError::FileSystem(format!(
                     "{}: read block dir {:?} failed: {:?}",
                     op, block_dir, e
