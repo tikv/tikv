@@ -631,13 +631,13 @@ mod tests {
     fn test_copy_from() {
         let mut v1 = BufferVec::new();
         v1.push([]);
-        v1.push(&[0xAA, 0xBB, 0x0C]);
-        v1.push(&[]);
-        v1.push(&[0x00]);
+        v1.push([0xAA, 0xBB, 0x0C]);
+        v1.push([]);
+        v1.push([0x00]);
 
         let mut v2 = BufferVec::new();
-        v2.push(&[]);
-        v2.push(&[]);
+        v2.push([]);
+        v2.push([]);
 
         let mut v3 = v1.clone();
         v3.copy_from(&v2);
@@ -650,8 +650,8 @@ mod tests {
         assert_eq!(v3.total_len(), 3);
         assert_eq!(format!("{:?}", v3), "[null, AABB0C, null]");
 
-        v3.push(&[]);
-        v3.push(&[0x00]);
+        v3.push([]);
+        v3.push([0x00]);
         assert_eq!(v3.len(), 5);
         assert_eq!(v3.total_len(), 4);
         assert_eq!(format!("{:?}", v3), "[null, AABB0C, null, null, 00]");
@@ -681,12 +681,12 @@ mod tests {
         assert_eq!(format!("{:?}", v3), "[]");
 
         let mut v1 = BufferVec::new();
-        v1.push(&[]);
-        v1.push(&[0xAA, 0xBB, 0x0C]);
+        v1.push([]);
+        v1.push([0xAA, 0xBB, 0x0C]);
 
         let mut v2 = BufferVec::new();
-        v2.push(&[0x0C, 0x00]);
-        v2.push(&[]);
+        v2.push([0x0C, 0x00]);
+        v2.push([]);
 
         let mut v3 = v2.clone();
         v3.copy_n_from(&v1, 0);
@@ -694,7 +694,7 @@ mod tests {
         assert_eq!(v3.total_len(), 2);
         assert_eq!(format!("{:?}", v3), "[0C00, null]");
 
-        v3.push(&[0xAA]);
+        v3.push([0xAA]);
         assert_eq!(v3.len(), 3);
         assert_eq!(v3.total_len(), 3);
         assert_eq!(format!("{:?}", v3), "[0C00, null, AA]");
@@ -705,17 +705,17 @@ mod tests {
         assert_eq!(v3.total_len(), 2);
         assert_eq!(format!("{:?}", v3), "[0C00, null, null]");
 
-        v3.push(&[0xAA]);
+        v3.push([0xAA]);
         assert_eq!(v3.len(), 4);
         assert_eq!(v3.total_len(), 3);
         assert_eq!(format!("{:?}", v3), "[0C00, null, null, AA]");
 
-        v3.extend(&[0xAA, 0xAB, 0xCC]);
+        v3.extend([0xAA, 0xAB, 0xCC]);
         assert_eq!(v3.len(), 5);
         assert_eq!(v3.total_len(), 6);
         assert_eq!(format!("{:?}", v3), "[0C00, null, null, AA, AAABCC]");
 
-        v3.extend(&[]);
+        v3.extend([]);
         assert_eq!(v3.len(), 6);
         assert_eq!(v3.total_len(), 6);
         assert_eq!(format!("{:?}", v3), "[0C00, null, null, AA, AAABCC, null]");
@@ -761,7 +761,7 @@ mod tests {
         v.retain_by_array(&[]);
         assert_eq!(format!("{:?}", v), "[]");
 
-        v.push(&[]);
+        v.push([]);
         assert_eq!(format!("{:?}", v), "[null]");
 
         v.retain_by_array(&[true]);
@@ -770,8 +770,8 @@ mod tests {
         v.retain_by_array(&[false]);
         assert_eq!(format!("{:?}", v), "[]");
 
-        v.push(&[0xAA, 0x00]);
-        v.push(&[]);
+        v.push([0xAA, 0x00]);
+        v.push([]);
         assert_eq!(format!("{:?}", v), "[AA00, null]");
 
         let mut v2 = v.clone();
@@ -790,8 +790,8 @@ mod tests {
         v2.retain_by_array(&[false, false]);
         assert_eq!(format!("{:?}", v2), "[]");
 
-        v.push(&[]);
-        v.push(&[0xBB, 0x00, 0xA0]);
+        v.push([]);
+        v.push([0xBB, 0x00, 0xA0]);
         assert_eq!(format!("{:?}", v), "[AA00, null, null, BB00A0]");
 
         let mut v2 = v.clone();
@@ -812,7 +812,7 @@ mod tests {
         v2.retain_by_array(&[false, false, true, true]);
         assert_eq!(format!("{:?}", v2), "[null, BB00A0]");
 
-        v2.push(&[]);
+        v2.push([]);
         assert_eq!(format!("{:?}", v2), "[null, BB00A0, null]");
 
         let mut v2 = v.clone();
@@ -841,12 +841,12 @@ mod tests {
     #[test]
     fn test_iter() {
         let mut v = BufferVec::new();
-        v.push(&[]);
-        v.push(&[0xAA, 0xBB, 0x0C]);
-        v.push(&[]);
-        v.push(&[]);
-        v.push(&[0x00]);
-        v.push(&[]);
+        v.push([]);
+        v.push([0xAA, 0xBB, 0x0C]);
+        v.push([]);
+        v.push([]);
+        v.push([0x00]);
+        v.push([]);
 
         let mut it = v.iter();
         assert_eq!(it.count(), 6);

@@ -4341,7 +4341,7 @@ mod tests {
         test_as_string_helper(
             ref_cs,
             |ctx, extra, val| {
-                let val = val.map(|x| *x);
+                let val = val.copied();
                 cast_year_as_string(ctx, extra, &val.unwrap())
             },
             "cast_year_as_string",

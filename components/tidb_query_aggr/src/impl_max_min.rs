@@ -514,8 +514,8 @@ where
                     self.extremum = value.copied()
                 }
             } else {
-                let v1 = self.extremum.map(|x| x);
-                let v2 = value.map(|x| *x);
+                let v1 = self.extremum;
+                let v2 = value.copied();
                 if v1.cmp(&v2) == E::ORD {
                     self.extremum = value.copied()
                 }

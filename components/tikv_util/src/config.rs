@@ -1789,8 +1789,8 @@ mod tests {
         ensure_dir_exist(&format!("{}", tmp_dir.to_path_buf().join("dir").display())).unwrap();
         let nodes: &[&str] = if cfg!(target_os = "linux") {
             std::os::unix::fs::symlink(
-                &tmp_dir.to_path_buf().join("dir"),
-                &tmp_dir.to_path_buf().join("symlink"),
+                tmp_dir.to_path_buf().join("dir"),
+                tmp_dir.to_path_buf().join("symlink"),
             )
             .unwrap();
             &["non_existing", "dir", "symlink"]
@@ -2116,10 +2116,10 @@ yyy = 100
                 let source_file = source.join("file");
                 let target_file = target.join("file");
                 if !target.exists() {
-                    fs::create_dir_all(&target).unwrap();
+                    fs::create_dir_all(target).unwrap();
                     check();
                 }
-                fs::copy(&source_file, &target_file).unwrap();
+                fs::copy(source_file, target_file).unwrap();
                 check();
                 state.after_dump_data_with_check(&check);
             }
@@ -2130,14 +2130,14 @@ yyy = 100
             if dst.exists() {
                 fs::remove_dir_all(dst)?;
             }
-            fs::create_dir_all(&dst)?;
+            fs::create_dir_all(dst)?;
             for entry in fs::read_dir(src)? {
                 let entry = entry?;
                 let ty = entry.file_type()?;
                 if ty.is_dir() {
                     copy_dir(&entry.path(), &dst.join(entry.file_name()))?;
                 } else {
-                    fs::copy(entry.path(), &dst.join(entry.file_name()))?;
+                    fs::copy(entry.path(), dst.join(entry.file_name()))?;
                 }
             }
             Ok(())
@@ -2151,7 +2151,7 @@ yyy = 100
         fs::create_dir_all(&target).unwrap();
         // Write some data into source.
         let source_file = source.join("file");
-        File::create(&source_file).unwrap();
+        File::create(source_file).unwrap();
 
         let backup = dir.path().join("backup");
 
