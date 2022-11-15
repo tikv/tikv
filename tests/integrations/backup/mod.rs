@@ -499,7 +499,7 @@ fn test_invalid_external_storage() {
 
     // Set backup directory read-only. TiKV fails to backup.
     let tmp = Builder::new().tempdir().unwrap();
-    let f = File::open(&tmp.path()).unwrap();
+    let f = File::open(tmp.path()).unwrap();
     let mut perms = f.metadata().unwrap().permissions();
     perms.set_readonly(true);
     f.set_permissions(perms.clone()).unwrap();

@@ -4,7 +4,7 @@
 //! module. external_storage contains the actual library code
 //! Cloud provider backends are under components/cloud
 use std::{
-    io::{self, Write},
+    io,
     path::Path,
     sync::Arc,
 };
@@ -182,7 +182,9 @@ fn create_backend_inner(
         Backend::Hdfs(hdfs) => {
             Box::new(HdfsStorage::new(&hdfs.remote, backend_config.hdfs_config)?)
         }
-        Backend::Noop(_) => Box::new(NoopStorage::default()) as Box<dyn ExternalStorage>,
+        Backend::Noop(_) => {
+            Box::<external_storage::NoopStorage>::default() as Box<dyn ExternalStorage>
+        }
         #[cfg(feature = "cloud-aws")]
         Backend::S3(config) => {
             let mut s = S3Storage::from_input(config.clone())?;
