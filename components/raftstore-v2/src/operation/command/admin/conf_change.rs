@@ -127,7 +127,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         Ok(proposal_index)
     }
 
-    pub fn on_apply_res_conf_change(&mut self, conf_change: ConfChangeResult) {
+    pub fn on_apply_res_conf_change<T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        conf_change: ConfChangeResult,
+    ) {
         // TODO: cancel generating snapshot.
 
         // Snapshot is applied in memory without waiting for all entries being
@@ -150,6 +154,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "notify pd with change peer region";
                 "region" => ?self.region(),
             );
+            self.heartbeat_pd(ctx);
             let demote_self = tikv_util::store::is_learner(self.peer());
             if remove_self || demote_self {
                 warn!(self.logger, "removing or demoting leader"; "remove" => remove_self, "demote" => demote_self);

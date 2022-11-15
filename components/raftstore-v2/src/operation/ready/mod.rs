@@ -20,13 +20,13 @@
 mod async_writer;
 mod snapshot;
 
-use std::cmp;
+use std::{cmp, time::Instant};
 
 use engine_traits::{KvEngine, RaftEngine};
 use error_code::ErrorCodeExt;
 use kvproto::{raft_cmdpb::AdminCmdType, raft_serverpb::RaftMessage};
 use protobuf::Message as _;
-use raft::{eraftpb, Ready, StateRole};
+use raft::{eraftpb, Ready, StateRole, INVALID_ID};
 use raftstore::store::{util, ExtraStates, FetchedLogs, ReadProgress, Transport, WriteTask};
 use slog::{debug, error, trace, warn};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
@@ -112,7 +112,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         // TODO: drop all msg append when the peer is uninitialized and has conflict
         // ranges with other peers.
-        self.insert_peer_cache(msg.take_from_peer());
+        let from_peer = msg.take_from_peer();
+        if self.is_leader() && from_peer.get_id() != INVALID_ID {
+            self.peer_heartbeats
+                .insert(from_peer.get_id(), Instant::now());
+        }
+        self.insert_peer_cache(from_peer);
         if let Err(e) = self.raft_group_mut().step(msg.take_message()) {
             error!(self.logger, "raft step error"; "err" => ?e);
         }
@@ -446,6 +451,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
                     // Exit entry cache warmup state when the peer becomes leader.
                     self.entry_storage_mut().clear_entry_cache_warmup_state();
+
+                    self.heartbeat_pd(ctx);
                 }
                 StateRole::Follower => {
                     self.leader_lease_mut().expire();

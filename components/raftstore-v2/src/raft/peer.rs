@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{mem, sync::Arc};
+use std::{mem, sync::Arc, time::Instant};
 
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
@@ -48,6 +48,8 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// peer list, for example, an isolated peer may need to send/receive
     /// messages with unknown peers after recovery.
     peer_cache: Vec<metapb::Peer>,
+    /// Record the last instant of each peer's heartbeat response.
+    pub peer_heartbeats: HashMap<u64, Instant>,
 
     /// Encoder for batching proposals and encoding them in a more efficient way
     /// than protobuf.
@@ -124,6 +126,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let mut peer = Peer {
             tablet,
             peer_cache: vec![],
+            peer_heartbeats: HashMap::default(),
             raw_write_encoder: None,
             proposals: ProposalQueue::new(region_id, raft_group.raft.id),
             async_writer: AsyncWriter::new(region_id, peer_id),
