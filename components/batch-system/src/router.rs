@@ -294,7 +294,7 @@ where
         }
     }
 
-    /// Force sending message to control FSM.
+    /// Sending message to control FSM.
     #[inline]
     pub fn send_control(&self, msg: C::Message) -> Result<(), TrySendError<C::Message>> {
         match self.control_box.try_send(msg, &self.control_scheduler) {
@@ -307,6 +307,12 @@ where
             }
             r => r,
         }
+    }
+
+    /// Force sending message to control FSM.
+    #[inline]
+    pub fn force_send_control(&self, msg: C::Message) -> Result<(), SendError<C::Message>> {
+        self.control_box.force_send(msg, &self.control_scheduler)
     }
 
     /// Try to notify all normal FSMs a message.

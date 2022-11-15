@@ -2412,13 +2412,6 @@ pub mod tests {
     #[test]
     fn test_inherit_last_change_ts_from_pessimistic_lock() {
         use engine_traits::CF_LOCK;
-        use pd_client::FeatureGate;
-
-        use crate::storage::txn::sched_pool::set_tls_feature_gate;
-
-        let feature_gate = FeatureGate::default();
-        feature_gate.set_version("6.5.0").unwrap();
-        set_tls_feature_gate(feature_gate);
 
         let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
         let key = b"k";

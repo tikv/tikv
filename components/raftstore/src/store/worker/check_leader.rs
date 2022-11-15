@@ -157,7 +157,7 @@ mod tests {
             region.set_start_key(kr.get_start_key().to_vec());
             region.set_end_key(kr.get_end_key().to_vec());
             region.set_peers(vec![kvproto::metapb::Peer::default()].into());
-            let rrp = RegionReadProgress::new(&region, 1, 1, "".to_owned());
+            let rrp = RegionReadProgress::new(&region, 1, 1, 1);
             rrp.update_safe_ts(1, safe_ts);
             assert_eq!(rrp.safe_ts(), safe_ts);
             meta.region_ranges.insert(enc_end_key(&region), id);
