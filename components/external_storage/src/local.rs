@@ -9,7 +9,6 @@ use std::{
 
 use async_trait::async_trait;
 use futures::io::AllowStdIo;
-
 use futures_util::stream::TryStreamExt;
 use rand::Rng;
 use tikv_util::stream::error_stream;

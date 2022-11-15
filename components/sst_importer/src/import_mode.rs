@@ -243,7 +243,6 @@ mod tests {
     use std::thread;
 
     use engine_traits::{KvEngine, CF_DEFAULT};
-    
     use tempfile::Builder;
     use test_sst_importer::{new_test_engine, new_test_engine_with_options};
     use tikv_util::config::ReadableDuration;

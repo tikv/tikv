@@ -1,10 +1,7 @@
-use std::{sync::Arc};
-
+use std::sync::Arc;
 
 use external_storage_export::ExternalStorage;
-
 use kvproto::brpb::StorageBackend;
-
 
 use super::cache_map::{MakeCache, ShareOwned};
 use crate::{Error, Result};
