@@ -192,10 +192,7 @@ impl ReadPoolHandle {
         match self {
             ReadPoolHandle::FuturePools {
                 read_pool_normal, ..
-            } => {
-                read_pool_normal.get_running_task_count() as usize
-                    / read_pool_normal.get_pool_size()
-            }
+            } => read_pool_normal.get_running_task_count() / read_pool_normal.get_pool_size(),
             ReadPoolHandle::Yatp {
                 running_tasks,
                 pool_size,

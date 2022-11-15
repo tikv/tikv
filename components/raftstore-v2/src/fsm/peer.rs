@@ -187,7 +187,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         self.store_ctx
             .raft_metrics
             .propose_wait_time
-            .observe(duration_to_sec(send_time.saturating_elapsed()) as f64);
+            .observe(duration_to_sec(send_time.saturating_elapsed()));
     }
 
     fn on_tick(&mut self, tick: PeerTick) {
