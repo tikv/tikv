@@ -3,11 +3,7 @@
 //! To use External storage with protobufs as an application, import this
 //! module. external_storage contains the actual library code
 //! Cloud provider backends are under components/cloud
-use std::{
-    io,
-    path::Path,
-    sync::Arc,
-};
+use std::{io, path::Path, sync::Arc};
 
 use async_trait::async_trait;
 #[cfg(feature = "cloud-aws")]
