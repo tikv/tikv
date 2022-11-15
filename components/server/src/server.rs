@@ -1119,8 +1119,6 @@ where
                 self.concurrency_manager.clone(),
                 server.env(),
                 self.security_mgr.clone(),
-                // TODO: replace to the cdc sinker
-                resolved_ts::DummySinker::new(),
             );
             rts_worker.start_with_timer(rts_endpoint);
             self.to_stop.push(rts_worker);
