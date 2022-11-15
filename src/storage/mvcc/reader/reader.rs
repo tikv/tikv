@@ -536,9 +536,8 @@ impl<S: EngineSnapshot> MvccReader<S> {
     /// specified, it will scan the latest version for each key, if the key
     /// does not exist or is not visible at that point, an `Option::None` will
     /// be placed. The return type is:
-    /// * `(Vec<(key, commit_ts, Option<write>)>, has_remain)`.
+    /// * `(Vec<(key, Option<write>)>, has_remain)`.
     ///   - `key` is the encoded key without commit ts.
-    ///   - `commit_ts` is the latest commit ts of the key.
     ///   - `write` is the PUT/DELETE write record at the given version.
     ///   - `has_remain` indicates whether there MAY be remaining writes that
     ///     can be scanned.
@@ -554,9 +553,9 @@ impl<S: EngineSnapshot> MvccReader<S> {
         version: Option<TimeStamp>,
         filter: F,
         limit: usize,
-    ) -> Result<(Vec<(Key, TimeStamp, Option<Write>)>, bool)>
+    ) -> Result<(Vec<(Key, Option<Write>)>, bool)>
     where
-        F: Fn(&Key) -> bool,
+        F: Fn(&Key /* user key */, TimeStamp /* latest `commit_ts` */) -> bool,
     {
         self.create_write_cursor()?;
         let cursor = self.write_cursor.as_mut().unwrap();
@@ -580,15 +579,17 @@ impl<S: EngineSnapshot> MvccReader<S> {
                     break;
                 }
             }
-            let commit_ts = key.decode_ts()?;
             let user_key = key.clone().truncate_ts()?;
-            // To make sure we only check each unique key once and `filter(&key)` returns
+            let commit_ts = key.decode_ts()?;
+            // To make sure we only check each unique user key once and the filter returns
             // true.
-            if (cur_key.is_some() && cur_key.clone().unwrap() == user_key) || !filter(&key) {
+            let should_skip = (cur_key.is_some() && cur_key.clone().unwrap() == user_key)
+                || !filter(&user_key, commit_ts);
+            cur_key = Some(user_key.clone());
+            if should_skip {
                 cursor.next(&mut self.statistics.write);
                 continue;
             }
-            cur_key = Some(user_key.clone());
 
             let mut write = None;
             let version_key = user_key.clone().append_ts(version);
@@ -623,7 +624,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
                     }
                 }
             }
-            key_writes.push((user_key, commit_ts, write));
+            key_writes.push((user_key, write));
             if limit > 0 && key_writes.len() == limit {
                 has_remain = true;
                 break;
@@ -1824,7 +1825,7 @@ pub mod tests {
             end_key: Option<Key>,
             version: Option<u64>,
             limit: usize,
-            expect_res: Vec<(Key, TimeStamp, Option<Write>)>,
+            expect_res: Vec<(Key, Option<Write>)>,
             expect_is_remain: bool,
         }
 
@@ -1838,7 +1839,6 @@ pub mod tests {
                 expect_res: vec![
                     (
                         Key::from_raw(b"k0"),
-                        1000.into(),
                         Some(Write::new(
                             WriteType::Put,
                             999.into(),
@@ -1847,17 +1847,14 @@ pub mod tests {
                     ),
                     (
                         Key::from_raw(b"k1"),
-                        4.into(),
                         Some(Write::new(WriteType::Put, 3.into(), Some(b"v1@3".to_vec()))),
                     ),
                     (
                         Key::from_raw(b"k2"),
-                        4.into(),
                         Some(Write::new(WriteType::Put, 3.into(), Some(b"v2@3".to_vec()))),
                     ),
                     (
                         Key::from_raw(b"k3"),
-                        9.into(),
                         Some(Write::new(WriteType::Put, 8.into(), Some(b"v3@8".to_vec()))),
                     ),
                 ],
@@ -1870,20 +1867,17 @@ pub mod tests {
                 version: Some(9),
                 limit: 4,
                 expect_res: vec![
-                    (Key::from_raw(b"k0"), 1000.into(), None),
+                    (Key::from_raw(b"k0"), None),
                     (
                         Key::from_raw(b"k1"),
-                        4.into(),
                         Some(Write::new(WriteType::Put, 3.into(), Some(b"v1@3".to_vec()))),
                     ),
                     (
                         Key::from_raw(b"k2"),
-                        4.into(),
                         Some(Write::new(WriteType::Put, 3.into(), Some(b"v2@3".to_vec()))),
                     ),
                     (
                         Key::from_raw(b"k3"),
-                        9.into(),
                         Some(Write::new(WriteType::Put, 8.into(), Some(b"v3@8".to_vec()))),
                     ),
                 ],
@@ -1896,20 +1890,17 @@ pub mod tests {
                 version: Some(8),
                 limit: 4,
                 expect_res: vec![
-                    (Key::from_raw(b"k0"), 1000.into(), None),
+                    (Key::from_raw(b"k0"), None),
                     (
                         Key::from_raw(b"k1"),
-                        4.into(),
                         Some(Write::new(WriteType::Put, 3.into(), Some(b"v1@3".to_vec()))),
                     ),
                     (
                         Key::from_raw(b"k2"),
-                        4.into(),
                         Some(Write::new(WriteType::Put, 3.into(), Some(b"v2@3".to_vec()))),
                     ),
                     (
                         Key::from_raw(b"k3"),
-                        9.into(),
                         Some(Write::new(WriteType::Put, 5.into(), Some(b"v3@5".to_vec()))),
                     ),
                 ],
@@ -1921,20 +1912,17 @@ pub mod tests {
                 version: Some(7),
                 limit: 4,
                 expect_res: vec![
-                    (Key::from_raw(b"k0"), 1000.into(), None),
+                    (Key::from_raw(b"k0"), None),
                     (
                         Key::from_raw(b"k1"),
-                        4.into(),
                         Some(Write::new(WriteType::Put, 3.into(), Some(b"v1@3".to_vec()))),
                     ),
                     (
                         Key::from_raw(b"k2"),
-                        4.into(),
                         Some(Write::new(WriteType::Put, 3.into(), Some(b"v2@3".to_vec()))),
                     ),
                     (
                         Key::from_raw(b"k3"),
-                        9.into(),
                         Some(Write::new(WriteType::Put, 5.into(), Some(b"v3@5".to_vec()))),
                     ),
                 ],
@@ -1946,20 +1934,17 @@ pub mod tests {
                 version: Some(6),
                 limit: 4,
                 expect_res: vec![
-                    (Key::from_raw(b"k0"), 1000.into(), None),
+                    (Key::from_raw(b"k0"), None),
                     (
                         Key::from_raw(b"k1"),
-                        4.into(),
                         Some(Write::new(WriteType::Put, 3.into(), Some(b"v1@3".to_vec()))),
                     ),
                     (
                         Key::from_raw(b"k2"),
-                        4.into(),
                         Some(Write::new(WriteType::Put, 3.into(), Some(b"v2@3".to_vec()))),
                     ),
                     (
                         Key::from_raw(b"k3"),
-                        9.into(),
                         Some(Write::new(WriteType::Put, 5.into(), Some(b"v3@5".to_vec()))),
                     ),
                 ],
@@ -1972,18 +1957,16 @@ pub mod tests {
                 version: Some(5),
                 limit: 4,
                 expect_res: vec![
-                    (Key::from_raw(b"k0"), 1000.into(), None),
+                    (Key::from_raw(b"k0"), None),
                     (
                         Key::from_raw(b"k1"),
-                        4.into(),
                         Some(Write::new(WriteType::Put, 3.into(), Some(b"v1@3".to_vec()))),
                     ),
                     (
                         Key::from_raw(b"k2"),
-                        4.into(),
                         Some(Write::new(WriteType::Put, 3.into(), Some(b"v2@3".to_vec()))),
                     ),
-                    (Key::from_raw(b"k3"), 9.into(), None),
+                    (Key::from_raw(b"k3"), None),
                 ],
                 expect_is_remain: true,
             },
@@ -1993,18 +1976,16 @@ pub mod tests {
                 version: Some(4),
                 limit: 4,
                 expect_res: vec![
-                    (Key::from_raw(b"k0"), 1000.into(), None),
+                    (Key::from_raw(b"k0"), None),
                     (
                         Key::from_raw(b"k1"),
-                        4.into(),
                         Some(Write::new(WriteType::Put, 3.into(), Some(b"v1@3".to_vec()))),
                     ),
                     (
                         Key::from_raw(b"k2"),
-                        4.into(),
                         Some(Write::new(WriteType::Put, 3.into(), Some(b"v2@3".to_vec()))),
                     ),
-                    (Key::from_raw(b"k3"), 9.into(), None),
+                    (Key::from_raw(b"k3"), None),
                 ],
                 expect_is_remain: true,
             },
@@ -2015,18 +1996,16 @@ pub mod tests {
                 version: Some(3),
                 limit: 4,
                 expect_res: vec![
-                    (Key::from_raw(b"k0"), 1000.into(), None),
+                    (Key::from_raw(b"k0"), None),
                     (
                         Key::from_raw(b"k1"),
-                        4.into(),
                         Some(Write::new(WriteType::Put, 1.into(), Some(b"v1@1".to_vec()))),
                     ),
                     (
                         Key::from_raw(b"k2"),
-                        4.into(),
                         Some(Write::new(WriteType::Put, 1.into(), Some(b"v2@1".to_vec()))),
                     ),
-                    (Key::from_raw(b"k3"), 9.into(), None),
+                    (Key::from_raw(b"k3"), None),
                 ],
                 expect_is_remain: true,
             },
@@ -2036,18 +2015,16 @@ pub mod tests {
                 version: Some(2),
                 limit: 4,
                 expect_res: vec![
-                    (Key::from_raw(b"k0"), 1000.into(), None),
+                    (Key::from_raw(b"k0"), None),
                     (
                         Key::from_raw(b"k1"),
-                        4.into(),
                         Some(Write::new(WriteType::Put, 1.into(), Some(b"v1@1".to_vec()))),
                     ),
                     (
                         Key::from_raw(b"k2"),
-                        4.into(),
                         Some(Write::new(WriteType::Put, 1.into(), Some(b"v2@1".to_vec()))),
                     ),
-                    (Key::from_raw(b"k3"), 9.into(), None),
+                    (Key::from_raw(b"k3"), None),
                 ],
                 expect_is_remain: true,
             },
@@ -2058,10 +2035,10 @@ pub mod tests {
                 version: Some(1),
                 limit: 4,
                 expect_res: vec![
-                    (Key::from_raw(b"k0"), 1000.into(), None),
-                    (Key::from_raw(b"k1"), 4.into(), None),
-                    (Key::from_raw(b"k2"), 4.into(), None),
-                    (Key::from_raw(b"k3"), 9.into(), None),
+                    (Key::from_raw(b"k0"), None),
+                    (Key::from_raw(b"k1"), None),
+                    (Key::from_raw(b"k2"), None),
+                    (Key::from_raw(b"k3"), None),
                 ],
                 expect_is_remain: true,
             },
@@ -2071,7 +2048,7 @@ pub mod tests {
                 end_key: None,
                 version: Some(0),
                 limit: 1,
-                expect_res: vec![(Key::from_raw(b"k0"), 1000.into(), None)],
+                expect_res: vec![(Key::from_raw(b"k0"), None)],
                 expect_is_remain: true,
             },
             Case {
@@ -2080,10 +2057,10 @@ pub mod tests {
                 version: Some(0),
                 limit: 5,
                 expect_res: vec![
-                    (Key::from_raw(b"k0"), 1000.into(), None),
-                    (Key::from_raw(b"k1"), 4.into(), None),
-                    (Key::from_raw(b"k2"), 4.into(), None),
-                    (Key::from_raw(b"k3"), 9.into(), None),
+                    (Key::from_raw(b"k0"), None),
+                    (Key::from_raw(b"k1"), None),
+                    (Key::from_raw(b"k2"), None),
+                    (Key::from_raw(b"k3"), None),
                 ],
                 expect_is_remain: false,
             },
@@ -2097,7 +2074,7 @@ pub mod tests {
                     case.start_key.as_ref(),
                     case.end_key.as_ref(),
                     case.version.map(Into::into),
-                    |_| true,
+                    |_, _| true,
                     case.limit,
                 )
                 .unwrap();
