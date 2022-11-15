@@ -10,7 +10,7 @@ use std::{
     sync::Arc,
 };
 
-use dashmap::{DashMap};
+use dashmap::DashMap;
 use encryption::{to_engine_encryption_method, DataKeyManager};
 use engine_rocks::{get_env, RocksSstReader};
 use engine_traits::{
