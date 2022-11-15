@@ -4,10 +4,7 @@ mod conf_change;
 mod split;
 
 use engine_traits::{KvEngine, RaftEngine};
-use kvproto::{
-    raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest},
-    raft_serverpb::PeerState,
-};
+use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest};
 use protobuf::Message;
 use raft::prelude::ConfChangeV2;
 use raftstore::{
@@ -20,7 +17,7 @@ use raftstore::{
     Result,
 };
 use slog::info;
-pub use split::SplitResult;
+pub use split::{SplitInit, SplitResult};
 use tikv_util::box_err;
 
 use self::conf_change::ConfChangeResult;

@@ -2,21 +2,35 @@
 
 use std::{mem, sync::Arc};
 
+use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory};
-use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb};
+use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
 use raft::{RawNode, StateRole};
-use raftstore::store::{
-    util::{Lease, RegionReadProgress},
-    Config, EntryStorage, ProposalQueue, ReadDelegate, ReadIndexQueue, TrackVer, TxnExt,
+use raftstore::{
+    coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
+    store::{
+        fsm::Proposal,
+        util::{Lease, RegionReadProgress},
+        Config, EntryStorage, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue, ReadProgress,
+        TxnExt,
+    },
+    Error,
 };
-use slog::Logger;
-use tikv_util::{box_err, config::ReadableSize};
+use slog::{debug, error, info, o, warn, Logger};
+use tikv_util::{
+    box_err,
+    config::ReadableSize,
+    time::{monotonic_raw_now, Instant as TiInstant},
+    worker::Scheduler,
+    Either,
+};
 use time::Timespec;
 
 use super::{storage::Storage, Apply};
 use crate::{
+    batch::StoreContext,
     fsm::{ApplyFsm, ApplyScheduler},
     operation::{AsyncWriter, DestroyProgress, ProposalControl, SimpleWriteEncoder},
     router::{CmdResChannel, QueryResChannel},
@@ -55,6 +69,8 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
 
     /// region buckets.
     region_buckets: Option<BucketStat>,
+    last_region_buckets: Option<BucketStat>,
+
     /// Transaction extensions related to this peer.
     txn_ext: Arc<TxnExt>,
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
@@ -76,22 +92,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         let applied_index = storage.apply_state().get_applied_index();
         let peer_id = storage.peer().get_id();
-
-        let raft_cfg = raft::Config {
-            id: peer_id,
-            election_tick: cfg.raft_election_timeout_ticks,
-            heartbeat_tick: cfg.raft_heartbeat_ticks,
-            min_election_tick: cfg.raft_min_election_timeout_ticks,
-            max_election_tick: cfg.raft_max_election_timeout_ticks,
-            max_size_per_msg: cfg.raft_max_size_per_msg.0,
-            max_inflight_msgs: cfg.raft_max_inflight_msgs,
-            applied: applied_index,
-            check_quorum: true,
-            skip_bcast_commit: true,
-            pre_vote: cfg.prevote,
-            max_committed_size_per_ready: ReadableSize::mb(16).0,
-            ..Default::default()
-        };
+        let raft_cfg = cfg.new_raft_config(peer_id, applied_index);
 
         let region_id = storage.region().get_id();
         let tablet_index = storage.region_state().get_tablet_index();
@@ -143,6 +144,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 cfg.renew_leader_lease_advance_duration(),
             ),
             region_buckets: None,
+            last_region_buckets: None,
             txn_ext: Arc::default(),
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
             proposal_control: ProposalControl::new(0),
@@ -171,6 +173,63 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn region_id(&self) -> u64 {
         self.region().get_id()
+    }
+
+    /// Set the region of a peer.
+    ///
+    /// This will update the region of the peer, caller must ensure the region
+    /// has been preserved in a durable device.
+    pub fn set_region(
+        &mut self,
+        // host: &CoprocessorHost<impl KvEngine>,
+        reader: &mut ReadDelegate,
+        region: metapb::Region,
+        reason: RegionChangeReason,
+        tablet_index: u64,
+    ) {
+        if self.region().get_region_epoch().get_version() < region.get_region_epoch().get_version()
+        {
+            // Epoch version changed, disable read on the local reader for this region.
+            self.leader_lease.expire_remote_lease();
+        }
+
+        let mut region_state = RegionLocalState::default();
+        region_state.set_region(region.clone());
+        region_state.set_tablet_index(tablet_index);
+        region_state.set_state(self.storage().region_state().get_state());
+        self.storage_mut().set_region_state(region_state);
+
+        let progress = ReadProgress::region(region);
+        // Always update read delegate's region to avoid stale region info after a
+        // follower becoming a leader.
+        self.maybe_update_read_progress(reader, progress);
+
+        if self.is_leader() {
+            // Unlike v1, we should renew remote lease if it's leader. This is because v2
+            // only provides read in local reader which requires passing the lease check. If
+            // lease check fails, it sends query to raftstore to make it renew the remote
+            // lease. However, raftstore will answer immediately if the `bound` in
+            // `leader_lease` is valid, so the remote lease will not be updated.
+            if let Some(progress) = self
+                .leader_lease
+                .maybe_new_remote_lease(self.term())
+                .map(ReadProgress::leader_lease)
+            {
+                self.maybe_update_read_progress(reader, progress);
+            }
+        }
+
+        // Update leader info
+        self.read_progress
+            .update_leader_info(self.leader_id(), self.term(), self.region());
+
+        {
+            let mut pessimistic_locks = self.txn_ext.pessimistic_locks.write();
+            pessimistic_locks.term = self.term();
+            pessimistic_locks.version = self.region().get_region_epoch().get_version();
+        }
+
+        // todo: CoprocessorHost
     }
 
     #[inline]
@@ -251,6 +310,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn raft_group_mut(&mut self) -> &mut RawNode<Storage<EK, ER>> {
         &mut self.raft_group
+    }
+
+    #[inline]
+    pub fn set_raft_group(&mut self, raft_group: RawNode<Storage<EK, ER>>) {
+        self.raft_group = raft_group;
     }
 
     /// Mark the peer has a ready so it will be checked at the end of every
@@ -392,6 +456,38 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn set_apply_scheduler(&mut self, apply_scheduler: ApplyScheduler) {
         self.apply_scheduler = Some(apply_scheduler);
+    }
+
+    #[inline]
+    pub fn post_split(&mut self) {
+        self.reset_region_buckets();
+    }
+
+    pub fn reset_region_buckets(&mut self) {
+        if self.region_buckets.is_some() {
+            self.last_region_buckets = self.region_buckets.take();
+        }
+    }
+
+    pub fn maybe_campaign(&mut self) -> bool {
+        if self.region().get_peers().len() <= 1 {
+            // The peer campaigned when it was created, no need to do it again.
+            return false;
+        }
+
+        // If last peer is the leader of the region before split, it's intuitional for
+        // it to become the leader of new split region.
+        let _ = self.raft_group.campaign();
+        true
+    }
+
+    #[inline]
+    pub fn txn_ext(&self) -> &Arc<TxnExt> {
+        &self.txn_ext
+    }
+
+    pub fn heartbeat_pd<T>(&self, store_ctx: &StoreContext<EK, ER, T>) {
+        // todo
     }
 
     pub fn generate_read_delegate(&self) -> ReadDelegate {
