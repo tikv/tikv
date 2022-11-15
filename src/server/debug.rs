@@ -239,7 +239,7 @@ impl<ER: RaftEngine> Debugger<ER> {
         &self,
         region_id: u64,
         cfs: Vec<T>,
-    ) -> Result<Vec<(T, usize)>> {
+    ) -> Result<Vec<(T, usize, usize)>> {
         let region_state_key = keys::region_state_key(region_id);
         match self
             .engines
@@ -253,6 +253,7 @@ impl<ER: RaftEngine> Debugger<ER> {
                 let mut sizes = vec![];
                 for cf in cfs {
                     let mut size = 0;
+                    let mut key = 0;
                     box_try!(self.engines.kv.scan(
                         cf.as_ref(),
                         start_key,
@@ -260,10 +261,11 @@ impl<ER: RaftEngine> Debugger<ER> {
                         false,
                         |k, v| {
                             size += k.len() + v.len();
+                            key += 1;
                             Ok(true)
                         }
                     ));
-                    sizes.push((cf, size));
+                    sizes.push((cf, size, key));
                 }
                 Ok(sizes)
             }
@@ -1683,7 +1685,7 @@ mod tests {
 
         let sizes = debugger.region_size(region_id, cfs.clone()).unwrap();
         assert_eq!(sizes.len(), 4);
-        for (cf, size) in sizes {
+        for (cf, size, _) in sizes {
             cfs.iter().find(|&&c| c == cf).unwrap();
             assert_eq!(size, k.len() + v.len());
         }

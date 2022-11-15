@@ -129,26 +129,32 @@ pub trait DebugExecutor {
         println!("value: {}", escape(&value));
     }
 
-    fn dump_region_size(&self, region: u64, cfs: Vec<&str>) -> usize {
-        let sizes = self.get_region_size(region, cfs);
+    fn dump_region_size_and_key(&self, region: u64, cfs: Vec<&str>) -> (usize, usize) {
+        let sizes = self.get_region_size_and_key(region, cfs);
         let mut total_size = 0;
+        let mut total_key = 0;
         println!("region id: {}", region);
-        for (cf, size) in sizes {
-            println!("cf {} region size: {}", cf, convert_gbmb(size as u64));
+        for (cf, size, key) in sizes {
+            println!("cf {} region size: {}, key: {}", cf, convert_gbmb(size as u64), key);
             total_size += size;
+            total_key += key;
         }
-        total_size
+        (total_size, total_key)
     }
 
-    fn dump_all_region_size(&self, cfs: Vec<&str>) {
+    fn dump_all_region_size_and_key(&self, cfs: Vec<&str>) {
         let regions = self.get_all_regions_in_store();
         let regions_number = regions.len();
         let mut total_size = 0;
+        let mut total_key = 0;
         for region in regions {
-            total_size += self.dump_region_size(region, cfs.clone());
+            let (size, key) = self.dump_region_size_and_key(region, cfs.clone());
+            total_size += size;
+            total_key += key;
         }
         println!("total region number: {}", regions_number);
         println!("total region size: {}", convert_gbmb(total_size as u64));
+        println!("total region key: {}", total_key);
     }
 
     fn dump_region_info(&self, region_ids: Option<Vec<u64>>, skip_tombstone: bool) {
@@ -592,7 +598,7 @@ pub trait DebugExecutor {
 
     fn get_value_by_key(&self, cf: &str, key: Vec<u8>) -> Vec<u8>;
 
-    fn get_region_size(&self, region: u64, cfs: Vec<&str>) -> Vec<(String, usize)>;
+    fn get_region_size_and_key(&self, region: u64, cfs: Vec<&str>) -> Vec<(String, usize, usize)>;
 
     fn get_region_info(&self, region: u64) -> RegionInfo;
 
@@ -657,7 +663,7 @@ impl DebugExecutor for DebugClient {
             .take_value()
     }
 
-    fn get_region_size(&self, region: u64, cfs: Vec<&str>) -> Vec<(String, usize)> {
+    fn get_region_size_and_key(&self, region: u64, cfs: Vec<&str>) -> Vec<(String, usize, usize)> {
         let cfs = cfs.into_iter().map(ToOwned::to_owned).collect::<Vec<_>>();
         let mut req = RegionSizeRequest::default();
         req.set_cfs(cfs.into());
@@ -666,7 +672,7 @@ impl DebugExecutor for DebugClient {
             .unwrap_or_else(|e| perror_and_exit("DebugClient::region_size", e))
             .take_entries()
             .into_iter()
-            .map(|mut entry| (entry.take_cf(), entry.get_size() as usize))
+            .map(|mut entry| (entry.take_cf(), entry.get_size() as usize, entry.get_key() as usize))
             .collect()
     }
 
@@ -862,11 +868,11 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
             .unwrap_or_else(|e| perror_and_exit("Debugger::get", e))
     }
 
-    fn get_region_size(&self, region: u64, cfs: Vec<&str>) -> Vec<(String, usize)> {
+    fn get_region_size_and_key(&self, region: u64, cfs: Vec<&str>) -> Vec<(String, usize, usize)> {
         self.region_size(region, cfs)
             .unwrap_or_else(|e| perror_and_exit("Debugger::region_size", e))
             .into_iter()
-            .map(|(cf, size)| (cf.to_owned(), size as usize))
+            .map(|(cf, size, key)| (cf.to_owned(), size as usize, key as usize))
             .collect()
     }
 

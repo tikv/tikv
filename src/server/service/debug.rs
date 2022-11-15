@@ -201,10 +201,11 @@ impl<ER: RaftEngine, EK: KvEngine, T: RaftStoreRouter<EK> + 'static> debugpb::De
             resp.set_entries(
                 entries
                     .into_iter()
-                    .map(|(cf, size)| {
+                    .map(|(cf, size, key)| {
                         let mut entry = region_size_response::Entry::default();
                         entry.set_cf(cf);
                         entry.set_size(size as u64);
+                        entry.set_key(key as u64);
                         entry
                     })
                     .collect(),

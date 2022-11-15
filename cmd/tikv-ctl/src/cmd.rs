@@ -107,7 +107,7 @@ pub enum Cmd {
         #[structopt(subcommand)]
         cmd: RaftCmd,
     },
-    /// Print region size
+    /// Print region size and key count
     Size {
         #[structopt(short = "r")]
         /// Set the region id, if not specified, print all regions
