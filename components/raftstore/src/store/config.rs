@@ -438,6 +438,24 @@ impl Config {
         Config::default()
     }
 
+    pub fn new_raft_config(&self, peer_id: u64, applied_index: u64) -> raft::Config {
+        raft::Config {
+            id: peer_id,
+            election_tick: self.raft_election_timeout_ticks,
+            heartbeat_tick: self.raft_heartbeat_ticks,
+            min_election_tick: self.raft_min_election_timeout_ticks,
+            max_election_tick: self.raft_max_election_timeout_ticks,
+            max_size_per_msg: self.raft_max_size_per_msg.0,
+            max_inflight_msgs: self.raft_max_inflight_msgs,
+            applied: applied_index,
+            check_quorum: true,
+            skip_bcast_commit: true,
+            pre_vote: self.prevote,
+            max_committed_size_per_ready: ReadableSize::mb(16).0,
+            ..Default::default()
+        }
+    }
+
     pub fn raft_store_max_leader_lease(&self) -> TimeDuration {
         TimeDuration::from_std(self.raft_store_max_leader_lease.0).unwrap()
     }
