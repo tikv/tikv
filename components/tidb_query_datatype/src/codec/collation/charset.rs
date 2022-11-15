@@ -4,9 +4,15 @@ use std::str;
 
 use super::*;
 
+#[derive(PartialEq)]
+pub enum Charset {
+    Binary,
+    Utf8Mb4,
+}
+
 pub struct CharsetBinary;
 
-impl Charset for CharsetBinary {
+impl super::Charset for CharsetBinary {
     type Char = u8;
 
     #[inline]
@@ -22,11 +28,15 @@ impl Charset for CharsetBinary {
             Some((data[0], 1))
         }
     }
+
+    fn charset() -> Charset {
+        Charset::Binary
+    }
 }
 
 pub struct CharsetUtf8mb4;
 
-impl Charset for CharsetUtf8mb4 {
+impl super::Charset for CharsetUtf8mb4 {
     type Char = char;
 
     #[inline]
@@ -45,5 +55,9 @@ impl Charset for CharsetUtf8mb4 {
                 it.as_slice().as_ptr().offset_from(start) as usize,
             )
         })
+    }
+
+    fn charset() -> Charset {
+        Charset::Utf8Mb4
     }
 }
