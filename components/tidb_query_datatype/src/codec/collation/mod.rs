@@ -35,12 +35,63 @@ macro_rules! match_template_collator {
      }}
 }
 
+<<<<<<< HEAD
+=======
+#[macro_export]
+macro_rules! match_template_multiple_collators {
+    ((), (), $($tail:tt)*) => {
+        $($tail)*
+    };
+    (($first:tt), ($match_exprs:tt), $($tail:tt)*) => {
+        match_template_multiple_collators! {
+            ($first,), ($match_exprs,), $($tail)*
+        }
+    };
+    (($first:tt, $($t:tt)*), ($first_match_expr:tt, $($match_exprs:tt)*), $($tail:tt)*) => {{
+        #[allow(unused_imports)]
+        use $crate::codec::collation::collator::*;
+
+        match_template_collator! {
+            $first, match $first_match_expr {
+                Collation::$first => {
+                    match_template_multiple_collators! {
+                        ($($t)*), ($($match_exprs)*), $($tail)*
+                    }
+                }
+            }
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! match_template_charset {
+     ($t:tt, $($tail:tt)*) => {{
+         #[allow(unused_imports)]
+         use $crate::codec::collation::encoding::*;
+
+         match_template::match_template! {
+             $t = [
+                 Utf8 => EncodingUtf8,
+                 Utf8Mb4 => EncodingUtf8Mb4,
+                 Latin1 => EncodingLatin1,
+                 Gbk => EncodingGbk,
+                 Binary => EncodingBinary,
+                 Ascii => EncodingAscii,
+            ],
+            $($tail)*
+         }
+     }}
+}
+
+>>>>>>> a80ab9880d (copr: fix _ pattern in like behavior for old collation (#13785))
 pub trait Charset {
     type Char: Copy + Into<u32>;
 
     fn validate(bstr: &[u8]) -> Result<()>;
 
     fn decode_one(data: &[u8]) -> Option<(Self::Char, usize)>;
+
+    fn charset() -> crate::Charset;
 }
 
 pub trait Collator: 'static + std::marker::Send + std::marker::Sync + std::fmt::Debug {

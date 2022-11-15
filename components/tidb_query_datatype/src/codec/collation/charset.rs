@@ -22,6 +22,10 @@ impl Charset for CharsetBinary {
             Some((data[0], 1))
         }
     }
+
+    fn charset() -> crate::Charset {
+        crate::Charset::Binary
+    }
 }
 
 pub struct CharsetUtf8mb4;
@@ -45,6 +49,10 @@ impl Charset for CharsetUtf8mb4 {
                 it.as_slice().as_ptr().offset_from(start) as usize,
             )
         })
+    }
+
+    fn charset() -> crate::Charset {
+        crate::Charset::Utf8Mb4
     }
 }
 
