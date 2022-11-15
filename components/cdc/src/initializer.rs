@@ -96,6 +96,8 @@ pub(crate) struct Initializer<E> {
     pub(crate) ts_filter_ratio: f64,
 
     pub(crate) kv_api: ChangeDataRequestKvApi,
+
+    pub(crate) ignore_cdc_written: bool,
 }
 
 impl<E: KvEngine> Initializer<E> {
@@ -425,8 +427,12 @@ impl<E: KvEngine> Initializer<E> {
 
     async fn sink_scan_events(&mut self, entries: Vec<Option<KvEntry>>, done: bool) -> Result<()> {
         let mut barrier = None;
-        let mut events =
-            Delegate::convert_to_grpc_events(self.region_id, self.request_id, entries)?;
+        let mut events = Delegate::convert_to_grpc_events(
+            self.region_id,
+            self.request_id,
+            entries,
+            self.ignore_cdc_written,
+        )?;
         if done {
             let (cb, fut) = tikv_util::future::paired_future_callback();
             events.push(CdcEvent::Barrier(Some(cb)));
@@ -645,6 +651,7 @@ mod tests {
             build_resolver: true,
             ts_filter_ratio: 1.0, // always enable it.
             kv_api,
+            ignore_cdc_written: false,
         };
 
         (receiver_worker, pool, initializer, rx, drain)
