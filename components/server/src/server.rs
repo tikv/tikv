@@ -530,30 +530,23 @@ where
         // enough space to do compaction and region migration when TiKV recover.
         // This file is created in data_dir rather than db_path, because we must not
         // increase store size of db_path.
-        fn setup_reserved_space(
-            for_raft_disk: bool,
-            data_dir: &String,
-            capacity: u64,
-            available: u64,
-            reserved_size: u64,
-        ) {
-            let mut reserve_space = reserved_size;
-            if reserved_size != 0 {
-                reserve_space = cmp::max((capacity as f64 * 0.05) as u64, reserved_size);
+        fn calculate_reserved_space(capacity: u64, reserved_size_from_config: u64) -> u64 {
+            let mut reserved_size = reserved_size_from_config;
+            if reserved_size_from_config != 0 {
+                reserved_size =
+                    cmp::max((capacity as f64 * 0.05) as u64, reserved_size_from_config);
             }
-            if for_raft_disk {
-                disk::set_raft_disk_reserved_space(reserve_space)
-            } else {
-                disk::set_disk_reserved_space(reserve_space)
-            }
+            reserved_size
+        }
+        fn reserve_physical_space(data_dir: &String, available: u64, reserved_size: u64) {
             let path = Path::new(data_dir).join(file_system::SPACE_PLACEHOLDER_FILE);
             if let Err(e) = file_system::remove_file(&path) {
                 warn!("failed to remove space holder on starting: {}", e);
             }
 
             // place holder file size is 20% of total reserved space.
-            if available > reserve_space {
-                file_system::reserve_space_for_recover(data_dir, reserve_space / 5)
+            if available > reserved_size {
+                file_system::reserve_space_for_recover(data_dir, reserved_size / 5)
                     .map_err(|e| panic!("Failed to reserve space for recovery: {}.", e))
                     .unwrap();
             } else {
@@ -567,12 +560,13 @@ where
             capacity = cmp::min(capacity, self.config.raft_store.capacity.0);
         }
         // reserve space for kv engine
-        setup_reserved_space(
-            false,
+        let kv_reserved_size =
+            calculate_reserved_space(capacity, self.config.storage.reserve_space.0);
+        disk::set_disk_reserved_space(kv_reserved_size);
+        reserve_physical_space(
             &self.config.storage.data_dir,
-            capacity,
             disk_stats.available_space(),
-            self.config.storage.reserve_space.0,
+            kv_reserved_size,
         );
 
         let raft_data_dir = if self.config.raft_engine.enable {
@@ -586,12 +580,15 @@ where
         if separated_raft_mount_path {
             let raft_disk_stats = fs2::statvfs(&raft_data_dir).unwrap();
             // reserve space for raft engine if raft engine is deployed separately
-            setup_reserved_space(
-                true,
-                &raft_data_dir,
+            let raft_reserved_size = calculate_reserved_space(
                 raft_disk_stats.total_space(),
-                raft_disk_stats.available_space(),
                 self.config.storage.reserve_raft_space.0,
+            );
+            disk::set_raft_disk_reserved_space(raft_reserved_size);
+            reserve_physical_space(
+                &raft_data_dir,
+                raft_disk_stats.available_space(),
+                raft_reserved_size,
             );
         }
     }
@@ -1491,6 +1488,15 @@ where
 
         let almost_full_threshold = reserve_space;
         let already_full_threshold = reserve_space / 2;
+        fn calculate_disk_usage(a: disk::DiskUsage, b: disk::DiskUsage) -> disk::DiskUsage {
+            match (a, b) {
+                (disk::DiskUsage::AlreadyFull, _) => disk::DiskUsage::AlreadyFull,
+                (_, disk::DiskUsage::AlreadyFull) => disk::DiskUsage::AlreadyFull,
+                (disk::DiskUsage::AlmostFull, _) => disk::DiskUsage::AlmostFull,
+                (_, disk::DiskUsage::AlmostFull) => disk::DiskUsage::AlmostFull,
+                (disk::DiskUsage::Normal, disk::DiskUsage::Normal) => disk::DiskUsage::Normal,
+            }
+        }
         self.background_worker
             .spawn_interval_task(DEFAULT_STORAGE_STATS_INTERVAL, move || {
                 let disk_stats = match fs2::statvfs(&store_path) {
@@ -1573,13 +1579,7 @@ where
                 } else {
                     disk::DiskUsage::Normal
                 };
-                let cur_disk_status = match (raft_disk_status, cur_kv_disk_status) {
-                    (disk::DiskUsage::AlreadyFull, _) => disk::DiskUsage::AlreadyFull,
-                    (_, disk::DiskUsage::AlreadyFull) => disk::DiskUsage::AlreadyFull,
-                    (disk::DiskUsage::AlmostFull, _) => disk::DiskUsage::AlmostFull,
-                    (_, disk::DiskUsage::AlmostFull) => disk::DiskUsage::AlmostFull,
-                    (disk::DiskUsage::Normal, disk::DiskUsage::Normal) => disk::DiskUsage::Normal,
-                };
+                let cur_disk_status = calculate_disk_usage(raft_disk_status, cur_kv_disk_status);
                 if prev_disk_status != cur_disk_status {
                     warn!(
                         "disk usage {:?}->{:?} (raft engine usage: {:?}, kv engine usage: {:?}), seperated raft mount={}, kv available={}, snap={}, kv={}, raft={}, capacity={}",
