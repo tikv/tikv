@@ -31,7 +31,7 @@ use kvproto::{
 use protobuf::Message as _;
 use raft::{
     eraftpb::{self, MessageType, Snapshot},
-    Ready, StateRole,
+    Ready, StateRole, Storage as rStorage,
 };
 use raftstore::{
     coprocessor::ApplySnapshotObserver,
@@ -402,25 +402,28 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let (persisted_message, has_snapshot) =
             self.async_writer
                 .on_persisted(ctx, ready_number, &self.logger);
-        if has_snapshot {
-            self.storage_mut().after_applied_snapshot();
-            let suffix = self.storage().raft_state().last_index;
-            let region_id = self.storage().get_region_id();
-            let tablet = ctx
-                .tablet_factory
-                .open_tablet(region_id, Some(suffix), OpenOptions::default())
-                .unwrap();
-            self.tablet_mut().set(tablet);
-            self.schedule_apply_fsm(ctx);
-        }
         for msgs in persisted_message {
             for msg in msgs {
                 self.send_raft_message(ctx, msg);
             }
         }
+
         let persisted_number = self.async_writer.persisted_number();
         self.raft_group_mut().on_persist_ready(persisted_number);
         let persisted_index = self.raft_group().raft.raft_log.persisted;
+        let first_index = self.storage().first_index().unwrap() - 1;
+        if first_index == persisted_index && has_snapshot {
+            self.storage_mut().after_applied_snapshot();
+            let region_id = self.storage().get_region_id();
+            let tablet = ctx
+                .tablet_factory
+                .open_tablet(region_id, Some(first_index), OpenOptions::default())
+                .unwrap();
+            self.tablet_mut().set(tablet);
+            self.schedule_apply_fsm(ctx);
+            info!(self.logger, "apply tablet snapshot completely");
+        }
+
         self.storage_mut()
             .entry_storage_mut()
             .update_cache_persisted(persisted_index);
@@ -536,12 +539,14 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let ever_persisted = self.ever_persisted();
 
         if !ready.snapshot().is_empty() {
-            let _ = self.apply_snapshot(
+            if let Err(e) = self.apply_snapshot(
                 ready.snapshot(),
                 write_task,
                 ctx.snap_mgr.clone(),
                 ctx.tablet_factory.clone(),
-            );
+            ) {
+                error!(self.logger(),"failed to apply snapshot";"error"=>?e)
+            }
         }
 
         let entry_storage = self.entry_storage_mut();

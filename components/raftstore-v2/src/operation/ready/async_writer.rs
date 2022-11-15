@@ -71,7 +71,7 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
 
     fn send(&mut self, ctx: &mut impl WriteRouterContext<EK, ER>, task: WriteTask<EK, ER>) {
         let ready_number = task.ready_number();
-        let has_snapshot = task.has_snapshot();
+        let has_snapshot = task.has_snapshot;
         self.write_router.send_write_msg(
             ctx,
             self.unpersisted_readies.back().map(|r| r.number),
@@ -133,9 +133,7 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
             let Some(v) = self.unpersisted_readies.pop_front() else {
                 panic!("{:?} ready number not found {}", logger.list(), ready_number);
             };
-            if v.has_snapshot {
-                has_snapshot = true;
-            }
+            has_snapshot |= v.has_snapshot;
             if v.number > ready_number {
                 panic!(
                     "{:?} ready number not matched {:?} vs {}",

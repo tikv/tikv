@@ -318,7 +318,6 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     }
 
     pub fn after_applied_snapshot(&mut self) {
-        println!("after applied snapshot");
         let mut entry = self.entry_storage_mut();
         let term = entry.get_truncate_term();
         let index = entry.get_truncate_index();
@@ -337,10 +336,9 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     ) -> Result<()> {
         let region_id = self.get_region_id();
         let peer_id = self.peer().get_id();
-        info!(self.logger(),
+        info!(
+            self.logger(),
             "begin to apply snapshot";
-            "region_id"=> region_id,
-            "peer_id" => peer_id,
         );
 
         let mut snap_data = RaftSnapshotData::default();
@@ -368,18 +366,16 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         self.entry_storage_mut().set_truncated_index(last_index);
         self.entry_storage_mut().set_truncated_term(last_term);
 
-        info!(self.logger(),
-            "apply snapshot with state ok";
-            "region_id" => region_id,
-            "peer_id" => peer_id,
-            "state" => ?self.entry_storage().apply_state(),
-        );
-
         let key = TabletSnapKey::new(region_id, peer_id, last_term, last_index);
         let mut path = snap_mgr.get_recv_tablet_path(&key);
 
-        let hook =
-            move |region_id: u64| tablet_factory.load_tablet(path.as_path(), region_id, last_index);
+        // In multi rocksDB version, the major cost of applying snapshot is that rename
+        // the recv directory, it becomes very cheap and doesn't need to executing it
+        // in async. so the action of loading tablet can be putted into the write task,
+        // The hook will be called after writing to the db by order.
+        // In single rocksDB version, the cost of apply snapshot is that ingest sst the
+        // DB, so it needs some time to executing it.
+        let hook = move || tablet_factory.load_tablet(path.as_path(), region_id, last_index);
         task.add_after_write_hook(Some(Box::new(hook)));
         Ok(())
     }

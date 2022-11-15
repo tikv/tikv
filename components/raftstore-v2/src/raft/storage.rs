@@ -503,7 +503,7 @@ mod tests {
         assert_ne!(10, s.region_state().get_tablet_index());
         assert!(task.after_write_hook.is_some());
         // todo: load tablet should be failed because the snapshot is not correct.
-        task.after_write_hook.unwrap()(1).unwrap_err();
+        task.after_write_hook.unwrap()().unwrap_err();
 
         s.after_applied_snapshot();
         assert_eq!(10, s.entry_storage().applied_index());

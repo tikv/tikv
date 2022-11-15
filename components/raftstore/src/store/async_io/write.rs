@@ -170,13 +170,14 @@ where
     ready_number: u64,
     pub send_time: Instant,
     pub raft_wb: Option<ER::LogBatch>,
-    pub after_write_hook: Option<Box<dyn FnOnce(u64) -> EResult<EK> + Send>>,
+    pub after_write_hook: Option<Box<dyn FnOnce() -> EResult<EK> + Send>>,
     pub entries: Vec<Entry>,
     pub cut_logs: Option<(u64, u64)>,
     pub raft_state: Option<RaftLocalState>,
     pub extra_write: ExtraWrite<EK::WriteBatch>,
     pub messages: Vec<RaftMessage>,
     pub trackers: Vec<TimeTracker>,
+    pub has_snapshot: bool,
 }
 
 impl<EK, ER> WriteTask<EK, ER>
@@ -198,17 +199,14 @@ where
             messages: vec![],
             trackers: vec![],
             after_write_hook: None,
+            has_snapshot: false,
         }
-    }
-
-    pub fn has_snapshot(&self) -> bool {
-        self.after_write_hook.is_some()
     }
 
     pub fn on_after_write_to_kv_db(&mut self) {
         if self.after_write_hook.is_some() {
             let hook = std::mem::take(&mut self.after_write_hook).unwrap();
-            if let Err(e) = hook(self.region_id) {
+            if let Err(e) = hook() {
                 error!("load tablet failed";"error"=>?e,"region_id"=>self.region_id);
             }
         };
@@ -241,11 +239,9 @@ where
         Ok(())
     }
 
-    pub fn add_after_write_hook(
-        &mut self,
-        hook: Option<Box<dyn FnOnce(u64) -> EResult<EK> + Send>>,
-    ) {
+    pub fn add_after_write_hook(&mut self, hook: Option<Box<dyn FnOnce() -> EResult<EK> + Send>>) {
         self.after_write_hook = hook;
+        self.has_snapshot = true;
     }
 }
 

@@ -36,23 +36,15 @@ fn test_add_learner() {
     let meta = router0
         .must_query_debug_info(region_id, Duration::from_secs(3))
         .unwrap();
+    let match_index = meta.raft_apply.applied_index;
     assert_eq!(meta.region_state.epoch.version, epoch.get_version());
     assert_eq!(meta.region_state.epoch.conf_ver, new_conf_ver);
-    // assert_eq!(meta.region_state.peers, vec![leader_peer, learner_peer]);
     // So heartbeat will create a learner.
     cluster.dispatch(region_id, vec![]);
     let router1 = cluster.router(1);
     let meta = router1
         .must_query_debug_info(region_id, Duration::from_secs(3))
         .unwrap();
-
-    assert_eq!(meta.raft_status.id, 10, "{:?}", meta);
-    assert_eq!(meta.region_state.epoch.version, epoch.get_version());
-    assert_eq!(meta.region_state.epoch.conf_ver, new_conf_ver);
-    assert_eq!(
-        meta.raft_status.soft_state.leader_id,
-        req.get_header().get_peer().get_id()
-    );
 
     let mut raft_msg = RaftMessage::default();
     raft_msg.set_region_id(region_id);
@@ -66,7 +58,8 @@ fn test_add_learner() {
     raft_message.set_term(meta.raft_status.hard_state.term);
     raft_message.set_reject(true);
     raft_message.set_request_snapshot(1);
-
+    // trigger the leader send snapshot to the new learner, it will create new
+    // snapshot generate task.
     let msgs = vec![Box::new(raft_msg)];
     cluster.dispatch(region_id, msgs.clone());
 
@@ -76,14 +69,20 @@ fn test_add_learner() {
     put_req.mut_put().set_key(b"key".to_vec());
     put_req.mut_put().set_value(b"value".to_vec());
     req.mut_requests().push(put_req);
-
+    // trigger the leader execute snapshot generator task.
     let (msg, _) = PeerMsg::raft_command(req.clone());
     router0.send(2, msg).unwrap();
 
-    std::thread::sleep(Duration::from_millis(100));
-    cluster.dispatch(region_id, msgs);
-    std::thread::sleep(Duration::from_millis(100));
+    // trigger the learner execute persisted log.
+    std::thread::sleep(Duration::from_millis(1000));
     cluster.dispatch(region_id, vec![]);
+
+    let meta = router1
+        .must_query_debug_info(region_id, Duration::from_secs(3))
+        .unwrap();
+    // the learner truncated index muse be equal the leader applied index
+    assert_eq!(match_index, meta.raft_apply.truncated_state.index);
+    assert!(meta.raft_apply.applied_index >= match_index);
 }
 
 #[test]
