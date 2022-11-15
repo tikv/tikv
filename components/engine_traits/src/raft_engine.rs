@@ -68,6 +68,7 @@ pub struct RaftLogGcTask {
     pub to: u64,
 }
 
+// TODO: Refactor common methods between Kv and Raft engine into a shared trait.
 pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send + 'static {
     type LogBatch: RaftLogBatch;
 
