@@ -39,7 +39,8 @@ use raftstore::{
         local_metrics::RaftMetrics,
         metrics::*,
         msg::ErrorCallback,
-        util, WriteCallback,
+        util::{self, admin_cmd_epoch_lookup},
+        WriteCallback,
     },
     Error, Result,
 };
@@ -58,7 +59,7 @@ mod admin;
 mod control;
 mod write;
 
-pub use admin::AdminCmdResult;
+pub use admin::{AdminCmdResult, SplitInit, SplitResult};
 pub use control::ProposalControl;
 pub use write::{SimpleWriteDecoder, SimpleWriteEncoder};
 
@@ -294,14 +295,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // region.
             return;
         }
+
         for admin_res in apply_res.admin_result {
             match admin_res {
                 AdminCmdResult::ConfChange(conf_change) => {
                     self.on_apply_res_conf_change(conf_change)
                 }
+                AdminCmdResult::SplitRegion(SplitResult {
+                    regions,
+                    derived_index,
+                    tablet_index,
+                }) => self.on_ready_split_region(ctx, derived_index, tablet_index, regions),
                 AdminCmdResult::SplitRegion(_) => unimplemented!(),
             }
         }
+
         self.raft_group_mut()
             .advance_apply_to(apply_res.applied_index);
         self.proposal_control_advance_apply(apply_res.applied_index);
@@ -453,6 +461,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 AdminCmdType::VerifyHash => unimplemented!(),
                 AdminCmdType::PrepareFlashback => unimplemented!(),
                 AdminCmdType::FinishFlashback => unimplemented!(),
+                AdminCmdType::BatchSwitchWitness => unimplemented!(),
                 AdminCmdType::InvalidAdmin => {
                     return Err(box_err!("invalid admin command type"));
                 }

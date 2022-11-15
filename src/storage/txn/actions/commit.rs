@@ -92,7 +92,8 @@ pub fn commit<S: Snapshot>(
         reader.start_ts,
         lock.short_value.take(),
     )
-    .set_last_change(lock.last_change_ts, lock.versions_to_last_change);
+    .set_last_change(lock.last_change_ts, lock.versions_to_last_change)
+    .set_txn_source(lock.txn_source);
 
     for ts in &lock.rollback_ts {
         if *ts == commit_ts {
@@ -117,7 +118,8 @@ pub mod tests {
     #[cfg(test)]
     use crate::storage::txn::tests::{
         must_acquire_pessimistic_lock_for_large_txn, must_prewrite_delete, must_prewrite_lock,
-        must_prewrite_put, must_prewrite_put_for_large_txn, must_prewrite_put_impl, must_rollback,
+        must_prewrite_put, must_prewrite_put_for_large_txn, must_prewrite_put_impl,
+        must_prewrite_put_with_txn_soucre, must_rollback,
     };
     #[cfg(test)]
     use crate::storage::{
@@ -349,5 +351,19 @@ pub mod tests {
         let write = must_written(&mut engine, k, 25, 30, WriteType::Put);
         assert!(write.last_change_ts.is_zero());
         assert_eq!(write.versions_to_last_change, 0);
+    }
+
+    #[test]
+    fn test_2pc_with_txn_source() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+
+        let k = b"k";
+        // WriteType is Put
+        must_prewrite_put_with_txn_soucre(&mut engine, k, b"v2", k, 25, 1);
+        let lock = must_locked(&mut engine, k, 25);
+        assert_eq!(lock.txn_source, 1);
+        must_succeed(&mut engine, k, 25, 30);
+        let write = must_written(&mut engine, k, 25, 30, WriteType::Put);
+        assert_eq!(write.txn_source, 1);
     }
 }
