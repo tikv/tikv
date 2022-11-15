@@ -41,11 +41,11 @@ impl ExternalStorage for NoopStorage {
         Ok(())
     }
 
-    fn read(&self, _name: &str) -> ExternalData<'_>{
+    fn read(&self, _name: &str) -> ExternalData<'_> {
         Box::new(io::empty().compat())
     }
 
-    fn read_part(&self, _name: &str, _off: u64, _len: u64) -> ExternalData<'_>{
+    fn read_part(&self, _name: &str, _off: u64, _len: u64) -> ExternalData<'_> {
         Box::new(io::empty().compat())
     }
 }
