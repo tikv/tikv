@@ -8,6 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use kvproto::raft_cmdpb::RaftCmdRequest;
 use raft::eraftpb::MessageType;
 use raftstore::store::MEMTRACE_ENTRY_CACHE;
 use test_raftstore::*;
@@ -132,4 +133,50 @@ fn test_memory_full_cause_of_raft_message() {
         return;
     }
     panic!("must have 10 MsgAppend and 10 MsgUnreachable");
+}
+
+use tikv_util::sys::{get_global_memory_usage, record_global_memory_usage};
+use std::mem::size_of;
+use raftstore::store::{Callback, RaftCmdExtraOpts, RaftCommand};
+use engine_rocks::RocksSnapshot;
+
+fn bytes_to_gib(bytes: u64) -> f64 {
+    bytes as f64 / (1024*1024*1024) as f64
+}
+
+fn print_memory_usage(message: &str) {
+    record_global_memory_usage();
+    let memory_usage = get_global_memory_usage();
+    println!("{}: {:.3} GiB", message, bytes_to_gib(memory_usage));
+}
+
+#[test]
+fn test_struct_mem(){
+    println!("raft cmd request {}", size_of::<RaftCmdRequest>());
+    println!("callback {}", size_of::<Callback<RocksSnapshot>>());
+    println!("extra opts {}", size_of::<RaftCmdExtraOpts>());
+    // 320Byte
+    println!("raft command {}", size_of::<RaftCommand<RocksSnapshot>>());
+}
+
+#[test]
+fn test_memory_usage_when_raftstore_hang(){
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.pd_client.disable_default_operator();
+    cluster.run();
+
+    cluster.must_put(b"k1", b"");
+    print_memory_usage("after start");
+
+    fail::cfg("begin_raft_poller", "pause").unwrap();
+
+    // Every 1k requests costs 1MB memory.
+    for i in 0..1000000{
+        cluster.async_put("".as_bytes(), format!("{:^02000}", "").as_bytes()).unwrap();
+        if i%1000 == 0 {
+            print_memory_usage(format!("after put {} keys", i).as_str());
+        }
+    }
+
+    print_memory_usage("after put 1.03G");
 }
