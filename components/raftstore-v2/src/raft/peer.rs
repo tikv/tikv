@@ -432,8 +432,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// committed it yet.
     #[inline]
     pub fn has_pending_snapshot(&self) -> bool {
-        // todo
-        false
+        self.raft_group().snap().is_some()
     }
 
     pub fn txn_ext(&self) -> &Arc<TxnExt> {
