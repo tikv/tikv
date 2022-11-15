@@ -8,7 +8,7 @@ use encryption::Error as EncryptionError;
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use futures::channel::oneshot::Canceled;
 use grpcio::Error as GrpcError;
-use kvproto::{import_sstpb, kvrpcpb::ApiVersion};
+use kvproto::{errorpb, import_sstpb, kvrpcpb::ApiVersion};
 use tikv_util::codec::Error as CodecError;
 use uuid::Error as UuidError;
 
@@ -152,7 +152,19 @@ pub type Result<T> = result::Result<T, Error>;
 impl From<Error> for import_sstpb::Error {
     fn from(e: Error) -> import_sstpb::Error {
         let mut err = import_sstpb::Error::default();
-        err.set_message(format!("{}", e));
+        match e {
+            Error::ResourceNotEnough(ref msg) => {
+                let mut import_err = errorpb::Error::default();
+                import_err.set_message(msg.clone());
+                import_err.set_server_is_busy(errorpb::ServerIsBusy::default());
+                err.set_store_error(import_err);
+                err.set_message(format!("{}", e));
+            }
+            _ => {
+                err.set_message(format!("{}", e));
+            }
+        }
+
         err
     }
 }

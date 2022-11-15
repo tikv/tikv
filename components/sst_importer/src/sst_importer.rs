@@ -30,7 +30,7 @@ use kvproto::{
     kvrpcpb::ApiVersion,
 };
 use tikv_util::{
-    codec::stream_event::{EventIterator, Iterator as EIterator},
+    codec::stream_event::{EventEncoder, EventIterator, Iterator as EIterator},
     config::ReadableSize,
     stream::block_on_external_io,
     sys::SysQuota,
@@ -68,7 +68,7 @@ impl SstImporter {
     ) -> Result<SstImporter> {
         let switcher = ImportModeSwitcher::new(cfg);
 
-        let memory_limit = SysQuota::memory_limit_in_bytes() * (cfg.mem_ratio as u64) / 100;
+        let memory_limit = (SysQuota::memory_limit_in_bytes() as f64) * cfg.memory_use_ratio;
         info!("memory limit when apply"; "size" => ?memory_limit);
 
         Ok(SstImporter {
@@ -79,7 +79,7 @@ impl SstImporter {
             compression_types: HashMap::with_capacity(2),
             file_locks: Arc::new(DashMap::default()),
             mem_use: AtomicU64::new(0),
-            mem_limit: ReadableSize(memory_limit),
+            mem_limit: ReadableSize(memory_limit as u64),
         })
     }
 
@@ -316,7 +316,7 @@ impl SstImporter {
                 *refcnt > 0 as u64 || start.saturating_elapsed() < Duration::from_secs(60);
             if need_retain {
                 retain_size += buff.len();
-            }else{
+            } else {
                 shrink_size += buff.len();
             }
             need_retain
@@ -352,6 +352,7 @@ impl SstImporter {
     pub fn do_read_kv_file(
         &self,
         meta: &KvMeta,
+        rewrite_rule: &RewriteRule,
         ext_storage: Arc<Box<dyn external_storage_export::ExternalStorage>>,
         speed_limiter: &Limiter,
     ) -> Result<Arc<Vec<u8>>> {
@@ -403,13 +404,14 @@ impl SstImporter {
             speed_limiter,
             restore_config,
         )?;
-        *lock = (Arc::new(buff), 1, Instant::now());
 
         IMPORTER_DOWNLOAD_BYTES.observe(file_length as _);
         IMPORTER_APPLY_DURATION
             .with_label_values(&["download"])
             .observe(start.saturating_elapsed().as_secs_f64());
 
+        let rewrite_buff = self.rewrite_kv_file(buff, rewrite_rule)?;
+        *lock = (Arc::new(rewrite_buff), 1, Instant::now());
         Ok(lock.value().0.clone())
     }
 
@@ -558,70 +560,90 @@ impl SstImporter {
         Ok(path.save)
     }
 
-    pub fn do_apply_kv_file(
+    pub fn rewrite_kv_file(
         &self,
-        start_key: &[u8],
-        end_key: &[u8],
-        restore_ts: u64,
-        file_buff: Arc<Vec<u8>>,
+        file_buff: Vec<u8>,
         rewrite_rule: &RewriteRule,
-        build_fn: &mut dyn FnMut(Vec<u8>, Vec<u8>),
-    ) -> Result<Option<Range>> {
-        let mut event_iter = EventIterator::new(file_buff.as_slice());
-
+    ) -> Result<Vec<u8>> {
         let old_prefix = rewrite_rule.get_old_key_prefix();
         let new_prefix = rewrite_rule.get_new_key_prefix();
-
-        let perform_rewrite = old_prefix != new_prefix;
+        // if old_prefix equals new_prefix, do not need rewrite.
+        if old_prefix == new_prefix {
+            return Ok(file_buff);
+        }
 
         // perform iteration and key rewrite.
+        let mut new_buff = Vec::with_capacity(file_buff.len());
+        let mut event_iter = EventIterator::new(file_buff.as_slice());
         let mut key = new_prefix.to_vec();
         let new_prefix_data_key_len = key.len();
-        let mut smallest_key = None;
-        let mut largest_key = None;
-
-        let mut total_key = 0;
-        let mut ts_not_expected = 0;
-        let mut not_in_range = 0;
 
         let start = Instant::now();
         loop {
             if !event_iter.valid() {
                 break;
             }
-            total_key += 1;
             event_iter.next()?;
 
+            // perform rewrite
+            let old_key = event_iter.key();
+            if !old_key.starts_with(old_prefix) {
+                return Err(Error::WrongKeyPrefix {
+                    what: "Key in file",
+                    key: old_key.to_vec(),
+                    prefix: old_prefix.to_vec(),
+                });
+            }
+            key.truncate(new_prefix_data_key_len);
+            key.extend_from_slice(&old_key[old_prefix.len()..]);
+            let value = event_iter.value();
+
+            let encoded = EventEncoder::encode_event(&key, value);
+            for slice in encoded {
+                new_buff.append(&mut slice.as_ref().to_owned());
+            }
+        }
+
+        IMPORTER_APPLY_DURATION
+            .with_label_values(&["rewrite"])
+            .observe(start.saturating_elapsed().as_secs_f64());
+        Ok(new_buff)
+    }
+
+    pub fn do_apply_kv_file(
+        &self,
+        start_key: &[u8],
+        end_key: &[u8],
+        start_ts: u64,
+        restore_ts: u64,
+        file_buff: Arc<Vec<u8>>,
+        build_fn: &mut dyn FnMut(Vec<u8>, Vec<u8>),
+    ) -> Result<Option<Range>> {
+        let mut event_iter = EventIterator::new(file_buff.as_slice());
+        let mut smallest_key = None;
+        let mut largest_key = None;
+        let mut total_key = 0;
+        let mut ts_not_expected = 0;
+        let mut not_in_range = 0;
+        let start = Instant::now();
+
+        loop {
+            if !event_iter.valid() {
+                break;
+            }
+            total_key += 1;
+            event_iter.next()?;
             INPORTER_APPLY_COUNT.with_label_values(&["key_meet"]).inc();
-            let ts = Key::decode_ts_from(event_iter.key())?;
-            if ts > TimeStamp::new(restore_ts) {
+
+            let key = event_iter.key().to_vec();
+            let value = event_iter.value().to_vec();
+            let ts = Key::decode_ts_from(&key)?;
+            if ts < TimeStamp::new(start_ts) || ts > TimeStamp::new(restore_ts) {
                 // we assume the keys in file are sorted by ts.
                 // so if we met the key not satisfy the ts.
                 // we can easily filter the remain keys.
                 ts_not_expected += 1;
                 continue;
-            }
-            if perform_rewrite {
-                let old_key = event_iter.key();
-
-                if !old_key.starts_with(old_prefix) {
-                    return Err(Error::WrongKeyPrefix {
-                        what: "Key in file",
-                        key: old_key.to_vec(),
-                        prefix: old_prefix.to_vec(),
-                    });
-                }
-                key.truncate(new_prefix_data_key_len);
-                key.extend_from_slice(&old_key[old_prefix.len()..]);
-
-                debug!(
-                    "perform rewrite new key: {:?}, new key prefix: {:?}, old key prefix: {:?}",
-                    log_wrappers::Value::key(&key),
-                    log_wrappers::Value::key(new_prefix),
-                    log_wrappers::Value::key(old_prefix),
-                );
-            } else {
-                key = event_iter.key().to_vec();
             }
             if check_key_in_range(&key, 0, start_key, end_key).is_err() {
                 // key not in range, we can simply skip this key here.
@@ -633,27 +655,19 @@ impl SstImporter {
                 not_in_range += 1;
                 continue;
             }
-            let value = event_iter.value().to_vec();
+
             build_fn(key.clone(), value);
-
-            let iter_key = key.clone();
-            smallest_key = smallest_key.map_or_else(
-                || Some(iter_key.clone()),
-                |v: Vec<u8>| Some(v.min(iter_key.clone())),
-            );
-
-            largest_key = largest_key.map_or_else(
-                || Some(iter_key.clone()),
-                |v: Vec<u8>| Some(v.max(iter_key.clone())),
-            );
+            smallest_key = smallest_key
+                .map_or_else(|| Some(key.clone()), |v: Vec<u8>| Some(v.min(key.clone())));
+            largest_key = largest_key
+                .map_or_else(|| Some(key.clone()), |v: Vec<u8>| Some(v.max(key.clone())));
         }
         info!("build download request file done"; "total keys" => %total_key,
             "ts filtered keys" => %ts_not_expected,
             "range filtered keys" => %not_in_range);
 
-        let label = if perform_rewrite { "rewrite" } else { "normal" };
         IMPORTER_APPLY_DURATION
-            .with_label_values(&[label])
+            .with_label_values(&["normal"])
             .observe(start.saturating_elapsed().as_secs_f64());
 
         match (smallest_key, largest_key) {

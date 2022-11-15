@@ -508,14 +508,19 @@ where
                         context.clone(),
                     );
 
-                    let buff = importer.do_read_kv_file(&meta, ext_storage.clone(), &limiter)?;
+                    let buff = importer.do_read_kv_file(
+                        &meta,
+                        &rules[i],
+                        ext_storage.clone(),
+                        &limiter,
+                    )?;
                     defer!({ importer.clear_kv_buff(&meta) });
                     let r: Option<Range> = importer.do_apply_kv_file(
                         meta.get_start_key(),
                         meta.get_end_key(),
+                        meta.get_start_ts(),
                         meta.get_restore_ts(),
                         buff,
-                        &rules[i],
                         &mut build_req_fn,
                     )?;
 
