@@ -4273,7 +4273,9 @@ name = "raftstore-v2"
 version = "0.1.0"
 dependencies = [
  "batch-system",
+ "causal_ts",
  "collections",
+ "concurrency_manager",
  "crossbeam",
  "engine_test",
  "engine_traits",

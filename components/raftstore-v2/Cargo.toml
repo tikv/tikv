@@ -30,7 +30,9 @@ cloud-azure = ["raftstore/cloud-azure"]
 
 [dependencies]
 batch-system = { workspace = true }
+causal_ts = { workspace = true }
 collections = { workspace = true }
+concurrency_manager = { workspace = true }
 crossbeam = "0.8"
 engine_traits = { workspace = true }
 error_code = { workspace = true }

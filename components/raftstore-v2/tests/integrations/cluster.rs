@@ -11,7 +11,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+use causal_ts::CausalTsProviderImpl;
 use collections::HashSet;
+use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{self, Receiver, Sender, TrySendError};
 use engine_test::{
     ctor::{CfOptions, DbOptions},
@@ -42,6 +44,7 @@ use tikv_util::{
     config::{ReadableDuration, VersionTrack},
     store::new_peer,
 };
+use txn_types::TimeStamp;
 
 #[derive(Clone)]
 pub struct TestRouter(RaftRouter<KvTestEngine, RaftTestEngine>);
@@ -193,6 +196,8 @@ impl RunningState {
         path: &Path,
         cfg: Arc<VersionTrack<Config>>,
         transport: TestTransport,
+        concurrency_manager: ConcurrencyManager,
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
         logger: &Logger,
     ) -> (TestRouter, Self) {
         let cf_opts = ALL_CFS
@@ -247,6 +252,8 @@ impl RunningState {
                 router.store_router(),
                 store_meta.clone(),
                 snap_mgr,
+                concurrency_manager,
+                causal_ts_provider,
             )
             .unwrap();
 
@@ -290,8 +297,15 @@ impl TestNode {
     }
 
     fn start(&mut self, cfg: Arc<VersionTrack<Config>>, trans: TestTransport) -> TestRouter {
-        let (router, state) =
-            RunningState::new(&self.pd_client, self.path.path(), cfg, trans, &self.logger);
+        let (router, state) = RunningState::new(
+            &self.pd_client,
+            self.path.path(),
+            cfg,
+            trans,
+            ConcurrencyManager::new(TimeStamp::zero()), // todo
+            None,
+            &self.logger,
+        );
         self.running_state = Some(state);
         router
     }

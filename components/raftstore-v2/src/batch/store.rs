@@ -10,7 +10,9 @@ use std::{
 use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, HandleResult, HandlerBuilder, PollHandler,
 };
+use causal_ts::CausalTsProviderImpl;
 use collections::HashMap;
+use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{Sender, TrySendError};
 use engine_traits::{Engines, KvEngine, RaftEngine, TabletFactory};
 use file_system::{set_io_type, IoType};
@@ -381,6 +383,8 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         router: &StoreRouter<EK, ER>,
         store_meta: Arc<Mutex<StoreMeta<EK>>>,
         snap_mgr: TabletSnapManager,
+        concurrency_manager: ConcurrencyManager,
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -413,6 +417,8 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
                 tablet_factory.clone(),
                 router.clone(),
                 workers.pd_worker.remote(),
+                concurrency_manager,
+                causal_ts_provider,
                 self.logger.clone(),
             ),
         );
