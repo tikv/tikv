@@ -715,7 +715,9 @@ mod tests {
         assert_eq!(v3.total_len(), 6);
         assert_eq!(format!("{:?}", v3), "[0C00, null, null, AA, AAABCC]");
 
-        v3.extend([]);
+        // False positive: https://github.com/rust-lang/rust-clippy/issues/9111
+        #[allow(clippy::needless_borrow)]
+        v3.extend(&[]);
         assert_eq!(v3.len(), 6);
         assert_eq!(v3.total_len(), 6);
         assert_eq!(format!("{:?}", v3), "[0C00, null, null, AA, AAABCC, null]");

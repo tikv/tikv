@@ -19,8 +19,10 @@ fi
 # - Enables `significant_drop_in_scrutinee` after
 #   https://github.com/rust-lang/rust-clippy/issues/8963 is fixed.
 # - `derive_partial_eq_without_eq` has compilation overhead.
+# - Blocking issue for enabling `result_large_err` is the raftstore messages.
 CLIPPY_LINTS=(
     -A clippy::module_inception  \
+    -A clippy::result_large_err \
     -A clippy::should_implement_trait \
     -A clippy::too_many_arguments \
     -A clippy::disallowed_names \

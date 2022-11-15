@@ -25,7 +25,7 @@
 #![feature(box_patterns)]
 #![feature(drain_filter)]
 #![feature(deadline_api)]
-#![feature(let_else)]
+#![feature(let_chains)]
 
 #[macro_use(fail_point)]
 extern crate fail;

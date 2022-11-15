@@ -347,7 +347,7 @@ pub mod kv {
             let path = self.tablet_path(region_id, suffix).join(TOMBSTONE_MARK);
             // When the full directory path does not exsit, create will return error and in
             // this case, we just ignore it.
-            let _ = std::fs::File::create(&path);
+            let _ = std::fs::File::create(path);
             {
                 let mut reg = self.registry.lock().unwrap();
                 if let Some((cached_tablet, cached_suffix)) = reg.remove(&region_id) && cached_suffix != suffix {
@@ -386,7 +386,7 @@ pub mod kv {
             }
 
             let db_path = self.tablet_path(region_id, suffix);
-            std::fs::rename(path, &db_path)?;
+            std::fs::rename(path, db_path)?;
             self.open_tablet(
                 region_id,
                 Some(suffix),
