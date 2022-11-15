@@ -471,6 +471,7 @@ impl SstImporter {
             speed_limiter,
             file_length,
             expected_sha256,
+            external_storage_export::MIN_READ_SPEED,
         ));
         let url = ext_storage.url()?.to_string();
         let buff = r.map_err(|e| Error::CannotReadExternalStorage {
@@ -1004,12 +1005,16 @@ fn is_after_end_bound<K: AsRef<[u8]>>(value: &[u8], bound: &Bound<K>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{self, BufWriter};
+    use std::{
+        io::{self, BufWriter, Write},
+        usize,
+    };
 
     use engine_traits::{
         collect, EncryptionMethod, Error as TraitError, ExternalSstFileInfo, Iterable, Iterator,
         RefIterable, SstReader, SstWriter, CF_DEFAULT, DATA_CFS,
     };
+    use external_storage_export::read_external_storage_info_buff;
     use file_system::File;
     use openssl::hash::{Hasher, MessageDigest};
     use tempfile::Builder;
@@ -1230,7 +1235,8 @@ mod tests {
         })
     }
 
-    fn create_sample_external_kv_file() -> Result<(tempfile::TempDir, StorageBackend, KvMeta)> {
+    fn create_sample_external_kv_file()
+    -> Result<(tempfile::TempDir, StorageBackend, KvMeta, Vec<u8>)> {
         let ext_dir = tempfile::tempdir()?;
         let file_name = "v1/t000001/abc.log";
         let file_path = ext_dir.path().join(file_name);
@@ -1242,6 +1248,7 @@ mod tests {
             (b"t1_r01".to_vec(), b"tidb".to_vec()),
             (b"t1_r02".to_vec(), b"tikv".to_vec()),
             (b"t1_r03".to_vec(), b"pingcap".to_vec()),
+            (b"t1_r04".to_vec(), b"test for PITR".to_vec()),
         ];
 
         let mut sha256 = Hasher::new(MessageDigest::sha256()).unwrap();
@@ -1262,7 +1269,7 @@ mod tests {
         kv_meta.set_sha256(sha256.finish().unwrap().to_vec());
 
         let backend = external_storage_export::make_local_backend(ext_dir.path());
-        Ok((ext_dir, backend, kv_meta))
+        Ok((ext_dir, backend, kv_meta, buff.buffer().to_vec()))
     }
 
     fn create_sample_external_rawkv_sst_file(
@@ -1441,6 +1448,143 @@ mod tests {
     }
 
     #[test]
+    fn test_read_external_storage_info_buff() {
+        let data = &b"input some data, used to test read buff"[..];
+        let mut reader = data;
+        let len = reader.len() as _;
+        let sha_256 = {
+            let mut hasher = Hasher::new(MessageDigest::sha256()).unwrap();
+            hasher.update(data).unwrap();
+            hasher.finish().unwrap().to_vec()
+        };
+
+        // test successfully.
+        let output = block_on_external_io(read_external_storage_info_buff(
+            &mut reader,
+            &Limiter::new(f64::INFINITY),
+            len,
+            Some(sha_256.clone()),
+            0,
+        ))
+        .unwrap();
+        assert_eq!(&output, data);
+
+        // test without expected_sha245.
+        reader = data;
+        let output = block_on_external_io(read_external_storage_info_buff(
+            &mut reader,
+            &Limiter::new(f64::INFINITY),
+            len,
+            None,
+            0,
+        ))
+        .unwrap();
+        assert_eq!(&output, data);
+
+        // test with wrong expectd_len.
+        reader = data;
+        let err = block_on_external_io(read_external_storage_info_buff(
+            &mut reader,
+            &Limiter::new(f64::INFINITY),
+            len + 1,
+            Some(sha_256.clone()),
+            0,
+        ))
+        .unwrap_err();
+        assert!(err.to_string().contains("length not match"));
+
+        // test with wrong expected_sha256.
+        reader = data;
+        let err = block_on_external_io(read_external_storage_info_buff(
+            &mut reader,
+            &Limiter::new(f64::INFINITY),
+            len,
+            Some(sha_256[..sha_256.len() - 1].to_vec()),
+            0,
+        ))
+        .unwrap_err();
+        assert!(err.to_string().contains("sha256 not match"));
+    }
+
+    #[test]
+    fn test_read_external_storage_info_buff_timed_out() {
+        use futures_util::stream::{pending, TryStreamExt};
+
+        let mut input = pending::<io::Result<&[u8]>>().into_async_read();
+        let err = block_on_external_io(read_external_storage_info_buff(
+            &mut input,
+            &Limiter::new(f64::INFINITY),
+            0,
+            None,
+            usize::MAX,
+        ))
+        .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn test_read_kv_files_from_external_storage() {
+        // create a sample kv file.
+        let (_temp_dir, backend, kv_meta, buff) = create_sample_external_kv_file().unwrap();
+
+        // create importer object.
+        let import_dir = tempfile::tempdir().unwrap();
+        let (_, key_manager) = new_key_manager_for_test();
+        let importer = SstImporter::new(
+            &Config::default(),
+            import_dir,
+            Some(key_manager.clone()),
+            ApiVersion::V1,
+        )
+        .unwrap();
+        let ext_storage = {
+            let inner = importer.create_external_storage(&backend, false).unwrap();
+            Arc::new(inner)
+        };
+
+        // test read all of the file.
+        let restore_config = external_storage_export::RestoreConfig {
+            expected_sha256: Some(kv_meta.get_sha256().to_vec()),
+            ..Default::default()
+        };
+
+        let output = importer
+            .read_kv_files_from_external_storage(
+                kv_meta.get_length(),
+                kv_meta.get_name(),
+                ext_storage.clone(),
+                &Limiter::new(f64::INFINITY),
+                restore_config,
+            )
+            .unwrap();
+        assert_eq!(
+            buff,
+            output,
+            "we are testing addition with {} and {}",
+            buff.len(),
+            output.len()
+        );
+
+        // test read range of the file.
+        let (offset, len) = (5, 16);
+        let restore_config = external_storage_export::RestoreConfig {
+            range: Some((offset, len)),
+            ..Default::default()
+        };
+
+        let output = importer
+            .read_kv_files_from_external_storage(
+                len,
+                kv_meta.get_name(),
+                ext_storage,
+                &Limiter::new(f64::INFINITY),
+                restore_config,
+            )
+            .unwrap();
+        assert_eq!(&buff[offset as _..(offset + len) as _], &output[..]);
+    }
+
+    #[test]
     fn test_download_file_from_external_storage_for_sst() {
         // creates a sample SST file.
         let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file().unwrap();
@@ -1480,7 +1624,7 @@ mod tests {
 
     #[test]
     fn test_download_file_from_external_storage_for_kv() {
-        let (_temp_dir, backend, kv_meta) = create_sample_external_kv_file().unwrap();
+        let (_temp_dir, backend, kv_meta, _) = create_sample_external_kv_file().unwrap();
         let (_, key_manager) = new_key_manager_for_test();
 
         let import_dir = tempfile::tempdir().unwrap();

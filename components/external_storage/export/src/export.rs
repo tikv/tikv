@@ -25,7 +25,7 @@ use external_storage::grpc_client;
 pub use external_storage::{
     compression_reader_dispatcher, encrypt_wrap_reader, read_external_storage_info_buff,
     read_external_storage_into_file, record_storage_create, BackendConfig, ExternalStorage,
-    HdfsStorage, LocalStorage, NoopStorage, RestoreConfig, UnpinReader,
+    HdfsStorage, LocalStorage, NoopStorage, RestoreConfig, UnpinReader, MIN_READ_SPEED,
 };
 use futures_io::AsyncRead;
 #[cfg(feature = "cloud-gcp")]

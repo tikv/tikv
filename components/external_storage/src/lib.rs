@@ -297,18 +297,25 @@ pub async fn read_external_storage_into_file(
     Ok(())
 }
 
+pub const MIN_READ_SPEED: usize = 8192;
+
 pub async fn read_external_storage_info_buff(
     reader: &mut (dyn AsyncRead + Unpin),
     speed_limiter: &Limiter,
     expected_length: u64,
     expected_sha256: Option<Vec<u8>>,
+    min_read_speed: usize,
 ) -> io::Result<Vec<u8>> {
     // the minimum speed of reading data, in bytes/second.
     // if reading speed is slower than this rate, we will stop with
     // a "TimedOut" error.
     // (at 8 KB/s for a 2 MB buffer, this means we timeout after 4m16s.)
-    let min_read_speed: usize = 8192;
-    let dur = Duration::from_secs((READ_BUF_SIZE / min_read_speed) as u64);
+    let read_speed = if min_read_speed > 0 {
+        min_read_speed
+    } else {
+        MIN_READ_SPEED
+    };
+    let dur = Duration::from_secs((READ_BUF_SIZE / read_speed) as u64);
     let mut output = Vec::new();
     let mut buffer = vec![0u8; READ_BUF_SIZE];
 
@@ -331,7 +338,7 @@ pub async fn read_external_storage_info_buff(
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
-                "downloaded size {}, expected {}",
+                "length not match, downloaded size {}, expected {}",
                 output.len(),
                 expected_length
             ),
