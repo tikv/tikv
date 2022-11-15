@@ -1506,11 +1506,10 @@ struct TaskRange {
 
 #[cfg(test)]
 mod tests {
-    use std::{ffi::OsStr, marker::Unpin, time::Duration};
+    use std::{ffi::OsStr, time::Duration};
 
     use external_storage::{ExternalData, NoopStorage};
     use futures::AsyncReadExt;
-    use futures_io::AsyncRead;
     use kvproto::brpb::{Local, Noop, StorageBackend, StreamBackupTaskInfo};
     use tikv_util::{
         codec::number::NumberEncoder,
