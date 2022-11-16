@@ -2,6 +2,7 @@
 
 use std::{borrow::ToOwned, error::Error, str, str::FromStr, u64};
 
+use kvproto::kvrpcpb::KeyRange;
 use server::setup::initial_logger;
 use tikv::config::TikvConfig;
 
@@ -62,21 +63,27 @@ pub fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
     tikv_util::logger::exit_process_gracefully(-1);
 }
 
-// Check if the region is in the specified range
-pub fn included_region_in_range(region_range: (&[u8], &[u8]), check_range: (&[u8], &[u8])) -> bool {
-    fn contains(a: (&[u8], &[u8]), b: (&[u8], &[u8])) -> bool {
-        if a.0 <= b.0 && (a.1.is_empty() || !b.1.is_empty() && a.1 >= b.1) {
+// Check if the region's `key_range` is in the specified `key_range_limit`
+pub fn check_range_included(key_range: &KeyRange, key_range_limit: &KeyRange) -> bool {
+    fn contains(key_range: &KeyRange, key_range_limit: &KeyRange) -> bool {
+        if key_range.get_start_key() <= key_range_limit.get_start_key()
+            && (key_range.get_end_key().is_empty()
+                || !key_range_limit.get_end_key().is_empty()
+                    && key_range.get_end_key() >= key_range_limit.get_end_key())
+        {
             return true;
         }
         false
     }
-    // Both start_key and end_key are in the region need to be considered as
-    // included as well.
-    contains(region_range, check_range) || contains(check_range, region_range)
+    // When `key_range_limit` is in the region's `key_range` need to be considered
+    // as included as well.
+    contains(key_range, key_range_limit) || contains(key_range_limit, key_range)
 }
 
 #[cfg(test)]
 mod tests {
+    use raftstore::store::util::build_key_range;
+
     use super::*;
 
     #[test]
@@ -88,29 +95,33 @@ mod tests {
     }
 
     #[test]
-    fn test_included_region_in_range() {
-        let region_range: (&[u8], &[u8]) = (&[0x01], &[0x04]);
+    fn test_included_region_in_rang() {
+        // To avoid unfolding the code when `make format` is called
+        fn range(start: &[u8], end: &[u8]) -> KeyRange {
+            build_key_range(start, end, false)
+        }
+        let mut region = range(&[0x01], &[0x04]);
         // region in range
-        assert!(included_region_in_range(region_range, (&[0x01], &[0x04])));
-        assert!(included_region_in_range(region_range, (&[0x01], &[])));
-        assert!(included_region_in_range(region_range, (&[], &[])));
-        assert!(included_region_in_range(region_range, (&[0x01], &[0x05])));
-        assert!(included_region_in_range(region_range, (&[0x00], &[0x04])));
-        assert!(included_region_in_range(region_range, (&[], &[0x04])));
+        assert!(check_range_included(&region, &range(&[0x01], &[0x04])));
+        assert!(check_range_included(&region, &range(&[0x01], &[])));
+        assert!(check_range_included(&region, &range(&[], &[])));
+        assert!(check_range_included(&region, &range(&[0x01], &[0x05])));
+        assert!(check_range_included(&region, &range(&[0x00], &[0x04])));
+        assert!(check_range_included(&region, &range(&[], &[0x04])));
         // range in region also need to return true
-        assert!(included_region_in_range(region_range, (&[0x02], &[0x04])));
+        assert!(check_range_included(&region, &range(&[0x02], &[0x04])));
         // region not in range
-        assert!(!included_region_in_range(region_range, (&[0x03], &[])));
-        assert!(!included_region_in_range(region_range, (&[], &[0x03])));
-        assert!(!included_region_in_range(region_range, (&[0x03], &[0x05])));
+        assert!(!check_range_included(&region, &range(&[0x03], &[])));
+        assert!(!check_range_included(&region, &range(&[], &[0x03])));
+        assert!(!check_range_included(&region, &range(&[0x03], &[0x05])));
         // check last region
-        let region_range: (&[u8], &[u8]) = (&[0x03], &[]);
-        assert!(included_region_in_range(region_range, (&[0x03], &[0x05])));
-        assert!(included_region_in_range(region_range, (&[0x03], &[])));
-        assert!(!included_region_in_range(region_range, (&[0x02], &[0x05])));
-        assert!(!included_region_in_range(region_range, (&[], &[0x05])));
-        assert!(!included_region_in_range(region_range, (&[], &[0x02])));
-        assert!(!included_region_in_range(region_range, (&[], &[0x03])));
-        assert!(included_region_in_range(region_range, (&[], &[])));
+        region = range(&[0x03], &[]);
+        assert!(check_range_included(&region, &range(&[0x03], &[0x05])));
+        assert!(check_range_included(&region, &range(&[0x03], &[])));
+        assert!(!check_range_included(&region, &range(&[0x02], &[0x05])));
+        assert!(!check_range_included(&region, &range(&[], &[0x05])));
+        assert!(!check_range_included(&region, &range(&[], &[0x02])));
+        assert!(!check_range_included(&region, &range(&[], &[0x03])));
+        assert!(check_range_included(&region, &range(&[], &[])));
     }
 }

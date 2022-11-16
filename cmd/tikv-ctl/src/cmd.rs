@@ -7,6 +7,7 @@ use engine_traits::CF_DEFAULT;
 use structopt::StructOpt;
 
 const RAW_KEY_HINT: &str = "Raw key (generally starts with \"z\") in escaped form";
+const MAX_REGION_LIMIT: u64 = 10240;
 static VERSION_INFO: LazyLock<String> = LazyLock::new(|| {
     let build_timestamp = option_env!("TIKV_BUILD_TIME");
     tikv::tikv_version_info(build_timestamp)
@@ -615,7 +616,7 @@ pub enum RaftCmd {
         /// hex end key
         end: String,
 
-        #[structopt(long, default_value = "0", max_values = 10240)]
+        #[structopt(long, default_value = "0", max_values = MAX_REGION_LIMIT)]
         /// Limit the number of keys to scan
         limit: usize,
 

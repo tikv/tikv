@@ -23,7 +23,7 @@ use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use protobuf::Message;
 use raft::eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType};
 use raft_log_engine::RaftLogEngine;
-use raftstore::store::INIT_EPOCH_CONF_VER;
+use raftstore::store::{util::build_key_range, INIT_EPOCH_CONF_VER};
 use security::SecurityManager;
 use serde_json::json;
 use tikv::{
@@ -177,9 +177,9 @@ pub trait DebugExecutor {
                 .as_ref()
                 .map(|s| s.get_region().clone())
                 .unwrap();
-            if !included_region_in_range(
-                (region.get_start_key(), region.get_end_key()),
-                (start_key, end_key),
+            if !check_range_included(
+                &build_key_range(region.get_start_key(), region.get_end_key(), false),
+                &build_key_range(start_key, end_key, false),
             ) {
                 continue;
             }
