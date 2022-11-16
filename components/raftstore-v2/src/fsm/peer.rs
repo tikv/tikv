@@ -34,7 +34,7 @@ pub struct PeerFsm<EK: KvEngine, ER: RaftEngine> {
     /// twice accidentally.
     tick_registry: u16,
     is_stopped: bool,
-    pub(crate) reactivate_memory_lock_ticks: usize,
+    reactivate_memory_lock_ticks: usize,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
