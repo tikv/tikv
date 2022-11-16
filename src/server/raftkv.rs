@@ -15,6 +15,7 @@ use std::{
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
+use futures::Future;
 use kvproto::{
     errorpb,
     kvrpcpb::{Context, IsolationLevel},
@@ -198,8 +199,7 @@ where
         &mut self,
         ctx: SnapContext<'_>,
         req: Request,
-        cb: Callback<CmdRes<E::Snapshot>>,
-    ) -> Result<()> {
+    ) -> impl Future<Output = Result<CmdRes<E::Snapshot>>> {
         let mut header = self.new_request_header(ctx.pb_ctx);
         let mut flags = 0;
         if ctx.pb_ctx.get_stale_read() && ctx.start_ts.map_or(true, |ts| !ts.is_zero()) {
@@ -215,18 +215,34 @@ where
         }
         header.set_flags(flags);
 
+        let region_id = header.get_region_id();
+        let peer_id = header.get_peer().get_id();
+
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.set_requests(vec![req].into());
-        self.router
-            .read(
-                ctx.read_id,
-                cmd,
-                StoreCallback::read(Box::new(move |resp| {
-                    cb(on_read_result(resp).map_err(Error::into));
-                })),
-            )
-            .map_err(From::from)
+        let (tx, rx) = futures::channel::oneshot::channel();
+        let res = self.router.read(
+            ctx.read_id,
+            cmd,
+            StoreCallback::read(Box::new(move |resp| {
+                let _ = tx.send(on_read_result(resp).map_err(Error::into));
+            })),
+        );
+        async move {
+            res?;
+            if let Ok(r) = rx.await {
+                return r;
+            }
+            if !tikv_util::thread_group::is_shutdown(false) {
+                error!("channel is dropped without response, while not shutdown"; "region_id" => region_id, "peer_id" => peer_id);
+            }
+            Err(Error::Server(RaftServerError::DataIsNotReady {
+                region_id,
+                peer_id,
+                safe_ts: 0,
+            }))
+        }
     }
 
     fn exec_write_requests(
@@ -428,15 +444,8 @@ where
         })
     }
 
-    fn async_snapshot(
-        &mut self,
-        mut ctx: SnapContext<'_>,
-        cb: Callback<Self::Snap>,
-    ) -> kv::Result<()> {
-        fail_point!("raftkv_async_snapshot_err", |_| Err(box_err!(
-            "injected error for async_snapshot"
-        )));
-
+    type SnapshotRes = impl Future<Output = kv::Result<Self::Snap>>;
+    fn async_snapshot(&mut self, mut ctx: SnapContext<'_>) -> Self::SnapshotRes {
         let mut req = Request::default();
         req.set_cmd_type(CmdType::Snap);
         if !ctx.key_ranges.is_empty() && ctx.start_ts.map_or(false, |ts| !ts.is_zero()) {
@@ -447,10 +456,13 @@ where
         }
         ASYNC_REQUESTS_COUNTER_VEC.snapshot.all.inc();
         let begin_instant = Instant::now_coarse();
-        self.exec_snapshot(
-            ctx,
-            req,
-            Box::new(move |res| match res {
+        let f = self.exec_snapshot(ctx, req);
+        async move {
+            fail_point!("raftkv_async_snapshot_err", |_| Err(box_err!(
+                "injected error for async_snapshot"
+            )));
+
+            match f.await {
                 Ok(CmdRes::Resp(mut r)) => {
                     let e = if r
                         .get(0)
@@ -462,27 +474,22 @@ where
                     } else {
                         invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into()
                     };
-                    cb(Err(e))
+                    Err(e)
                 }
                 Ok(CmdRes::Snap(s)) => {
                     ASYNC_REQUESTS_DURATIONS_VEC
                         .snapshot
                         .observe(begin_instant.saturating_elapsed_secs());
                     ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
-                    cb(Ok(s))
+                    Ok(s)
                 }
                 Err(e) => {
-                    let status_kind = get_status_kind_from_engine_error(&e);
+                    let status_kind = get_status_kind_from_error(&e);
                     ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
-                    cb(Err(e))
+                    Err(e.into())
                 }
-            }),
-        )
-        .map_err(|e| {
-            let status_kind = get_status_kind_from_error(&e);
-            ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
-            e.into()
-        })
+            }
+        }
     }
 
     fn release_snapshot(&mut self) {

@@ -6,6 +6,7 @@ use std::{
 };
 
 use collections::HashMap;
+use futures::Future;
 use kvproto::kvrpcpb::Context;
 
 use super::Result;
@@ -157,8 +158,9 @@ impl Engine for MockEngine {
         self.base.modify_on_kv_engine(region_modifies)
     }
 
-    fn async_snapshot(&mut self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()> {
-        self.base.async_snapshot(ctx, cb)
+    type SnapshotRes = impl Future<Output = Result<Self::Snap>>;
+    fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes {
+        self.base.async_snapshot(ctx)
     }
 
     fn async_write(&self, ctx: &Context, batch: WriteData, write_cb: Callback<()>) -> Result<()> {

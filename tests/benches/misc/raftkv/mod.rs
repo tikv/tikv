@@ -191,14 +191,15 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(leader);
     b.iter(|| {
-        let on_finished: EngineCallback<RegionSnapshot<RocksSnapshot>> = Box::new(move |results| {
-            let _ = test::black_box(results);
-        });
         let snap_ctx = SnapContext {
             pb_ctx: &ctx,
             ..Default::default()
         };
-        kv.async_snapshot(snap_ctx, on_finished).unwrap();
+        let f = kv.async_snapshot(snap_ctx);
+        futures::executor::block_on(async move {
+            let res = f.await;
+            let _ = test::black_box(res);
+        });
     });
 }
 

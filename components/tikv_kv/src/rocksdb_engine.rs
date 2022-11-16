@@ -18,6 +18,7 @@ use engine_traits::{
     CfName, Engines, IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions,
 };
 use file_system::IoRateLimiter;
+use futures::{channel::oneshot, Future};
 use kvproto::{kvrpcpb::Context, metapb, raft_cmdpb};
 use raftstore::coprocessor::CoprocessorHost;
 use tempfile::{Builder, TempDir};
@@ -253,18 +254,28 @@ impl Engine for RocksEngine {
         Ok(())
     }
 
-    fn async_snapshot(&mut self, _: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()> {
-        fail_point!("rockskv_async_snapshot", |_| Err(box_err!(
-            "snapshot failed"
-        )));
-        fail_point!("rockskv_async_snapshot_not_leader", |_| {
-            Err(self.not_leader_error())
-        });
-        if self.not_leader.load(Ordering::SeqCst) {
-            return Err(self.not_leader_error());
+    type SnapshotRes = impl Future<Output = Result<Self::Snap>>;
+    fn async_snapshot(&mut self, _: SnapContext<'_>) -> Self::SnapshotRes {
+        let res = (|| {
+            fail_point!("rockskv_async_snapshot", |_| Err(box_err!(
+                "snapshot failed"
+            )));
+            fail_point!("rockskv_async_snapshot_not_leader", |_| {
+                Err(self.not_leader_error())
+            });
+            if self.not_leader.load(Ordering::SeqCst) {
+                return Err(self.not_leader_error());
+            }
+            let (tx, rx) = oneshot::channel();
+            box_try!(self.sched.schedule(Task::Snapshot(Box::new(move |s| {
+                let _ = tx.send(s);
+            }))));
+            Ok(rx)
+        })();
+        async move {
+            res?.await
+                .map_err(|cancel| Error::from(ErrorInner::Other(box_err!(cancel))))?
         }
-        box_try!(self.sched.schedule(Task::Snapshot(cb)));
-        Ok(())
     }
 }
 
