@@ -204,6 +204,31 @@ fn quote(bytes: BytesRef) -> Result<Option<Bytes>> {
     Ok(Some(result))
 }
 
+#[rpn_fn(nullable, raw_varg, min_args = 1, max_args = 1)]
+#[inline]
+fn json_valid(args: &[ScalarValueRef]) -> Result<Option<Int>> {
+    assert_eq!(args.len(), 1);
+    let received_et = args[0].eval_type();
+    let r = match args[0].to_owned().is_none() {
+        true => None,
+        _ => match received_et {
+            EvalType::Json => args[0].as_json().and(Some(1)),
+            EvalType::Bytes => match args[0].as_bytes() {
+                Some(p) => {
+                    let tmp_str =
+                        std::str::from_utf8(p).map_err(tidb_query_datatype::codec::Error::from)?;
+                    let json: serde_json::error::Result<Json> = serde_json::from_str(tmp_str);
+                    Some(json.is_ok() as Int)
+                }
+                _ => Some(0),
+            },
+            _ => Some(0),
+        },
+    };
+
+    Ok(r)
+}
+
 #[rpn_fn]
 #[inline]
 fn json_unquote(arg: BytesRef) -> Result<Option<Bytes>> {
@@ -821,6 +846,38 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_params(vargs.clone())
                 .evaluate(ScalarFuncSig::JsonLengthSig)
+                .unwrap();
+            assert_eq!(output, expected, "{:?}", vargs);
+        }
+    }
+
+    #[test]
+    fn test_json_valid() {
+        let cases: Vec<(Vec<ScalarValue>, Option<i64>)> = vec![
+            (
+                vec![Some(Json::from_str(r#"{"a":1}"#).unwrap()).into()],
+                Some(1),
+            ),
+            (vec![Some(b"hello".to_vec()).into()], Some(0)),
+            (vec![Some(b"\"hello\"".to_vec()).into()], Some(1)),
+            (vec![Some(b"null".to_vec()).into()], Some(1)),
+            (vec![Some(Json::from_str(r#"{}"#).unwrap()).into()], Some(1)),
+            (vec![Some(Json::from_str(r#"[]"#).unwrap()).into()], Some(1)),
+            (vec![Some(b"2".to_vec()).into()], Some(1)),
+            (vec![Some(b"2.5".to_vec()).into()], Some(1)),
+            (vec![Some(b"2019-8-19".to_vec()).into()], Some(0)),
+            (vec![Some(b"\"2019-8-19\"".to_vec()).into()], Some(1)),
+            (vec![Some(2).into()], Some(0)),
+            (vec![Some(2.5).into()], Some(0)),
+            (vec![None::<Json>.into()], None),
+            (vec![None::<Bytes>.into()], None),
+            (vec![None::<Int>.into()], None),
+        ];
+
+        for (vargs, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(vargs.clone())
+                .evaluate(ScalarFuncSig::JsonValidJsonSig)
                 .unwrap();
             assert_eq!(output, expected, "{:?}", vargs);
         }

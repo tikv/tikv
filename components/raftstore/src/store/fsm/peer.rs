@@ -694,7 +694,7 @@ where
             .raft_metrics
             .event_time
             .peer_msg
-            .observe(duration_to_sec(timer.saturating_elapsed()) as f64);
+            .observe(duration_to_sec(timer.saturating_elapsed()));
     }
 
     #[inline]

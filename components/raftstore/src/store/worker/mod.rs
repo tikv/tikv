@@ -6,7 +6,7 @@ mod cleanup_snapshot;
 mod cleanup_sst;
 mod compact;
 mod consistency_check;
-mod metrics;
+pub mod metrics;
 mod pd;
 mod raftlog_gc;
 mod read;
@@ -25,7 +25,6 @@ pub use self::{
     cleanup_sst::{Runner as CleanupSstRunner, Task as CleanupSstTask},
     compact::{Runner as CompactRunner, Task as CompactTask},
     consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask},
-    metrics::TLS_LOCAL_READ_METRICS,
     pd::{
         new_change_peer_v2_request, FlowStatistics, FlowStatsReporter, HeartbeatTask,
         Runner as PdRunner, Task as PdTask,

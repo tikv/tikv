@@ -52,6 +52,7 @@ pub fn must_prewrite_put_impl<E: Engine>(
         assertion_level,
         false,
         None,
+        0,
     );
 }
 
@@ -90,6 +91,7 @@ pub fn must_prewrite_insert_impl<E: Engine>(
         assertion_level,
         true,
         None,
+        0,
     );
 }
 
@@ -111,8 +113,10 @@ pub fn must_prewrite_put_impl_with_should_not_exist<E: Engine>(
     assertion_level: AssertionLevel,
     should_not_exist: bool,
     region_id: Option<u64>,
+    txn_source: u32,
 ) {
     let mut ctx = Context::default();
+    ctx.set_txn_source(txn_source);
     if let Some(region_id) = region_id {
         ctx.region_id = region_id;
     }
@@ -154,6 +158,7 @@ pub fn must_prewrite_put_impl_with_should_not_exist<E: Engine>(
             need_old_value: false,
             is_retry_request,
             assertion_level,
+            txn_source: txn_source as u8,
         },
         mutation,
         secondary_keys,
@@ -215,6 +220,37 @@ pub fn must_prewrite_put_on_region<E: Engine>(
         AssertionLevel::Off,
         false,
         Some(region_id),
+        0,
+    );
+}
+
+pub fn must_prewrite_put_with_txn_soucre<E: Engine>(
+    engine: &mut E,
+    key: &[u8],
+    value: &[u8],
+    pk: &[u8],
+    ts: impl Into<TimeStamp>,
+    txn_source: u32,
+) {
+    must_prewrite_put_impl_with_should_not_exist(
+        engine,
+        key,
+        value,
+        pk,
+        &None,
+        ts.into(),
+        SkipPessimisticCheck,
+        0,
+        TimeStamp::default(),
+        0,
+        TimeStamp::default(),
+        TimeStamp::default(),
+        false,
+        Assertion::None,
+        AssertionLevel::Off,
+        false,
+        None,
+        txn_source,
     );
 }
 
@@ -422,6 +458,7 @@ fn default_txn_props(
         need_old_value: false,
         is_retry_request: false,
         assertion_level: AssertionLevel::Off,
+        txn_source: 0,
     }
 }
 

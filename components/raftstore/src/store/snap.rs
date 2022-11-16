@@ -557,7 +557,7 @@ impl Snapshot {
             for (i, file_path) in file_paths.iter().enumerate() {
                 if cf_file.size[i] > 0 {
                     let path = Path::new(file_path);
-                    let file = File::open(&path)?;
+                    let file = File::open(path)?;
                     cf_file
                         .file_for_sending
                         .push(Box::new(file) as Box<dyn Read + Send>);
@@ -600,7 +600,7 @@ impl Snapshot {
                 let f = OpenOptions::new()
                     .write(true)
                     .create_new(true)
-                    .open(&file_path)?;
+                    .open(file_path)?;
                 cf_file.file_for_recving.push(CfFileForRecving {
                     file: f,
                     encrypter: None,
@@ -788,7 +788,7 @@ impl Snapshot {
                 if !for_send && !plain_file_used(cf_file.cf) {
                     sst_importer::prepare_sst_for_ingestion(
                         file_path,
-                        &Path::new(&clone_file_paths[i]),
+                        Path::new(&clone_file_paths[i]),
                         self.mgr.encryption_key_manager.as_deref(),
                     )?;
                 }
@@ -972,7 +972,7 @@ impl Snapshot {
             } else {
                 // delete snapshot files according to meta file
                 for clone_file_path in clone_file_paths {
-                    delete_file_if_exist(&clone_file_path).unwrap();
+                    delete_file_if_exist(clone_file_path).unwrap();
                 }
             }
 
@@ -983,7 +983,7 @@ impl Snapshot {
                     try_delete_snapshot_files!(cf_file, gen_tmp_file_name);
                 } else {
                     for tmp_file_path in tmp_file_paths {
-                        delete_file_if_exist(&tmp_file_path).unwrap();
+                        delete_file_if_exist(tmp_file_path).unwrap();
                     }
                 }
             }
@@ -994,7 +994,7 @@ impl Snapshot {
                 try_delete_snapshot_files!(cf_file);
             } else {
                 for file_path in &file_paths {
-                    delete_file_if_exist(&file_path).unwrap();
+                    delete_file_if_exist(file_path).unwrap();
                 }
                 if let Some(ref mgr) = self.mgr.encryption_key_manager {
                     for file_path in &file_paths {
@@ -1047,7 +1047,7 @@ impl Snapshot {
         snap_data.set_version(SNAPSHOT_VERSION);
         snap_data.set_meta(self.meta_file.meta.as_ref().unwrap().clone());
 
-        SNAPSHOT_BUILD_TIME_HISTOGRAM.observe(duration_to_sec(t.saturating_elapsed()) as f64);
+        SNAPSHOT_BUILD_TIME_HISTOGRAM.observe(duration_to_sec(t.saturating_elapsed()));
         SNAPSHOT_KV_COUNT_HISTOGRAM.observe(total_count as f64);
         SNAPSHOT_SIZE_HISTOGRAM.observe(total_size as f64);
         info!(
@@ -1115,7 +1115,7 @@ impl Snapshot {
                 || (cf_file
                     .file_paths()
                     .iter()
-                    .all(|file_path| file_exists(&Path::new(file_path))))
+                    .all(|file_path| file_exists(Path::new(file_path))))
         }) && file_exists(&self.meta_file.path)
     }
 
@@ -1184,7 +1184,7 @@ impl Snapshot {
             let tmp_paths = cf_file.tmp_file_paths();
             let paths = cf_file.file_paths();
             for (i, tmp_path) in tmp_paths.iter().enumerate() {
-                file_system::rename(&tmp_path, &paths[i])?;
+                file_system::rename(tmp_path, &paths[i])?;
             }
         }
         sync_dir(&self.dir_path)?;
@@ -1488,7 +1488,7 @@ impl SnapManager {
             "{}_{}{}{}",
             DEL_RANGE_PREFIX, sst_id, SST_FILE_SUFFIX, TMP_FILE_SUFFIX
         );
-        let path = PathBuf::from(&self.core.base).join(&filename);
+        let path = PathBuf::from(&self.core.base).join(filename);
         path.to_str().unwrap().to_string()
     }
 
@@ -1802,7 +1802,7 @@ impl SnapManagerCore {
                 }
                 r?;
             } else {
-                file_system::rename(&tmp_file_path, &file_paths[i])?;
+                file_system::rename(tmp_file_path, &file_paths[i])?;
             }
             let file = Path::new(&file_paths[i]);
             let (checksum, size) = calc_checksum_and_size(file, mgr)?;
@@ -1883,6 +1883,81 @@ impl SnapManagerBuilder {
         };
         snapshot.set_max_per_file_size(self.max_per_file_size); // set actual max_per_file_size
         snapshot
+    }
+}
+
+#[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub struct TabletSnapKey {
+    pub region_id: u64,
+    pub to_peer: u64,
+    pub term: u64,
+    pub idx: u64,
+}
+
+impl TabletSnapKey {
+    #[inline]
+    pub fn new(region_id: u64, to_peer: u64, term: u64, idx: u64) -> TabletSnapKey {
+        TabletSnapKey {
+            region_id,
+            to_peer,
+            term,
+            idx,
+        }
+    }
+
+    pub fn from_region_snap(region_id: u64, to_peer: u64, snap: &RaftSnapshot) -> TabletSnapKey {
+        let index = snap.get_metadata().get_index();
+        let term = snap.get_metadata().get_term();
+        TabletSnapKey::new(region_id, to_peer, term, index)
+    }
+}
+
+impl Display for TabletSnapKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}_{}_{}_{}",
+            self.region_id, self.to_peer, self.term, self.idx
+        )
+    }
+}
+
+/// `TabletSnapManager` manager tablet snapshot and shared between raftstore v2.
+/// It's similar `SnapManager`, but simpler in tablet version.
+///
+///  TODO:
+///     - add Limiter to control send/recv speed
+///     - clean up expired tablet checkpointer
+#[derive(Clone)]
+pub struct TabletSnapManager {
+    // directory to store snapfile.
+    base: String,
+}
+
+impl TabletSnapManager {
+    pub fn new<T: Into<String>>(path: T) -> Self {
+        Self { base: path.into() }
+    }
+
+    pub fn init(&self) -> io::Result<()> {
+        // Initialize the directory if it doesn't exist.
+        let path = Path::new(&self.base);
+        if !path.exists() {
+            file_system::create_dir_all(path)?;
+            return Ok(());
+        }
+        if !path.is_dir() {
+            return Err(io::Error::new(
+                ErrorKind::Other,
+                format!("{} should be a directory", path.display()),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn get_tablet_checkpointer_path(&self, key: &TabletSnapKey) -> PathBuf {
+        let prefix = format!("{}_{}", SNAP_GEN_PREFIX, key);
+        PathBuf::from(&self.base).join(prefix)
     }
 }
 

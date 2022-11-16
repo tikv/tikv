@@ -247,9 +247,9 @@ impl ImportDir {
 
     /// Make an import path base on the basic path and the file name.
     pub fn get_import_path(&self, file_name: &str) -> Result<ImportPath> {
-        let save_path = self.root_dir.join(&file_name);
-        let temp_path = self.temp_dir.join(&file_name);
-        let clone_path = self.clone_dir.join(&file_name);
+        let save_path = self.root_dir.join(file_name);
+        let temp_path = self.temp_dir.join(file_name);
+        let clone_path = self.clone_dir.join(file_name);
         Ok(ImportPath {
             save: save_path,
             temp: temp_path,
@@ -276,7 +276,7 @@ impl ImportDir {
 
     pub fn delete_file(&self, path: &Path, key_manager: Option<&DataKeyManager>) -> Result<()> {
         if path.exists() {
-            file_system::remove_file(&path)?;
+            file_system::remove_file(path)?;
             if let Some(manager) = key_manager {
                 manager.delete_file(path.to_str().unwrap())?;
             }
@@ -515,7 +515,7 @@ mod test {
             meta.get_region_epoch().get_version(),
             SST_SUFFIX,
         ));
-        let new_meta = path_to_sst_meta(&path).unwrap();
+        let new_meta = path_to_sst_meta(path).unwrap();
         assert_eq!(meta, new_meta);
     }
 }
