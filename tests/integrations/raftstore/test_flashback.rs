@@ -148,7 +148,7 @@ fn test_flashback_for_schedule() {
     // Prepare flashback.
     let region = cluster.get_region(TEST_KEY);
     cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::PrepareFlashback);
-    // Verify the schedule is disabled.
+    // Make sure the schedule is disabled.
     let mut region = cluster.get_region(TEST_KEY);
     let admin_req = new_transfer_leader_cmd(new_peer(2, 2));
     let transfer_leader =
@@ -210,7 +210,7 @@ fn test_flashback_for_read() {
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
-    // Reed without flashback flag.
+    // Read without flashback flag.
     let mut region = cluster.get_region(TEST_KEY);
     must_request_without_flashback_flag(&mut cluster, &mut region.clone(), new_get_cmd(TEST_KEY));
     // Prepare flashback.
@@ -408,22 +408,13 @@ fn request<T: Simulator>(
         .unwrap()
 }
 
-#[inline(always)]
-fn request_with_flashback_flag<T: Simulator>(
-    cluster: &mut Cluster<T>,
-    region: &mut metapb::Region,
-    req: Request,
-) -> RaftCmdResponse {
-    request(cluster, region, req, true)
-}
-
-// Verify whether the request could be executed with flashback flag.
+// Make sure the request could be executed with flashback flag.
 fn must_request_with_flashback_flag<T: Simulator>(
     cluster: &mut Cluster<T>,
     region: &mut metapb::Region,
     req: Request,
 ) {
-    let resp = request_with_flashback_flag(cluster, region, req);
+    let resp = request(cluster, region, req, true);
     assert!(!resp.get_header().has_error());
 }
 
@@ -432,26 +423,17 @@ fn must_get_flashback_not_prepared_error<T: Simulator>(
     region: &mut metapb::Region,
     req: Request,
 ) {
-    let resp = request_with_flashback_flag(cluster, region, req);
+    let resp = request(cluster, region, req, true);
     assert!(resp.get_header().get_error().has_flashback_not_prepared());
 }
 
-#[inline(always)]
-fn request_without_flashback_flag<T: Simulator>(
-    cluster: &mut Cluster<T>,
-    region: &mut metapb::Region,
-    req: Request,
-) -> RaftCmdResponse {
-    request(cluster, region, req, false)
-}
-
-// Verify whether the request could be executed without flashback flag.
+// Make sure the request could be executed without flashback flag.
 fn must_request_without_flashback_flag<T: Simulator>(
     cluster: &mut Cluster<T>,
     region: &mut metapb::Region,
     req: Request,
 ) {
-    let resp = request_without_flashback_flag(cluster, region, req);
+    let resp = request(cluster, region, req, false);
     assert!(!resp.get_header().has_error());
 }
 
@@ -460,6 +442,6 @@ fn must_get_flashback_in_progress_error<T: Simulator>(
     region: &mut metapb::Region,
     req: Request,
 ) {
-    let resp = request_without_flashback_flag(cluster, region, req);
+    let resp = request(cluster, region, req, false);
     assert!(resp.get_header().get_error().has_flashback_in_progress());
 }
