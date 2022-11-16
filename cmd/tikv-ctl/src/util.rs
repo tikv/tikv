@@ -3,7 +3,7 @@
 use std::{borrow::ToOwned, error::Error, str, str::FromStr, u64};
 
 use server::setup::initial_logger;
-use tikv::{config::TikvConfig, server::debug::RegionInfo};
+use tikv::config::TikvConfig;
 
 const LOG_DIR: &str = "./ctl-engine-info-log";
 
@@ -63,21 +63,16 @@ pub fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
 }
 
 // Check if the region is in the specified range
-pub fn included_region_in_range(r: &RegionInfo, start_key: &Vec<u8>, end_key: &Vec<u8>) -> bool {
-    let region = r
-        .region_local_state
-        .as_ref()
-        .map(|s| s.get_region().clone())
-        .unwrap();
-    if !end_key.is_empty() && region.get_start_key() >= end_key.as_slice() {
-        return false;
+pub fn included_region_in_range(region_range: (&[u8], &[u8]), check_range: (&[u8], &[u8])) -> bool {
+    fn contains(a: (&[u8], &[u8]), b: (&[u8], &[u8])) -> bool {
+        if a.0 <= b.0 && (a.1.is_empty() || !b.1.is_empty() && a.1 >= b.1) {
+            return true;
+        }
+        false
     }
-    if start_key.as_slice() >= region.get_start_key()
-        && (region.get_end_key().is_empty() || start_key.as_slice() < region.get_end_key())
-    {
-        return true;
-    }
-    false
+    // Both start_key and end_key are in the region need to be considered as
+    // included as well.
+    contains(region_range, check_range) || contains(check_range, region_range)
 }
 
 #[cfg(test)]
@@ -90,5 +85,32 @@ mod tests {
         assert_eq!(from_hex("74").unwrap(), result);
         assert_eq!(from_hex("0x74").unwrap(), result);
         assert_eq!(from_hex("0X74").unwrap(), result);
+    }
+
+    #[test]
+    fn test_included_region_in_range() {
+        let region_range: (&[u8], &[u8]) = (&[0x01], &[0x04]);
+        // region in range
+        assert!(included_region_in_range(region_range, (&[0x01], &[0x04])));
+        assert!(included_region_in_range(region_range, (&[0x01], &[])));
+        assert!(included_region_in_range(region_range, (&[], &[])));
+        assert!(included_region_in_range(region_range, (&[0x01], &[0x05])));
+        assert!(included_region_in_range(region_range, (&[0x00], &[0x04])));
+        assert!(included_region_in_range(region_range, (&[], &[0x04])));
+        // range in region also need to return true
+        assert!(included_region_in_range(region_range, (&[0x02], &[0x04])));
+        // region not in range
+        assert!(!included_region_in_range(region_range, (&[0x03], &[])));
+        assert!(!included_region_in_range(region_range, (&[], &[0x03])));
+        assert!(!included_region_in_range(region_range, (&[0x03], &[0x05])));
+        // check last region
+        let region_range: (&[u8], &[u8]) = (&[0x03], &[]);
+        assert!(included_region_in_range(region_range, (&[0x03], &[0x05])));
+        assert!(included_region_in_range(region_range, (&[0x03], &[])));
+        assert!(!included_region_in_range(region_range, (&[0x02], &[0x05])));
+        assert!(!included_region_in_range(region_range, (&[], &[0x05])));
+        assert!(!included_region_in_range(region_range, (&[], &[0x02])));
+        assert!(!included_region_in_range(region_range, (&[], &[0x03])));
+        assert!(included_region_in_range(region_range, (&[], &[])));
     }
 }

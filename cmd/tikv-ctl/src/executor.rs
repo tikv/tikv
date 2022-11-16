@@ -154,8 +154,8 @@ pub trait DebugExecutor {
     fn dump_region_info(
         &self,
         region_ids: Option<Vec<u64>>,
-        start_key: &Vec<u8>,
-        end_key: &Vec<u8>,
+        start_key: &[u8],
+        end_key: &[u8],
         limit: usize,
         skip_tombstone: bool,
     ) {
@@ -172,7 +172,15 @@ pub trait DebugExecutor {
                     continue;
                 }
             }
-            if !start_key.is_empty() && !included_region_in_range(&r, start_key, end_key) {
+            let region = r
+                .region_local_state
+                .as_ref()
+                .map(|s| s.get_region().clone())
+                .unwrap();
+            if !included_region_in_range(
+                (region.get_start_key(), region.get_end_key()),
+                (start_key, end_key),
+            ) {
                 continue;
             }
             let region_object = json!({
