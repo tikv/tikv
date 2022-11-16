@@ -16,11 +16,11 @@ use file_system::{IoType, WithIoType};
 use futures::{
     future::{Future, TryFutureExt},
     sink::{Sink, SinkExt},
-    stream::{StreamExt, TryStreamExt},
+    stream::{Stream, StreamExt, TryStreamExt},
 };
 use grpcio::{
-    ChannelBuilder, ClientStreamingSink, Environment, RequestStream, RpcStatus, RpcStatusCode,
-    WriteFlags,
+    self, ChannelBuilder, ClientStreamingSink, Environment, RequestStream, RpcStatus,
+    RpcStatusCode, WriteFlags,
 };
 use kvproto::{
     raft_serverpb::{Done, RaftMessage, RaftSnapshotData, SnapshotChunk},
@@ -108,6 +108,7 @@ async fn send_snap_files(
     key: TabletSnapKey,
 ) -> Result<u64> {
     let path = mgr.get_tablet_checkpointer_path(&key);
+    info!("begin to send snapshot file";"snap_key"=>%key);
     let files = fs::read_dir(&path)?
         .map(|d| Ok(d?.path()))
         .collect::<Result<Vec<_>>>()?;
@@ -123,15 +124,12 @@ async fn send_snap_files(
         buffer.push(name.len() as u8);
         buffer.extend_from_slice(name.as_bytes());
         let mut f = File::open(&path)?;
-        let file_size = f.metadata()?.len();
-        let mut size = 0;
         let mut off = buffer.len();
         loop {
             unsafe { buffer.set_len(SNAP_CHUNK_LEN) }
             let readed = f.read(&mut buffer[off..])?;
             let new_len = readed + off;
             total_sent += new_len as u64;
-
             unsafe {
                 buffer.set_len(new_len);
             }
@@ -140,15 +138,14 @@ async fn send_snap_files(
             sender
                 .feed((chunk, WriteFlags::default().buffer_hint(true)))
                 .await?;
-            size += readed;
             if new_len < SNAP_CHUNK_LEN {
                 break;
             }
             buffer = Vec::with_capacity(SNAP_CHUNK_LEN);
             off = 0
         }
-        info!("sent snap file finish"; "file" => %path.display(), "size" => file_size, "sent" => size);
     }
+    info!("sent all snap file finish"; "snap_key" => %key);
     sender.close().await?;
     Ok(total_sent)
 }
@@ -168,7 +165,6 @@ pub fn send_snap(
     assert!(msg.get_message().has_snapshot());
     let timer = Instant::now();
     let send_timer = SEND_SNAP_HISTOGRAM.start_coarse_timer();
-
     let key = TabletSnapKey::from_region_snap(
         msg.get_region_id(),
         msg.get_to_peer().get_id(),
@@ -210,6 +206,52 @@ pub fn send_snap(
     Ok(send_task)
 }
 
+async fn recv_snap_files(
+    snap_mgr: TabletSnapManager,
+    mut stream: impl Stream<Item = Result<SnapshotChunk>> + Unpin,
+) -> Result<RecvTabletSnapContext> {
+    let head = Some(stream.next().await.unwrap().unwrap());
+    let context = RecvTabletSnapContext::new(head)?;
+    let path = snap_mgr.get_tmp_name_for_recv(&context.key);
+    info!("begin to receive tablet snapshot files"; "file" => %path.display());
+    fs::create_dir_all(&path)?;
+    loop {
+        let mut chunk = match stream.next().await {
+            Some(Ok(mut c)) if !c.has_message() => c.take_data(),
+            Some(_) => {
+                return Err(box_err!("duplicated metadata"));
+            }
+            None => break,
+        };
+        // the format of chunk:
+        // |--name_len--|--name--|--content--|
+        let len = chunk[0] as usize;
+        let file_name = box_try!(std::str::from_utf8(&chunk[1..len + 1]));
+        let p = path.join(file_name);
+        let mut f = File::create(&p)?;
+        let mut size = chunk.len() - len - 1;
+        f.write_all(&chunk[len + 1..])?;
+        while chunk.len() >= SNAP_CHUNK_LEN {
+            chunk = match stream.next().await {
+                Some(Ok(mut c)) if !c.has_message() => c.take_data(),
+                Some(_) => return Err(box_err!("duplicated metadata")),
+                None => return Err(box_err!("missing chunk")),
+            };
+            f.write_all(&chunk[..])?;
+            size += chunk.len();
+        }
+        debug!("received snap file"; "file" => %p.display(), "size" => size);
+        SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC
+            .recv
+            .inc_by(size as u64);
+        f.sync_data()?;
+    }
+    info!("received all tablet snapshot file"; "snap_key" => %context.key);
+    let final_path = snap_mgr.get_final_name_for_recv(&context.key);
+    fs::rename(&path, final_path)?;
+    Ok(context)
+}
+
 fn recv_snap<R: RaftStoreRouter<impl KvEngine> + 'static>(
     stream: RequestStream<SnapshotChunk>,
     sink: ClientStreamingSink<Done>,
@@ -217,47 +259,8 @@ fn recv_snap<R: RaftStoreRouter<impl KvEngine> + 'static>(
     raft_router: R,
 ) -> impl Future<Output = Result<()>> {
     let recv_task = async move {
-        let mut stream = stream.map_err(Error::from);
-        let head = stream.next().await.transpose()?;
-        let context = RecvTabletSnapContext::new(head)?;
-        let path = snap_mgr.get_tmp_name_for_recv(&context.key);
-        fs::create_dir_all(&path)?;
-        loop {
-            fail_point!("receiving_snapshot_net_error", |_| {
-                Err(box_err!("{} failed to receive snapshot", context.key))
-            });
-            let mut chunk = match stream.try_next().await? {
-                // todo: need to check data
-                Some(mut c) if !c.has_message() => c.take_data(),
-                Some(_) => return Err(box_err!("duplicated metadata")),
-                None => break,
-            };
-            // the format of chunk:
-            // |--name_len--|--name--|--content--|
-            let len = chunk[0] as usize;
-            let file_name = box_try!(std::str::from_utf8(&chunk[1..len + 1]));
-            let p = path.join(file_name);
-            let mut f = File::create(&p)?;
-            let mut size = chunk.len() - len - 1;
-            f.write_all(&chunk[len + 1..])?;
-            while chunk.len() >= SNAP_CHUNK_LEN {
-                chunk = match stream.try_next().await? {
-                    Some(mut c) if !c.has_message() => c.take_data(),
-                    Some(_) => return Err(box_err!("duplicated metadata")),
-                    None => return Err(box_err!("missing chunk")),
-                };
-                f.write_all(&chunk[..])?;
-                size += chunk.len();
-            }
-            info!("received snap file"; "file" => %p.display(), "size" => size);
-            SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC
-                .recv
-                .inc_by(size as u64);
-            f.sync_data()?;
-        }
-
-        let final_path = snap_mgr.get_final_name_for_recv(&context.key);
-        fs::rename(&path, final_path)?;
+        let stream = stream.map_err(Error::from);
+        let context = recv_snap_files(snap_mgr, stream).await?;
         context.finish(raft_router)
     };
     async move {
@@ -438,13 +441,64 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::io::{self, Write};
+    use std::{
+        fs::{create_dir_all, File},
+        io::Write,
+    };
+
+    use futures::{
+        channel::mpsc::{self},
+        executor::block_on,
+        sink::SinkExt,
+    };
+    use futures_util::StreamExt;
+    use grpcio::WriteFlags;
+    // use futures_util::SinkExt;
+    use kvproto::raft_serverpb::{RaftMessage, SnapshotChunk};
+    use raftstore::store::snap::{TabletSnapKey, TabletSnapManager};
+    use tempfile::TempDir;
+    use tikv_util::store::new_peer;
+
+    use super::{super::Error, recv_snap_files, send_snap_files};
 
     #[test]
     fn test_send_tablet() {
-        let buffer = vec![1, 2, 3, 5, 8];
-        let sink = io::sink();
-        let num_bytes = sink.write(&buffer).unwrap();
-        assert_eq!(num_bytes, 5);
+        let snap_key = TabletSnapKey::new(1, 1, 1, 1);
+        let mut msg = RaftMessage::default();
+        msg.set_region_id(1);
+        msg.set_to_peer(new_peer(1, 1));
+        msg.mut_message().mut_snapshot().mut_metadata().set_index(1);
+        msg.mut_message().mut_snapshot().mut_metadata().set_term(1);
+        let send_path = TempDir::new().unwrap();
+        let send_snap_path =
+            TabletSnapManager::new(send_path.path().join("snap_dir").to_str().unwrap());
+        let snap_path = send_snap_path.get_tablet_checkpointer_path(&snap_key);
+        create_dir_all(snap_path.as_path()).unwrap();
+        for i in 0..2 {
+            let mut f = File::create(snap_path.join(i.to_string())).unwrap();
+            f.write_all(format!("snapshot-{}", i).as_bytes()).unwrap();
+            f.sync_data().unwrap();
+        }
+
+        let recv_path = TempDir::new().unwrap();
+        let recv_snap_manager =
+            TabletSnapManager::new(recv_path.path().join("snap_dir").to_str().unwrap());
+        let (tx, rx) = mpsc::unbounded();
+        let sink = tx.sink_map_err(Error::from);
+        block_on(send_snap_files(
+            &send_snap_path,
+            sink,
+            msg,
+            snap_key.clone(),
+        ))
+        .unwrap();
+
+        let stream = rx.map(|x: (SnapshotChunk, WriteFlags)| Ok(x.0));
+        let final_path = recv_snap_manager.get_final_name_for_recv(&snap_key);
+        let r = block_on(recv_snap_files(recv_snap_manager, stream)).unwrap();
+        assert_eq!(r.key, snap_key);
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        let dir = std::fs::read_dir(final_path).unwrap();
+        assert_eq!(2, dir.count());
     }
 }
