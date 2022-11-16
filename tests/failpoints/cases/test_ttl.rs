@@ -12,7 +12,7 @@ use tikv::{
     server::ttl::check_ttl_and_compact_files,
     storage::{
         kv::{SnapContext, TestEngineBuilder},
-        lock_manager::DummyLockManager,
+        lock_manager::MockLockManager,
         raw::encoded::RawEncodeSnapshot,
         test_util::{expect_ok_callback, expect_value},
         Engine, Iterator, Snapshot, Statistics, TestStorageBuilder,
@@ -176,7 +176,7 @@ fn test_ttl_snapshot() {
 fn test_ttl_snapshot_impl<F: KvFormat>() {
     fail::cfg("ttl_current_ts", "return(100)").unwrap();
     let dir = tempfile::TempDir::new().unwrap();
-    let engine = TestEngineBuilder::new()
+    let mut engine = TestEngineBuilder::new()
         .path(dir.path())
         .api_version(F::TAG)
         .build()
@@ -273,7 +273,7 @@ fn test_ttl_iterator() {
 fn test_ttl_iterator_impl<F: KvFormat>() {
     fail::cfg("ttl_current_ts", "return(100)").unwrap();
     let dir = tempfile::TempDir::new().unwrap();
-    let engine = TestEngineBuilder::new()
+    let mut engine = TestEngineBuilder::new()
         .path(dir.path())
         .api_version(F::TAG)
         .build()
@@ -394,7 +394,7 @@ fn test_stoarge_raw_batch_put_ttl() {
 fn test_stoarge_raw_batch_put_ttl_impl<F: KvFormat>() {
     fail::cfg("ttl_current_ts", "return(100)").unwrap();
 
-    let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager)
+    let storage = TestStorageBuilder::<_, _, F>::new(MockLockManager::new())
         .build()
         .unwrap();
     let (tx, rx) = channel();

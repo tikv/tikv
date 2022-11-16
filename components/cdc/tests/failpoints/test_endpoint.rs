@@ -8,7 +8,7 @@ use std::{
 
 use api_version::{test_kv_format_impl, KvFormat};
 use causal_ts::CausalTsProvider;
-use cdc::{recv_timeout, OldValueCache, Task, Validate};
+use cdc::{recv_timeout, Delegate, OldValueCache, Task, Validate};
 use futures::{executor::block_on, sink::SinkExt};
 use grpcio::{ChannelBuilder, Environment, WriteFlags};
 use kvproto::{cdcpb::*, kvrpcpb::*, tikvpb_grpc::TikvClient};
@@ -57,6 +57,12 @@ fn test_cdc_double_scan_deregister_impl<F: KvFormat>() {
     let (mut req_tx_1, event_feed_wrap_1, receive_event_1) =
         new_event_feed(suite.get_region_cdc_client(1));
     block_on(req_tx_1.send((req, WriteFlags::default()))).unwrap();
+
+    // wait for the second connection register to the delegate.
+    suite.must_wait_delegate_condition(
+        1,
+        Arc::new(|d: Option<&Delegate>| d.unwrap().downstreams().len() == 2),
+    );
 
     // close connection
     block_on(req_tx.close()).unwrap();
@@ -493,7 +499,7 @@ fn test_cdc_rawkv_resolved_ts() {
 
     let pause_write_fp = "raftkv_async_write";
     fail::cfg(pause_write_fp, "pause").unwrap();
-    let ts = ts_provider.get_ts().unwrap();
+    let ts = block_on(ts_provider.async_get_ts()).unwrap();
     let handle = thread::spawn(move || {
         let _ = client.raw_put(&put_req).unwrap();
     });
@@ -501,7 +507,20 @@ fn test_cdc_rawkv_resolved_ts() {
     sleep_ms(100);
 
     let event = receive_event(true).resolved_ts.unwrap();
-    assert_eq!(ts.next(), TimeStamp::from(event.ts));
+    assert!(
+        ts.next() >= TimeStamp::from(event.ts),
+        "{} {}",
+        ts,
+        TimeStamp::from(event.ts)
+    );
+    // Receive again to make sure resolved ts <= ongoing request's ts.
+    let event = receive_event(true).resolved_ts.unwrap();
+    assert!(
+        ts.next() >= TimeStamp::from(event.ts),
+        "{} {}",
+        ts,
+        TimeStamp::from(event.ts)
+    );
 
     fail::remove(pause_write_fp);
     handle.join().unwrap();

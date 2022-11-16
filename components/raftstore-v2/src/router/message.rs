@@ -3,14 +3,10 @@
 // #[PerformanceCriticalPath]
 use std::fmt;
 
-use engine_traits::{KvEngine, Snapshot};
-use kvproto::{
-    cdcpb::Event,
-    metapb,
-    raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
-    raft_serverpb::RaftMessage,
-};
-use raftstore::store::{metrics::RaftEventDurationType, FetchedLogs, RegionSnapshot};
+use engine_traits::Snapshot;
+use kvproto::{raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
+use raft::eraftpb::Snapshot as RaftSnapshot;
+use raftstore::store::{metrics::RaftEventDurationType, FetchedLogs, GenSnapRes};
 use tikv_util::time::Instant;
 
 use super::{
@@ -19,6 +15,7 @@ use super::{
     },
     ApplyRes,
 };
+use crate::operation::SplitInit;
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
 #[repr(u8)]
@@ -129,9 +126,12 @@ pub enum PeerMsg {
     Tick(PeerTick),
     /// Result of applying committed entries. The message can't be lost.
     ApplyRes(ApplyRes),
-    FetchedLogs(FetchedLogs),
+    LogsFetched(FetchedLogs),
+    SnapshotGenerated(GenSnapRes),
     /// Start the FSM.
     Start,
+    /// Messages from peer to peer in the same store
+    SplitInit(Box<SplitInit>),
     /// A message only used to notify a peer.
     Noop,
     /// A message that indicates an asynchronous write has finished.
@@ -140,6 +140,9 @@ pub enum PeerMsg {
         ready_number: u64,
     },
     QueryDebugInfo(DebugInfoChannel),
+    /// A message that used to check if a flush is happened.
+    #[cfg(feature = "testexport")]
+    WaitFlush(super::FlushChannel),
 }
 
 impl PeerMsg {
@@ -167,6 +170,9 @@ impl fmt::Debug for PeerMsg {
             },
             PeerMsg::ApplyRes(res) => write!(fmt, "ApplyRes {:?}", res),
             PeerMsg::Start => write!(fmt, "Startup"),
+            PeerMsg::SplitInit(_) => {
+                write!(fmt, "Split initialization")
+            }
             PeerMsg::Noop => write!(fmt, "Noop"),
             PeerMsg::Persisted {
                 peer_id,
@@ -176,14 +182,18 @@ impl fmt::Debug for PeerMsg {
                 "Persisted peer_id {}, ready_number {}",
                 peer_id, ready_number
             ),
-            PeerMsg::FetchedLogs(fetched) => write!(fmt, "FetchedLogs {:?}", fetched),
+            PeerMsg::LogsFetched(fetched) => write!(fmt, "LogsFetched {:?}", fetched),
+            PeerMsg::SnapshotGenerated(_) => write!(fmt, "SnapshotGenerated"),
             PeerMsg::QueryDebugInfo(_) => write!(fmt, "QueryDebugInfo"),
+            #[cfg(feature = "testexport")]
+            PeerMsg::WaitFlush(_) => write!(fmt, "FlushMessages"),
         }
     }
 }
 
 pub enum StoreMsg {
     RaftMessage(Box<RaftMessage>),
+    SplitInit(Box<SplitInit>),
     Tick(StoreTick),
     Start,
 }
@@ -192,6 +202,7 @@ impl fmt::Debug for StoreMsg {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             StoreMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
+            StoreMsg::SplitInit(_) => write!(fmt, "Split initialization"),
             StoreMsg::Tick(tick) => write!(fmt, "StoreTick {:?}", tick),
             StoreMsg::Start => write!(fmt, "Start store"),
         }

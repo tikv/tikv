@@ -253,7 +253,7 @@ impl Engine for RocksEngine {
         Ok(())
     }
 
-    fn async_snapshot(&self, _: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()> {
+    fn async_snapshot(&mut self, _: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()> {
         fail_point!("rockskv_async_snapshot", |_| Err(box_err!(
             "snapshot failed"
         )));

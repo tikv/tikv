@@ -82,8 +82,11 @@ pub struct RaftMetrics {
     pub store_time: LocalHistogram,
     pub propose_wait_time: LocalHistogram,
     pub process_ready: LocalHistogram,
+    pub event_time: RaftEventDurationVec,
+    pub peer_msg_len: LocalHistogram,
     pub commit_log: LocalHistogram,
     pub write_block_wait: LocalHistogram,
+    pub propose_log_size: LocalHistogram,
 
     // waterfall metrics
     pub waterfall_metrics: bool,
@@ -117,8 +120,11 @@ impl RaftMetrics {
             process_ready: PEER_RAFT_PROCESS_DURATION
                 .with_label_values(&["ready"])
                 .local(),
+            event_time: RaftEventDurationVec::from(&RAFT_EVENT_DURATION_VEC),
+            peer_msg_len: PEER_MSG_LEN.local(),
             commit_log: PEER_COMMIT_LOG_HISTOGRAM.local(),
             write_block_wait: STORE_WRITE_MSG_BLOCK_WAIT_DURATION_HISTOGRAM.local(),
+            propose_log_size: PEER_PROPOSE_LOG_SIZE_HISTOGRAM.local(),
             waterfall_metrics,
             wf_batch_wait: STORE_WF_BATCH_WAIT_DURATION_HISTOGRAM.local(),
             wf_send_to_queue: STORE_WF_SEND_TO_QUEUE_DURATION_HISTOGRAM.local(),
@@ -149,8 +155,11 @@ impl RaftMetrics {
         self.store_time.flush();
         self.propose_wait_time.flush();
         self.process_ready.flush();
+        self.event_time.flush();
+        self.peer_msg_len.flush();
         self.commit_log.flush();
         self.write_block_wait.flush();
+        self.propose_log_size.flush();
 
         if self.waterfall_metrics {
             self.wf_batch_wait.flush();

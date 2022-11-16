@@ -30,7 +30,7 @@ use test_raftstore::new_server_cluster;
 use tikv::storage::{
     self,
     kv::SnapshotExt,
-    lock_manager::DummyLockManager,
+    lock_manager::MockLockManager,
     txn::tests::{
         must_acquire_pessimistic_lock, must_commit, must_pessimistic_prewrite_put,
         must_pessimistic_prewrite_put_err, must_prewrite_put, must_prewrite_put_err,
@@ -42,34 +42,34 @@ use txn_types::{Key, Mutation, PessimisticLock, TimeStamp};
 
 #[test]
 fn test_txn_failpoints() {
-    let engine = TestEngineBuilder::new().build().unwrap();
+    let mut engine = TestEngineBuilder::new().build().unwrap();
     let (k, v) = (b"k", b"v");
     fail::cfg("prewrite", "return(WriteConflict)").unwrap();
-    must_prewrite_put_err(&engine, k, v, k, 10);
+    must_prewrite_put_err(&mut engine, k, v, k, 10);
     fail::remove("prewrite");
-    must_prewrite_put(&engine, k, v, k, 10);
+    must_prewrite_put(&mut engine, k, v, k, 10);
     fail::cfg("commit", "delay(100)").unwrap();
-    must_commit(&engine, k, 10, 20);
+    must_commit(&mut engine, k, 10, 20);
     fail::remove("commit");
 
     let v1 = b"v1";
     let (k2, v2) = (b"k2", b"v2");
-    must_acquire_pessimistic_lock(&engine, k, k, 30, 30);
+    must_acquire_pessimistic_lock(&mut engine, k, k, 30, 30);
     fail::cfg("pessimistic_prewrite", "return()").unwrap();
-    must_pessimistic_prewrite_put_err(&engine, k, v1, k, 30, 30, DoPessimisticCheck);
-    must_prewrite_put(&engine, k2, v2, k2, 31);
+    must_pessimistic_prewrite_put_err(&mut engine, k, v1, k, 30, 30, DoPessimisticCheck);
+    must_prewrite_put(&mut engine, k2, v2, k2, 31);
     fail::remove("pessimistic_prewrite");
-    must_pessimistic_prewrite_put(&engine, k, v1, k, 30, 30, DoPessimisticCheck);
-    must_commit(&engine, k, 30, 40);
-    must_commit(&engine, k2, 31, 41);
-    must_get(&engine, k, 50, v1);
-    must_get(&engine, k2, 50, v2);
+    must_pessimistic_prewrite_put(&mut engine, k, v1, k, 30, 30, DoPessimisticCheck);
+    must_commit(&mut engine, k, 30, 40);
+    must_commit(&mut engine, k2, 31, 41);
+    must_get(&mut engine, k, 50, v1);
+    must_get(&mut engine, k2, 50, v2);
 }
 
 #[test]
 fn test_atomic_getting_max_ts_and_storing_memory_lock() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
         .build()
         .unwrap();
 
@@ -120,7 +120,7 @@ fn test_atomic_getting_max_ts_and_storing_memory_lock() {
 #[test]
 fn test_snapshot_must_be_later_than_updating_max_ts() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
         .build()
         .unwrap();
 
@@ -163,7 +163,7 @@ fn test_snapshot_must_be_later_than_updating_max_ts() {
 #[test]
 fn test_update_max_ts_before_scan_memory_locks() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
         .build()
         .unwrap();
 
@@ -217,7 +217,7 @@ macro_rules! lock_release_test {
         fn $test_name() {
             let engine = TestEngineBuilder::new().build().unwrap();
             let storage =
-                TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+                TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
                     .build()
                     .unwrap();
 
@@ -294,7 +294,7 @@ lock_release_test!(
 #[test]
 fn test_max_commit_ts_error() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
         .build()
         .unwrap();
     let cm = storage.get_concurrency_manager();
@@ -338,8 +338,8 @@ fn test_max_commit_ts_error() {
     cm.read_range_check(None, None, |_, _| Err(())).unwrap();
 
     // Two locks should be written, the second one does not async commit.
-    let l1 = must_locked(&storage.get_engine(), b"k1", 10);
-    let l2 = must_locked(&storage.get_engine(), b"k2", 10);
+    let l1 = must_locked(&mut storage.get_engine(), b"k1", 10);
+    let l2 = must_locked(&mut storage.get_engine(), b"k2", 10);
     assert!(l1.use_async_commit);
     assert!(!l2.use_async_commit);
 }
@@ -347,7 +347,7 @@ fn test_max_commit_ts_error() {
 #[test]
 fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
     let engine = TestEngineBuilder::new().build().unwrap();
-    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, MockLockManager::new())
         .build()
         .unwrap();
     let cm = storage.get_concurrency_manager();
@@ -566,6 +566,8 @@ fn test_concurrent_write_after_transfer_leader_invalidates_locks() {
         ttl: 3000,
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
+        last_change_ts: 5.into(),
+        versions_to_last_change: 3,
     };
     txn_ext
         .pessimistic_locks

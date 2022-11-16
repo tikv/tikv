@@ -11,12 +11,12 @@ use crate::codec::mysql::Tz;
 bitflags! {
     /// Please refer to SQLMode in `mysql/const.go` in repo `pingcap/parser` for details.
     pub struct SqlMode: u64 {
-        const STRICT_TRANS_TABLES = 1 << 22;
-        const STRICT_ALL_TABLES = 1 << 23;
-        const NO_ZERO_IN_DATE = 1 << 24;
-        const NO_ZERO_DATE = 1 << 25;
-        const INVALID_DATES = 1 << 26;
-        const ERROR_FOR_DIVISION_BY_ZERO = 1 << 27;
+        const STRICT_TRANS_TABLES = 1 << 21;
+        const STRICT_ALL_TABLES = 1 << 22;
+        const NO_ZERO_IN_DATE = 1 << 23;
+        const NO_ZERO_DATE = 1 << 24;
+        const INVALID_DATES = 1 << 25;
+        const ERROR_FOR_DIVISION_BY_ZERO = 1 << 26;
     }
 }
 
@@ -143,7 +143,7 @@ impl EvalConfig {
                 self.tz = tz;
                 Ok(self)
             }
-            None => Err(Error::invalid_timezone(&format!("offset {}s", offset_sec))),
+            None => Err(Error::invalid_timezone(format!("offset {}s", offset_sec))),
         }
     }
 
@@ -300,7 +300,7 @@ impl EvalContext {
         }
         let orig_str = String::from_utf8_lossy(bytes);
         self.warnings
-            .append_warning(Error::truncated_wrong_val("INTEGER", &orig_str));
+            .append_warning(Error::truncated_wrong_val("INTEGER", orig_str));
         if negative {
             Ok(i64::MIN)
         } else {

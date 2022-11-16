@@ -300,10 +300,9 @@ mod tests {
     };
     use tikv::storage::{
         kv::{MockEngineBuilder, TestEngineBuilder},
-        lock_manager::DummyLockManager,
         mvcc::{tests::write, Mutation, MvccTxn, SnapshotReader},
         txn::{
-            commands::one_pc_commit_ts, prewrite, tests::*, CommitKind, TransactionKind,
+            commands::one_pc_commit, prewrite, tests::*, CommitKind, TransactionKind,
             TransactionProperties,
         },
         Engine,
@@ -316,7 +315,7 @@ mod tests {
     #[test]
     fn test_cmd_encode() {
         let rocks_engine = TestEngineBuilder::new().build().unwrap();
-        let engine = MockEngineBuilder::from_rocks_engine(rocks_engine).build();
+        let mut engine = MockEngineBuilder::from_rocks_engine(rocks_engine).build();
 
         let mut reqs = vec![Modify::Put("default", Key::from_raw(b"k1"), b"v1".to_vec()).into()];
         let mut req = Request::default();
@@ -326,17 +325,17 @@ mod tests {
         assert_eq!(has_ingest_sst, true);
         assert!(ChangeLog::encode_rows(changes, false).is_empty());
 
-        must_prewrite_put(&engine, b"k1", b"v1", b"k1", 1);
-        must_commit(&engine, b"k1", 1, 2);
+        must_prewrite_put(&mut engine, b"k1", b"v1", b"k1", 1);
+        must_commit(&mut engine, b"k1", 1, 2);
 
-        must_prewrite_put(&engine, b"k1", b"v2", b"k1", 3);
-        must_rollback(&engine, b"k1", 3, false);
+        must_prewrite_put(&mut engine, b"k1", b"v2", b"k1", 3);
+        must_rollback(&mut engine, b"k1", 3, false);
 
-        must_prewrite_put(&engine, b"k1", &[b'v'; 512], b"k1", 4);
-        must_commit(&engine, b"k1", 4, 5);
+        must_prewrite_put(&mut engine, b"k1", &[b'v'; 512], b"k1", 4);
+        must_commit(&mut engine, b"k1", 4, 5);
 
-        must_prewrite_put(&engine, b"k1", b"v3", b"k1", 5);
-        must_rollback(&engine, b"k1", 5, false);
+        must_prewrite_put(&mut engine, b"k1", b"v3", b"k1", 5);
+        must_rollback(&mut engine, b"k1", 5, false);
 
         let k1 = Key::from_raw(b"k1");
         let rows: Vec<_> = engine
@@ -420,13 +419,14 @@ mod tests {
                 need_old_value: false,
                 is_retry_request: false,
                 assertion_level: AssertionLevel::Off,
+                txn_source: 0,
             },
             Mutation::make_put(k1.clone(), b"v4".to_vec()),
             &None,
             SkipPessimisticCheck,
         )
         .unwrap();
-        one_pc_commit_ts(true, &mut txn, 10.into(), &DummyLockManager);
+        one_pc_commit(true, &mut txn, 10.into());
         write(&engine, &Default::default(), txn.into_modifies());
         let one_pc_row = engine
             .take_last_modifies()

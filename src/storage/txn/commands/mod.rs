@@ -40,13 +40,15 @@ pub use commit::Commit;
 pub use compare_and_swap::RawCompareAndSwap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 pub use flashback_to_version::FlashbackToVersion;
-pub use flashback_to_version_read_phase::FlashbackToVersionReadPhase;
+pub use flashback_to_version_read_phase::{
+    new_flashback_to_version_read_phase_cmd, FlashbackToVersionReadPhase, FlashbackToVersionState,
+};
 use kvproto::kvrpcpb::*;
 pub use mvcc_by_key::MvccByKey;
 pub use mvcc_by_start_ts::MvccByStartTs;
 pub use pause::Pause;
 pub use pessimistic_rollback::PessimisticRollback;
-pub use prewrite::{one_pc_commit_ts, Prewrite, PrewritePessimistic};
+pub use prewrite::{one_pc_commit, Prewrite, PrewritePessimistic};
 pub use resolve_lock::{ResolveLock, RESOLVE_LOCK_BATCH_SIZE};
 pub use resolve_lock_lite::ResolveLockLite;
 pub use resolve_lock_readphase::ResolveLockReadPhase;
@@ -63,8 +65,8 @@ use crate::storage::{
     mvcc::{Lock as MvccLock, MvccReader, ReleasedLock, SnapshotReader},
     txn::{latch, ProcessResult, Result},
     types::{
-        MvccInfo, PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallbackType,
-        TxnStatus,
+        MvccInfo, PessimisticLockParameters, PessimisticLockResults, PrewriteResult,
+        SecondaryLocksStatus, StorageCallbackType, TxnStatus,
     },
     Result as StorageResult, Snapshot, Statistics,
 };
@@ -193,7 +195,7 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
     }
 }
 
-impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLockRes>> {
+impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLockResults>> {
     fn from(mut req: PessimisticLockRequest) -> Self {
         let keys = req
             .take_mutations()
@@ -353,24 +355,15 @@ impl From<MvccGetByStartTsRequest> for TypedCommand<Option<(Key, MvccInfo)>> {
 
 impl From<FlashbackToVersionRequest> for TypedCommand<()> {
     fn from(mut req: FlashbackToVersionRequest) -> Self {
-        FlashbackToVersionReadPhase::new(
+        new_flashback_to_version_read_phase_cmd(
             req.get_start_ts().into(),
             req.get_commit_ts().into(),
             req.get_version().into(),
-            Some(Key::from_raw(req.get_end_key())),
-            Some(Key::from_raw(req.get_start_key())),
-            Some(Key::from_raw(req.get_start_key())),
+            Key::from_raw(req.get_start_key()),
+            Key::from_raw(req.get_end_key()),
             req.take_context(),
         )
     }
-}
-
-#[derive(Default)]
-pub(super) struct ReleasedLocks {
-    start_ts: TimeStamp,
-    commit_ts: TimeStamp,
-    hashes: Vec<u64>,
-    pessimistic: bool,
 }
 
 /// Represents for a scheduler command, when should the response sent to the
@@ -398,62 +391,58 @@ pub struct WriteResult {
     pub rows: usize,
     pub pr: ProcessResult,
     pub lock_info: Option<WriteResultLockInfo>,
+    pub released_locks: ReleasedLocks,
     pub lock_guards: Vec<KeyHandleGuard>,
     pub response_policy: ResponsePolicy,
 }
 
 pub struct WriteResultLockInfo {
-    pub lock: lock_manager::Lock,
-    pub key: Vec<u8>,
-    pub is_first_lock: bool,
-    pub wait_timeout: Option<WaitTimeout>,
+    pub lock_digest: lock_manager::LockDigest,
+    pub key: Key,
+    pub lock_info_pb: LockInfo,
+    pub parameters: PessimisticLockParameters,
 }
 
 impl WriteResultLockInfo {
-    pub fn from_lock_info_pb(
-        lock_info: &LockInfo,
-        is_first_lock: bool,
-        wait_timeout: Option<WaitTimeout>,
-    ) -> Self {
-        let lock = lock_manager::Lock {
-            ts: lock_info.get_lock_version().into(),
-            hash: Key::from_raw(lock_info.get_key()).gen_hash(),
+    pub fn new(lock_info_pb: LockInfo, parameters: PessimisticLockParameters) -> Self {
+        let lock = lock_manager::LockDigest {
+            ts: lock_info_pb.get_lock_version().into(),
+            hash: Key::from_raw(lock_info_pb.get_key()).gen_hash(),
         };
-        let key = lock_info.get_key().to_owned();
+        let key = Key::from_raw(lock_info_pb.get_key());
         Self {
-            lock,
+            lock_digest: lock,
             key,
-            is_first_lock,
-            wait_timeout,
+            lock_info_pb,
+            parameters,
         }
     }
 }
 
+#[derive(Default)]
+pub struct ReleasedLocks(Vec<ReleasedLock>);
+
 impl ReleasedLocks {
-    pub fn new(start_ts: TimeStamp, commit_ts: TimeStamp) -> Self {
-        Self {
-            start_ts,
-            commit_ts,
-            ..Default::default()
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn push(&mut self, lock: Option<ReleasedLock>) {
         if let Some(lock) = lock {
-            self.hashes.push(lock.hash);
-            if !self.pessimistic {
-                self.pessimistic = lock.pessimistic;
-            }
+            self.0.push(lock);
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.hashes.is_empty()
+        self.0.is_empty()
     }
 
-    // Wake up pessimistic transactions that waiting for these locks.
-    pub fn wake_up<L: LockManager>(self, lock_mgr: &L) {
-        lock_mgr.wake_up(self.start_ts, self.hashes, self.commit_ts, self.pessimistic);
+    pub fn clear(&mut self) {
+        self.0.clear()
+    }
+
+    pub fn into_iter(self) -> impl Iterator<Item = ReleasedLock> {
+        self.0.into_iter()
     }
 }
 
@@ -526,12 +515,18 @@ pub trait CommandExt: Display {
     fn gen_lock(&self) -> latch::Lock;
 }
 
+pub struct RawExt {
+    pub ts: TimeStamp,
+    pub key_guard: KeyHandleGuard,
+}
+
 pub struct WriteContext<'a, L: LockManager> {
     pub lock_mgr: &'a L,
     pub concurrency_manager: ConcurrencyManager,
     pub extra_op: ExtraOp,
     pub statistics: &'a mut Statistics,
     pub async_apply_prewrite: bool,
+    pub raw_ext: Option<RawExt>, // use for apiv2
 }
 
 pub struct ReaderWithStats<'a, S: Snapshot> {
@@ -740,30 +735,35 @@ pub trait WriteCommand<S: Snapshot, L: LockManager>: CommandExt {
 
 #[cfg(test)]
 pub mod test_util {
+    use std::sync::Arc;
+
+    use causal_ts::CausalTsProviderImpl;
+    use kvproto::kvrpcpb::ApiVersion;
     use txn_types::Mutation;
 
     use super::*;
     use crate::storage::{
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{Error, ErrorInner, Result},
-        DummyLockManager, Engine,
+        Engine, MockLockManager,
     };
 
     // Some utils for tests that may be used in multiple source code files.
 
     pub fn prewrite_command<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         cm: ConcurrencyManager,
         statistics: &mut Statistics,
         cmd: TypedCommand<PrewriteResult>,
     ) -> Result<PrewriteResult> {
         let snap = engine.snapshot(Default::default())?;
         let context = WriteContext {
-            lock_mgr: &DummyLockManager {},
+            lock_mgr: &MockLockManager::new(),
             concurrency_manager: cm,
             extra_op: ExtraOp::Noop,
             statistics,
             async_apply_prewrite: false,
+            raw_ext: None,
         };
         let ret = cmd.cmd.process_write(snap, context)?;
         let res = match ret.pr {
@@ -786,7 +786,7 @@ pub mod test_util {
     }
 
     pub fn prewrite<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         statistics: &mut Statistics,
         mutations: Vec<Mutation>,
         primary: Vec<u8>,
@@ -806,7 +806,7 @@ pub mod test_util {
     }
 
     pub fn prewrite_with_cm<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         cm: ConcurrencyManager,
         statistics: &mut Statistics,
         mutations: Vec<Mutation>,
@@ -828,7 +828,7 @@ pub mod test_util {
     }
 
     pub fn pessimistic_prewrite<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         statistics: &mut Statistics,
         mutations: Vec<(Mutation, PrewriteRequestPessimisticAction)>,
         primary: Vec<u8>,
@@ -850,7 +850,7 @@ pub mod test_util {
     }
 
     pub fn pessimistic_prewrite_with_cm<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         cm: ConcurrencyManager,
         statistics: &mut Statistics,
         mutations: Vec<(Mutation, PrewriteRequestPessimisticAction)>,
@@ -879,7 +879,7 @@ pub mod test_util {
     }
 
     pub fn commit<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         statistics: &mut Statistics,
         keys: Vec<Key>,
         lock_ts: u64,
@@ -896,11 +896,12 @@ pub mod test_util {
         );
 
         let context = WriteContext {
-            lock_mgr: &DummyLockManager {},
+            lock_mgr: &MockLockManager::new(),
             concurrency_manager,
             extra_op: ExtraOp::Noop,
             statistics,
             async_apply_prewrite: false,
+            raw_ext: None,
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
@@ -910,7 +911,7 @@ pub mod test_util {
     }
 
     pub fn rollback<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         statistics: &mut Statistics,
         keys: Vec<Key>,
         start_ts: u64,
@@ -920,16 +921,27 @@ pub mod test_util {
         let concurrency_manager = ConcurrencyManager::new(start_ts.into());
         let cmd = Rollback::new(keys, TimeStamp::from(start_ts), ctx);
         let context = WriteContext {
-            lock_mgr: &DummyLockManager {},
+            lock_mgr: &MockLockManager::new(),
             concurrency_manager,
             extra_op: ExtraOp::Noop,
             statistics,
             async_apply_prewrite: false,
+            raw_ext: None,
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
         let ctx = Context::default();
         engine.write(&ctx, ret.to_be_write).unwrap();
         Ok(())
+    }
+
+    pub fn gen_ts_provider(api_version: ApiVersion) -> Option<Arc<CausalTsProviderImpl>> {
+        if api_version == ApiVersion::V2 {
+            let test_provider: causal_ts::CausalTsProviderImpl =
+                causal_ts::tests::TestProvider::default().into();
+            Some(Arc::new(test_provider))
+        } else {
+            None
+        }
     }
 }

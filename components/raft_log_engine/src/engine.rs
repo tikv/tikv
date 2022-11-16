@@ -311,7 +311,7 @@ impl RaftLogEngine {
         if !path.exists() || !path.is_dir() {
             return false;
         }
-        fs::read_dir(&path).unwrap().next().is_some()
+        fs::read_dir(path).unwrap().next().is_some()
     }
 
     pub fn raft_groups(&self) -> Vec<u64> {

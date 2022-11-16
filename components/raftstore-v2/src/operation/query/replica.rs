@@ -1,7 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{KvEngine, RaftEngine};
-use kvproto::raft_cmdpb::{self, CmdType, RaftCmdRequest, RaftCmdResponse};
+use kvproto::raft_cmdpb::{self, RaftCmdRequest, RaftCmdResponse};
 use pd_client::INVALID_ID;
 use raftstore::{
     store::{
@@ -9,22 +9,18 @@ use raftstore::{
         fsm::apply::notify_stale_req,
         metrics::RAFT_READ_INDEX_PENDING_COUNT,
         msg::{ErrorCallback, ReadCallback},
-        propose_read_index,
-        util::check_region_epoch,
-        ReadIndexRequest, Transport,
+        propose_read_index, ReadIndexRequest, Transport,
     },
     Error,
 };
-use slog::{debug, error, info, o, Logger};
-use tikv_util::{box_err, time::monotonic_raw_now};
-use time::Timespec;
+use slog::debug;
+use tikv_util::time::monotonic_raw_now;
 use tracker::GLOBAL_TRACKERS;
 
 use crate::{
     batch::StoreContext,
     raft::Peer,
-    router::{message::RaftRequest, QueryResChannel, QueryResult, ReadResponse},
-    Result,
+    router::{QueryResChannel, QueryResult, ReadResponse},
 };
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// read index on follower

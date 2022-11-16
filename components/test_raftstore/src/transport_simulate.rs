@@ -251,7 +251,7 @@ impl<C: RaftStoreRouter<RocksEngine>> RaftStoreRouter<RocksEngine> for SimulateT
 
 impl<C: LocalReadRouter<RocksEngine>> LocalReadRouter<RocksEngine> for SimulateTransport<C> {
     fn read(
-        &self,
+        &mut self,
         read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
@@ -259,7 +259,7 @@ impl<C: LocalReadRouter<RocksEngine>> LocalReadRouter<RocksEngine> for SimulateT
         self.ch.read(read_id, req, cb)
     }
 
-    fn release_snapshot_cache(&self) {
+    fn release_snapshot_cache(&mut self) {
         self.ch.release_snapshot_cache()
     }
 }
@@ -273,7 +273,7 @@ pub struct DefaultFilterFactory<F: Filter + Default>(PhantomData<F>);
 
 impl<F: Filter + Default + 'static> FilterFactory for DefaultFilterFactory<F> {
     fn generate(&self, _: u64) -> Vec<Box<dyn Filter>> {
-        vec![Box::new(F::default())]
+        vec![Box::<F>::default()]
     }
 }
 

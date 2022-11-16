@@ -21,7 +21,7 @@ use collections::{HashMap, HashSet};
 use engine_traits::{Engines, KvEngine, RaftEngine, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
-use futures::channel::{mpsc::UnboundedSender, oneshot::Sender};
+use futures::channel::mpsc::UnboundedSender;
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::{
     brpb::CheckAdminResponse,
@@ -55,7 +55,7 @@ use tikv_util::{
     mpsc::{self, LooseBoundedSender, Receiver},
     store::{find_peer, is_learner, region_on_same_stores},
     sys::{disk::DiskUsage, memory_usage_reaches_high_water},
-    time::{monotonic_raw_now, Instant as TiInstant},
+    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant},
     trace, warn,
     worker::{ScheduleError, Scheduler},
     Either,
@@ -70,6 +70,7 @@ use crate::{
     coprocessor::{RegionChangeEvent, RegionChangeReason},
     store::{
         cmd_resp::{bind_term, new_error},
+        entry_storage::MAX_WARMED_UP_CACHE_KEEP_TIME,
         fsm::{
             apply,
             store::{PollContext, StoreMeta},
@@ -82,11 +83,10 @@ use crate::{
         metrics::*,
         msg::{Callback, ExtCallback, InspectedRaftMessage},
         peer::{
-            ConsistencyState, FlashbackState, ForceLeaderState, Peer, PersistSnapshotResult,
-            SnapshotRecoveryState, SnapshotRecoveryWaitApplySyncer, StaleState,
-            UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
-            UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
-            TRANSFER_LEADER_COMMAND_REPLY_CTX,
+            ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult, SnapshotRecoveryState,
+            SnapshotRecoveryWaitApplySyncer, StaleState, UnsafeRecoveryExecutePlanSyncer,
+            UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
+            UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer, TRANSFER_LEADER_COMMAND_REPLY_CTX,
         },
         region_meta::RegionMeta,
         transport::Transport,
@@ -94,11 +94,10 @@ use crate::{
         util::{KeysInfoFormatter, LeaseState},
         worker::{
             new_change_peer_v2_request, Bucket, BucketRange, CleanupTask, ConsistencyCheckTask,
-            GcSnapshotTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, ReadProgress,
-            RegionTask, SplitCheckTask,
+            GcSnapshotTask, RaftlogGcTask, ReadDelegate, ReadProgress, RegionTask, SplitCheckTask,
         },
         CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg, PeerTick,
-        ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, ReadCallback,
+        ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, ReadCallback, ReadTask,
         SignificantMsg, SnapKey, StoreMsg, WriteCallback,
     },
     Error, Result,
@@ -245,7 +244,7 @@ where
         store_id: u64,
         cfg: &Config,
         region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
-        raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+        raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
         engines: Engines<EK, ER>,
         region: &metapb::Region,
     ) -> Result<SenderFsmPair<EK, ER>> {
@@ -304,7 +303,7 @@ where
         store_id: u64,
         cfg: &Config,
         region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
-        raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+        raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
         engines: Engines<EK, ER>,
         region_id: u64,
         peer: metapb::Peer,
@@ -606,6 +605,8 @@ where
     }
 
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK>>) {
+        let timer = TiInstant::now_coarse();
+        let count = msgs.len();
         for m in msgs.drain(..) {
             match m {
                 PeerMsg::RaftMessage(msg) => {
@@ -688,6 +689,12 @@ where
             }
         }
         self.on_loop_finished();
+        self.ctx.raft_metrics.peer_msg_len.observe(count as f64);
+        self.ctx
+            .raft_metrics
+            .event_time
+            .peer_msg
+            .observe(duration_to_sec(timer.saturating_elapsed()));
     }
 
     #[inline]
@@ -987,38 +994,6 @@ where
         syncer.report_for_self(self_report);
     }
 
-    // Call msg PrepareFlashback to stop the scheduling and RW tasks.
-    // Once called, it will wait for the channel's notification in FlashbackState to
-    // finish. We place a flag in the request, which is checked when the
-    // pre_propose_raft_command is called. Stopping tasks is done by applying
-    // the flashback-only command in this way, But for RW local reads which need
-    // to be considered, we let the leader lease to None to ensure that local reads
-    // are not executed.
-    fn on_prepare_flashback(&mut self, ch: Sender<bool>) {
-        info!(
-            "prepare flashback";
-            "region_id" => self.region().get_id(),
-            "peer_id" => self.fsm.peer.peer_id(),
-        );
-        if self.fsm.peer.flashback_state.is_some() {
-            ch.send(false).unwrap();
-            return;
-        }
-        self.fsm.peer.flashback_state = Some(FlashbackState::new(ch));
-        // Let the leader lease to None to ensure that local reads are not executed.
-        self.fsm.peer.leader_lease_mut().expire_remote_lease();
-        self.fsm.peer.maybe_finish_flashback_wait_apply();
-    }
-
-    fn on_finish_flashback(&mut self) {
-        info!(
-            "finish flashback";
-            "region_id" => self.region().get_id(),
-            "peer_id" => self.fsm.peer.peer_id(),
-        );
-        self.fsm.peer.flashback_state.take();
-    }
-
     fn on_check_pending_admin(&mut self, ch: UnboundedSender<CheckAdminResponse>) {
         if !self.fsm.peer.is_leader() {
             // no need to check non-leader pending conf change.
@@ -1217,6 +1192,7 @@ where
             PeerTick::ReactivateMemoryLock => self.on_reactivate_memory_lock_tick(),
             PeerTick::ReportBuckets => self.on_report_region_buckets_tick(),
             PeerTick::CheckLongUncommitted => self.on_check_long_uncommitted_tick(),
+            PeerTick::CheckPeersAvailability => self.on_check_peers_availability(),
         }
     }
 
@@ -1414,7 +1390,7 @@ where
             SignificantMsg::CatchUpLogs(catch_up_logs) => {
                 self.on_catch_up_logs_for_merge(catch_up_logs);
             }
-            SignificantMsg::StoreResolved { group_id, .. } => {
+            SignificantMsg::StoreResolved { group_id, store_id } => {
                 let state = self.ctx.global_replication_state.lock().unwrap();
                 if state.status().get_mode() != ReplicationMode::DrAutoSync {
                     return;
@@ -1423,11 +1399,13 @@ where
                     return;
                 }
                 drop(state);
-                self.fsm
-                    .peer
-                    .raft_group
-                    .raft
-                    .assign_commit_groups(&[(self.fsm.peer_id(), group_id)]);
+                if let Some(peer_id) = find_peer(self.region(), store_id).map(|p| p.get_id()) {
+                    self.fsm
+                        .peer
+                        .raft_group
+                        .raft
+                        .assign_commit_groups(&[(peer_id, group_id)]);
+                }
             }
             SignificantMsg::CaptureChange {
                 cmd,
@@ -1463,9 +1441,6 @@ where
             SignificantMsg::UnsafeRecoveryFillOutReport(syncer) => {
                 self.on_unsafe_recovery_fill_out_report(syncer)
             }
-
-            SignificantMsg::PrepareFlashback(ch) => self.on_prepare_flashback(ch),
-            SignificantMsg::FinishFlashback => self.on_finish_flashback(),
             // for snapshot recovery (safe recovery)
             SignificantMsg::SnapshotRecoveryWaitApply(syncer) => {
                 self.on_snapshot_recovery_wait_apply(syncer)
@@ -1836,8 +1811,17 @@ where
 
     fn on_raft_log_fetched(&mut self, context: GetEntriesContext, res: Box<RaftlogFetchResult>) {
         let low = res.low;
-        // if the peer is not the leader anymore or being destroyed, ignore the result.
-        if !self.fsm.peer.is_leader() || self.fsm.peer.pending_remove {
+        // If the peer is not the leader anymore and it's not in entry cache warmup
+        // state, or it is being destroyed, ignore the result.
+        if !self.fsm.peer.is_leader()
+            && self
+                .fsm
+                .peer
+                .get_store()
+                .entry_cache_warmup_state()
+                .is_none()
+            || self.fsm.peer.pending_remove
+        {
             self.fsm.peer.mut_store().clean_async_fetch_res(low);
             return;
         }
@@ -1845,6 +1829,19 @@ where
         if self.fsm.peer.term() != res.term {
             // term has changed, the result may be not correct.
             self.fsm.peer.mut_store().clean_async_fetch_res(low);
+        } else if self
+            .fsm
+            .peer
+            .get_store()
+            .entry_cache_warmup_state()
+            .is_some()
+        {
+            if self.fsm.peer.mut_store().maybe_warm_up_entry_cache(*res) {
+                self.fsm.peer.ack_transfer_leader_msg(false);
+                self.fsm.has_ready = true;
+            }
+            self.fsm.peer.mut_store().clean_async_fetch_res(low);
+            return;
         } else {
             self.fsm
                 .peer
@@ -2308,10 +2305,6 @@ where
         if self.fsm.peer.unsafe_recovery_state.is_some() {
             self.check_unsafe_recovery_state();
         }
-        // TODO: combine recovery state and flashback state as a wait apply queue.
-        if self.fsm.peer.flashback_state.is_some() {
-            self.fsm.peer.maybe_finish_flashback_wait_apply();
-        }
 
         if self.fsm.peer.snapshot_recovery_state.is_some() {
             self.fsm
@@ -2496,12 +2489,14 @@ where
         // TODO: spin off the I/O code (delete_snapshot)
         let regions_to_destroy = match self.check_snapshot(&msg)? {
             Either::Left(key) => {
-                // If the snapshot file is not used again, then it's OK to
-                // delete them here. If the snapshot file will be reused when
-                // receiving, then it will fail to pass the check again, so
-                // missing snapshot files should not be noticed.
-                let s = self.ctx.snap_mgr.get_snapshot_for_applying(&key)?;
-                self.ctx.snap_mgr.delete_snapshot(&key, s.as_ref(), false);
+                if let Some(key) = key {
+                    // If the snapshot file is not used again, then it's OK to
+                    // delete them here. If the snapshot file will be reused when
+                    // receiving, then it will fail to pass the check again, so
+                    // missing snapshot files should not be noticed.
+                    let s = self.ctx.snap_mgr.get_snapshot_for_applying(&key)?;
+                    self.ctx.snap_mgr.delete_snapshot(&key, s.as_ref(), false);
+                }
                 return Ok(());
             }
             Either::Right(v) => v,
@@ -2627,11 +2622,57 @@ where
         self.fsm.hibernate_state.count_vote(from.get_id());
     }
 
+    fn on_availability_response(&mut self, from: &metapb::Peer, msg: &ExtraMessage) {
+        if !self.fsm.peer.is_leader() {
+            return;
+        }
+        if !msg.wait_data {
+            self.fsm
+                .peer
+                .wait_data_peers
+                .retain(|id| *id != from.get_id());
+            debug!(
+                "receive peer ready info";
+                "peer_id" => self.fsm.peer.peer.get_id(),
+            );
+            return;
+        }
+        self.register_check_peers_availability_tick();
+    }
+
+    fn on_availability_request(&mut self, from: &metapb::Peer) {
+        if self.fsm.peer.is_leader() {
+            return;
+        }
+        let mut resp = ExtraMessage::default();
+        resp.set_type(ExtraMessageType::MsgAvailabilityResponse);
+        resp.wait_data = self.fsm.peer.wait_data;
+        self.fsm
+            .peer
+            .send_extra_message(resp, &mut self.ctx.trans, from);
+        debug!(
+            "peer responses availability info to leader";
+            "region_id" => self.region().get_id(),
+            "peer_id" => self.fsm.peer.peer.get_id(),
+            "leader_id" => from.id,
+        );
+    }
+
     fn on_extra_message(&mut self, mut msg: RaftMessage) {
         match msg.get_extra_msg().get_type() {
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
                 if self.fsm.hibernate_state.group_state() == GroupState::Idle {
-                    self.reset_raft_tick(GroupState::Ordered);
+                    if msg.get_extra_msg().forcely_awaken {
+                        // Forcely awaken this region by manually setting this GroupState
+                        // into Chaos to trigger a new voting in this RaftGroup.
+                        self.reset_raft_tick(if !self.fsm.peer.is_leader() {
+                            GroupState::Chaos
+                        } else {
+                            GroupState::Ordered
+                        });
+                    } else {
+                        self.reset_raft_tick(GroupState::Ordered);
+                    }
                 }
                 if msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp
                     && self.fsm.peer.is_leader()
@@ -2659,6 +2700,12 @@ where
             }
             ExtraMessageType::MsgRejectRaftLogCausedByMemoryUsage => {
                 unimplemented!()
+            }
+            ExtraMessageType::MsgAvailabilityRequest => {
+                self.on_availability_request(msg.get_from_peer());
+            }
+            ExtraMessageType::MsgAvailabilityResponse => {
+                self.on_availability_response(msg.get_from_peer(), msg.get_extra_msg());
             }
         }
     }
@@ -2911,16 +2958,55 @@ where
     // Returns `Vec<(u64, bool)>` indicated (source_region_id, merge_to_this_peer)
     // if the `msg` doesn't contain a snapshot or this snapshot doesn't conflict
     // with any other snapshots or regions. Otherwise a `SnapKey` is returned.
-    fn check_snapshot(&mut self, msg: &RaftMessage) -> Result<Either<SnapKey, Vec<(u64, bool)>>> {
+    fn check_snapshot(
+        &mut self,
+        msg: &RaftMessage,
+    ) -> Result<Either<Option<SnapKey>, Vec<(u64, bool)>>> {
         if !msg.get_message().has_snapshot() {
             return Ok(Either::Right(vec![]));
         }
 
         let region_id = msg.get_region_id();
         let snap = msg.get_message().get_snapshot();
-        let key = SnapKey::from_region_snap(region_id, snap);
         let mut snap_data = RaftSnapshotData::default();
         snap_data.merge_from_bytes(snap.get_data())?;
+
+        let key = if !snap_data.get_meta().get_for_witness() {
+            // Check if snapshot file exists.
+            // No need to get snapshot for witness, as witness's empty snapshot bypass
+            // snapshot manager.
+            let key = SnapKey::from_region_snap(region_id, snap);
+            self.ctx.snap_mgr.get_snapshot_for_applying(&key)?;
+            Some(key)
+        } else {
+            None
+        };
+
+        // If the index of snapshot is not newer than peer's apply index, it
+        // is possibly because there is witness -> non-witness switch, and the peer
+        // requests snapshot from leader but leader doesn't applies the switch yet.
+        // In that case, the snapshot is a witness snapshot whereas non-witness snapshot
+        // is expected.
+        if snap.get_metadata().get_index() < self.fsm.peer.get_store().applied_index()
+            && snap_data.get_meta().get_for_witness() != self.fsm.peer.is_witness()
+        {
+            info!(
+                "mismatch witness snapshot";
+                "region_id" => region_id,
+                "peer_id" => self.fsm.peer_id(),
+                "for_witness" => snap_data.get_meta().get_for_witness(),
+                "is_witness" => self.fsm.peer.is_witness(),
+                "index" => snap.get_metadata().get_index(),
+                "applied_index" => self.fsm.peer.get_store().applied_index(),
+            );
+            self.ctx
+                .raft_metrics
+                .message_dropped
+                .mismatch_witness_snapshot
+                .inc();
+            return Ok(Either::Left(key));
+        }
+
         let snap_region = snap_data.take_region();
         let peer_id = msg.get_to_peer().get_id();
         let snap_enc_start_key = enc_start_key(&snap_region);
@@ -3071,9 +3157,6 @@ where
             return Ok(Either::Left(key));
         }
 
-        // Check if snapshot file exists.
-        self.ctx.snap_mgr.get_snapshot_for_applying(&key)?;
-
         // WARNING: The checking code must be above this line.
         // Now all checking passed.
 
@@ -3209,13 +3292,17 @@ where
                         );
                     } else {
                         self.fsm.peer.transfer_leader(&from);
+                        self.fsm.peer.wait_data_peers.clear();
                     }
                 }
             }
-        } else {
-            self.fsm
-                .peer
-                .execute_transfer_leader(self.ctx, msg.get_from(), peer_disk_usage, false);
+        } else if !self
+            .fsm
+            .peer
+            .maybe_reject_transfer_leader_msg(self.ctx, msg, peer_disk_usage)
+            && self.fsm.peer.pre_ack_transfer_leader_msg(self.ctx, msg)
+        {
+            self.fsm.peer.ack_transfer_leader_msg(false);
         }
     }
 
@@ -3660,6 +3747,7 @@ where
                             .peer
                             .peers_start_pending_time
                             .retain(|&(p, _)| p != peer_id);
+                        self.fsm.peer.wait_data_peers.retain(|id| *id != peer_id);
                     }
                     self.fsm.peer.remove_peer_from_cache(peer_id);
                     // We only care remove itself now.
@@ -3752,6 +3840,14 @@ where
     }
 
     fn on_ready_compact_log(&mut self, first_index: u64, state: RaftTruncatedState) {
+        // Since this peer may be warming up the entry cache, log compaction should be
+        // temporarily skipped. Otherwise, the warmup task may fail.
+        if let Some(state) = self.fsm.peer.mut_store().entry_cache_warmup_state_mut() {
+            if !state.check_stale(MAX_WARMED_UP_CACHE_KEEP_TIME) {
+                return;
+            }
+        }
+
         let total_cnt = self.fsm.peer.last_applying_idx - first_index;
         // the size of current CompactLog command can be ignored.
         let remain_cnt = self.fsm.peer.last_applying_idx - state.get_index() - 1;
@@ -4786,6 +4882,9 @@ where
                 }
                 ExecResult::IngestSst { ssts } => self.on_ingest_sst_result(ssts),
                 ExecResult::TransferLeader { term } => self.on_transfer_leader(term),
+                ExecResult::SetFlashbackState { region } => {
+                    self.on_set_flashback_state(region.get_is_in_flashback())
+                }
             }
         }
 
@@ -4890,20 +4989,19 @@ where
             return Ok(Some(resp));
         }
 
-        let region_id = self.region_id();
-        // When in the flashback state, we should not allow any other request to be
-        // proposed.
-        if self.fsm.peer.flashback_state.is_some() {
-            self.ctx.raft_metrics.invalid_proposal.flashback.inc();
-            let flags = WriteBatchFlags::from_bits_truncate(msg.get_header().get_flags());
-            if !flags.contains(WriteBatchFlags::FLASHBACK) {
-                return Err(Error::FlashbackInProgress(self.region_id()));
-            }
-        }
-
         // Check whether the store has the right peer to handle the request.
         let leader_id = self.fsm.peer.leader_id();
         let request = msg.get_requests();
+
+        // peer_id must be the same as peer's.
+        if let Err(e) = util::check_peer_id(msg, self.fsm.peer.peer_id()) {
+            self.ctx
+                .raft_metrics
+                .invalid_proposal
+                .mismatch_peer_id
+                .inc();
+            return Err(e);
+        }
 
         if self.fsm.peer.force_leader.is_some() {
             self.ctx.raft_metrics.invalid_proposal.force_leader.inc();
@@ -4927,6 +5025,7 @@ where
                 _ => read_only = false,
             }
         }
+        let region_id = self.region_id();
         let allow_replica_read = read_only && msg.get_header().get_replica_read();
         let flags = WriteBatchFlags::from_bits_check(msg.get_header().get_flags());
         let allow_stale_read = read_only && flags.contains(WriteBatchFlags::STALE_READ);
@@ -4941,15 +5040,17 @@ where
             self.register_raft_base_tick();
             return Err(Error::NotLeader(region_id, leader));
         }
-        // peer_id must be the same as peer's.
-        if let Err(e) = util::check_peer_id(msg, self.fsm.peer.peer_id()) {
-            self.ctx
-                .raft_metrics
-                .invalid_proposal
-                .mismatch_peer_id
-                .inc();
-            return Err(e);
+
+        // Forbid requests when it's a witness unless it's transfer leader
+        if self.fsm.peer.is_witness()
+            && !(msg.has_admin_request()
+                && msg.get_admin_request().get_cmd_type() == AdminCmdType::TransferLeader)
+        {
+            self.ctx.raft_metrics.invalid_proposal.witness.inc();
+            // TODO: use a dedicated error type
+            return Err(Error::RecoveryInProgress(self.region_id()));
         }
+
         // check whether the peer is initialized.
         if !self.fsm.peer.is_initialized() {
             self.ctx
@@ -4988,11 +5089,33 @@ where
                 let requested_version = msg.get_header().get_region_epoch().version;
                 self.collect_sibling_region(requested_version, &mut new_regions);
                 self.ctx.raft_metrics.invalid_proposal.epoch_not_match.inc();
-                Err(Error::EpochNotMatch(m, new_regions))
+                return Err(Error::EpochNotMatch(m, new_regions));
             }
-            Err(e) => Err(e),
-            Ok(()) => Ok(None),
+            Err(e) => return Err(e),
+            _ => {}
+        };
+        // Check whether the region is in the flashback state and the request could be
+        // proposed.
+        if let Err(e) = util::check_flashback_state(self.fsm.peer.is_in_flashback, msg, region_id) {
+            match e {
+                Error::FlashbackInProgress(_) => self
+                    .ctx
+                    .raft_metrics
+                    .invalid_proposal
+                    .flashback_in_progress
+                    .inc(),
+                Error::FlashbackNotPrepared(_) => self
+                    .ctx
+                    .raft_metrics
+                    .invalid_proposal
+                    .flashback_not_prepared
+                    .inc(),
+                _ => unreachable!(),
+            }
+            return Err(e);
         }
+
+        Ok(None)
     }
 
     /// Proposes pending batch raft commands (if any), then proposes the
@@ -5858,6 +5981,26 @@ where
         self.schedule_tick(PeerTick::PdHeartbeat)
     }
 
+    fn register_check_peers_availability_tick(&mut self) {
+        fail_point!("ignore schedule check peers availability tick", |_| {});
+        self.schedule_tick(PeerTick::CheckPeersAvailability)
+    }
+
+    fn on_check_peers_availability(&mut self) {
+        for peer_id in self.fsm.peer.wait_data_peers.iter() {
+            let peer = self.fsm.peer.get_peer_from_cache(*peer_id).unwrap();
+            let mut msg = ExtraMessage::default();
+            msg.set_type(ExtraMessageType::MsgAvailabilityRequest);
+            self.fsm
+                .peer
+                .send_extra_message(msg, &mut self.ctx.trans, &peer);
+            debug!(
+                "check peer availability";
+                "target peer id" => *peer_id,
+            );
+        }
+    }
+
     fn on_check_peer_stale_state_tick(&mut self) {
         if self.fsm.peer.pending_remove {
             return;
@@ -6117,15 +6260,15 @@ where
         if term != self.fsm.peer.term() {
             return;
         }
-        // As the leader can propose the TransferLeader request successfully, the disk
-        // of the leader is probably not full.
-        self.fsm.peer.execute_transfer_leader(
-            self.ctx,
-            self.fsm.peer.leader_id(),
-            DiskUsage::Normal,
-            true,
-        );
+        self.fsm.peer.ack_transfer_leader_msg(true);
         self.fsm.has_ready = true;
+    }
+
+    fn on_set_flashback_state(&mut self, is_in_flashback: bool) {
+        // Set flashback memory
+        self.fsm.peer.is_in_flashback = is_in_flashback;
+        // Let the leader lease to None to ensure that local reads are not executed.
+        self.fsm.peer.leader_lease_mut().expire_remote_lease();
     }
 
     /// Verify and store the hash to state. return true means the hash has been

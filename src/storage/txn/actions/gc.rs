@@ -137,7 +137,7 @@ pub mod tests {
         RocksEngine, TestEngineBuilder,
     };
 
-    pub fn must_succeed<E: Engine>(engine: &E, key: &[u8], safe_point: impl Into<TimeStamp>) {
+    pub fn must_succeed<E: Engine>(engine: &mut E, key: &[u8], safe_point: impl Into<TimeStamp>) {
         let ctx = SnapContext::default();
         let snapshot = engine.snapshot(ctx).unwrap();
         let cm = ConcurrencyManager::new(1.into());
@@ -150,22 +150,22 @@ pub mod tests {
     #[cfg(test)]
     fn test_gc_imp<F>(k: &[u8], v1: &[u8], v2: &[u8], v3: &[u8], v4: &[u8], gc: F)
     where
-        F: Fn(&RocksEngine, &[u8], u64),
+        F: Fn(&mut RocksEngine, &[u8], u64),
     {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
-        must_prewrite_put(&engine, k, v1, k, 5);
-        must_commit(&engine, k, 5, 10);
-        must_prewrite_put(&engine, k, v2, k, 15);
-        must_commit(&engine, k, 15, 20);
-        must_prewrite_delete(&engine, k, k, 25);
-        must_commit(&engine, k, 25, 30);
-        must_prewrite_put(&engine, k, v3, k, 35);
-        must_commit(&engine, k, 35, 40);
-        must_prewrite_lock(&engine, k, k, 45);
-        must_commit(&engine, k, 45, 50);
-        must_prewrite_put(&engine, k, v4, k, 55);
-        must_rollback(&engine, k, 55, false);
+        must_prewrite_put(&mut engine, k, v1, k, 5);
+        must_commit(&mut engine, k, 5, 10);
+        must_prewrite_put(&mut engine, k, v2, k, 15);
+        must_commit(&mut engine, k, 15, 20);
+        must_prewrite_delete(&mut engine, k, k, 25);
+        must_commit(&mut engine, k, 25, 30);
+        must_prewrite_put(&mut engine, k, v3, k, 35);
+        must_commit(&mut engine, k, 35, 40);
+        must_prewrite_lock(&mut engine, k, k, 45);
+        must_commit(&mut engine, k, 45, 50);
+        must_prewrite_put(&mut engine, k, v4, k, 55);
+        must_rollback(&mut engine, k, 55, false);
 
         // Transactions:
         // startTS commitTS Command
@@ -192,19 +192,19 @@ pub mod tests {
         // 10             Commit(PUT,5)
         // 5    x5
 
-        gc(&engine, k, 12);
-        must_get(&engine, k, 12, v1);
+        gc(&mut engine, k, 12);
+        must_get(&mut engine, k, 12, v1);
 
-        gc(&engine, k, 22);
-        must_get(&engine, k, 22, v2);
-        must_get_none(&engine, k, 12);
+        gc(&mut engine, k, 22);
+        must_get(&mut engine, k, 22, v2);
+        must_get_none(&mut engine, k, 12);
 
-        gc(&engine, k, 32);
-        must_get_none(&engine, k, 22);
-        must_get_none(&engine, k, 35);
+        gc(&mut engine, k, 32);
+        must_get_none(&mut engine, k, 22);
+        must_get_none(&mut engine, k, 35);
 
-        gc(&engine, k, 60);
-        must_get(&engine, k, 62, v3);
+        gc(&mut engine, k, 60);
+        must_get(&mut engine, k, 62, v3);
     }
 
     #[test]

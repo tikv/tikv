@@ -1,10 +1,9 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cell::Cell,
-    mem,
     ops::{Deref, DerefMut},
-    sync::{atomic::AtomicUsize, Arc, Mutex},
+    path::Path,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -14,6 +13,7 @@ use batch_system::{
 use collections::HashMap;
 use crossbeam::channel::{Sender, TrySendError};
 use engine_traits::{Engines, KvEngine, RaftEngine, TabletFactory};
+use file_system::{set_io_type, IoType};
 use futures::{compat::Future01CompatExt, FutureExt};
 use kvproto::{
     metapb::Store,
@@ -21,8 +21,8 @@ use kvproto::{
 };
 use raft::INVALID_ID;
 use raftstore::store::{
-    fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, RaftlogFetchRunner,
-    RaftlogFetchTask, StoreWriters, Transport, WriteMsg, WriteSenders,
+    fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, ReadRunner, ReadTask,
+    StoreWriters, TabletSnapManager, Transport, WriteSenders,
 };
 use slog::Logger;
 use tikv_util::{
@@ -30,18 +30,19 @@ use tikv_util::{
     config::{Tracker, VersionTrack},
     defer,
     future::poll_future_notify,
+    sys::SysQuota,
     time::Instant as TiInstant,
     timer::SteadyTimer,
     worker::{Scheduler, Worker},
+    yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
     Either,
 };
 use time::Timespec;
 
-use super::apply::{create_apply_batch_system, ApplyPollerBuilder, ApplyRouter, ApplySystem};
 use crate::{
     fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate, StoreMeta},
-    raft::{Peer, Storage},
-    router::{PeerMsg, PeerTick, QueryResChannel, StoreMsg},
+    raft::Storage,
+    router::{PeerMsg, PeerTick, StoreMsg},
     Error, Result,
 };
 
@@ -67,7 +68,8 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub store_meta: Arc<Mutex<StoreMeta<EK>>>,
     pub engine: ER,
     pub tablet_factory: Arc<dyn TabletFactory<EK>>,
-    pub log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+    pub apply_pool: FuturePool,
+    pub read_scheduler: Scheduler<ReadTask<EK>>,
 }
 
 /// A [`PollHandler`] that handles updates of [`StoreFsm`]s and [`PeerFsm`]s.
@@ -214,8 +216,9 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     tablet_factory: Arc<dyn TabletFactory<EK>>,
     trans: T,
     router: StoreRouter<EK, ER>,
-    log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+    read_scheduler: Scheduler<ReadTask<EK>>,
     write_senders: WriteSenders<EK, ER>,
+    apply_pool: FuturePool,
     logger: Logger,
     store_meta: Arc<Mutex<StoreMeta<EK>>>,
 }
@@ -228,11 +231,21 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         tablet_factory: Arc<dyn TabletFactory<EK>>,
         trans: T,
         router: StoreRouter<EK, ER>,
-        log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+        read_scheduler: Scheduler<ReadTask<EK>>,
         store_writers: &mut StoreWriters<EK, ER>,
         logger: Logger,
         store_meta: Arc<Mutex<StoreMeta<EK>>>,
     ) -> Self {
+        let pool_size = cfg.value().apply_batch_system.pool_size;
+        let max_pool_size = std::cmp::max(
+            pool_size,
+            std::cmp::max(4, SysQuota::cpu_cores_quota() as usize),
+        );
+        let apply_pool = YatpPoolBuilder::new(DefaultTicker::default())
+            .thread_count(1, pool_size, max_pool_size)
+            .after_start(move || set_io_type(IoType::ForegroundWrite))
+            .name_prefix("apply")
+            .build_future_pool();
         StorePollerBuilder {
             cfg,
             store_id,
@@ -240,7 +253,8 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             tablet_factory,
             trans,
             router,
-            log_fetch_scheduler,
+            read_scheduler,
+            apply_pool,
             logger,
             write_senders: store_writers.senders(),
             store_meta,
@@ -251,6 +265,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
     fn init(&self) -> Result<HashMap<u64, SenderFsmPair<EK, ER>>> {
         let mut regions = HashMap::default();
         let cfg = self.cfg.value();
+        let mut meta = self.store_meta.lock().unwrap();
         self.engine
             .for_each_raft_group::<Error, _>(&mut |region_id| {
                 assert_ne!(region_id, INVALID_ID);
@@ -258,14 +273,17 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                     region_id,
                     self.store_id,
                     self.engine.clone(),
-                    self.log_fetch_scheduler.clone(),
+                    self.read_scheduler.clone(),
                     &self.logger,
                 )? {
                     Some(p) => p,
                     None => return Ok(()),
                 };
-                let pair = PeerFsm::new(&cfg, &*self.tablet_factory, storage)?;
-                let prev = regions.insert(region_id, pair);
+                let (sender, peer_fsm) = PeerFsm::new(&cfg, &*self.tablet_factory, storage)?;
+                meta.region_read_progress
+                    .insert(region_id, peer_fsm.as_ref().peer().read_progress().clone());
+
+                let prev = regions.insert(region_id, (sender, peer_fsm));
                 if let Some((_, p)) = prev {
                     return Err(box_err!(
                         "duplicate region {:?} vs {:?}",
@@ -310,7 +328,8 @@ where
             store_meta: self.store_meta.clone(),
             engine: self.engine.clone(),
             tablet_factory: self.tablet_factory.clone(),
-            log_fetch_scheduler: self.log_fetch_scheduler.clone(),
+            apply_pool: self.apply_pool.clone(),
+            read_scheduler: self.read_scheduler.clone(),
         };
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
         StorePoller::new(poll_ctx, cfg_tracker)
@@ -321,14 +340,14 @@ where
 /// raftstore.
 struct Workers<EK: KvEngine, ER: RaftEngine> {
     /// Worker for fetching raft logs asynchronously
-    log_fetch_worker: Worker,
+    async_read_worker: Worker,
     store_writers: StoreWriters<EK, ER>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Default for Workers<EK, ER> {
     fn default() -> Self {
         Self {
-            log_fetch_worker: Worker::new("raftlog-fetch-worker"),
+            async_read_worker: Worker::new("async-read-worker"),
             store_writers: StoreWriters::default(),
         }
     }
@@ -337,8 +356,6 @@ impl<EK: KvEngine, ER: RaftEngine> Default for Workers<EK, ER> {
 /// The system used for polling Raft activities.
 pub struct StoreSystem<EK: KvEngine, ER: RaftEngine> {
     system: BatchSystem<PeerFsm<EK, ER>, StoreFsm>,
-    apply_router: ApplyRouter<EK>,
-    apply_system: ApplySystem<EK>,
     workers: Option<Workers<EK, ER>>,
     logger: Logger,
 }
@@ -353,6 +370,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         trans: T,
         router: &StoreRouter<EK, ER>,
         store_meta: Arc<Mutex<StoreMeta<EK>>>,
+        snap_mgr: TabletSnapManager,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -361,10 +379,12 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         workers
             .store_writers
             .spawn(store_id, raft_engine.clone(), None, router, &trans, &cfg)?;
-        let log_fetch_scheduler = workers.log_fetch_worker.start(
-            "raftlog-fetch-worker",
-            RaftlogFetchRunner::new(router.clone(), raft_engine.clone()),
-        );
+
+        let mut read_runner = ReadRunner::new(router.clone(), raft_engine.clone());
+        read_runner.set_snap_mgr(snap_mgr);
+        let read_scheduler = workers
+            .async_read_worker
+            .start("async-read-worker", read_runner);
 
         let mut builder = StorePollerBuilder::new(
             cfg.clone(),
@@ -373,15 +393,13 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             tablet_factory,
             trans,
             router.clone(),
-            log_fetch_scheduler,
+            read_scheduler,
             &mut workers.store_writers,
             self.logger.clone(),
-            store_meta,
+            store_meta.clone(),
         );
         self.workers = Some(workers);
         let peers = builder.init()?;
-        self.apply_system
-            .schedule_all(peers.values().map(|pair| pair.1.peer()));
         // Choose a different name so we know what version is actually used. rs stands
         // for raft store.
         let tag = format!("rs-{}", store_id);
@@ -389,12 +407,20 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
 
         let mut mailboxes = Vec::with_capacity(peers.len());
         let mut address = Vec::with_capacity(peers.len());
-        for (region_id, (tx, fsm)) in peers {
-            address.push(region_id);
-            mailboxes.push((
-                region_id,
-                BasicMailbox::new(tx, fsm, router.state_cnt().clone()),
-            ));
+        {
+            let mut meta = store_meta.as_ref().lock().unwrap();
+            for (region_id, (tx, fsm)) in peers {
+                meta.readers
+                    .insert(region_id, fsm.peer().generate_read_delegate());
+                meta.tablet_caches
+                    .insert(region_id, fsm.peer().tablet().clone());
+
+                address.push(region_id);
+                mailboxes.push((
+                    region_id,
+                    BasicMailbox::new(tx, fsm, router.state_cnt().clone()),
+                ));
+            }
         }
         router.register_all(mailboxes);
 
@@ -403,10 +429,6 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             router.force_send(addr, PeerMsg::Start).unwrap();
         }
         router.send_control(StoreMsg::Start).unwrap();
-
-        let apply_poller_builder = ApplyPollerBuilder::new(cfg);
-        self.apply_system
-            .spawn("apply".to_owned(), apply_poller_builder);
         Ok(())
     }
 
@@ -416,11 +438,12 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         }
         let mut workers = self.workers.take().unwrap();
 
-        self.apply_system.shutdown();
+        // TODO: gracefully shutdown future pool
+
         self.system.shutdown();
 
         workers.store_writers.shutdown();
-        workers.log_fetch_worker.stop();
+        workers.async_read_worker.stop();
     }
 }
 
@@ -493,11 +516,8 @@ where
     let (store_tx, store_fsm) = StoreFsm::new(cfg, store_id, logger.clone());
     let (router, system) =
         batch_system::create_system(&cfg.store_batch_system, store_tx, store_fsm);
-    let (apply_router, apply_system) = create_apply_batch_system(cfg);
     let system = StoreSystem {
         system,
-        apply_router,
-        apply_system,
         workers: None,
         logger: logger.clone(),
     };

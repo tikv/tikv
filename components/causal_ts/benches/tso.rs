@@ -19,11 +19,7 @@ fn bench_batch_tso_list_pop(c: &mut Criterion) {
                 batch_list.flush();
                 for i in 0..CAPACITY {
                     batch_list
-                        .push(
-                            batch_size as u32,
-                            TimeStamp::compose(i as u64, batch_size),
-                            false,
-                        )
+                        .push(batch_size as u32, TimeStamp::compose(i, batch_size), false)
                         .unwrap();
                 }
             },
@@ -87,7 +83,7 @@ fn bench_batch_tso_provider_get_ts(c: &mut Criterion) {
 
     c.bench_function("bench_batch_tso_provider_get_ts", |b| {
         b.iter(|| {
-            black_box(provider.get_ts().unwrap());
+            black_box(block_on(provider.async_get_ts()).unwrap());
         })
     });
 }
@@ -108,7 +104,7 @@ fn bench_batch_tso_provider_flush(c: &mut Criterion) {
 
     c.bench_function("bench_batch_tso_provider_flush", |b| {
         b.iter(|| {
-            black_box(provider.flush()).unwrap();
+            black_box(block_on(provider.async_flush())).unwrap();
         })
     });
 }

@@ -128,12 +128,15 @@ where
         handle: ObserveHandle,
     ) -> Result<Statistics> {
         let region_id = region.get_id();
+        let h = handle.clone();
         // Note: we have external retry at `ScanCmd::exec_by_with_retry`, should we keep
         // retrying here?
         let snap = self.observe_over_with_retry(region, move || {
             ChangeObserver::from_pitr(region_id, handle.clone())
         })?;
-        let stat = self.do_initial_scan(region, start_ts, snap)?;
+        #[cfg(feature = "failpoints")]
+        fail::fail_point!("scan_after_get_snapshot");
+        let stat = self.do_initial_scan(region, h, start_ts, snap)?;
         Ok(stat)
     }
 
@@ -403,7 +406,7 @@ where
                     self.subs.deregister_region_if(region, |_, _| true);
                 }
                 ObserveOp::Destroy { ref region } => {
-                    let stopped = self.subs.deregister_region_if(region, |old, new| {
+                    self.subs.deregister_region_if(region, |old, new| {
                         raftstore::store::util::compare_region_epoch(
                             old.meta.get_region_epoch(),
                             new,
@@ -414,9 +417,6 @@ where
                         .map_err(|err| warn!("check epoch and stop failed."; "err" => %err))
                         .is_ok()
                     });
-                    if stopped {
-                        self.subs.destroy_stopped_region(region.get_id());
-                    }
                 }
                 ObserveOp::RefreshResolver { ref region } => self.refresh_resolver(region).await,
                 ObserveOp::NotifyFailToStartObserve {
