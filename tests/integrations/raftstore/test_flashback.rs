@@ -11,7 +11,7 @@ use kvproto::{
     metapb,
     raft_cmdpb::{AdminCmdType, RaftCmdResponse, Request},
 };
-use raftstore::store::{util::insert_write_batch_flag, Callback};
+use raftstore::store::Callback;
 use test_raftstore::*;
 use txn_types::WriteBatchFlags;
 
@@ -185,15 +185,10 @@ fn test_flashback_for_write() {
     // Prepare flashback.
     cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::PrepareFlashback);
     // Write will be blocked
-    assert!(
-        request_without_flashback_flag(
-            &mut cluster,
-            &mut region.clone(),
-            new_put_cmd(TEST_KEY, TEST_VALUE)
-        )
-        .get_header()
-        .get_error()
-        .has_flashback_in_progress()
+    must_get_flashback_in_progress_error(
+        &mut cluster,
+        &mut region.clone(),
+        new_put_cmd(TEST_KEY, TEST_VALUE),
     );
     // Write with flashback flag will succeed.
     must_request_with_flashback_flag(
@@ -287,12 +282,7 @@ fn test_flashback_for_local_read() {
     let state = cluster.raft_local_state(region.get_id(), store_id);
     assert_eq!(state.get_last_index(), last_index);
     // A local read with flashback flag will also be blocked.
-    assert!(
-        request_with_flashback_flag(&mut cluster, &mut region, new_get_cmd(TEST_KEY))
-            .get_header()
-            .get_error()
-            .has_flashback_not_prepared()
-    );
+    must_get_flashback_not_prepared_error(&mut cluster, &mut region, new_get_cmd(TEST_KEY));
 }
 
 #[test]
@@ -411,8 +401,7 @@ fn request<T: Simulator>(
     let header = cmd_req.mut_header();
     header.set_peer(new_leader.unwrap());
     if with_flashback_flag {
-        req.mut_header()
-            .set_flags(txn_types::WriteBatchFlags::FLASHBACK.bits());
+        header.set_flags(WriteBatchFlags::FLASHBACK.bits());
     }
     cluster
         .call_command(cmd_req, Duration::from_secs(3))
