@@ -246,7 +246,7 @@ impl ChangeData for Service {
                 req_id,
                 conn_id,
                 req_kvapi,
-                request.ignore_xxx,
+                request.filter_loop,
             );
             let ret = scheduler
                 .schedule(Task::Register {

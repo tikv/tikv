@@ -620,7 +620,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let api_version = self.api_version;
         let downstream_id = downstream.get_id();
         let downstream_state = downstream.get_state();
-        let ignore_cdc_written = downstream.get_ignore_cdc_written();
+        let filter_loop = downstream.get_filter_loop();
 
         // Register must follow OpenConn, so the connection must be available.
         let conn = self.connections.get_mut(&conn_id).unwrap();
@@ -747,7 +747,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             build_resolver: is_new_delegate,
             ts_filter_ratio: self.config.incremental_scan_ts_filter_ratio,
             kv_api,
-            ignore_cdc_written,
+            filter_loop,
         };
 
         let raft_router = self.raft_router.clone();

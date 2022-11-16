@@ -129,7 +129,7 @@ pub struct Downstream {
     sink: Option<Sink>,
     state: Arc<AtomicCell<DownstreamState>>,
     kv_api: ChangeDataRequestKvApi,
-    ignore_cdc_written: bool,
+    filter_loop: bool,
 }
 
 impl Downstream {
@@ -143,7 +143,7 @@ impl Downstream {
         req_id: u64,
         conn_id: ConnId,
         kv_api: ChangeDataRequestKvApi,
-        ignore_cdc_written: bool,
+        filter_loop: bool,
     ) -> Downstream {
         Downstream {
             id: DownstreamId::new(),
@@ -154,7 +154,7 @@ impl Downstream {
             sink: None,
             state: Arc::new(AtomicCell::new(DownstreamState::default())),
             kv_api,
-            ignore_cdc_written,
+            filter_loop,
         }
     }
 
@@ -206,8 +206,8 @@ impl Downstream {
         self.id
     }
 
-    pub fn get_ignore_cdc_written(&self) -> bool {
-        self.ignore_cdc_written
+    pub fn get_filter_loop(&self) -> bool {
+        self.filter_loop
     }
 
     pub fn get_state(&self) -> Arc<AtomicCell<DownstreamState>> {
@@ -478,7 +478,7 @@ impl Delegate {
         region_id: u64,
         request_id: u64,
         entries: Vec<Option<KvEntry>>,
-        ignore_cdc_written: bool,
+        filter_loop: bool,
     ) -> Result<Vec<CdcEvent>> {
         let entries_len = entries.len();
         let mut rows = vec![Vec::with_capacity(entries_len)];
@@ -535,7 +535,7 @@ impl Delegate {
                     row_size = 0;
                 }
             }
-            if row.txn_source != 0 && ignore_cdc_written {
+            if row.txn_source != 0 && filter_loop {
                 continue;
             }
             if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
@@ -631,12 +631,12 @@ impl Delegate {
         if entries.is_empty() {
             return Ok(());
         }
-        let always_sink_entries: Vec<EventRow> = entries
+        let user_change_entries: Vec<EventRow> = entries
             .iter()
             .filter(|x| x.txn_source == 0)
             .cloned()
             .collect::<Vec<EventRow>>();
-        let always_sink_is_empty = always_sink_entries.is_empty();
+        let user_change_is_empty = user_change_entries.is_empty();
 
         let event_entries = EventEntries {
             entries: entries.into(),
@@ -649,14 +649,13 @@ impl Delegate {
             ..Default::default()
         };
 
-        let always_sink_event_entries = EventEntries {
-            entries: always_sink_entries.into(),
-            ..Default::default()
-        };
-        let always_sink_change_data_event = Event {
+        let user_change_data_event = Event {
             region_id: self.region_id,
             index,
-            event: Some(Event_oneof_event::Entries(always_sink_event_entries)),
+            event: Some(Event_oneof_event::Entries(EventEntries {
+                entries: user_change_entries.into(),
+                ..Default::default()
+            })),
             ..Default::default()
         };
 
@@ -667,12 +666,12 @@ impl Delegate {
             if !downstream.state.load().ready_for_change_events() || downstream.kv_api != kv_api {
                 return Ok(());
             }
-            if downstream.ignore_cdc_written && always_sink_is_empty {
+            if downstream.filter_loop && user_change_is_empty {
                 return Ok(());
             }
 
-            let event = if downstream.ignore_cdc_written {
-                always_sink_change_data_event.clone()
+            let event = if downstream.filter_loop {
+                user_change_data_event.clone()
             } else {
                 change_data_event.clone()
             };
