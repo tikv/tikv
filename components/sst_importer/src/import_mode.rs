@@ -355,6 +355,7 @@ mod tests {
         check_import_options(&db, &import_db_options, &import_cf_options);
 
         thread::sleep(Duration::from_secs(1));
+        threads.block_on(tokio::task::yield_now());
 
         check_import_options(&db, &normal_db_options, &normal_cf_options);
     }
