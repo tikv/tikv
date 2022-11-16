@@ -121,7 +121,7 @@ mod imp {
         // Unsafe due to FFI.
         unsafe {
             let tid = libc::syscall(libc::SYS_gettid);
-            if libc::setpriority(libc::PRIO_PROCESS as u32, tid as u32, pri) != 0 {
+            if libc::setpriority(libc::PRIO_PROCESS, tid as u32, pri) != 0 {
                 let e = Error::last_os_error();
                 return Err(e);
             }
@@ -134,7 +134,7 @@ mod imp {
         unsafe {
             let tid = libc::syscall(libc::SYS_gettid);
             clear_errno();
-            let ret = libc::getpriority(libc::PRIO_PROCESS as u32, tid as u32);
+            let ret = libc::getpriority(libc::PRIO_PROCESS, tid as u32);
             if ret == -1 {
                 let e = Error::last_os_error();
                 if let Some(errno) = e.raw_os_error() {

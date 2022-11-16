@@ -1332,7 +1332,7 @@ mod tests {
 
         let config = Config {
             end_point_request_max_handle_duration: ReadableDuration::millis(
-                (PAYLOAD_SMALL + PAYLOAD_LARGE) as u64 * 2,
+                (PAYLOAD_SMALL + PAYLOAD_LARGE) * 2,
             ),
             ..Default::default()
         };
@@ -1357,23 +1357,22 @@ mod tests {
 
             // Request 1: Unary, success response.
             let handler_builder = Box::new(|_, _: &_| {
-                Ok(UnaryFixture::new_with_duration(
-                    Ok(coppb::Response::default()),
-                    PAYLOAD_SMALL as u64,
+                Ok(
+                    UnaryFixture::new_with_duration(Ok(coppb::Response::default()), PAYLOAD_SMALL)
+                        .into_boxed(),
                 )
-                .into_boxed())
             });
             let resp_future_1 =
                 copr.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![block_on(resp_future_1).unwrap()]).unwrap());
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
-            thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
+            thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS));
 
             // Request 2: Unary, error response.
             let handler_builder = Box::new(|_, _: &_| {
                 Ok(
-                    UnaryFixture::new_with_duration(Err(box_err!("foo")), PAYLOAD_LARGE as u64)
+                    UnaryFixture::new_with_duration(Err(box_err!("foo")), PAYLOAD_LARGE)
                         .into_boxed(),
                 )
             });
@@ -1381,7 +1380,7 @@ mod tests {
                 copr.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![block_on(resp_future_2).unwrap()]).unwrap());
-            thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
+            thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS));
 
             // Response 1
             let resp = &rx.recv().unwrap()[0];
@@ -1447,7 +1446,7 @@ mod tests {
             let handler_builder = Box::new(|_, _: &_| {
                 Ok(UnaryFixture::new_with_duration_yieldable(
                     Ok(coppb::Response::default()),
-                    PAYLOAD_SMALL as u64,
+                    PAYLOAD_SMALL,
                 )
                 .into_boxed())
             });
@@ -1456,21 +1455,20 @@ mod tests {
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![block_on(resp_future_1).unwrap()]).unwrap());
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
-            thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
+            thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS));
 
             // Request 2: Unary, error response.
             let handler_builder = Box::new(|_, _: &_| {
-                Ok(UnaryFixture::new_with_duration_yieldable(
-                    Err(box_err!("foo")),
-                    PAYLOAD_LARGE as u64,
+                Ok(
+                    UnaryFixture::new_with_duration_yieldable(Err(box_err!("foo")), PAYLOAD_LARGE)
+                        .into_boxed(),
                 )
-                .into_boxed())
             });
             let resp_future_2 =
                 copr.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![block_on(resp_future_2).unwrap()]).unwrap());
-            thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
+            thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS));
 
             // Response 1
             //
@@ -1524,18 +1522,17 @@ mod tests {
 
             // Request 1: Unary, success response.
             let handler_builder = Box::new(|_, _: &_| {
-                Ok(UnaryFixture::new_with_duration(
-                    Ok(coppb::Response::default()),
-                    PAYLOAD_LARGE as u64,
+                Ok(
+                    UnaryFixture::new_with_duration(Ok(coppb::Response::default()), PAYLOAD_LARGE)
+                        .into_boxed(),
                 )
-                .into_boxed())
             });
             let resp_future_1 =
                 copr.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![block_on(resp_future_1).unwrap()]).unwrap());
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
-            thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
+            thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS));
 
             // Request 2: Stream.
             let handler_builder = Box::new(|_, _: &_| {
@@ -1545,11 +1542,7 @@ mod tests {
                         Err(box_err!("foo")),
                         Ok(coppb::Response::default()),
                     ],
-                    vec![
-                        PAYLOAD_SMALL as u64,
-                        PAYLOAD_LARGE as u64,
-                        PAYLOAD_SMALL as u64,
-                    ],
+                    vec![PAYLOAD_SMALL, PAYLOAD_LARGE, PAYLOAD_SMALL],
                 )
                 .into_boxed())
             });

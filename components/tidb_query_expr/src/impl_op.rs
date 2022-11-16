@@ -64,7 +64,7 @@ pub fn unary_minus_uint(arg: Option<&Int>) -> Result<Option<Int>> {
         Some(val) => {
             let uval = *val as u64;
             match uval.cmp(&(i64::MAX as u64 + 1)) {
-                Greater => Err(Error::overflow("BIGINT", &format!("-{}", uval)).into()),
+                Greater => Err(Error::overflow("BIGINT", format!("-{}", uval)).into()),
                 Equal => Ok(Some(i64::MIN)),
                 Less => Ok(Some(-*val)),
             }
@@ -79,7 +79,7 @@ pub fn unary_minus_int(arg: Option<&Int>) -> Result<Option<Int>> {
     match arg {
         Some(val) => {
             if *val == i64::MIN {
-                Err(Error::overflow("BIGINT", &format!("-{}", *val)).into())
+                Err(Error::overflow("BIGINT", format!("-{}", *val)).into())
             } else {
                 Ok(Some(-*val))
             }

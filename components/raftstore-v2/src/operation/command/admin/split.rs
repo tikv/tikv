@@ -8,52 +8,58 @@
 //! - Nothing special except for validating batch split requests (ex: split keys
 //!   are in ascending order).
 //!
-//! Execution:
-//! - exec_batch_split: Create and initialize metapb::region for split regions
+//! Apply:
+//! - apply_batch_split: Create and initialize metapb::region for split regions
 //!   and derived regions. Then, create checkpoints of the current talbet for
 //!   split regions and derived region to make tablet physical isolated. Update
 //!   the parent region's region state without persistency. Send the new regions
 //!   (including derived region) back to raftstore.
 //!
-//! Result apply:
-//! - todo
+//! On Apply Result:
+//! - on_ready_split_region: Update the relevant in memory meta info of the
+//!   parent peer, then send to the store the relevant info needed to create and
+//!   initialize the split regions.
 //!
 //! Split peer creation and initlization:
-//! - todo
-//!
-//! Split finish:
-//! - todo
+//! - on_split_init: In normal cases, the uninitialized split region will be
+//!   created by the store, and here init it using the data sent from the parent
+//!   peer.
 
 use std::collections::VecDeque;
 
+use crossbeam::channel::{SendError, TrySendError};
 use engine_traits::{
-    Checkpointer, KvEngine, OpenOptions, RaftEngine, TabletFactory, CF_DEFAULT, SPLIT_PREFIX,
+    Checkpointer, DeleteStrategy, KvEngine, OpenOptions, RaftEngine, RaftLogBatch, Range,
+    CF_DEFAULT, SPLIT_PREFIX,
 };
+use fail::fail_point;
+use keys::enc_end_key;
 use kvproto::{
-    metapb::Region,
+    metapb::{self, Region, RegionEpoch},
     raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, SplitRequest},
     raft_serverpb::RegionLocalState,
 };
 use protobuf::Message;
+use raft::RawNode;
 use raftstore::{
-    coprocessor::split_observer::{is_valid_split_key, strip_timestamp_if_exists},
+    coprocessor::RegionChangeReason,
     store::{
         fsm::apply::validate_batch_split,
         metrics::PEER_ADMIN_CMD_COUNTER,
         util::{self, KeysInfoFormatter},
-        PeerStat, ProposalContext, RAFT_INIT_LOG_INDEX,
+        PeerPessimisticLocks, PeerStat, ProposalContext, RAFT_INIT_LOG_INDEX,
     },
     Result,
 };
-use slog::{info, warn, Logger};
+use slog::{error, info, warn, Logger};
 use tikv_util::box_err;
 
 use crate::{
     batch::StoreContext,
-    fsm::ApplyResReporter,
+    fsm::{ApplyResReporter, PeerFsmDelegate},
     operation::AdminCmdResult,
-    raft::{Apply, Peer},
-    router::ApplyRes,
+    raft::{write_initial_states, Apply, Peer, Storage},
+    router::{ApplyRes, PeerMsg, StoreMsg},
 };
 
 #[derive(Debug)]
@@ -63,20 +69,27 @@ pub struct SplitResult {
     pub derived_index: usize,
     pub tablet_index: u64,
 }
+pub struct SplitInit {
+    /// Split region
+    pub region: metapb::Region,
+    pub check_split: bool,
+    pub parent_is_leader: bool,
+
+    /// In-memory pessimistic locks that should be inherited from parent region
+    pub locks: PeerPessimisticLocks,
+}
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn propose_split<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
-        mut req: RaftCmdRequest,
+        req: RaftCmdRequest,
     ) -> Result<u64> {
-        validate_batch_split(req.mut_admin_request(), self.region())?;
-        let mut proposal_ctx = ProposalContext::empty();
-        proposal_ctx.insert(ProposalContext::SYNC_LOG);
-        proposal_ctx.insert(ProposalContext::SPLIT);
-
+        validate_batch_split(req.get_admin_request(), self.region())?;
+        // We rely on ConflictChecker to detect conflicts, so no need to set proposal
+        // context.
         let data = req.write_to_bytes().unwrap();
-        self.propose_with_ctx(store_ctx, data, proposal_ctx.to_vec())
+        self.propose(store_ctx, data)
     }
 }
 
@@ -249,6 +262,187 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     }
 }
 
+impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    pub fn on_ready_split_region<T>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        derived_index: usize,
+        tablet_index: u64,
+        regions: Vec<Region>,
+    ) {
+        fail_point!("on_split", self.peer().get_store_id() == 3, |_| {});
+
+        let derived = &regions[derived_index];
+        let derived_epoch = derived.get_region_epoch().clone();
+        let region_id = derived.get_id();
+
+        // Group in-memory pessimistic locks in the original region into new regions.
+        // The locks of new regions will be put into the corresponding new regions
+        // later. And the locks belonging to the old region will stay in the original
+        // map.
+        let region_locks = {
+            let mut pessimistic_locks = self.txn_ext().pessimistic_locks.write();
+            info!(self.logger, "moving {} locks to new regions", pessimistic_locks.len(););
+            // Update the version so the concurrent reader will fail due to EpochNotMatch
+            // instead of PessimisticLockNotFound.
+            pessimistic_locks.version = derived_epoch.get_version();
+            pessimistic_locks.group_by_regions(&regions, derived)
+        };
+        fail_point!("on_split_invalidate_locks");
+
+        // Roughly estimate the size and keys for new regions.
+        let new_region_count = regions.len() as u64;
+        {
+            let mut meta = store_ctx.store_meta.lock().unwrap();
+            let reader = meta.readers.get_mut(&derived.get_id()).unwrap();
+            self.set_region(
+                reader,
+                derived.clone(),
+                RegionChangeReason::Split,
+                tablet_index,
+            );
+        }
+
+        self.post_split();
+
+        let last_region_id = regions.last().unwrap().get_id();
+        for (new_region, locks) in regions.into_iter().zip(region_locks) {
+            let new_region_id = new_region.get_id();
+            if new_region_id == region_id {
+                continue;
+            }
+
+            let split_init = PeerMsg::SplitInit(Box::new(SplitInit {
+                region: new_region,
+                parent_is_leader: self.is_leader(),
+                check_split: last_region_id == new_region_id,
+                locks,
+            }));
+
+            // First, send init msg to peer directly. Returning error means the peer is not
+            // existed in which case we should redirect it to the store.
+            match store_ctx.router.force_send(new_region_id, split_init) {
+                Ok(_) => {}
+                Err(SendError(PeerMsg::SplitInit(msg))) => {
+                    store_ctx
+                        .router
+                        .force_send_control(StoreMsg::SplitInit(msg))
+                        .unwrap_or_else(|e| {
+                            panic!(
+                                "{:?} fails to send split peer intialization msg to store : {:?}",
+                                self.logger.list(),
+                                e
+                            )
+                        });
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    pub fn on_split_init<T>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        split_init: Box<SplitInit>,
+    ) {
+        let region_id = split_init.region.id;
+        let replace = split_init.region.get_region_epoch().get_version()
+            > self
+                .storage()
+                .region_state()
+                .get_region()
+                .get_region_epoch()
+                .get_version();
+
+        if !self.storage().is_initialized() || replace {
+            let split_temp_path = store_ctx.tablet_factory.tablet_path_with_prefix(
+                SPLIT_PREFIX,
+                region_id,
+                RAFT_INIT_LOG_INDEX,
+            );
+
+            let tablet = store_ctx
+                .tablet_factory
+                .load_tablet(&split_temp_path, region_id, RAFT_INIT_LOG_INDEX)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{:?} fails to load tablet {:?} :{:?}",
+                        self.logger.list(),
+                        split_temp_path,
+                        e
+                    )
+                });
+
+            self.tablet_mut().set(tablet);
+
+            let storage = Storage::with_split(
+                self.peer().get_store_id(),
+                &split_init.region,
+                store_ctx.engine.clone(),
+                store_ctx.read_scheduler.clone(),
+                &store_ctx.logger,
+            )
+            .unwrap_or_else(|e| panic!("fail to create storage: {:?}", e))
+            .unwrap();
+
+            let applied_index = storage.apply_state().get_applied_index();
+            let peer_id = storage.peer().get_id();
+            let raft_cfg = store_ctx.cfg.new_raft_config(peer_id, applied_index);
+
+            let mut raft_group = RawNode::new(&raft_cfg, storage, &self.logger).unwrap();
+            // If this region has only one peer and I am the one, campaign directly.
+            if split_init.region.get_peers().len() == 1 {
+                raft_group.campaign().unwrap();
+                self.set_has_ready();
+            }
+            self.set_raft_group(raft_group);
+        } else {
+            // todo: when reaching here (peer is initalized before and cannot be replaced),
+            // it is much complexer.
+            return;
+        }
+
+        {
+            let mut meta = store_ctx.store_meta.lock().unwrap();
+
+            info!(
+                self.logger,
+                "init split region";
+                "region" => ?split_init.region,
+            );
+
+            // todo: GlobalReplicationState
+
+            for p in split_init.region.get_peers() {
+                self.insert_peer_cache(p.clone());
+            }
+
+            if split_init.parent_is_leader {
+                if self.maybe_campaign() {
+                    self.set_has_ready();
+                }
+
+                *self.txn_ext().pessimistic_locks.write() = split_init.locks;
+                // The new peer is likely to become leader, send a heartbeat immediately to
+                // reduce client query miss.
+                self.heartbeat_pd(store_ctx);
+            }
+
+            meta.tablet_caches.insert(region_id, self.tablet().clone());
+            meta.readers
+                .insert(region_id, self.generate_read_delegate());
+            meta.region_read_progress
+                .insert(region_id, self.read_progress().clone());
+        }
+
+        if split_init.check_split {
+            // todo: check if the last region needs to split again
+        }
+
+        self.schedule_apply_fsm(store_ctx);
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::sync::{
@@ -262,7 +456,7 @@ mod test {
         kv::TestTabletFactoryV2,
         raft,
     };
-    use engine_traits::{CfOptionsExt, Peekable, WriteBatch, ALL_CFS};
+    use engine_traits::{CfOptionsExt, Peekable, TabletFactory, WriteBatch, ALL_CFS};
     use futures::channel::mpsc::unbounded;
     use kvproto::{
         metapb::RegionEpoch,
@@ -421,7 +615,7 @@ mod test {
         region_state.set_region(region.clone());
         region_state.set_tablet_index(5);
 
-        let (read_scheduler, rx) = dummy_scheduler();
+        let (read_scheduler, _rx) = dummy_scheduler();
         let (reporter, _) = MockReporter::new();
         let mut apply = Apply::new(
             region
@@ -610,7 +804,9 @@ mod test {
         // Split will create checkpoint tablet, so if there are some writes before
         // split, they should be flushed immediately.
         apply.apply_put(CF_DEFAULT, b"k04", b"v4").unwrap();
-        assert!(!apply.write_batch_mut().as_ref().unwrap().is_empty());
+        assert!(!WriteBatch::is_empty(
+            apply.write_batch_mut().as_ref().unwrap()
+        ));
         splits.mut_requests().clear();
         splits
             .mut_requests()

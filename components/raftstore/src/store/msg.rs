@@ -719,6 +719,7 @@ pub struct InspectedRaftMessage {
 }
 
 /// Message that can be sent to a peer.
+#[allow(clippy::large_enum_variant)]
 pub enum PeerMsg<EK: KvEngine> {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target

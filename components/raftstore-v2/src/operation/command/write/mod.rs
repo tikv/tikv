@@ -7,9 +7,10 @@ use raftstore::{
         cmd_resp,
         fsm::{apply, Proposal, MAX_PROPOSAL_SIZE_RATIO},
         msg::ErrorCallback,
-        util, WriteCallback,
+        util::{self, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER},
+        WriteCallback,
     },
-    Result,
+    Error, Result,
 };
 
 use crate::{
@@ -53,10 +54,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         // To maintain propose order, we need to make pending proposal first.
-        self.propose_pending_command(ctx);
+        self.propose_pending_writes(ctx);
+        if let Some(conflict) = self.proposal_control_mut().check_conflict(None) {
+            conflict.delay_channel(ch);
+            return;
+        }
+        // ProposalControl is reliable only when applied to current term.
+        let call_proposed_on_success = self.applied_to_current_term();
         match SimpleWriteEncoder::new(
             req,
             (ctx.cfg.raft_entry_max_size.0 as f64 * MAX_PROPOSAL_SIZE_RATIO) as usize,
+            call_proposed_on_success,
         ) {
             Ok(mut encoder) => {
                 encoder.add_response_channel(ch);
@@ -65,35 +73,38 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             Err(req) => {
                 let res = self.propose_command(ctx, req);
-                self.post_propose_write(ctx, res, vec![ch]);
+                self.post_propose_command(ctx, res, vec![ch], call_proposed_on_success);
             }
         }
     }
 
-    #[inline]
-    pub fn post_propose_write<T>(
-        &mut self,
-        ctx: &mut StoreContext<EK, ER, T>,
-        res: Result<u64>,
-        ch: Vec<CmdResChannel>,
-    ) {
-        let idx = match res {
-            Ok(i) => i,
-            Err(e) => {
-                ch.report_error(cmd_resp::err_resp(e, self.term()));
-                return;
-            }
-        };
-        let p = Proposal::new(idx, self.term(), ch);
-        self.enqueue_pending_proposal(ctx, p);
-        self.set_has_ready();
-    }
-
-    pub fn propose_pending_command<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
+    pub fn propose_pending_writes<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
         if let Some(encoder) = self.simple_write_encoder_mut().take() {
+            let call_proposed_on_success = if encoder.notify_proposed() {
+                // The request has pass conflict check and called all proposed callbacks.
+                false
+            } else {
+                // Epoch may have changed since last check.
+                let from_epoch = encoder.header().get_region_epoch();
+                let res = util::compare_region_epoch(
+                    from_epoch,
+                    self.region(),
+                    NORMAL_REQ_CHECK_CONF_VER,
+                    NORMAL_REQ_CHECK_VER,
+                    true,
+                );
+                if let Err(mut e) = res {
+                    // TODO: query sibling regions.
+                    ctx.raft_metrics.invalid_proposal.epoch_not_match.inc();
+                    encoder.encode().1.report_error(cmd_resp::new_error(e));
+                    return;
+                }
+                // Only when it applies to current term, the epoch check can be reliable.
+                self.applied_to_current_term()
+            };
             let (data, chs) = encoder.encode();
             let res = self.propose(ctx, data);
-            self.post_propose_write(ctx, res, chs);
+            self.post_propose_command(ctx, res, chs, call_proposed_on_success);
         }
     }
 }
