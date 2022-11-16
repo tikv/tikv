@@ -1,6 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    convert::TryFrom,
     fs::{self, File},
     io::{Read, Write},
     marker::PhantomData,
@@ -40,7 +41,7 @@ use tikv_util::{
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 
 use super::{metrics::*, snap::Task, Config, Error, Result};
-use crate::tikv_util::sys::thread::ThreadBuildWrapper;
+use crate::tikv_util::{sys::thread::ThreadBuildWrapper, time::Limiter};
 
 pub type Callback = Box<dyn FnOnce(Result<()>) + Send>;
 
@@ -106,9 +107,10 @@ async fn send_snap_files(
     mut sender: impl Sink<(SnapshotChunk, WriteFlags), Error = Error> + Unpin,
     msg: RaftMessage,
     key: TabletSnapKey,
+    limiter: Limiter,
 ) -> Result<u64> {
     let path = mgr.get_tablet_checkpointer_path(&key);
-    info!("begin to send snapshot file";"snap_key"=>%key);
+    info!("begin to send snapshot file";"snap_key" => %key);
     let files = fs::read_dir(&path)?
         .map(|d| Ok(d?.path()))
         .collect::<Result<Vec<_>>>()?;
@@ -128,6 +130,7 @@ async fn send_snap_files(
         loop {
             unsafe { buffer.set_len(SNAP_CHUNK_LEN) }
             let readed = f.read(&mut buffer[off..])?;
+            limiter.consume(readed);
             let new_len = readed + off;
             total_sent += new_len as u64;
             unsafe {
@@ -161,6 +164,7 @@ pub fn send_snap(
     cfg: &Config,
     addr: &str,
     msg: RaftMessage,
+    limiter: Limiter,
 ) -> Result<impl Future<Output = Result<SendStat>>> {
     assert!(msg.get_message().has_snapshot());
     let timer = Instant::now();
@@ -184,7 +188,7 @@ pub fn send_snap(
     let (sink, receiver) = client.snapshot()?;
     let send_task = async move {
         let sink = sink.sink_map_err(Error::from);
-        let total_size = send_snap_files(&mgr, sink, msg, key.clone()).await?;
+        let total_size = send_snap_files(&mgr, sink, msg, key.clone(), limiter).await?;
         let recv_result = receiver.map_err(Error::from).await;
         send_timer.observe_duration();
         drop(client);
@@ -209,6 +213,7 @@ pub fn send_snap(
 async fn recv_snap_files(
     snap_mgr: TabletSnapManager,
     mut stream: impl Stream<Item = Result<SnapshotChunk>> + Unpin,
+    limit: Limiter,
 ) -> Result<RecvTabletSnapContext> {
     let head = Some(stream.next().await.unwrap().unwrap());
     let context = RecvTabletSnapContext::new(head)?;
@@ -238,6 +243,7 @@ async fn recv_snap_files(
                 None => return Err(box_err!("missing chunk")),
             };
             f.write_all(&chunk[..])?;
+            limit.consume(chunk.len());
             size += chunk.len();
         }
         debug!("received snap file"; "file" => %p.display(), "size" => size);
@@ -257,10 +263,11 @@ fn recv_snap<R: RaftStoreRouter<impl KvEngine> + 'static>(
     sink: ClientStreamingSink<Done>,
     snap_mgr: TabletSnapManager,
     raft_router: R,
+    limit: Limiter,
 ) -> impl Future<Output = Result<()>> {
     let recv_task = async move {
         let stream = stream.map_err(Error::from);
-        let context = recv_snap_files(snap_mgr, stream).await?;
+        let context = recv_snap_files(snap_mgr, stream, limit).await?;
         context.finish(raft_router)
     };
     async move {
@@ -289,6 +296,7 @@ where
     sending_count: Arc<AtomicUsize>,
     recving_count: Arc<AtomicUsize>,
     engine: PhantomData<E>,
+    limiter: Limiter,
 }
 
 impl<E, R> TabletRunner<E, R>
@@ -303,7 +311,16 @@ where
         security_mgr: Arc<SecurityManager>,
         cfg: Arc<VersionTrack<Config>>,
     ) -> TabletRunner<E, R> {
-        let cfg_tracker = cfg.clone().tracker("tablet-snap-sender".to_owned());
+        let config = cfg.value().clone();
+        let cfg_tracker = cfg.clone().tracker("tablet-sender".to_owned());
+        let limit = i64::try_from(config.snap_max_write_bytes_per_sec.0)
+            .unwrap_or_else(|_| panic!("snap_max_write_bytes_per_sec > i64::max_value"));
+        let limiter = Limiter::new(if limit > 0 {
+            limit as f64
+        } else {
+            f64::INFINITY
+        });
+
         let snap_worker = TabletRunner {
             env,
             snap_mgr,
@@ -317,24 +334,25 @@ where
             raft_router: r,
             security_mgr,
             cfg_tracker,
-            cfg: cfg.value().clone(),
+            cfg: config,
             sending_count: Arc::new(AtomicUsize::new(0)),
             recving_count: Arc::new(AtomicUsize::new(0)),
             engine: PhantomData,
+            limiter,
         };
         snap_worker
     }
 
     fn refresh_cfg(&mut self) {
         if let Some(incoming) = self.cfg_tracker.any_new() {
-            // todo: need to check limit
-            let max_total_size = if incoming.snap_max_total_size.0 > 0 {
-                incoming.snap_max_total_size.0
+            let limit = if incoming.snap_max_write_bytes_per_sec.0 > 0 {
+                incoming.snap_max_write_bytes_per_sec.0 as f64
             } else {
-                u64::MAX
+                f64::INFINITY
             };
+            self.limiter.set_speed_limit(limit);
             info!("refresh snapshot manager config";
-            "max_total_snap_size"=> max_total_size);
+            "speed_limit"=> limit);
             self.cfg = incoming.clone();
         }
     }
@@ -375,8 +393,9 @@ where
                 let raft_router = self.raft_router.clone();
                 let recving_count = Arc::clone(&self.recving_count);
                 recving_count.fetch_add(1, Ordering::SeqCst);
+                let limit = self.limiter.clone();
                 let task = async move {
-                    let result = recv_snap(stream, sink, snap_mgr, raft_router).await;
+                    let result = recv_snap(stream, sink, snap_mgr, raft_router, limit).await;
                     recving_count.fetch_sub(1, Ordering::SeqCst);
                     if let Err(e) = result {
                         error!("failed to recv snapshot"; "err" => %e);
@@ -402,7 +421,9 @@ where
                 let security_mgr = Arc::clone(&self.security_mgr);
                 let sending_count = Arc::clone(&self.sending_count);
                 sending_count.fetch_add(1, Ordering::SeqCst);
-                let send_task = send_snap(env, mgr, security_mgr, &self.cfg.clone(), &addr, msg);
+                let limit = self.limiter.clone();
+                let send_task =
+                    send_snap(env, mgr, security_mgr, &self.cfg.clone(), &addr, msg, limit);
                 let task = async move {
                     let res = match send_task {
                         Err(e) => Err(e),
@@ -457,12 +478,13 @@ mod tests {
     use kvproto::raft_serverpb::{RaftMessage, SnapshotChunk};
     use raftstore::store::snap::{TabletSnapKey, TabletSnapManager};
     use tempfile::TempDir;
-    use tikv_util::store::new_peer;
+    use tikv_util::{store::new_peer, time::Limiter};
 
     use super::{super::Error, recv_snap_files, send_snap_files};
 
     #[test]
     fn test_send_tablet() {
+        let limiter = Limiter::new(f64::INFINITY);
         let snap_key = TabletSnapKey::new(1, 1, 1, 1);
         let mut msg = RaftMessage::default();
         msg.set_region_id(1);
@@ -490,12 +512,13 @@ mod tests {
             sink,
             msg,
             snap_key.clone(),
+            limiter.clone(),
         ))
         .unwrap();
 
         let stream = rx.map(|x: (SnapshotChunk, WriteFlags)| Ok(x.0));
         let final_path = recv_snap_manager.get_final_name_for_recv(&snap_key);
-        let r = block_on(recv_snap_files(recv_snap_manager, stream)).unwrap();
+        let r = block_on(recv_snap_files(recv_snap_manager, stream, limiter)).unwrap();
         assert_eq!(r.key, snap_key);
         std::thread::sleep(std::time::Duration::from_secs(1));
         let dir = std::fs::read_dir(final_path).unwrap();

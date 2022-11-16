@@ -34,6 +34,7 @@ const MIN_COMMIT_TS_PREFIX: u8 = b'c';
 const ASYNC_COMMIT_PREFIX: u8 = b'a';
 const ROLLBACK_TS_PREFIX: u8 = b'r';
 const LAST_CHANGE_PREFIX: u8 = b'l';
+const TXN_SOURCE_PREFIX: u8 = b's';
 
 impl LockType {
     pub fn from_mutation(mutation: &Mutation) -> Option<LockType> {
@@ -92,6 +93,10 @@ pub struct Lock {
     /// The number of versions that need skipping from the latest version to
     /// find the latest PUT/DELETE record
     pub versions_to_last_change: u64,
+    /// The source of this txn. It is used by ticdc, if the value is 0 ticdc
+    /// will sync the kv change event to downstream, if it is not 0, ticdc
+    /// may ignore this change event.
+    pub txn_source: u8,
 }
 
 impl std::fmt::Debug for Lock {
@@ -117,6 +122,7 @@ impl std::fmt::Debug for Lock {
             .field("rollback_ts", &self.rollback_ts)
             .field("last_change_ts", &self.last_change_ts)
             .field("versions_to_last_change", &self.versions_to_last_change)
+            .field("txn_source", &self.txn_source)
             .finish()
     }
 }
@@ -146,6 +152,7 @@ impl Lock {
             rollback_ts: Vec::default(),
             last_change_ts: TimeStamp::zero(),
             versions_to_last_change: 0,
+            txn_source: 0,
         }
     }
 
@@ -170,6 +177,13 @@ impl Lock {
     ) -> Self {
         self.last_change_ts = last_change_ts;
         self.versions_to_last_change = versions_to_last_change;
+        self
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn set_txn_source(mut self, source: u8) -> Self {
+        self.txn_source = source;
         self
     }
 
@@ -215,6 +229,10 @@ impl Lock {
             b.encode_u64(self.last_change_ts.into_inner()).unwrap();
             b.encode_var_u64(self.versions_to_last_change).unwrap();
         }
+        if self.txn_source != 0 {
+            b.push(TXN_SOURCE_PREFIX);
+            b.push(self.txn_source);
+        }
         b
     }
 
@@ -246,6 +264,9 @@ impl Lock {
         }
         if !self.last_change_ts.is_zero() {
             size += 1 + size_of::<u64>() + MAX_VAR_U64_LEN;
+        }
+        if self.txn_source != 0 {
+            size += 2;
         }
         size
     }
@@ -285,6 +306,7 @@ impl Lock {
         let mut rollback_ts = Vec::new();
         let mut last_change_ts = TimeStamp::zero();
         let mut versions_to_last_change = 0;
+        let mut txn_source = 0;
         while !b.is_empty() {
             match b.read_u8()? {
                 SHORT_VALUE_PREFIX => {
@@ -322,6 +344,9 @@ impl Lock {
                     last_change_ts = number::decode_u64(&mut b)?.into();
                     versions_to_last_change = number::decode_var_u64(&mut b)?;
                 }
+                TXN_SOURCE_PREFIX => {
+                    txn_source = b.read_u8()?;
+                }
                 _ => {
                     // To support forward compatibility, all fields should be serialized in order
                     // and stop parsing if meets an unknown byte.
@@ -339,7 +364,8 @@ impl Lock {
             txn_size,
             min_commit_ts,
         )
-        .set_last_change(last_change_ts, versions_to_last_change);
+        .set_last_change(last_change_ts, versions_to_last_change)
+        .set_txn_source(txn_source);
         if use_async_commit {
             lock = lock.use_async_commit(secondaries);
         }
@@ -365,7 +391,8 @@ impl Lock {
         info.set_use_async_commit(self.use_async_commit);
         info.set_min_commit_ts(self.min_commit_ts.into_inner());
         info.set_secondaries(self.secondaries.into());
-        // The client does not care about last_change_ts and versions_to_last_version.
+        // The client does not care about last_change_ts, versions_to_last_version and
+        // txn_source.
         info
     }
 
@@ -743,6 +770,18 @@ mod tests {
                 8.into(),
             )
             .set_last_change(4.into(), 2),
+            Lock::new(
+                LockType::Lock,
+                b"pk".to_vec(),
+                1.into(),
+                10,
+                None,
+                6.into(),
+                16,
+                8.into(),
+            )
+            .set_last_change(4.into(), 2)
+            .set_txn_source(1),
         ];
         for (i, lock) in locks.drain(..).enumerate() {
             let v = lock.to_bytes();
@@ -997,7 +1036,7 @@ mod tests {
             min_commit_ts: TimeStamp(127), use_async_commit: true, \
             secondaries: [7365636F6E646172795F6B31, 7365636F6E646172795F6B6B6B6B6B32, \
             7365636F6E646172795F6B336B336B336B336B336B33, 7365636F6E646172795F6B34], rollback_ts: [], \
-            last_change_ts: TimeStamp(80), versions_to_last_change: 4 }"
+            last_change_ts: TimeStamp(80), versions_to_last_change: 4, txn_source: 0 }"
         );
         log_wrappers::set_redact_info_log(true);
         let redact_result = format!("{:?}", lock);
@@ -1007,7 +1046,7 @@ mod tests {
             "Lock { lock_type: Put, primary_key: ?, start_ts: TimeStamp(100), ttl: 3, \
             short_value: ?, for_update_ts: TimeStamp(101), txn_size: 10, min_commit_ts: TimeStamp(127), \
             use_async_commit: true, secondaries: [?, ?, ?, ?], rollback_ts: [], \
-            last_change_ts: TimeStamp(80), versions_to_last_change: 4 }"
+            last_change_ts: TimeStamp(80), versions_to_last_change: 4, txn_source: 0 }"
         );
 
         lock.short_value = None;
@@ -1017,7 +1056,7 @@ mod tests {
             "Lock { lock_type: Put, primary_key: 706B, start_ts: TimeStamp(100), ttl: 3, short_value: , \
             for_update_ts: TimeStamp(101), txn_size: 10, min_commit_ts: TimeStamp(127), \
             use_async_commit: true, secondaries: [], rollback_ts: [], last_change_ts: TimeStamp(80), \
-            versions_to_last_change: 4 }"
+            versions_to_last_change: 4, txn_source: 0 }"
         );
         log_wrappers::set_redact_info_log(true);
         let redact_result = format!("{:?}", lock);
@@ -1027,7 +1066,7 @@ mod tests {
             "Lock { lock_type: Put, primary_key: ?, start_ts: TimeStamp(100), ttl: 3, short_value: ?, \
             for_update_ts: TimeStamp(101), txn_size: 10, min_commit_ts: TimeStamp(127), \
             use_async_commit: true, secondaries: [], rollback_ts: [], last_change_ts: TimeStamp(80), \
-            versions_to_last_change: 4 }"
+            versions_to_last_change: 4, txn_source: 0 }"
         );
     }
 
@@ -1056,6 +1095,7 @@ mod tests {
             rollback_ts: vec![],
             last_change_ts: 8.into(),
             versions_to_last_change: 2,
+            txn_source: 0,
         };
         assert_eq!(pessimistic_lock.to_lock(), expected_lock);
         assert_eq!(pessimistic_lock.into_lock(), expected_lock);

@@ -226,6 +226,7 @@ pub fn admin_cmd_epoch_lookup(admin_cmp_type: AdminCmdType) -> AdminCmdEpochStat
         AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => {
             AdminCmdEpochState::new(true, true, false, false)
         }
+        AdminCmdType::BatchSwitchWitness => unimplemented!(),
     }
 }
 
