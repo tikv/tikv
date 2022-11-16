@@ -42,7 +42,7 @@ use tikv::{
     },
 };
 use tikv_util::{future::paired_future_callback, worker::dummy_scheduler, HandyRwLock};
-use txn_types::{Key, Mutation, OldValues, TimeStamp};
+use txn_types::{Key, Mutation, TimeStamp};
 
 #[test]
 fn test_scheduler_leader_change_twice() {
@@ -679,7 +679,7 @@ fn test_async_apply_prewrite_impl<E: Engine, F: KvFormat>(
                     None,
                     false,
                     0.into(),
-                    OldValues::default(),
+                    false,
                     false,
                     false,
                     ctx.clone(),
@@ -1018,7 +1018,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine, F: KvFormat>(
                     None,
                     false,
                     0.into(),
-                    OldValues::default(),
+                    false,
                     false,
                     false,
                     ctx.clone(),
