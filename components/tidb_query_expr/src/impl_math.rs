@@ -226,7 +226,7 @@ impl Floor for FloorIntToInt {
 #[inline]
 fn abs_int(arg: &Int) -> Result<Option<Int>> {
     match arg.checked_abs() {
-        None => Err(Error::overflow("BIGINT", &format!("abs({})", *arg)).into()),
+        None => Err(Error::overflow("BIGINT", format!("abs({})", *arg)).into()),
         Some(arg_abs) => Ok(Some(arg_abs)),
     }
 }
@@ -288,7 +288,7 @@ fn radians(arg: &Real) -> Result<Option<Real>> {
 pub fn exp(arg: &Real) -> Result<Option<Real>> {
     let ret = arg.exp();
     if ret.is_infinite() {
-        Err(Error::overflow("DOUBLE", &format!("exp({})", arg)).into())
+        Err(Error::overflow("DOUBLE", format!("exp({})", arg)).into())
     } else {
         Ok(Real::new(ret).ok())
     }

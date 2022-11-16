@@ -98,7 +98,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
 
         Self {
             heap: BinaryHeap::new(),
-            eval_columns_buffer_unsafe: Box::new(Vec::new()),
+            eval_columns_buffer_unsafe: Box::<Vec<_>>::default(),
             order_exprs: order_exprs.into_boxed_slice(),
             order_exprs_field_type: order_exprs_field_type.into_boxed_slice(),
             order_is_desc: order_is_desc.into_boxed_slice(),
@@ -127,7 +127,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
 
         Self {
             heap: BinaryHeap::new(),
-            eval_columns_buffer_unsafe: Box::new(Vec::new()),
+            eval_columns_buffer_unsafe: Box::<Vec<_>>::default(),
             order_exprs: order_exprs.into_boxed_slice(),
             order_exprs_field_type: order_exprs_field_type.into_boxed_slice(),
             order_is_desc: order_is_desc.into_boxed_slice(),
