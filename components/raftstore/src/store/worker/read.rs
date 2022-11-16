@@ -809,7 +809,7 @@ where
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.witness.inc());
             return Err(Error::RecoveryInProgress(region_id));
         }
-        
+
         // Check whether the region is in the flashback state and the local read could
         // be performed.
         let is_in_flashback = delegate.region.is_in_flashback;
