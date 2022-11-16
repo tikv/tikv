@@ -280,23 +280,29 @@ pub trait WriteSubscriber: Send {
     fn result(self) -> Self::ResultWaiter;
 }
 
-impl<F> WriteSubscriber for F
+pub struct FutureAsSubscriber<F> {
+    f: F,
+    proposed: bool,
+    committed: bool,
+}
+
+impl<F> WriteSubscriber for FutureAsSubscriber<F>
 where
     F: Future<Output = Option<Result<()>>> + Send + 'static,
 {
     type ProposedWaiter<'a> = futures::future::Ready<bool> where F: 'a;
     fn wait_proposed(&mut self) -> Self::ProposedWaiter<'_> {
-        futures::future::ready(true)
+        futures::future::ready(self.proposed)
     }
 
     type CommittedWaiter<'a> = futures::future::Ready<bool> where F: 'a;
     fn wait_committed(&mut self) -> Self::CommittedWaiter<'_> {
-        futures::future::ready(true)
+        futures::future::ready(self.committed)
     }
 
-    type ResultWaiter = Self;
+    type ResultWaiter = F;
     fn result(self) -> Self::ResultWaiter {
-        self
+        self.f
     }
 }
 

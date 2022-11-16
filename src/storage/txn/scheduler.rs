@@ -1236,22 +1236,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         drop(downgraded_guard);
 
-        if subscribed_event & tikv_kv::SUBSCRIBE_COMMITTED != 0 {
-            // Currently, the only case that response is returned after finishing
-            // commit is async applying prewrites for async commit transactions.
-            if sub.wait_committed().await {
-                fail_point!("before_async_apply_prewrite_finish", |_| {});
-                let cb = scheduler.inner.take_task_cb(cid);
-                Self::early_response(
-                    cid,
-                    cb.unwrap(),
-                    pr.take().unwrap(),
-                    tag,
-                    CommandStageKind::async_apply_prewrite,
-                );
-            }
-            is_async_apply_prewrite = true;
-        } else if subscribed_event & tikv_kv::SUBSCRIBE_PROPOSED != 0 {
+        if subscribed_event & tikv_kv::SUBSCRIBE_PROPOSED != 0 {
             // The normal write process is respond to clients and release
             // latches after async write finished. If pipelined pessimistic
             // locking is enabled, the process becomes parallel and there are
@@ -1262,8 +1247,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             // proposed phase is pipelined pessimistic lock.
             // TODO: Unify the code structure of pipelined pessimistic lock and
             // async apply prewrite.
-            if sub.wait_proposed().await {
-                fail_point!("before_pipelined_write_finish", |_| {});
+            let allow_early_return = (|| {
+                fail_point!("before_pipelined_write_finish", |_| false);
+                true
+            })();
+            if sub.wait_proposed().await && allow_early_return {
                 let cb = scheduler.inner.take_task_cb(cid);
                 Self::early_response(
                     cid,
@@ -1273,6 +1261,24 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     CommandStageKind::pipelined_write,
                 );
             }
+        } else if subscribed_event & tikv_kv::SUBSCRIBE_COMMITTED != 0 {
+            // Currently, the only case that response is returned after finishing
+            // commit is async applying prewrites for async commit transactions.
+            let allow_early_return = (|| {
+                fail_point!("before_async_apply_prewrite_finish", |_| false);
+                true
+            })();
+            if sub.wait_committed().await && allow_early_return {
+                let cb = scheduler.inner.take_task_cb(cid);
+                Self::early_response(
+                    cid,
+                    cb.unwrap(),
+                    pr.take().unwrap(),
+                    tag,
+                    CommandStageKind::async_apply_prewrite,
+                );
+            }
+            is_async_apply_prewrite = true;
         }
 
         // If there is no result, it means the result of the call is undeterministic.

@@ -20,8 +20,9 @@ use txn_types::{Key, Value};
 
 use super::SnapContext;
 use crate::{
-    DummySnapshotExt, Engine, Error as EngineError, ErrorInner as EngineErrorInner, Iterator,
-    Modify, OnReturnCallback, Result as EngineResult, Snapshot, WriteData, WriteSubscriber,
+    DummySnapshotExt, Engine, Error as EngineError, ErrorInner as EngineErrorInner,
+    FutureAsSubscriber, Iterator, Modify, OnReturnCallback, Result as EngineResult, Snapshot,
+    WriteData, WriteSubscriber,
 };
 
 type RwLockTree = RwLock<BTreeMap<Key, Value>>;
@@ -105,7 +106,11 @@ impl Engine for BTreeEngine {
             cb(&mut res);
         }
 
-        futures::future::ready(Some(res))
+        FutureAsSubscriber {
+            f: futures::future::ready(Some(res)),
+            proposed: false,
+            committed: false,
+        }
     }
 
     type SnapshotRes = impl Future<Output = EngineResult<Self::Snap>>;

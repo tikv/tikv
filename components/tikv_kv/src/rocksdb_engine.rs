@@ -29,7 +29,7 @@ use super::{
     write_modifies, Callback, DummySnapshotExt, Engine, Error, ErrorInner,
     Iterator as EngineIterator, Modify, Result, SnapContext, Snapshot, WriteData,
 };
-use crate::{OnReturnCallback, WriteSubscriber};
+use crate::{FutureAsSubscriber, OnReturnCallback, WriteSubscriber};
 
 // Duplicated in test_engine_builder
 const TEMP_DIR: &str = "";
@@ -255,11 +255,16 @@ impl Engine for RocksEngine {
             Ok(rx)
         })();
 
-        async move {
-            match rx {
-                Ok(rx) => rx.await.ok(),
-                Err(e) => Some(Err(e)),
-            }
+        let wait_result = rx.is_ok();
+        FutureAsSubscriber {
+            f: async move {
+                match rx {
+                    Ok(rx) => rx.await.ok(),
+                    Err(e) => Some(Err(e)),
+                }
+            },
+            proposed: wait_result,
+            committed: wait_result,
         }
     }
 
