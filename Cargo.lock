@@ -4098,6 +4098,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "qos"
+version = "0.0.1"
+dependencies = [
+ "bitflags",
+ "codec",
+ "kvproto",
+ "lazy_static",
+ "match-template",
+ "serde",
+ "slog",
+ "slog-global",
+ "thiserror",
+ "tikv_util",
+]
+
+[[package]]
 name = "quick-xml"
 version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6262,6 +6278,7 @@ dependencies = [
  "prometheus",
  "prometheus-static-metric",
  "protobuf",
+ "qos",
  "raft",
  "raft_log_engine",
  "raftstore",
