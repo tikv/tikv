@@ -5727,7 +5727,6 @@ mod tests {
             AdminCmdType::TransferLeader,
             AdminCmdType::ComputeHash,
             AdminCmdType::VerifyHash,
-            AdminCmdType::BatchSwitchWitness,
         ];
         for tp in AdminCmdType::values() {
             let mut msg = RaftCmdRequest::default();
