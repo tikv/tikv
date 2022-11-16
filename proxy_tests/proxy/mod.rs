@@ -12,5 +12,6 @@ mod flashback;
 mod normal;
 mod proxy;
 mod server_cluster_test;
+mod snapshot;
 mod util;
 mod write;

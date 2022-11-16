@@ -18,7 +18,7 @@ pub use kvproto::{
     metapb,
     metapb::RegionEpoch,
     raft_cmdpb::{AdminCmdType, AdminRequest, CmdType, Request},
-    raft_serverpb::{RaftApplyState, RegionLocalState, StoreIdent},
+    raft_serverpb::{PeerState, RaftApplyState, RegionLocalState, StoreIdent},
 };
 pub use new_mock_engine_store::{
     config::Config,
@@ -30,6 +30,7 @@ pub use new_mock_engine_store::{
     },
     Cluster, ProxyConfig, Simulator, TestPdClient,
 };
+pub use raft::eraftpb::MessageType;
 pub use raftstore::coprocessor::ConsistencyCheckMethod;
 pub use test_raftstore::new_peer;
 pub use tikv_util::{
@@ -104,30 +105,41 @@ pub fn iter_ffi_helpers(
     }
 }
 
-pub fn collect_all_states(cluster: &Cluster<NodeCluster>, region_id: u64) -> HashMap<u64, States> {
+pub fn maybe_collect_states(
+    cluster: &Cluster<NodeCluster>,
+    region_id: u64,
+    store_ids: Option<Vec<u64>>,
+) -> HashMap<u64, States> {
     let mut prev_state: HashMap<u64, States> = HashMap::default();
     iter_ffi_helpers(
         cluster,
         None,
         &mut |id: u64, engine: &engine_rocks::RocksEngine, ffi: &mut FFIHelperSet| {
             let server = &ffi.engine_store_server;
-            let region = server.kvstore.get(&region_id).unwrap();
-            let ident = match engine.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY) {
-                Ok(Some(i)) => (i),
-                _ => unreachable!(),
-            };
-            prev_state.insert(
-                id,
-                States {
-                    in_memory_apply_state: region.apply_state.clone(),
-                    in_memory_applied_term: region.applied_term,
-                    in_disk_apply_state: get_apply_state(&engine, region_id),
-                    in_disk_region_state: get_region_local_state(&engine, region_id),
-                    ident,
-                },
-            );
+            if let Some(region) = server.kvstore.get(&region_id) {
+                let ident = match engine.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY) {
+                    Ok(Some(i)) => (i),
+                    _ => unreachable!(),
+                };
+                prev_state.insert(
+                    id,
+                    States {
+                        in_memory_apply_state: region.apply_state.clone(),
+                        in_memory_applied_term: region.applied_term,
+                        in_disk_apply_state: get_apply_state(&engine, region_id),
+                        in_disk_region_state: get_region_local_state(&engine, region_id),
+                        ident,
+                    },
+                );
+            }
         },
     );
+    prev_state
+}
+
+pub fn collect_all_states(cluster: &Cluster<NodeCluster>, region_id: u64) -> HashMap<u64, States> {
+    let prev_state = maybe_collect_states(cluster, region_id, None);
+    assert_eq!(prev_state.len(), cluster.engines.keys().len());
     prev_state
 }
 
