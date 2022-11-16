@@ -25,6 +25,7 @@ use tikv_util::{
     codec::number::decode_u64,
     debug, error,
     lru::LruCache,
+    store::find_peer_by_id,
     time::{monotonic_raw_now, ThreadReadId},
 };
 use time::Timespec;
@@ -563,9 +564,11 @@ impl ReadDelegate {
         }
         debug!(
             "reject stale read by safe ts";
-            "tag" => &self.tag,
-            "safe ts" => safe_ts,
-            "read ts" => read_ts
+            "safe_ts" => safe_ts,
+            "read_ts" => read_ts,
+
+            "region_id" => self.region.get_id(),
+            "peer_id" => self.peer_id,
         );
         TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.safe_ts.inc());
         let mut response = cmd_resp::new_error(Error::DataIsNotReady {
@@ -581,7 +584,7 @@ impl ReadDelegate {
     pub fn mock(region_id: u64) -> Self {
         let mut region: metapb::Region = Default::default();
         region.set_id(region_id);
-        let read_progress = Arc::new(RegionReadProgress::new(&region, 0, 0, "mock".to_owned()));
+        let read_progress = Arc::new(RegionReadProgress::new(&region, 0, 0, 1));
         ReadDelegate {
             region: Arc::new(region),
             peer_id: 1,
@@ -782,6 +785,15 @@ where
             return Err(e);
         }
 
+        // Check witness
+        if find_peer_by_id(&delegate.region, delegate.peer_id)
+            .unwrap()
+            .is_witness
+        {
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.witness.inc());
+            return Err(Error::RecoveryInProgress(region_id));
+        }
+
         // Check term.
         if let Err(e) = util::check_term(req, delegate.term) {
             debug!(
@@ -798,6 +810,23 @@ where
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.epoch.inc());
             // Stale epoch, redirect it to raftstore to get the latest region.
             debug!("rejected by epoch not match"; "tag" => &delegate.tag);
+            return Ok(None);
+        }
+
+        // Check whether the region is in the flashback state and the local read could
+        // be performed.
+        let is_in_flashback = delegate.region.is_in_flashback;
+        if let Err(e) = util::check_flashback_state(is_in_flashback, req, region_id) {
+            TLS_LOCAL_READ_METRICS.with(|m| match e {
+                Error::FlashbackNotPrepared(_) => {
+                    m.borrow_mut().reject_reason.flashback_not_prepared.inc()
+                }
+                Error::FlashbackInProgress(_) => {
+                    m.borrow_mut().reject_reason.flashback_in_progress.inc()
+                }
+                _ => unreachable!(),
+            });
+            debug!("rejected by flashback state"; "is_in_flashback" => is_in_flashback, "tag" => &delegate.tag);
             return Ok(None);
         }
 
@@ -1241,7 +1270,7 @@ mod tests {
         region1.set_region_epoch(epoch13.clone());
         let term6 = 6;
         let mut lease = Lease::new(Duration::seconds(1), Duration::milliseconds(250)); // 1s is long enough.
-        let read_progress = Arc::new(RegionReadProgress::new(&region1, 1, 1, "".to_owned()));
+        let read_progress = Arc::new(RegionReadProgress::new(&region1, 1, 1, 1));
 
         let mut cmd = RaftCmdRequest::default();
         let mut header = RaftRequestHeader::default();
@@ -1573,7 +1602,7 @@ mod tests {
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
                 txn_ext: Arc::new(TxnExt::default()),
                 track_ver: TrackVer::new(),
-                read_progress: Arc::new(RegionReadProgress::new(&region, 0, 0, "".to_owned())),
+                read_progress: Arc::new(RegionReadProgress::new(&region, 0, 0, 1)),
                 pending_remove: false,
                 bucket_meta: None,
             };
@@ -1680,7 +1709,7 @@ mod tests {
         let leader = prs[0].clone();
         region.set_region_epoch(region_epoch);
         let mut lease = Lease::new(Duration::seconds(1), Duration::milliseconds(250)); // 1s is long enough.
-        let read_progress = Arc::new(RegionReadProgress::new(&region, 1, 1, "".to_owned()));
+        let read_progress = Arc::new(RegionReadProgress::new(&region, 1, 1, 1));
 
         // Register region
         lease.renew(monotonic_raw_now());

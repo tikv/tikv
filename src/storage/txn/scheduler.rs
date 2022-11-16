@@ -95,6 +95,7 @@ const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 pub const DEFAULT_EXECUTION_DURATION_LIMIT: Duration = Duration::from_secs(24 * 60 * 60);
 
 const IN_MEMORY_PESSIMISTIC_LOCK: Feature = Feature::require(6, 0, 0);
+pub const LAST_CHANGE_TS: Feature = Feature::require(6, 5, 0);
 
 /// Task is a running command.
 pub(super) struct Task {
@@ -391,12 +392,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 engine.clone(),
                 config.scheduler_worker_pool_size,
                 reporter.clone(),
+                feature_gate.clone(),
                 "sched-worker-pool",
             ),
             high_priority_pool: SchedPool::new(
                 engine,
                 std::cmp::max(1, config.scheduler_worker_pool_size / 2),
                 reporter,
+                feature_gate.clone(),
                 "sched-high-pri-pool",
             ),
             control_mutex: Arc::new(tokio::sync::Mutex::new(false)),
@@ -1655,7 +1658,7 @@ mod tests {
                 assert!(latches.acquire(&mut lock, id));
             }
             let unlocked = latches.release(&lock, id);
-            if id as u64 == max_id {
+            if id == max_id {
                 assert!(unlocked.is_empty());
             } else {
                 assert_eq!(unlocked, vec![id + 1]);

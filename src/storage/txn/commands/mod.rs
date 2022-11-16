@@ -40,7 +40,9 @@ pub use commit::Commit;
 pub use compare_and_swap::RawCompareAndSwap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 pub use flashback_to_version::FlashbackToVersion;
-pub use flashback_to_version_read_phase::FlashbackToVersionReadPhase;
+pub use flashback_to_version_read_phase::{
+    new_flashback_to_version_read_phase_cmd, FlashbackToVersionReadPhase, FlashbackToVersionState,
+};
 use kvproto::kvrpcpb::*;
 pub use mvcc_by_key::MvccByKey;
 pub use mvcc_by_start_ts::MvccByStartTs;
@@ -63,7 +65,7 @@ use crate::storage::{
     mvcc::{Lock as MvccLock, MvccReader, ReleasedLock, SnapshotReader},
     txn::{latch, ProcessResult, Result},
     types::{
-        MvccInfo, PessimisticLockParameters, PessimisticLockRes, PrewriteResult,
+        MvccInfo, PessimisticLockParameters, PessimisticLockResults, PrewriteResult,
         SecondaryLocksStatus, StorageCallbackType, TxnStatus,
     },
     Result as StorageResult, Snapshot, Statistics,
@@ -193,7 +195,7 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
     }
 }
 
-impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLockRes>> {
+impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLockResults>> {
     fn from(mut req: PessimisticLockRequest) -> Self {
         let keys = req
             .take_mutations()
@@ -353,13 +355,12 @@ impl From<MvccGetByStartTsRequest> for TypedCommand<Option<(Key, MvccInfo)>> {
 
 impl From<FlashbackToVersionRequest> for TypedCommand<()> {
     fn from(mut req: FlashbackToVersionRequest) -> Self {
-        FlashbackToVersionReadPhase::new(
+        new_flashback_to_version_read_phase_cmd(
             req.get_start_ts().into(),
             req.get_commit_ts().into(),
             req.get_version().into(),
-            Some(Key::from_raw(req.get_end_key())),
-            Some(Key::from_raw(req.get_start_key())),
-            Some(Key::from_raw(req.get_start_key())),
+            Key::from_raw(req.get_start_key()),
+            Key::from_raw(req.get_end_key()),
             req.take_context(),
         )
     }

@@ -32,3 +32,4 @@ mod test_transfer_leader;
 mod test_transport;
 mod test_unsafe_recovery;
 mod test_update_region_size;
+mod test_witness;

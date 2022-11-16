@@ -6,7 +6,6 @@
 //! [`RocksEngine`](RocksEngine) are used for testing only.
 
 #![feature(min_specialization)]
-#![feature(generic_associated_types)]
 
 #[macro_use(fail_point)]
 extern crate fail;
@@ -1183,6 +1182,8 @@ mod unit_tests {
                     ttl: 200,
                     for_update_ts: 101.into(),
                     min_commit_ts: 102.into(),
+                    last_change_ts: 80.into(),
+                    versions_to_last_change: 2,
                 },
             ),
             Modify::DeleteRange(
@@ -1225,6 +1226,8 @@ mod unit_tests {
                         ttl: 200,
                         for_update_ts: 101.into(),
                         min_commit_ts: 102.into(),
+                        last_change_ts: 80.into(),
+                        versions_to_last_change: 2,
                     }
                     .into_lock()
                     .to_bytes(),
