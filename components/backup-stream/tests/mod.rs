@@ -3,7 +3,7 @@
 #![cfg(test)]
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     path::Path,
     sync::Arc,
     time::Duration,
@@ -22,7 +22,7 @@ use backup_stream::{
     Endpoint, GetCheckpointResult, RegionCheckpointOperation, RegionSet, Service, Task,
 };
 use futures::{executor::block_on, AsyncWriteExt, Future, Stream, StreamExt, TryStreamExt};
-use grpcio::{ChannelBuilder, EnvBuilder, Server, ServerBuilder};
+use grpcio::{ChannelBuilder, Server, ServerBuilder};
 use kvproto::{
     brpb::{CompressionType, Local, Metadata, StorageBackend},
     kvrpcpb::*,
@@ -288,10 +288,9 @@ impl Suite {
                     })
                     .unwrap_or_else(|err| panic!("failed to subscribe on {} because {}", id, err));
                 let id = *id;
-                let stream = stream.map_ok(move |x| (id, x)).map(move |x| {
+                stream.map_ok(move |x| (id, x)).map(move |x| {
                     x.unwrap_or_else(move |err| panic!("failed to rec from {} because {}", id, err))
-                });
-                stream
+                })
             })
             .collect::<Vec<_>>();
 
@@ -1235,7 +1234,7 @@ mod test {
     #[test]
     fn subscribe_flushing() {
         let mut suite = super::SuiteBuilder::new_named("sub_flush").build();
-        let mut stream = suite.flush_stream();
+        let stream = suite.flush_stream();
         for i in 1..10 {
             let split_key = make_split_key_at_record(1, i * 20);
             suite.must_split(&split_key);
