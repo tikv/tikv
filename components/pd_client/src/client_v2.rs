@@ -61,9 +61,12 @@ use super::{
     client::{CLIENT_PREFIX, CQ_COUNT},
     metrics::*,
     util::{check_resp_header, PdConnector, TargetInfo},
-    Config, Error, FeatureGate, RegionInfo, Result, UnixSecs, REQUEST_TIMEOUT,
+    Config, Error, FeatureGate, RegionInfo, Result, UnixSecs,
+    REQUEST_TIMEOUT as REQUEST_TIMEOUT_SEC,
 };
 use crate::PdFuture;
+
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(REQUEST_TIMEOUT_SEC);
 
 /// Immutable context for making new connections.
 struct ConnectContext {
@@ -168,11 +171,7 @@ impl CachedRawClient {
     async fn wait_for_ready(&mut self) -> Result<()> {
         self.refresh_cache().await;
         for _ in 0..3 {
-            if self
-                .channel()
-                .wait_for_connected(Duration::from_secs(REQUEST_TIMEOUT))
-                .await
-            {
+            if self.channel().wait_for_connected(REQUEST_TIMEOUT).await {
                 return Ok(());
             } else if !self.refresh_cache().await {
                 // Only retry if client is updated.
@@ -186,7 +185,9 @@ impl CachedRawClient {
     }
 
     /// Increases global version only when a new connection is established.
-    async fn reconnect(&mut self, force: bool, callback: &CallbackHolder) -> Result<()> {
+    async fn reconnect(&mut self, callback: &CallbackHolder) -> Result<()> {
+        let force = self.channel().check_connectivity_state(true)
+            == ConnectivityState::GRPC_CHANNEL_SHUTDOWN;
         if self.cache.maybe_reconnect(&self.context, force).await? {
             let latest_version = {
                 let mut latest = self.latest.lock().await;
@@ -370,9 +371,10 @@ impl RpcClient {
 
     #[cfg(feature = "testexport")]
     pub fn reconnect(&mut self) -> Result<()> {
-        block_on(self.raw_client.reconnect(true, &self.on_reconnect))
+        block_on(self.raw_client.reconnect(&self.on_reconnect))
     }
 
+    #[cfg(feature = "testexport")]
     pub fn cluster_id(&self) -> u64 {
         self.cluster_id
     }
@@ -690,12 +692,10 @@ impl PdClient for RpcClient {
         req.set_region(region);
 
         block_on(self.raw_client.wait_for_ready())?;
-        let mut resp = self.raw_client.stub().bootstrap_opt(
-            &req,
-            self.raw_client
-                .call_option()
-                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-        )?;
+        let mut resp = self
+            .raw_client
+            .stub()
+            .bootstrap_opt(&req, self.raw_client.call_option().timeout(REQUEST_TIMEOUT))?;
         check_resp_header(resp.get_header())?;
         Ok(resp.replication_status.take())
     }
@@ -709,12 +709,10 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
 
         block_on(self.raw_client.wait_for_ready())?;
-        let resp = self.raw_client.stub().is_bootstrapped_opt(
-            &req,
-            self.raw_client
-                .call_option()
-                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-        )?;
+        let resp = self
+            .raw_client
+            .stub()
+            .is_bootstrapped_opt(&req, self.raw_client.call_option().timeout(REQUEST_TIMEOUT))?;
         check_resp_header(resp.get_header())?;
 
         Ok(resp.get_bootstrapped())
@@ -755,9 +753,7 @@ impl PdClient for RpcClient {
         block_on(self.raw_client.wait_for_ready())?;
         let resp = self.raw_client.stub().is_snapshot_recovering_opt(
             &req,
-            self.raw_client
-                .call_option()
-                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+            self.raw_client.call_option().timeout(REQUEST_TIMEOUT),
         )?;
         check_resp_header(resp.get_header())?;
 
@@ -774,12 +770,10 @@ impl PdClient for RpcClient {
         req.set_store(store);
 
         block_on(self.raw_client.wait_for_ready())?;
-        let mut resp = self.raw_client.stub().put_store_opt(
-            &req,
-            self.raw_client
-                .call_option()
-                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-        )?;
+        let mut resp = self
+            .raw_client
+            .stub()
+            .put_store_opt(&req, self.raw_client.call_option().timeout(REQUEST_TIMEOUT))?;
         check_resp_header(resp.get_header())?;
 
         Ok(resp.replication_status.take())
@@ -800,12 +794,7 @@ impl PdClient for RpcClient {
             raw_client.wait_for_ready().await?;
             let mut resp = raw_client
                 .stub()
-                .get_store_async_opt(
-                    &req,
-                    raw_client
-                        .call_option()
-                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-                )
+                .get_store_async_opt(&req, raw_client.call_option().timeout(REQUEST_TIMEOUT))
                 .unwrap_or_else(|e| {
                     panic!("fail to request PD {} err {:?}", "get_store_and_stats", e);
                 })
@@ -846,12 +835,10 @@ impl PdClient for RpcClient {
         req.set_exclude_tombstone_stores(exclude_tombstone);
 
         block_on(self.raw_client.wait_for_ready())?;
-        let mut resp = self.raw_client.stub().get_all_stores_opt(
-            &req,
-            self.raw_client
-                .call_option()
-                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-        )?;
+        let mut resp = self
+            .raw_client
+            .stub()
+            .get_all_stores_opt(&req, self.raw_client.call_option().timeout(REQUEST_TIMEOUT))?;
         check_resp_header(resp.get_header())?;
 
         Ok(resp.take_stores().into())
@@ -866,12 +853,10 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
 
         block_on(self.raw_client.wait_for_ready())?;
-        let mut resp = self.raw_client.stub().get_cluster_config_opt(
-            &req,
-            self.raw_client
-                .call_option()
-                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-        )?;
+        let mut resp = self
+            .raw_client
+            .stub()
+            .get_cluster_config_opt(&req, self.raw_client.call_option().timeout(REQUEST_TIMEOUT))?;
         check_resp_header(resp.get_header())?;
 
         Ok(resp.take_cluster())
@@ -894,12 +879,7 @@ impl PdClient for RpcClient {
             raw_client.wait_for_ready().await?;
             let mut resp = raw_client
                 .stub()
-                .get_region_async_opt(
-                    &req,
-                    raw_client
-                        .call_option()
-                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-                )
+                .get_region_async_opt(&req, raw_client.call_option().timeout(REQUEST_TIMEOUT))
                 .unwrap_or_else(|e| {
                     panic!("fail to request PD {} err {:?}", "get_region_async_opt", e)
                 })
@@ -949,12 +929,7 @@ impl PdClient for RpcClient {
             raw_client.wait_for_ready().await?;
             let mut resp = raw_client
                 .stub()
-                .get_region_by_id_async_opt(
-                    &req,
-                    raw_client
-                        .call_option()
-                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-                )
+                .get_region_by_id_async_opt(&req, raw_client.call_option().timeout(REQUEST_TIMEOUT))
                 .unwrap_or_else(|e| {
                     panic!("fail to request PD {} err {:?}", "get_region_by_id", e);
                 })
@@ -986,12 +961,7 @@ impl PdClient for RpcClient {
             raw_client.wait_for_ready().await?;
             let mut resp = raw_client
                 .stub()
-                .get_region_by_id_async_opt(
-                    &req,
-                    raw_client
-                        .call_option()
-                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-                )
+                .get_region_by_id_async_opt(&req, raw_client.call_option().timeout(REQUEST_TIMEOUT))
                 .unwrap_or_else(|e| {
                     panic!(
                         "fail to request PD {} err {:?}",
@@ -1023,12 +993,7 @@ impl PdClient for RpcClient {
             raw_client.wait_for_ready().await?;
             let resp = raw_client
                 .stub()
-                .ask_split_async_opt(
-                    &req,
-                    raw_client
-                        .call_option()
-                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-                )
+                .ask_split_async_opt(&req, raw_client.call_option().timeout(REQUEST_TIMEOUT))
                 .unwrap_or_else(|e| {
                     panic!("fail to request PD {} err {:?}", "ask_split", e);
                 })
@@ -1058,12 +1023,7 @@ impl PdClient for RpcClient {
             raw_client.wait_for_ready().await?;
             let resp = raw_client
                 .stub()
-                .ask_batch_split_async_opt(
-                    &req,
-                    raw_client
-                        .call_option()
-                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-                )
+                .ask_batch_split_async_opt(&req, raw_client.call_option().timeout(REQUEST_TIMEOUT))
                 .unwrap_or_else(|e| {
                     panic!("fail to request PD {} err {:?}", "ask_batch_split", e);
                 })
@@ -1103,12 +1063,7 @@ impl PdClient for RpcClient {
             raw_client.wait_for_ready().await?;
             let resp = raw_client
                 .stub()
-                .store_heartbeat_async_opt(
-                    &req,
-                    raw_client
-                        .call_option()
-                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-                )
+                .store_heartbeat_async_opt(&req, raw_client.call_option().timeout(REQUEST_TIMEOUT))
                 .unwrap_or_else(|e| {
                     panic!("fail to request PD {} err {:?}", "store_heartbeat", e);
                 })
@@ -1140,9 +1095,7 @@ impl PdClient for RpcClient {
                 .stub()
                 .report_batch_split_async_opt(
                     &req,
-                    raw_client
-                        .call_option()
-                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+                    raw_client.call_option().timeout(REQUEST_TIMEOUT),
                 )
                 .unwrap_or_else(|e| {
                     panic!("fail to request PD {} err {:?}", "report_batch_split", e);
@@ -1170,12 +1123,10 @@ impl PdClient for RpcClient {
         req.set_region(region.region);
 
         block_on(self.raw_client.wait_for_ready())?;
-        let resp = self.raw_client.stub().scatter_region_opt(
-            &req,
-            self.raw_client
-                .call_option()
-                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-        )?;
+        let resp = self
+            .raw_client
+            .stub()
+            .scatter_region_opt(&req, self.raw_client.call_option().timeout(REQUEST_TIMEOUT))?;
         check_resp_header(resp.get_header())
     }
 
@@ -1192,9 +1143,7 @@ impl PdClient for RpcClient {
                 .stub()
                 .get_gc_safe_point_async_opt(
                     &req,
-                    raw_client
-                        .call_option()
-                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+                    raw_client.call_option().timeout(REQUEST_TIMEOUT),
                 )
                 .unwrap_or_else(|e| {
                     panic!("fail to request PD {} err {:?}", "get_gc_saft_point", e);
@@ -1218,12 +1167,10 @@ impl PdClient for RpcClient {
         req.set_region_id(region_id);
 
         block_on(self.raw_client.wait_for_ready())?;
-        let resp = self.raw_client.stub().get_operator_opt(
-            &req,
-            self.raw_client
-                .call_option()
-                .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-        )?;
+        let resp = self
+            .raw_client
+            .stub()
+            .get_operator_opt(&req, self.raw_client.call_option().timeout(REQUEST_TIMEOUT))?;
         check_resp_header(resp.get_header())?;
 
         Ok(resp)
@@ -1249,9 +1196,7 @@ impl PdClient for RpcClient {
                 .stub()
                 .update_service_gc_safe_point_async_opt(
                     &req,
-                    raw_client
-                        .call_option()
-                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+                    raw_client.call_option().timeout(REQUEST_TIMEOUT),
                 )
                 .unwrap_or_else(|e| {
                     panic!(
@@ -1283,9 +1228,7 @@ impl PdClient for RpcClient {
                 .stub()
                 .report_min_resolved_ts_async_opt(
                     &req,
-                    raw_client
-                        .call_option()
-                        .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
+                    raw_client.call_option().timeout(REQUEST_TIMEOUT),
                 )
                 .unwrap_or_else(|e| {
                     panic!("fail to request PD {} err {:?}", "min_resolved_ts", e);
@@ -1305,27 +1248,26 @@ async fn reconnect_loop(
     on_reconnect: CallbackHolder,
     mut reconnect: mpsc::Receiver<u64>,
 ) {
-    let interval = Duration::from_secs(REQUEST_TIMEOUT);
     loop {
-        while !client.channel().wait_for_connected(interval).await {
+        while !client.channel().wait_for_connected(REQUEST_TIMEOUT).await {
             // wait_for_connected will attempt to connect internally. When it fails we
             // should force reconnect.
-            if let Err(e) = client.reconnect(true, &on_reconnect).await {
+            if let Err(e) = client.reconnect(&on_reconnect).await {
                 warn!("failed to reconnect pd"; "err" => ?e);
             }
         }
         let state = ConnectivityState::GRPC_CHANNEL_READY;
         select! {
-            _ = client.channel().wait_for_state_change(state, interval).fuse() => {},
+            _ = client.channel().wait_for_state_change(state, REQUEST_TIMEOUT).fuse() => {},
             v = reconnect.next().fuse() => {
-                if v.is_none() || v.unwrap() < client.cache_version() {
+                if v.is_none() {
+                    break;
+                } else if v.unwrap() < client.cache_version() {
                     continue;
                 }
             }
         }
-        let force = client.channel().check_connectivity_state(true)
-            == ConnectivityState::GRPC_CHANNEL_SHUTDOWN;
-        if let Err(e) = client.reconnect(force, &on_reconnect).await {
+        if let Err(e) = client.reconnect(&on_reconnect).await {
             warn!("failed to reconnect pd"; "err" => ?e);
         }
     }
