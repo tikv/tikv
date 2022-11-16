@@ -2694,7 +2694,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#29a30c4ef9c52aafb1b1da73dd9df60857068114"
+source = "git+https://github.com/pingcap/kvproto.git#8da76ed6a1afe471e6b21cbb27a869e793b72c3e"
 dependencies = [
  "futures 0.3.15",
  "grpcio",

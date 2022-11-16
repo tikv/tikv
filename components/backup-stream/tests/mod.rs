@@ -22,7 +22,7 @@ use backup_stream::{
     Endpoint, GetCheckpointResult, RegionCheckpointOperation, RegionSet, Service, Task,
 };
 use futures::{executor::block_on, AsyncWriteExt, Future, Stream, StreamExt, TryStreamExt};
-use grpcio::{ChannelBuilder, EnvBuilder, ServerBuilder};
+use grpcio::{ChannelBuilder, EnvBuilder, Server, ServerBuilder};
 use kvproto::{
     brpb::{CompressionType, Local, Metadata, StorageBackend},
     kvrpcpb::*,
@@ -159,6 +159,7 @@ impl SuiteBuilder {
             obs: Default::default(),
             tikv_cli: Default::default(),
             log_backup_cli: Default::default(),
+            servers: Default::default(),
             env: Arc::new(grpcio::Environment::new(1)),
             cluster,
 
@@ -230,6 +231,8 @@ pub struct Suite {
     log_backup_cli: HashMap<u64, LogBackupClient>,
     obs: HashMap<u64, BackupStreamObserver>,
     env: Arc<grpcio::Environment>,
+    // The place to make services live as long as suite.
+    servers: Vec<Server>,
 
     temp_files: TempDir,
     flushed_files: TempDir,
@@ -301,17 +304,17 @@ impl Suite {
             .get(&id)
             .expect("must register endpoint first");
 
-        let env = Arc::new(EnvBuilder::new().build());
         let serv = Service::new(endpoint.scheduler());
-        let builder = ServerBuilder::new(env.clone()).register_service(create_log_backup(serv));
+        let builder =
+            ServerBuilder::new(self.env.clone()).register_service(create_log_backup(serv));
         let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
         server.start();
         let (_, port) = server.bind_addrs().next().unwrap();
         let addr = format!("127.0.0.1:{}", port);
-        let channel = ChannelBuilder::new(env).connect(&addr);
+        let channel = ChannelBuilder::new(self.env.clone()).connect(&addr);
         println!("connecting channel to {} for store {}", addr, id);
         let client = LogBackupClient::new(channel);
-        Box::leak(Box::new(server));
+        self.servers.push(server);
         client
     }
 
