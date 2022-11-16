@@ -575,7 +575,7 @@ impl Config {
 
         let election_timeout =
             self.raft_base_tick_interval.as_millis() * self.raft_election_timeout_ticks as u64;
-        let lease = self.raft_store_max_leader_lease.as_millis() as u64;
+        let lease = self.raft_store_max_leader_lease.as_millis();
         if election_timeout < lease {
             return Err(box_err!(
                 "election timeout {} ms is less than lease {} ms",
@@ -584,7 +584,7 @@ impl Config {
             ));
         }
 
-        let tick = self.raft_base_tick_interval.as_millis() as u64;
+        let tick = self.raft_base_tick_interval.as_millis();
         if lease > election_timeout - tick {
             return Err(box_err!(
                 "lease {} ms should not be greater than election timeout {} ms - 1 tick({} ms)",
@@ -598,7 +598,7 @@ impl Config {
             return Err(box_err!("raftstore.merge-check-tick-interval can't be 0."));
         }
 
-        let stale_state_check = self.peer_stale_state_check_interval.as_millis() as u64;
+        let stale_state_check = self.peer_stale_state_check_interval.as_millis();
         if stale_state_check < election_timeout * 2 {
             return Err(box_err!(
                 "peer stale state check interval {} ms is less than election timeout x 2 {} ms",
@@ -613,7 +613,7 @@ impl Config {
             ));
         }
 
-        let abnormal_leader_missing = self.abnormal_leader_missing_duration.as_millis() as u64;
+        let abnormal_leader_missing = self.abnormal_leader_missing_duration.as_millis();
         if abnormal_leader_missing < stale_state_check {
             return Err(box_err!(
                 "abnormal leader missing {} ms is less than peer stale state check interval {} ms",
@@ -622,7 +622,7 @@ impl Config {
             ));
         }
 
-        let max_leader_missing = self.max_leader_missing_duration.as_millis() as u64;
+        let max_leader_missing = self.max_leader_missing_duration.as_millis();
         if max_leader_missing < abnormal_leader_missing {
             return Err(box_err!(
                 "max leader missing {} ms is less than abnormal leader missing {} ms",

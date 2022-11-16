@@ -133,7 +133,6 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     next_write_key,
                     &self.end_key,
                     self.version,
-                    self.start_ts,
                     self.commit_ts,
                     statistics,
                 )?;

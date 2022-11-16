@@ -884,7 +884,7 @@ impl<ER: RaftEngine> Debugger<ER> {
         res.push(("region.end_key".to_owned(), hex::encode(&region.end_key)));
         res.push((
             "region.middle_key_by_approximate_size".to_owned(),
-            hex::encode(&middle_key),
+            hex::encode(middle_key),
         ));
 
         Ok(res)

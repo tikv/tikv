@@ -764,7 +764,7 @@ fn test_order_by_pk_with_select_from_index() {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded = datum::encode_value(
             &mut EvalContext::default(),
-            &[name_datum, (cnt as i64).into(), (id as i64).into()],
+            &[name_datum, cnt.into(), id.into()],
         )
         .unwrap();
         let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
