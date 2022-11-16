@@ -258,7 +258,7 @@ fn test_flashback_for_local_read() {
     cluster.run();
 
     cluster.must_put(b"k1", b"v1");
-    let region = cluster.get_region(b"k1");
+    let mut region = cluster.get_region(b"k1");
     cluster.must_transfer_leader(region.get_id(), peer.clone());
 
     // Check local read before prepare flashback
@@ -318,6 +318,20 @@ fn test_flashback_for_local_read() {
     // Check the leader does a local read.
     let state = cluster.raft_local_state(region.get_id(), store_id);
     assert_eq!(state.get_last_index(), last_index);
+
+    // A local read with flashback flag will also be blocked.
+    let mut req = new_request(
+        region.get_id(),
+        region.take_region_epoch(),
+        vec![new_get_cmd(b"k1")],
+        false,
+    );
+    let new_leader = cluster.query_leader(1, region.get_id(), Duration::from_secs(1));
+    req.mut_header().set_peer(new_leader.unwrap());
+    req.mut_header()
+        .set_flags(WriteBatchFlags::FLASHBACK.bits());
+    let resp = cluster.call_command(req, Duration::from_secs(3)).unwrap();
+    assert!(resp.get_header().get_error().has_flashback_not_prepared());
 }
 
 #[test]
