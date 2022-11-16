@@ -15,7 +15,7 @@ use std::{
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
-use futures::Future;
+use futures::{Future, StreamExt};
 use kvproto::{
     errorpb,
     kvrpcpb::{Context, IsolationLevel},
@@ -37,7 +37,9 @@ use raftstore::{
     },
 };
 use thiserror::Error;
-use tikv_kv::write_modifies;
+use tikv_kv::{
+    write_modifies, OnReturnCallback, WriteSubscriber, SUBSCRIBE_COMMITTED, SUBSCRIBE_PROPOSED,
+};
 use tikv_util::{codec::number::NumberEncoder, time::Instant};
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
@@ -45,8 +47,8 @@ use super::metrics::*;
 use crate::storage::{
     self, kv,
     kv::{
-        Callback, Engine, Error as KvError, ErrorInner as KvErrorInner, ExtCallback, Modify,
-        SnapContext, WriteData,
+        Engine, Error as KvError, ErrorInner as KvErrorInner, ExtCallback, Modify, SnapContext,
+        WriteData,
     },
 };
 
@@ -150,6 +152,82 @@ where
     }
 }
 
+enum WriteEvent {
+    Proposed,
+    Committed,
+    Applied(kv::Result<()>),
+}
+
+pub struct RaftKvWriteSubscriber {
+    receiver: futures::channel::mpsc::Receiver<WriteEvent>,
+    last_event: Option<WriteEvent>,
+}
+
+impl WriteSubscriber for RaftKvWriteSubscriber {
+    type ProposedWaiter<'a> = impl Future<Output = bool> + 'a
+    where
+        Self: 'a;
+
+    fn wait_proposed(&mut self) -> Self::ProposedWaiter<'_> {
+        async move {
+            if self.last_event.is_some() {
+                return false;
+            }
+            match self.receiver.next().await {
+                Some(WriteEvent::Proposed) => return true,
+                e @ (Some(WriteEvent::Committed) | Some(WriteEvent::Applied(_))) => {
+                    self.last_event = e
+                }
+                None => (),
+            }
+            false
+        }
+    }
+
+    type CommittedWaiter<'a> = impl Future<Output = bool> + 'a
+    where
+        Self: 'a;
+
+    fn wait_committed(&mut self) -> Self::CommittedWaiter<'_> {
+        async move {
+            match &self.last_event {
+                Some(WriteEvent::Committed) => return true,
+                Some(WriteEvent::Applied(_)) => return false,
+                _ => (),
+            }
+            let mut res = self.receiver.next().await;
+            if let Some(WriteEvent::Proposed) = res {
+                res = self.receiver.next().await;
+            }
+            match res {
+                Some(WriteEvent::Committed) => return true,
+                e @ Some(WriteEvent::Applied(_)) => self.last_event = e,
+                None => (),
+                Some(WriteEvent::Proposed) => unreachable!(),
+            }
+            false
+        }
+    }
+
+    type ResultWaiter = impl Future<Output = Option<kv::Result<()>>>;
+
+    fn result(mut self) -> Self::ResultWaiter {
+        async move {
+            if let Some(WriteEvent::Applied(r)) = self.last_event {
+                return Some(r);
+            }
+            loop {
+                let res = self.receiver.next().await;
+                match res {
+                    Some(WriteEvent::Applied(r)) => return Some(r),
+                    Some(_) => continue,
+                    None => return None,
+                }
+            }
+        }
+    }
+}
+
 /// `RaftKv` is a storage engine base on `RaftStore`.
 #[derive(Clone)]
 pub struct RaftKv<E, S>
@@ -244,66 +322,6 @@ where
             }))
         }
     }
-
-    fn exec_write_requests(
-        &self,
-        ctx: &Context,
-        batch: WriteData,
-        write_cb: Callback<CmdRes<E::Snapshot>>,
-        proposed_cb: Option<ExtCallback>,
-        committed_cb: Option<ExtCallback>,
-    ) -> Result<()> {
-        #[cfg(feature = "failpoints")]
-        {
-            // If rid is some, only the specified region reports error.
-            // If rid is None, all regions report error.
-            let raftkv_early_error_report_fp = || -> Result<()> {
-                fail_point!("raftkv_early_error_report", |rid| {
-                    let region_id = ctx.get_region_id();
-                    rid.and_then(|rid| {
-                        let rid: u64 = rid.parse().unwrap();
-                        if rid == region_id { None } else { Some(()) }
-                    })
-                    .ok_or_else(|| RaftServerError::RegionNotFound(region_id).into())
-                });
-                Ok(())
-            };
-            raftkv_early_error_report_fp()?;
-        }
-
-        let reqs: Vec<Request> = batch.modifies.into_iter().map(Into::into).collect();
-        let txn_extra = batch.extra;
-        let mut header = self.new_request_header(ctx);
-        let mut flags = 0;
-        if txn_extra.one_pc {
-            flags |= WriteBatchFlags::ONE_PC.bits();
-        }
-        if txn_extra.for_flashback {
-            flags |= WriteBatchFlags::FLASHBACK.bits();
-        }
-        header.set_flags(flags);
-
-        let mut cmd = RaftCmdRequest::default();
-        cmd.set_header(header);
-        cmd.set_requests(reqs.into());
-
-        self.schedule_txn_extra(txn_extra);
-
-        let cb = StoreCallback::write_ext(
-            Box::new(move |resp| {
-                write_cb(on_write_result(resp).map_err(Error::into));
-            }),
-            proposed_cb,
-            committed_cb,
-        );
-        let extra_opts = RaftCmdExtraOpts {
-            deadline: batch.deadline,
-            disk_full_opt: batch.disk_full_opt,
-        };
-        self.router.send_command(cmd, cb, extra_opts)?;
-
-        Ok(())
-    }
 }
 
 fn invalid_resp_type(exp: CmdType, act: CmdType) -> Error {
@@ -388,60 +406,129 @@ where
         }
     }
 
+    type WriteSubscriber = RaftKvWriteSubscriber;
     fn async_write(
         &self,
         ctx: &Context,
         batch: WriteData,
-        write_cb: Callback<()>,
-    ) -> kv::Result<()> {
-        self.async_write_ext(ctx, batch, write_cb, None, None)
-    }
-
-    fn async_write_ext(
-        &self,
-        ctx: &Context,
-        batch: WriteData,
-        write_cb: Callback<()>,
-        proposed_cb: Option<ExtCallback>,
-        committed_cb: Option<ExtCallback>,
-    ) -> kv::Result<()> {
+        subscribed_event: u8,
+        on_return: Option<OnReturnCallback<()>>,
+    ) -> Self::WriteSubscriber {
         fail_point!("raftkv_async_write");
-        if batch.modifies.is_empty() {
-            return Err(KvError::from(KvErrorInner::EmptyRequest));
+        ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
+        let timer = Instant::now_coarse();
+
+        let reqs: Vec<Request> = batch.modifies.into_iter().map(Into::into).collect();
+        let txn_extra = batch.extra;
+        let mut header = self.new_request_header(ctx);
+        let mut flags = 0;
+        if txn_extra.one_pc {
+            flags |= WriteBatchFlags::ONE_PC.bits();
+        }
+        if txn_extra.for_flashback {
+            flags |= WriteBatchFlags::FLASHBACK.bits();
+        }
+        header.set_flags(flags);
+
+        let mut cmd = RaftCmdRequest::default();
+        cmd.set_header(header);
+        cmd.set_requests(reqs.into());
+
+        self.schedule_txn_extra(txn_extra);
+
+        let (mut tx, rx) = futures::channel::mpsc::channel(3);
+        let mut res;
+        #[cfg(feature = "failpoints")]
+        {
+            // If rid is some, only the specified region reports error.
+            // If rid is None, all regions report error.
+            let raftkv_early_error_report_fp = || -> Result<()> {
+                fail_point!("raftkv_early_error_report", |rid| {
+                    let region_id = ctx.get_region_id();
+                    rid.and_then(|rid| {
+                        let rid: u64 = rid.parse().unwrap();
+                        if rid == region_id { None } else { Some(()) }
+                    })
+                    .ok_or_else(|| RaftServerError::RegionNotFound(region_id).into())
+                });
+                Ok(())
+            };
+            res = raftkv_early_error_report_fp().map_err(KvError::from);
+        }
+        #[cfg(not(feature = "failpoints"))]
+        {
+            res = Ok(());
         }
 
-        ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
-        let begin_instant = Instant::now_coarse();
-
-        self.exec_write_requests(
-            ctx,
-            batch,
-            Box::new(move |res| match res {
-                Ok(CmdRes::Resp(_)) => {
-                    ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
-                    ASYNC_REQUESTS_DURATIONS_VEC
-                        .write
-                        .observe(begin_instant.saturating_elapsed_secs());
-                    fail_point!("raftkv_async_write_finish");
-                    write_cb(Ok(()))
+        let proposed_cb: Option<ExtCallback> = if subscribed_event & SUBSCRIBE_PROPOSED != 0 {
+            let mut tx0 = tx.clone();
+            Some(Box::new(move || {
+                let _ = tx0.try_send(WriteEvent::Proposed);
+            }))
+        } else {
+            None
+        };
+        let committed_cb: Option<ExtCallback> = if subscribed_event & SUBSCRIBE_COMMITTED != 0 {
+            let mut tx0 = tx.clone();
+            Some(Box::new(move || {
+                let _ = tx0.try_send(WriteEvent::Committed);
+            }))
+        } else {
+            None
+        };
+        let cb = StoreCallback::write_ext(
+            Box::new(move |resp| {
+                let mut res = match on_write_result::<E::Snapshot>(resp).map_err(Error::into) {
+                    Ok(CmdRes::Resp(_)) => Ok(()),
+                    Ok(CmdRes::Snap(_)) => {
+                        Err(box_err!("unexpect snapshot, should mutate instead."))
+                    }
+                    Err(e) => Err(e),
+                };
+                if let Some(cb) = on_return {
+                    cb(&mut res);
                 }
-                Ok(CmdRes::Snap(_)) => {
-                    write_cb(Err(box_err!("unexpect snapshot, should mutate instead.")))
+                match &res {
+                    Ok(_) => {
+                        ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
+                        ASYNC_REQUESTS_DURATIONS_VEC
+                            .write
+                            .observe(timer.saturating_elapsed_secs());
+                        fail_point!("raftkv_async_write_finish");
+                    }
+                    Err(e) => {
+                        let status_kind = get_status_kind_from_engine_error(e);
+                        ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
+                    }
                 }
-                Err(e) => {
-                    let status_kind = get_status_kind_from_engine_error(&e);
-                    ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
-                    write_cb(Err(e))
-                }
+                let _ = tx.try_send(WriteEvent::Applied(res));
             }),
             proposed_cb,
             committed_cb,
-        )
-        .map_err(|e| {
-            let status_kind = get_status_kind_from_error(&e);
-            ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
-            e.into()
-        })
+        );
+        let extra_opts = RaftCmdExtraOpts {
+            deadline: batch.deadline,
+            disk_full_opt: batch.disk_full_opt,
+        };
+        if res.is_ok() && cmd.get_requests().is_empty() {
+            res = Err(KvError::from(KvErrorInner::EmptyRequest))
+        }
+        if res.is_ok() {
+            res = self
+                .router
+                .send_command(cmd, cb, extra_opts)
+                .map_err(KvError::from);
+        }
+
+        let last_event = match res {
+            Ok(_) => None,
+            Err(e) => Some(WriteEvent::Applied(Err(e))),
+        };
+
+        RaftKvWriteSubscriber {
+            receiver: rx,
+            last_event,
+        }
     }
 
     type SnapshotRes = impl Future<Output = kv::Result<Self::Snap>>;

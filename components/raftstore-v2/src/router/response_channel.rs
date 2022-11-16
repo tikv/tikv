@@ -48,7 +48,10 @@ struct EventCore<Res> {
     /// Other events should be defined within [1, 30].
     event: AtomicU64,
     res: UnsafeCell<Option<Res>>,
-    // Waker can be changed, need to use `AtomicWaker` to guarantee no data race.
+    /// A hook to be called when setting a result.
+    before_set: UnsafeCell<Option<Box<dyn FnOnce(&Res) + Send>>>,
+    /// Waker can be changed, need to use `AtomicWaker` to guarantee no data
+    /// race.
     waker: AtomicWaker,
 }
 
@@ -74,6 +77,7 @@ impl<Res> Default for EventCore<Res> {
             event: AtomicU64::new(0),
             res: UnsafeCell::new(None),
             waker: AtomicWaker::new(),
+            before_set: UnsafeCell::new(None),
         }
     }
 }
@@ -93,6 +97,9 @@ impl<Res> EventCore<Res> {
     #[inline]
     fn set_result(&self, result: Res) {
         unsafe {
+            if let Some(hook) = (*self.before_set.get()).take() {
+                hook(&result);
+            }
             *self.res.get() = Some(result);
         }
         let previous = self.event.fetch_or(
@@ -110,6 +117,9 @@ impl<Res> EventCore<Res> {
     /// set.
     #[inline]
     fn cancel(&self) {
+        unsafe {
+            (*self.before_set.get()).take();
+        }
         let mut previous = self
             .event
             .fetch_or(fired_bit_of(CANCEL_EVENT), Ordering::AcqRel);
@@ -243,6 +253,23 @@ impl<Res> BaseChannel<Res> {
     #[inline]
     pub fn pair() -> (Self, BaseSubscriber<Res>) {
         let core: Arc<EventCore<Res>> = Arc::default();
+        (Self { core: core.clone() }, BaseSubscriber { core })
+    }
+
+    /// Create a peer with preconfigured hook.
+    ///
+    /// In some case you may want to call a hook right in the thread that is
+    /// generating the result. But with pure future, it's impossible to do
+    /// so. So the hook is introduce to provide the guarantee.
+    ///
+    /// If the channel is dropped before setting any result, the hook will not
+    /// be called.
+    #[inline]
+    pub fn with_pre_set(hook: Box<dyn FnOnce(&Res) + Send>) -> (Self, BaseSubscriber<Res>) {
+        let core: Arc<EventCore<Res>> = Arc::new(EventCore {
+            before_set: UnsafeCell::new(Some(hook)),
+            ..Default::default()
+        });
         (Self { core: core.clone() }, BaseSubscriber { core })
     }
 
@@ -431,6 +458,7 @@ pub type FlushSubscriber = BaseSubscriber<()>;
 
 #[cfg(test)]
 mod tests {
+    use crossbeam::channel::{self, TryRecvError};
     use futures::executor::block_on;
 
     use super::*;
@@ -481,5 +509,20 @@ mod tests {
         });
         chan.set_result(read.clone());
         assert_eq!(block_on(sub.result()).unwrap(), read);
+    }
+
+    #[test]
+    fn test_pre_set() {
+        let (tx, rx) = channel::unbounded();
+        let (mut chan, mut sub) =
+            CmdResChannel::with_pre_set(Box::new(move |a| tx.send(a.clone()).unwrap()));
+        assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
+        drop(chan);
+        assert_eq!(rx.try_recv(), Err(TryRecvError::Disconnected));
+
+        let (tx, rx) = channel::unbounded();
+        (chan, sub) = CmdResChannel::with_pre_set(Box::new(move |a| tx.send(a.clone()).unwrap()));
+        chan.set_result(RaftCmdResponse::default());
+        assert_eq!(rx.try_recv(), Ok(RaftCmdResponse::default()));
     }
 }

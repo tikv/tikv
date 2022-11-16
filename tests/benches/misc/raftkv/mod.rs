@@ -25,7 +25,7 @@ use tempfile::{Builder, TempDir};
 use tikv::{
     server::raftkv::{CmdRes, RaftKv},
     storage::{
-        kv::{Callback as EngineCallback, Modify, SnapContext, WriteData},
+        kv::{Callback as EngineCallback, Modify, SnapContext, WriteData, BASIC_EVENT},
         Engine,
     },
 };
@@ -225,7 +225,7 @@ fn bench_async_write(b: &mut test::Bencher) {
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(leader);
     b.iter(|| {
-        let on_finished: EngineCallback<()> = Box::new(|_| {
+        let on_finished = Box::new(|_: &mut _| {
             test::black_box(());
         });
         kv.async_write(
@@ -234,8 +234,8 @@ fn bench_async_write(b: &mut test::Bencher) {
                 CF_DEFAULT,
                 Key::from_encoded(b"fooo".to_vec()),
             )]),
-            on_finished,
-        )
-        .unwrap();
+            BASIC_EVENT,
+            Some(on_finished),
+        );
     });
 }

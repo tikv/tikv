@@ -26,9 +26,10 @@ use tikv_util::worker::{Runnable, Scheduler, Worker};
 use txn_types::{Key, Value};
 
 use super::{
-    write_modifies, Callback, DummySnapshotExt, Engine, Error, ErrorInner, ExtCallback,
+    write_modifies, Callback, DummySnapshotExt, Engine, Error, ErrorInner,
     Iterator as EngineIterator, Modify, Result, SnapContext, Snapshot, WriteData,
 };
+use crate::{OnReturnCallback, WriteSubscriber};
 
 // Duplicated in test_engine_builder
 const TEMP_DIR: &str = "";
@@ -224,34 +225,42 @@ impl Engine for RocksEngine {
         Ok(())
     }
 
-    fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> Result<()> {
-        self.async_write_ext(ctx, batch, cb, None, None)
-    }
-
-    fn async_write_ext(
+    type WriteSubscriber = impl WriteSubscriber;
+    fn async_write(
         &self,
-        _: &Context,
+        _ctx: &Context,
         batch: WriteData,
-        cb: Callback<()>,
-        proposed_cb: Option<ExtCallback>,
-        committed_cb: Option<ExtCallback>,
-    ) -> Result<()> {
-        fail_point!("rockskv_async_write", |_| Err(box_err!("write failed")));
+        _subscribe_event: u8,
+        on_return: Option<OnReturnCallback<()>>,
+    ) -> Self::WriteSubscriber {
+        let rx = (|| {
+            fail_point!("rockskv_async_write", |_| Err(box_err!("write failed")));
 
-        if batch.modifies.is_empty() {
-            return Err(Error::from(ErrorInner::EmptyRequest));
-        }
+            if batch.modifies.is_empty() {
+                return Err(Error::from(ErrorInner::EmptyRequest));
+            }
 
-        let batch = self.pre_propose(batch)?;
+            let batch = self.pre_propose(batch)?;
 
-        if let Some(cb) = proposed_cb {
-            cb();
+            let (tx, rx) = oneshot::channel();
+            box_try!(self.sched.schedule(Task::Write(
+                batch.modifies,
+                Box::new(move |mut res| {
+                    if let Some(cb) = on_return {
+                        cb(&mut res);
+                    }
+                    let _ = tx.send(res);
+                })
+            )));
+            Ok(rx)
+        })();
+
+        async move {
+            match rx {
+                Ok(rx) => rx.await.ok(),
+                Err(e) => Some(Err(e)),
+            }
         }
-        if let Some(cb) = committed_cb {
-            cb();
-        }
-        box_try!(self.sched.schedule(Task::Write(batch.modifies, cb)));
-        Ok(())
     }
 
     type SnapshotRes = impl Future<Output = Result<Self::Snap>>;

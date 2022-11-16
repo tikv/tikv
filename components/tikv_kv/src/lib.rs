@@ -67,6 +67,7 @@ const DEFAULT_TIMEOUT_SECS: u64 = 5;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 pub type ExtCallback = Box<dyn FnOnce() + Send>;
 pub type Result<T> = result::Result<T, Error>;
+pub type OnReturnCallback<T> = Box<dyn FnOnce(&mut Result<T>) + Send>;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Modify {
@@ -248,6 +249,57 @@ impl WriteData {
     }
 }
 
+pub const SUBSCRIBE_PROPOSED: u8 = 1;
+pub const SUBSCRIBE_COMMITTED: u8 = 1 << 1;
+pub const ALL_EVENT: u8 = SUBSCRIBE_PROPOSED | SUBSCRIBE_COMMITTED;
+pub const BASIC_EVENT: u8 = 0;
+
+/// A subscriber that can wait on processing event of a write.
+pub trait WriteSubscriber: Send {
+    type ProposedWaiter<'a>: Future<Output = bool> + Send
+    where
+        Self: 'a;
+    /// Wait till the write is proposed. Returns false means the write is
+    /// finished (not necessary succeeded) before notifying proposed.
+    fn wait_proposed(&mut self) -> Self::ProposedWaiter<'_>;
+
+    type CommittedWaiter<'a>: Future<Output = bool> + Send
+    where
+        Self: 'a;
+    /// Wait till the write is committed. Returns false means the write is
+    /// finished (not necessary succeeded) before notifying committed.
+    fn wait_committed(&mut self) -> Self::CommittedWaiter<'_>;
+
+    type ResultWaiter: Future<Output = Option<Result<()>>> + Send;
+    /// Wait till the result is ready. if `None` is returned, then a write is
+    /// untracked before taking any actions. It's unknown whether the write
+    /// will be finished successfully. This can happen if the callback is
+    /// dropped during shutdown or any other cases that the underlying
+    /// engine thinks inappropriate to send back a result. Caller may not
+    /// release any lock in this case to guarantee correctness.
+    fn result(self) -> Self::ResultWaiter;
+}
+
+impl<F> WriteSubscriber for F
+where
+    F: Future<Output = Option<Result<()>>> + Send + 'static,
+{
+    type ProposedWaiter<'a> = futures::future::Ready<bool> where F: 'a;
+    fn wait_proposed(&mut self) -> Self::ProposedWaiter<'_> {
+        futures::future::ready(true)
+    }
+
+    type CommittedWaiter<'a> = futures::future::Ready<bool> where F: 'a;
+    fn wait_committed(&mut self) -> Self::CommittedWaiter<'_> {
+        futures::future::ready(true)
+    }
+
+    type ResultWaiter = Self;
+    fn result(self) -> Self::ResultWaiter {
+        self
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SnapContext<'a> {
     pub pb_ctx: &'a Context,
@@ -286,27 +338,33 @@ pub trait Engine: Send + Clone + 'static {
         Ok(())
     }
 
-    fn async_write(&self, ctx: &Context, batch: WriteData, write_cb: Callback<()>) -> Result<()>;
-
-    /// Writes data to the engine asynchronously with some extensions.
+    type WriteSubscriber: WriteSubscriber;
+    /// Write data into engine asynchronously.
     ///
-    /// When the write request is proposed successfully, the `proposed_cb` is
-    /// invoked. When the write request is finished, the `write_cb` is invoked.
-    fn async_write_ext(
+    /// `on_return` will be called when the write is finished. It's guaranteed
+    /// that when `Subscriber::result` returns `Some`, `on_return` must be
+    /// called already in the generating result thread.
+    #[must_use]
+    fn async_write(
         &self,
         ctx: &Context,
         batch: WriteData,
-        write_cb: Callback<()>,
-        _proposed_cb: Option<ExtCallback>,
-        _committed_cb: Option<ExtCallback>,
-    ) -> Result<()> {
-        self.async_write(ctx, batch, write_cb)
-    }
+        subscribe_events: u8,
+        on_return: Option<OnReturnCallback<()>>,
+    ) -> Self::WriteSubscriber;
 
     fn write(&self, ctx: &Context, batch: WriteData) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-        wait_op!(|cb| self.async_write(ctx, batch, cb), timeout)
-            .unwrap_or_else(|| Err(Error::from(ErrorInner::Timeout(timeout))))
+        let timeout_f = GLOBAL_TIMER_HANDLE.delay(Instant::now() + timeout);
+        futures::executor::block_on(async move {
+            let res = futures::select! {
+                res = self.async_write(ctx, batch, BASIC_EVENT, None).result().fuse() => res,
+                _ = timeout_f.compat().fuse() => Some(Err(Error::from(ErrorInner::Timeout(timeout)))),
+            };
+            // None result means the write is undeterministic and caller should be blocked
+            // forever.
+            res.unwrap_or_else(|| Err(Error::from(ErrorInner::Timeout(timeout))))
+        })
     }
 
     fn release_snapshot(&mut self) {}
