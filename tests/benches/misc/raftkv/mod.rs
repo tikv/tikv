@@ -228,7 +228,7 @@ fn bench_async_write(b: &mut test::Bencher) {
         let on_finished = Box::new(|_: &mut _| {
             test::black_box(());
         });
-        kv.async_write(
+        let _ = kv.async_write(
             &ctx,
             WriteData::from_modifies(vec![Modify::Delete(
                 CF_DEFAULT,
