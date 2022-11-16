@@ -81,7 +81,7 @@ impl Default for Config {
             scheduler_worker_pool_size: if cpu_num >= 16.0 {
                 8
             } else {
-                std::cmp::max(1, std::cmp::min(4, cpu_num as usize))
+                cpu_num.clamp(1., 4.) as usize
             },
             scheduler_pending_write_threshold: ReadableSize::mb(DEFAULT_SCHED_PENDING_WRITE_MB),
             reserve_space: ReadableSize::gb(DEFAULT_RESERVED_SPACE_GB),

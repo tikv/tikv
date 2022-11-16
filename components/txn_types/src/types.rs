@@ -681,7 +681,7 @@ mod tests {
             let shorter_encoded = Key::from_encoded_slice(&encoded.0[..encoded_len - 9]);
             assert!(!shorter_encoded.is_encoded_from(&raw));
             let mut longer_encoded = encoded.as_encoded().clone();
-            longer_encoded.extend(&[0, 0, 0, 0, 0, 0, 0, 0, 0xFF]);
+            longer_encoded.extend([0, 0, 0, 0, 0, 0, 0, 0, 0xFF]);
             let longer_encoded = Key::from_encoded(longer_encoded);
             assert!(!longer_encoded.is_encoded_from(&raw));
 

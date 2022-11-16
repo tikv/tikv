@@ -96,7 +96,7 @@ fn test_basic_write() {
     );
 
     // Make it step down and follower should reject write.
-    let mut msg = Box::new(RaftMessage::default());
+    let mut msg = Box::<RaftMessage>::default();
     msg.set_region_id(2);
     msg.set_to_peer(new_peer(1, 3));
     msg.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);

@@ -691,7 +691,7 @@ where
         }
 
         let elapsed = t.saturating_elapsed();
-        STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(elapsed) as f64);
+        STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(elapsed));
         for mut inspector in std::mem::take(&mut self.pending_latency_inspect) {
             inspector.record_apply_process(elapsed);
             inspector.finish();
@@ -1629,6 +1629,7 @@ where
             AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => {
                 self.exec_flashback(ctx, request)
             }
+            AdminCmdType::BatchSwitchWitness => Err(box_err!("unsupported admin command type")),
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
         }?;
         response.set_cmd_type(cmd_type);
@@ -5860,7 +5861,7 @@ mod tests {
                 }
             }
             let sst_path = import_dir.path().join("test.sst");
-            let (mut meta, data) = gen_sst_file_with_kvs(&sst_path, &kvs);
+            let (mut meta, data) = gen_sst_file_with_kvs(sst_path, &kvs);
             meta.set_region_id(1);
             meta.mut_region_epoch().set_conf_ver(1);
             meta.mut_region_epoch().set_version(3);
@@ -5891,7 +5892,7 @@ mod tests {
                 }
             }
             let sst_path = import_dir.path().join("test2.sst");
-            let (mut meta, data) = gen_sst_file_with_kvs(&sst_path, &kvs);
+            let (mut meta, data) = gen_sst_file_with_kvs(sst_path, &kvs);
             meta.set_region_id(1);
             meta.mut_region_epoch().set_conf_ver(1);
             meta.mut_region_epoch().set_version(3);

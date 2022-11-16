@@ -1658,7 +1658,7 @@ mod tests {
                 assert!(latches.acquire(&mut lock, id));
             }
             let unlocked = latches.release(&lock, id);
-            if id as u64 == max_id {
+            if id == max_id {
                 assert!(unlocked.is_empty());
             } else {
                 assert_eq!(unlocked, vec![id + 1]);

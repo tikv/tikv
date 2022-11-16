@@ -235,6 +235,7 @@ struct TikvServer<ER: RaftEngine> {
     concurrency_manager: ConcurrencyManager,
     env: Arc<Environment>,
     background_worker: Worker,
+    check_leader_worker: Worker,
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
@@ -363,6 +364,10 @@ where
             info!("Causal timestamp provider startup.");
         }
 
+        // Run check leader in a dedicate thread, because it is time sensitive
+        // and crucial to TiCDC replication lag.
+        let check_leader_worker = WorkerBuilder::new("check_leader").thread_count(1).create();
+
         TikvServer {
             config,
             cfg_controller: Some(cfg_controller),
@@ -384,6 +389,7 @@ where
             concurrency_manager,
             env,
             background_worker,
+            check_leader_worker,
             flow_info_sender: None,
             flow_info_receiver: None,
             sst_worker: None,
@@ -476,7 +482,7 @@ where
         let cur_port = cur_addr.port();
         let lock_dir = get_lock_dir();
 
-        let search_base = env::temp_dir().join(&lock_dir);
+        let search_base = env::temp_dir().join(lock_dir);
         file_system::create_dir_all(&search_base)
             .unwrap_or_else(|_| panic!("create {} failed", search_base.display()));
 
@@ -540,7 +546,7 @@ where
         }
         fn reserve_physical_space(data_dir: &String, available: u64, reserved_size: u64) {
             let path = Path::new(data_dir).join(file_system::SPACE_PLACEHOLDER_FILE);
-            if let Err(e) = file_system::remove_file(&path) {
+            if let Err(e) = file_system::remove_file(path) {
                 warn!("failed to remove space holder on starting: {}", e);
             }
 
@@ -903,7 +909,7 @@ where
             self.coprocessor_host.clone().unwrap(),
         );
         let check_leader_scheduler = self
-            .background_worker
+            .check_leader_worker
             .start("check-leader", check_leader_runner);
 
         let server_config = Arc::new(VersionTrack::new(self.config.server.clone()));
@@ -1555,7 +1561,7 @@ where
                     .join(Path::new(file_system::SPACE_PLACEHOLDER_FILE));
 
                 let placeholder_size: u64 =
-                    file_system::get_file_size(&placeholer_file_path).unwrap_or(0);
+                    file_system::get_file_size(placeholer_file_path).unwrap_or(0);
 
                 let used_size = if !separated_raft_mount_path {
                     snap_size + kv_size + raft_size + placeholder_size
