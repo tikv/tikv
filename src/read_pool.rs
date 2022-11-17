@@ -123,7 +123,7 @@ impl ReadPoolHandle {
         f: F,
         priority: CommandPri,
         task_id: u64,
-        group_id: u64,
+        group_name: String,
     ) -> Result<(), ReadPoolError>
     where
         F: Future<Output = ()> + Send + 'static,
@@ -168,7 +168,7 @@ impl ReadPoolHandle {
                 };
                 let mut extras = Extras::new_multilevel(task_id, fixed_level);
                 if enable_priority.load(Ordering::Relaxed) {
-                    let priority_value = resource_ctl.get_priority(group_id, priority);
+                    let priority_value = resource_ctl.get_priority(&group_name, priority);
                     extras.set_priority(priority_value);
                     let task_cell = TaskCell::new(
                         TrackedFuture::new(ControlledFuture::new(
@@ -177,7 +177,7 @@ impl ReadPoolHandle {
                                 running_tasks.dec();
                             },
                             resource_ctl.clone(),
-                            group_id,
+                            group_name,
                             priority,
                         )),
                         extras,
@@ -208,7 +208,7 @@ impl ReadPoolHandle {
         F: Future<Output = T> + Send + 'static,
         T: Send + 'static,
     {
-        self.spawn_handle_with_priority(f, priority, task_id, 0)
+        self.spawn_handle_with_priority(f, priority, task_id, "default".into())
     }
 
     pub fn spawn_handle_with_priority<F, T>(
@@ -216,7 +216,7 @@ impl ReadPoolHandle {
         f: F,
         priority: CommandPri,
         task_id: u64,
-        group_id: u64,
+        group_name: String,
     ) -> impl Future<Output = Result<T, ReadPoolError>>
     where
         F: Future<Output = T> + Send + 'static,
@@ -230,7 +230,7 @@ impl ReadPoolHandle {
             },
             priority,
             task_id,
-            group_id,
+            group_name,
         );
         async move {
             res?;

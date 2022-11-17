@@ -239,6 +239,7 @@ struct TikvServer<ER: RaftEngine> {
     check_leader_worker: Worker,
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
+    resource_ctl: Arc<ResourceController>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_factory: Option<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
     br_snap_recovery_mode: bool, // use for br snapshot recovery
@@ -368,6 +369,7 @@ where
         // Run check leader in a dedicate thread, because it is time sensitive
         // and crucial to TiCDC replication lag.
         let check_leader_worker = WorkerBuilder::new("check_leader").thread_count(1).create();
+        let resource_ctl = Arc::new(ResourceController::new());
 
         TikvServer {
             config,
@@ -395,6 +397,7 @@ where
             flow_info_receiver: None,
             sst_worker: None,
             quota_limiter,
+            resource_ctl,
             causal_ts_provider,
             tablet_factory: None,
             br_snap_recovery_mode: is_recovering_marked,
@@ -733,13 +736,12 @@ where
             sst_worker.start_with_timer(sst_runner);
         }
 
-        let resource_ctl = Arc::new(ResourceController::new());
         let unified_read_pool = if self.config.readpool.is_unified_pool_enabled() {
             Some(build_yatp_read_pool(
                 &self.config.readpool.unified,
                 pd_sender.clone(),
                 engines.engine.clone(),
-                resource_ctl.clone(),
+                self.resource_ctl.clone(),
                 self.config.readpool.unified.enable_priority,
             ))
         } else {
@@ -964,7 +966,7 @@ where
             check_leader_scheduler,
             self.env.clone(),
             unified_read_pool,
-            resource_ctl,
+            self.resource_ctl.clone(),
             debug_thread_pool,
             health_service,
         )
@@ -1645,6 +1647,7 @@ where
             let mut status_server = match StatusServer::new(
                 self.config.server.status_thread_pool_size,
                 self.cfg_controller.take().unwrap(),
+                self.resource_ctl.clone(),
                 Arc::new(self.config.security.clone()),
                 self.router.clone(),
                 self.store_path.clone(),

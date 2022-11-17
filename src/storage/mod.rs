@@ -86,7 +86,6 @@ use kvproto::{
 use pd_client::FeatureGate;
 use raftstore::store::{util::build_key_range, ReadStats, TxnExt, WriteStats};
 use rand::prelude::*;
-use resource_control::parse_resource_group_tag;
 use resource_metering::{FutureExt, ResourceTagFactory};
 use tikv_kv::SnapshotExt;
 use tikv_util::{
@@ -591,7 +590,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let stage_begin_ts = Instant::now();
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
-        let group_id = parse_resource_group_tag(ctx.get_resource_group_tag());
+        let group_name = String::from_utf8_lossy(ctx.get_resource_group_tag().into()).into_owned();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
             &ctx,
@@ -725,7 +724,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
-            group_id,
+            group_name,
         );
         async move {
             res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
@@ -749,7 +748,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         const CMD: CommandKind = CommandKind::batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
         let priority = requests[0].get_context().get_priority();
-        let group_id = parse_resource_group_tag(requests[0].get_context().get_resource_group_tag());
+        let group_name =
+            String::from_utf8_lossy(requests[0].get_context().get_resource_group_tag().into())
+                .into_owned();
 
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
@@ -911,7 +912,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
-            group_id,
+            group_name,
         );
         async move {
             res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
@@ -931,7 +932,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let stage_begin_ts = Instant::now();
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
-        let group_id = parse_resource_group_tag(ctx.get_resource_group_tag());
+        let group_name = String::from_utf8_lossy(ctx.get_resource_group_tag().into()).into_owned();
         let priority_tag = get_priority_tag(priority);
         let key_ranges = keys
             .iter()
@@ -1085,7 +1086,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
-            group_id,
+            group_name,
         );
 
         async move {
@@ -1113,7 +1114,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
         const CMD: CommandKind = CommandKind::scan;
         let priority = ctx.get_priority();
-        let group_id = parse_resource_group_tag(ctx.get_resource_group_tag());
+        let group_name = String::from_utf8_lossy(ctx.get_resource_group_tag().into()).into_owned();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
             &ctx,
@@ -1263,7 +1264,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
-            group_id,
+            group_name,
         );
 
         async move {
@@ -1282,7 +1283,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<Vec<LockInfo>>> {
         const CMD: CommandKind = CommandKind::scan_lock;
         let priority = ctx.get_priority();
-        let group_id = parse_resource_group_tag(ctx.get_resource_group_tag());
+        let group_name = String::from_utf8_lossy(ctx.get_resource_group_tag().into()).into_owned();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
             &ctx,
@@ -1412,7 +1413,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
-            group_id,
+            group_name,
         );
         async move {
             res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))

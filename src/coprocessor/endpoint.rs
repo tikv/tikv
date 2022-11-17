@@ -11,7 +11,6 @@ use engine_traits::PerfLevel;
 use futures::{channel::mpsc, prelude::*};
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 use protobuf::{CodedInputStream, Message};
-use resource_control::parse_resource_group_tag;
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
 use tidb_query_common::execute_stats::ExecSummary;
 use tikv_alloc::trace::MemoryTraceGuard;
@@ -456,7 +455,8 @@ impl<E: Engine> Endpoint<E> {
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> impl Future<Output = Result<MemoryTraceGuard<coppb::Response>>> {
         let priority = req_ctx.context.get_priority();
-        let group_id = parse_resource_group_tag(req_ctx.context.get_resource_group_tag());
+        let group_name =
+            String::from_utf8_lossy(req_ctx.context.get_resource_group_tag().into()).into_owned();
         let task_id = req_ctx.build_task_id();
         let key_ranges = req_ctx
             .ranges
@@ -476,7 +476,7 @@ impl<E: Engine> Endpoint<E> {
                     .in_resource_metering_tag(resource_tag),
                 priority,
                 task_id,
-                group_id,
+                group_name,
             )
             .map_err(|_| Error::MaxPendingTasksExceeded);
         async move { res.await? }
@@ -607,7 +607,8 @@ impl<E: Engine> Endpoint<E> {
     ) -> Result<impl futures::stream::Stream<Item = Result<coppb::Response>>> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
-        let group_id = parse_resource_group_tag(req_ctx.context.get_resource_group_tag());
+        let group_name =
+            String::from_utf8_lossy(req_ctx.context.get_resource_group_tag().into()).into_owned();
         let key_ranges = req_ctx
             .ranges
             .iter()
@@ -630,7 +631,7 @@ impl<E: Engine> Endpoint<E> {
                     }),
                 priority,
                 task_id,
-                group_id,
+                group_name,
             )
             .map_err(|_| Error::MaxPendingTasksExceeded)?;
         Ok(rx)

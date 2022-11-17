@@ -45,13 +45,12 @@ pub use profile::{
     read_file, start_one_cpu_profile, start_one_heap_profile,
 };
 use prometheus::TEXT_FORMAT;
-use qos::{set_resource_group_by_attributes, delete_resource_group};
 use raftstore::store::{transport::CasualRouter, CasualMessage};
 use regex::Regex;
+use resource_control::ResourceController;
 use security::{self, SecurityConfig};
 use serde_json::Value;
 use tikv_util::{
-    config::ReadableSize,
     logger::set_log_level,
     metrics::{dump, dump_to},
     timer::GLOBAL_TIMER_HANDLE,
@@ -90,6 +89,7 @@ pub struct StatusServer<E, R> {
     rx: Option<Receiver<()>>,
     addr: Option<SocketAddr>,
     cfg_controller: ConfigController,
+    resource_ctl: Arc<ResourceController>,
     router: R,
     security_config: Arc<SecurityConfig>,
     store_path: PathBuf,
@@ -104,6 +104,7 @@ where
     pub fn new(
         status_thread_pool_size: usize,
         cfg_controller: ConfigController,
+        resource_ctl: Arc<ResourceController>,
         security_config: Arc<SecurityConfig>,
         router: R,
         store_path: PathBuf,
@@ -123,6 +124,7 @@ where
             rx: Some(rx),
             addr: None,
             cfg_controller,
+            resource_ctl,
             router,
             security_config,
             store_path,
@@ -412,7 +414,10 @@ where
         }
     }
 
-    async fn update_resource_group(req: Request<Body>) -> hyper::Result<Response<Body>> {
+    async fn update_resource_group(
+        req: Request<Body>,
+        resource_ctl: &ResourceController,
+    ) -> hyper::Result<Response<Body>> {
         let mut body = Vec::new();
         req.into_body()
             .try_for_each(|bytes| {
@@ -420,92 +425,42 @@ where
                 ok(())
             })
             .await?;
-        Ok(match decode_json(&body) {
-            Ok(change) => {
-                let rg_id: usize;
-                let cpu_quota: usize;
-                let read_bandwidth: ReadableSize;
-                let write_bandwidth: ReadableSize;
-
-                if let Some(rg_id_str) = change.get("resource-group-id") {
-                    rg_id = rg_id_str.parse().unwrap();
-                } else {
-                    return Ok(make_response(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "no resource group id provided",
-                    ));
-                }
-
-                if let Some(cpu_quota_str) = change.get("cpu-quota") {
-                    cpu_quota = cpu_quota_str.parse().unwrap();
-                } else {
-                    return Ok(make_response(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "no cpu quota provided",
-                    ));
-                }
-
-                if let Some(bandwidth_str) = change.get("read-bandwidth") {
-                    read_bandwidth = ReadableSize::from_str(bandwidth_str).unwrap();
-                } else {
-                    return Ok(make_response(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "no read bandwidth provided",
-                    ));
-                }
-
-                if let Some(bandwidth_str) = change.get("write-bandwidth") {
-                    write_bandwidth = ReadableSize::from_str(bandwidth_str).unwrap();
-                } else {
-                    return Ok(make_response(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "no write bandwidth provided",
-                    ));
-                }
-
-                set_resource_group_by_attributes(rg_id, cpu_quota, read_bandwidth, write_bandwidth);
+        match serde_json::from_slice(&body) {
+            Ok(rg) => {
+                resource_ctl.add_resource_group(rg);
                 let mut resp = Response::default();
                 *resp.status_mut() = StatusCode::OK;
-                resp
+                Ok(resp)
             }
-            Err(e) => make_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("failed to decode, error: {:?}", e),
-            ),
-        })
+            Err(e) => Ok(make_response(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode resource group, error: {:?}", e),
+            )),
+        }
     }
 
-    async fn delete_resource_group(req: Request<Body>) -> hyper::Result<Response<Body>> {
-        let mut body = Vec::new();
-        req.into_body()
-            .try_for_each(|bytes| {
-                body.extend(bytes);
-                ok(())
-            })
-            .await?;
-        Ok(match decode_json(&body) {
-            Ok(change) => {
-                let rg_id: usize;
+    async fn delete_resource_group(
+        group_name: &str,
+        resource_ctl: &ResourceController,
+    ) -> hyper::Result<Response<Body>> {
+        let mut resp = Response::default();
+        if resource_ctl.remove_resource_group(group_name).is_some() {
+            *resp.status_mut() = StatusCode::OK;
+        } else {
+            *resp.status_mut() = StatusCode::NOT_FOUND;
+        }
+        Ok(resp)
+    }
 
-                if let Some(rg_id_str) = change.get("resource-group-id") {
-                    rg_id = rg_id_str.parse().unwrap();
-                } else {
-                    return Ok(make_response(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "no resource group id provided",
-                    ));
-                }
-
-                delete_resource_group(rg_id);
-                let mut resp = Response::default();
-                *resp.status_mut() = StatusCode::OK;
-                resp
-            }
-            Err(e) => make_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("failed to decode, error: {:?}", e),
-            ),
-        })
+    async fn get_all_resource_groups(
+        resource_ctl: &ResourceController,
+    ) -> hyper::Result<Response<Body>> {
+        let groups = resource_ctl.get_all_resource_groups();
+        let res = serde_json::to_string(&groups).unwrap();
+        Ok(Response::builder()
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(res))
+            .unwrap())
     }
 
     pub fn stop(self) {
@@ -635,6 +590,7 @@ where
     {
         let security_config = self.security_config.clone();
         let cfg_controller = self.cfg_controller.clone();
+        let resource_ctl = self.resource_ctl.clone();
         let router = self.router.clone();
         let store_path = self.store_path.clone();
         // Start to serve.
@@ -644,6 +600,7 @@ where
             let cfg_controller = cfg_controller.clone();
             let router = router.clone();
             let store_path = store_path.clone();
+            let resource_ctl = resource_ctl.clone();
             async move {
                 // Create a status service.
                 Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
@@ -652,6 +609,7 @@ where
                     let cfg_controller = cfg_controller.clone();
                     let router = router.clone();
                     let store_path = store_path.clone();
+                    let resource_ctl = resource_ctl.clone();
                     async move {
                         let path = req.uri().path().to_owned();
                         let method = req.method().to_owned();
@@ -726,11 +684,14 @@ where
                             (Method::PUT, path) if path.starts_with("/log-level") => {
                                 Self::change_log_level(req).await
                             }
-                            (Method::POST, "/config_resource_group") => {
-                                Self::update_resource_group(req).await
+                            (Method::GET, "/resource_groups") => {
+                                Self::get_all_resource_groups(&*resource_ctl).await
                             }
-                            (Method::DELETE, "/config_resource_group") => {
-                                Self::delete_resource_group(req).await
+                            (Method::POST, "/resource_group") => {
+                                Self::update_resource_group(req, &*resource_ctl).await
+                            }
+                            (Method::DELETE, path) if path.starts_with("/resource_group/") => {
+                                Self::delete_resource_group(&path[16..], &*resource_ctl).await
                             }
 
                             _ => Ok(make_response(StatusCode::NOT_FOUND, "path not found")),
@@ -1055,8 +1016,7 @@ mod tests {
     use raftstore::store::{transport::CasualRouter, CasualMessage};
     use security::SecurityConfig;
     use test_util::new_security_cfg;
-    use tikv_util::config::ReadableSize;
-    use tikv_util::logger::get_log_level;
+    use tikv_util::{config::ReadableSize, logger::get_log_level};
 
     use crate::{
         config::{ConfigController, TikvConfig},
@@ -1611,7 +1571,7 @@ mod tests {
             MockRouter,
             temp_dir.path().to_path_buf(),
         )
-            .unwrap();
+        .unwrap();
         let addr = "127.0.0.1:0".to_owned();
         let _ = status_server.start(addr);
 
@@ -1628,11 +1588,10 @@ mod tests {
         let write_bandwidth_1 = ReadableSize::kb(100);
 
         let mut set_resource_group_request = Request::new(Body::from(
-            serde_json::to_string(
-                {
-                   &ResourceGroup::new(rg_id_1, cpu_quota_1, read_bandwidth_1, write_bandwidth_1)}
-            )
-                .unwrap(),
+            serde_json::to_string({
+                &ResourceGroup::new(rg_id_1, cpu_quota_1, read_bandwidth_1, write_bandwidth_1)
+            })
+            .unwrap(),
         ));
         *set_resource_group_request.method_mut() = Method::POST;
         *set_resource_group_request.uri_mut() = uri_1;
@@ -1647,10 +1606,22 @@ mod tests {
                 .await
                 .map(move |res| {
                     assert_eq!(res.status(), StatusCode::OK);
-                    assert_eq!(get_resource_group(rg_id_1).unwrap().get_resource_group_id(), rg_id_1);
-                    assert_eq!(get_resource_group(rg_id_1).unwrap().get_cpu_quota(), cpu_quota_1);
-                    assert_eq!(get_resource_group(rg_id_1).unwrap().get_read_bandwidth(), read_bandwidth_1);
-                    assert_eq!(get_resource_group(rg_id_1).unwrap().get_write_bandwidth(), write_bandwidth_1);
+                    assert_eq!(
+                        get_resource_group(rg_id_1).unwrap().get_resource_group_id(),
+                        rg_id_1
+                    );
+                    assert_eq!(
+                        get_resource_group(rg_id_1).unwrap().get_cpu_quota(),
+                        cpu_quota_1
+                    );
+                    assert_eq!(
+                        get_resource_group(rg_id_1).unwrap().get_read_bandwidth(),
+                        read_bandwidth_1
+                    );
+                    assert_eq!(
+                        get_resource_group(rg_id_1).unwrap().get_write_bandwidth(),
+                        write_bandwidth_1
+                    );
                 })
                 .unwrap()
         });
@@ -1668,11 +1639,10 @@ mod tests {
         let write_bandwidth_2 = ReadableSize::kb(200);
 
         let mut set_resource_group_request = Request::new(Body::from(
-            serde_json::to_string(
-                {
-                    &ResourceGroup::new(rg_id_2, cpu_quota_2, read_bandwidth_2, write_bandwidth_2)}
-            )
-                .unwrap(),
+            serde_json::to_string({
+                &ResourceGroup::new(rg_id_2, cpu_quota_2, read_bandwidth_2, write_bandwidth_2)
+            })
+            .unwrap(),
         ));
         *set_resource_group_request.method_mut() = Method::POST;
         *set_resource_group_request.uri_mut() = uri_2;
@@ -1687,14 +1657,38 @@ mod tests {
                 .await
                 .map(move |res| {
                     assert_eq!(res.status(), StatusCode::OK);
-                    assert_eq!(get_resource_group(rg_id_1).unwrap().get_resource_group_id(), rg_id_1);
-                    assert_eq!(get_resource_group(rg_id_1).unwrap().get_cpu_quota(), cpu_quota_1);
-                    assert_eq!(get_resource_group(rg_id_1).unwrap().get_read_bandwidth(), read_bandwidth_1);
-                    assert_eq!(get_resource_group(rg_id_1).unwrap().get_write_bandwidth(), write_bandwidth_1);
-                    assert_eq!(get_resource_group(rg_id_2).unwrap().get_resource_group_id(), rg_id_2);
-                    assert_eq!(get_resource_group(rg_id_2).unwrap().get_cpu_quota(), cpu_quota_2);
-                    assert_eq!(get_resource_group(rg_id_2).unwrap().get_read_bandwidth(), read_bandwidth_2);
-                    assert_eq!(get_resource_group(rg_id_2).unwrap().get_write_bandwidth(), write_bandwidth_2);
+                    assert_eq!(
+                        get_resource_group(rg_id_1).unwrap().get_resource_group_id(),
+                        rg_id_1
+                    );
+                    assert_eq!(
+                        get_resource_group(rg_id_1).unwrap().get_cpu_quota(),
+                        cpu_quota_1
+                    );
+                    assert_eq!(
+                        get_resource_group(rg_id_1).unwrap().get_read_bandwidth(),
+                        read_bandwidth_1
+                    );
+                    assert_eq!(
+                        get_resource_group(rg_id_1).unwrap().get_write_bandwidth(),
+                        write_bandwidth_1
+                    );
+                    assert_eq!(
+                        get_resource_group(rg_id_2).unwrap().get_resource_group_id(),
+                        rg_id_2
+                    );
+                    assert_eq!(
+                        get_resource_group(rg_id_2).unwrap().get_cpu_quota(),
+                        cpu_quota_2
+                    );
+                    assert_eq!(
+                        get_resource_group(rg_id_2).unwrap().get_read_bandwidth(),
+                        read_bandwidth_2
+                    );
+                    assert_eq!(
+                        get_resource_group(rg_id_2).unwrap().get_write_bandwidth(),
+                        write_bandwidth_2
+                    );
                 })
                 .unwrap()
         });
@@ -1712,11 +1706,10 @@ mod tests {
         let write_bandwidth_3 = ReadableSize::kb(300);
 
         let mut set_resource_group_request = Request::new(Body::from(
-            serde_json::to_string(
-                {
-                    &ResourceGroup::new(rg_id_2, cpu_quota_3, read_bandwidth_3, write_bandwidth_3)}
-            )
-                .unwrap(),
+            serde_json::to_string({
+                &ResourceGroup::new(rg_id_2, cpu_quota_3, read_bandwidth_3, write_bandwidth_3)
+            })
+            .unwrap(),
         ));
         *set_resource_group_request.method_mut() = Method::POST;
         *set_resource_group_request.uri_mut() = uri_3;
@@ -1731,14 +1724,38 @@ mod tests {
                 .await
                 .map(move |res| {
                     assert_eq!(res.status(), StatusCode::OK);
-                    assert_eq!(get_resource_group(rg_id_1).unwrap().get_resource_group_id(), rg_id_1);
-                    assert_eq!(get_resource_group(rg_id_1).unwrap().get_cpu_quota(), cpu_quota_1);
-                    assert_eq!(get_resource_group(rg_id_1).unwrap().get_read_bandwidth(), read_bandwidth_1);
-                    assert_eq!(get_resource_group(rg_id_1).unwrap().get_write_bandwidth(), write_bandwidth_1);
-                    assert_eq!(get_resource_group(rg_id_2).unwrap().get_resource_group_id(), rg_id_3);
-                    assert_eq!(get_resource_group(rg_id_2).unwrap().get_cpu_quota(), cpu_quota_3);
-                    assert_eq!(get_resource_group(rg_id_2).unwrap().get_read_bandwidth(), read_bandwidth_3);
-                    assert_eq!(get_resource_group(rg_id_2).unwrap().get_write_bandwidth(), write_bandwidth_3);
+                    assert_eq!(
+                        get_resource_group(rg_id_1).unwrap().get_resource_group_id(),
+                        rg_id_1
+                    );
+                    assert_eq!(
+                        get_resource_group(rg_id_1).unwrap().get_cpu_quota(),
+                        cpu_quota_1
+                    );
+                    assert_eq!(
+                        get_resource_group(rg_id_1).unwrap().get_read_bandwidth(),
+                        read_bandwidth_1
+                    );
+                    assert_eq!(
+                        get_resource_group(rg_id_1).unwrap().get_write_bandwidth(),
+                        write_bandwidth_1
+                    );
+                    assert_eq!(
+                        get_resource_group(rg_id_2).unwrap().get_resource_group_id(),
+                        rg_id_3
+                    );
+                    assert_eq!(
+                        get_resource_group(rg_id_2).unwrap().get_cpu_quota(),
+                        cpu_quota_3
+                    );
+                    assert_eq!(
+                        get_resource_group(rg_id_2).unwrap().get_read_bandwidth(),
+                        read_bandwidth_3
+                    );
+                    assert_eq!(
+                        get_resource_group(rg_id_2).unwrap().get_write_bandwidth(),
+                        write_bandwidth_3
+                    );
                 })
                 .unwrap()
         });
@@ -1752,11 +1769,10 @@ mod tests {
             .unwrap();
 
         let mut set_resource_group_request = Request::new(Body::from(
-            serde_json::to_string(
-                {
-                    &ResourceGroup::new(rg_id_1, cpu_quota_2, read_bandwidth_2, write_bandwidth_2)}
-            )
-                .unwrap(),
+            serde_json::to_string({
+                &ResourceGroup::new(rg_id_1, cpu_quota_2, read_bandwidth_2, write_bandwidth_2)
+            })
+            .unwrap(),
         ));
         *set_resource_group_request.method_mut() = Method::DELETE;
         *set_resource_group_request.uri_mut() = uri_4;
@@ -1772,8 +1788,11 @@ mod tests {
                 .map(move |res| {
                     assert_eq!(res.status(), StatusCode::OK);
                     assert_eq!(get_resource_group(rg_id_1), None);
-                    assert_eq!(get_resource_group(rg_id_2).unwrap().get_resource_group_id(), rg_id_2);
-        })
+                    assert_eq!(
+                        get_resource_group(rg_id_2).unwrap().get_resource_group_id(),
+                        rg_id_2
+                    );
+                })
                 .unwrap()
         });
         block_on(handle).unwrap();
