@@ -68,6 +68,7 @@ raft_log_engine = { workspace = true }
 raftstore = { workspace = true, features = ["engine_rocks"] }
 rand = "0.8"
 resolved_ts = { workspace = true }
+resource_control = { workspace = true }
 resource_metering = { workspace = true }
 security = { workspace = true, features = ["tonic"] }
 serde_json = "1.0"

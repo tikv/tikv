@@ -990,7 +990,7 @@ name = "concurrency_manager"
 version = "0.0.1"
 dependencies = [
  "criterion",
- "crossbeam-skiplist",
+ "crossbeam-skiplist 0.0.0 (git+https://github.com/tikv/crossbeam.git?branch=tikv-5.0)",
  "fail",
  "futures 0.3.15",
  "kvproto",
@@ -1197,6 +1197,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam-epoch"
+version = "0.9.11"
+source = "git+https://github.com/crossbeam-rs/crossbeam#46d0aeb7052e8ed672fe39dd1521a826fd698d0a"
+dependencies = [
+ "autocfg",
+ "cfg-if 1.0.0",
+ "crossbeam-utils 0.8.12",
+ "memoffset",
+ "scopeguard",
+]
+
+[[package]]
 name = "crossbeam-queue"
 version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1214,6 +1226,17 @@ dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-epoch 0.9.3",
  "crossbeam-utils 0.8.3",
+ "scopeguard",
+]
+
+[[package]]
+name = "crossbeam-skiplist"
+version = "0.0.0"
+source = "git+https://github.com/crossbeam-rs/crossbeam#46d0aeb7052e8ed672fe39dd1521a826fd698d0a"
+dependencies = [
+ "cfg-if 1.0.0",
+ "crossbeam-epoch 0.9.11",
+ "crossbeam-utils 0.8.12",
  "scopeguard",
 ]
 
@@ -1255,6 +1278,14 @@ source = "git+https://github.com/crossbeam-rs/crossbeam?rev=41ed3d948720f26149b2
 dependencies = [
  "cfg-if 1.0.0",
  "once_cell",
+]
+
+[[package]]
+name = "crossbeam-utils"
+version = "0.8.12"
+source = "git+https://github.com/crossbeam-rs/crossbeam#46d0aeb7052e8ed672fe39dd1521a826fd698d0a"
+dependencies = [
+ "cfg-if 1.0.0",
 ]
 
 [[package]]
@@ -4630,6 +4661,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "resource_control"
+version = "0.0.1"
+dependencies = [
+ "byteorder",
+ "crossbeam-skiplist 0.0.0 (git+https://github.com/crossbeam-rs/crossbeam)",
+ "dashmap",
+ "kvproto",
+ "lazy_static",
+ "pin-project",
+ "prometheus",
+ "slog",
+ "slog-global",
+ "tikv_util",
+ "yatp",
+]
+
+[[package]]
 name = "resource_metering"
 version = "0.0.1"
 dependencies = [
@@ -5205,6 +5253,7 @@ dependencies = [
  "raftstore",
  "rand 0.8.3",
  "resolved_ts",
+ "resource_control",
  "resource_metering",
  "security",
  "serde_json",
@@ -6285,6 +6334,7 @@ dependencies = [
  "rand 0.7.3",
  "regex",
  "reqwest",
+ "resource_control",
  "resource_metering",
  "rev_lines",
  "seahash",
@@ -7306,9 +7356,10 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/tikv/yatp.git?branch=master#39cb495953d40a7e846363c06090755c2eac65fa"
+source = "git+https://github.com/glorv/yatp?branch=priority-schedule#02d46d074a5c3a044b80e8da49b6e43b54518939"
 dependencies = [
  "crossbeam-deque",
+ "crossbeam-skiplist 0.0.0 (git+https://github.com/crossbeam-rs/crossbeam)",
  "dashmap",
  "fail",
  "lazy_static",

@@ -81,6 +81,7 @@ use raftstore::{
     },
     RaftRouterCompactedEventSender,
 };
+use resource_control::ResourceController;
 use security::SecurityManager;
 use snap_recovery::RecoveryService;
 use tikv::{
@@ -732,11 +733,14 @@ where
             sst_worker.start_with_timer(sst_runner);
         }
 
+        let resource_ctl = Arc::new(ResourceController::new());
         let unified_read_pool = if self.config.readpool.is_unified_pool_enabled() {
             Some(build_yatp_read_pool(
                 &self.config.readpool.unified,
                 pd_sender.clone(),
                 engines.engine.clone(),
+                resource_ctl.clone(),
+                self.config.readpool.unified.enable_priority,
             ))
         } else {
             None
@@ -960,6 +964,7 @@ where
             check_leader_scheduler,
             self.env.clone(),
             unified_read_pool,
+            resource_ctl,
             debug_thread_pool,
             health_service,
         )

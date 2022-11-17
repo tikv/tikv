@@ -282,6 +282,14 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
             .build_with_queue_and_runner(QueueType::Multilevel(multilevel_builder), runner_builder)
     }
 
+    pub fn build_priority_pool(&mut self) -> ThreadPool<TaskCell> {
+        let (builder, runner) = self.create_builder();
+        builder.build_with_queue_and_runner(
+            yatp::queue::QueueType::Priority,
+            yatp::pool::CloneRunnerBuilder(runner),
+        )
+    }
+
     fn create_builder(&mut self) -> (yatp::Builder, YatpPoolRunner<T>) {
         let name = self.name_prefix.as_deref().unwrap_or("yatp_pool");
         let mut builder = yatp::Builder::new(thd_name!(name));

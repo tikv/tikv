@@ -86,6 +86,7 @@ use kvproto::{
 use pd_client::FeatureGate;
 use raftstore::store::{util::build_key_range, ReadStats, TxnExt, WriteStats};
 use rand::prelude::*;
+use resource_control::parse_resource_group_tag;
 use resource_metering::{FutureExt, ResourceTagFactory};
 use tikv_kv::SnapshotExt;
 use tikv_util::{
@@ -590,6 +591,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let stage_begin_ts = Instant::now();
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
+        let group_id = parse_resource_group_tag(ctx.get_resource_group_tag());
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
             &ctx,
@@ -601,7 +603,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let quota_limiter = self.quota_limiter.clone();
         let mut sample = quota_limiter.new_sample(true);
 
-        let res = self.read_pool.spawn_handle(
+        let res = self.read_pool.spawn_handle_with_priority(
             async move {
                 let stage_scheduled_ts = Instant::now();
                 tls_collect_query(
@@ -723,6 +725,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
+            group_id,
         );
         async move {
             res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
@@ -746,6 +749,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         const CMD: CommandKind = CommandKind::batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
         let priority = requests[0].get_context().get_priority();
+        let group_id = parse_resource_group_tag(requests[0].get_context().get_resource_group_tag());
+
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
 
@@ -761,7 +766,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         // Unset the TLS tracker because the future below does not belong to any
         // specific request
         clear_tls_tracker_token();
-        let res = self.read_pool.spawn_handle(
+        let res = self.read_pool.spawn_handle_with_priority(
             async move {
                 KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
                 KV_COMMAND_KEYREAD_HISTOGRAM_STATIC
@@ -906,6 +911,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
+            group_id,
         );
         async move {
             res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
@@ -925,6 +931,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let stage_begin_ts = Instant::now();
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
+        let group_id = parse_resource_group_tag(ctx.get_resource_group_tag());
         let priority_tag = get_priority_tag(priority);
         let key_ranges = keys
             .iter()
@@ -937,7 +944,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let api_version = self.api_version;
         let quota_limiter = self.quota_limiter.clone();
         let mut sample = quota_limiter.new_sample(true);
-        let res = self.read_pool.spawn_handle(
+        let res = self.read_pool.spawn_handle_with_priority(
             async move {
                 let stage_scheduled_ts = Instant::now();
                 let mut key_ranges = vec![];
@@ -1078,6 +1085,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
+            group_id,
         );
 
         async move {
@@ -1105,6 +1113,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
         const CMD: CommandKind = CommandKind::scan;
         let priority = ctx.get_priority();
+        let group_id = parse_resource_group_tag(ctx.get_resource_group_tag());
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
             &ctx,
@@ -1119,7 +1128,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
 
-        let res = self.read_pool.spawn_handle(
+        let res = self.read_pool.spawn_handle_with_priority(
             async move {
                 {
                     let end_key = match &end_key {
@@ -1254,6 +1263,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
+            group_id,
         );
 
         async move {
@@ -1272,6 +1282,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<Vec<LockInfo>>> {
         const CMD: CommandKind = CommandKind::scan_lock;
         let priority = ctx.get_priority();
+        let group_id = parse_resource_group_tag(ctx.get_resource_group_tag());
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
             &ctx,
@@ -1290,7 +1301,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         // Do not allow replica read for scan_lock.
         ctx.set_replica_read(false);
 
-        let res = self.read_pool.spawn_handle(
+        let res = self.read_pool.spawn_handle_with_priority(
             async move {
                 if let Some(start_key) = &start_key {
                     let end_key = match &end_key {
@@ -1401,6 +1412,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .in_resource_metering_tag(resource_tag),
             priority,
             thread_rng().next_u64(),
+            group_id,
         );
         async move {
             res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
