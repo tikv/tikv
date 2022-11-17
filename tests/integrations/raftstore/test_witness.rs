@@ -448,7 +448,7 @@ fn test_witness_replica_read() {
     request.mut_header().set_replica_read(true);
 
     let resp = cluster
-        .call_command_on_node(nodes[2], request, Duration::from_millis(100))
+        .read(None, request, Duration::from_millis(100))
         .unwrap();
     assert_eq!(
         resp.get_header().get_error().get_recovery_in_progress(),
