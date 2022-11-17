@@ -5,8 +5,8 @@ use txn_types::{Key, TimeStamp, Write, WriteType};
 
 use crate::storage::{
     mvcc::{
-        metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
-        ErrorInner, LockType, MvccTxn, ReleasedLock, Result as MvccResult, SnapshotReader,
+        ErrorInner,
+        LockType, metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC}, MvccTxn, ReleasedLock, Result as MvccResult, SnapshotReader,
     },
     Snapshot,
 };
@@ -38,7 +38,7 @@ pub fn commit<S: Snapshot>(
                     key: key.into_raw()?,
                     min_commit_ts: lock.min_commit_ts,
                 }
-                .into());
+                    .into());
             }
 
             // It's an abnormal routine since pessimistic locks shouldn't be committed in
@@ -75,7 +75,7 @@ pub fn commit<S: Snapshot>(
                         commit_ts,
                         key: key.into_raw()?,
                     }
-                    .into())
+                        .into())
                 }
                 // Committed by concurrent transaction.
                 Some((_, WriteType::Put))
@@ -92,8 +92,8 @@ pub fn commit<S: Snapshot>(
         reader.start_ts,
         lock.short_value.take(),
     )
-    .set_last_change(lock.last_change_ts, lock.versions_to_last_change)
-    .set_txn_source(lock.txn_source);
+        .set_last_change(lock.last_change_ts, lock.versions_to_last_change)
+        .set_txn_source(lock.txn_source);
 
     for ts in &lock.rollback_ts {
         if *ts == commit_ts {
@@ -107,28 +107,30 @@ pub fn commit<S: Snapshot>(
 }
 
 pub mod tests {
-    use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
     #[cfg(test)]
     use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
+
+    use concurrency_manager::ConcurrencyManager;
     use tikv_kv::SnapContext;
     use txn_types::TimeStamp;
 
-    use super::*;
+    #[cfg(test)]
+    use crate::storage::{
+        mvcc::SHORT_VALUE_MAX_LEN, TestEngineBuilder, txn::commands::check_txn_status, TxnStatus,
+    };
+    use crate::storage::{
+        Engine,
+        mvcc::{MvccTxn, tests::*},
+    };
     #[cfg(test)]
     use crate::storage::txn::tests::{
         must_acquire_pessimistic_lock_for_large_txn, must_prewrite_delete, must_prewrite_lock,
         must_prewrite_put, must_prewrite_put_for_large_txn, must_prewrite_put_impl,
         must_prewrite_put_with_txn_soucre, must_rollback,
     };
-    #[cfg(test)]
-    use crate::storage::{
-        mvcc::SHORT_VALUE_MAX_LEN, txn::commands::check_txn_status, TestEngineBuilder, TxnStatus,
-    };
-    use crate::storage::{
-        mvcc::{tests::*, MvccTxn},
-        Engine,
-    };
+
+    use super::*;
 
     pub fn must_succeed<E: Engine>(
         engine: &mut E,
@@ -355,15 +357,17 @@ pub mod tests {
 
     #[test]
     fn test_2pc_with_txn_source() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        for source in vec![0x1, 0x85] {
+            let mut engine = TestEngineBuilder::new().build().unwrap();
 
-        let k = b"k";
-        // WriteType is Put
-        must_prewrite_put_with_txn_soucre(&mut engine, k, b"v2", k, 25, 0x85);
-        let lock = must_locked(&mut engine, k, 25);
-        assert_eq!(lock.txn_source, 1);
-        must_succeed(&mut engine, k, 25, 30);
-        let write = must_written(&mut engine, k, 25, 30, WriteType::Put);
-        assert_eq!(write.txn_source, 1);
+            let k = b"k";
+            // WriteType is Put
+            must_prewrite_put_with_txn_soucre(&mut engine, k, b"v2", k, 25, source);
+            let lock = must_locked(&mut engine, k, 25);
+            assert_eq!(lock.txn_source, source);
+            must_succeed(&mut engine, k, 25, 30);
+            let write = must_written(&mut engine, k, 25, 30, WriteType::Put);
+            assert_eq!(write.txn_source, source);
+        }
     }
 }
