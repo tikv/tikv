@@ -96,7 +96,7 @@ pub struct Lock {
     /// The source of this txn. It is used by ticdc, if the value is 0 ticdc
     /// will sync the kv change event to downstream, if it is not 0, ticdc
     /// may ignore this change event.
-    pub txn_source: u8,
+    pub txn_source: u64,
 }
 
 impl std::fmt::Debug for Lock {
@@ -182,7 +182,7 @@ impl Lock {
 
     #[inline]
     #[must_use]
-    pub fn set_txn_source(mut self, source: u8) -> Self {
+    pub fn set_txn_source(mut self, source: u64) -> Self {
         self.txn_source = source;
         self
     }
@@ -231,7 +231,7 @@ impl Lock {
         }
         if self.txn_source != 0 {
             b.push(TXN_SOURCE_PREFIX);
-            b.push(self.txn_source);
+            b.encode_var_u64(self.txn_source).unwrap();
         }
         b
     }
@@ -266,7 +266,7 @@ impl Lock {
             size += 1 + size_of::<u64>() + MAX_VAR_U64_LEN;
         }
         if self.txn_source != 0 {
-            size += 2;
+            size += 1 + size_of::<u64>() + MAX_VAR_U64_LEN;
         }
         size
     }
@@ -345,7 +345,7 @@ impl Lock {
                     versions_to_last_change = number::decode_var_u64(&mut b)?;
                 }
                 TXN_SOURCE_PREFIX => {
-                    txn_source = b.read_u8()?;
+                    txn_source = number::decode_var_u64(&mut b)?;
                 }
                 _ => {
                     // To support forward compatibility, all fields should be serialized in order

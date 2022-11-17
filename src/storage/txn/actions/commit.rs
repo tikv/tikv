@@ -359,7 +359,7 @@ pub mod tests {
 
         let k = b"k";
         // WriteType is Put
-        must_prewrite_put_with_txn_soucre(&mut engine, k, b"v2", k, 25, 1);
+        must_prewrite_put_with_txn_soucre(&mut engine, k, b"v2", k, 25, 0x85);
         let lock = must_locked(&mut engine, k, 25);
         assert_eq!(lock.txn_source, 1);
         must_succeed(&mut engine, k, 25, 30);
