@@ -938,6 +938,8 @@ pub fn check_conf_change(
             (ConfChangeType::RemoveNode, PeerRole::Voter)
                 if kind == ConfChangeKind::Simple && current_voter.len() <= 2 =>
             {
+                // Prevent removing a voter directly in 2 replica raft group, which may lead
+                // region unavailable.
                 // Details are in Issue 10595 (https://github.com/tikv/tikv/issues/10595).
                 return Err(box_err!(
                     "{:?} can not remove voter directly from a raft group that contains less than 3 voters, please demote voter firstly.",
