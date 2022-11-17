@@ -571,6 +571,7 @@ mod tests {
         kv::Engine,
         txn::tests::{
             must_acquire_pessimistic_lock, must_commit, must_prewrite_delete, must_prewrite_put,
+            must_prewrite_put_with_txn_soucre,
         },
         TestEngineBuilder,
     };
@@ -607,6 +608,7 @@ mod tests {
         buffer: usize,
         engine: Option<RocksEngine>,
         kv_api: ChangeDataRequestKvApi,
+        filter_loop: bool,
     ) -> (
         LazyWorker<Task>,
         Runtime,
@@ -651,7 +653,7 @@ mod tests {
             build_resolver: true,
             ts_filter_ratio: 1.0, // always enable it.
             kv_api,
-            filter_loop: false,
+            filter_loop,
         };
 
         (receiver_worker, pool, initializer, rx, drain)
@@ -693,6 +695,7 @@ mod tests {
             buffer,
             engine.kv_engine(),
             ChangeDataRequestKvApi::TiDb,
+            false,
         );
         let check_result = || loop {
             let task = rx.recv().unwrap();
@@ -761,6 +764,52 @@ mod tests {
         worker.stop();
     }
 
+    #[test]
+    fn test_initializer_filter_loop() {
+        let mut engine = TestEngineBuilder::new().build_without_cache().unwrap();
+
+        let mut total_bytes = 0;
+
+        for i in 10..100 {
+            let (k, v) = (&[b'k', i], &[b'v', i]);
+            total_bytes += k.len();
+            total_bytes += v.len();
+            let ts = TimeStamp::new(i as _);
+            must_prewrite_put_with_txn_soucre(&mut engine, k, v, k, ts, 1);
+        }
+
+        let region = Region::default();
+        let snap = engine.snapshot(Default::default()).unwrap();
+        // Buffer must be large enough to unblock async incremental scan.
+        let buffer = 1000;
+        let (mut worker, pool, mut initializer, rx, mut drain) = mock_initializer(
+            total_bytes,
+            buffer,
+            engine.kv_engine(),
+            ChangeDataRequestKvApi::TiDb,
+            true,
+        );
+        // To not block test by barrier.
+        pool.spawn(async move {
+            let mut d = drain.drain();
+            while d.next().await.is_some() {}
+        });
+
+        block_on(initializer.async_incremental_scan(snap, region)).unwrap();
+        loop {
+            let task = rx.recv().unwrap();
+            match task {
+                Task::ResolverReady { resolver, .. } => {
+                    assert_eq!(resolver.locks().len(), 0);
+                    break;
+                }
+                t => panic!("unexpected task {} received", t),
+            }
+        }
+
+        worker.stop();
+    }
+
     // Test `hint_min_ts` works fine with `ExtraOp::ReadOldValue`.
     // Whether `DeltaScanner` emits correct old values or not is already tested by
     // another case `test_old_value_with_hint_min_ts`, so here we only care about
@@ -789,6 +838,7 @@ mod tests {
                     1000,
                     engine.kv_engine(),
                     ChangeDataRequestKvApi::TiDb,
+                    false,
                 );
                 initializer.checkpoint_ts = checkpoint_ts.into();
                 let mut drain = drain.drain();
@@ -847,8 +897,13 @@ mod tests {
     fn test_initializer_deregister_downstream() {
         let total_bytes = 1;
         let buffer = 1;
-        let (mut worker, _pool, mut initializer, rx, _drain) =
-            mock_initializer(total_bytes, buffer, None, ChangeDataRequestKvApi::TiDb);
+        let (mut worker, _pool, mut initializer, rx, _drain) = mock_initializer(
+            total_bytes,
+            buffer,
+            None,
+            ChangeDataRequestKvApi::TiDb,
+            false,
+        );
 
         // Errors reported by region should deregister region.
         initializer.build_resolver = false;
@@ -898,7 +953,7 @@ mod tests {
         let total_bytes = 1;
         let buffer = 1;
         let (mut worker, pool, mut initializer, _rx, _drain) =
-            mock_initializer(total_bytes, buffer, None, kv_api);
+            mock_initializer(total_bytes, buffer, None, kv_api, false);
 
         let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
         let raft_router = MockRaftStoreRouter::new();
