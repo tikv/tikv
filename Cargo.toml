@@ -133,7 +133,6 @@ pprof = { version = "0.11", default-features = false, features = ["flamegraph", 
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 protobuf = { version = "2.8", features = ["bytes"] }
-qos = { workspace = true }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raft_log_engine = { workspace = true }
 raftstore = { workspace = true, features = ["engine_rocks"] }
@@ -268,7 +267,6 @@ members = [
   "components/panic_hook",
   "components/pd_client",
   "components/profiler",
-  "components/qos",
   "components/raftstore",
   "components/raftstore-v2",
   "components/resolved_ts",
@@ -321,7 +319,6 @@ cloud = { path = "components/cloud" }
 codec = { path = "components/codec" }
 collections = { path = "components/collections" }
 concurrency_manager = { path = "components/concurrency_manager" }
-qos = { path = "components/qos" }
 coprocessor_plugin_api = { path = "components/coprocessor_plugin_api" }
 encryption = { path = "components/encryption" }
 encryption_export = { path = "components/encryption/export" }
