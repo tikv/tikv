@@ -177,7 +177,7 @@ pub trait DebugExecutor {
                 .as_ref()
                 .map(|s| s.get_region().clone())
                 .unwrap();
-            if !check_range_included(
+            if !check_intersect_of_range(
                 &build_key_range(region.get_start_key(), region.get_end_key(), false),
                 &build_key_range(start_key, end_key, false),
             ) {
