@@ -559,7 +559,7 @@ Some invalid logs 2: Welcome to TiKV
         .unwrap();
 
         let log_file2 = dir.path().join("tikv.2019-08-23T18-10-00.387.log");
-        let mut file = File::create(&log_file2).unwrap();
+        let mut file = File::create(log_file2).unwrap();
         write!(
             file,
             r#"[2019/08/23 18:10:01.387 +08:00] [INFO] [foo.rs:100] [some message] [key=val]
@@ -736,7 +736,7 @@ Some invalid logs 4: Welcome to TiKV - test-filter"#
 
         // this file is ignored because its filename is not expected
         let log_file2 = dir.path().join("tikv.log.2");
-        let mut file = File::create(&log_file2).unwrap();
+        let mut file = File::create(log_file2).unwrap();
         write!(
             file,
             r#"[2019/08/23 18:10:01.387 +08:00] [INFO] [foo.rs:100] [some message] [key=val]
@@ -749,7 +749,7 @@ Some invalid logs 4: Welcome to TiKV - test-filter"#
         .unwrap();
 
         let log_file3 = dir.path().join("tikv.2019-08-23T18-11-02.123.log");
-        let mut file = File::create(&log_file3).unwrap();
+        let mut file = File::create(log_file3).unwrap();
         write!(
             file,
             r#"[2019/08/23 18:11:53.387 +08:00] [INFO] [foo.rs:100] [some message] [key=val]
@@ -766,7 +766,7 @@ Some invalid logs 2: Welcome to TiKV - test-filter"#
 
         // this file is ignored because its filename is not expected
         let log_file4 = dir.path().join("tikv.T.log");
-        let mut file = File::create(&log_file4).unwrap();
+        let mut file = File::create(log_file4).unwrap();
         write!(
             file,
             r#"[2019/08/23 18:10:01.387 +08:00] [INFO] [foo.rs:100] [some message] [key=val]

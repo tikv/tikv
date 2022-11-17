@@ -341,8 +341,8 @@ mod tests {
             old_value_cache.cache.insert(key, value.clone());
         }
 
-        assert_eq!(old_value_cache.cache.size(), size * cases as usize);
-        assert_eq!(old_value_cache.cache.len(), cases as usize);
+        assert_eq!(old_value_cache.cache.size(), size * cases);
+        assert_eq!(old_value_cache.cache.len(), cases);
         assert_eq!(old_value_cache.capacity(), capacity as usize);
 
         // Reduces capacity.
@@ -360,7 +360,7 @@ mod tests {
 
         assert_eq!(old_value_cache.cache.size(), size * remaining_count);
         assert_eq!(old_value_cache.cache.len(), remaining_count);
-        assert_eq!(old_value_cache.capacity(), new_capacity as usize);
+        assert_eq!(old_value_cache.capacity(), new_capacity);
         for i in dropped_count..cases {
             let key = Key::from_raw(&i.to_be_bytes());
             assert_eq!(old_value_cache.cache.get(&key).is_some(), true);

@@ -3118,6 +3118,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mnt"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1587ebb20a5b04738f16cffa7e2526f1b8496b84f92920facd518362ff1559eb"
+dependencies = [
+ "libc 0.2.132",
+]
+
+[[package]]
 name = "more-asserts"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4121,7 +4130,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.3.0"
-source = "git+https://github.com/tikv/raft-engine.git#a0d29980f1448565a6d03f911ebb103c4266f1f4"
+source = "git+https://github.com/tikv/raft-engine.git#82f6da7b8dff1856483e8e72a59dda903fb2499b"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4155,7 +4164,7 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.3.0"
-source = "git+https://github.com/tikv/raft-engine.git#a0d29980f1448565a6d03f911ebb103c4266f1f4"
+source = "git+https://github.com/tikv/raft-engine.git#82f6da7b8dff1856483e8e72a59dda903fb2499b"
 dependencies = [
  "clap 3.1.6",
  "env_logger",
@@ -4694,7 +4703,7 @@ dependencies = [
 [[package]]
 name = "rusoto_core"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#5fcf2d1c36b93d0146cc49f257dd850e01b6e4db"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#0d6df7b119c4e757daaa715f261c3150c7ae0a3b"
 dependencies = [
  "async-trait",
  "base64",
@@ -4718,7 +4727,7 @@ dependencies = [
 [[package]]
 name = "rusoto_credential"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#5fcf2d1c36b93d0146cc49f257dd850e01b6e4db"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#0d6df7b119c4e757daaa715f261c3150c7ae0a3b"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4735,7 +4744,7 @@ dependencies = [
 [[package]]
 name = "rusoto_kms"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#5fcf2d1c36b93d0146cc49f257dd850e01b6e4db"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#0d6df7b119c4e757daaa715f261c3150c7ae0a3b"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4748,7 +4757,7 @@ dependencies = [
 [[package]]
 name = "rusoto_mock"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#5fcf2d1c36b93d0146cc49f257dd850e01b6e4db"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#0d6df7b119c4e757daaa715f261c3150c7ae0a3b"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4762,7 +4771,7 @@ dependencies = [
 [[package]]
 name = "rusoto_s3"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#5fcf2d1c36b93d0146cc49f257dd850e01b6e4db"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#0d6df7b119c4e757daaa715f261c3150c7ae0a3b"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4776,7 +4785,7 @@ dependencies = [
 [[package]]
 name = "rusoto_signature"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#5fcf2d1c36b93d0146cc49f257dd850e01b6e4db"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#0d6df7b119c4e757daaa715f261c3150c7ae0a3b"
 dependencies = [
  "base64",
  "bytes",
@@ -4801,7 +4810,7 @@ dependencies = [
 [[package]]
 name = "rusoto_sts"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#5fcf2d1c36b93d0146cc49f257dd850e01b6e4db"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#0d6df7b119c4e757daaa715f261c3150c7ae0a3b"
 dependencies = [
  "async-trait",
  "bytes",
@@ -6174,7 +6183,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "6.4.0-alpha"
+version = "6.5.0-alpha"
 dependencies = [
  "anyhow",
  "api_version",
@@ -6472,6 +6481,7 @@ dependencies = [
  "libc 0.2.132",
  "log",
  "log_wrappers",
+ "mnt",
  "nix 0.24.1",
  "num-traits",
  "num_cpus",

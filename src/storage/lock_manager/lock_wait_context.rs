@@ -258,6 +258,7 @@ mod tests {
                     for_update_ts: 1.into(),
                     ..Default::default()
                 },
+                should_not_exist: false,
                 lock_wait_token: token,
                 legacy_wake_up_index: None,
                 key_cb: None,
