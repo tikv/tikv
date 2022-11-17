@@ -13,16 +13,17 @@
 use std::cmp;
 
 use batch_system::BasicMailbox;
-use crossbeam::channel::TrySendError;
+use crossbeam::channel::{SendError, TrySendError};
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
     metapb::Region,
     raft_serverpb::{PeerState, RaftMessage},
 };
 use raftstore::store::{util, ExtraStates, WriteTask};
-use slog::{debug, error, info};
+use slog::{debug, error, info, warn};
 use tikv_util::store::find_peer;
 
+use super::command::SplitInit;
 use crate::{
     batch::StoreContext,
     fsm::{PeerFsm, Store},
@@ -89,6 +90,44 @@ impl DestroyProgress {
 }
 
 impl Store {
+    /// The method is called during split.
+    /// The creation process is:
+    /// 1. create an uninitialized peer if not existed before
+    /// 2. initialize the peer by the information sent from parent peer
+    #[inline]
+    pub fn on_split_init<EK, ER, T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        msg: Box<SplitInit>,
+    ) where
+        EK: KvEngine,
+        ER: RaftEngine,
+    {
+        let region_id = msg.region.id;
+        let mut raft_msg = Box::<RaftMessage>::default();
+        raft_msg.set_region_id(region_id);
+        raft_msg.set_region_epoch(msg.region.get_region_epoch().clone());
+        raft_msg.set_to_peer(
+            msg.region
+                .get_peers()
+                .iter()
+                .find(|p| p.get_store_id() == self.store_id())
+                .unwrap()
+                .clone(),
+        );
+
+        // It will create the peer if it does not exist
+        self.on_raft_message(ctx, raft_msg);
+
+        if let Err(SendError(m)) = ctx.router.force_send(region_id, PeerMsg::SplitInit(msg)) {
+            warn!(
+                self.logger(),
+                "Split peer is destroyed before sending the intialization msg";
+                "split init msg" => ?m,
+            )
+        }
+    }
+
     /// When a message's recipient doesn't exist, it will be redirected to
     /// store. Store is responsible for checking if it's neccessary to create
     /// a peer to handle the message.
@@ -174,15 +213,21 @@ impl Store {
         let mut region = Region::default();
         region.set_id(region_id);
         region.set_region_epoch(from_epoch.clone());
+
         // Peer list doesn't have to be complete, as it's uninitialized.
-        region.mut_peers().push(from_peer.clone());
+        //
+        // If the id of the from_peer is INVALID_ID, this msg must be sent from parent
+        // peer in the split execution in which case we do not add it into the region.
+        if from_peer.id != raft::INVALID_ID {
+            region.mut_peers().push(from_peer.clone());
+        }
         region.mut_peers().push(to_peer.clone());
         // We don't set the region range here as we allow range conflict.
         let (tx, fsm) = match Storage::uninit(
             self.store_id(),
             region,
             ctx.engine.clone(),
-            ctx.log_fetch_scheduler.clone(),
+            ctx.read_scheduler.clone(),
             &ctx.logger,
         )
         .and_then(|s| PeerFsm::new(&ctx.cfg, &*ctx.tablet_factory, s))

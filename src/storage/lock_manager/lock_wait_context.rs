@@ -22,7 +22,8 @@ use crate::storage::{
         lock_waiting_queue::{LockWaitQueues, PessimisticLockKeyCallback},
         LockManager, LockWaitToken,
     },
-    Error as StorageError, PessimisticLockRes, ProcessResult, StorageCallback,
+    types::PessimisticLockKeyResult,
+    Error as StorageError, ProcessResult, StorageCallback,
 };
 
 pub struct LockWaitContextInner {
@@ -124,7 +125,11 @@ impl<L: LockManager> LockWaitContext<L> {
         }
     }
 
-    fn finish_request(&self, result: Result<PessimisticLockRes, SharedError>, is_canceling: bool) {
+    fn finish_request(
+        &self,
+        result: Result<PessimisticLockKeyResult, SharedError>,
+        is_canceling: bool,
+    ) {
         if is_canceling {
             let entry = self
                 .lock_wait_queues
@@ -171,13 +176,13 @@ mod tests {
         lock_manager::{lock_waiting_queue::LockWaitEntry, MockLockManager},
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         txn::{Error as TxnError, ErrorInner as TxnErrorInner},
-        types::PessimisticLockParameters,
+        types::{PessimisticLockParameters, PessimisticLockResults},
         ErrorInner as StorageErrorInner, Result as StorageResult,
     };
 
     fn create_storage_cb() -> (
         StorageCallback,
-        Receiver<StorageResult<StorageResult<PessimisticLockRes>>>,
+        Receiver<StorageResult<StorageResult<PessimisticLockResults>>>,
     ) {
         let (tx, rx) = channel();
         let cb = StorageCallback::PessimisticLock(Box::new(move |r| tx.send(r).unwrap()));
@@ -190,7 +195,7 @@ mod tests {
     ) -> (
         LockWaitToken,
         LockWaitContext<impl LockManager>,
-        Receiver<StorageResult<StorageResult<PessimisticLockRes>>>,
+        Receiver<StorageResult<StorageResult<PessimisticLockResults>>>,
     ) {
         let (cb, rx) = create_storage_cb();
         let token = lock_wait_queues.get_lock_mgr().allocate_token();
@@ -253,6 +258,7 @@ mod tests {
                     for_update_ts: 1.into(),
                     ..Default::default()
                 },
+                should_not_exist: false,
                 lock_wait_token: token,
                 legacy_wake_up_index: None,
                 key_cb: None,

@@ -126,6 +126,7 @@ make_auto_flush_static_metric! {
         batch_get_command,
         prewrite,
         acquire_pessimistic_lock,
+        acquire_pessimistic_lock_resumed,
         commit,
         cleanup,
         rollback,

@@ -115,11 +115,7 @@ pub fn memory_limit_for_cf(is_raft_db: bool, cf: &str, total_mem: u64) -> Readab
         _ => unreachable!(),
     };
     let mut size = (total_mem as f64 * ratio) as usize;
-    if size < min {
-        size = min;
-    } else if size > max {
-        size = max;
-    }
+    size = size.clamp(min, max);
     ReadableSize::mb(size as u64 / MIB)
 }
 

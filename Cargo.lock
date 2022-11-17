@@ -81,31 +81,15 @@ name = "api_version"
 version = "0.1.0"
 dependencies = [
  "bitflags",
- "codec 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "codec",
  "engine_traits",
  "kvproto",
  "match-template",
- "panic_hook 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "panic_hook",
  "thiserror",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
-]
-
-[[package]]
-name = "api_version"
-version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "bitflags",
- "codec 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "engine_traits",
- "kvproto",
- "match-template",
- "thiserror",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_alloc",
+ "tikv_util",
+ "txn_types",
 ]
 
 [[package]]
@@ -288,7 +272,7 @@ dependencies = [
  "async-trait",
  "base64",
  "bytes",
- "cloud 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "cloud",
  "fail",
  "futures 0.3.15",
  "futures-util",
@@ -309,41 +293,7 @@ dependencies = [
  "slog",
  "slog-global",
  "thiserror",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tokio",
- "url",
- "uuid 0.8.2",
-]
-
-[[package]]
-name = "aws"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "async-trait",
- "base64",
- "bytes",
- "cloud 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "fail",
- "futures 0.3.15",
- "futures-util",
- "grpcio",
- "http",
- "hyper",
- "hyper-tls",
- "kvproto",
- "lazy_static",
- "md5",
- "prometheus",
- "rusoto_core",
- "rusoto_credential",
- "rusoto_kms",
- "rusoto_s3",
- "rusoto_sts",
- "slog",
- "slog-global",
- "thiserror",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_util",
  "tokio",
  "url",
  "uuid 0.8.2",
@@ -359,37 +309,14 @@ dependencies = [
  "azure_storage",
  "base64",
  "chrono",
- "cloud 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "cloud",
  "futures 0.3.15",
  "futures-util",
  "kvproto",
  "oauth2",
  "slog",
  "slog-global",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tokio",
- "url",
-]
-
-[[package]]
-name = "azure"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "async-trait",
- "azure_core",
- "azure_identity",
- "azure_storage",
- "base64",
- "chrono",
- "cloud 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "futures 0.3.15",
- "futures-util",
- "kvproto",
- "oauth2",
- "slog",
- "slog-global",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_util",
  "tokio",
  "url",
 ]
@@ -484,96 +411,48 @@ dependencies = [
 name = "backup"
 version = "0.0.1"
 dependencies = [
- "api_version 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "api_version",
  "async-channel",
- "aws 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "causal_ts 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "concurrency_manager 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "aws",
+ "causal_ts",
+ "collections",
+ "concurrency_manager",
  "crc64fast",
- "encryption 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "encryption",
  "engine_rocks",
  "engine_traits",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "external_storage 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "external_storage_export 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "error_code",
+ "external_storage",
+ "external_storage_export",
+ "file_system",
  "futures 0.3.15",
  "futures-util",
  "grpcio",
  "hex 0.4.2",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "keys",
  "kvproto",
  "lazy_static",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "online_config 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "log_wrappers",
+ "online_config",
+ "pd_client",
  "prometheus",
  "raft",
- "raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "raftstore",
  "rand 0.8.3",
- "security 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "security",
  "serde",
  "serde_derive",
  "slog",
  "slog-global",
  "tempfile",
  "thiserror",
- "tidb_query_common 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv 6.5.0-alpha",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tidb_query_common",
+ "tikv",
+ "tikv_alloc",
+ "tikv_util",
  "tokio",
  "tokio-stream",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "yatp",
-]
-
-[[package]]
-name = "backup"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "api_version 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "async-channel",
- "aws 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "causal_ts 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "concurrency_manager 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "crc64fast",
- "encryption 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "engine_rocks",
- "engine_traits",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "external_storage 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "external_storage_export 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "futures 0.3.15",
- "futures-util",
- "grpcio",
- "hex 0.4.2",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "kvproto",
- "lazy_static",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "online_config 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "prometheus",
- "raft",
- "raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "security 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "serde",
- "serde_derive",
- "slog",
- "slog-global",
- "thiserror",
- "tidb_query_common 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv 6.5.0-alpha",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tokio",
- "tokio-stream",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "txn_types",
  "yatp",
 ]
 
@@ -585,110 +464,56 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
- "concurrency_manager 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "concurrency_manager",
  "crossbeam",
  "crossbeam-channel",
  "dashmap",
  "engine_panic",
  "engine_rocks",
  "engine_traits",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "error_code",
  "etcd-client",
- "external_storage 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "external_storage_export 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "external_storage",
+ "external_storage_export",
  "fail",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "file_system",
  "futures 0.3.15",
  "futures-io",
  "grpcio",
  "hex 0.4.2",
  "kvproto",
  "lazy_static",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "online_config 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "log_wrappers",
+ "online_config",
  "openssl",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "pd_client",
  "prometheus",
  "protobuf",
  "raft",
- "raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "raftstore",
  "rand 0.8.3",
  "regex",
- "resolved_ts 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "resolved_ts",
  "slog",
  "slog-global",
  "tempdir",
  "tempfile",
- "test_raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "test_util 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "test_raftstore",
+ "test_util",
  "thiserror",
- "tidb_query_datatype 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv 6.5.0-alpha",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_kv 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tidb_query_datatype",
+ "tikv",
+ "tikv_alloc",
+ "tikv_kv",
+ "tikv_util",
  "tokio",
  "tokio-stream",
  "tokio-util 0.7.2",
  "tonic",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "txn_types",
  "url",
  "uuid 0.8.2",
  "walkdir",
- "yatp",
-]
-
-[[package]]
-name = "backup-stream"
-version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "async-compression",
- "async-trait",
- "bytes",
- "chrono",
- "concurrency_manager 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "crossbeam",
- "crossbeam-channel",
- "dashmap",
- "engine_rocks",
- "engine_traits",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "etcd-client",
- "external_storage 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "external_storage_export 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "fail",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "futures 0.3.15",
- "futures-io",
- "grpcio",
- "hex 0.4.2",
- "kvproto",
- "lazy_static",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "online_config 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "openssl",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "prometheus",
- "protobuf",
- "raft",
- "raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "regex",
- "resolved_ts 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "slog",
- "slog-global",
- "thiserror",
- "tidb_query_datatype 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv 6.5.0-alpha",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_kv 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tokio",
- "tokio-stream",
- "tokio-util 0.7.2",
- "tonic",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "uuid 0.8.2",
  "yatp",
 ]
 
@@ -702,42 +527,21 @@ checksum = "904dfeac50f3cdaba28fc6f57fdcddb75f49ed61346676a78c4ffe55877802fd"
 name = "batch-system"
 version = "0.1.0"
 dependencies = [
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "collections",
  "criterion",
  "crossbeam",
  "derive_more",
  "fail",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "file_system",
  "lazy_static",
- "online_config 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "online_config",
  "prometheus",
  "serde",
  "serde_derive",
  "slog",
  "slog-global",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
-]
-
-[[package]]
-name = "batch-system"
-version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "crossbeam",
- "derive_more",
- "fail",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "lazy_static",
- "online_config 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "prometheus",
- "serde",
- "serde_derive",
- "slog",
- "slog-global",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_alloc",
+ "tikv_util",
 ]
 
 [[package]]
@@ -932,11 +736,6 @@ name = "case_macros"
 version = "0.1.0"
 
 [[package]]
-name = "case_macros"
-version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-
-[[package]]
 name = "cast"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -946,20 +745,20 @@ checksum = "926013f2860c46252efceabb19f4a6b308197505082c609025aa6706c011d427"
 name = "causal_ts"
 version = "0.0.1"
 dependencies = [
- "api_version 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "api_version",
  "async-trait",
  "criterion",
  "engine_rocks",
  "engine_traits",
  "enum_dispatch",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "error_code",
  "fail",
  "futures 0.3.15",
  "kvproto",
  "lazy_static",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "log_wrappers",
  "parking_lot 0.12.0",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "pd_client",
  "prometheus",
  "prometheus-static-metric",
  "raft",
@@ -967,45 +766,12 @@ dependencies = [
  "serde_derive",
  "slog",
  "slog-global",
- "test_pd_client 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "test_pd_client",
  "thiserror",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_alloc",
+ "tikv_util",
  "tokio",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
-]
-
-[[package]]
-name = "causal_ts"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "api_version 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "async-trait",
- "engine_rocks",
- "engine_traits",
- "enum_dispatch",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "fail",
- "futures 0.3.15",
- "kvproto",
- "lazy_static",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "parking_lot 0.12.0",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "prometheus",
- "prometheus-static-metric",
- "raft",
- "serde",
- "serde_derive",
- "slog",
- "slog-global",
- "test_pd_client 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "thiserror",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tokio",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "txn_types",
 ]
 
 [[package]]
@@ -1021,11 +787,11 @@ dependencies = [
 name = "cdc"
 version = "0.0.1"
 dependencies = [
- "api_version 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "api_version",
  "bitflags",
- "causal_ts 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "concurrency_manager 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "causal_ts",
+ "collections",
+ "concurrency_manager",
  "criterion",
  "crossbeam",
  "engine_rocks",
@@ -1035,74 +801,32 @@ dependencies = [
  "futures-timer",
  "getset",
  "grpcio",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "keys",
  "kvproto",
  "lazy_static",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "online_config 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "log_wrappers",
+ "online_config",
+ "pd_client",
  "prometheus",
  "prometheus-static-metric",
  "protobuf",
  "raft",
- "raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "resolved_ts 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "security 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "raftstore",
+ "resolved_ts",
+ "security",
  "semver 1.0.4",
  "slog",
  "slog-global",
  "tempfile",
- "test_pd_client 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "test_raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "test_util 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "test_pd_client",
+ "test_raftstore",
+ "test_util",
  "thiserror",
- "tikv 6.5.0-alpha",
- "tikv_kv 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv",
+ "tikv_kv",
+ "tikv_util",
  "tokio",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
-]
-
-[[package]]
-name = "cdc"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "api_version 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "bitflags",
- "causal_ts 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "concurrency_manager 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "crossbeam",
- "engine_rocks",
- "engine_traits",
- "fail",
- "futures 0.3.15",
- "futures-timer",
- "getset",
- "grpcio",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "kvproto",
- "lazy_static",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "online_config 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "prometheus",
- "prometheus-static-metric",
- "protobuf",
- "raft",
- "raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "resolved_ts 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "security 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "semver 1.0.4",
- "slog",
- "slog-global",
- "thiserror",
- "tikv 6.5.0-alpha",
- "tikv_kv 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tokio",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "txn_types",
 ]
 
 [[package]]
@@ -1189,7 +913,7 @@ version = "0.0.1"
 dependencies = [
  "async-trait",
  "derive_more",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "error_code",
  "fail",
  "futures-io",
  "kvproto",
@@ -1199,27 +923,7 @@ dependencies = [
  "protobuf",
  "rusoto_core",
  "thiserror",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "url",
-]
-
-[[package]]
-name = "cloud"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "async-trait",
- "derive_more",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "futures-io",
- "kvproto",
- "lazy_static",
- "openssl",
- "prometheus",
- "protobuf",
- "rusoto_core",
- "thiserror",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_util",
  "url",
 ]
 
@@ -1237,27 +941,14 @@ version = "0.0.1"
 dependencies = [
  "byteorder",
  "bytes",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "error_code",
  "libc 0.2.132",
- "panic_hook 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "panic_hook",
  "protobuf",
  "rand 0.8.3",
  "static_assertions",
  "thiserror",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
-]
-
-[[package]]
-name = "codec"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "byteorder",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "libc 0.2.132",
- "static_assertions",
- "thiserror",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_alloc",
 ]
 
 [[package]]
@@ -1265,16 +956,7 @@ name = "collections"
 version = "0.1.0"
 dependencies = [
  "fxhash",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
-]
-
-[[package]]
-name = "collections"
-version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "fxhash",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_alloc",
 ]
 
 [[package]]
@@ -1288,24 +970,10 @@ dependencies = [
  "kvproto",
  "parking_lot 0.12.0",
  "rand 0.8.3",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_alloc",
+ "tikv_util",
  "tokio",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
-]
-
-[[package]]
-name = "concurrency_manager"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "crossbeam-skiplist",
- "fail",
- "kvproto",
- "parking_lot 0.12.0",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tokio",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "txn_types",
 ]
 
 [[package]]
@@ -1320,16 +988,6 @@ dependencies = [
 [[package]]
 name = "coprocessor_plugin_api"
 version = "0.1.0"
-dependencies = [
- "async-trait",
- "atomic",
- "rustc_version 0.3.3",
-]
-
-[[package]]
-name = "coprocessor_plugin_api"
-version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
 dependencies = [
  "async-trait",
  "atomic",
@@ -1767,16 +1425,16 @@ dependencies = [
  "crossbeam",
  "derive_more",
  "engine_traits",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "error_code",
  "fail",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "file_system",
  "futures 0.3.15",
  "futures-util",
  "hex 0.4.2",
  "kvproto",
  "lazy_static",
  "matches",
- "online_config 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "online_config",
  "openssl",
  "prometheus",
  "protobuf",
@@ -1786,47 +1444,12 @@ dependencies = [
  "slog",
  "slog-global",
  "tempfile",
- "test_util 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "test_util",
  "thiserror",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_alloc",
+ "tikv_util",
  "tokio",
  "toml",
-]
-
-[[package]]
-name = "encryption"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "async-trait",
- "byteorder",
- "bytes",
- "crc32fast",
- "crossbeam",
- "derive_more",
- "engine_traits",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "fail",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "futures 0.3.15",
- "futures-util",
- "hex 0.4.2",
- "kvproto",
- "lazy_static",
- "online_config 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "openssl",
- "prometheus",
- "protobuf",
- "rand 0.8.3",
- "serde",
- "serde_derive",
- "slog",
- "slog-global",
- "thiserror",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tokio",
 ]
 
 [[package]]
@@ -1834,12 +1457,12 @@ name = "encryption_export"
 version = "0.0.1"
 dependencies = [
  "async-trait",
- "aws 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "cloud 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "aws",
+ "cloud",
  "derive_more",
- "encryption 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "encryption",
+ "error_code",
+ "file_system",
  "kvproto",
  "openssl",
  "protobuf",
@@ -1847,66 +1470,45 @@ dependencies = [
  "slog",
  "slog-global",
  "structopt",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
-]
-
-[[package]]
-name = "encryption_export"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "async-trait",
- "aws 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "cloud 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "derive_more",
- "encryption 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "kvproto",
- "openssl",
- "protobuf",
- "slog",
- "slog-global",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_util",
 ]
 
 [[package]]
 name = "engine_panic"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
 dependencies = [
  "engine_traits",
  "kvproto",
  "raft",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tracker 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_alloc",
+ "tikv_util",
+ "tracker",
+ "txn_types",
 ]
 
 [[package]]
 name = "engine_rocks"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
 dependencies = [
- "api_version 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "case_macros 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "api_version",
+ "case_macros",
+ "collections",
  "derive_more",
- "encryption 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "encryption",
  "engine_traits",
  "fail",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "file_system",
+ "keys",
  "kvproto",
  "lazy_static",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "log_wrappers",
  "num_cpus",
- "online_config 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "online_config",
  "prometheus",
  "prometheus-static-metric",
  "protobuf",
  "raft",
+ "rand 0.8.3",
  "regex",
  "rocksdb",
  "serde",
@@ -1915,11 +1517,12 @@ dependencies = [
  "slog-global",
  "slog_derive",
  "tempfile",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_alloc",
+ "tikv_util",
  "time",
- "tracker 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "toml",
+ "tracker",
+ "txn_types",
 ]
 
 [[package]]
@@ -1931,83 +1534,63 @@ dependencies = [
  "engine_traits",
  "fail",
  "futures 0.3.15",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "keys",
  "kvproto",
  "lazy_static",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "pd_client",
  "prometheus",
  "protobuf",
- "raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "raftstore",
  "slog",
  "slog-global",
  "tempfile",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
-]
-
-[[package]]
-name = "engine_rocks_helper"
-version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "engine_rocks",
- "engine_traits",
- "fail",
- "futures 0.3.15",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "lazy_static",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "prometheus",
- "protobuf",
- "raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "slog",
- "slog-global",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_util",
 ]
 
 [[package]]
 name = "engine_store_ffi"
 version = "0.0.1"
 dependencies = [
- "batch-system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "batch-system",
  "bitflags",
  "byteorder",
  "bytes",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "collections",
  "crossbeam",
  "derivative",
- "encryption 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "encryption_export 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "encryption",
+ "encryption_export",
  "engine_panic",
  "engine_rocks",
  "engine_test",
  "engine_tiflash",
  "engine_traits",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "error_code",
  "fail",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "file_system",
  "fs2",
  "futures 0.3.15",
  "futures-util",
  "getset",
  "grpcio-health",
- "into_other 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "into_other",
  "itertools 0.10.0",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "keys",
  "kvproto",
  "lazy_static",
  "log",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "online_config 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "log_wrappers",
+ "online_config",
  "ordered-float",
- "panic_hook 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "panic_hook",
  "parking_lot 0.12.0",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "pd_client",
  "prometheus",
  "prometheus-static-metric",
  "protobuf",
  "raft",
  "raft-proto",
- "raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "raftstore",
  "rand 0.8.3",
  "serde",
  "serde_derive",
@@ -2015,16 +1598,16 @@ dependencies = [
  "slog",
  "slog-global",
  "smallvec",
- "sst_importer 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "sst_importer",
  "tempfile",
- "test_sst_importer 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "test_sst_importer",
  "thiserror",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_alloc",
+ "tikv_util",
  "time",
  "tokio",
  "tokio-timer",
- "tracker 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tracker",
  "uuid 0.8.2",
  "yatp",
 ]
@@ -2032,40 +1615,39 @@ dependencies = [
 [[package]]
 name = "engine_test"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
 dependencies = [
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "encryption 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "collections",
+ "encryption",
  "engine_panic",
  "engine_rocks",
  "engine_traits",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "file_system",
  "raft_log_engine",
  "tempfile",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_alloc",
+ "tikv_util",
 ]
 
 [[package]]
 name = "engine_tiflash"
 version = "0.0.1"
 dependencies = [
- "api_version 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "case_macros 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "api_version",
+ "case_macros",
+ "collections",
  "derive_more",
- "encryption 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "encryption",
  "engine_rocks",
  "engine_traits",
  "fail",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "file_system",
+ "keys",
  "kvproto",
  "lazy_static",
  "libc 0.2.132",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "log_wrappers",
  "num_cpus",
- "online_config 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "online_config",
  "prometheus",
  "prometheus-static-metric",
  "protobuf",
@@ -2079,48 +1661,48 @@ dependencies = [
  "slog-global",
  "slog_derive",
  "tempfile",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_alloc",
+ "tikv_util",
  "time",
  "toml",
- "tracker 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tracker",
+ "txn_types",
  "yatp",
 ]
 
 [[package]]
 name = "engine_traits"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
 dependencies = [
- "case_macros 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "case_macros",
+ "error_code",
  "fail",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "file_system",
  "kvproto",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "log_wrappers",
  "protobuf",
  "raft",
  "serde",
+ "serde_derive",
  "slog",
  "slog-global",
  "thiserror",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tracker 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_alloc",
+ "tikv_util",
+ "toml",
+ "tracker",
+ "txn_types",
 ]
 
 [[package]]
 name = "engine_traits_tests"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
 dependencies = [
  "engine_test",
  "engine_traits",
- "panic_hook 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "panic_hook",
  "tempfile",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_alloc",
 ]
 
 [[package]]
@@ -2190,20 +1772,7 @@ dependencies = [
  "lazy_static",
  "raft",
  "serde",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
-]
-
-[[package]]
-name = "error_code"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "grpcio",
- "kvproto",
- "lazy_static",
- "raft",
- "serde",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_alloc",
 ]
 
 [[package]]
@@ -2231,15 +1800,7 @@ checksum = "f7531096570974c3a9dcf9e4b8e1cede1ec26cf5046219fb3b9d897503b9be59"
 name = "example_coprocessor_plugin"
 version = "0.1.0"
 dependencies = [
- "coprocessor_plugin_api 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
-]
-
-[[package]]
-name = "example_coprocessor_plugin"
-version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "coprocessor_plugin_api 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "coprocessor_plugin_api",
 ]
 
 [[package]]
@@ -2249,11 +1810,11 @@ dependencies = [
  "async-compression",
  "async-trait",
  "bytes",
- "encryption 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "encryption",
  "engine_traits",
  "fail",
  "ffi-support",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "file_system",
  "futures 0.3.15",
  "futures-executor",
  "futures-io",
@@ -2273,43 +1834,8 @@ dependencies = [
  "slog-global",
  "structopt",
  "tempfile",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tokio",
- "tokio-util 0.7.2",
- "url",
-]
-
-[[package]]
-name = "external_storage"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "async-compression",
- "async-trait",
- "bytes",
- "encryption 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "engine_traits",
- "fail",
- "ffi-support",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "futures 0.3.15",
- "futures-executor",
- "futures-io",
- "futures-util",
- "grpcio",
- "kvproto",
- "lazy_static",
- "libloading",
- "openssl",
- "prometheus",
- "protobuf",
- "rand 0.8.3",
- "rusoto_core",
- "slog",
- "slog-global",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_alloc",
+ "tikv_util",
  "tokio",
  "tokio-util 0.7.2",
  "url",
@@ -2321,19 +1847,19 @@ version = "0.0.1"
 dependencies = [
  "async-compression",
  "async-trait",
- "aws 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "azure 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "cloud 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "encryption 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "aws",
+ "azure",
+ "cloud",
+ "encryption",
  "engine_traits",
- "external_storage 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "external_storage",
  "ffi-support",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "file_system",
  "futures 0.3.15",
  "futures-executor",
  "futures-io",
  "futures-util",
- "gcp 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "gcp",
  "grpcio",
  "kvproto",
  "lazy_static",
@@ -2350,44 +1876,7 @@ dependencies = [
  "slog-term",
  "structopt",
  "tempfile",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tokio",
- "tokio-util 0.7.2",
- "url",
-]
-
-[[package]]
-name = "external_storage_export"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "async-compression",
- "async-trait",
- "aws 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "azure 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "cloud 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "encryption 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "engine_traits",
- "external_storage 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "ffi-support",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "futures 0.3.15",
- "futures-executor",
- "futures-io",
- "futures-util",
- "gcp 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "grpcio",
- "kvproto",
- "lazy_static",
- "libc 0.2.132",
- "libloading",
- "once_cell",
- "protobuf",
- "signal-hook",
- "slog",
- "slog-global",
- "slog-term",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_util",
  "tokio",
  "tokio-util 0.7.2",
  "url",
@@ -2425,14 +1914,14 @@ name = "file_system"
 version = "0.1.0"
 dependencies = [
  "bcc",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "collections",
  "crc32fast",
  "crossbeam-utils 0.8.8",
  "fs2",
  "lazy_static",
  "libc 0.2.132",
  "maligned",
- "online_config 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "online_config",
  "openssl",
  "parking_lot 0.12.0",
  "prometheus",
@@ -2444,35 +1933,8 @@ dependencies = [
  "strum 0.20.0",
  "tempfile",
  "thread_local",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tokio",
-]
-
-[[package]]
-name = "file_system"
-version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "crc32fast",
- "crossbeam-utils 0.8.8",
- "fs2",
- "lazy_static",
- "libc 0.2.132",
- "online_config 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "openssl",
- "parking_lot 0.12.0",
- "prometheus",
- "prometheus-static-metric",
- "rand 0.8.3",
- "serde",
- "slog",
- "slog-global",
- "strum 0.20.0",
- "thread_local",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_alloc",
+ "tikv_util",
  "tokio",
 ]
 
@@ -2752,8 +2214,8 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "byteorder",
- "tidb_query_datatype 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tidb_query_datatype",
+ "tikv_util",
 ]
 
 [[package]]
@@ -2804,39 +2266,19 @@ name = "gcp"
 version = "0.0.1"
 dependencies = [
  "async-trait",
- "cloud 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "cloud",
  "futures-util",
  "http",
  "hyper",
  "hyper-tls",
  "kvproto",
  "matches",
+ "pin-project",
  "slog",
  "slog-global",
  "tame-gcs",
  "tame-oauth",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tokio",
- "url",
-]
-
-[[package]]
-name = "gcp"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "async-trait",
- "cloud 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "futures-util",
- "http",
- "hyper",
- "hyper-tls",
- "kvproto",
- "slog",
- "slog-global",
- "tame-gcs",
- "tame-oauth",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_util",
  "tokio",
  "url",
 ]
@@ -3266,16 +2708,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "into_other"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "engine_traits",
- "kvproto",
- "raft",
-]
-
-[[package]]
 name = "iovec"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3374,28 +2806,16 @@ version = "0.1.0"
 dependencies = [
  "byteorder",
  "kvproto",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "panic_hook 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "log_wrappers",
+ "panic_hook",
  "thiserror",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
-]
-
-[[package]]
-name = "keys"
-version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "byteorder",
- "kvproto",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "thiserror",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_alloc",
 ]
 
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#65d0ae8fa853c1e41b43f329afbf60616bdd4d18"
+source = "git+https://github.com/pingcap/kvproto.git#29a30c4ef9c52aafb1b1da73dd9df60857068114"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -3608,19 +3028,7 @@ dependencies = [
  "protobuf",
  "slog",
  "slog-term",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
-]
-
-[[package]]
-name = "log_wrappers"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "hex 0.4.2",
- "protobuf",
- "slog",
- "slog-term",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_alloc",
 ]
 
 [[package]]
@@ -3713,7 +3121,6 @@ dependencies = [
 [[package]]
 name = "memory_trace_macros"
 version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
 dependencies = [
  "quote",
  "syn",
@@ -3835,6 +3242,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mnt"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1587ebb20a5b04738f16cffa7e2526f1b8496b84f92920facd518362ff1559eb"
+dependencies = [
+ "libc 0.2.132",
+]
+
+[[package]]
 name = "more-asserts"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3908,47 +3324,47 @@ dependencies = [
 name = "new-mock-engine-store"
 version = "0.0.1"
 dependencies = [
- "api_version 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "causal_ts 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "concurrency_manager 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "api_version",
+ "causal_ts",
+ "collections",
+ "concurrency_manager",
  "crossbeam",
- "encryption 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "encryption_export 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "encryption",
+ "encryption_export",
  "engine_rocks",
  "engine_store_ffi",
  "engine_test",
  "engine_tiflash",
  "engine_traits",
  "fail",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "file_system",
  "futures 0.3.15",
  "grpcio",
  "grpcio-health",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "keys",
  "kvproto",
  "lazy_static",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "log_wrappers",
+ "pd_client",
  "protobuf",
  "proxy_server",
  "raft",
- "raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "raftstore",
  "rand 0.8.3",
- "resolved_ts 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "resource_metering 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "security 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "resolved_ts",
+ "resource_metering",
+ "security",
  "slog",
  "slog-global",
  "tempfile",
- "test_pd_client 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "test_raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "test_util 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv 6.5.0-alpha",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "test_pd_client",
+ "test_raftstore",
+ "test_util",
+ "tikv",
+ "tikv_util",
  "tokio",
  "tokio-timer",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "txn_types",
 ]
 
 [[package]]
@@ -4252,34 +3668,15 @@ checksum = "87f3e037eac156d1775da914196f0f37741a274155e34a0b7e427c35d2a2ecb9"
 name = "online_config"
 version = "0.1.0"
 dependencies = [
- "online_config_derive 0.1.0",
+ "online_config_derive",
  "serde",
  "serde_derive",
  "toml",
 ]
 
 [[package]]
-name = "online_config"
-version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "online_config_derive 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "serde",
-]
-
-[[package]]
 name = "online_config_derive"
 version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
-name = "online_config_derive"
-version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4377,11 +3774,6 @@ name = "panic_hook"
 version = "0.0.1"
 
 [[package]]
-name = "panic_hook"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-
-[[package]]
 name = "parking_lot"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4448,58 +3840,28 @@ checksum = "c5d65c4d95931acda4498f675e332fcbdc9a06705cd07086c510e9b6009cd1c1"
 name = "pd_client"
 version = "0.1.0"
 dependencies = [
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "collections",
+ "error_code",
  "fail",
  "futures 0.3.15",
  "grpcio",
  "kvproto",
  "lazy_static",
  "log",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "log_wrappers",
  "prometheus",
- "security 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "security",
  "semver 0.10.0",
  "serde",
  "serde_derive",
  "slog",
  "slog-global",
  "thiserror",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_alloc",
+ "tikv_util",
  "tokio",
  "tokio-timer",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "yatp",
-]
-
-[[package]]
-name = "pd_client"
-version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "fail",
- "futures 0.3.15",
- "grpcio",
- "kvproto",
- "lazy_static",
- "log",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "prometheus",
- "security 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "semver 0.10.0",
- "serde",
- "serde_derive",
- "slog",
- "slog-global",
- "thiserror",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tokio",
- "tokio-timer",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "txn_types",
  "yatp",
 ]
 
@@ -4794,19 +4156,7 @@ dependencies = [
  "callgrind",
  "gperftools",
  "lazy_static",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "valgrind_request",
-]
-
-[[package]]
-name = "profiler"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "callgrind",
- "gperftools",
- "lazy_static",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_alloc",
  "valgrind_request",
 ]
 
@@ -4958,25 +4308,25 @@ dependencies = [
 name = "proxy_server"
 version = "0.0.1"
 dependencies = [
- "api_version 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "api_version",
  "async-stream 0.2.0",
- "backup 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "backup-stream 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "causal_ts 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "backup",
+ "backup-stream",
+ "causal_ts",
  "chrono",
  "clap",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "concurrency_manager 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "collections",
+ "concurrency_manager",
  "crossbeam",
- "encryption 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "encryption_export 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "encryption",
+ "encryption_export",
  "engine_rocks",
- "engine_rocks_helper 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "engine_rocks_helper",
  "engine_store_ffi",
  "engine_traits",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "error_code",
  "fail",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "file_system",
  "fs2",
  "futures 0.3.15",
  "grpcio",
@@ -4984,46 +4334,46 @@ dependencies = [
  "hex 0.4.2",
  "hyper",
  "itertools 0.10.0",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "keys",
  "kvproto",
  "lazy_static",
  "libc 0.2.132",
  "log",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "log_wrappers",
  "mime",
  "nix 0.23.1",
- "online_config 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "online_config",
  "openssl",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "pd_client",
  "pin-project",
  "pprof",
  "prometheus",
  "protobuf",
  "raft",
  "raft_log_engine",
- "raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "raftstore",
  "rand 0.8.3",
  "regex",
- "resolved_ts 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "resource_metering 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "security 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "resolved_ts",
+ "resource_metering",
+ "security",
  "serde",
  "serde_derive",
  "serde_ignored",
  "serde_json",
  "serde_with",
- "server 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "server",
  "signal",
  "slog",
  "slog-global",
  "tempfile",
- "tikv 6.5.0-alpha",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv",
+ "tikv_alloc",
+ "tikv_util",
  "tokio",
  "tokio-openssl",
  "toml",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "txn_types",
  "url",
  "yatp",
 ]
@@ -5032,83 +4382,84 @@ dependencies = [
 name = "proxy_tests"
 version = "0.0.1"
 dependencies = [
- "api_version 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "api_version",
  "arrow",
  "async-trait",
- "batch-system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "batch-system",
  "byteorder",
- "causal_ts 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "cdc 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "causal_ts",
+ "cdc",
  "clap",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "concurrency_manager 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "collections",
+ "concurrency_manager",
  "crc64fast",
  "criterion",
  "criterion-cpu-time",
  "criterion-perf-events",
  "crossbeam",
- "encryption 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "encryption",
  "engine_rocks",
- "engine_rocks_helper 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "engine_rocks_helper",
  "engine_store_ffi",
  "engine_test",
+ "engine_tiflash",
  "engine_traits",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "external_storage_export 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "error_code",
+ "external_storage_export",
  "fail",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "file_system",
  "futures 0.3.15",
  "grpcio",
  "grpcio-health",
  "hyper",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "keys",
  "kvproto",
  "libc 0.2.132",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "log_wrappers",
  "more-asserts",
  "new-mock-engine-store",
- "online_config 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "panic_hook 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "online_config",
+ "panic_hook",
  "paste",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "pd_client",
  "perfcnt",
  "procinfo",
- "profiler 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "profiler",
  "protobuf",
  "proxy_server",
  "raft",
  "raft_log_engine",
- "raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "raftstore",
  "rand 0.8.3",
  "rand_xorshift",
- "resource_metering 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "security 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "resource_metering",
+ "security",
  "serde_json",
  "slog",
  "slog-global",
- "sst_importer 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "sst_importer",
  "tempfile",
- "test_backup 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "test_coprocessor 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "test_pd 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "test_pd_client 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "test_raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "test_sst_importer 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "test_storage 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "test_util 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_aggr 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_common 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_datatype 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_executors 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_expr 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv 6.5.0-alpha",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "test_backup",
+ "test_coprocessor",
+ "test_pd",
+ "test_pd_client",
+ "test_raftstore",
+ "test_sst_importer",
+ "test_storage",
+ "test_util",
+ "tidb_query_aggr",
+ "tidb_query_common",
+ "tidb_query_datatype",
+ "tidb_query_executors",
+ "tidb_query_expr",
+ "tikv",
+ "tikv_util",
  "time",
  "tipb",
- "tipb_helper 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tipb_helper",
  "tokio",
  "toml",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "txn_types",
  "uuid 0.8.2",
 ]
 
@@ -5148,7 +4499,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.3.0"
-source = "git+https://github.com/tikv/raft-engine.git#a0d29980f1448565a6d03f911ebb103c4266f1f4"
+source = "git+https://github.com/tikv/raft-engine.git#82f6da7b8dff1856483e8e72a59dda903fb2499b"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -5191,15 +4542,14 @@ dependencies = [
 [[package]]
 name = "raft_log_engine"
 version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
 dependencies = [
- "encryption 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "encryption",
  "engine_traits",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "file_system",
  "kvproto",
  "lazy_static",
  "num_cpus",
- "online_config 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "online_config",
  "protobuf",
  "raft",
  "raft-engine",
@@ -5207,144 +4557,77 @@ dependencies = [
  "serde_derive",
  "slog",
  "slog-global",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_util",
  "time",
- "tracker 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tracker",
 ]
 
 [[package]]
 name = "raftstore"
 version = "0.0.1"
 dependencies = [
- "batch-system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "batch-system",
  "bitflags",
  "byteorder",
  "bytes",
- "causal_ts 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "concurrency_manager 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "causal_ts",
+ "collections",
+ "concurrency_manager",
  "crc32fast",
  "crossbeam",
  "derivative",
- "encryption 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "encryption_export 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "encryption",
+ "encryption_export",
  "engine_panic",
  "engine_rocks",
  "engine_test",
  "engine_traits",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "error_code",
  "fail",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "file_system",
  "fs2",
  "futures 0.3.15",
  "futures-util",
  "getset",
  "grpcio-health",
- "into_other 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "into_other",
  "itertools 0.10.0",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "keys",
  "kvproto",
  "lazy_static",
  "log",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "log_wrappers",
  "memory_trace_macros",
- "online_config 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "online_config",
  "openssl",
  "ordered-float",
- "panic_hook 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "panic_hook",
  "parking_lot 0.12.0",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "pd_client",
  "prometheus",
  "prometheus-static-metric",
  "protobuf",
  "raft",
  "raft-proto",
  "rand 0.8.3",
- "resource_metering 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "resource_metering",
  "serde",
  "serde_derive",
  "serde_with",
  "slog",
  "slog-global",
  "smallvec",
- "sst_importer 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "sst_importer",
  "tempfile",
- "test_sst_importer 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "test_sst_importer",
  "thiserror",
- "tidb_query_datatype 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tidb_query_datatype",
+ "tikv_alloc",
+ "tikv_util",
  "time",
  "tokio",
- "tracker 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "uuid 0.8.2",
- "yatp",
-]
-
-[[package]]
-name = "raftstore"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "batch-system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "bitflags",
- "byteorder",
- "bytes",
- "causal_ts 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "concurrency_manager 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "crc32fast",
- "crossbeam",
- "derivative",
- "encryption 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "engine_rocks",
- "engine_test",
- "engine_traits",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "fail",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "fs2",
- "futures 0.3.15",
- "futures-util",
- "getset",
- "grpcio-health",
- "into_other 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "itertools 0.10.0",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "kvproto",
- "lazy_static",
- "log",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "memory_trace_macros",
- "online_config 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "openssl",
- "ordered-float",
- "parking_lot 0.12.0",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "prometheus",
- "prometheus-static-metric",
- "protobuf",
- "raft",
- "raft-proto",
- "rand 0.8.3",
- "resource_metering 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "serde",
- "serde_derive",
- "serde_with",
- "slog",
- "slog-global",
- "smallvec",
- "sst_importer 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tempfile",
- "thiserror",
- "tidb_query_datatype 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "time",
- "tokio",
- "tracker 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tracker",
+ "txn_types",
  "uuid 0.8.2",
  "yatp",
 ]
@@ -5360,33 +4643,33 @@ dependencies = [
 name = "raftstore-v2"
 version = "0.1.0"
 dependencies = [
- "batch-system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "batch-system",
+ "collections",
  "crossbeam",
  "engine_test",
  "engine_traits",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "error_code",
  "fail",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "file_system",
  "futures 0.3.15",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "keys",
  "kvproto",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "log_wrappers",
+ "pd_client",
  "protobuf",
  "raft",
  "raft-proto",
- "raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "raftstore",
  "slog",
  "slog-global",
  "smallvec",
  "tempfile",
- "test_pd 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "test_util 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "test_pd",
+ "test_util",
+ "tikv_util",
  "time",
- "tracker 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tracker",
+ "txn_types",
 ]
 
 [[package]]
@@ -5658,8 +4941,8 @@ dependencies = [
 name = "resolved_ts"
 version = "0.0.1"
 dependencies = [
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "concurrency_manager 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "collections",
+ "concurrency_manager",
  "crossbeam",
  "engine_rocks",
  "engine_traits",
@@ -5669,66 +4952,34 @@ dependencies = [
  "hex 0.4.2",
  "kvproto",
  "lazy_static",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "online_config 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "panic_hook 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "log_wrappers",
+ "online_config",
+ "panic_hook",
+ "pd_client",
  "prometheus",
  "protobuf",
  "raft",
- "raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "security 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "raftstore",
+ "security",
  "slog",
  "slog-global",
  "tempfile",
- "test_raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "test_sst_importer 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "test_util 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "test_raftstore",
+ "test_sst_importer",
+ "test_util",
  "thiserror",
- "tikv 6.5.0-alpha",
- "tikv_kv 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv",
+ "tikv_kv",
+ "tikv_util",
  "tokio",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
-]
-
-[[package]]
-name = "resolved_ts"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "concurrency_manager 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "crossbeam",
- "engine_traits",
- "fail",
- "futures 0.3.15",
- "grpcio",
- "hex 0.4.2",
- "kvproto",
- "lazy_static",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "online_config 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "prometheus",
- "protobuf",
- "raft",
- "raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "security 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "slog",
- "slog-global",
- "thiserror",
- "tikv 6.5.0-alpha",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tokio",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "txn_types",
 ]
 
 [[package]]
 name = "resource_metering"
 version = "0.0.1"
 dependencies = [
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "collections",
  "crossbeam",
  "futures 0.3.15",
  "grpcio",
@@ -5736,7 +4987,7 @@ dependencies = [
  "lazy_static",
  "libc 0.2.132",
  "log",
- "online_config 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "online_config",
  "pdqselect",
  "pin-project",
  "procinfo",
@@ -5746,32 +4997,7 @@ dependencies = [
  "serde_derive",
  "slog",
  "slog-global",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
-]
-
-[[package]]
-name = "resource_metering"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "crossbeam",
- "futures 0.3.15",
- "grpcio",
- "kvproto",
- "lazy_static",
- "libc 0.2.132",
- "log",
- "online_config 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "pdqselect",
- "pin-project",
- "procinfo",
- "prometheus",
- "serde",
- "serde_derive",
- "slog",
- "slog-global",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_util",
 ]
 
 [[package]]
@@ -6061,29 +5287,14 @@ checksum = "1c107b6f4780854c8b126e228ea8869f4d7b71260f962fefb57b996b8959ba6b"
 name = "security"
 version = "0.0.1"
 dependencies = [
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "encryption 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "collections",
+ "encryption",
  "grpcio",
  "serde",
  "serde_derive",
  "serde_json",
  "tempfile",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tonic",
-]
-
-[[package]]
-name = "security"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "encryption 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "grpcio",
- "serde",
- "serde_derive",
- "serde_json",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_util",
  "tonic",
 ]
 
@@ -6279,112 +5490,55 @@ dependencies = [
 name = "server"
 version = "0.0.1"
 dependencies = [
- "api_version 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "backup 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "backup-stream 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "causal_ts 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "cdc 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "api_version",
+ "backup",
+ "backup-stream",
+ "causal_ts",
+ "cdc",
  "chrono",
  "clap",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "concurrency_manager 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "collections",
+ "concurrency_manager",
  "crossbeam",
- "encryption 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "encryption_export 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "encryption",
+ "encryption_export",
  "engine_rocks",
- "engine_rocks_helper 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "engine_rocks_helper",
  "engine_traits",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "error_code",
+ "file_system",
  "fs2",
  "futures 0.3.15",
  "grpcio",
  "grpcio-health",
  "hex 0.4.2",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "keys",
  "kvproto",
  "libc 0.2.132",
  "log",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "log_wrappers",
+ "pd_client",
  "prometheus",
  "protobuf",
  "raft",
  "raft_log_engine",
- "raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "raftstore",
  "rand 0.8.3",
- "resolved_ts 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "resource_metering 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "security 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "resolved_ts",
+ "resource_metering",
+ "security",
  "serde_json",
  "signal-hook",
  "slog",
  "slog-global",
- "snap_recovery 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "snap_recovery",
  "tempfile",
- "tikv 6.5.0-alpha",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv",
+ "tikv_alloc",
+ "tikv_util",
  "tokio",
  "toml",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "yatp",
-]
-
-[[package]]
-name = "server"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "api_version 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "backup 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "backup-stream 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "causal_ts 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "cdc 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "chrono",
- "clap",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "concurrency_manager 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "crossbeam",
- "encryption 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "encryption_export 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "engine_rocks",
- "engine_rocks_helper 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "engine_traits",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "fs2",
- "futures 0.3.15",
- "grpcio",
- "grpcio-health",
- "hex 0.4.2",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "kvproto",
- "libc 0.2.132",
- "log",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "prometheus",
- "protobuf",
- "raft",
- "raft_log_engine",
- "raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "rand 0.8.3",
- "resolved_ts 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "resource_metering 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "security 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "serde_json",
- "signal-hook",
- "slog",
- "slog-global",
- "snap_recovery 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tempfile",
- "tikv 6.5.0-alpha",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tokio",
- "toml",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "txn_types",
  "yatp",
 ]
 
@@ -6530,60 +5684,29 @@ name = "snap_recovery"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "encryption 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "encryption_export 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "encryption",
+ "encryption_export",
  "engine_rocks",
  "engine_traits",
  "futures 0.3.15",
  "grpcio",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "keys",
  "kvproto",
  "log",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "pd_client",
  "protobuf",
  "raft_log_engine",
- "raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "raftstore",
  "slog",
  "slog-global",
  "structopt",
  "tempfile",
  "thiserror",
- "tikv 6.5.0-alpha",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv",
+ "tikv_alloc",
+ "tikv_util",
  "toml",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
-]
-
-[[package]]
-name = "snap_recovery"
-version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "chrono",
- "encryption 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "encryption_export 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "engine_rocks",
- "engine_traits",
- "futures 0.3.15",
- "grpcio",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "kvproto",
- "log",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "protobuf",
- "raft_log_engine",
- "raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "slog",
- "slog-global",
- "structopt",
- "tempfile",
- "thiserror",
- "tikv 6.5.0-alpha",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "toml",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "txn_types",
 ]
 
 [[package]]
@@ -6634,22 +5757,22 @@ checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 name = "sst_importer"
 version = "0.1.0"
 dependencies = [
- "api_version 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "api_version",
  "crc32fast",
  "dashmap",
- "encryption 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "encryption",
  "engine_rocks",
  "engine_traits",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "external_storage_export 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "error_code",
+ "external_storage_export",
+ "file_system",
  "futures 0.3.15",
  "futures-util",
  "grpcio",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "keys",
  "kvproto",
  "lazy_static",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "log_wrappers",
  "openssl",
  "prometheus",
  "serde",
@@ -6657,48 +5780,13 @@ dependencies = [
  "slog",
  "slog-global",
  "tempfile",
- "test_sst_importer 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "test_util 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "test_sst_importer",
+ "test_util",
  "thiserror",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_alloc",
+ "tikv_util",
  "tokio",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "uuid 0.8.2",
-]
-
-[[package]]
-name = "sst_importer"
-version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "api_version 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "crc32fast",
- "dashmap",
- "encryption 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "engine_rocks",
- "engine_traits",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "external_storage_export 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "futures 0.3.15",
- "futures-util",
- "grpcio",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "kvproto",
- "lazy_static",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "openssl",
- "prometheus",
- "serde",
- "serde_derive",
- "slog",
- "slog-global",
- "thiserror",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tokio",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "txn_types",
  "uuid 0.8.2",
 ]
 
@@ -6974,14 +6062,14 @@ dependencies = [
 name = "test_backup"
 version = "0.0.1"
 dependencies = [
- "api_version 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "backup 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "concurrency_manager 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "api_version",
+ "backup",
+ "collections",
+ "concurrency_manager",
  "crc64fast",
  "engine_traits",
- "external_storage_export 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "external_storage_export",
+ "file_system",
  "futures 0.3.15",
  "futures-executor",
  "futures-util",
@@ -6990,249 +6078,114 @@ dependencies = [
  "protobuf",
  "rand 0.8.3",
  "tempfile",
- "test_raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_common 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv 6.5.0-alpha",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
-]
-
-[[package]]
-name = "test_backup"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "api_version 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "backup 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "concurrency_manager 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "crc64fast",
- "engine_traits",
- "external_storage_export 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "futures 0.3.15",
- "futures-executor",
- "futures-util",
- "grpcio",
- "kvproto",
- "protobuf",
- "rand 0.8.3",
- "tempfile",
- "test_raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_common 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv 6.5.0-alpha",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "test_raftstore",
+ "tidb_query_common",
+ "tikv",
+ "tikv_util",
+ "txn_types",
 ]
 
 [[package]]
 name = "test_coprocessor"
 version = "0.0.1"
 dependencies = [
- "api_version 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "concurrency_manager 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "api_version",
+ "collections",
+ "concurrency_manager",
  "engine_rocks",
  "futures 0.3.15",
  "kvproto",
  "protobuf",
- "resource_metering 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "test_storage 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_common 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_datatype 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv 6.5.0-alpha",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "resource_metering",
+ "test_storage",
+ "tidb_query_common",
+ "tidb_query_datatype",
+ "tikv",
+ "tikv_util",
  "tipb",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
-]
-
-[[package]]
-name = "test_coprocessor"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "api_version 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "concurrency_manager 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "engine_rocks",
- "futures 0.3.15",
- "kvproto",
- "protobuf",
- "resource_metering 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "test_storage 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_common 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_datatype 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv 6.5.0-alpha",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tipb",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "txn_types",
 ]
 
 [[package]]
 name = "test_pd"
 version = "0.0.1"
 dependencies = [
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "collections",
  "fail",
  "futures 0.3.15",
  "grpcio",
  "kvproto",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "security 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "pd_client",
+ "security",
  "slog",
  "slog-global",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
-]
-
-[[package]]
-name = "test_pd"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "fail",
- "futures 0.3.15",
- "grpcio",
- "kvproto",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "security 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "slog",
- "slog-global",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_util",
 ]
 
 [[package]]
 name = "test_pd_client"
 version = "0.0.1"
 dependencies = [
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "collections",
  "fail",
  "futures 0.3.15",
  "grpcio",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "keys",
  "kvproto",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "log_wrappers",
+ "pd_client",
  "raft",
  "slog",
  "slog-global",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_util",
  "tokio",
  "tokio-timer",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
-]
-
-[[package]]
-name = "test_pd_client"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "fail",
- "futures 0.3.15",
- "grpcio",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "kvproto",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "raft",
- "slog",
- "slog-global",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tokio",
- "tokio-timer",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "txn_types",
 ]
 
 [[package]]
 name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
- "api_version 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "api_version",
  "backtrace",
- "causal_ts 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "concurrency_manager 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "causal_ts",
+ "collections",
+ "concurrency_manager",
  "crossbeam",
- "encryption_export 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "encryption_export",
  "engine_rocks",
- "engine_rocks_helper 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "engine_rocks_helper",
  "engine_test",
  "engine_traits",
  "fail",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "file_system",
  "futures 0.3.15",
  "grpcio",
  "grpcio-health",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "keys",
  "kvproto",
  "lazy_static",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "log_wrappers",
+ "pd_client",
  "protobuf",
  "raft",
- "raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "raftstore",
  "rand 0.8.3",
- "resolved_ts 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "resource_metering 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "security 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "server 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "resolved_ts",
+ "resource_metering",
+ "security",
+ "server",
  "slog",
  "slog-global",
  "tempfile",
- "test_pd_client 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "test_util 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv 6.5.0-alpha",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "test_pd_client",
+ "test_util",
+ "tikv",
+ "tikv_util",
  "tokio",
  "tokio-timer",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
-]
-
-[[package]]
-name = "test_raftstore"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "api_version 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "backtrace",
- "causal_ts 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "concurrency_manager 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "crossbeam",
- "encryption_export 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "engine_rocks",
- "engine_rocks_helper 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "engine_test",
- "engine_traits",
- "fail",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "futures 0.3.15",
- "grpcio",
- "grpcio-health",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "kvproto",
- "lazy_static",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "protobuf",
- "raft",
- "raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "rand 0.8.3",
- "resolved_ts 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "resource_metering 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "security 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "server 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "slog",
- "slog-global",
- "tempfile",
- "test_pd_client 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "test_util 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv 6.5.0-alpha",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tokio",
- "tokio-timer",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "txn_types",
 ]
 
 [[package]]
@@ -7242,20 +6195,7 @@ dependencies = [
  "crc32fast",
  "engine_rocks",
  "engine_traits",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "kvproto",
- "uuid 0.8.2",
-]
-
-[[package]]
-name = "test_sst_importer"
-version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "crc32fast",
- "engine_rocks",
- "engine_traits",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "keys",
  "kvproto",
  "uuid 0.8.2",
 ]
@@ -7264,35 +6204,17 @@ dependencies = [
 name = "test_storage"
 version = "0.0.1"
 dependencies = [
- "api_version 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "api_version",
+ "collections",
  "futures 0.3.15",
  "kvproto",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "test_raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv 6.5.0-alpha",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tracker 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
-]
-
-[[package]]
-name = "test_storage"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "api_version 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "futures 0.3.15",
- "kvproto",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "test_raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv 6.5.0-alpha",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tracker 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "pd_client",
+ "raftstore",
+ "test_raftstore",
+ "tikv",
+ "tikv_util",
+ "tracker",
+ "txn_types",
 ]
 
 [[package]]
@@ -7300,39 +6222,18 @@ name = "test_util"
 version = "0.0.1"
 dependencies = [
  "backtrace",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "encryption_export 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "collections",
+ "encryption_export",
  "fail",
  "grpcio",
  "kvproto",
  "rand 0.8.3",
  "rand_isaac",
- "security 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "security",
  "slog",
  "slog-global",
  "tempfile",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "time",
-]
-
-[[package]]
-name = "test_util"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "backtrace",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "encryption_export 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "fail",
- "grpcio",
- "kvproto",
- "rand 0.8.3",
- "rand_isaac",
- "security 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "slog",
- "slog-global",
- "tempfile",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_util",
  "time",
 ]
 
@@ -7340,79 +6241,79 @@ dependencies = [
 name = "tests"
 version = "0.0.1"
 dependencies = [
- "api_version 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "api_version",
  "arrow",
  "async-trait",
- "batch-system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "batch-system",
  "byteorder",
- "causal_ts 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "cdc 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "concurrency_manager 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "causal_ts",
+ "cdc",
+ "collections",
+ "concurrency_manager",
  "crc64fast",
  "criterion",
  "criterion-cpu-time",
  "criterion-perf-events",
  "crossbeam",
- "encryption 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "encryption",
  "engine_rocks",
- "engine_rocks_helper 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "engine_rocks_helper",
  "engine_test",
  "engine_traits",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "external_storage_export 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "error_code",
+ "external_storage_export",
  "fail",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "file_system",
  "futures 0.3.15",
  "grpcio",
  "grpcio-health",
  "hyper",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "keys",
  "kvproto",
  "libc 0.2.132",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "log_wrappers",
  "more-asserts",
- "online_config 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "panic_hook 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "online_config",
+ "panic_hook",
  "paste",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "pd_client",
  "perfcnt",
  "procinfo",
- "profiler 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "profiler",
  "protobuf",
  "raft",
  "raft_log_engine",
- "raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "raftstore",
  "rand 0.8.3",
  "rand_xorshift",
- "resource_metering 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "security 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "resource_metering",
+ "security",
  "serde_json",
  "slog",
  "slog-global",
- "sst_importer 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "sst_importer",
  "tempfile",
- "test_backup 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "test_coprocessor 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "test_pd 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "test_pd_client 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "test_raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "test_sst_importer 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "test_storage 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "test_util 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_aggr 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_common 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_datatype 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_executors 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_expr 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv 6.5.0-alpha",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "test_backup",
+ "test_coprocessor",
+ "test_pd",
+ "test_pd_client",
+ "test_raftstore",
+ "test_sst_importer",
+ "test_storage",
+ "test_util",
+ "tidb_query_aggr",
+ "tidb_query_common",
+ "tidb_query_datatype",
+ "tidb_query_executors",
+ "tidb_query_expr",
+ "tikv",
+ "tikv_util",
  "time",
  "tipb",
- "tipb_helper 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tipb_helper",
  "tokio",
  "toml",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "txn_types",
  "uuid 0.8.2",
 ]
 
@@ -7459,45 +6360,19 @@ name = "tidb_query_aggr"
 version = "0.0.1"
 dependencies = [
  "match-template",
- "panic_hook 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_codegen 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_common 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_datatype 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_expr 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "panic_hook",
+ "tidb_query_codegen",
+ "tidb_query_common",
+ "tidb_query_datatype",
+ "tidb_query_expr",
+ "tikv_util",
  "tipb",
- "tipb_helper 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
-]
-
-[[package]]
-name = "tidb_query_aggr"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "match-template",
- "tidb_query_codegen 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_common 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_datatype 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_expr 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tipb",
+ "tipb_helper",
 ]
 
 [[package]]
 name = "tidb_query_codegen"
 version = "0.0.1"
-dependencies = [
- "darling",
- "heck 0.3.1",
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
-name = "tidb_query_codegen"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
 dependencies = [
  "darling",
  "heck 0.3.1",
@@ -7514,38 +6389,16 @@ dependencies = [
  "async-trait",
  "byteorder",
  "derive_more",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "error_code",
  "futures 0.3.15",
  "kvproto",
  "lazy_static",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "log_wrappers",
  "prometheus",
  "prometheus-static-metric",
  "serde_json",
  "thiserror",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "time",
- "yatp",
-]
-
-[[package]]
-name = "tidb_query_common"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "anyhow",
- "async-trait",
- "derive_more",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "futures 0.3.15",
- "kvproto",
- "lazy_static",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "prometheus",
- "prometheus-static-metric",
- "serde_json",
- "thiserror",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_util",
  "time",
  "yatp",
 ]
@@ -7561,54 +6414,14 @@ dependencies = [
  "bstr",
  "chrono",
  "chrono-tz",
- "codec 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "codec",
+ "collections",
  "encoding_rs 0.8.29 (git+https://github.com/xiongjiwei/encoding_rs.git?rev=68e0bc5a72a37a78228d80cd98047326559cf43c)",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "error_code",
  "hex 0.4.2",
  "kvproto",
  "lazy_static",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "match-template",
- "nom 5.1.0",
- "num 0.3.0",
- "num-derive",
- "num-traits",
- "ordered-float",
- "protobuf",
- "regex",
- "serde",
- "serde_json",
- "slog",
- "slog-global",
- "static_assertions",
- "thiserror",
- "tidb_query_common 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tipb",
-]
-
-[[package]]
-name = "tidb_query_datatype"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "base64",
- "bitfield",
- "bitflags",
- "boolinator",
- "bstr",
- "chrono",
- "chrono-tz",
- "codec 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "encoding_rs 0.8.29 (git+https://github.com/xiongjiwei/encoding_rs.git?rev=68e0bc5a72a37a78228d80cd98047326559cf43c)",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "hex 0.4.2",
- "kvproto",
- "lazy_static",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "log_wrappers",
  "match-template",
  "nom 7.1.0",
  "num 0.3.0",
@@ -7623,9 +6436,9 @@ dependencies = [
  "slog-global",
  "static_assertions",
  "thiserror",
- "tidb_query_common 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tidb_query_common",
+ "tikv_alloc",
+ "tikv_util",
  "tipb",
 ]
 
@@ -7635,53 +6448,26 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "async-trait",
- "codec 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "codec",
+ "collections",
  "fail",
  "futures 0.3.15",
  "itertools 0.10.0",
  "kvproto",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "log_wrappers",
  "match-template",
  "protobuf",
  "slog",
  "slog-global",
  "smallvec",
- "tidb_query_aggr 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_codegen 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_common 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_datatype 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_expr 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tidb_query_aggr",
+ "tidb_query_codegen",
+ "tidb_query_common",
+ "tidb_query_datatype",
+ "tidb_query_expr",
+ "tikv_util",
  "tipb",
- "tipb_helper 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "yatp",
-]
-
-[[package]]
-name = "tidb_query_executors"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "async-trait",
- "codec 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "fail",
- "futures 0.3.15",
- "itertools 0.10.0",
- "kvproto",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "match-template",
- "protobuf",
- "slog",
- "slog-global",
- "smallvec",
- "tidb_query_aggr 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_common 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_datatype 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_expr 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tipb",
+ "tipb_helper",
  "yatp",
 ]
 
@@ -7693,17 +6479,17 @@ dependencies = [
  "bstr",
  "byteorder",
  "chrono",
- "codec 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "codec",
+ "file_system",
  "flate2",
  "hex 0.4.2",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "log_wrappers",
  "match-template",
  "num 0.3.0",
  "num-traits",
  "openssl",
- "panic_hook 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "profiler 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "panic_hook",
+ "profiler",
  "protobuf",
  "rand 0.8.3",
  "regex",
@@ -7711,84 +6497,49 @@ dependencies = [
  "serde",
  "serde_json",
  "static_assertions",
- "tidb_query_codegen 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_common 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_datatype 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tidb_query_codegen",
+ "tidb_query_common",
+ "tidb_query_datatype",
+ "tikv_util",
  "time",
  "tipb",
- "tipb_helper 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "twoway",
- "uuid 0.8.2",
-]
-
-[[package]]
-name = "tidb_query_expr"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "base64",
- "bstr",
- "byteorder",
- "codec 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "flate2",
- "hex 0.4.2",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "match-template",
- "num 0.3.0",
- "num-traits",
- "openssl",
- "protobuf",
- "rand 0.8.3",
- "regex",
- "safemem",
- "serde",
- "serde_json",
- "static_assertions",
- "tidb_query_codegen 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_common 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_datatype 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "time",
- "tipb",
+ "tipb_helper",
  "twoway",
  "uuid 0.8.2",
 ]
 
 [[package]]
 name = "tikv"
-version = "6.4.0-alpha"
+version = "6.5.0-alpha"
 dependencies = [
  "anyhow",
- "api_version 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "api_version",
  "async-stream 0.2.0",
  "async-trait",
  "backtrace",
- "batch-system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "batch-system",
  "byteorder",
- "case_macros 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "causal_ts 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "case_macros",
+ "causal_ts",
  "chrono",
- "codec 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "concurrency_manager 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "coprocessor_plugin_api 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "codec",
+ "collections",
+ "concurrency_manager",
+ "coprocessor_plugin_api",
  "crc32fast",
  "crc64fast",
  "crossbeam",
  "dashmap",
- "encryption_export 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "encryption_export",
  "engine_panic",
  "engine_rocks",
  "engine_test",
- "engine_tiflash",
  "engine_traits",
  "engine_traits_tests",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "example_coprocessor_plugin 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "error_code",
+ "example_coprocessor_plugin",
  "fail",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "file_system",
  "flate2",
  "futures 0.3.15",
  "futures-executor",
@@ -7803,16 +6554,16 @@ dependencies = [
  "hyper",
  "hyper-openssl",
  "hyper-tls",
- "into_other 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "into_other",
  "itertools 0.10.0",
  "keyed_priority_queue",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "keys",
  "kvproto",
  "lazy_static",
  "libc 0.2.132",
  "libloading",
  "log",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "log_wrappers",
  "match-template",
  "memory_trace_macros",
  "mime",
@@ -7822,12 +6573,12 @@ dependencies = [
  "notify",
  "num-traits",
  "num_cpus",
- "online_config 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "online_config",
  "openssl",
- "panic_hook 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "panic_hook",
  "parking_lot 0.12.0",
  "paste",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "pd_client",
  "pin-project",
  "pnet_datalink",
  "pprof",
@@ -7838,14 +6589,14 @@ dependencies = [
  "protobuf",
  "raft",
  "raft_log_engine",
- "raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "raftstore",
  "rand 0.7.3",
  "regex",
  "reqwest",
- "resource_metering 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "resource_metering",
  "rev_lines",
  "seahash",
- "security 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "security",
  "semver 0.11.0",
  "serde",
  "serde_derive",
@@ -7854,156 +6605,35 @@ dependencies = [
  "slog",
  "slog-global",
  "smallvec",
- "sst_importer 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "sst_importer",
  "strum 0.20.0",
  "sync_wrapper",
  "sysinfo",
  "tempfile",
- "test_sst_importer 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "test_util 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "test_sst_importer",
+ "test_util",
  "thiserror",
- "tidb_query_aggr 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_common 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_datatype 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_executors 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_expr 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_kv 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tidb_query_aggr",
+ "tidb_query_common",
+ "tidb_query_datatype",
+ "tidb_query_executors",
+ "tidb_query_expr",
+ "tikv_alloc",
+ "tikv_kv",
+ "tikv_util",
  "time",
  "tipb",
  "tokio",
  "tokio-openssl",
  "tokio-timer",
  "toml",
- "tracker 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tracker",
+ "txn_types",
  "url",
  "uuid 0.8.2",
  "walkdir",
  "yatp",
  "zipf",
-]
-
-[[package]]
-name = "tikv"
-version = "6.5.0-alpha"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "anyhow",
- "api_version 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "async-stream 0.2.0",
- "async-trait",
- "backtrace",
- "batch-system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "byteorder",
- "case_macros 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "causal_ts 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "chrono",
- "codec 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "concurrency_manager 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "coprocessor_plugin_api 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "crc32fast",
- "crc64fast",
- "crossbeam",
- "dashmap",
- "encryption_export 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "engine_panic",
- "engine_rocks",
- "engine_test",
- "engine_traits",
- "engine_traits_tests",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "fail",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "flate2",
- "futures 0.3.15",
- "futures-executor",
- "futures-timer",
- "futures-util",
- "fxhash",
- "getset",
- "grpcio",
- "grpcio-health",
- "hex 0.4.2",
- "http",
- "hyper",
- "hyper-tls",
- "into_other 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "itertools 0.10.0",
- "keyed_priority_queue",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "kvproto",
- "lazy_static",
- "libc 0.2.132",
- "libloading",
- "log",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "match-template",
- "memory_trace_macros",
- "mime",
- "more-asserts",
- "murmur3",
- "nom 5.1.0",
- "notify",
- "num-traits",
- "num_cpus",
- "online_config 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "openssl",
- "parking_lot 0.12.0",
- "paste",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "pin-project",
- "pnet_datalink",
- "pprof",
- "procinfo",
- "prometheus",
- "prometheus-static-metric",
- "protobuf",
- "raft",
- "raft_log_engine",
- "raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "rand 0.7.3",
- "regex",
- "resource_metering 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "rev_lines",
- "seahash",
- "security 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "semver 0.11.0",
- "serde",
- "serde_derive",
- "serde_ignored",
- "serde_json",
- "slog",
- "slog-global",
- "smallvec",
- "sst_importer 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "strum 0.20.0",
- "sync_wrapper",
- "sysinfo",
- "tempfile",
- "thiserror",
- "tidb_query_aggr 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_common 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_datatype 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_executors 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_expr 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_kv 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "time",
- "tipb",
- "tokio",
- "tokio-openssl",
- "tokio-timer",
- "toml",
- "tracker 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "url",
- "uuid 0.8.2",
- "walkdir",
- "yatp",
 ]
 
 [[package]]
@@ -8055,84 +6685,36 @@ dependencies = [
 ]
 
 [[package]]
-name = "tikv_alloc"
-version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "fxhash",
- "lazy_static",
- "libc 0.2.132",
- "mimalloc",
- "snmalloc-rs",
- "tcmalloc",
- "tikv-jemalloc-ctl",
- "tikv-jemalloc-sys",
- "tikv-jemallocator",
-]
-
-[[package]]
 name = "tikv_kv"
 version = "0.1.0"
 dependencies = [
  "backtrace",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "collections",
  "engine_panic",
  "engine_rocks",
  "engine_test",
  "engine_traits",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "error_code",
  "fail",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "file_system",
  "futures 0.3.15",
- "into_other 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "keys 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "into_other",
+ "keys",
  "kvproto",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "panic_hook 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "log_wrappers",
+ "panic_hook",
+ "pd_client",
  "prometheus",
  "prometheus-static-metric",
- "raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "raftstore",
  "slog",
  "slog-global",
  "slog_derive",
  "tempfile",
  "thiserror",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tracker 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
-]
-
-[[package]]
-name = "tikv_kv"
-version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "backtrace",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "engine_panic",
- "engine_rocks",
- "engine_test",
- "engine_traits",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "fail",
- "file_system 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "futures 0.3.15",
- "into_other 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "kvproto",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "pd_client 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "prometheus",
- "prometheus-static-metric",
- "raftstore 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "slog",
- "slog-global",
- "slog_derive",
- "tempfile",
- "thiserror",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tracker 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "txn_types 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_util",
+ "tracker",
+ "txn_types",
 ]
 
 [[package]]
@@ -8144,13 +6726,13 @@ dependencies = [
  "byteorder",
  "bytes",
  "chrono",
- "codec 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "codec",
+ "collections",
  "cpu-time",
  "crc32fast",
  "crossbeam",
  "derive_more",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "error_code",
  "fail",
  "futures 0.3.15",
  "futures-util",
@@ -8161,14 +6743,15 @@ dependencies = [
  "lazy_static",
  "libc 0.2.132",
  "log",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "log_wrappers",
+ "mnt",
  "nix 0.24.1",
  "num-traits",
  "num_cpus",
- "online_config 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "online_config",
  "openssl",
  "page_size",
- "panic_hook 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "panic_hook",
  "pin-project",
  "procfs",
  "procinfo",
@@ -8188,75 +6771,15 @@ dependencies = [
  "sysinfo",
  "tempfile",
  "thiserror",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_alloc",
  "time",
  "tokio",
  "tokio-executor",
  "tokio-timer",
  "toml",
- "tracker 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tracker",
  "url",
  "utime",
- "yatp",
-]
-
-[[package]]
-name = "tikv_util"
-version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "async-speed-limit",
- "backtrace",
- "byteorder",
- "bytes",
- "chrono",
- "codec 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "cpu-time",
- "crc32fast",
- "crossbeam",
- "derive_more",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "fail",
- "futures 0.3.15",
- "futures-util",
- "grpcio",
- "http",
- "kvproto",
- "lazy_static",
- "libc 0.2.132",
- "log",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "nix 0.24.1",
- "num-traits",
- "num_cpus",
- "online_config 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "openssl",
- "page_size",
- "pin-project",
- "procfs",
- "procinfo",
- "prometheus",
- "prometheus-static-metric",
- "protobuf",
- "rand 0.8.3",
- "rusoto_core",
- "serde",
- "serde_json",
- "slog",
- "slog-async",
- "slog-global",
- "slog-json",
- "slog-term",
- "sysinfo",
- "thiserror",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "time",
- "tokio",
- "tokio-executor",
- "tokio-timer",
- "tracker 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "url",
  "yatp",
 ]
 
@@ -8296,18 +6819,8 @@ dependencies = [
 name = "tipb_helper"
 version = "0.0.1"
 dependencies = [
- "codec 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_datatype 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tipb",
-]
-
-[[package]]
-name = "tipb_helper"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "codec 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tidb_query_datatype 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "codec",
+ "tidb_query_datatype",
  "tipb",
 ]
 
@@ -8577,22 +7090,7 @@ dependencies = [
 name = "tracker"
 version = "0.0.1"
 dependencies = [
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "crossbeam-utils 0.8.8",
- "kvproto",
- "lazy_static",
- "parking_lot 0.12.0",
- "pin-project",
- "prometheus",
- "slab",
-]
-
-[[package]]
-name = "tracker"
-version = "0.0.1"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "collections",
  "crossbeam-utils 0.8.8",
  "kvproto",
  "lazy_static",
@@ -8630,37 +7128,18 @@ version = "0.1.0"
 dependencies = [
  "bitflags",
  "byteorder",
- "codec 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "codec",
+ "collections",
+ "error_code",
  "farmhash",
  "kvproto",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "panic_hook 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "log_wrappers",
+ "panic_hook",
  "rand 0.8.3",
  "slog",
  "thiserror",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
-]
-
-[[package]]
-name = "txn_types"
-version = "0.1.0"
-source = "git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e#e87d16d0b17e507e4fea0923c8438ddfd0296a0e"
-dependencies = [
- "bitflags",
- "byteorder",
- "codec 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "collections 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "error_code 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "farmhash",
- "kvproto",
- "log_wrappers 0.0.1 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "slog",
- "thiserror",
- "tikv_alloc 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
- "tikv_util 0.1.0 (git+https://github.com/tikv/tikv.git?rev=e87d16d0b17e507e4fea0923c8438ddfd0296a0e)",
+ "tikv_alloc",
+ "tikv_util",
 ]
 
 [[package]]

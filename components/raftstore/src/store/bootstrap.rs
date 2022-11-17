@@ -74,6 +74,7 @@ pub fn prepare_bootstrap_cluster(
 ) -> Result<()> {
     let mut state = RegionLocalState::default();
     state.set_region(region.clone());
+
     let mut wb = engines.kv.write_batch();
     box_try!(wb.put_msg(keys::PREPARE_BOOTSTRAP_KEY, region));
     box_try!(wb.put_msg_cf(CF_RAFT, &keys::region_state_key(region.get_id()), &state));

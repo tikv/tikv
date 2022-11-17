@@ -84,8 +84,9 @@ use super::{
 use crate::{
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason, RoleChange},
     errors::RAFTSTORE_IS_BUSY,
+    router::RaftStoreRouter,
     store::{
-        async_io::{write::WriteMsg, write_router::WriteRouter},
+        async_io::{read::ReadTask, write::WriteMsg, write_router::WriteRouter},
         fsm::{
             apply::{self, CatchUpLogs},
             store::{PollContext, RaftRouter},
@@ -93,12 +94,13 @@ use crate::{
         },
         hibernate_state::GroupState,
         memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES},
-        msg::{ErrorCallback, PeerMsg, RaftCommand, SignificantMsg, StoreMsg},
+        msg::{CasualMessage, ErrorCallback, PeerMsg, RaftCommand, SignificantMsg, StoreMsg},
+        peer_storage::HandleSnapshotResult,
         txn_ext::LocksStatus,
         util::{admin_cmd_epoch_lookup, RegionReadProgress},
         worker::{
-            HeartbeatTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, ReadExecutor,
-            ReadProgress, RegionTask, SplitCheckTask,
+            HeartbeatTask, RaftlogGcTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask,
+            SplitCheckTask,
         },
         Callback, Config, GlobalReplicationState, PdTask, ReadCallback, ReadIndexContext,
         ReadResponse, TxnExt, WriteCallback, RAFT_INIT_LOG_INDEX,
@@ -466,6 +468,7 @@ pub struct PersistSnapshotResult {
     pub prev_region: metapb::Region,
     pub region: metapb::Region,
     pub destroy_regions: Vec<metapb::Region>,
+    pub for_witness: bool,
 }
 
 #[derive(Debug)]
@@ -1041,7 +1044,7 @@ where
         store_id: u64,
         cfg: &Config,
         region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
-        raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+        raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
         engines: Engines<EK, ER>,
         region: &metapb::Region,
         peer: metapb::Peer,
@@ -1076,6 +1079,7 @@ where
             skip_bcast_commit: true,
             pre_vote: cfg.prevote,
             max_committed_size_per_ready: MAX_COMMITTED_SIZE_PER_READY,
+            // TODO: if peer.is_witness { 0 } else { 1 },
             ..Default::default()
         };
 
@@ -1150,7 +1154,7 @@ where
                 region,
                 applied_index,
                 REGION_READ_PROGRESS_CAP,
-                tag.clone(),
+                peer_id,
             )),
             memtrace_raft_entries: 0,
             write_router: WriteRouter::new(tag),
@@ -1685,6 +1689,11 @@ where
     }
 
     #[inline]
+    pub fn is_witness(&self) -> bool {
+        self.peer.is_witness
+    }
+
+    #[inline]
     pub fn get_role(&self) -> StateRole {
         self.raft_group.raft.state
     }
@@ -2013,7 +2022,6 @@ where
             if p.get_id() == self.peer.get_id() {
                 continue;
             }
-            // TODO
             if let Some(instant) = self.peer_heartbeats.get(&p.get_id()) {
                 let elapsed = instant.saturating_elapsed();
                 if elapsed >= max_duration {
@@ -2856,13 +2864,20 @@ where
             }
         }
 
-        if let HandleReadyResult::Snapshot {
+        if let HandleReadyResult::Snapshot(box HandleSnapshotResult {
             msgs,
             snap_region,
             destroy_regions,
             last_first_index,
-        } = res
+            for_witness,
+        }) = res
         {
+            if for_witness {
+                // inform next round to check apply status
+                ctx.router
+                    .send_casual_msg(snap_region.get_id(), CasualMessage::SnapshotApplied)
+                    .unwrap();
+            }
             // When applying snapshot, there is no log applied and not compacted yet.
             self.raft_log_size_hint = 0;
 
@@ -2874,6 +2889,7 @@ where
                     prev_region: self.region().clone(),
                     region: snap_region,
                     destroy_regions,
+                    for_witness,
                 }),
             });
             if self.last_compacted_idx == 0 && last_first_index >= RAFT_INIT_LOG_INDEX {
@@ -2977,6 +2993,7 @@ where
             } else {
                 vec![]
             };
+
             // Note that the `commit_index` and `commit_term` here may be used to
             // forward the commit index. So it must be less than or equal to persist
             // index.
@@ -2985,6 +3002,7 @@ where
                 self.raft_group.raft.raft_log.persisted,
             );
             let commit_term = self.get_store().term(commit_index).unwrap();
+
             let mut apply = Apply::new(
                 self.peer_id(),
                 self.region_id,
@@ -3094,6 +3112,9 @@ where
                 "after" => ?peer,
             );
             self.peer = peer;
+            // TODO: set priority for witness
+            // self.raft_group
+            //     .set_priority(if self.peer.is_witness { 0 } else { 1 });
         };
 
         self.activate(ctx);
@@ -3443,7 +3464,7 @@ where
         }
 
         let progress_to_be_updated = self.mut_store().applied_term() != applied_term;
-        self.mut_store().set_applied_state(apply_state);
+        self.mut_store().set_apply_state(apply_state);
         self.mut_store().set_applied_term(applied_term);
 
         self.peer_stat.written_keys += apply_metrics.written_keys;
@@ -4331,9 +4352,10 @@ where
         };
 
         let data = req.write_to_bytes()?;
-
-        // TODO: use local histogram metrics
-        PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
+        poll_ctx
+            .raft_metrics
+            .propose_log_size
+            .observe(data.len() as f64);
 
         if data.len() as u64 > poll_ctx.cfg.raft_entry_max_size.0 {
             error!(
@@ -4394,6 +4416,11 @@ where
         msg: &eraftpb::Message,
         peer_disk_usage: DiskUsage,
     ) -> bool {
+        if self.is_witness() {
+            // shouldn't transfer leader to witness peer
+            return true;
+        }
+
         let pending_snapshot = self.is_handling_snapshot() || self.has_pending_snapshot();
         if pending_snapshot
             || msg.get_from() != self.leader_id()
@@ -4646,6 +4673,7 @@ where
         util::check_conf_change(
             &ctx.cfg,
             &self.raft_group,
+            self.region(),
             &self.peer,
             changes.as_ref(),
             &cc,
@@ -4653,8 +4681,7 @@ where
         )?;
 
         ctx.raft_metrics.propose.conf_change.inc();
-        // TODO: use local histogram metrics
-        PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data_size as f64);
+        ctx.raft_metrics.propose_log_size.observe(data_size as f64);
         info!(
             "propose conf change peer";
             "region_id" => self.region_id,
@@ -5011,6 +5038,7 @@ where
             Some(ForceLeaderState::ForceLeader { .. })
         )
     }
+
     pub fn unsafe_recovery_maybe_finish_wait_apply(&mut self, force: bool) {
         if let Some(UnsafeRecoveryState::WaitApply { target_index, .. }) =
             &self.unsafe_recovery_state
@@ -5698,6 +5726,7 @@ mod tests {
             AdminCmdType::TransferLeader,
             AdminCmdType::ComputeHash,
             AdminCmdType::VerifyHash,
+            AdminCmdType::BatchSwitchWitness,
         ];
         for tp in AdminCmdType::values() {
             let mut msg = RaftCmdRequest::default();

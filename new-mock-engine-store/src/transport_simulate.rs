@@ -270,7 +270,7 @@ pub struct DefaultFilterFactory<F: Filter + Default>(PhantomData<F>);
 
 impl<F: Filter + Default + 'static> FilterFactory for DefaultFilterFactory<F> {
     fn generate(&self, _: u64) -> Vec<Box<dyn Filter>> {
-        vec![Box::new(F::default())]
+        vec![Box::<F>::default()]
     }
 }
 

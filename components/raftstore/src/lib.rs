@@ -6,9 +6,8 @@
 #![feature(min_specialization)]
 #![feature(box_patterns)]
 #![feature(hash_drain_filter)]
-#![feature(let_else)]
+#![feature(let_chains)]
 #![recursion_limit = "256"]
-#![feature(drain_filter)]
 
 #[cfg(test)]
 extern crate test;

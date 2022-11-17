@@ -1,8 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use kvproto::kvrpcpb::{ExtraOp, LockInfo};
-use txn_types::{Key, OldValues, TimeStamp, TxnExtra};
+use kvproto::kvrpcpb::ExtraOp;
+use tikv_kv::Modify;
+use txn_types::{insert_old_value_if_resolved, Key, OldValues, TimeStamp, TxnExtra};
 
 use crate::storage::{
     kv::WriteData,
@@ -16,9 +17,9 @@ use crate::storage::{
         },
         Error, ErrorInner, Result,
     },
-    types::PessimisticLockParameters,
-    Error as StorageError, ErrorInner as StorageErrorInner, PessimisticLockRes, ProcessResult,
-    Result as StorageResult, Snapshot,
+    types::{PessimisticLockParameters, PessimisticLockResults},
+    Error as StorageError, PessimisticLockKeyResult, ProcessResult, Result as StorageResult,
+    Snapshot,
 };
 
 command! {
@@ -26,7 +27,7 @@ command! {
     ///
     /// This can be rolled back with a [`PessimisticRollback`](Command::PessimisticRollback) command.
     AcquirePessimisticLock:
-        cmd_ty => StorageResult<PessimisticLockRes>,
+        cmd_ty => StorageResult<PessimisticLockResults>,
         display => "kv::command::acquirepessimisticlock keys({:?}) @ {} {} {} {:?} {} {} {} | {:?}",
         (keys, start_ts, lock_ttl, for_update_ts, wait_timeout, min_commit_ts, check_existence, lock_only_if_exists, ctx),
         content => {
@@ -46,9 +47,9 @@ command! {
             /// later read in the same transaction.
             return_values: bool,
             min_commit_ts: TimeStamp,
-            old_values: OldValues,
             check_existence: bool,
             lock_only_if_exists: bool,
+            allow_lock_with_conflict: bool,
         }
 }
 
@@ -69,17 +70,15 @@ impl CommandExt for AcquirePessimisticLock {
     gen_lock!(keys: multiple(|x| &x.0));
 }
 
-fn extract_lock_info_from_result<T>(res: &StorageResult<T>) -> &LockInfo {
-    match res {
-        Err(StorageError(box StorageErrorInner::Txn(Error(box ErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::KeyIsLocked(info),
-        )))))) => info,
-        _ => panic!("unexpected mvcc error"),
-    }
-}
-
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock {
-    fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+        if self.allow_lock_with_conflict && self.keys.len() > 1 {
+            // Currently multiple keys with `allow_lock_with_conflict` set is not supported.
+            return Err(Error::from(ErrorInner::Other(box_err!(
+                "multiple keys in a single request with allowed_lock_with_conflict set is not allowed"
+            ))));
+        }
+
         let (start_ts, ctx, keys) = (self.start_ts, self.ctx, self.keys);
         let mut txn = MvccTxn::new(start_ts, context.concurrency_manager);
         let mut reader = ReaderWithStats::new(
@@ -87,18 +86,11 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             context.statistics,
         );
 
-        let rows = keys.len();
-        let mut res = if self.return_values {
-            Ok(PessimisticLockRes::Values(vec![]))
-        } else if self.check_existence {
-            // If return_value is set, the existence status is implicitly included in the
-            // result. So check_existence only need to be explicitly handled if
-            // `return_values` is not set.
-            Ok(PessimisticLockRes::Existence(vec![]))
-        } else {
-            Ok(PessimisticLockRes::Empty)
-        };
+        let total_keys = keys.len();
+        let mut res = PessimisticLockResults::with_capacity(total_keys);
+        let mut encountered_locks = vec![];
         let need_old_value = context.extra_op == ExtraOp::ReadOldValue;
+        let mut old_values = OldValues::default();
         for (k, should_not_exist) in keys {
             match acquire_pessimistic_lock(
                 &mut txn,
@@ -113,74 +105,79 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                 self.min_commit_ts,
                 need_old_value,
                 self.lock_only_if_exists,
+                self.allow_lock_with_conflict,
             ) {
-                Ok((val, old_value)) => {
-                    if self.return_values || self.check_existence {
-                        res.as_mut().unwrap().push(val);
-                    }
-                    if old_value.resolved() {
-                        let key = k.append_ts(txn.start_ts);
-                        // MutationType is unknown in AcquirePessimisticLock stage.
-                        let mutation_type = None;
-                        self.old_values.insert(key, (old_value, mutation_type));
-                    }
+                Ok((key_res, old_value)) => {
+                    res.push(key_res);
+                    // MutationType is unknown in AcquirePessimisticLock stage.
+                    insert_old_value_if_resolved(&mut old_values, k, txn.start_ts, old_value, None);
                 }
-                Err(e @ MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
-                    res = Err(e).map_err(Error::from).map_err(StorageError::from);
+                Err(MvccError(box MvccErrorInner::KeyIsLocked(lock_info))) => {
+                    let request_parameters = PessimisticLockParameters {
+                        pb_ctx: ctx.clone(),
+                        primary: self.primary.clone(),
+                        start_ts,
+                        lock_ttl: self.lock_ttl,
+                        for_update_ts: self.for_update_ts,
+                        wait_timeout: self.wait_timeout,
+                        return_values: self.return_values,
+                        min_commit_ts: self.min_commit_ts,
+                        check_existence: self.check_existence,
+                        is_first_lock: self.is_first_lock,
+                        lock_only_if_exists: self.lock_only_if_exists,
+                        allow_lock_with_conflict: self.allow_lock_with_conflict,
+                    };
+                    let lock_info = WriteResultLockInfo::new(
+                        lock_info,
+                        request_parameters,
+                        k,
+                        should_not_exist,
+                    );
+                    encountered_locks.push(lock_info);
+                    // Do not lock previously succeeded keys.
+                    txn.clear();
+                    res.0.clear();
+                    res.push(PessimisticLockKeyResult::Waiting);
                     break;
                 }
                 Err(e) => return Err(Error::from(e)),
             }
         }
 
-        // Some values are read, update max_ts
-        match &res {
-            Ok(PessimisticLockRes::Values(values)) if !values.is_empty() => {
-                txn.concurrency_manager.update_max_ts(self.for_update_ts);
+        let modifies = txn.into_modifies();
+
+        let mut res = Ok(res);
+
+        // If encountered lock and `wait_timeout` is `None` (which means no wait),
+        // return error directly here.
+        if !encountered_locks.is_empty() && self.wait_timeout.is_none() {
+            // Mind the difference of the protocols of legacy requests and resumable
+            // requests. For resumable requests (allow_lock_with_conflict ==
+            // true), key errors are considered key by key instead of for the
+            // whole request.
+            let lock_info = encountered_locks.drain(..).next().unwrap().lock_info_pb;
+            let err = StorageError::from(Error::from(MvccError::from(
+                MvccErrorInner::KeyIsLocked(lock_info),
+            )));
+            if self.allow_lock_with_conflict {
+                res.as_mut().unwrap().0[0] = PessimisticLockKeyResult::Failed(err.into())
+            } else {
+                res = Err(err)
             }
-            Ok(PessimisticLockRes::Existence(values)) if !values.is_empty() => {
-                txn.concurrency_manager.update_max_ts(self.for_update_ts);
-            }
-            _ => (),
         }
 
-        // no conflict
-        let (pr, to_be_write, rows, ctx, lock_info) = if res.is_ok() {
-            let pr = ProcessResult::PessimisticLockRes { res };
-            let extra = TxnExtra {
-                old_values: self.old_values,
-                // One pc status is unkown AcquirePessimisticLock stage.
-                one_pc: false,
-                for_flashback: false,
-            };
-            let write_data = WriteData::new(txn.into_modifies(), extra);
-            (pr, write_data, rows, ctx, None)
-        } else {
-            let request_parameters = PessimisticLockParameters {
-                pb_ctx: ctx.clone(),
-                primary: self.primary.clone(),
-                start_ts: self.start_ts,
-                lock_ttl: self.lock_ttl,
-                for_update_ts: self.for_update_ts,
-                wait_timeout: self.wait_timeout,
-                return_values: self.return_values,
-                min_commit_ts: self.min_commit_ts,
-                check_existence: self.check_existence,
-                is_first_lock: self.is_first_lock,
-                allow_lock_with_conflict: false,
-            };
-            let lock_info_pb = extract_lock_info_from_result(&res);
-            let lock_info = WriteResultLockInfo::new(lock_info_pb.clone(), request_parameters);
-            let pr = ProcessResult::PessimisticLockRes { res };
-            // Wait for lock released
-            (pr, WriteData::default(), 0, ctx, Some(lock_info))
-        };
+        let rows = if res.is_ok() { total_keys } else { 0 };
+
+        let pr = ProcessResult::PessimisticLockRes { res };
+
+        let to_be_write = make_write_data(modifies, old_values);
+
         Ok(WriteResult {
             ctx,
             to_be_write,
             rows,
             pr,
-            lock_info,
+            lock_info: encountered_locks,
             released_locks: ReleasedLocks::new(),
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnProposed,
@@ -188,38 +185,16 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_gen_lock_info_from_result() {
-        let raw_key = b"key".to_vec();
-        let key = Key::from_raw(&raw_key);
-        let ts = 100;
-        let is_first_lock = true;
-        let wait_timeout = WaitTimeout::from_encoded(200);
-
-        let mut info = LockInfo::default();
-        info.set_key(raw_key.clone());
-        info.set_lock_version(ts);
-        info.set_lock_ttl(100);
-        let case = StorageError::from(StorageErrorInner::Txn(Error::from(ErrorInner::Mvcc(
-            MvccError::from(MvccErrorInner::KeyIsLocked(info.clone())),
-        ))));
-        let lock_info = WriteResultLockInfo::new(
-            extract_lock_info_from_result::<()>(&Err(case)).clone(),
-            PessimisticLockParameters {
-                is_first_lock,
-                wait_timeout,
-                ..Default::default()
-            },
-        );
-        assert_eq!(lock_info.lock_digest.ts, ts.into());
-        assert_eq!(lock_info.lock_digest.hash, key.gen_hash());
-        assert_eq!(lock_info.key.into_raw().unwrap(), raw_key);
-        assert_eq!(lock_info.parameters.is_first_lock, is_first_lock);
-        assert_eq!(lock_info.parameters.wait_timeout, wait_timeout);
-        assert_eq!(lock_info.lock_info_pb, info);
+pub(super) fn make_write_data(modifies: Vec<Modify>, old_values: OldValues) -> WriteData {
+    if !modifies.is_empty() {
+        let extra = TxnExtra {
+            old_values,
+            // One pc status is unknown in AcquirePessimisticLock stage.
+            one_pc: false,
+            for_flashback: false,
+        };
+        WriteData::new(modifies, extra)
+    } else {
+        WriteData::default()
     }
 }

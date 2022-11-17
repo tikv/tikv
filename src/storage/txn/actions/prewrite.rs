@@ -21,7 +21,10 @@ use crate::storage::{
         },
         Error, ErrorInner, Lock, LockType, MvccTxn, Result, SnapshotReader,
     },
-    txn::{actions::check_data_constraint::check_data_constraint, LockInfo},
+    txn::{
+        actions::check_data_constraint::check_data_constraint, sched_pool::tls_can_enable,
+        scheduler::LAST_CHANGE_TS, LockInfo,
+    },
     Snapshot,
 };
 
@@ -62,7 +65,7 @@ pub fn prewrite<S: Snapshot>(
     let lock_status = match reader.load_lock(&mutation.key)? {
         Some(lock) => mutation.check_lock(lock, pessimistic_action)?,
         None if matches!(pessimistic_action, DoPessimisticCheck) => {
-            amend_pessimistic_lock(&mutation, reader)?;
+            amend_pessimistic_lock(&mut mutation, reader)?;
             lock_amended = true;
             LockStatus::None
         }
@@ -169,6 +172,7 @@ pub struct TransactionProperties<'a> {
     pub need_old_value: bool,
     pub is_retry_request: bool,
     pub assertion_level: AssertionLevel,
+    pub txn_source: u8,
 }
 
 impl<'a> TransactionProperties<'a> {
@@ -236,6 +240,8 @@ struct PrewriteMutation<'a> {
 
     lock_type: Option<LockType>,
     lock_ttl: u64,
+    last_change_ts: TimeStamp,
+    versions_to_last_change: u64,
 
     should_not_exist: bool,
     should_not_write: bool,
@@ -273,6 +279,8 @@ impl<'a> PrewriteMutation<'a> {
 
             lock_type,
             lock_ttl: txn_props.lock_ttl,
+            last_change_ts: TimeStamp::zero(),
+            versions_to_last_change: 0,
 
             should_not_exist,
             should_not_write,
@@ -320,6 +328,9 @@ impl<'a> PrewriteMutation<'a> {
             return Err(ErrorInner::KeyIsLocked(self.lock_info(lock)?).into());
         }
 
+        self.last_change_ts = lock.last_change_ts;
+        self.versions_to_last_change = lock.versions_to_last_change;
+
         if lock.lock_type == LockType::Pessimistic {
             // TODO: remove it in future
             if !self.txn_props.is_pessimistic() {
@@ -350,7 +361,7 @@ impl<'a> PrewriteMutation<'a> {
     }
 
     fn check_for_newer_version<S: Snapshot>(
-        &self,
+        &mut self,
         reader: &mut SnapshotReader<S>,
     ) -> Result<Option<(Write, TimeStamp)>> {
         let mut seek_ts = TimeStamp::max();
@@ -364,6 +375,10 @@ impl<'a> PrewriteMutation<'a> {
                 MVCC_CONFLICT_COUNTER.rolled_back.inc();
                 // TODO: Maybe we need to add a new error for the rolled back case.
                 self.write_conflict_error(&write, commit_ts, WriteConflictReason::SelfRolledBack)?;
+            }
+            if seek_ts == TimeStamp::max() {
+                (self.last_change_ts, self.versions_to_last_change) =
+                    write.next_last_change_info(commit_ts);
             }
             match self.txn_props.kind {
                 TransactionKind::Optimistic(_) => {
@@ -439,7 +454,13 @@ impl<'a> PrewriteMutation<'a> {
             self.txn_props.for_update_ts(),
             self.txn_props.txn_size,
             self.min_commit_ts,
-        );
+        )
+        .set_txn_source(self.txn_props.txn_source);
+        // Only Lock needs to record `last_change_ts` in its write record, Put or Delete
+        // records themselves are effective changes.
+        if tls_can_enable(LAST_CHANGE_TS) && self.lock_type == Some(LockType::Lock) {
+            lock = lock.set_last_change(self.last_change_ts, self.versions_to_last_change);
+        }
 
         if let Some(value) = self.value {
             if is_short_value(&value) {
@@ -503,7 +524,7 @@ impl<'a> PrewriteMutation<'a> {
     }
 
     fn check_assertion<S: Snapshot>(
-        &self,
+        &mut self,
         reader: &mut SnapshotReader<S>,
         write: &Option<(Write, TimeStamp)>,
         write_loaded: bool,
@@ -694,11 +715,11 @@ fn async_commit_timestamps(
 // If the data is not changed after acquiring the lock, we can still prewrite
 // the key.
 fn amend_pessimistic_lock<S: Snapshot>(
-    mutation: &PrewriteMutation<'_>,
+    mutation: &mut PrewriteMutation<'_>,
     reader: &mut SnapshotReader<S>,
 ) -> Result<()> {
     let write = reader.seek_write(&mutation.key, TimeStamp::max())?;
-    if let Some((commit_ts, _)) = write.as_ref() {
+    if let Some((commit_ts, write)) = write.as_ref() {
         // The invariants of pessimistic locks are:
         //   1. lock's for_update_ts >= key's latest commit_ts
         //   2. lock's for_update_ts >= txn's start_ts
@@ -727,6 +748,8 @@ fn amend_pessimistic_lock<S: Snapshot>(
             }
             .into());
         }
+        (mutation.last_change_ts, mutation.versions_to_last_change) =
+            write.next_last_change_info(*commit_ts);
     }
     // Used pipelined pessimistic lock acquiring in this txn but failed
     // Luckily no other txn modified this lock, amend it by treat it as optimistic
@@ -774,6 +797,7 @@ pub mod tests {
             need_old_value: false,
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
+            txn_source: 0,
         }
     }
 
@@ -800,6 +824,7 @@ pub mod tests {
             need_old_value: true,
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
+            txn_source: 0,
         }
     }
 
@@ -1112,6 +1137,7 @@ pub mod tests {
                 need_old_value: true,
                 is_retry_request: false,
                 assertion_level: AssertionLevel::Off,
+                txn_source: 0,
             },
             Mutation::make_check_not_exists(Key::from_raw(key)),
             &None,
@@ -1144,6 +1170,7 @@ pub mod tests {
             need_old_value: true,
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
+            txn_source: 0,
         };
         // calculated commit_ts = 43 ≤ 50, ok
         let (_, old_value) = prewrite(
@@ -1194,6 +1221,7 @@ pub mod tests {
             need_old_value: true,
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
+            txn_source: 0,
         };
         // calculated commit_ts = 43 ≤ 50, ok
         let (_, old_value) = prewrite(
@@ -1303,6 +1331,7 @@ pub mod tests {
             need_old_value: true,
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
+            txn_source: 0,
         };
 
         let cases = vec![
@@ -1363,6 +1392,7 @@ pub mod tests {
             need_old_value: true,
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
+            txn_source: 0,
         };
 
         let cases: Vec<_> = vec![
@@ -1634,6 +1664,7 @@ pub mod tests {
                 need_old_value: true,
                 is_retry_request: false,
                 assertion_level: AssertionLevel::Off,
+                txn_source: 0,
             };
             let snapshot = engine.snapshot(Default::default()).unwrap();
             let cm = ConcurrencyManager::new(start_ts);
@@ -1688,6 +1719,7 @@ pub mod tests {
             need_old_value: true,
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
+            txn_source: 0,
         };
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let cm = ConcurrencyManager::new(start_ts);
@@ -1829,6 +1861,7 @@ pub mod tests {
                     need_old_value: true,
                     is_retry_request: false,
                     assertion_level: AssertionLevel::Off,
+                    txn_source: 0,
                 };
                 let (_, old_value) = prewrite(
                     &mut txn,
@@ -1865,6 +1898,7 @@ pub mod tests {
                     need_old_value: true,
                     is_retry_request: false,
                     assertion_level: AssertionLevel::Off,
+                    txn_source: 0,
                 };
                 let (_, old_value) = prewrite(
                     &mut txn,
@@ -2193,5 +2227,260 @@ pub mod tests {
         must_prewrite_delete(&mut engine, key, key, 21);
         must_commit(&mut engine, key, 21, 22);
         must_pessimistic_prewrite_insert(&mut engine, key, value, key, 23, 23, DoConstraintCheck);
+    }
+
+    #[cfg(test)]
+    fn test_calculate_last_change_ts_from_latest_write_impl(
+        prewrite_func: impl Fn(&mut RocksEngine, LockType, /* start_ts */ u64),
+    ) {
+        use engine_traits::CF_WRITE;
+        use pd_client::FeatureGate;
+
+        use crate::storage::txn::sched_pool::set_tls_feature_gate;
+
+        let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+        let key = b"k";
+
+        // Latest change ts should not be enabled on TiKV 6.4
+        let feature_gate = FeatureGate::default();
+        feature_gate.set_version("6.4.0").unwrap();
+        set_tls_feature_gate(feature_gate);
+        let write = Write::new(WriteType::Put, 5.into(), Some(b"value".to_vec()));
+        engine
+            .put_cf(
+                Default::default(),
+                CF_WRITE,
+                Key::from_raw(key).append_ts(8.into()),
+                write.as_ref().to_bytes(),
+            )
+            .unwrap();
+        prewrite_func(&mut engine, LockType::Lock, 10);
+        let lock = must_locked(&mut engine, key, 10);
+        assert_eq!(lock.last_change_ts, TimeStamp::zero());
+        assert_eq!(lock.versions_to_last_change, 0);
+        must_rollback(&mut engine, key, 10, false);
+
+        let feature_gate = FeatureGate::default();
+        feature_gate.set_version("6.5.0").unwrap();
+        set_tls_feature_gate(feature_gate);
+
+        // Latest version is a PUT. But as we are prewriting a PUT, no need to record
+        // `last_change_ts`.
+        let write = Write::new(WriteType::Put, 15.into(), Some(b"value".to_vec()));
+        engine
+            .put_cf(
+                Default::default(),
+                CF_WRITE,
+                Key::from_raw(key).append_ts(20.into()),
+                write.as_ref().to_bytes(),
+            )
+            .unwrap();
+        prewrite_func(&mut engine, LockType::Put, 25);
+        let lock = must_locked(&mut engine, key, 25);
+        assert_eq!(lock.last_change_ts, TimeStamp::zero());
+        assert_eq!(lock.versions_to_last_change, 0);
+        must_rollback(&mut engine, key, 25, false);
+
+        // Latest version is a PUT
+        let write = Write::new(WriteType::Put, 30.into(), Some(b"value".to_vec()));
+        engine
+            .put_cf(
+                Default::default(),
+                CF_WRITE,
+                Key::from_raw(key).append_ts(35.into()),
+                write.as_ref().to_bytes(),
+            )
+            .unwrap();
+        prewrite_func(&mut engine, LockType::Lock, 40);
+        let lock = must_locked(&mut engine, key, 40);
+        assert_eq!(lock.last_change_ts, 35.into());
+        assert_eq!(lock.versions_to_last_change, 1);
+        must_rollback(&mut engine, key, 40, false);
+
+        // Latest version is a DELETE
+        let write = Write::new(WriteType::Delete, 45.into(), None);
+        engine
+            .put_cf(
+                Default::default(),
+                CF_WRITE,
+                Key::from_raw(key).append_ts(50.into()),
+                write.as_ref().to_bytes(),
+            )
+            .unwrap();
+        prewrite_func(&mut engine, LockType::Lock, 55);
+        let lock = must_locked(&mut engine, key, 55);
+        assert_eq!(lock.last_change_ts, 50.into());
+        assert_eq!(lock.versions_to_last_change, 1);
+        must_rollback(&mut engine, key, 55, false);
+
+        // Latest version is a LOCK without last_change_ts. Set the last_change_ts of
+        // the new record to zero.
+        let write = Write::new(WriteType::Lock, 60.into(), None);
+        engine
+            .put_cf(
+                Default::default(),
+                CF_WRITE,
+                Key::from_raw(key).append_ts(65.into()),
+                write.as_ref().to_bytes(),
+            )
+            .unwrap();
+        prewrite_func(&mut engine, LockType::Lock, 70);
+        let lock = must_locked(&mut engine, key, 70);
+        assert!(lock.last_change_ts.is_zero());
+        assert_eq!(lock.versions_to_last_change, 0);
+        must_rollback(&mut engine, key, 70, false);
+
+        // Latest version is a ROLLBACK without last_change_ts. Set the last_change_ts
+        // of the new record to zero.
+        let write = Write::new(WriteType::Rollback, 75.into(), None);
+        engine
+            .put_cf(
+                Default::default(),
+                CF_WRITE,
+                Key::from_raw(key).append_ts(80.into()),
+                write.as_ref().to_bytes(),
+            )
+            .unwrap();
+        prewrite_func(&mut engine, LockType::Lock, 85);
+        let lock = must_locked(&mut engine, key, 85);
+        assert!(lock.last_change_ts.is_zero());
+        assert_eq!(lock.versions_to_last_change, 0);
+        must_rollback(&mut engine, key, 85, false);
+
+        // Latest version is a LOCK with last_change_ts
+        let write = Write::new(WriteType::Lock, 90.into(), None).set_last_change(20.into(), 6);
+        engine
+            .put_cf(
+                Default::default(),
+                CF_WRITE,
+                Key::from_raw(key).append_ts(95.into()),
+                write.as_ref().to_bytes(),
+            )
+            .unwrap();
+        prewrite_func(&mut engine, LockType::Lock, 100);
+        let lock = must_locked(&mut engine, key, 100);
+        assert_eq!(lock.last_change_ts, 20.into());
+        assert_eq!(lock.versions_to_last_change, 7);
+        must_rollback(&mut engine, key, 100, false);
+
+        // Latest version is a LOCK with last_change_ts
+        let write = Write::new(WriteType::Lock, 105.into(), None).set_last_change(20.into(), 8);
+        engine
+            .put_cf(
+                Default::default(),
+                CF_WRITE,
+                Key::from_raw(key).append_ts(110.into()),
+                write.as_ref().to_bytes(),
+            )
+            .unwrap();
+        prewrite_func(&mut engine, LockType::Lock, 120);
+        let lock = must_locked(&mut engine, key, 120);
+        assert_eq!(lock.last_change_ts, 20.into());
+        assert_eq!(lock.versions_to_last_change, 9);
+        must_rollback(&mut engine, key, 120, false);
+    }
+
+    #[test]
+    fn test_optimistic_txn_calculate_last_change_ts() {
+        test_calculate_last_change_ts_from_latest_write_impl(|engine, tp, start_ts| match tp {
+            LockType::Put => must_prewrite_put(engine, b"k", b"value", b"k", start_ts),
+            LockType::Delete => must_prewrite_delete(engine, b"k", b"k", start_ts),
+            LockType::Lock => must_prewrite_lock(engine, b"k", b"k", start_ts),
+            _ => unreachable!(),
+        });
+    }
+
+    #[test]
+    fn test_pessimistic_amend_txn_calculate_last_change_ts() {
+        test_calculate_last_change_ts_from_latest_write_impl(|engine, tp, start_ts| match tp {
+            LockType::Put => must_pessimistic_prewrite_put(
+                engine,
+                b"k",
+                b"value",
+                b"k",
+                start_ts,
+                start_ts,
+                DoPessimisticCheck,
+            ),
+            LockType::Delete => must_pessimistic_prewrite_delete(
+                engine,
+                b"k",
+                b"k",
+                start_ts,
+                start_ts,
+                DoPessimisticCheck,
+            ),
+            LockType::Lock => must_pessimistic_prewrite_lock(
+                engine,
+                b"k",
+                b"k",
+                start_ts,
+                start_ts,
+                DoPessimisticCheck,
+            ),
+            _ => unreachable!(),
+        });
+    }
+
+    #[test]
+    fn test_inherit_last_change_ts_from_pessimistic_lock() {
+        use engine_traits::CF_LOCK;
+
+        let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+        let key = b"k";
+        let put_lock =
+            |engine: &mut RocksEngine, ts: u64, last_change_ts: u64, versions_to_last_change| {
+                let lock = Lock::new(
+                    LockType::Pessimistic,
+                    key.to_vec(),
+                    ts.into(),
+                    100,
+                    None,
+                    ts.into(),
+                    5,
+                    ts.into(),
+                )
+                .set_last_change(last_change_ts.into(), versions_to_last_change);
+                engine
+                    .put_cf(
+                        Default::default(),
+                        CF_LOCK,
+                        Key::from_raw(key),
+                        lock.to_bytes(),
+                    )
+                    .unwrap();
+            };
+
+        // Prewrite LOCK from pessimistic lock without `last_change_ts`
+        put_lock(&mut engine, 10, 0, 0);
+        must_pessimistic_prewrite_lock(&mut engine, key, key, 10, 10, DoPessimisticCheck);
+        let lock = must_locked(&mut engine, key, 10);
+        assert_eq!(lock.last_change_ts, TimeStamp::zero());
+        assert_eq!(lock.versions_to_last_change, 0);
+        must_rollback(&mut engine, key, 10, false);
+
+        // Prewrite LOCK from pessimistic lock with `last_change_ts`
+        put_lock(&mut engine, 20, 15, 3);
+        must_pessimistic_prewrite_lock(&mut engine, key, key, 20, 20, DoPessimisticCheck);
+        let lock = must_locked(&mut engine, key, 20);
+        assert_eq!(lock.last_change_ts, 15.into());
+        assert_eq!(lock.versions_to_last_change, 3);
+        must_rollback(&mut engine, key, 20, false);
+
+        // Prewrite PUT from pessimistic lock with `last_change_ts`
+        put_lock(&mut engine, 30, 15, 5);
+        must_pessimistic_prewrite_put(&mut engine, key, b"value", key, 30, 30, DoPessimisticCheck);
+        let lock = must_locked(&mut engine, key, 30);
+        assert_eq!(lock.last_change_ts, TimeStamp::zero());
+        assert_eq!(lock.versions_to_last_change, 0);
+        must_rollback(&mut engine, key, 30, false);
+
+        // Prewrite DELETE from pessimistic lock with `last_change_ts`
+        put_lock(&mut engine, 40, 15, 5);
+        must_pessimistic_prewrite_delete(&mut engine, key, key, 40, 30, DoPessimisticCheck);
+        let lock = must_locked(&mut engine, key, 40);
+        assert_eq!(lock.last_change_ts, TimeStamp::zero());
+        assert_eq!(lock.versions_to_last_change, 0);
+        must_rollback(&mut engine, key, 40, false);
     }
 }

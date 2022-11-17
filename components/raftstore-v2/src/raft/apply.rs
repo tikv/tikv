@@ -1,11 +1,12 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::mem;
+use std::{mem, sync::Arc};
 
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::{KvEngine, TabletFactory};
 use kvproto::{metapb, raft_cmdpb::RaftCmdResponse, raft_serverpb::RegionLocalState};
-use raftstore::store::fsm::apply::DEFAULT_APPLY_WB_SIZE;
+use raftstore::store::{fsm::apply::DEFAULT_APPLY_WB_SIZE, ReadTask};
 use slog::Logger;
+use tikv_util::worker::Scheduler;
 
 use super::Peer;
 use crate::{
@@ -18,9 +19,12 @@ use crate::{
 /// Apply applies all the committed commands to kv db.
 pub struct Apply<EK: KvEngine, R> {
     peer: metapb::Peer,
+    /// publish the update of the tablet
     remote_tablet: CachedTablet<EK>,
     tablet: EK,
     write_batch: Option<EK::WriteBatch>,
+
+    tablet_factory: Arc<dyn TabletFactory<EK>>,
 
     callbacks: Vec<(Vec<CmdResChannel>, RaftCmdResponse)>,
 
@@ -34,6 +38,7 @@ pub struct Apply<EK: KvEngine, R> {
     region_state: RegionLocalState,
 
     res_reporter: R,
+    read_scheduler: Scheduler<ReadTask<EK>>,
     pub(crate) logger: Logger,
 }
 
@@ -44,6 +49,8 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         region_state: RegionLocalState,
         res_reporter: R,
         mut remote_tablet: CachedTablet<EK>,
+        tablet_factory: Arc<dyn TabletFactory<EK>>,
+        read_scheduler: Scheduler<ReadTask<EK>>,
         logger: Logger,
     ) -> Self {
         Apply {
@@ -57,9 +64,16 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             applied_term: 0,
             admin_cmd_result: vec![],
             region_state,
+            tablet_factory,
+            read_scheduler,
             res_reporter,
             logger,
         }
+    }
+
+    #[inline]
+    pub fn tablet_factory(&self) -> &Arc<dyn TabletFactory<EK>> {
+        &self.tablet_factory
     }
 
     #[inline]
@@ -97,6 +111,11 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     }
 
     #[inline]
+    pub fn read_scheduler(&self) -> &Scheduler<ReadTask<EK>> {
+        &self.read_scheduler
+    }
+
+    #[inline]
     pub fn region_state(&self) -> &RegionLocalState {
         &self.region_state
     }
@@ -114,6 +133,11 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     pub fn publish_tablet(&mut self, tablet: EK) {
         self.remote_tablet.set(tablet.clone());
         self.tablet = tablet;
+    }
+
+    #[inline]
+    pub fn tablet(&self) -> &EK {
+        &self.tablet
     }
 
     #[inline]

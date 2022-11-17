@@ -40,7 +40,7 @@ impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
     pub fn new(
         cfg: &Config,
         tablet_factory: &dyn TabletFactory<EK>,
-        storage: Storage<ER>,
+        storage: Storage<EK, ER>,
     ) -> Result<SenderFsmPair<EK, ER>> {
         let peer = Peer::new(cfg, tablet_factory, storage)?;
         info!(peer.logger, "create peer");
@@ -187,7 +187,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         self.store_ctx
             .raft_metrics
             .propose_wait_time
-            .observe(duration_to_sec(send_time.saturating_elapsed()) as f64);
+            .observe(duration_to_sec(send_time.saturating_elapsed()));
     }
 
     fn on_tick(&mut self, tick: PeerTick) {
@@ -220,6 +220,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
                 PeerMsg::ApplyRes(res) => self.fsm.peer.on_apply_res(self.store_ctx, res),
+                PeerMsg::SplitInit(msg) => self.fsm.peer.on_split_init(self.store_ctx, msg),
                 PeerMsg::Start => self.on_start(),
                 PeerMsg::Noop => unimplemented!(),
                 PeerMsg::Persisted {
@@ -229,8 +230,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     .fsm
                     .peer_mut()
                     .on_persisted(self.store_ctx, peer_id, ready_number),
-                PeerMsg::FetchedLogs(fetched_logs) => {
-                    self.fsm.peer_mut().on_fetched_logs(fetched_logs)
+                PeerMsg::LogsFetched(fetched_logs) => {
+                    self.fsm.peer_mut().on_logs_fetched(fetched_logs)
+                }
+                PeerMsg::SnapshotGenerated(snap_res) => {
+                    self.fsm.peer_mut().on_snapshot_generated(snap_res)
                 }
                 PeerMsg::QueryDebugInfo(ch) => self.fsm.peer_mut().on_query_debug_info(ch),
                 #[cfg(feature = "testexport")]
@@ -238,6 +242,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
             }
         }
         // TODO: instead of propose pending commands immediately, we should use timeout.
-        self.fsm.peer.propose_pending_command(self.store_ctx);
+        self.fsm.peer.propose_pending_writes(self.store_ctx);
     }
 }

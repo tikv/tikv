@@ -866,7 +866,7 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
         self.region_size(region, cfs)
             .unwrap_or_else(|e| perror_and_exit("Debugger::region_size", e))
             .into_iter()
-            .map(|(cf, size)| (cf.to_owned(), size as usize))
+            .map(|(cf, size)| (cf.to_owned(), size))
             .collect()
     }
 

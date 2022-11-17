@@ -132,7 +132,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
             to_be_write: write_data,
             rows: 1,
             pr,
-            lock_info: None,
+            lock_info: vec![],
             released_locks,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
@@ -144,8 +144,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
 pub mod tests {
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::{Context, PrewriteRequestPessimisticAction::*};
+    use tikv_kv::Statistics;
     use tikv_util::deadline::Deadline;
-    use txn_types::{Key, WriteType};
+    use txn_types::{Key, Mutation, WriteType};
 
     use super::{TxnStatus::*, *};
     use crate::storage::{
@@ -153,7 +154,9 @@ pub mod tests {
         lock_manager::MockLockManager,
         mvcc::tests::*,
         txn::{
-            commands::{pessimistic_rollback, WriteCommand, WriteContext},
+            commands::{
+                pessimistic_rollback, test_util::prewrite_with_cm, WriteCommand, WriteContext,
+            },
             scheduler::DEFAULT_EXECUTION_DURATION_LIMIT,
             tests::*,
         },
@@ -1162,5 +1165,109 @@ pub mod tests {
         );
         must_unlocked(&mut engine, k);
         must_get_rollback_ts(&mut engine, k, ts(50, 0));
+    }
+
+    #[test]
+    fn test_rollback_calculate_last_change_info() {
+        use pd_client::FeatureGate;
+
+        use crate::storage::txn::sched_pool::set_tls_feature_gate;
+
+        let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+        let cm = ConcurrencyManager::new(1.into());
+        let k = b"k";
+        let mut statistics = Statistics::default();
+
+        must_prewrite_put(&mut engine, k, b"v1", k, 5);
+        must_commit(&mut engine, k, 5, 6);
+        must_prewrite_put(&mut engine, k, b"v2", k, 7);
+        must_commit(&mut engine, k, 7, 8);
+        must_prewrite_put(&mut engine, k, b"v3", k, 30);
+        must_commit(&mut engine, k, 30, 35);
+
+        // TiKV 6.4 should not write last_change_ts.
+        let feature_gate = FeatureGate::default();
+        feature_gate.set_version("6.4.0").unwrap();
+        set_tls_feature_gate(feature_gate);
+        must_rollback(&mut engine, k, 40, true);
+        let rollback = must_written(&mut engine, k, 40, 40, WriteType::Rollback);
+        assert!(rollback.last_change_ts.is_zero());
+        assert_eq!(rollback.versions_to_last_change, 0);
+
+        let feature_gate = FeatureGate::default();
+        feature_gate.set_version("6.5.0").unwrap();
+        set_tls_feature_gate(feature_gate);
+
+        must_prewrite_put(&mut engine, k, b"v4", k, 45);
+        must_commit(&mut engine, k, 45, 50);
+
+        // Rollback when there is no lock; prev writes:
+        // - 50: PUT
+        must_rollback(&mut engine, k, 55, true);
+        let rollback = must_written(&mut engine, k, 55, 55, WriteType::Rollback);
+        assert_eq!(rollback.last_change_ts, 50.into());
+        assert_eq!(rollback.versions_to_last_change, 1);
+
+        // Write a LOCK; prev writes:
+        // - 55: ROLLBACK
+        // - 50: PUT
+        let res = prewrite_with_cm(
+            &mut engine,
+            cm,
+            &mut statistics,
+            vec![Mutation::make_lock(Key::from_raw(k))],
+            k.to_vec(),
+            60,
+            Some(70),
+        )
+        .unwrap();
+        assert!(!res.one_pc_commit_ts.is_zero());
+        let lock_commit_ts = res.one_pc_commit_ts;
+        let lock = must_written(&mut engine, k, 60, res.one_pc_commit_ts, WriteType::Lock);
+        assert_eq!(lock.last_change_ts, 50.into());
+        assert_eq!(lock.versions_to_last_change, 2);
+
+        // Write another ROLLBACK; prev writes:
+        // - 61: LOCK
+        // - 55: ROLLBACK
+        // - 50: PUT
+        must_rollback(&mut engine, k, 70, true);
+        let rollback = must_written(&mut engine, k, 70, 70, WriteType::Rollback);
+        assert_eq!(rollback.last_change_ts, 50.into());
+        assert_eq!(rollback.versions_to_last_change, 3);
+
+        // last_change_ts should point to the latest record before start_ts; prev
+        // writes:
+        // - 8: PUT
+        must_acquire_pessimistic_lock(&mut engine, k, k, 10, 75);
+        must_pessimistic_prewrite_put(&mut engine, k, b"v5", k, 10, 75, DoPessimisticCheck);
+        must_rollback(&mut engine, k, 10, true);
+        must_unlocked(&mut engine, k);
+        let rollback = must_written(&mut engine, k, 10, 10, WriteType::Rollback);
+        assert_eq!(rollback.last_change_ts, 8.into());
+        assert_eq!(rollback.versions_to_last_change, 1);
+
+        // Overlapped rollback should not update the last_change_ts of PUT; prev writes:
+        // - 8: PUT <- rollback overlaps
+        // - 6: PUT
+        must_rollback(&mut engine, k, 8, true);
+        let put = must_written(&mut engine, k, 7, 8, WriteType::Put);
+        assert!(put.last_change_ts.is_zero());
+        assert_eq!(put.versions_to_last_change, 0);
+        assert!(put.has_overlapped_rollback);
+
+        // Overlapped rollback can update the last_change_ts of LOCK; writes:
+        // - 61: PUT <- rollback overlaps
+        // - 57: ROLLBACK (inserted later)
+        // - 55: ROLLBACK
+        // - 50: PUT
+        must_rollback(&mut engine, k, 57, true);
+        let rollback = must_written(&mut engine, k, 57, 57, WriteType::Rollback);
+        assert_eq!(rollback.last_change_ts, 50.into());
+        assert_eq!(rollback.versions_to_last_change, 2);
+        must_rollback(&mut engine, k, lock_commit_ts, true);
+        let lock = must_written(&mut engine, k, 60, lock_commit_ts, WriteType::Lock);
+        assert_eq!(lock.last_change_ts, 50.into());
+        assert_eq!(lock.versions_to_last_change, 3);
     }
 }

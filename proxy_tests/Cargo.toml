@@ -15,7 +15,7 @@ failpoints = ["fail/failpoints", "tikv/failpoints"]
 cloud-aws = ["external_storage_export/cloud-aws"]
 cloud-gcp = ["external_storage_export/cloud-gcp"]
 cloud-azure = ["external_storage_export/cloud-azure"]
-testexport = ["raftstore/testexport", "tikv/testexport"]
+testexport = ["raftstore/testexport", "tikv/testexport", "engine_tiflash/testexport"]
 profiling = ["profiler/profiling"]
 
 test-engine-kv-rocksdb = [
@@ -49,6 +49,7 @@ crossbeam = "0.8"
 encryption = { workspace = true }
 engine_rocks_helper = { workspace = true }
 engine_store_ffi = { workspace = true, default-features = false }
+engine_tiflash = { workspace = true, default-features = false }
 error_code = { workspace = true }
 fail = "0.5"
 file_system = { workspace = true }

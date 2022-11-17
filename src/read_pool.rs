@@ -32,10 +32,10 @@ use crate::{
 // the duration to check auto-scale unified-thread-pool's thread
 const READ_POOL_THREAD_CHECK_DURATION: Duration = Duration::from_secs(10);
 // consider scale out read pool size if the average thread cpu usage is higher
-// than this threahold.
+// than this threshold.
 const READ_POOL_THREAD_HIGH_THRESHOLD: f64 = 0.8;
 // consider scale in read pool size if the average thread cpu usage is lower
-// than this threahold.
+// than this threshold.
 const READ_POOL_THREAD_LOW_THRESHOLD: f64 = 0.7;
 // avg running tasks per-thread that indicates read-pool is busy
 const RUNNING_TASKS_PER_THREAD_THRESHOLD: i64 = 3;
@@ -192,10 +192,7 @@ impl ReadPoolHandle {
         match self {
             ReadPoolHandle::FuturePools {
                 read_pool_normal, ..
-            } => {
-                read_pool_normal.get_running_task_count() as usize
-                    / read_pool_normal.get_pool_size()
-            }
+            } => read_pool_normal.get_running_task_count() / read_pool_normal.get_pool_size(),
             ReadPoolHandle::Yatp {
                 running_tasks,
                 pool_size,

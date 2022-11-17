@@ -90,7 +90,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
             to_be_write: write_data,
             rows: 1,
             pr,
-            lock_info: None,
+            lock_info: vec![],
             released_locks: ReleasedLocks::new(),
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
