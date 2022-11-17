@@ -16,8 +16,7 @@ use std::{
 use collections::HashMap;
 use crossbeam::channel::{bounded, Receiver, Sender, TryRecvError};
 use engine_traits::{
-    KvEngine, PerfContext, PerfContextKind, RaftEngine, RaftLogBatch, Result as EResult,
-    WriteBatch, WriteOptions,
+    KvEngine, PerfContext, PerfContextKind, RaftEngine, RaftLogBatch, WriteBatch, WriteOptions,
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
@@ -29,7 +28,7 @@ use raft::eraftpb::Entry;
 use tikv_util::{
     box_err,
     config::{Tracker, VersionTrack},
-    debug, error, info, slow_log,
+    debug, info, slow_log,
     sys::thread::StdThreadBuildWrapper,
     thd_name,
     time::{duration_to_sec, Instant},
@@ -171,7 +170,7 @@ where
     pub send_time: Instant,
     pub raft_wb: Option<ER::LogBatch>,
     // after_write_hook will be called after write to db.
-    pub after_write_hook: Option<Box<dyn FnOnce() -> EResult<EK> + Send>>,
+    pub after_write_hook: Option<Box<dyn FnOnce() + Send>>,
     pub entries: Vec<Entry>,
     pub cut_logs: Option<(u64, u64)>,
     pub raft_state: Option<RaftLocalState>,
@@ -202,15 +201,6 @@ where
             after_write_hook: None,
             has_snapshot: false,
         }
-    }
-
-    pub fn on_after_write_to_kv_db(&mut self) {
-        if self.after_write_hook.is_some() {
-            let hook = std::mem::take(&mut self.after_write_hook).unwrap();
-            if let Err(e) = hook() {
-                error!("load tablet failed";"error"=>?e,"region_id"=>self.region_id);
-            }
-        };
     }
 
     pub fn has_data(&self) -> bool {
@@ -376,6 +366,7 @@ where
     pub extra_batch_write: ExtraBatchWrite<EK::WriteBatch>,
     pub state_size: usize,
     pub tasks: Vec<WriteTask<EK, ER>>,
+    pub after_hooks: Vec<Box<dyn FnOnce() + Send>>,
     // region_id -> (peer_id, ready_number)
     pub readies: HashMap<u64, (u64, u64)>,
 }
@@ -392,6 +383,7 @@ where
             extra_batch_write: ExtraBatchWrite::None,
             state_size: 0,
             tasks: vec![],
+            after_hooks: vec![],
             readies: HashMap::default(),
         }
     }
@@ -445,7 +437,9 @@ where
                 );
             }
         }
-
+        if let Some(v) = task.after_write_hook.take() {
+            self.after_hooks.push(v);
+        };
         self.tasks.push(task);
     }
 
@@ -514,16 +508,21 @@ where
     }
 
     fn after_write_to_kv_db(&mut self, metrics: &StoreWriteMetrics) {
-        let now = std::time::Instant::now();
-        for task in &mut self.tasks {
-            task.on_after_write_to_kv_db();
-            if metrics.waterfall_metrics {
+        if metrics.waterfall_metrics {
+            let now = std::time::Instant::now();
+            for task in &self.tasks {
                 for tracker in &task.trackers {
                     tracker.observe(now, &metrics.wf_kvdb_end, |t| {
                         &mut t.metrics.wf_kvdb_end_nanos
                     });
                 }
             }
+        }
+    }
+
+    fn on_after_writer_to_kv_db(&mut self) {
+        for hook in mem::take(&mut self.after_hooks) {
+            hook();
         }
     }
 
@@ -722,8 +721,9 @@ where
                 write_kv_time = duration_to_sec(now.saturating_elapsed());
                 STORE_WRITE_KVDB_DURATION_HISTOGRAM.observe(write_kv_time);
             }
+            self.batch.after_write_to_kv_db(&self.metrics);
         }
-        self.batch.after_write_to_kv_db(&self.metrics);
+        self.batch.on_after_writer_to_kv_db();
         fail_point!("raft_between_save");
 
         let mut write_raft_time = 0f64;

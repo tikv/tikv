@@ -289,7 +289,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         &mut self.region_state
     }
 
-    pub fn get_region_id(&self) -> u64 {
+    pub fn region_id(&self) -> u64 {
         return self.region().get_id();
     }
 
@@ -536,8 +536,8 @@ mod tests {
 
         // It can be set before load tablet.
         assert_eq!(PeerState::Normal, s.region_state().get_state());
-        assert_eq!(10, s.entry_storage().get_truncate_index());
-        assert_eq!(1, s.entry_storage().get_truncate_term());
+        assert_eq!(10, s.entry_storage().truncate_index());
+        assert_eq!(1, s.entry_storage().truncate_term());
         assert_eq!(10, s.entry_storage().raft_state().last_index);
         // This index can't be set before load tablet.
         assert_ne!(10, s.entry_storage().applied_index());
@@ -545,8 +545,6 @@ mod tests {
         assert_ne!(1, s.entry_storage().applied_term());
         assert_ne!(10, s.region_state().get_tablet_index());
         assert!(task.after_write_hook.is_some());
-        // todo: load tablet should be failed because the snapshot is not correct.
-        task.after_write_hook.unwrap()().unwrap_err();
 
         s.after_applied_snapshot();
         assert_eq!(10, s.entry_storage().applied_index());

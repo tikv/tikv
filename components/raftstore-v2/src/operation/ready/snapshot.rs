@@ -319,8 +319,8 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
 
     pub fn after_applied_snapshot(&mut self) {
         let mut entry = self.entry_storage_mut();
-        let term = entry.get_truncate_term();
-        let index = entry.get_truncate_index();
+        let term = entry.truncate_term();
+        let index = entry.truncate_index();
         entry.set_applied_term(term);
         entry.set_last_term(term);
         entry.apply_state_mut().set_applied_index(index);
@@ -334,7 +334,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         snap_mgr: TabletSnapManager,
         tablet_factory: Arc<dyn TabletFactory<EK>>,
     ) -> Result<()> {
-        let region_id = self.get_region_id();
+        let region_id = self.region_id();
         let peer_id = self.peer().get_id();
         info!(
             self.logger(),
@@ -369,9 +369,14 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let key = TabletSnapKey::new(region_id, peer_id, last_term, last_index);
         let mut path = snap_mgr.get_recv_tablet_path(&key);
 
+        let logger = self.logger().clone();
         // The snapshot require no additional processing such as ingest them to DB, but
         // it should load it into the factory after it persisted.
-        let hook = move || tablet_factory.load_tablet(path.as_path(), region_id, last_index);
+        let hook = move || {
+            if let Err(e) = tablet_factory.load_tablet(path.as_path(), region_id, last_index) {
+                error!(logger, "failed to load tablet";"path" => path.display(),"err" => ?e);
+            }
+        };
         task.after_write_hook = (Some(Box::new(hook)));
         task.has_snapshot = true;
         Ok(())

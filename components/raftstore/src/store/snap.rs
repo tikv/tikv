@@ -1969,12 +1969,12 @@ impl TabletSnapManager {
 
     pub fn get_tablet_checkpointer_path(&self, key: &TabletSnapKey) -> PathBuf {
         let prefix = key.get_gen_suffix();
-        PathBuf::from(&self.base).join(&prefix)
+        PathBuf::from(&self.base).join(prefix)
     }
 
     pub fn get_recv_tablet_path(&self, key: &TabletSnapKey) -> PathBuf {
         let prefix = key.get_recv_suffix();
-        PathBuf::from(&self.base).join(&prefix)
+        PathBuf::from(&self.base).join(prefix)
     }
 }
 

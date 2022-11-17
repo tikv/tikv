@@ -412,15 +412,22 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.raft_group_mut().on_persist_ready(persisted_number);
         let persisted_index = self.raft_group().raft.raft_log.persisted;
         let first_index = self.storage().first_index().unwrap() - 1;
+        /// The apply snapshot process order would be:
+        /// - Get the snapshot from the ready
+        /// - Wait for async write to load this tablet
+        /// In this step, the snapshot has loaded finish, but some apply state
+        /// need to update.
         if first_index == persisted_index && has_snapshot {
-            self.storage_mut().after_applied_snapshot();
-            let region_id = self.storage().get_region_id();
+            let region_id = self.storage().region_id();
             let tablet = ctx
                 .tablet_factory
                 .open_tablet(region_id, Some(first_index), OpenOptions::default())
                 .unwrap();
             self.tablet_mut().set(tablet);
             self.schedule_apply_fsm(ctx);
+            self.storage_mut().after_applied_snapshot();
+            self.raft_group_mut().advance_apply_to(first_index);
+            self.read_progress_mut().update_applied_core(first_index);
             info!(self.logger, "apply tablet snapshot completely");
         }
 
@@ -545,7 +552,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 ctx.snap_mgr.clone(),
                 ctx.tablet_factory.clone(),
             ) {
-                error!(self.logger(),"failed to apply snapshot";"error"=>?e)
+                error!(self.logger(),"failed to apply snapshot";"error" => ?e)
             }
         }
 
