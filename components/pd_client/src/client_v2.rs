@@ -76,7 +76,6 @@ struct ConnectContext {
 
 #[derive(Clone)]
 struct RawClient {
-    channel: Channel,
     stub: PdClientStub,
     target_info: TargetInfo,
     members: GetMembersResponse,
@@ -91,7 +90,7 @@ impl RawClient {
         let members = self.members.clone();
         let direct_connected = self.target_info.direct_connected();
         slow_log!(start.saturating_elapsed(), "try reconnect pd");
-        let (channel, stub, target_info, members, _) = match ctx
+        let (stub, target_info, members, _) = match ctx
             .connector
             .reconnect_pd(
                 members,
@@ -124,7 +123,6 @@ impl RawClient {
 
         fail_point!("pd_client_v2_reconnect", |_| Ok(true));
 
-        self.channel = channel;
         self.stub = stub;
         self.target_info = target_info;
         self.members = members;
@@ -210,7 +208,7 @@ impl CachedRawClient {
 
     #[inline]
     fn channel(&self) -> &Channel {
-        &self.cache.channel
+        unimplemented!()
     }
 
     #[inline]
@@ -301,14 +299,13 @@ impl RpcClient {
         let pd_connector = PdConnector::new(env.clone(), security_mgr.clone());
         for i in 0..retries {
             match pd_connector.validate_endpoints(cfg, false).await {
-                Ok((channel, stub, target_info, members, _)) => {
+                Ok((stub, target_info, members, _)) => {
                     let cluster_id = members.get_header().get_cluster_id();
                     let context = ConnectContext {
                         enable_forwarding: cfg.enable_forwarding,
                         connector: pd_connector,
                     };
                     let client = RawClient {
-                        channel,
                         stub,
                         target_info,
                         members,

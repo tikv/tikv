@@ -2,7 +2,7 @@
 
 use std::{
     i32,
-    net::{IpAddr, SocketAddr},
+    net::SocketAddr,
     str::FromStr,
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -141,8 +141,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
             cfg.value().reject_messages_on_memory_ratio,
         );
 
-        let addr = SocketAddr::from_str(&cfg.value().addr)?;
-        let ip = format!("{}", addr.ip());
+        let local_addr = SocketAddr::from_str(&cfg.value().addr)?;
         let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
             .resize_memory(cfg.value().grpc_memory_pool_quota.0 as usize);
         let channel_args = ChannelBuilder::new(Arc::clone(&env))
@@ -161,7 +160,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
                 .channel_args(channel_args)
                 .register_service(create_tikv(kv_service))
                 .register_service(create_health(health_service.clone()));
-            sb = security_mgr.bind(sb, &ip, addr.port());
+            sb = security_mgr.prepare(sb);
             Either::Left(sb)
         };
 
@@ -183,7 +182,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
             env: Arc::clone(&env),
             builder_or_server: Some(builder),
             grpc_mem_quota: mem_quota,
-            local_addr: addr,
+            local_addr,
             trans,
             raft_router,
             snap_mgr,
@@ -237,14 +236,16 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
     }
 
     /// Build gRPC server and bind to address.
-    pub fn build_and_bind(&mut self) -> Result<SocketAddr> {
+    pub fn build_and_bind(&mut self, security_mgr: &Arc<SecurityManager>) -> Result<SocketAddr> {
         let sb = self.builder_or_server.take().unwrap().left().unwrap();
-        let server = sb.build()?;
-        let (host, port) = server.bind_addrs().next().unwrap();
-        let addr = SocketAddr::new(IpAddr::from_str(host)?, port);
-        self.local_addr = addr;
+        let mut server = sb.build()?;
+
+        let addr_str = format!("{}:{}", self.local_addr.ip(), self.local_addr.port());
+        let port = security_mgr.bind(&mut server, &addr_str)?;
+        self.local_addr.set_port(port);
+
         self.builder_or_server = Some(Either::Right(server));
-        Ok(addr)
+        Ok(self.local_addr)
     }
 
     /// Starts the TiKV server.
@@ -571,7 +572,7 @@ mod tests {
         )
         .unwrap();
 
-        server.build_and_bind().unwrap();
+        server.build_and_bind(&security_mgr).unwrap();
         server.start(cfg, security_mgr).unwrap();
 
         let mut trans = server.transport();

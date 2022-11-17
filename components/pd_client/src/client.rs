@@ -87,7 +87,7 @@ impl RpcClient {
         let pd_connector = PdConnector::new(env.clone(), security_mgr.clone());
         for i in 0..retries {
             match pd_connector.validate_endpoints(cfg, true).await {
-                Ok((_, client, target, members, tso)) => {
+                Ok((client, target, members, tso)) => {
                     let cluster_id = members.get_header().get_cluster_id();
                     let rpc_client = RpcClient {
                         cluster_id,

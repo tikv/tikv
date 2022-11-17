@@ -26,9 +26,12 @@ where
         .max_send_message_len(-1)
         .build_args();
 
-    let mut sb = ServerBuilder::new(Arc::clone(&env))
+    let sb = ServerBuilder::new(Arc::clone(&env))
         .channel_args(channel_args)
         .register_service(create_tikv(kv));
-    sb = security_mgr.bind(sb, ip, port);
-    sb.build()
+    let mut server = security_mgr.prepare(sb).build().unwrap();
+    security_mgr
+        .bind(&mut server, &format!("{ip}:{port}"))
+        .unwrap();
+    Ok(server)
 }

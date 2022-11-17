@@ -24,6 +24,7 @@ use super::mocker::*;
 pub struct Server<C: PdMocker> {
     server: Option<GrpcServer>,
     mocker: PdMock<C>,
+    bind_addrs: Vec<(String, u16)>,
 }
 
 impl Server<Service> {
@@ -61,6 +62,7 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
         let mut server = Server {
             server: None,
             mocker,
+            bind_addrs: Vec::new(),
         };
         server.start(mgr, eps);
         server
@@ -74,21 +76,20 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
                 .name_prefix(thd_name!("mock-server"))
                 .build(),
         );
-        let mut sb = ServerBuilder::new(env).register_service(service);
-        for (host, port) in eps {
-            sb = mgr.bind(sb, &host, port);
-        }
+        let sb = ServerBuilder::new(env).register_service(service);
+        let mut server = mgr.prepare(sb).build().unwrap();
 
-        let mut server = sb.build().unwrap();
-        {
-            let addrs: Vec<String> = server
-                .bind_addrs()
-                .map(|(host, port)| format!("{}:{}", host, port))
-                .collect();
-            self.mocker.default_handler.set_endpoints(addrs.clone());
-            if let Some(case) = self.mocker.case.as_ref() {
-                case.set_endpoints(addrs);
-            }
+        let mut flat_addrs = Vec::new();
+        for (host, port) in eps {
+            let port = mgr.bind(&mut server, &format!("{host}:{port}")).unwrap();
+            flat_addrs.push(format!("{host}:{port}"));
+            self.bind_addrs.push((host, port));
+        }
+        self.mocker
+            .default_handler
+            .set_endpoints(flat_addrs.clone());
+        if let Some(case) = self.mocker.case.as_ref() {
+            case.set_endpoints(flat_addrs);
         }
 
         server.start();
@@ -105,12 +106,7 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
     }
 
     pub fn bind_addrs(&self) -> Vec<(String, u16)> {
-        self.server
-            .as_ref()
-            .unwrap()
-            .bind_addrs()
-            .map(|(host, port)| (host.clone(), port))
-            .collect()
+        self.bind_addrs.clone()
     }
 }
 

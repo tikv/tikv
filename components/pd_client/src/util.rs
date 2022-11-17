@@ -18,9 +18,8 @@ use futures::{
     task::{Context, Poll, Waker},
 };
 use grpcio::{
-    CallOption, Channel, ChannelBuilder, ClientCStreamReceiver, ClientDuplexReceiver,
-    ClientDuplexSender, Environment, Error::RpcFailure, MetadataBuilder, Result as GrpcResult,
-    RpcStatusCode,
+    CallOption, ChannelBuilder, ClientCStreamReceiver, ClientDuplexReceiver, ClientDuplexSender,
+    Environment, Error::RpcFailure, MetadataBuilder, Result as GrpcResult, RpcStatusCode,
 };
 use kvproto::{
     metapb::BucketStats,
@@ -368,7 +367,7 @@ impl Client {
         }
 
         slow_log!(start.saturating_elapsed(), "try reconnect pd");
-        let (_, client, target_info, members, tso) = match future.await {
+        let (client, target_info, members, tso) = match future.await {
             Err(e) => {
                 PD_RECONNECT_COUNTER_VEC
                     .with_label_values(&["failure"])
@@ -527,7 +526,6 @@ where
 
 // TODO: remove `Channel` when `PdClientStub::channel()` is available.
 pub type StubTuple = (
-    Channel,
     PdClientStub,
     TargetInfo,
     GetMembersResponse,
@@ -556,7 +554,7 @@ impl PdConnector {
                 return Err(box_err!("duplicate PD endpoint {}", ep));
             }
 
-            let (_, _, resp) = match self.connect(ep).await {
+            let (_, resp) = match self.connect(ep).await {
                 Ok(resp) => resp,
                 // Ignore failed PD node.
                 Err(e) => {
@@ -597,7 +595,7 @@ impl PdConnector {
         }
     }
 
-    pub async fn connect(&self, addr: &str) -> Result<(Channel, PdClientStub, GetMembersResponse)> {
+    pub async fn connect(&self, addr: &str) -> Result<(PdClientStub, GetMembersResponse)> {
         info!("connecting to PD endpoint"; "endpoints" => addr);
         let addr_trim = trim_http_prefix(addr);
         let channel = {
@@ -610,19 +608,18 @@ impl PdConnector {
         };
         fail_point!("cluster_id_is_not_ready", |_| {
             Ok((
-                channel.clone(),
                 PdClientStub::new(channel.clone()),
                 GetMembersResponse::default(),
             ))
         });
-        let client = PdClientStub::new(channel.clone());
+        let client = PdClientStub::new(channel);
         let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
         let response = client
             .get_members_async_opt(&GetMembersRequest::default(), option)
             .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "get_members", e))
             .await;
         match response {
-            Ok(resp) => Ok((channel, client, resp)),
+            Ok(resp) => Ok((client, resp)),
             Err(e) => Err(Error::Grpc(e)),
         }
     }
@@ -647,7 +644,7 @@ impl PdConnector {
         {
             for ep in m.get_client_urls() {
                 match self.connect(ep.as_str()).await {
-                    Ok((_, _, r)) => {
+                    Ok((_, r)) => {
                         let header = r.get_header();
                         // Try next follower endpoint if the cluster has not ready since this pr:
                         // pd#5412.
@@ -711,7 +708,7 @@ impl PdConnector {
         }
         let (res, has_network_error) = self.reconnect_leader(leader).await?;
         match res {
-            Some((channel, client, target_url)) => {
+            Some((client, target_url)) => {
                 let info = TargetInfo::new(target_url, "");
                 let tso = if build_tso {
                     Some(TimestampOracle::new(
@@ -722,7 +719,7 @@ impl PdConnector {
                 } else {
                     None
                 };
-                return Ok(Some((channel, client, info, resp, tso)));
+                return Ok(Some((client, info, resp, tso)));
             }
             None => {
                 // If the force is false, we could have already forwarded the requests.
@@ -731,9 +728,7 @@ impl PdConnector {
                     return Err(box_err!("failed to connect to {:?}", leader));
                 }
                 if enable_forwarding && has_network_error {
-                    if let Ok(Some((channel, client, info))) =
-                        self.try_forward(members, leader).await
-                    {
+                    if let Ok(Some((client, info))) = self.try_forward(members, leader).await {
                         let tso = if build_tso {
                             Some(TimestampOracle::new(
                                 resp.get_header().get_cluster_id(),
@@ -743,7 +738,7 @@ impl PdConnector {
                         } else {
                             None
                         };
-                        return Ok(Some((channel, client, info, resp, tso)));
+                        return Ok(Some((client, info, resp, tso)));
                     }
                 }
             }
@@ -757,18 +752,15 @@ impl PdConnector {
     pub async fn connect_member(
         &self,
         peer: &Member,
-    ) -> Result<(
-        Option<(Channel, PdClientStub, String, GetMembersResponse)>,
-        bool,
-    )> {
+    ) -> Result<(Option<(PdClientStub, String, GetMembersResponse)>, bool)> {
         let mut network_fail_num = 0;
         let mut has_network_error = false;
         let client_urls = peer.get_client_urls();
         for ep in client_urls {
             match self.connect(ep.as_str()).await {
-                Ok((channel, client, resp)) => {
+                Ok((client, resp)) => {
                     info!("connected to PD member"; "endpoints" => ep);
-                    return Ok((Some((channel, client, ep.clone(), resp)), false));
+                    return Ok((Some((client, ep.clone(), resp)), false));
                 }
                 Err(Error::Grpc(e)) => {
                     if let RpcFailure(ref status) = e {
@@ -793,7 +785,7 @@ impl PdConnector {
     pub async fn reconnect_leader(
         &self,
         leader: &Member,
-    ) -> Result<(Option<(Channel, PdClientStub, String)>, bool)> {
+    ) -> Result<(Option<(PdClientStub, String)>, bool)> {
         fail_point!("connect_leader", |_| Ok((None, true)));
         let mut retry_times = MAX_RETRY_TIMES;
         let timer = Instant::now();
@@ -801,8 +793,8 @@ impl PdConnector {
         loop {
             let (res, has_network_err) = self.connect_member(leader).await?;
             match res {
-                Some((channel, client, ep, _)) => {
-                    return Ok((Some((channel, client, ep)), has_network_err));
+                Some((client, ep, _)) => {
+                    return Ok((Some((client, ep)), has_network_err));
                 }
                 None => {
                     if has_network_err
@@ -826,12 +818,12 @@ impl PdConnector {
         &self,
         members: &[Member],
         leader: &Member,
-    ) -> Result<Option<(Channel, PdClientStub, TargetInfo)>> {
+    ) -> Result<Option<(PdClientStub, TargetInfo)>> {
         // Try to connect the PD cluster follower.
         for m in members.iter().filter(|m| *m != leader) {
             let (res, _) = self.connect_member(m).await?;
             match res {
-                Some((channel, client, ep, resp)) => {
+                Some((client, ep, resp)) => {
                     let leader = resp.get_leader();
                     let client_urls = leader.get_client_urls();
                     for leader_url in client_urls {
@@ -848,7 +840,7 @@ impl PdConnector {
                             })
                             .await;
                         match response {
-                            Ok(_) => return Ok(Some((channel, client, target))),
+                            Ok(_) => return Ok(Some((client, target))),
                             Err(_) => continue,
                         }
                     }
