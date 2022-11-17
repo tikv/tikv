@@ -7,7 +7,7 @@ use kvproto::{metapb, raft_cmdpb::ChangePeerRequest, raft_serverpb::PeerState};
 use pd_client::PdClient;
 use raft::eraftpb::ConfChangeType;
 use test_raftstore::*;
-use tikv_util::store::find_peer;
+use tikv_util::{config::ReadableDuration, store::find_peer};
 
 fn become_witness(cluster: &Cluster<ServerCluster>, region_id: u64, peer: &mut metapb::Peer) {
     peer.set_role(metapb::PeerRole::Learner);
@@ -484,54 +484,57 @@ fn must_get_error_recovery_in_progress<T: Simulator>(
     );
 }
 
-// Test the case that witness replicate logs to lagging behind follower when
-// leader is down
-#[test]
-fn test_witness_leader_down() {
-    let mut cluster = new_server_cluster(0, 3);
+fn test_non_witness_availability(fp: &str) {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.check_peers_availability_interval = ReadableDuration::millis(20);
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
+    assert_eq!(nodes.len(), 3);
+
+    cluster.must_put(b"k1", b"v1");
 
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
-    cluster.must_put(b"k0", b"v0");
-
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
-    let peer_on_store1 = find_peer(&region, nodes[0]).unwrap().clone();
-    cluster.must_transfer_leader(region.get_id(), peer_on_store1);
+    let peer_on_store1 = find_peer(&region, nodes[1]).unwrap();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1.clone());
 
-    let mut peer_on_store2 = find_peer(&region, nodes[1]).unwrap().clone();
     // nonwitness -> witness
-    become_witness(&cluster, region.get_id(), &mut peer_on_store2);
+    let mut peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
+    peer_on_store3.set_is_witness(true);
+    cluster
+        .pd_client
+        .must_add_peer(region.get_id(), peer_on_store3.clone());
 
-    // the other follower is isolated
-    cluster.add_send_filter(IsolationFilterFactory::new(3));
-    for i in 1..10 {
-        cluster.must_put(format!("k{}", i).as_bytes(), format!("v{}", i).as_bytes());
-    }
-    // the leader is down
-    cluster.stop_node(1);
+    std::thread::sleep(Duration::from_millis(100));
+    must_get_none(&cluster.get_engine(3), b"k1");
 
-    // witness would help to replicate the logs
-    cluster.clear_send_filters();
+    // witness -> nonwitness
+    fail::cfg(fp, "return").unwrap();
+    peer_on_store3.set_role(metapb::PeerRole::Learner);
+    peer_on_store3.set_is_witness(false);
+    cluster
+        .pd_client
+        .must_add_peer(region.get_id(), peer_on_store3.clone());
+    std::thread::sleep(Duration::from_millis(20));
+    // Conf changed, but applying snapshot not yet completed
+    must_get_none(&cluster.get_engine(3), b"k1");
+    assert_eq!(cluster.pd_client.get_pending_peers().len(), 1);
+    std::thread::sleep(Duration::from_millis(200));
+    // snapshot applied
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    assert_eq!(cluster.pd_client.get_pending_peers().len(), 0);
+    fail::remove(fp);
+}
 
-    // forbid writes
-    let put = new_put_cmd(b"k3", b"v3");
-    must_get_error_recovery_in_progress(&mut cluster, &region, put);
-    // forbid reads
-    let get = new_get_cmd(b"k1");
-    must_get_error_recovery_in_progress(&mut cluster, &region, get);
-    // forbid read index
-    let read_index = new_read_index_cmd();
-    must_get_error_recovery_in_progress(&mut cluster, &region, read_index);
+#[test]
+fn test_pull_non_witness_availability() {
+    test_non_witness_availability("ignore notify leader non-witness is available");
+}
 
-    let peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
-    cluster.must_transfer_leader(region.get_id(), peer_on_store3);
-    cluster.must_put(b"k1", b"v1");
-    assert_eq!(
-        cluster.leader_of_region(region.get_id()).unwrap().store_id,
-        nodes[2],
-    );
-    assert_eq!(cluster.must_get(b"k9"), Some(b"v9".to_vec()));
+#[test]
+fn test_push_non_witness_availability() {
+    test_non_witness_availability("ignore schedule check non-witness availability tick");
 }

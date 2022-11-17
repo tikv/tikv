@@ -1046,6 +1046,7 @@ where
         engines: Engines<EK, ER>,
         region: &metapb::Region,
         peer: metapb::Peer,
+        wait_data: bool,
     ) -> Result<Peer<EK, ER>> {
         let peer_id = peer.get_id();
         if peer_id == raft::INVALID_ID {
@@ -1105,7 +1106,7 @@ where
             compaction_declined_bytes: 0,
             leader_unreachable: false,
             pending_remove: false,
-            wait_data: false,
+            wait_data,
             should_wake_up: false,
             force_leader: None,
             pending_merge_state: None,
@@ -2043,6 +2044,12 @@ where
         let status = self.raft_group.status();
         let truncated_idx = self.get_store().truncated_index();
 
+        for peer_id in &self.wait_data_peers {
+            if let Some(p) = self.get_peer_from_cache(*peer_id) {
+                pending_peers.push(p);
+            }
+        }
+
         if status.progress.is_none() {
             return pending_peers;
         }
@@ -2117,6 +2124,9 @@ where
         }
         for i in 0..self.peers_start_pending_time.len() {
             if self.peers_start_pending_time[i].0 != peer_id {
+                continue;
+            }
+            if self.wait_data_peers.contains(&peer_id) {
                 continue;
             }
             let truncated_idx = self.raft_group.store().truncated_index();
@@ -2375,8 +2385,12 @@ where
         // a stale heartbeat can make the leader think follower has already applied
         // the snapshot, and send remaining log entries, which may increase
         // commit_index.
+        //
+        // If it's witness before, but a command changes it to non-witness, it will stop
+        // applying all following command, therefore, add the judgment of `wait_data` to
+        // avoid applying snapshot is also blocked.
         // TODO: add more test
-        self.last_applying_idx == self.get_store().applied_index()
+        (self.last_applying_idx == self.get_store().applied_index() || self.wait_data)
             // Requesting snapshots also triggers apply workers to write
             // apply states even if there is no pending committed entry.
             // TODO: Instead of sharing the counter, we should apply snapshots
@@ -3009,6 +3023,7 @@ where
                 committed_entries,
                 cbs,
                 self.region_buckets.as_ref().map(|b| b.meta.clone()),
+                self.wait_data,
             );
             apply.on_schedule(&ctx.raft_metrics);
             self.mut_store()

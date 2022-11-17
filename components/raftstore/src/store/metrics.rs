@@ -35,7 +35,8 @@ make_auto_flush_static_metric! {
         compact,
         transfer_leader,
         prepare_flashback,
-        finish_flashback
+        finish_flashback,
+        batch_switch_witness : "batch-switch-witness",
     }
 
     pub label_enum AdminCmdStatus {
@@ -204,7 +205,8 @@ make_static_metric! {
         force_leader,
         witness,
         flashback_in_progress,
-        flashback_not_prepared
+        flashback_not_prepared,
+        non_witness,
     }
 
     pub label_enum RaftEventDurationType {

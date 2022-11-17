@@ -644,6 +644,7 @@ mod tests {
                 txn_ext: Arc::new(TxnExt::default()),
                 read_progress: read_progress.clone(),
                 pending_remove: false,
+                wait_data: false,
                 track_ver: TrackVer::new(),
                 bucket_meta: None,
             };

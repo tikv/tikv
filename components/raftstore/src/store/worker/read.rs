@@ -418,6 +418,7 @@ pub struct ReadDelegate {
     pub txn_ext: Arc<TxnExt>,
     pub read_progress: Arc<RegionReadProgress>,
     pub pending_remove: bool,
+    pub wait_data: bool,
 
     // `track_ver` used to keep the local `ReadDelegate` in `LocalReader`
     // up-to-date with the global `ReadDelegate` stored at `StoreMeta`
@@ -441,6 +442,7 @@ impl ReadDelegate {
             txn_ext: peer.txn_ext.clone(),
             read_progress: peer.read_progress.clone(),
             pending_remove: false,
+            wait_data: false,
             bucket_meta: peer.region_buckets.as_ref().map(|b| b.meta.clone()),
             track_ver: TrackVer::new(),
         }
@@ -469,6 +471,7 @@ impl ReadDelegate {
             txn_ext,
             read_progress,
             pending_remove: false,
+            wait_data: false,
             bucket_meta,
             track_ver: TrackVer::new(),
         }
@@ -597,6 +600,7 @@ impl ReadDelegate {
             txn_ext: Default::default(),
             read_progress,
             pending_remove: false,
+            wait_data: false,
             track_ver: TrackVer::new(),
             bucket_meta: None,
         }
@@ -783,6 +787,12 @@ where
         if let Err(e) = util::check_peer_id(req.get_header(), delegate.peer_id) {
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.peer_id_mismatch.inc());
             return Err(e);
+        }
+
+        // Check non-witness hasn't finish applying snapshot yet.
+        if delegate.wait_data {
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.non_witness.inc());
+            return Err(Error::RecoveryInProgress(region_id));
         }
 
         // Check term.
@@ -1310,6 +1320,7 @@ mod tests {
                 txn_ext: Arc::new(TxnExt::default()),
                 read_progress: read_progress.clone(),
                 pending_remove: false,
+                wait_data: false,
                 track_ver: TrackVer::new(),
                 bucket_meta: None,
             };
@@ -1601,6 +1612,7 @@ mod tests {
                 track_ver: TrackVer::new(),
                 read_progress: Arc::new(RegionReadProgress::new(&region, 0, 0, 1)),
                 pending_remove: false,
+                wait_data: false,
                 bucket_meta: None,
             };
             meta.readers.insert(1, read_delegate);
@@ -1726,6 +1738,7 @@ mod tests {
                 txn_ext: Arc::new(TxnExt::default()),
                 read_progress,
                 pending_remove: false,
+                wait_data: false,
                 track_ver: TrackVer::new(),
                 bucket_meta: None,
             };

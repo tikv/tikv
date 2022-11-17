@@ -40,7 +40,7 @@ use kvproto::{
     metapb::{self, PeerRole, Region, RegionEpoch},
     raft_cmdpb::{
         AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
-        RaftCmdRequest, RaftCmdResponse, Request, SplitRequest,
+        RaftCmdRequest, RaftCmdResponse, Request, SplitRequest, SwitchWitnessRequest,
     },
     raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState},
 };
@@ -233,6 +233,13 @@ impl Range {
     }
 }
 
+#[derive(Default, Debug)]
+pub struct SwitchWitness {
+    pub succeeded: bool,
+    pub switches: Vec<SwitchWitnessRequest>,
+    pub region: Region,
+}
+
 #[derive(Debug)]
 pub enum ExecResult<S> {
     ChangePeer(ChangePeer),
@@ -281,6 +288,7 @@ pub enum ExecResult<S> {
     SetFlashbackState {
         region: Region,
     },
+    BatchSwitchWitness(SwitchWitness),
 }
 
 /// The possible returned value when applying logs.
@@ -954,6 +962,9 @@ where
     /// in same Ready should be applied failed.
     pending_remove: bool,
 
+    /// Indicates whether the peer is waiting data. See more in `Peer`.
+    wait_data: bool,
+
     /// The commands waiting to be committed and applied
     pending_cmds: PendingCmdQueue<Callback<EK::Snapshot>>,
     /// The counter of pending request snapshots. See more in `Peer`.
@@ -1016,6 +1027,7 @@ where
             peer: find_peer_by_id(&reg.region, reg.id).unwrap().clone(),
             region: reg.region,
             pending_remove: false,
+            wait_data: reg.wait_data,
             last_flush_applied_index: reg.apply_state.get_applied_index(),
             apply_state: reg.apply_state,
             applied_term: reg.applied_term,
@@ -1166,6 +1178,14 @@ where
 
         if !data.is_empty() {
             if !self.peer.is_witness || !can_witness_skip(entry) {
+                // If it's witness before, but a command changes it to non-witness,
+                // and starts applying all following commands. It can cause problem
+                // if the command depends on previous side effect. So stop applying
+                // following commands when `wait_data` is set, until the snapshot is
+                // applied.
+                if self.wait_data {
+                    return ApplyResult::Yield;
+                }
                 let cmd = util::parse_data_at(data, index, &self.tag);
                 if apply_ctx.yield_high_latency_operation && has_high_latency_operation(&cmd) {
                     self.priority = Priority::Low;
@@ -1232,6 +1252,14 @@ where
         fail_point!("yield_apply_conf_change_3", self.id() == 3, |_| {
             ApplyResult::Yield
         });
+        // If it's witness before, but a command changes it to non-witness,
+        // and starts applying all following commands. It can case problem
+        // if the command depends on previous side effect. So stop applying
+        // following commands when `wait_data` is set, until the snapshot is
+        // applied.
+        if self.wait_data {
+            return ApplyResult::Yield;
+        }
         let (index, term) = (entry.get_index(), entry.get_term());
         let conf_change: ConfChangeV2 = match entry.get_entry_type() {
             EntryType::EntryConfChange => {
@@ -1509,6 +1537,7 @@ where
                 ExecResult::SetFlashbackState { ref region } => {
                     self.region = region.clone();
                 }
+                ExecResult::BatchSwitchWitness(..) => {}
             }
         }
         if let Some(epoch) = origin_epoch {
@@ -1634,7 +1663,7 @@ where
             AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => {
                 self.exec_flashback(ctx, request)
             }
-            AdminCmdType::BatchSwitchWitness => Err(box_err!("unsupported admin command type")),
+            AdminCmdType::BatchSwitchWitness => self.exec_batch_switch_witness(ctx, request),
             AdminCmdType::InvalidAdmin => Err(box_err!("unsupported admin command type")),
         }?;
         response.set_cmd_type(cmd_type);
@@ -3058,6 +3087,75 @@ where
         ))
     }
 
+    fn exec_batch_switch_witness(
+        &mut self,
+        ctx: &mut ApplyContext<EK>,
+        request: &AdminRequest,
+    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+        assert!(request.has_switch_witnesses());
+        let switches = request
+            .get_switch_witnesses()
+            .get_switch_witnesses()
+            .to_vec();
+
+        info!(
+            "exec BatchSwitchWitness";
+            "region_id" => self.region_id(),
+            "epoch" => ?self.region.get_region_epoch(),
+        );
+
+        self.apply_batch_switch_witness(switches.as_slice())?;
+
+        let state = if self.pending_remove {
+            PeerState::Tombstone
+        } else if self.wait_data {
+            PeerState::Unavailable
+        } else {
+            PeerState::Normal
+        };
+
+        if let Err(e) = write_peer_state(ctx.kv_wb_mut(), &self.region, state, None) {
+            panic!("{} failed to update region state: {:?}", self.tag, e);
+        }
+
+        let resp = AdminResponse::default();
+        let region = self.region.clone();
+        Ok((
+            resp,
+            ApplyResult::Res(ExecResult::BatchSwitchWitness(SwitchWitness {
+                succeeded: true,
+                switches,
+                region,
+            })),
+        ))
+    }
+
+    fn apply_batch_switch_witness(&mut self, switches: &[SwitchWitnessRequest]) -> Result<()> {
+        for s in switches {
+            PEER_ADMIN_CMD_COUNTER.batch_switch_witness.all.inc();
+            let (peer_id, is_witness) = (s.get_peer_id(), s.get_is_witness());
+            for p in self.region.mut_peers().iter_mut() {
+                if p.id == peer_id {
+                    if p.is_witness == is_witness {
+                        return Err(box_err!(
+                            "can't duplicated switch peer {:?} on region {:?}",
+                            find_peer_by_id(&self.region, peer_id),
+                            self.region
+                        ));
+                    }
+                    p.is_witness = is_witness;
+                    PEER_ADMIN_CMD_COUNTER.batch_switch_witness.success.inc();
+                    break;
+                }
+            }
+            if self.id() == peer_id && !is_witness {
+                self.wait_data = true;
+                self.peer.is_witness = false;
+            }
+        }
+        Ok(())
+    }
+
     fn update_memory_trace(&mut self, event: &mut TraceEvent) {
         let pending_cmds = self.pending_cmds.heap_size();
         let merge_yield = if let Some(ref mut state) = self.yield_state {
@@ -3161,6 +3259,7 @@ pub struct Apply<C> {
     pub entries_size: usize,
     pub cbs: Vec<Proposal<C>>,
     pub bucket_meta: Option<Arc<BucketMeta>>,
+    pub wait_data: bool,
 }
 
 impl<C: WriteCallback> Apply<C> {
@@ -3173,6 +3272,7 @@ impl<C: WriteCallback> Apply<C> {
         entries: Vec<Entry>,
         cbs: Vec<Proposal<C>>,
         buckets: Option<Arc<BucketMeta>>,
+        wait_data: bool,
     ) -> Apply<C> {
         let mut entries_size = 0;
         for e in &entries {
@@ -3189,6 +3289,7 @@ impl<C: WriteCallback> Apply<C> {
             entries_size,
             cbs,
             bucket_meta: buckets,
+            wait_data,
         }
     }
 
@@ -3243,6 +3344,7 @@ pub struct Registration {
     pub applied_term: u64,
     pub region: Region,
     pub pending_request_snapshot_count: Arc<AtomicUsize>,
+    pub wait_data: bool,
     pub is_merging: bool,
     raft_engine: Box<dyn RaftEngineReadOnly>,
 }
@@ -3256,6 +3358,7 @@ impl Registration {
             applied_term: peer.get_store().applied_term(),
             region: peer.region().clone(),
             pending_request_snapshot_count: peer.pending_request_snapshot_count.clone(),
+            wait_data: peer.wait_data,
             is_merging: peer.pending_merge_state.is_some(),
             raft_engine: Box::new(peer.get_store().engines.raft.clone()),
         }
@@ -3612,6 +3715,8 @@ where
             return;
         }
 
+        self.delegate.wait_data = apply.wait_data;
+
         let mut entries = Vec::new();
 
         let mut dangle_size = 0;
@@ -3814,8 +3919,9 @@ where
         if self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
-        if self.delegate.peer.is_witness {
-            // witness shouldn't generate snapshot.
+        if self.delegate.peer.is_witness || self.delegate.wait_data {
+            // witness or non-witess hasn't finish applying snapshot shouldn't generate
+            // snapshot.
             return;
         }
         let applied_index = self.delegate.apply_state.get_applied_index();
@@ -4681,6 +4787,7 @@ mod tests {
                 applied_term: Default::default(),
                 region: Default::default(),
                 pending_request_snapshot_count: Default::default(),
+                wait_data: Default::default(),
                 is_merging: Default::default(),
                 raft_engine: Box::new(PanicEngine),
             }
@@ -4696,6 +4803,7 @@ mod tests {
                 applied_term: self.applied_term,
                 region: self.region.clone(),
                 pending_request_snapshot_count: self.pending_request_snapshot_count.clone(),
+                wait_data: self.wait_data,
                 is_merging: self.is_merging,
                 raft_engine: Box::new(PanicEngine),
             }
@@ -4901,6 +5009,7 @@ mod tests {
             entries,
             cbs,
             None,
+            false,
         )
     }
 
