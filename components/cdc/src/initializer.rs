@@ -564,7 +564,10 @@ mod tests {
     use engine_rocks::RocksEngine;
     use engine_traits::{MiscExt, CF_WRITE};
     use futures::{executor::block_on, StreamExt};
-    use kvproto::{cdcpb::Event_oneof_event, errorpb::Error as ErrorHeader};
+    use kvproto::{
+        cdcpb::{EventLogType, Event_oneof_event},
+        errorpb::Error as ErrorHeader,
+    };
     use raftstore::{coprocessor::ObserveHandle, store::RegionSnapshot};
     use test_raftstore::MockRaftStoreRouter;
     use tikv::storage::{
@@ -778,35 +781,36 @@ mod tests {
             must_prewrite_put_with_txn_soucre(&mut engine, k, v, k, ts, 1);
         }
 
-        let region = Region::default();
         let snap = engine.snapshot(Default::default()).unwrap();
         // Buffer must be large enough to unblock async incremental scan.
         let buffer = 1000;
-        let (mut worker, pool, mut initializer, rx, mut drain) = mock_initializer(
+        let (mut worker, pool, mut initializer, _rx, mut drain) = mock_initializer(
             total_bytes,
             buffer,
             engine.kv_engine(),
             ChangeDataRequestKvApi::TiDb,
             true,
         );
-        // To not block test by barrier.
-        pool.spawn(async move {
-            let mut d = drain.drain();
-            while d.next().await.is_some() {}
+        let th = pool.spawn(async move {
+            initializer
+                .async_incremental_scan(snap, Region::default())
+                .await
+                .unwrap();
         });
-
-        block_on(initializer.async_incremental_scan(snap, region)).unwrap();
-        loop {
-            let task = rx.recv().unwrap();
-            match task {
-                Task::ResolverReady { resolver, .. } => {
-                    assert_eq!(resolver.locks().len(), 0);
-                    break;
-                }
-                t => panic!("unexpected task {} received", t),
-            }
+        let mut drain = drain.drain();
+        while let Some((event, _)) = block_on(drain.next()) {
+            let event = match event {
+                CdcEvent::Event(x) if x.event.is_some() => x.event.unwrap(),
+                _ => continue,
+            };
+            let entries = match event {
+                Event_oneof_event::Entries(mut x) => x.take_entries().into_vec(),
+                _ => continue,
+            };
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].get_type(), EventLogType::Initialized);
         }
-
+        block_on(th).unwrap();
         worker.stop();
     }
 
