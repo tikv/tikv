@@ -339,6 +339,10 @@ impl RaftEngine for RocksEngine {
         Ok(used_size)
     }
 
+    fn get_engine_path(&self) -> &str {
+        self.as_inner().path()
+    }
+
     fn put_store_ident(&self, ident: &StoreIdent) -> Result<()> {
         self.put_msg(keys::STORE_IDENT_KEY, ident)
     }

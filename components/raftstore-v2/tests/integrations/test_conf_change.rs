@@ -61,7 +61,7 @@ fn test_add_learner() {
     // trigger the leader send snapshot to the new learner, it will create new
     // snapshot generate task.
     let msgs = vec![Box::new(raft_msg)];
-    cluster.dispatch(region_id, msgs.clone());
+    cluster.dispatch(region_id, msgs);
 
     let mut req = router0.new_request_for(region_id);
     let mut put_req = Request::default();

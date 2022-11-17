@@ -317,7 +317,7 @@ mod tests {
             .iter()
             .enumerate()
         {
-            fs::write(f, &[id as u8]).unwrap();
+            fs::write(f, [id as u8]).unwrap();
         }
 
         let mut c = cfg.clone();

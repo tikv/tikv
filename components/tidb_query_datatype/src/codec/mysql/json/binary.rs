@@ -82,7 +82,7 @@ impl<'a> JsonRef<'a> {
     pub fn val_entry_get(&self, val_entry_off: usize) -> Result<JsonRef<'a>> {
         let val_type: JsonType = self.value()[val_entry_off].try_into()?;
         let val_offset =
-            NumberCodec::decode_u32_le(&self.value()[val_entry_off + TYPE_LEN as usize..]) as usize;
+            NumberCodec::decode_u32_le(&self.value()[val_entry_off + TYPE_LEN..]) as usize;
         Ok(match val_type {
             JsonType::Literal => {
                 let offset = val_entry_off + TYPE_LEN;

@@ -357,7 +357,7 @@ where
                             because found data key that is not written by TiDB: {:?}",
                             ident.api_version,
                             self.api_version,
-                            log_wrappers::hex_encode_upper(&unexpected_data_key)
+                            log_wrappers::hex_encode_upper(unexpected_data_key)
                         ));
                     }
                 }

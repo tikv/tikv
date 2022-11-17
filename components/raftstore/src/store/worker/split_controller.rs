@@ -361,7 +361,7 @@ impl RegionInfo {
             if n == 0 || self.key_ranges.len() < self.sample_num {
                 self.key_ranges.push(key_range);
             } else {
-                let j = rand::thread_rng().gen_range(0..n) as usize;
+                let j = rand::thread_rng().gen_range(0..n);
                 if j < self.sample_num {
                     self.key_ranges[j] = key_range;
                 }
