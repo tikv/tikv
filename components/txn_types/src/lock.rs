@@ -96,6 +96,10 @@ pub struct Lock {
     /// The source of this txn. It is used by ticdc, if the value is 0 ticdc
     /// will sync the kv change event to downstream, if it is not 0, ticdc
     /// may ignore this change event.
+    ///
+    /// We use `u64` to reserve more space for future use. For now, the upper
+    /// application is limited to setting this value under `0x80`,
+    /// so there will no more cost to change it to `u64`.
     pub txn_source: u64,
 }
 
