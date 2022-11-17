@@ -990,6 +990,39 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         });
     }
 
+    fn get_progress_by_req(
+        &self,
+        request: &Request,
+        codec: KeyValueCodec,
+    ) -> Arc<Mutex<Progress<R>>> {
+        if request.sub_ranges.is_empty() {
+            let start_key = codec.encode_backup_key(request.start_key.clone());
+            let end_key = codec.encode_backup_key(request.end_key.clone());
+            Arc::new(Mutex::new(Progress::new_with_range(
+                self.store_id,
+                start_key,
+                end_key,
+                self.region_info.clone(),
+                codec,
+                request.cf,
+            )))
+        } else {
+            let mut ranges = Vec::with_capacity(request.sub_ranges.len());
+            for k in &request.sub_ranges {
+                let start_key = codec.encode_backup_key(k.start_key.clone());
+                let end_key = codec.encode_backup_key(k.end_key.clone());
+                ranges.push((start_key, end_key));
+            }
+            Arc::new(Mutex::new(Progress::new_with_ranges(
+                self.store_id,
+                ranges,
+                self.region_info.clone(),
+                codec,
+                request.cf,
+            )))
+        }
+    }
+
     pub fn handle_backup_task(&self, task: Task) {
         let Task { request, resp } = task;
         let codec = KeyValueCodec::new(request.is_raw_kv, self.api_version, request.dst_api_ver);
@@ -1029,32 +1062,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             }
         }
 
-        let prs = if request.sub_ranges.is_empty() {
-            let start_key = codec.encode_backup_key(request.start_key.clone());
-            let end_key = codec.encode_backup_key(request.end_key.clone());
-            Arc::new(Mutex::new(Progress::new_with_range(
-                self.store_id,
-                start_key,
-                end_key,
-                self.region_info.clone(),
-                codec,
-                request.cf,
-            )))
-        } else {
-            let mut ranges = Vec::with_capacity(request.sub_ranges.len());
-            for k in &request.sub_ranges {
-                let start_key = codec.encode_backup_key(k.start_key.clone());
-                let end_key = codec.encode_backup_key(k.end_key.clone());
-                ranges.push((start_key, end_key));
-            }
-            Arc::new(Mutex::new(Progress::new_with_ranges(
-                self.store_id,
-                ranges,
-                self.region_info.clone(),
-                codec,
-                request.cf,
-            )))
-        };
+        let prs = self.get_progress_by_req(&request, codec);
 
         let backend = match create_storage(&request.backend, self.get_config()) {
             Ok(backend) => backend,
@@ -1433,16 +1441,8 @@ pub mod tests {
         // Test seek backup range.
         let test_seek_backup_range =
             |start_key: &[u8], end_key: &[u8], expect: Vec<(&[u8], &[u8])>| {
-                let start_key = if start_key.is_empty() {
-                    None
-                } else {
-                    Some(Key::from_raw(start_key))
-                };
-                let end_key = if end_key.is_empty() {
-                    None
-                } else {
-                    Some(Key::from_raw(end_key))
-                };
+                let start_key = (!start_key.is_empty()).then_some(Key::from_raw(start_key));
+                let end_key = (!end_key.is_empty()).then_some(Key::from_raw(end_key));
                 let mut prs = Progress::new_with_range(
                     endpoint.store_id,
                     start_key,
@@ -1578,16 +1578,8 @@ pub mod tests {
             |sub_ranges: Vec<(&[u8], &[u8])>, expect: Vec<(&[u8], &[u8])>| {
                 let mut ranges = Vec::with_capacity(sub_ranges.len());
                 for &(start_key, end_key) in &sub_ranges {
-                    let start_key = if start_key.is_empty() {
-                        None
-                    } else {
-                        Some(Key::from_raw(start_key))
-                    };
-                    let end_key = if end_key.is_empty() {
-                        None
-                    } else {
-                        Some(Key::from_raw(end_key))
-                    };
+                    let start_key = (!start_key.is_empty()).then_some(Key::from_raw(start_key));
+                    let end_key = (!end_key.is_empty()).then_some(Key::from_raw(end_key));
                     ranges.push((start_key, end_key));
                 }
                 let mut prs = Progress::new_with_ranges(
