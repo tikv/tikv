@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 pub(crate) mod metrics;
-mod raft_client;
 
 pub mod config;
 pub mod debug;
@@ -13,7 +12,9 @@ pub mod load_statistics;
 pub mod lock_manager;
 pub mod node;
 mod proxy;
+mod raft_client;
 pub mod raftkv;
+mod raftkv_v2;
 mod reset_to_version;
 pub mod resolve;
 pub mod server;
@@ -35,6 +36,7 @@ pub use self::{
     proxy::{build_forward_option, get_target_address, Proxy},
     raft_client::{ConnectionBuilder, RaftClient},
     raftkv::RaftKv,
+    raftkv_v2::RaftKvV2,
     resolve::{PdStoreAddrResolver, StoreAddrResolver},
     server::{Server, GRPC_THREAD_PREFIX},
     transport::ServerTransport,

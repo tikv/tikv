@@ -278,6 +278,45 @@ pub trait WriteSubscriber: Send {
     /// engine thinks inappropriate to send back a result. Caller may not
     /// release any lock in this case to guarantee correctness.
     fn result(self) -> Self::ResultWaiter;
+
+    /// Call the hook when the result is received.
+    #[inline]
+    fn map<F>(self, f: F) -> MapSubscriber<Self, F>
+    where
+        Self: Sized,
+        F: FnOnce(Result<()>) -> Result<()> + Send,
+    {
+        MapSubscriber { sub: self, f }
+    }
+}
+
+pub struct MapSubscriber<S, F> {
+    sub: S,
+    f: F,
+}
+
+impl<S, F> WriteSubscriber for MapSubscriber<S, F>
+where
+    S: WriteSubscriber,
+    F: FnOnce(Result<()>) -> Result<()> + Send,
+{
+    type ProposedWaiter<'a> = S::ProposedWaiter<'a> where Self: 'a;
+    #[inline]
+    fn wait_proposed(&mut self) -> Self::ProposedWaiter<'_> {
+        self.sub.wait_proposed()
+    }
+
+    type CommittedWaiter<'a> = S::CommittedWaiter<'a> where Self: 'a;
+    #[inline]
+    fn wait_committed(&mut self) -> Self::CommittedWaiter<'_> {
+        self.sub.wait_committed()
+    }
+
+    type ResultWaiter = impl Future<Output = Option<Result<()>>>;
+    #[inline]
+    fn result(self) -> Self::ResultWaiter {
+        async move { self.sub.result().await.map(self.f) }
+    }
 }
 
 pub struct FutureAsSubscriber<F> {

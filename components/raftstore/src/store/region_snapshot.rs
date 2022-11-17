@@ -14,7 +14,7 @@ use engine_traits::{
     Peekable, RaftEngine, ReadOptions, Result as EngineResult, Snapshot, CF_RAFT,
 };
 use fail::fail_point;
-use keys::DATA_PREFIX_KEY;
+use keys::{DataKey, Prefix, DATA_PREFIX_KEY};
 use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb::Region, raft_serverpb::RaftApplyState};
 use pd_client::BucketMeta;
 use tikv_util::{
@@ -31,7 +31,7 @@ use crate::{
 ///
 /// Only data within a region can be accessed.
 #[derive(Debug)]
-pub struct RegionSnapshot<S: Snapshot> {
+pub struct RegionSnapshot<S: Snapshot, K: DataKey = Prefix> {
     snap: Arc<S>,
     region: Arc<Region>,
     apply_index: Arc<AtomicU64>,
@@ -40,28 +40,30 @@ pub struct RegionSnapshot<S: Snapshot> {
     // `None` means the snapshot does not provide peer related transaction extensions.
     pub txn_ext: Option<Arc<TxnExt>>,
     pub bucket_meta: Option<Arc<BucketMeta>>,
+    _phantom: std::marker::PhantomData<K>,
 }
 
-impl<S> RegionSnapshot<S>
+impl<S, K> RegionSnapshot<S, K>
 where
     S: Snapshot,
+    K: DataKey,
 {
     #[allow(clippy::new_ret_no_self)] // temporary until this returns RegionSnapshot<E>
-    pub fn new<EK>(ps: &PeerStorage<EK, impl RaftEngine>) -> RegionSnapshot<EK::Snapshot>
+    pub fn new<EK>(ps: &PeerStorage<EK, impl RaftEngine>) -> RegionSnapshot<EK::Snapshot, K>
     where
         EK: KvEngine,
     {
         RegionSnapshot::from_snapshot(Arc::new(ps.raw_snapshot()), Arc::new(ps.region().clone()))
     }
 
-    pub fn from_raw<EK>(db: EK, region: Region) -> RegionSnapshot<EK::Snapshot>
+    pub fn from_raw<EK>(db: EK, region: Region) -> RegionSnapshot<EK::Snapshot, K>
     where
         EK: KvEngine,
     {
         RegionSnapshot::from_snapshot(Arc::new(db.snapshot()), Arc::new(region))
     }
 
-    pub fn from_snapshot(snap: Arc<S>, region: Arc<Region>) -> RegionSnapshot<S> {
+    pub fn from_snapshot(snap: Arc<S>, region: Arc<Region>) -> RegionSnapshot<S, K> {
         RegionSnapshot {
             snap,
             region,
@@ -72,6 +74,7 @@ where
             txn_extra_op: TxnExtraOp::Noop,
             txn_ext: None,
             bucket_meta: None,
+            _phantom: std::marker::PhantomData,
         }
     }
 
@@ -109,7 +112,7 @@ where
         }
     }
 
-    pub fn iter(&self, cf: &str, iter_opt: IterOptions) -> Result<RegionIterator<S>> {
+    pub fn iter(&self, cf: &str, iter_opt: IterOptions) -> Result<RegionIterator<S, K>> {
         Ok(RegionIterator::new(
             &self.snap,
             Arc::clone(&self.region),
@@ -154,9 +157,10 @@ where
     }
 }
 
-impl<S> Clone for RegionSnapshot<S>
+impl<S, K> Clone for RegionSnapshot<S, K>
 where
     S: Snapshot,
+    K: DataKey,
 {
     fn clone(&self) -> Self {
         RegionSnapshot {
@@ -167,13 +171,15 @@ where
             txn_extra_op: self.txn_extra_op,
             txn_ext: self.txn_ext.clone(),
             bucket_meta: self.bucket_meta.clone(),
+            _phantom: std::marker::PhantomData,
         }
     }
 }
 
-impl<S> Peekable for RegionSnapshot<S>
+impl<S, K> Peekable for RegionSnapshot<S, K>
 where
     S: Snapshot,
+    K: DataKey,
 {
     type DbVector = <S as Peekable>::DbVector;
 
@@ -189,7 +195,7 @@ where
             self.region.get_end_key(),
         )
         .map_err(|e| EngineError::Other(box_err!(e)))?;
-        let data_key = keys::data_key(key);
+        let data_key = K::key(key);
         self.snap
             .get_value_opt(opts, &data_key)
             .map_err(|e| self.handle_get_value_error(e, "", key))
@@ -208,16 +214,17 @@ where
             self.region.get_end_key(),
         )
         .map_err(|e| EngineError::Other(box_err!(e)))?;
-        let data_key = keys::data_key(key);
+        let data_key = K::key(key);
         self.snap
             .get_value_cf_opt(opts, cf, &data_key)
             .map_err(|e| self.handle_get_value_error(e, cf, key))
     }
 }
 
-impl<S> RegionSnapshot<S>
+impl<S, K> RegionSnapshot<S, K>
 where
     S: Snapshot,
+    K: DataKey,
 {
     #[inline(never)]
     fn handle_get_value_error(&self, e: EngineError, cf: &str, key: &[u8]) -> EngineError {
@@ -246,9 +253,10 @@ where
 /// `RegionIterator` wrap a rocksdb iterator and only allow it to
 /// iterate in the region. It behaves as if underlying
 /// db only contains one region.
-pub struct RegionIterator<S: Snapshot> {
+pub struct RegionIterator<S: Snapshot, K: DataKey = Prefix> {
     iter: <S as Iterable>::Iterator,
     region: Arc<Region>,
+    _phantom: std::marker::PhantomData<K>,
 }
 
 fn update_lower_bound(iter_opt: &mut IterOptions, region: &Region) {
@@ -276,22 +284,27 @@ fn update_upper_bound(iter_opt: &mut IterOptions, region: &Region) {
 }
 
 // we use engine::rocks's style iterator, doesn't need to impl std iterator.
-impl<S> RegionIterator<S>
+impl<S, K> RegionIterator<S, K>
 where
     S: Snapshot,
+    K: DataKey,
 {
     pub fn new(
         snap: &S,
         region: Arc<Region>,
         mut iter_opt: IterOptions,
         cf: &str,
-    ) -> RegionIterator<S> {
+    ) -> RegionIterator<S, K> {
         update_lower_bound(&mut iter_opt, &region);
         update_upper_bound(&mut iter_opt, &region);
         let iter = snap
             .iterator_opt(cf, iter_opt)
             .expect("creating snapshot iterator"); // FIXME error handling
-        RegionIterator { iter, region }
+        RegionIterator {
+            iter,
+            region,
+            _phantom: std::marker::PhantomData,
+        }
     }
 
     pub fn seek_to_first(&mut self) -> Result<bool> {
@@ -307,13 +320,13 @@ where
             Err(box_err!("region seek error"))
         });
         self.should_seekable(key)?;
-        let key = keys::data_key(key);
+        let key = K::key(key);
         self.iter.seek(&key).map_err(Error::from)
     }
 
     pub fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
         self.should_seekable(key)?;
-        let key = keys::data_key(key);
+        let key = K::key(key);
         self.iter.seek_for_prev(&key).map_err(Error::from)
     }
 

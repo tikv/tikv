@@ -86,7 +86,7 @@ fn get_status_kind_from_error(e: &Error) -> RequestStatusKind {
     }
 }
 
-fn get_status_kind_from_engine_error(e: &kv::Error) -> RequestStatusKind {
+pub(crate) fn get_status_kind_from_engine_error(e: &kv::Error) -> RequestStatusKind {
     match *e {
         KvError(box KvErrorInner::Request(ref header)) => {
             RequestStatusKind::from(storage::get_error_kind_from_header(header))
@@ -120,7 +120,7 @@ where
     Snap(RegionSnapshot<S>),
 }
 
-fn check_raft_cmd_response(resp: &mut RaftCmdResponse) -> Result<()> {
+pub fn check_raft_cmd_response(resp: &mut RaftCmdResponse) -> Result<()> {
     if resp.get_header().has_error() {
         return Err(Error::RequestFailed(resp.take_header().take_error()));
     }
@@ -228,6 +228,19 @@ impl WriteSubscriber for RaftKvWriteSubscriber {
     }
 }
 
+pub fn new_request_header(ctx: &Context) -> RaftRequestHeader {
+    let mut header = RaftRequestHeader::default();
+    header.set_region_id(ctx.get_region_id());
+    header.set_peer(ctx.get_peer().clone());
+    header.set_region_epoch(ctx.get_region_epoch().clone());
+    if ctx.get_term() != 0 {
+        header.set_term(ctx.get_term());
+    }
+    header.set_sync_log(ctx.get_sync_log());
+    header.set_replica_read(ctx.get_replica_read());
+    header
+}
+
 /// `RaftKv` is a storage engine base on `RaftStore`.
 #[derive(Clone)]
 pub struct RaftKv<E, S>
@@ -260,25 +273,12 @@ where
         self.txn_extra_scheduler = Some(txn_extra_scheduler);
     }
 
-    fn new_request_header(&self, ctx: &Context) -> RaftRequestHeader {
-        let mut header = RaftRequestHeader::default();
-        header.set_region_id(ctx.get_region_id());
-        header.set_peer(ctx.get_peer().clone());
-        header.set_region_epoch(ctx.get_region_epoch().clone());
-        if ctx.get_term() != 0 {
-            header.set_term(ctx.get_term());
-        }
-        header.set_sync_log(ctx.get_sync_log());
-        header.set_replica_read(ctx.get_replica_read());
-        header
-    }
-
     fn exec_snapshot(
         &mut self,
         ctx: SnapContext<'_>,
         req: Request,
     ) -> impl Future<Output = Result<CmdRes<E::Snapshot>>> {
-        let mut header = self.new_request_header(ctx.pb_ctx);
+        let mut header = new_request_header(ctx.pb_ctx);
         let mut flags = 0;
         if ctx.pb_ctx.get_stale_read() && ctx.start_ts.map_or(true, |ts| !ts.is_zero()) {
             let mut data = [0u8; 8];
@@ -324,7 +324,7 @@ where
     }
 }
 
-fn invalid_resp_type(exp: CmdType, act: CmdType) -> Error {
+pub fn invalid_resp_type(exp: CmdType, act: CmdType) -> Error {
     Error::InvalidResponse(format!(
         "cmd type not match, want {:?}, got {:?}!",
         exp, act
@@ -420,7 +420,7 @@ where
 
         let reqs: Vec<Request> = batch.modifies.into_iter().map(Into::into).collect();
         let txn_extra = batch.extra;
-        let mut header = self.new_request_header(ctx);
+        let mut header = new_request_header(ctx);
         let mut flags = 0;
         if txn_extra.one_pc {
             flags |= WriteBatchFlags::ONE_PC.bits();

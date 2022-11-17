@@ -5,6 +5,7 @@ use std::sync::{Arc, RwLock};
 use collections::HashMap;
 use engine_traits::KvEngine;
 use fail::fail_point;
+use keys::Prefix;
 use kvproto::metapb::{Peer, Region};
 use raft::StateRole;
 use raftstore::{coprocessor::*, store::RegionSnapshot, Error as RaftStoreError};
@@ -121,7 +122,10 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
         // Create a snapshot here for preventing the old value was GC-ed.
         // TODO: only need it after enabling old value, may add a flag to indicate
         // whether to get it.
-        let snapshot = RegionSnapshot::from_snapshot(Arc::new(engine.snapshot()), Arc::new(region));
+        let snapshot = RegionSnapshot::<_, Prefix>::from_snapshot(
+            Arc::new(engine.snapshot()),
+            Arc::new(region),
+        );
         let get_old_value = move |key,
                                   query_ts,
                                   old_value_cache: &mut OldValueCache,

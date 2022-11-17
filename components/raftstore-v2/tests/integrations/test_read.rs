@@ -172,7 +172,7 @@ fn test_local_read() {
     request_inner.set_cmd_type(CmdType::Snap);
     req.mut_requests().push(request_inner);
 
-    block_on(async { router.get_snapshot(req.clone()).await.unwrap() });
+    block_on(async { router.snapshot(req.clone()).await.unwrap() });
     let res = router.query(region_id, req.clone()).unwrap();
     let resp = res.read().unwrap();
     // The read index will be 0 as the retry process in the `get_snapshot` will

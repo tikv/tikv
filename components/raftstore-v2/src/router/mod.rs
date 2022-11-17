@@ -15,7 +15,7 @@ pub use self::{
     internal_message::ApplyRes,
     message::{PeerMsg, PeerTick, RaftRequest, StoreMsg, StoreTick},
     response_channel::{
-        CmdResChannel, DebugInfoChannel, DebugInfoSubscriber, QueryResChannel, QueryResult,
-        ReadResponse,
+        CmdResChannel, CmdResSubscriber, DebugInfoChannel, DebugInfoSubscriber, QueryResChannel,
+        QueryResult, ReadResponse,
     },
 };
