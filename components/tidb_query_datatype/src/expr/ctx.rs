@@ -143,7 +143,7 @@ impl EvalConfig {
                 self.tz = tz;
                 Ok(self)
             }
-            None => Err(Error::invalid_timezone(&format!("offset {}s", offset_sec))),
+            None => Err(Error::invalid_timezone(format!("offset {}s", offset_sec))),
         }
     }
 
@@ -300,7 +300,7 @@ impl EvalContext {
         }
         let orig_str = String::from_utf8_lossy(bytes);
         self.warnings
-            .append_warning(Error::truncated_wrong_val("INTEGER", &orig_str));
+            .append_warning(Error::truncated_wrong_val("INTEGER", orig_str));
         if negative {
             Ok(i64::MIN)
         } else {

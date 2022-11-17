@@ -96,7 +96,7 @@ use tikv_util::{
 use tracker::{
     clear_tls_tracker_token, set_tls_tracker_token, with_tls_tracker, TrackedFuture, TrackerToken,
 };
-use txn_types::{Key, KvPair, Lock, LockType, OldValues, TimeStamp, TsSet, Value};
+use txn_types::{Key, KvPair, Lock, LockType, TimeStamp, TsSet, Value};
 
 pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
@@ -1416,7 +1416,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         callback: Callback<T>,
     ) -> Result<()> {
         use crate::storage::txn::commands::{
-            AcquirePessimisticLock, Prewrite, PrewritePessimistic,
+            AcquirePessimisticLock, AcquirePessimisticLockResumed, Prewrite, PrewritePessimistic,
         };
 
         let cmd: Command = cmd.into();
@@ -1448,6 +1448,18 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     self.api_version,
                     cmd.ctx().api_version,
                     CommandKind::prewrite,
+                    keys.clone(),
+                )?;
+                check_key_size!(keys, self.max_key_size, callback);
+            }
+            Command::AcquirePessimisticLockResumed(AcquirePessimisticLockResumed {
+                items, ..
+            }) => {
+                let keys = items.iter().map(|item| item.key.as_encoded());
+                Self::check_api_version(
+                    self.api_version,
+                    cmd.ctx().api_version,
+                    CommandKind::acquire_pessimistic_lock_resumed,
                     keys.clone(),
                 )?;
                 check_key_size!(keys, self.max_key_size, callback);
@@ -3341,8 +3353,8 @@ pub mod test_util {
             Some(WaitTimeout::Default),
             return_values,
             for_update_ts.next(),
-            OldValues::default(),
             check_existence,
+            false,
             false,
             Context::default(),
         )
@@ -8193,7 +8205,7 @@ mod tests {
                     Some(WaitTimeout::Millis(100)),
                     false,
                     21.into(),
-                    OldValues::default(),
+                    false,
                     false,
                     false,
                     Context::default(),
@@ -8285,7 +8297,7 @@ mod tests {
                             Some(WaitTimeout::Millis(5000)),
                             false,
                             (lock_ts + 1).into(),
-                            OldValues::default(),
+                            false,
                             false,
                             false,
                             Context::default(),
@@ -8870,7 +8882,7 @@ mod tests {
                     None,
                     false,
                     0.into(),
-                    OldValues::default(),
+                    false,
                     false,
                     false,
                     Default::default(),
@@ -8893,7 +8905,7 @@ mod tests {
                     None,
                     false,
                     0.into(),
-                    OldValues::default(),
+                    false,
                     false,
                     false,
                     Default::default(),
@@ -9123,7 +9135,7 @@ mod tests {
                 None,
                 false,
                 TimeStamp::new(12),
-                OldValues::default(),
+                false,
                 false,
                 false,
                 Context::default(),
@@ -9149,7 +9161,7 @@ mod tests {
                 None,
                 false,
                 TimeStamp::new(12),
-                OldValues::default(),
+                false,
                 false,
                 false,
                 Context::default(),

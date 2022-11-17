@@ -71,7 +71,7 @@ fn test_life_by_message() {
     assert_peer_not_exist(test_region_id, test_peer_id, &router);
 
     // Build a correct message.
-    let mut msg = Box::new(RaftMessage::default());
+    let mut msg = Box::<RaftMessage>::default();
     msg.set_region_id(test_region_id);
     msg.set_to_peer(new_peer(1, test_peer_id));
     msg.mut_region_epoch().set_conf_ver(1);
@@ -147,7 +147,7 @@ fn test_destroy_by_larger_id() {
     let test_region_id = 4;
     let test_peer_id = 6;
     let init_term = 5;
-    let mut msg = Box::new(RaftMessage::default());
+    let mut msg = Box::<RaftMessage>::default();
     msg.set_region_id(test_region_id);
     msg.set_to_peer(new_peer(1, test_peer_id));
     msg.mut_region_epoch().set_conf_ver(1);
