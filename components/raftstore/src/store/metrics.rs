@@ -48,6 +48,7 @@ make_auto_flush_static_metric! {
         stale,
         decode,
         epoch,
+        cancel,
     }
 
     pub label_enum RegionHashType {
@@ -86,25 +87,11 @@ make_auto_flush_static_metric! {
         finished,
     }
 
-    pub label_enum RaftEventDurationType {
-        compact_check,
-        pd_store_heartbeat,
-        snap_gc,
-        compact_lock_cf,
-        consistency_check,
-        cleanup_import_sst,
-        raft_engine_purge,
-    }
-
     pub label_enum CompactionGuardAction {
         init,
         init_failure,
         partition,
         skip_partition,
-    }
-
-    pub struct RaftEventDuration : LocalHistogram {
-        "type" => RaftEventDurationType
     }
 
     pub struct RaftEntryFetches : LocalIntCounter {
@@ -218,6 +205,18 @@ make_static_metric! {
         flashback_not_prepared
     }
 
+    pub label_enum RaftEventDurationType {
+        compact_check,
+        pd_store_heartbeat,
+        snap_gc,
+        compact_lock_cf,
+        consistency_check,
+        cleanup_import_sst,
+        raft_engine_purge,
+        peer_msg,
+        store_msg,
+    }
+
     pub label_enum RaftLogGcSkippedReason {
         reserve_log,
         compact_idx_too_small,
@@ -277,6 +276,10 @@ make_static_metric! {
 
     pub struct RaftInvalidProposalCounterVec : LocalIntCounter {
         "type" => RaftInvalidProposal
+    }
+
+    pub struct RaftEventDurationVec : LocalHistogram {
+        "type" => RaftEventDurationType
     }
 
     pub struct RaftLogGcSkippedCounterVec: LocalIntCounter {
@@ -662,8 +665,13 @@ lazy_static! {
             &["type"],
             exponential_buckets(0.001, 1.59, 20).unwrap() // max 10s
         ).unwrap();
-    pub static ref RAFT_EVENT_DURATION: RaftEventDuration =
-        auto_flush_from!(RAFT_EVENT_DURATION_VEC, RaftEventDuration);
+
+    pub static ref PEER_MSG_LEN: Histogram =
+        register_histogram!(
+            "tikv_raftstore_peer_msg_len",
+            "Length of peer msg.",
+            exponential_buckets(1.0, 2.0, 20).unwrap() // max 1000s
+        ).unwrap();
 
     pub static ref RAFT_READ_INDEX_PENDING_DURATION: Histogram =
         register_histogram!(

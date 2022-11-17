@@ -20,8 +20,8 @@ use kvproto::{
 };
 use raft::INVALID_ID;
 use raftstore::store::{
-    fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, RaftlogFetchRunner,
-    RaftlogFetchTask, StoreWriters, Transport, WriteSenders,
+    fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, ReadRunner, ReadTask,
+    StoreWriters, Transport, WriteSenders,
 };
 use slog::Logger;
 use tikv_util::{
@@ -68,7 +68,7 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub engine: ER,
     pub tablet_factory: Arc<dyn TabletFactory<EK>>,
     pub apply_pool: FuturePool,
-    pub log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+    pub read_scheduler: Scheduler<ReadTask<EK>>,
 }
 
 /// A [`PollHandler`] that handles updates of [`StoreFsm`]s and [`PeerFsm`]s.
@@ -215,7 +215,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     tablet_factory: Arc<dyn TabletFactory<EK>>,
     trans: T,
     router: StoreRouter<EK, ER>,
-    log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+    read_scheduler: Scheduler<ReadTask<EK>>,
     write_senders: WriteSenders<EK, ER>,
     apply_pool: FuturePool,
     logger: Logger,
@@ -230,7 +230,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         tablet_factory: Arc<dyn TabletFactory<EK>>,
         trans: T,
         router: StoreRouter<EK, ER>,
-        log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+        read_scheduler: Scheduler<ReadTask<EK>>,
         store_writers: &mut StoreWriters<EK, ER>,
         logger: Logger,
         store_meta: Arc<Mutex<StoreMeta<EK>>>,
@@ -252,7 +252,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             tablet_factory,
             trans,
             router,
-            log_fetch_scheduler,
+            read_scheduler,
             apply_pool,
             logger,
             write_senders: store_writers.senders(),
@@ -271,7 +271,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                     region_id,
                     self.store_id,
                     self.engine.clone(),
-                    self.log_fetch_scheduler.clone(),
+                    self.read_scheduler.clone(),
                     &self.logger,
                 )? {
                     Some(p) => p,
@@ -324,7 +324,7 @@ where
             engine: self.engine.clone(),
             tablet_factory: self.tablet_factory.clone(),
             apply_pool: self.apply_pool.clone(),
-            log_fetch_scheduler: self.log_fetch_scheduler.clone(),
+            read_scheduler: self.read_scheduler.clone(),
         };
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
         StorePoller::new(poll_ctx, cfg_tracker)
@@ -335,14 +335,14 @@ where
 /// raftstore.
 struct Workers<EK: KvEngine, ER: RaftEngine> {
     /// Worker for fetching raft logs asynchronously
-    log_fetch_worker: Worker,
+    async_read_worker: Worker,
     store_writers: StoreWriters<EK, ER>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Default for Workers<EK, ER> {
     fn default() -> Self {
         Self {
-            log_fetch_worker: Worker::new("raftlog-fetch-worker"),
+            async_read_worker: Worker::new("async-read-worker"),
             store_writers: StoreWriters::default(),
         }
     }
@@ -373,9 +373,9 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         workers
             .store_writers
             .spawn(store_id, raft_engine.clone(), None, router, &trans, &cfg)?;
-        let log_fetch_scheduler = workers.log_fetch_worker.start(
-            "raftlog-fetch-worker",
-            RaftlogFetchRunner::new(router.clone(), raft_engine.clone()),
+        let read_scheduler = workers.async_read_worker.start(
+            "async-read-worker",
+            ReadRunner::new(router.clone(), raft_engine.clone()),
         );
 
         let mut builder = StorePollerBuilder::new(
@@ -385,7 +385,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             tablet_factory,
             trans,
             router.clone(),
-            log_fetch_scheduler,
+            read_scheduler,
             &mut workers.store_writers,
             self.logger.clone(),
             store_meta.clone(),
@@ -435,7 +435,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         self.system.shutdown();
 
         workers.store_writers.shutdown();
-        workers.log_fetch_worker.stop();
+        workers.async_read_worker.stop();
     }
 }
 

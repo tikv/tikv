@@ -142,6 +142,8 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 ttl: lock_ttl,
                 for_update_ts,
                 min_commit_ts,
+                last_change_ts: lock.last_change_ts,
+                versions_to_last_change: lock.versions_to_last_change,
             };
             txn.put_pessimistic_lock(key, lock);
         } else {
@@ -154,6 +156,8 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
 
     // Following seek_write read the previous write.
     let (prev_write_loaded, mut prev_write) = (true, None);
+    let mut last_change_ts = TimeStamp::zero();
+    let mut versions_to_last_change = 0;
     if let Some((commit_ts, write)) = reader.seek_write(&key, TimeStamp::max())? {
         // Find a previous write.
         if need_old_value {
@@ -214,6 +218,8 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         // Check data constraint when acquiring pessimistic lock.
         check_data_constraint(reader, should_not_exist, &write, commit_ts, &key)?;
 
+        (last_change_ts, versions_to_last_change) = write.next_last_change_info(commit_ts);
+
         if need_value || need_check_existence {
             val = match write.write_type {
                 // If it's a valid Write, no need to read again.
@@ -256,6 +262,8 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         ttl: lock_ttl,
         for_update_ts,
         min_commit_ts,
+        last_change_ts,
+        versions_to_last_change,
     };
 
     // When lock_only_if_exists is false, always accquire pessimitic lock, otherwise
@@ -273,7 +281,7 @@ pub mod tests {
     use kvproto::kvrpcpb::Context;
     #[cfg(test)]
     use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
-    use txn_types::TimeStamp;
+    use txn_types::{Lock, TimeStamp};
 
     use super::*;
     use crate::storage::{
@@ -503,13 +511,14 @@ pub mod tests {
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
         for_update_ts: impl Into<TimeStamp>,
-    ) {
+    ) -> Lock {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true);
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts.into());
         assert_eq!(lock.for_update_ts, for_update_ts.into());
         assert_eq!(lock.lock_type, LockType::Pessimistic);
+        lock
     }
 
     #[test]
@@ -1459,5 +1468,109 @@ pub mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_calculate_last_change_ts() {
+        use engine_traits::CF_WRITE;
+
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let key = b"k";
+
+        // Latest version is a PUT
+        let write = Write::new(WriteType::Put, 15.into(), Some(b"value".to_vec()));
+        engine
+            .put_cf(
+                Default::default(),
+                CF_WRITE,
+                Key::from_raw(key).append_ts(20.into()),
+                write.as_ref().to_bytes(),
+            )
+            .unwrap();
+        must_succeed(&mut engine, key, key, 10, 30);
+        let lock = must_pessimistic_locked(&mut engine, key, 10, 30);
+        assert_eq!(lock.last_change_ts, 20.into());
+        assert_eq!(lock.versions_to_last_change, 1);
+        pessimistic_rollback::tests::must_success(&mut engine, key, 10, 30);
+
+        // Latest version is a DELETE
+        let write = Write::new(WriteType::Delete, 40.into(), None);
+        engine
+            .put_cf(
+                Default::default(),
+                CF_WRITE,
+                Key::from_raw(key).append_ts(50.into()),
+                write.as_ref().to_bytes(),
+            )
+            .unwrap();
+        must_succeed(&mut engine, key, key, 60, 70);
+        let lock = must_pessimistic_locked(&mut engine, key, 60, 70);
+        assert_eq!(lock.last_change_ts, 50.into());
+        assert_eq!(lock.versions_to_last_change, 1);
+        pessimistic_rollback::tests::must_success(&mut engine, key, 60, 70);
+
+        // Latest version is a LOCK without last_change_ts
+        let write = Write::new(WriteType::Lock, 70.into(), None);
+        engine
+            .put_cf(
+                Default::default(),
+                CF_WRITE,
+                Key::from_raw(key).append_ts(75.into()),
+                write.as_ref().to_bytes(),
+            )
+            .unwrap();
+        must_succeed(&mut engine, key, key, 80, 80);
+        let lock = must_pessimistic_locked(&mut engine, key, 80, 80);
+        assert!(lock.last_change_ts.is_zero());
+        assert_eq!(lock.versions_to_last_change, 0);
+        pessimistic_rollback::tests::must_success(&mut engine, key, 80, 80);
+
+        // Latest version is a ROLLBACK without last_change_ts
+        let write = Write::new(WriteType::Lock, 90.into(), None);
+        engine
+            .put_cf(
+                Default::default(),
+                CF_WRITE,
+                Key::from_raw(key).append_ts(90.into()),
+                write.as_ref().to_bytes(),
+            )
+            .unwrap();
+        must_succeed(&mut engine, key, key, 95, 95);
+        let lock = must_pessimistic_locked(&mut engine, key, 95, 95);
+        assert!(lock.last_change_ts.is_zero());
+        assert_eq!(lock.versions_to_last_change, 0);
+        pessimistic_rollback::tests::must_success(&mut engine, key, 95, 95);
+
+        // Latest version is a LOCK with last_change_ts
+        let write = Write::new(WriteType::Lock, 100.into(), None).set_last_change(40.into(), 4);
+        engine
+            .put_cf(
+                Default::default(),
+                CF_WRITE,
+                Key::from_raw(key).append_ts(110.into()),
+                write.as_ref().to_bytes(),
+            )
+            .unwrap();
+        must_succeed(&mut engine, key, key, 120, 130);
+        let lock = must_pessimistic_locked(&mut engine, key, 120, 130);
+        assert_eq!(lock.last_change_ts, 40.into());
+        assert_eq!(lock.versions_to_last_change, 5);
+        pessimistic_rollback::tests::must_success(&mut engine, key, 120, 130);
+
+        // Latest version is a ROLLBACK with last_change_ts
+        let write = Write::new(WriteType::Rollback, 120.into(), None).set_last_change(40.into(), 5);
+        engine
+            .put_cf(
+                Default::default(),
+                CF_WRITE,
+                Key::from_raw(key).append_ts(120.into()),
+                write.as_ref().to_bytes(),
+            )
+            .unwrap();
+        must_succeed(&mut engine, key, key, 140, 140);
+        let lock = must_pessimistic_locked(&mut engine, key, 140, 140);
+        assert_eq!(lock.last_change_ts, 40.into());
+        assert_eq!(lock.versions_to_last_change, 6);
+        pessimistic_rollback::tests::must_success(&mut engine, key, 140, 140);
     }
 }
