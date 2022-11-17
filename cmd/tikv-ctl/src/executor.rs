@@ -23,7 +23,7 @@ use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use protobuf::Message;
 use raft::eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType};
 use raft_log_engine::RaftLogEngine;
-use raftstore::store::INIT_EPOCH_CONF_VER;
+use raftstore::store::{util::build_key_range, INIT_EPOCH_CONF_VER};
 use security::SecurityManager;
 use serde_json::json;
 use tikv::{
@@ -151,16 +151,37 @@ pub trait DebugExecutor {
         println!("total region size: {}", convert_gbmb(total_size as u64));
     }
 
-    fn dump_region_info(&self, region_ids: Option<Vec<u64>>, skip_tombstone: bool) {
+    fn dump_region_info(
+        &self,
+        region_ids: Option<Vec<u64>>,
+        start_key: &[u8],
+        end_key: &[u8],
+        limit: usize,
+        skip_tombstone: bool,
+    ) {
         let region_ids = region_ids.unwrap_or_else(|| self.get_all_regions_in_store());
         let mut region_objects = serde_json::map::Map::new();
         for region_id in region_ids {
+            if limit > 0 && region_objects.len() >= limit {
+                break;
+            }
             let r = self.get_region_info(region_id);
             if skip_tombstone {
                 let region_state = r.region_local_state.as_ref();
                 if region_state.map_or(false, |s| s.get_state() == PeerState::Tombstone) {
-                    return;
+                    continue;
                 }
+            }
+            let region = r
+                .region_local_state
+                .as_ref()
+                .map(|s| s.get_region().clone())
+                .unwrap();
+            if !check_intersect_of_range(
+                &build_key_range(region.get_start_key(), region.get_end_key(), false),
+                &build_key_range(start_key, end_key, false),
+            ) {
+                continue;
             }
             let region_object = json!({
                 "region_id": region_id,
