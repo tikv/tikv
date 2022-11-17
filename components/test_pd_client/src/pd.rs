@@ -404,13 +404,13 @@ impl Operator {
                     if region
                         .get_peers()
                         .iter()
-                        .any(|p| (p.get_id() == *peer_id) && (p.get_is_witness() == *is_witness))
-                        && !cluster.pending_peers.contains_key(&peer_id)
+                        .any(|p| (p.get_id() == *peer_id) && (p.get_is_witness() != *is_witness))
+                        || cluster.pending_peers.contains_key(peer_id)
                     {
                         return false;
                     }
                 }
-                return true;
+                true
             }
         }
     }
@@ -1128,9 +1128,9 @@ impl TestPdClient {
             if !need_retry {
                 return;
             }
-            let region = block_on(self.get_region_by_id(region_id)).unwrap();
-            panic!("region {:?} failed to finish switch witnesses", region);
         }
+        let region = block_on(self.get_region_by_id(region_id)).unwrap();
+        panic!("region {:?} failed to finish switch witnesses", region);
     }
 
     pub fn add_region(&self, region: &metapb::Region) {

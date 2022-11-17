@@ -25,8 +25,8 @@ use kvproto::{
     kvrpcpb::DiskFullOpt,
     metapb, pdpb,
     raft_cmdpb::{
-        AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest,
-        SplitRequest,
+        AdminCmdType, AdminRequest, BatchSwitchWitnessRequest, ChangePeerRequest,
+        ChangePeerV2Request, RaftCmdRequest, SplitRequest, SwitchWitnessRequest,
     },
     raft_serverpb::RaftMessage,
     replication_modepb::{RegionReplicationStatus, StoreDrAutoSyncStatus},
@@ -1564,6 +1564,18 @@ where
                         deadline:None,
                         disk_full_opt:DiskFullOpt::AllowedOnAlmostFull,
                     });
+                } else if resp.has_switch_witnesses() {
+                    PD_HEARTBEAT_COUNTER_VEC
+                        .with_label_values(&["switch witness"])
+                        .inc();
+
+                    let mut switches = resp.take_switch_witnesses();
+                    info!("try to switch witness";
+                          "region_id" => region_id,
+                          "switch witness" => ?switches
+                    );
+                    let req = new_batch_switch_witness(switches.take_switch_witnesses().into());
+                    send_admin_request(&router, region_id, epoch, peer, req, Callback::None, Default::default());
                 } else {
                     PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["noop"]).inc();
                 }
@@ -2295,6 +2307,24 @@ fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
     req.set_cmd_type(AdminCmdType::PrepareMerge);
     req.mut_prepare_merge()
         .set_target(merge.get_target().to_owned());
+    req
+}
+
+fn new_batch_switch_witness(switches: Vec<pdpb::SwitchWitness>) -> AdminRequest {
+    let mut req = AdminRequest::default();
+    req.set_cmd_type(AdminCmdType::BatchSwitchWitness);
+    let switch_reqs = switches
+        .into_iter()
+        .map(|s| {
+            let mut sw = SwitchWitnessRequest::default();
+            sw.set_peer_id(s.get_peer_id());
+            sw.set_is_witness(s.get_is_witness());
+            sw
+        })
+        .collect();
+    let mut sw = BatchSwitchWitnessRequest::default();
+    sw.set_switch_witnesses(switch_reqs);
+    req.set_switch_witnesses(sw);
     req
 }
 
