@@ -1012,7 +1012,6 @@ mod tests {
     use hyper_openssl::HttpsConnector;
     use online_config::OnlineConfig;
     use openssl::ssl::{SslConnector, SslFiletype, SslMethod};
-    use qos::{get_resource_group, ResourceGroup};
     use raftstore::store::{transport::CasualRouter, CasualMessage};
     use security::SecurityConfig;
     use test_util::new_security_cfg;
