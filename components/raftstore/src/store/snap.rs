@@ -4,6 +4,7 @@ use std::{
     cmp::{self, Ordering as CmpOrdering, Reverse},
     error::Error as StdError,
     fmt::{self, Display, Formatter},
+    fs,
     io::{self, ErrorKind, Read, Write},
     path::{Path, PathBuf},
     result, str,
@@ -1927,7 +1928,6 @@ impl Display for TabletSnapKey {
 /// It's similar `SnapManager`, but simpler in tablet version.
 ///
 ///  TODO:
-///     - add Limiter to control send/recv speed
 ///     - clean up expired tablet checkpointer
 #[derive(Clone)]
 pub struct TabletSnapManager {
@@ -1968,6 +1968,19 @@ impl TabletSnapManager {
     pub fn get_tmp_name_for_recv(&self, key: &TabletSnapKey) -> PathBuf {
         let prefix = format!("{}_{}{}", SNAP_REV_PREFIX, key, TMP_FILE_SUFFIX);
         PathBuf::from(&self.base).join(&prefix)
+    }
+
+    pub fn delete_snapshot(&self, key: &TabletSnapKey) -> bool {
+        let path = self.get_tablet_checkpointer_path(key);
+        if path.exists() && fs::remove_dir_all(path.as_path()).is_err() {
+            warn!(
+                "delete snapshot failed";
+                "path" => %path.display(),
+            );
+            false
+        } else {
+            true
+        }
     }
 }
 

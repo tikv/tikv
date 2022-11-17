@@ -194,10 +194,7 @@ pub fn send_snap(
         drop(client);
         match recv_result {
             Ok(_) => {
-                fail_point!("snapshot_delete_after_send");
-                // TODO: improve it after rustc resolves the bug.
-                // Call `info` in the closure directly will cause rustc
-                // panic with `Cannot create local mono-item for DefId`.
+                mgr.delete_snapshot(&key);
                 Ok(SendStat {
                     key,
                     total_size,
@@ -215,7 +212,7 @@ async fn recv_snap_files(
     mut stream: impl Stream<Item = Result<SnapshotChunk>> + Unpin,
     limit: Limiter,
 ) -> Result<RecvTabletSnapContext> {
-    let head = Some(stream.next().await.unwrap().unwrap());
+    let head = stream.next().await.transpose()?;
     let context = RecvTabletSnapContext::new(head)?;
     let path = snap_mgr.get_tmp_name_for_recv(&context.key);
     info!("begin to receive tablet snapshot files"; "file" => %path.display());
@@ -312,7 +309,7 @@ where
         cfg: Arc<VersionTrack<Config>>,
     ) -> TabletRunner<E, R> {
         let config = cfg.value().clone();
-        let cfg_tracker = cfg.clone().tracker("tablet-sender".to_owned());
+        let cfg_tracker = cfg.tracker("tablet-sender".to_owned());
         let limit = i64::try_from(config.snap_max_write_bytes_per_sec.0)
             .unwrap_or_else(|_| panic!("snap_max_write_bytes_per_sec > i64::max_value"));
         let limiter = Limiter::new(if limit > 0 {
@@ -492,9 +489,9 @@ mod tests {
         msg.mut_message().mut_snapshot().mut_metadata().set_index(1);
         msg.mut_message().mut_snapshot().mut_metadata().set_term(1);
         let send_path = TempDir::new().unwrap();
-        let send_snap_path =
+        let send_snap_mgr =
             TabletSnapManager::new(send_path.path().join("snap_dir").to_str().unwrap());
-        let snap_path = send_snap_path.get_tablet_checkpointer_path(&snap_key);
+        let snap_path = send_snap_mgr.get_tablet_checkpointer_path(&snap_key);
         create_dir_all(snap_path.as_path()).unwrap();
         for i in 0..2 {
             let mut f = File::create(snap_path.join(i.to_string())).unwrap();
@@ -508,7 +505,7 @@ mod tests {
         let (tx, rx) = mpsc::unbounded();
         let sink = tx.sink_map_err(Error::from);
         block_on(send_snap_files(
-            &send_snap_path,
+            &send_snap_mgr,
             sink,
             msg,
             snap_key.clone(),
@@ -523,5 +520,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_secs(1));
         let dir = std::fs::read_dir(final_path).unwrap();
         assert_eq!(2, dir.count());
+        send_snap_mgr.delete_snapshot(&snap_key);
+        assert!(!snap_path.exists());
     }
 }
