@@ -208,6 +208,7 @@ impl CachedRawClient {
 
     #[inline]
     fn channel(&self) -> &Channel {
+        // self.cache.stub.client.channel()
         unimplemented!()
     }
 

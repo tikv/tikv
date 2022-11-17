@@ -2265,9 +2265,8 @@ dependencies = [
 
 [[package]]
 name = "grpcio-compiler"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4caa0700833147dcfbe4f0758bd92545cc0f4506ee7fa154e499745a8b24e86c"
+version = "0.12.0"
+source = "git+https://github.com/BusyJay/grpc-rs?branch=allow-access-channel#9949dc8749b54f92f453b410d9f9b0405dc42be3"
 dependencies = [
  "protobuf",
 ]
@@ -2287,7 +2286,7 @@ dependencies = [
 [[package]]
 name = "grpcio-sys"
 version = "0.12.0+1.46.5-patched"
-source = "git+https://github.com/BusyJay/grpc-rs?branch=allow-access-channel#36a92a70366e10b8cde06646ef0fb909215790cd"
+source = "git+https://github.com/BusyJay/grpc-rs?branch=allow-access-channel#9949dc8749b54f92f453b410d9f9b0405dc42be3"
 dependencies = [
  "bindgen 0.59.2",
  "cc",
