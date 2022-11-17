@@ -54,7 +54,7 @@ use tikv_util::{
     timer::GLOBAL_TIMER_HANDLE,
     warn,
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 use txn_types::TimeStamp;
 
 use super::{
@@ -70,7 +70,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(REQUEST_TIMEOUT_SEC);
 
 /// Immutable context for making new connections.
 struct ConnectContext {
-    enable_forwarding: bool,
+    cfg: Config,
     connector: PdConnector,
 }
 
@@ -96,7 +96,7 @@ impl RawClient {
                 members,
                 direct_connected,
                 force,
-                ctx.enable_forwarding,
+                ctx.cfg.enable_forwarding,
                 false,
             )
             .await
@@ -126,6 +126,7 @@ impl RawClient {
         self.stub = stub;
         self.target_info = target_info;
         self.members = members;
+
         info!("trying to update PD client done"; "spend" => ?start.saturating_elapsed());
         Ok(true)
     }
@@ -135,19 +136,23 @@ impl RawClient {
 #[derive(Clone)]
 pub struct CachedRawClient {
     context: Arc<ConnectContext>,
-    latest: Arc<Mutex<RawClient>>,
+
+    latest: Arc<Mutex<Option<RawClient>>>,
     version: Arc<AtomicU64>,
-    cache: RawClient,
+    on_reconnect_notify: Arc<Notify>,
+
+    cache: Option<RawClient>,
     cache_version: u64,
 }
 
 impl CachedRawClient {
-    fn new(context: ConnectContext, client: RawClient) -> Self {
+    fn new(context: ConnectContext, on_reconnect_notify: Arc<Notify>) -> Self {
         Self {
             context: Arc::new(context),
-            latest: Arc::new(Mutex::new(client.clone())),
+            latest: Arc::new(Mutex::new(None)),
             version: Arc::new(AtomicU64::new(0)),
-            cache: client,
+            on_reconnect_notify,
+            cache: None,
             cache_version: 0,
         }
     }
@@ -164,16 +169,45 @@ impl CachedRawClient {
         }
     }
 
+    #[inline]
+    async fn publish_cache(&mut self) {
+        let latest_version = {
+            let mut latest = self.latest.lock().await;
+            *latest = self.cache.clone();
+            self.version.fetch_add(1, Ordering::AcqRel) + 1
+        };
+        debug_assert!(self.cache_version < latest_version);
+        self.cache_version = latest_version;
+    }
+
     /// Refreshes the local cache with latest client, then waits for the
     /// connection to be ready.
+    /// The connection must be available if this function returns `Ok(())`.
     async fn wait_for_ready(&mut self) -> Result<()> {
         self.refresh_cache().await;
-        for _ in 0..3 {
-            if self.channel().wait_for_connected(REQUEST_TIMEOUT).await {
-                return Ok(());
-            } else if !self.refresh_cache().await {
-                // Only retry if client is updated.
-                break;
+        if self.cache.is_none() {
+            if tokio::time::timeout(REQUEST_TIMEOUT, self.on_reconnect_notify.notified())
+                .await
+                .is_ok()
+            {
+                self.refresh_cache().await;
+                debug_assert!(self.cache.is_some());
+            }
+            if self.cache.is_none() {
+                return Err(box_err!("Connection is not initialized in time"));
+            }
+        }
+        select! {
+            r = self.channel().wait_for_connected(REQUEST_TIMEOUT).fuse() => {
+                if r {
+                    return Ok(());
+                }
+            }
+            _ = self.on_reconnect_notify.notified().fuse() => {
+                let _prev_version = self.cache_version;
+                self.refresh_cache().await;
+                debug_assert!(_prev_version < self.cache_version);
+                return Ok(())
             }
         }
         Err(box_err!(
@@ -182,50 +216,104 @@ impl CachedRawClient {
         ))
     }
 
-    /// Increases global version only when a new connection is established.
-    async fn reconnect(&mut self, callback: &CallbackHolder) -> Result<()> {
-        let force = self.channel().check_connectivity_state(true)
-            == ConnectivityState::GRPC_CHANNEL_SHUTDOWN;
-        if self.cache.maybe_reconnect(&self.context, force).await? {
-            let latest_version = {
-                let mut latest = self.latest.lock().await;
-                *latest = self.cache.clone();
-                self.version.fetch_add(1, Ordering::AcqRel) + 1
-            };
-            debug_assert!(self.cache_version < latest_version);
-            self.cache_version = latest_version;
-            if let Some(ref f) = *callback.lock().unwrap() {
-                f();
+    /// Makes the first connection.
+    async fn connect(&mut self) -> Result<()> {
+        debug_assert!(self.cache.is_none());
+        // -1 means the max.
+        let retries = match self.context.cfg.retry_max_count {
+            -1 => std::isize::MAX,
+            v => v.saturating_add(1),
+        };
+        for i in 0..retries {
+            match self
+                .context
+                .connector
+                .validate_endpoints(&self.context.cfg, false)
+                .await
+            {
+                Ok((stub, target_info, members, _)) => {
+                    self.cache = Some(RawClient {
+                        stub,
+                        target_info,
+                        members,
+                    });
+                    self.publish_cache().await;
+                }
+                Err(e) => {
+                    if i as usize % self.context.cfg.retry_log_every == 0 {
+                        warn!("validate PD endpoints failed"; "err" => ?e);
+                    }
+                    let _ = GLOBAL_TIMER_HANDLE
+                        .delay(std::time::Instant::now() + self.context.cfg.retry_interval.0)
+                        .compat()
+                        .await;
+                }
             }
         }
-        Ok(())
+        Err(box_err!("endpoints are invalid"))
     }
 
+    /// Increases global version only when a new connection is established.
+    /// Might panic if `wait_for_ready` isn't called up-front.
+    async fn reconnect(&mut self) -> Result<bool> {
+        let force = self.channel().check_connectivity_state(true)
+            == ConnectivityState::GRPC_CHANNEL_SHUTDOWN;
+        if self
+            .cache
+            .as_mut()
+            .unwrap()
+            .maybe_reconnect(&self.context, force)
+            .await?
+        {
+            self.publish_cache().await;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    /// Might panic if `wait_for_ready` isn't called up-front.
     #[inline]
     fn stub(&self) -> &PdClientStub {
-        &self.cache.stub
+        &self.cache.as_ref().unwrap().stub
     }
 
+    /// Might panic if `wait_for_ready` isn't called up-front.
     #[inline]
     fn channel(&self) -> &Channel {
         // self.cache.stub.client.channel()
         unimplemented!()
     }
 
-    #[inline]
-    fn cache_version(&self) -> u64 {
-        self.cache_version
-    }
-
+    /// Might panic if `wait_for_ready` isn't called up-front.
     #[inline]
     fn call_option(&self) -> CallOption {
-        self.cache.target_info.call_option()
+        self.cache.as_ref().unwrap().target_info.call_option()
     }
 
+    /// Might panic if `wait_for_ready` isn't called up-front.
+    #[inline]
+    fn cluster_id(&self) -> u64 {
+        self.cache
+            .as_ref()
+            .unwrap()
+            .members
+            .get_header()
+            .get_cluster_id()
+    }
+
+    /// Might panic if `wait_for_ready` isn't called up-front.
+    #[inline]
+    fn header(&self) -> pdpb::RequestHeader {
+        let mut header = pdpb::RequestHeader::default();
+        header.set_cluster_id(self.cluster_id());
+        header
+    }
+
+    /// Might panic if `wait_for_ready` isn't called up-front.
     #[cfg(feature = "testexport")]
     #[inline]
     fn leader(&self) -> pdpb::Member {
-        self.cache.members.get_leader().clone()
+        self.cache.as_ref().unwrap().members.get_leader().clone()
     }
 }
 
@@ -262,23 +350,48 @@ type CallbackHolder = Arc<StdMutex<Option<Box<dyn Fn() + Sync + Send + 'static>>
 
 #[derive(Clone)]
 pub struct RpcClient {
-    cluster_id: u64,
     raw_client: CachedRawClient,
     feature_gate: FeatureGate,
-    reconnect_tx: mpsc::Sender<u64>,
-    on_reconnect: CallbackHolder,
+    on_reconnect_cb: CallbackHolder,
+}
+
+async fn reconnect_loop(
+    mut client: CachedRawClient,
+    on_reconnect_notify: Arc<Notify>,
+    on_reconnect_cb: CallbackHolder,
+) {
+    if let Err(e) = client.connect().await {
+        error!("failed to connect pd"; "err" => ?e);
+        return;
+    } else {
+        on_reconnect_notify.notify_waiters();
+    }
+    loop {
+        if client.channel().wait_for_connected(REQUEST_TIMEOUT).await {
+            let state = ConnectivityState::GRPC_CHANNEL_READY;
+            // Checks for leader change periodically.
+            client
+                .channel()
+                .wait_for_state_change(state, REQUEST_TIMEOUT)
+                .await;
+        }
+        match client.reconnect().await {
+            Ok(true) => {
+                if let Some(ref f) = *on_reconnect_cb.lock().unwrap() {
+                    f();
+                }
+                on_reconnect_notify.notify_waiters();
+            }
+            Err(e) => {
+                warn!("failed to reconnect pd"; "err" => ?e);
+            }
+            _ => {}
+        }
+    }
 }
 
 impl RpcClient {
     pub fn new(
-        cfg: &Config,
-        shared_env: Option<Arc<Environment>>,
-        security_mgr: Arc<SecurityManager>,
-    ) -> Result<RpcClient> {
-        block_on(Self::new_async(cfg, shared_env, security_mgr))
-    }
-
-    pub async fn new_async(
         cfg: &Config,
         shared_env: Option<Arc<Environment>>,
         security_mgr: Arc<SecurityManager>,
@@ -292,68 +405,30 @@ impl RpcClient {
             )
         });
 
-        // -1 means the max.
-        let retries = match cfg.retry_max_count {
-            -1 => std::isize::MAX,
-            v => v.saturating_add(1),
+        let on_reconnect_cb: CallbackHolder = Default::default();
+        let on_reconnect_notify = Arc::new(Notify::new());
+        let context = ConnectContext {
+            cfg: cfg.clone(),
+            connector: PdConnector::new(env.clone(), security_mgr),
         };
-        let pd_connector = PdConnector::new(env.clone(), security_mgr.clone());
-        for i in 0..retries {
-            match pd_connector.validate_endpoints(cfg, false).await {
-                Ok((stub, target_info, members, _)) => {
-                    let cluster_id = members.get_header().get_cluster_id();
-                    let context = ConnectContext {
-                        enable_forwarding: cfg.enable_forwarding,
-                        connector: pd_connector,
-                    };
-                    let client = RawClient {
-                        stub,
-                        target_info,
-                        members,
-                    };
-                    return Self::build_from_raw(cluster_id, CachedRawClient::new(context, client));
-                }
-                Err(e) => {
-                    if i as usize % cfg.retry_log_every == 0 {
-                        warn!("validate PD endpoints failed"; "err" => ?e);
-                    }
-                    let _ = GLOBAL_TIMER_HANDLE
-                        .delay(std::time::Instant::now() + cfg.retry_interval.0)
-                        .compat()
-                        .await;
-                }
-            }
-        }
-        Err(box_err!("endpoints are invalid"))
-    }
+        let raw_client = CachedRawClient::new(context, on_reconnect_notify.clone());
 
-    fn build_from_raw(cluster_id: u64, raw_client: CachedRawClient) -> Result<Self> {
-        let (reconnect_tx, reconnect_rx) = mpsc::unbounded(mpsc::WakePolicy::Immediately);
-        let on_reconnect: CallbackHolder = Default::default();
-        raw_client.stub().spawn(reconnect_loop(
+        let lame_client = PdClientStub::new(Channel::lame(env, "0.0.0.0:0"));
+        lame_client.spawn(reconnect_loop(
             raw_client.clone(),
-            on_reconnect.clone(),
-            reconnect_rx,
+            on_reconnect_notify,
+            on_reconnect_cb.clone(),
         ));
 
         Ok(Self {
-            cluster_id,
             raw_client,
             feature_gate: Default::default(),
-            on_reconnect,
-            reconnect_tx,
+            on_reconnect_cb,
         })
     }
 
     pub fn set_on_reconnect<F: Fn() + Sync + Send + 'static>(&self, f: F) {
-        *self.on_reconnect.lock().unwrap() = Some(Box::new(f));
-    }
-
-    #[inline]
-    fn header(&self) -> pdpb::RequestHeader {
-        let mut header = pdpb::RequestHeader::default();
-        header.set_cluster_id(self.cluster_id);
-        header
+        *self.on_reconnect_cb.lock().unwrap() = Some(Box::new(f));
     }
 
     #[cfg(feature = "testexport")]
@@ -368,13 +443,13 @@ impl RpcClient {
     }
 
     #[cfg(feature = "testexport")]
-    pub fn reconnect(&mut self) -> Result<()> {
-        block_on(self.raw_client.reconnect(&self.on_reconnect))
+    pub fn reconnect(&mut self) -> Result<bool> {
+        block_on(self.raw_client.reconnect())
     }
 
     #[cfg(feature = "testexport")]
     pub fn cluster_id(&self) -> u64 {
-        self.cluster_id
+        self.raw_client.cluster_id()
     }
 }
 
@@ -405,7 +480,7 @@ pub trait PdClient {
         &mut self,
     ) -> Result<grpcio::ClientSStreamReceiver<pdpb::WatchGlobalConfigResponse>>;
 
-    fn get_cluster_id(&self) -> Result<u64>;
+    fn get_cluster_id(&mut self) -> Result<u64>;
 
     fn bootstrap_cluster(
         &mut self,
@@ -501,7 +576,6 @@ impl PdClient for RpcClient {
         let response_holder = Arc::new(std::sync::Mutex::new(None));
         let response_holder_clone = response_holder.clone();
         let mut raw_client = self.raw_client.clone();
-        let reconnect = self.reconnect_tx.clone();
         let mut requests = Box::pin(rx).map(|r| {
             fail::fail_point!("region_heartbeat_send_failed", |_| {
                 Err(grpcio::Error::RemoteStopped)
@@ -512,9 +586,6 @@ impl PdClient for RpcClient {
             loop {
                 if let Err(e) = raw_client.wait_for_ready().await {
                     warn!("failed to acquire client for RegionHeartbeat stream"; "err" => ?e);
-                    if reconnect.send(raw_client.cache_version()).is_err() {
-                        break;
-                    }
                     continue;
                 }
                 let (mut bk_tx, bk_rx) = raw_client
@@ -532,9 +603,6 @@ impl PdClient for RpcClient {
                     warn!("region heartbeat stream exited"; "res" => ?res);
                 }
                 let _ = bk_tx.close().await;
-                if reconnect.send(raw_client.cache_version()).is_err() {
-                    break;
-                }
             }
         });
         Ok((
@@ -552,15 +620,11 @@ impl PdClient for RpcClient {
     ) -> Result<mpsc::Sender<ReportBucketsRequest>> {
         let (tx, rx) = mpsc::unbounded(wake_policy);
         let mut raw_client = self.raw_client.clone();
-        let reconnect = self.reconnect_tx.clone();
         let mut requests = Box::pin(rx).map(|r| Ok((r, WriteFlags::default())));
         self.raw_client.stub().spawn(async move {
             loop {
                 if let Err(e) = raw_client.wait_for_ready().await {
                     warn!("failed to acquire client for ReportRegionBuckets stream"; "err" => ?e);
-                    if reconnect.send(raw_client.cache_version()).is_err() {
-                        break;
-                    }
                     continue;
                 }
                 let (mut bk_tx, bk_rx) = raw_client
@@ -583,9 +647,6 @@ impl PdClient for RpcClient {
                     }
                 }
                 let _ = bk_tx.close().await;
-                if reconnect.send(raw_client.cache_version()).is_err() {
-                    break;
-                }
             }
         });
         Ok(tx)
@@ -599,15 +660,11 @@ impl PdClient for RpcClient {
         let response_holder = Arc::new(std::sync::Mutex::new(None));
         let response_holder_clone = response_holder.clone();
         let mut raw_client = self.raw_client.clone();
-        let reconnect = self.reconnect_tx.clone();
         let mut requests = Box::pin(rx).map(|r| Ok((r, WriteFlags::default())));
         self.raw_client.stub().spawn(async move {
             loop {
                 if let Err(e) = raw_client.wait_for_ready().await {
                     warn!("failed to acquire client for Tso stream"; "err" => ?e);
-                    if reconnect.send(raw_client.cache_version()).is_err() {
-                        break;
-                    }
                     continue;
                 }
                 let (mut bk_tx, bk_rx) = raw_client
@@ -623,9 +680,6 @@ impl PdClient for RpcClient {
                     warn!("tso exited"; "res" => ?res);
                 }
                 let _ = bk_tx.close().await;
-                if reconnect.send(raw_client.cache_version()).is_err() {
-                    break;
-                }
             }
         });
         Ok((
@@ -671,8 +725,9 @@ impl PdClient for RpcClient {
         Ok(self.raw_client.stub().watch_global_config(&req)?)
     }
 
-    fn get_cluster_id(&self) -> Result<u64> {
-        Ok(self.cluster_id)
+    fn get_cluster_id(&mut self) -> Result<u64> {
+        block_on(self.raw_client.wait_for_ready())?;
+        Ok(self.raw_client.cluster_id())
     }
 
     fn bootstrap_cluster(
@@ -684,12 +739,13 @@ impl PdClient for RpcClient {
             .with_label_values(&["bootstrap_cluster"])
             .start_coarse_timer();
 
+        block_on(self.raw_client.wait_for_ready())?;
+
         let mut req = pdpb::BootstrapRequest::default();
-        req.set_header(self.header());
+        req.set_header(self.raw_client.header());
         req.set_store(stores);
         req.set_region(region);
 
-        block_on(self.raw_client.wait_for_ready())?;
         let mut resp = self
             .raw_client
             .stub()
@@ -703,10 +759,11 @@ impl PdClient for RpcClient {
             .with_label_values(&["is_cluster_bootstrapped"])
             .start_coarse_timer();
 
-        let mut req = pdpb::IsBootstrappedRequest::default();
-        req.set_header(self.header());
-
         block_on(self.raw_client.wait_for_ready())?;
+
+        let mut req = pdpb::IsBootstrappedRequest::default();
+        req.set_header(self.raw_client.header());
+
         let resp = self
             .raw_client
             .stub()
@@ -721,10 +778,11 @@ impl PdClient for RpcClient {
             .with_label_values(&["alloc_id"])
             .start_coarse_timer();
 
-        let mut req = pdpb::AllocIdRequest::default();
-        req.set_header(self.header());
-
         block_on(self.raw_client.wait_for_ready())?;
+
+        let mut req = pdpb::AllocIdRequest::default();
+        req.set_header(self.raw_client.header());
+
         let resp = self.raw_client.stub().alloc_id_opt(
             &req,
             self.raw_client
@@ -745,10 +803,11 @@ impl PdClient for RpcClient {
             .with_label_values(&["is_recovering_marked"])
             .start_coarse_timer();
 
-        let mut req = pdpb::IsSnapshotRecoveringRequest::default();
-        req.set_header(self.header());
-
         block_on(self.raw_client.wait_for_ready())?;
+
+        let mut req = pdpb::IsSnapshotRecoveringRequest::default();
+        req.set_header(self.raw_client.header());
+
         let resp = self.raw_client.stub().is_snapshot_recovering_opt(
             &req,
             self.raw_client.call_option().timeout(REQUEST_TIMEOUT),
@@ -763,11 +822,12 @@ impl PdClient for RpcClient {
             .with_label_values(&["put_store"])
             .start_coarse_timer();
 
+        block_on(self.raw_client.wait_for_ready())?;
+
         let mut req = pdpb::PutStoreRequest::default();
-        req.set_header(self.header());
+        req.set_header(self.raw_client.header());
         req.set_store(store);
 
-        block_on(self.raw_client.wait_for_ready())?;
         let mut resp = self
             .raw_client
             .stub()
@@ -784,12 +844,12 @@ impl PdClient for RpcClient {
         let timer = Instant::now();
 
         let mut req = pdpb::GetStoreRequest::default();
-        req.set_header(self.header());
         req.set_store_id(store_id);
 
         let mut raw_client = self.raw_client.clone();
         Box::pin(async move {
             raw_client.wait_for_ready().await?;
+            req.set_header(raw_client.header());
             let mut resp = raw_client
                 .stub()
                 .get_store_async_opt(&req, raw_client.call_option().timeout(REQUEST_TIMEOUT))
@@ -828,11 +888,12 @@ impl PdClient for RpcClient {
             .with_label_values(&["get_all_stores"])
             .start_coarse_timer();
 
+        block_on(self.raw_client.wait_for_ready())?;
+
         let mut req = pdpb::GetAllStoresRequest::default();
-        req.set_header(self.header());
+        req.set_header(self.raw_client.header());
         req.set_exclude_tombstone_stores(exclude_tombstone);
 
-        block_on(self.raw_client.wait_for_ready())?;
         let mut resp = self
             .raw_client
             .stub()
@@ -847,10 +908,11 @@ impl PdClient for RpcClient {
             .with_label_values(&["get_cluster_config"])
             .start_coarse_timer();
 
-        let mut req = pdpb::GetClusterConfigRequest::default();
-        req.set_header(self.header());
-
         block_on(self.raw_client.wait_for_ready())?;
+
+        let mut req = pdpb::GetClusterConfigRequest::default();
+        req.set_header(self.raw_client.header());
+
         let mut resp = self
             .raw_client
             .stub()
@@ -869,12 +931,12 @@ impl PdClient for RpcClient {
             .start_coarse_timer();
 
         let mut req = pdpb::GetRegionRequest::default();
-        req.set_header(self.header());
         req.set_region_key(key.to_vec());
 
         let mut raw_client = self.raw_client.clone();
         Box::pin(async move {
             raw_client.wait_for_ready().await?;
+            req.set_header(raw_client.header());
             let mut resp = raw_client
                 .stub()
                 .get_region_async_opt(&req, raw_client.call_option().timeout(REQUEST_TIMEOUT))
@@ -919,12 +981,12 @@ impl PdClient for RpcClient {
         let timer = Instant::now();
 
         let mut req = pdpb::GetRegionByIdRequest::default();
-        req.set_header(self.header());
         req.set_region_id(region_id);
 
         let mut raw_client = self.raw_client.clone();
         Box::pin(async move {
             raw_client.wait_for_ready().await?;
+            req.set_header(raw_client.header());
             let mut resp = raw_client
                 .stub()
                 .get_region_by_id_async_opt(&req, raw_client.call_option().timeout(REQUEST_TIMEOUT))
@@ -951,12 +1013,12 @@ impl PdClient for RpcClient {
         let timer = Instant::now();
 
         let mut req = pdpb::GetRegionByIdRequest::default();
-        req.set_header(self.header());
         req.set_region_id(region_id);
 
         let mut raw_client = self.raw_client.clone();
         Box::pin(async move {
             raw_client.wait_for_ready().await?;
+            req.set_header(raw_client.header());
             let mut resp = raw_client
                 .stub()
                 .get_region_by_id_async_opt(&req, raw_client.call_option().timeout(REQUEST_TIMEOUT))
@@ -983,12 +1045,12 @@ impl PdClient for RpcClient {
         let timer = Instant::now();
 
         let mut req = pdpb::AskSplitRequest::default();
-        req.set_header(self.header());
         req.set_region(region);
 
         let mut raw_client = self.raw_client.clone();
         Box::pin(async move {
             raw_client.wait_for_ready().await?;
+            req.set_header(raw_client.header());
             let resp = raw_client
                 .stub()
                 .ask_split_async_opt(&req, raw_client.call_option().timeout(REQUEST_TIMEOUT))
@@ -1012,13 +1074,13 @@ impl PdClient for RpcClient {
         let timer = Instant::now();
 
         let mut req = pdpb::AskBatchSplitRequest::default();
-        req.set_header(self.header());
         req.set_region(region);
         req.set_split_count(count as u32);
 
         let mut raw_client = self.raw_client.clone();
         Box::pin(async move {
             raw_client.wait_for_ready().await?;
+            req.set_header(raw_client.header());
             let resp = raw_client
                 .stub()
                 .ask_batch_split_async_opt(&req, raw_client.call_option().timeout(REQUEST_TIMEOUT))
@@ -1043,7 +1105,6 @@ impl PdClient for RpcClient {
         let timer = Instant::now();
 
         let mut req = pdpb::StoreHeartbeatRequest::default();
-        req.set_header(self.header());
         stats
             .mut_interval()
             .set_end_timestamp(UnixSecs::now().into_inner());
@@ -1059,6 +1120,7 @@ impl PdClient for RpcClient {
         let feature_gate = self.feature_gate.clone();
         Box::pin(async move {
             raw_client.wait_for_ready().await?;
+            req.set_header(raw_client.header());
             let resp = raw_client
                 .stub()
                 .store_heartbeat_async_opt(&req, raw_client.call_option().timeout(REQUEST_TIMEOUT))
@@ -1083,12 +1145,12 @@ impl PdClient for RpcClient {
         let timer = Instant::now();
 
         let mut req = pdpb::ReportBatchSplitRequest::default();
-        req.set_header(self.header());
         req.set_regions(regions.into());
 
         let mut raw_client = self.raw_client.clone();
         Box::pin(async move {
             raw_client.wait_for_ready().await?;
+            req.set_header(raw_client.header());
             let resp = raw_client
                 .stub()
                 .report_batch_split_async_opt(
@@ -1113,7 +1175,6 @@ impl PdClient for RpcClient {
             .start_coarse_timer();
 
         let mut req = pdpb::ScatterRegionRequest::default();
-        req.set_header(self.header());
         req.set_region_id(region.get_id());
         if let Some(leader) = region.leader.take() {
             req.set_leader(leader);
@@ -1121,6 +1182,7 @@ impl PdClient for RpcClient {
         req.set_region(region.region);
 
         block_on(self.raw_client.wait_for_ready())?;
+        req.set_header(self.raw_client.header());
         let resp = self
             .raw_client
             .stub()
@@ -1132,11 +1194,11 @@ impl PdClient for RpcClient {
         let timer = Instant::now();
 
         let mut req = pdpb::GetGcSafePointRequest::default();
-        req.set_header(self.header());
 
         let mut raw_client = self.raw_client.clone();
         Box::pin(async move {
             raw_client.wait_for_ready().await?;
+            req.set_header(raw_client.header());
             let resp = raw_client
                 .stub()
                 .get_gc_safe_point_async_opt(
@@ -1160,11 +1222,12 @@ impl PdClient for RpcClient {
             .with_label_values(&["get_operator"])
             .start_coarse_timer();
 
+        block_on(self.raw_client.wait_for_ready())?;
+
         let mut req = pdpb::GetOperatorRequest::default();
-        req.set_header(self.header());
+        req.set_header(self.raw_client.header());
         req.set_region_id(region_id);
 
-        block_on(self.raw_client.wait_for_ready())?;
         let resp = self
             .raw_client
             .stub()
@@ -1182,7 +1245,6 @@ impl PdClient for RpcClient {
     ) -> PdFuture<()> {
         let timer = Instant::now();
         let mut req = pdpb::UpdateServiceGcSafePointRequest::default();
-        req.set_header(self.header());
         req.set_service_id(name.into());
         req.set_ttl(ttl.as_secs() as _);
         req.set_safe_point(safe_point.into_inner());
@@ -1190,6 +1252,7 @@ impl PdClient for RpcClient {
         let mut raw_client = self.raw_client.clone();
         Box::pin(async move {
             raw_client.wait_for_ready().await?;
+            req.set_header(raw_client.header());
             let resp = raw_client
                 .stub()
                 .update_service_gc_safe_point_async_opt(
@@ -1215,13 +1278,13 @@ impl PdClient for RpcClient {
         let timer = Instant::now();
 
         let mut req = pdpb::ReportMinResolvedTsRequest::default();
-        req.set_header(self.header());
         req.set_store_id(store_id);
         req.set_min_resolved_ts(min_resolved_ts);
 
         let mut raw_client = self.raw_client.clone();
         Box::pin(async move {
             raw_client.wait_for_ready().await?;
+            req.set_header(raw_client.header());
             let resp = raw_client
                 .stub()
                 .report_min_resolved_ts_async_opt(
@@ -1238,35 +1301,5 @@ impl PdClient for RpcClient {
             check_resp_header(resp.get_header())?;
             Ok(())
         })
-    }
-}
-
-async fn reconnect_loop(
-    mut client: CachedRawClient,
-    on_reconnect: CallbackHolder,
-    mut reconnect: mpsc::Receiver<u64>,
-) {
-    loop {
-        while !client.channel().wait_for_connected(REQUEST_TIMEOUT).await {
-            // wait_for_connected will attempt to connect internally. When it fails we
-            // should force reconnect.
-            if let Err(e) = client.reconnect(&on_reconnect).await {
-                warn!("failed to reconnect pd"; "err" => ?e);
-            }
-        }
-        let state = ConnectivityState::GRPC_CHANNEL_READY;
-        select! {
-            _ = client.channel().wait_for_state_change(state, REQUEST_TIMEOUT).fuse() => {},
-            v = reconnect.next().fuse() => {
-                if v.is_none() {
-                    break;
-                } else if v.unwrap() < client.cache_version() {
-                    continue;
-                }
-            }
-        }
-        if let Err(e) = client.reconnect(&on_reconnect).await {
-            warn!("failed to reconnect pd"; "err" => ?e);
-        }
     }
 }
