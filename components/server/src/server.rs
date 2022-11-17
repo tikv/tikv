@@ -1625,7 +1625,7 @@ where
         let server = self.servers.as_mut().unwrap();
         server
             .server
-            .build_and_bind()
+            .build_and_bind(&self.security_mgr, &server_config)
             .unwrap_or_else(|e| fatal!("failed to build server: {}", e));
         server
             .server

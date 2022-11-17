@@ -12,7 +12,7 @@ use tempfile::TempDir;
 fn test_bootstrap_half_way_failure() {
     let server = test_pd::Server::new(1);
     let eps = server.bind_addrs();
-    let pd_client = test_pd::util::new_client(eps, None);
+    let pd_client = test_pd::util::new_client(eps.to_vec(), None);
     let path = TempDir::new().unwrap();
     let engines = engine_test::new_temp_engine(&path);
     let bootstrap = || {
