@@ -355,7 +355,7 @@ pub mod tests {
 
     #[test]
     fn test_2pc_with_txn_source() {
-        for source in &[0x1, 0x85] {
+        for source in [0x1, 0x85] {
             let mut engine = TestEngineBuilder::new().build().unwrap();
 
             let k = b"k";
