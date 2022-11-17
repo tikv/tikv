@@ -290,18 +290,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         };
         fail_point!("on_split_invalidate_locks");
 
-        // Roughly estimate the size and keys for new regions.
-        let new_region_count = regions.len() as u64;
-        {
-            let mut meta = store_ctx.store_meta.lock().unwrap();
-            let reader = meta.readers.get_mut(&derived.get_id()).unwrap();
-            self.set_region(
-                reader,
-                derived.clone(),
-                RegionChangeReason::Split,
-                tablet_index,
-            );
-        }
+        self.set_region(
+            &mut store_ctx.store_meta.lock().unwrap(),
+            derived.clone(),
+            RegionChangeReason::Split,
+            tablet_index,
+        );
 
         self.post_split();
 

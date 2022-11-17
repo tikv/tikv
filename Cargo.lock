@@ -4284,6 +4284,7 @@ dependencies = [
  "keys",
  "kvproto",
  "log_wrappers",
+ "parking_lot 0.12.0",
  "pd_client",
  "protobuf",
  "raft",

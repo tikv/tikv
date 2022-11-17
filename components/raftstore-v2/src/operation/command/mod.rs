@@ -233,6 +233,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let idx = match res {
             Ok(i) => i,
             Err(e) => {
+                // TODO: `post_propose_fail`.
                 ch.report_error(cmd_resp::err_resp(e, self.term()));
                 return;
             }
@@ -306,7 +307,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     derived_index,
                     tablet_index,
                 }) => self.on_ready_split_region(ctx, derived_index, tablet_index, regions),
-                AdminCmdResult::SplitRegion(_) => unimplemented!(),
+                AdminCmdResult::PrepareMerge(res) => self.on_ready_prepare_merge(ctx, res),
             }
         }
 
@@ -322,6 +323,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         entry_storage.set_applied_term(apply_res.applied_term);
         if !is_leader {
             entry_storage.compact_entry_cache(apply_res.applied_index + 1);
+        }
+        if is_leader {
+            self.retry_pending_prepare_merge(ctx, apply_res.applied_index);
         }
         self.handle_read_on_apply(
             ctx,
@@ -447,7 +451,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 AdminCmdType::CompactLog => unimplemented!(),
                 AdminCmdType::Split => self.apply_split(admin_req, entry.index)?,
                 AdminCmdType::BatchSplit => self.apply_batch_split(admin_req, entry.index)?,
-                AdminCmdType::PrepareMerge => unimplemented!(),
+                AdminCmdType::PrepareMerge => self.apply_prepare_merge(admin_req, entry.index)?,
                 AdminCmdType::CommitMerge => unimplemented!(),
                 AdminCmdType::RollbackMerge => unimplemented!(),
                 AdminCmdType::TransferLeader => unreachable!(),

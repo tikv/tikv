@@ -56,6 +56,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
     ) -> Result<u64> {
+        if self.has_pending_merge_state() {
+            return Err(Error::ProposalInMergingMode(self.region_id()));
+        }
         if self.raft_group().raft.has_pending_conf() {
             info!(
                 self.logger,

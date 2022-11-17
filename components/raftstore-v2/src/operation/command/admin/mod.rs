@@ -1,6 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod conf_change;
+mod merge;
+mod prepare_merge;
 mod split;
 
 use engine_traits::{KvEngine, RaftEngine};
@@ -14,13 +16,13 @@ use raftstore::{
         msg::ErrorCallback,
         util::{ChangePeerI, ConfChangeKind},
     },
-    Result,
+    Error, Result,
 };
 use slog::info;
 pub use split::{SplitInit, SplitResult};
 use tikv_util::box_err;
 
-use self::conf_change::ConfChangeResult;
+use self::{conf_change::ConfChangeResult, prepare_merge::PrepareMergeResult};
 use crate::{
     batch::StoreContext,
     raft::{Apply, Peer},
@@ -31,6 +33,7 @@ use crate::{
 pub enum AdminCmdResult {
     SplitRegion(SplitResult),
     ConfChange(ConfChangeResult),
+    PrepareMerge(PrepareMergeResult),
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -66,6 +69,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         let cmd_type = req.get_admin_request().get_cmd_type();
+        if self.has_pending_merge_state() && cmd_type != AdminCmdType::RollbackMerge
+            || self.prepare_merge_fence.is_some() && cmd_type != AdminCmdType::PrepareMerge
+        {
+            let resp = cmd_resp::new_error(Error::ProposalInMergingMode(self.region_id()));
+            ch.report_error(resp);
+            return;
+        }
         if let Some(conflict) = self.proposal_control_mut().check_conflict(Some(cmd_type)) {
             conflict.delay_channel(ch);
             return;
@@ -81,6 +91,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     "Split is deprecated. Please use BatchSplit instead."
                 )),
                 AdminCmdType::BatchSplit => self.propose_split(ctx, req),
+                AdminCmdType::PrepareMerge => self.propose_prepare_merge(ctx, req),
                 _ => unimplemented!(),
             }
         };

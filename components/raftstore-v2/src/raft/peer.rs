@@ -5,7 +5,12 @@ use std::{mem, sync::Arc};
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory};
-use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, raft_serverpb::RegionLocalState};
+use kvproto::{
+    kvrpcpb::ExtraOp as TxnExtraOp,
+    metapb,
+    raft_cmdpb::RaftCmdRequest,
+    raft_serverpb::{MergeState, RegionLocalState},
+};
 use pd_client::BucketStat;
 use raft::{RawNode, StateRole};
 use raftstore::{
@@ -35,7 +40,7 @@ use crate::{
     operation::{AsyncWriter, DestroyProgress, ProposalControl, SimpleWriteEncoder},
     router::{CmdResChannel, QueryResChannel},
     tablet::CachedTablet,
-    Result,
+    Result, StoreMeta,
 };
 
 const REGION_READ_PROGRESS_CAP: usize = 128;
@@ -74,6 +79,18 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// Transaction extensions related to this peer.
     txn_ext: Arc<TxnExt>,
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+
+    /// When a fence <idx, cmd> is present, we (1) delay the PrepareMerge
+    /// command `cmd` until all writes before `idx` are applied (2) reject all
+    /// in-coming write proposals.
+    /// Before proposing `PrepareMerge`, we first serialize and propose the lock
+    /// table. Locks marked as deleted (but not removed yet) will be
+    /// serialized as normal locks.
+    /// Thanks to the fence, we can ensure at the time of lock transfer, locks
+    /// are either removed (when applying logs) or won't be removed before
+    /// merge (the proposals to remove them are rejected).
+    pub prepare_merge_fence: Option<(u64, RaftCmdRequest)>,
+    pub pending_merge_state: Option<MergeState>,
 
     /// Check whether this proposal can be proposed based on its epoch.
     proposal_control: ProposalControl,
@@ -147,6 +164,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             last_region_buckets: None,
             txn_ext: Arc::default(),
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
+            prepare_merge_fence: None,
+            pending_merge_state: None,
             proposal_control: ProposalControl::new(0),
         };
 
@@ -181,12 +200,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// has been preserved in a durable device.
     pub fn set_region(
         &mut self,
+        store_meta: &mut StoreMeta<EK>,
         // host: &CoprocessorHost<impl KvEngine>,
-        reader: &mut ReadDelegate,
         region: metapb::Region,
         reason: RegionChangeReason,
         tablet_index: u64,
     ) {
+        let reader = store_meta.readers.get_mut(&region.get_id()).unwrap();
+
         if self.region().get_region_epoch().get_version() < region.get_region_epoch().get_version()
         {
             // Epoch version changed, disable read on the local reader for this region.
@@ -400,9 +421,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    // TODO
     pub fn has_pending_merge_state(&self) -> bool {
-        false
+        self.pending_merge_state.is_some()
+    }
+
+    #[inline]
+    pub fn set_pending_merge_state(&mut self, s: MergeState) {
+        self.pending_merge_state = Some(s);
     }
 
     pub fn serving(&self) -> bool {
