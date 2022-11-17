@@ -63,21 +63,33 @@ pub fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
     tikv_util::logger::exit_process_gracefully(-1);
 }
 
-// Check if the region's `key_range` is in the specified `key_range_limit`
+// Check if the part of region's `key_range` is in the specified
+// `key_range_limit`.
 pub fn check_range_included(key_range: &KeyRange, key_range_limit: &KeyRange) -> bool {
-    fn contains(key_range: &KeyRange, key_range_limit: &KeyRange) -> bool {
-        if key_range.get_start_key() <= key_range_limit.get_start_key()
-            && (key_range.get_end_key().is_empty()
-                || !key_range_limit.get_end_key().is_empty()
-                    && key_range.get_end_key() >= key_range_limit.get_end_key())
-        {
-            return true;
-        }
-        false
+    // When limit start_key contains region start_key
+    if key_range_limit.get_start_key() <= key_range.get_start_key()
+        && (key_range_limit.get_end_key().is_empty() /* when limit end_key is infinite */
+         || key_range_limit.get_end_key() >= key_range.get_start_key())
+    {
+        return true;
     }
-    // When `key_range_limit` is in the region's `key_range` need to be considered
-    // as included as well.
-    contains(key_range, key_range_limit) || contains(key_range_limit, key_range)
+    // When limit end_key contains region end_key
+    if (key_range_limit.get_end_key() >= key_range.get_end_key()
+        || key_range_limit.get_end_key().is_empty())
+        && key_range_limit.get_start_key() < key_range.get_end_key()
+    {
+        return true;
+    }
+    // When `key_range_limit` is in the region's `key_range` also need to
+    // be considered as included.
+    if key_range.get_start_key() <= key_range_limit.get_start_key()
+        && (key_range.get_end_key().is_empty() /* when region end_key is infinite */
+            || (!key_range_limit.get_end_key().is_empty() /* when limit end_key is not infinite */
+                    && key_range.get_end_key() >= key_range_limit.get_end_key()))
+    {
+        return true;
+    }
+    false
 }
 
 #[cfg(test)]
@@ -95,33 +107,40 @@ mod tests {
     }
 
     #[test]
-    fn test_included_region_in_rang() {
+    fn test_included_region_in_range() {
         // To avoid unfolding the code when `make format` is called
         fn range(start: &[u8], end: &[u8]) -> KeyRange {
             build_key_range(start, end, false)
         }
-        let mut region = range(&[0x01], &[0x04]);
-        // region in range
-        assert!(check_range_included(&region, &range(&[0x01], &[0x04])));
+        let mut region = range(&[0x02], &[0x05]);
+        // region absolutely in range
+        assert!(check_range_included(&region, &range(&[0x02], &[0x05])));
         assert!(check_range_included(&region, &range(&[0x01], &[])));
+        assert!(check_range_included(&region, &range(&[0x02], &[])));
         assert!(check_range_included(&region, &range(&[], &[])));
+        assert!(check_range_included(&region, &range(&[0x02], &[0x06])));
         assert!(check_range_included(&region, &range(&[0x01], &[0x05])));
-        assert!(check_range_included(&region, &range(&[0x00], &[0x04])));
-        assert!(check_range_included(&region, &range(&[], &[0x04])));
+        assert!(check_range_included(&region, &range(&[], &[0x05])));
+        // region boundary in range
+        assert!(check_range_included(&region, &range(&[0x04], &[0x05])));
+        assert!(check_range_included(&region, &range(&[0x04], &[])));
+        assert!(check_range_included(&region, &range(&[0x01], &[0x03])));
+        assert!(check_range_included(&region, &range(&[], &[0x03])));
+        assert!(check_range_included(&region, &range(&[], &[0x02]))); // region is left-closed and right-open interval
         // range in region also need to return true
-        assert!(check_range_included(&region, &range(&[0x02], &[0x04])));
+        assert!(check_range_included(&region, &range(&[0x03], &[0x04])));
         // region not in range
-        assert!(!check_range_included(&region, &range(&[0x03], &[])));
-        assert!(!check_range_included(&region, &range(&[], &[0x03])));
-        assert!(!check_range_included(&region, &range(&[0x03], &[0x05])));
+        assert!(!check_range_included(&region, &range(&[0x05], &[]))); // region is left-closed and right-open interval
+        assert!(!check_range_included(&region, &range(&[0x06], &[])));
+        assert!(!check_range_included(&region, &range(&[], &[0x01])));
         // check last region
-        region = range(&[0x03], &[]);
-        assert!(check_range_included(&region, &range(&[0x03], &[0x05])));
-        assert!(check_range_included(&region, &range(&[0x03], &[])));
-        assert!(!check_range_included(&region, &range(&[0x02], &[0x05])));
-        assert!(!check_range_included(&region, &range(&[], &[0x05])));
-        assert!(!check_range_included(&region, &range(&[], &[0x02])));
-        assert!(!check_range_included(&region, &range(&[], &[0x03])));
+        region = range(&[0x02], &[]);
+        assert!(check_range_included(&region, &range(&[0x02], &[0x05])));
+        assert!(check_range_included(&region, &range(&[0x02], &[])));
+        assert!(check_range_included(&region, &range(&[0x01], &[0x05])));
+        assert!(check_range_included(&region, &range(&[], &[0x05])));
+        assert!(check_range_included(&region, &range(&[], &[0x02])));
         assert!(check_range_included(&region, &range(&[], &[])));
+        assert!(!check_range_included(&region, &range(&[], &[0x01])));
     }
 }
