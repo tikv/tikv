@@ -58,9 +58,7 @@ impl CommandExt for FlashbackToVersion {
 
     fn gen_lock(&self) -> latch::Lock {
         match &self.state {
-            FlashbackToVersionState::Lock { key_to_lock, .. } => {
-                latch::Lock::new(vec![key_to_lock.clone()].iter())
-            }
+            FlashbackToVersionState::Lock { key_to_lock, .. } => latch::Lock::new([key_to_lock]),
             FlashbackToVersionState::ScanLock { key_locks, .. } => {
                 latch::Lock::new(key_locks.iter().map(|(key, _)| key))
             }
