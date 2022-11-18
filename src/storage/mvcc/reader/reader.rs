@@ -6,7 +6,7 @@ use kvproto::{
     errorpb::{self, EpochNotMatch, StaleCommand},
     kvrpcpb::Context,
 };
-use tikv_kv::SnapshotExt;
+use tikv_kv::{SnapshotExt, SEEK_BOUND};
 use txn_types::{Key, Lock, OldValue, TimeStamp, Value, Write, WriteRef, WriteType};
 
 use crate::storage::{
@@ -382,7 +382,31 @@ impl<S: EngineSnapshot> MvccReader<S> {
                         WriteType::Delete => {
                             return Ok(None);
                         }
-                        WriteType::Lock | WriteType::Rollback => ts = commit_ts.prev(),
+                        WriteType::Lock | WriteType::Rollback => {
+                            if write.versions_to_last_change < SEEK_BOUND
+                                || write.last_change_ts.is_zero()
+                            {
+                                ts = commit_ts.prev();
+                            } else {
+                                let commit_ts = write.last_change_ts;
+                                let key_with_ts = key.clone().append_ts(commit_ts);
+                                let Some(value) = self
+                                    .snapshot
+                                    .get_cf(CF_WRITE, &key_with_ts)? else {
+                                        return Ok(None);
+                                    };
+                                self.statistics.write.get += 1;
+                                let write = WriteRef::parse(&value)?.to_owned();
+                                assert!(
+                                    write.write_type == WriteType::Put
+                                        || write.write_type == WriteType::Delete,
+                                    "Write record pointed by last_change_ts {} should be Put or Delete, but got {:?}",
+                                    commit_ts,
+                                    write.write_type,
+                                );
+                                return Ok(Some((write, commit_ts)));
+                            }
+                        }
                     }
                 }
                 None => return Ok(None),
@@ -2498,5 +2522,51 @@ pub mod tests {
             reader.seek_write(&k, ts).unwrap();
             assert_eq!(reader.statistics.write.seek_tombstone, *tombstones);
         }
+    }
+
+    #[test]
+    fn test_get_write_second_get() {
+        let path = tempfile::Builder::new()
+            .prefix("_test_storage_mvcc_reader_get_write_second_get")
+            .tempdir()
+            .unwrap();
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![], vec![]);
+        let db = open_db(path, true);
+        let mut engine = RegionEngine::new(&db, &region);
+
+        let (k, v) = (b"k", b"v");
+        let m = Mutation::make_put(Key::from_raw(k), v.to_vec());
+        engine.prewrite(m, k, 1);
+        engine.commit(k, 1, 2);
+
+        // Write enough ROLLBACK/LOCK recrods
+        engine.rollback(k, 5);
+        for start_ts in (6..30).into_iter().step_by(2) {
+            engine.lock(k, start_ts, start_ts + 1);
+        }
+
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db, region);
+        let mut reader = MvccReader::new(snap, None, false);
+
+        let key = Key::from_raw(k);
+        // Get write record whose commit_ts = 2
+        let w2 = reader
+            .get_write(&key, TimeStamp::new(2), None)
+            .unwrap()
+            .unwrap();
+
+        // Clear statistics first
+        reader.statistics = Statistics::default();
+        let (write, commit_ts) = reader
+            .get_write_with_commit_ts(&key, 40.into(), None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(commit_ts, 2.into());
+        assert_eq!(write, w2);
+        // versions_to_last_change should be large enough to trigger a second get
+        // instead of calling a series of next, so the count of next should be 0 instead
+        assert_eq!(reader.statistics.write.next, 0);
+        assert_eq!(reader.statistics.write.get, 1);
     }
 }
