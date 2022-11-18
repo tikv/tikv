@@ -12,7 +12,7 @@ use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use tikv::server::DEFAULT_CLUSTER_ID;
-use tikv_util::HandyRwLock;
+use tikv_util::{config::ReadableDuration, HandyRwLock};
 use txn_types::{Key, Lock, LockType};
 
 use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
@@ -2358,4 +2358,94 @@ fn test_prewrite_without_value() {
     // The lock without value shouldn't be retrieved.
     let event = receive_event(false);
     assert_eq!(event.get_events()[0].get_entries().entries[0].commit_ts, 14);
+}
+
+#[test]
+fn test_flashback() {
+    let mut cluster = new_server_cluster(0, 1);
+    cluster.cfg.resolved_ts.advance_ts_interval = ReadableDuration::millis(50);
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
+
+    let key = Key::from_raw(b"a");
+    let region = suite.cluster.get_region(key.as_encoded());
+    let region_id = region.get_id();
+    let req = suite.new_changedata_request(region_id);
+    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(region_id));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let event = receive_event(false);
+    event.events.into_iter().for_each(|e| {
+        match e.event.unwrap() {
+            // Even if there is no write,
+            // it should always outputs an Initialized event.
+            Event_oneof_event::Entries(es) => {
+                assert!(es.entries.len() == 1, "{:?}", es);
+                let e = &es.entries[0];
+                assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+            }
+            other => panic!("unknown event {:?}", other),
+        }
+    });
+    // Sleep a while to make sure the stream is registered.
+    sleep_ms(1000);
+    // If tikv enable ApiV2, txn key needs to start with 'x';
+    let (k, v) = ("xflashback_key".to_owned(), "flashback_value".to_owned());
+    // Prewrite
+    let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.key = k.clone().into_bytes();
+    mutation.value = v.into_bytes();
+    suite.must_kv_prewrite(region_id, vec![mutation], k.clone().into_bytes(), start_ts);
+    let mut events = receive_event(false).events.to_vec();
+    assert_eq!(events.len(), 1, "{:?}", events);
+    match events.pop().unwrap().event.unwrap() {
+        Event_oneof_event::Entries(entries) => {
+            assert_eq!(entries.entries.len(), 1);
+            assert_eq!(entries.entries[0].get_type(), EventLogType::Prewrite);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+    // Commit
+    let commit_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_commit(region_id, vec![k.into_bytes()], start_ts, commit_ts);
+    let mut event = receive_event(false);
+    let mut events = event.take_events();
+    assert_eq!(events.len(), 1, "{:?}", event);
+    match events.pop().unwrap().event.unwrap() {
+        Event_oneof_event::Entries(entries) => {
+            assert_eq!(entries.entries.len(), 1);
+            assert_eq!(entries.entries[0].get_type(), EventLogType::Commit);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+    // Prepare flashback.
+    let flashback_start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_prepare_flashback(region_id, region.get_start_key(), flashback_start_ts);
+    // resolved ts should not be advanced anymore.
+    let mut counter = 0;
+    let mut last_resolved_ts = 0;
+    loop {
+        let event = receive_event(true);
+        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+            if resolved_ts.ts == last_resolved_ts {
+                counter += 1;
+            }
+            last_resolved_ts = resolved_ts.ts;
+        }
+        if counter > 20 {
+            break;
+        }
+        sleep_ms(50);
+    }
+    // Flashback.
+    let flashback_commit_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_flashback(
+        region_id,
+        region.get_start_key(),
+        region.get_end_key(),
+        flashback_start_ts,
+        flashback_commit_ts,
+        start_ts,
+    );
+    // TODO: check the flashback event.
 }

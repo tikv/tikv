@@ -79,14 +79,19 @@ impl CommandExt for FlashbackToVersionReadPhase {
     }
 }
 
-/// FlashbackToVersion contains two phases:
-///   1. Read phase:
-///     - Scan all locks to delete them all later.
-///     - Scan all the latest writes to flashback them all later.
-///   2. Write phase:
-///     - Delete all locks we scanned at the read phase.
-///     - Write the old MVCC version writes for the keys we scanned at the read
-///       phase.
+/// The whole flashback progress contains there phases:
+///   1. Lock phase:
+///     - Lock the `self.start_key` specifically to prevent the `resolved_ts`
+///       from advancing.
+///   2. Read-and-flashback writes phase:
+///     - Scan all the latest writes and their corresponding values at
+///       `self.version`.
+///     - Write the old MVCC version writes again for all these keys with
+///       `self.commit_ts`.
+///   3. Read-and-rollback locks phase:
+///     - Scan all locks.
+///     - Rollback all these locks including the `self.start_key` lock we write
+///       at the first phase.
 impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
         let tag = self.tag().get_str();
