@@ -1108,6 +1108,10 @@ impl TestPdClient {
                 None => continue,
             };
 
+            for p in region.get_peers().iter() {
+                error!("in must_finish_switch_witnesses, p: {:?}", p);
+            }
+
             let mut need_retry = false;
             for (peer_id, is_witness) in peer_ids.iter().zip(is_witnesses.iter()) {
                 match find_peer_by_id(&region, *peer_id) {

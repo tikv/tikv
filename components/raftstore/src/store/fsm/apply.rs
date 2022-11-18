@@ -1537,7 +1537,12 @@ where
                 ExecResult::SetFlashbackState { ref region } => {
                     self.region = region.clone();
                 }
-                ExecResult::BatchSwitchWitness(..) => {}
+                ExecResult::BatchSwitchWitness(ref switches) => {
+                    self.region = switches.region.clone();
+                    if let Some(p) = find_peer_by_id(&self.region, self.id()) {
+                        self.peer = p.clone();
+                    }
+                }
             }
         }
         if let Some(epoch) = origin_epoch {
@@ -3104,7 +3109,7 @@ where
             "epoch" => ?self.region.get_region_epoch(),
         );
 
-        self.apply_batch_switch_witness(switches.as_slice())?;
+        let region = self.apply_batch_switch_witness(switches.as_slice())?;
 
         let state = if self.pending_remove {
             PeerState::Tombstone
@@ -3114,12 +3119,11 @@ where
             PeerState::Normal
         };
 
-        if let Err(e) = write_peer_state(ctx.kv_wb_mut(), &self.region, state, None) {
+        if let Err(e) = write_peer_state(ctx.kv_wb_mut(), &region, state, None) {
             panic!("{} failed to update region state: {:?}", self.tag, e);
         }
 
         let resp = AdminResponse::default();
-        let region = self.region.clone();
         Ok((
             resp,
             ApplyResult::Res(ExecResult::BatchSwitchWitness(SwitchWitness {
@@ -3130,11 +3134,12 @@ where
         ))
     }
 
-    fn apply_batch_switch_witness(&mut self, switches: &[SwitchWitnessRequest]) -> Result<()> {
+    fn apply_batch_switch_witness(&mut self, switches: &[SwitchWitnessRequest]) -> Result<Region> {
+        let mut region = self.region.clone();
         for s in switches {
             PEER_ADMIN_CMD_COUNTER.batch_switch_witness.all.inc();
             let (peer_id, is_witness) = (s.get_peer_id(), s.get_is_witness());
-            for p in self.region.mut_peers().iter_mut() {
+            for p in region.mut_peers().iter_mut() {
                 if p.id == peer_id {
                     if p.is_witness == is_witness {
                         return Err(box_err!(
@@ -3153,7 +3158,17 @@ where
                 self.peer.is_witness = false;
             }
         }
-        Ok(())
+        let conf_ver = region.get_region_epoch().get_conf_ver() + switches.len() as u64;
+        region.mut_region_epoch().set_conf_ver(conf_ver);
+        info!(
+            "switch witness successfully";
+            "region_id" => self.region_id(),
+            "peer_id" => self.id(),
+            "switches" => ?switches,
+            "original region" => ?&self.region,
+            "current region" => ?&region,
+        );
+        Ok(region)
     }
 
     fn update_memory_trace(&mut self, event: &mut TraceEvent) {
