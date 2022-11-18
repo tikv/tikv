@@ -317,10 +317,10 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         true
     }
 
-    pub fn after_applied_snapshot(&mut self) {
+    pub fn on_applied_snapshot(&mut self) {
         let mut entry = self.entry_storage_mut();
-        let term = entry.truncate_term();
-        let index = entry.truncate_index();
+        let term = entry.truncated_term();
+        let index = entry.truncated_index();
         entry.set_applied_term(term);
         entry.set_last_term(term);
         entry.apply_state_mut().set_applied_index(index);
@@ -334,7 +334,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         snap_mgr: TabletSnapManager,
         tablet_factory: Arc<dyn TabletFactory<EK>>,
     ) -> Result<()> {
-        let region_id = self.region_id();
+        let region_id = self.region().get_id();
         let peer_id = self.peer().get_id();
         info!(
             self.logger(),
@@ -377,7 +377,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 error!(logger, "failed to load tablet";"path" => path.display(),"err" => ?e);
             }
         };
-        task.after_write_hook = (Some(Box::new(hook)));
+        task.persisted_cb = (Some(Box::new(hook)));
         task.has_snapshot = true;
         Ok(())
     }

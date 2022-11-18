@@ -16,8 +16,7 @@ use raft::{
     GetEntriesContext, RaftState, INVALID_ID,
 };
 use raftstore::store::{
-    util, util::new_empty_snapshot, EntryStorage, ReadTask, WriteTask, RAFT_INIT_LOG_INDEX,
-    RAFT_INIT_LOG_TERM,
+    util, EntryStorage, ReadTask, WriteTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
 };
 use slog::{info, o, Logger};
 use tikv_util::{box_err, store::find_peer, worker::Scheduler};
@@ -285,12 +284,9 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         })
     }
 
+    #[inline]
     pub fn region_state_mut(&mut self) -> &mut RegionLocalState {
         &mut self.region_state
-    }
-
-    pub fn region_id(&self) -> u64 {
-        return self.region().get_id();
     }
 
     #[inline]
@@ -424,8 +420,8 @@ mod tests {
     };
     use raft::{eraftpb::Snapshot as RaftSnapshot, Error as RaftError, StorageError};
     use raftstore::store::{
-        AsyncReadNotifier, FetchedLogs, GenSnapRes, ReadRunner, ReadTask, TabletSnapKey,
-        TabletSnapManager, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+        util::new_empty_snapshot, AsyncReadNotifier, FetchedLogs, GenSnapRes, ReadRunner, ReadTask,
+        TabletSnapKey, TabletSnapManager, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
     };
     use slog::o;
     use tempfile::TempDir;
@@ -536,17 +532,17 @@ mod tests {
 
         // It can be set before load tablet.
         assert_eq!(PeerState::Normal, s.region_state().get_state());
-        assert_eq!(10, s.entry_storage().truncate_index());
-        assert_eq!(1, s.entry_storage().truncate_term());
+        assert_eq!(10, s.entry_storage().truncated_index());
+        assert_eq!(1, s.entry_storage().truncated_term());
         assert_eq!(10, s.entry_storage().raft_state().last_index);
         // This index can't be set before load tablet.
         assert_ne!(10, s.entry_storage().applied_index());
         assert_ne!(1, s.entry_storage().last_term());
         assert_ne!(1, s.entry_storage().applied_term());
         assert_ne!(10, s.region_state().get_tablet_index());
-        assert!(task.after_write_hook.is_some());
+        assert!(task.persisted_cb.is_some());
 
-        s.after_applied_snapshot();
+        s.on_applied_snapshot();
         assert_eq!(10, s.entry_storage().applied_index());
         assert_eq!(1, s.entry_storage().last_term());
         assert_eq!(1, s.entry_storage().applied_term());
