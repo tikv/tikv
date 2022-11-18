@@ -270,7 +270,7 @@ impl Lock {
             size += 1 + size_of::<u64>() + MAX_VAR_U64_LEN;
         }
         if self.txn_source != 0 {
-            size += 1 + size_of::<u64>() + MAX_VAR_U64_LEN;
+            size += 1 + MAX_VAR_U64_LEN;
         }
         size
     }
