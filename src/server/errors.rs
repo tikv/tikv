@@ -66,7 +66,7 @@ pub enum Error {
 
     #[error("{0:?}")]
     OpenSsl(#[from] OpenSslError),
-    #[error("failed to send")]
+    #[error("{0:?}")]
     StreamDisconnect(#[from] SendError),
 }
 
