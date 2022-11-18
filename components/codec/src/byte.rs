@@ -759,7 +759,7 @@ mod tests {
         for (exp, encoded) in cases {
             let mut path = env::temp_dir();
             path.push("read-compact-codec-file");
-            fs::write(&path, &encoded).unwrap();
+            fs::write(&path, encoded).unwrap();
             let f = File::open(&path).unwrap();
             let mut rdr = BufReader::new(f);
             let decoded = rdr.read_compact_bytes().unwrap();

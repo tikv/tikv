@@ -120,11 +120,35 @@ impl From<BottommostLevelCompaction> for debugpb::BottommostLevelCompaction {
     }
 }
 
+trait InnerRocksEngineExtractor {
+    fn get_db_from_type(&self, db: DbType) -> Result<&RocksEngine>;
+}
+
 #[derive(Clone)]
 pub struct Debugger<ER: RaftEngine> {
     engines: Engines<RocksEngine, ER>,
     reset_to_version_manager: ResetToVersionManager,
     cfg_controller: ConfigController,
+}
+
+impl<ER: RaftEngine> InnerRocksEngineExtractor for Debugger<ER> {
+    default fn get_db_from_type(&self, db: DbType) -> Result<&RocksEngine> {
+        match db {
+            DbType::Kv => Ok(&self.engines.kv),
+            DbType::Raft => Err(box_err!("Get raft db is not allowed")),
+            _ => Err(box_err!("invalid DB type")),
+        }
+    }
+}
+
+impl InnerRocksEngineExtractor for Debugger<RocksEngine> {
+    fn get_db_from_type(&self, db: DbType) -> Result<&RocksEngine> {
+        match db {
+            DbType::Kv => Ok(&self.engines.kv),
+            DbType::Raft => Ok(&self.engines.raft),
+            _ => Err(box_err!("invalid DB type")),
+        }
+    }
 }
 
 impl<ER: RaftEngine> Debugger<ER> {
@@ -161,14 +185,6 @@ impl<ER: RaftEngine> Debugger<ER> {
         }));
         regions.sort_unstable();
         Ok(regions)
-    }
-
-    fn get_db_from_type(&self, db: DbType) -> Result<&RocksEngine> {
-        match db {
-            DbType::Kv => Ok(&self.engines.kv),
-            DbType::Raft => Err(box_err!("Get raft db is not allowed")),
-            _ => Err(box_err!("invalid DB type")),
-        }
     }
 
     pub fn get(&self, db: DbType, cf: &str, key: &[u8]) -> Result<Vec<u8>> {
@@ -868,7 +884,7 @@ impl<ER: RaftEngine> Debugger<ER> {
         res.push(("region.end_key".to_owned(), hex::encode(&region.end_key)));
         res.push((
             "region.middle_key_by_approximate_size".to_owned(),
-            hex::encode(&middle_key),
+            hex::encode(middle_key),
         ));
 
         Ok(res)
@@ -2271,5 +2287,15 @@ mod tests {
                 .expect("get api version")
                 .get_api_version()
         )
+    }
+
+    #[test]
+    fn test_compact() {
+        let debugger = new_debugger();
+        let compact = |db, cf| debugger.compact(db, cf, &[0], &[0xFF], 1, Some("skip").into());
+        compact(DbType::Kv, CF_DEFAULT).unwrap();
+        compact(DbType::Kv, CF_LOCK).unwrap();
+        compact(DbType::Kv, CF_WRITE).unwrap();
+        compact(DbType::Raft, CF_DEFAULT).unwrap();
     }
 }

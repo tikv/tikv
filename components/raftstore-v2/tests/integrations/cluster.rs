@@ -21,12 +21,15 @@ use engine_test::{
 use engine_traits::{OpenOptions, TabletFactory, ALL_CFS};
 use futures::executor::block_on;
 use kvproto::{
-    metapb::Store,
+    metapb::{self, RegionEpoch, Store},
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RaftMessage,
 };
 use pd_client::RpcClient;
-use raftstore::store::{region_meta::RegionMeta, Config, Transport, RAFT_INIT_LOG_INDEX};
+use raftstore::store::{
+    region_meta::{RegionLocalState, RegionMeta},
+    Config, TabletSnapManager, Transport, RAFT_INIT_LOG_INDEX,
+};
 use raftstore_v2::{
     create_store_batch_system,
     router::{DebugInfoChannel, FlushChannel, PeerMsg, QueryResult, RaftRouter},
@@ -145,6 +148,32 @@ impl TestRouter {
         req.mut_header().set_term(meta.raft_status.hard_state.term);
         req
     }
+
+    pub fn region_detail(&self, region_id: u64) -> metapb::Region {
+        let RegionLocalState {
+            id,
+            start_key,
+            end_key,
+            epoch,
+            peers,
+            ..
+        } = self
+            .must_query_debug_info(region_id, Duration::from_secs(1))
+            .unwrap()
+            .region_state;
+        let mut region = metapb::Region::default();
+        region.set_id(id);
+        region.set_start_key(start_key);
+        region.set_end_key(end_key);
+        let mut region_epoch = RegionEpoch::default();
+        region_epoch.set_conf_ver(epoch.conf_ver);
+        region_epoch.set_version(epoch.version);
+        region.set_region_epoch(region_epoch);
+        for peer in peers {
+            region.mut_peers().push(new_peer(peer.store_id, peer.id));
+        }
+        region
+    }
 }
 
 pub struct RunningState {
@@ -206,7 +235,7 @@ impl RunningState {
 
         let router = RaftRouter::new(store_id, router);
         let store_meta = router.store_meta().clone();
-
+        let snap_mgr = TabletSnapManager::new(path.join("tablets_snap").to_str().unwrap());
         system
             .start(
                 store_id,
@@ -216,6 +245,7 @@ impl RunningState {
                 transport.clone(),
                 router.store_router(),
                 store_meta.clone(),
+                snap_mgr,
             )
             .unwrap();
 

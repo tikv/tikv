@@ -1,9 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::*, time::Duration};
+use std::{
+    sync::*,
+    time::{Duration, Instant},
+};
 
 use causal_ts::CausalTsProvider;
-use cdc::{recv_timeout, CdcObserver, FeatureGate, MemoryQuota, Task};
+use cdc::{recv_timeout, CdcObserver, Delegate, FeatureGate, MemoryQuota, Task, Validate};
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
@@ -522,5 +525,34 @@ impl TestSuite {
                 .async_flush(),
         )
         .unwrap();
+    }
+
+    pub fn must_wait_delegate_condition(
+        &self,
+        region_id: u64,
+        cond: Arc<dyn Fn(Option<&Delegate>) -> bool + Sync + Send>,
+    ) {
+        let scheduler = self.endpoints[&region_id].scheduler();
+        let start = Instant::now();
+        loop {
+            sleep_ms(100);
+            let (tx, rx) = mpsc::sync_channel(1);
+            let c = cond.clone();
+            let checker = move |d: Option<&Delegate>| {
+                tx.send(c(d)).unwrap();
+            };
+            scheduler
+                .schedule(Task::Validate(Validate::Region(
+                    region_id,
+                    Box::new(checker),
+                )))
+                .unwrap();
+            if rx.recv().unwrap() {
+                return;
+            }
+            if start.elapsed() > Duration::from_secs(5) {
+                panic!("wait delegate timeout");
+            }
+        }
     }
 }

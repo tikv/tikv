@@ -29,6 +29,7 @@ const MAX_SCHED_CONCURRENCY: usize = 2 * 1024 * 1024;
 const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 100;
 
 const DEFAULT_RESERVED_SPACE_GB: u64 = 5;
+const DEFAULT_RESERVED_RAFT_SPACE_GB: u64 = 1;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
@@ -49,6 +50,8 @@ pub struct Config {
     #[online_config(skip)]
     // Reserve disk space to make tikv would have enough space to compact when disk is full.
     pub reserve_space: ReadableSize,
+    #[online_config(skip)]
+    pub reserve_raft_space: ReadableSize,
     #[online_config(skip)]
     pub enable_async_apply_prewrite: bool,
     #[online_config(skip)]
@@ -78,10 +81,11 @@ impl Default for Config {
             scheduler_worker_pool_size: if cpu_num >= 16.0 {
                 8
             } else {
-                std::cmp::max(1, std::cmp::min(4, cpu_num as usize))
+                cpu_num.clamp(1., 4.) as usize
             },
             scheduler_pending_write_threshold: ReadableSize::mb(DEFAULT_SCHED_PENDING_WRITE_MB),
             reserve_space: ReadableSize::gb(DEFAULT_RESERVED_SPACE_GB),
+            reserve_raft_space: ReadableSize::gb(DEFAULT_RESERVED_RAFT_SPACE_GB),
             enable_async_apply_prewrite: false,
             api_version: 1,
             enable_ttl: false,

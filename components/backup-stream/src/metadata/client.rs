@@ -546,7 +546,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
             ))
             .await?;
 
-        let mut result = Vec::with_capacity(all.len() as usize + 1);
+        let mut result = Vec::with_capacity(all.len() + 1);
         if !prev.kvs.is_empty() {
             let kv = &mut prev.kvs[0];
             if kv.value() > start_key.as_slice() {

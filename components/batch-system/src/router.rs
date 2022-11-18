@@ -294,7 +294,7 @@ where
         }
     }
 
-    /// Force sending message to control FSM.
+    /// Sending message to control FSM.
     #[inline]
     pub fn send_control(&self, msg: C::Message) -> Result<(), TrySendError<C::Message>> {
         match self.control_box.try_send(msg, &self.control_scheduler) {
@@ -309,6 +309,12 @@ where
         }
     }
 
+    /// Force sending message to control FSM.
+    #[inline]
+    pub fn force_send_control(&self, msg: C::Message) -> Result<(), SendError<C::Message>> {
+        self.control_box.force_send(msg, &self.control_scheduler)
+    }
+
     /// Try to notify all normal FSMs a message.
     pub fn broadcast_normal(&self, mut msg_gen: impl FnMut() -> N::Message) {
         let timer = Instant::now_coarse();
@@ -316,7 +322,7 @@ where
         for mailbox in mailboxes.map.values() {
             let _ = mailbox.force_send(msg_gen(), &self.normal_scheduler);
         }
-        BROADCAST_NORMAL_DURATION.observe(duration_to_sec(timer.saturating_elapsed()) as f64);
+        BROADCAST_NORMAL_DURATION.observe(duration_to_sec(timer.saturating_elapsed()));
     }
 
     /// Try to notify all FSMs that the cluster is being shutdown.
