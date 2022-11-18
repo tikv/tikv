@@ -2,50 +2,49 @@
 
 //! This module contains merge related processing logic.
 //!
-//! ## Propose (`propose_prepare_merge`)
+//! ## Propose (`Peer::propose_prepare_merge`)
 //!
-//!  
+//! Checks for these requirements:
 //!
-//! ## Apply (`apply_prepare_merge`)
+//! - Validate the request. (`Peer::validate_prepare_merge_command`)
+//! - Log gap between source region leader and peers is not too large. We need
+//!   to catch up these logs before starting the merge.
+//! - Logs that aren't fully committed (to all peers) does not contains
+//!   `CompactLog` or certain admin commands.
 //!
-//! ## On Apply Result (`on_ready_prepare_merge`)
+//! Then, transfer all in-memory pessimistic locks to the target region as a
+//! Raft proposal. To guarantee the consistency of lock serialization, we might
+//! need to wait for some in-flight logs to be applied. Read the comments of
+//! `Peer::pending_merge_fence` for more details.
+//!
+//! ## Apply (`Apply::apply_prepare_merge`)
+//!
+//! Increase region epoch and write the merge state.
+//!
+//! ## On Apply Result (`Peer::on_ready_prepare_merge`)
+//!
+//! Initiate catch up logs. And start the tick (`Peer::on_merge_check_tick`) to
+//! periodically check the eligibility of merge.
 
-use std::{collections::VecDeque, mem};
-
-use engine_traits::{
-    Checkpointer, KvEngine, OpenOptions, RaftEngine, TabletFactory, CF_DEFAULT, CF_LOCK,
-    SPLIT_PREFIX,
-};
+use engine_traits::{KvEngine, RaftEngine, CF_LOCK};
 use kvproto::{
     metapb::Region,
     raft_cmdpb::{
-        AdminCmdType, AdminRequest, AdminResponse, CmdType, PutRequest, RaftCmdRequest, Request,
-        SplitRequest,
+        AdminCmdType, AdminRequest, AdminResponse, CmdType, PrepareMergeRequest, PutRequest,
+        RaftCmdRequest, Request,
     },
-    raft_serverpb::{MergeState, PeerState, RegionLocalState},
+    raft_serverpb::{MergeState, PeerState},
 };
 use parking_lot::RwLockUpgradableReadGuard;
 use protobuf::Message;
-use raft::{
-    eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType},
-    GetEntriesContext, ProgressState, INVALID_INDEX, NO_LIMIT,
-};
+use raft::{eraftpb::EntryType, GetEntriesContext, ProgressState, INVALID_INDEX, NO_LIMIT};
 use raftstore::{
-    coprocessor::{
-        split_observer::{is_valid_split_key, strip_timestamp_if_exists},
-        RegionChangeReason,
-    },
-    store::{
-        entry_storage,
-        fsm::apply::validate_batch_split,
-        metrics::PEER_ADMIN_CMD_COUNTER,
-        util::{self, KeysInfoFormatter},
-        LocksStatus, PeerStat, ProposalContext, RAFT_INIT_LOG_INDEX,
-    },
+    coprocessor::RegionChangeReason,
+    store::{entry_storage, metrics::PEER_ADMIN_CMD_COUNTER, util, LocksStatus, ProposalContext},
     Error, Result,
 };
 use slog::{debug, info, warn, Logger};
-use tikv_util::box_err;
+use tikv_util::{box_err, store::region_on_same_stores};
 
 use crate::{
     batch::StoreContext,
@@ -67,6 +66,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
     ) -> Result<u64> {
+        self.validate_prepare_merge_command(
+            store_ctx,
+            req.get_admin_request().get_prepare_merge(),
+        )?;
         let req = self.pre_propose_prepare_merge(store_ctx, req)?;
 
         let mut proposal_ctx = ProposalContext::empty();
@@ -79,18 +82,65 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         Ok(res)
     }
 
-    pub fn retry_pending_prepare_merge<T>(
+    /// Mirrors v1::check_merge_proposal.
+    /// - Target region epoch as requested is identical with the local version.
+    /// - Target region is a sibling to the source region.
+    /// - Peers of both source and target region are aligned, i.e. located on
+    ///   the same set of stores.
+    fn validate_prepare_merge_command<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
-        applied_index: u64,
-    ) {
-        if let Some(idx) = self.prepare_merge_fence.as_ref().map(|f| f.0) && idx <= applied_index {
-            let cmd = self.prepare_merge_fence.take().unwrap().1;
-            self.propose_command(store_ctx, cmd);
+        req: &PrepareMergeRequest,
+    ) -> Result<()> {
+        // Just for simplicity, do not start region merge while in joint state
+        if self.in_joint_state() {
+            return Err(box_err!(
+                "{:?} region in joint state, can not propose merge command, command: {:?}",
+                self.logger.list(),
+                req
+            ));
         }
+        let region = self.region();
+        let target_region = req.get_target();
+
+        {
+            let store_meta = store_ctx.store_meta.lock().unwrap();
+            match store_meta.readers.get(&target_region.get_id()) {
+                Some(reader) if *reader.region != *target_region => {
+                    return Err(box_err!(
+                        "target region not matched, skip proposing: {:?} != {:?}",
+                        reader.region,
+                        target_region
+                    ));
+                }
+                None => {
+                    return Err(box_err!(
+                        "target region {} doesn't exist.",
+                        target_region.get_id()
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        if !util::is_sibling_regions(target_region, region) {
+            return Err(box_err!(
+                "{:?} and {:?} are not sibling, skip proposing.",
+                target_region,
+                region
+            ));
+        }
+        if !region_on_same_stores(target_region, region) {
+            return Err(box_err!(
+                "peers doesn't match {:?} != {:?}, reject merge",
+                region.get_peers(),
+                target_region.get_peers()
+            ));
+        }
+        Ok(())
     }
 
-    pub fn pre_propose_prepare_merge<T>(
+    fn pre_propose_prepare_merge<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
@@ -313,6 +363,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         Ok((min_m, min_c))
     }
 
+    /// Called after some new entries have been applied and the fence can
+    /// probably be lifted.
+    pub fn retry_pending_prepare_merge<T>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        applied_index: u64,
+    ) {
+        if let Some(idx) = self.prepare_merge_fence.as_ref().map(|f| f.0) && idx <= applied_index {
+            let cmd = self.prepare_merge_fence.take().unwrap().1;
+            self.propose_command(store_ctx, cmd);
+        }
+    }
+
     pub fn on_ready_prepare_merge<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
@@ -344,15 +407,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 
         let prepare_merge = req.get_prepare_merge();
         let index = prepare_merge.get_min_index();
-        let first_index = 0;
-        // let first_index = entry_storage::first_index(&self.apply_state);
-        if index < first_index {
-            // We filter `CompactLog` command before.
-            panic!(
-                "{} first index {} > min_index {}, skip pre merge",
-                "tag", first_index, index
-            );
-        }
+        // Note: the check against first_index is removed in v2.
         let mut region = self.region_state().get_region().clone();
         let region_version = region.get_region_epoch().get_version() + 1;
         region.mut_region_epoch().set_version(region_version);

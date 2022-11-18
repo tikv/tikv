@@ -455,7 +455,7 @@ mod test {
     use kvproto::{
         metapb::RegionEpoch,
         raft_cmdpb::{AdminCmdType, BatchSplitRequest, PutRequest, RaftCmdResponse, SplitRequest},
-        raft_serverpb::{PeerState, RaftApplyState, RegionLocalState},
+        raft_serverpb::{PeerState, RegionLocalState},
     };
     use raftstore::store::{cmd_resp::new_error, Config, ReadRunner};
     use slog::o;

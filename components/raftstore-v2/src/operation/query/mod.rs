@@ -18,7 +18,6 @@ use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
     errorpb,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, StatusCmdType},
-    raft_serverpb::RaftApplyState,
 };
 use raft::Ready;
 use raftstore::{

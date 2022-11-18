@@ -7,7 +7,7 @@ use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory};
 use kvproto::{
     kvrpcpb::ExtraOp as TxnExtraOp,
-    metapb,
+    metapb::{self, PeerRole},
     raft_cmdpb::RaftCmdRequest,
     raft_serverpb::{MergeState, RegionLocalState},
 };
@@ -546,5 +546,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let term = self.term();
         self.proposal_control
             .advance_apply(apply_index, term, region);
+    }
+
+    #[inline]
+    pub fn in_joint_state(&self) -> bool {
+        self.region().get_peers().iter().any(|p| {
+            p.get_role() == PeerRole::IncomingVoter || p.get_role() == PeerRole::DemotingVoter
+        })
     }
 }
