@@ -2393,7 +2393,7 @@ fn test_flashback() {
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
     mutation.key = k.clone();
-    mutation.value = v.clone();
+    mutation.value = v;
     suite.must_kv_prewrite(1, vec![mutation], k.clone(), start_ts);
     // Commit
     let commit_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
