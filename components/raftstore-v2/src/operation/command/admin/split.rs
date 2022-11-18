@@ -397,7 +397,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             self.set_raft_group(raft_group);
         } else {
-            // todo: when reaching here (peer is initalized before and cannot be replaced),
+            // TODO: when reaching here (peer is initalized before and cannot be replaced),
             // it is much complexer.
             return;
         }
@@ -411,7 +411,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "region" => ?split_init.region,
             );
 
-            // todo: GlobalReplicationState
+            // TODO: GlobalReplicationState
 
             for p in split_init.region.get_peers() {
                 self.insert_peer_cache(p.clone());
@@ -436,7 +436,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
 
         if split_init.check_split {
-            // todo: check if the last region needs to split again
+            // TODO: check if the last region needs to split again
         }
 
         self.schedule_apply_fsm(store_ctx);

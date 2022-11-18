@@ -114,8 +114,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // ranges with other peers.
         let from_peer = msg.take_from_peer();
         if self.is_leader() && from_peer.get_id() != INVALID_ID {
-            self.peer_heartbeats
-                .insert(from_peer.get_id(), Instant::now());
+            self.add_peer_heartbeat(from_peer.get_id(), Instant::now());
         }
         self.insert_peer_cache(from_peer);
         if let Err(e) = self.raft_group_mut().step(msg.take_message()) {

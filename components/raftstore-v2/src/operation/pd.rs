@@ -66,6 +66,7 @@ impl Store {
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
     pub fn on_pd_heartbeat(&mut self) {
+        self.fsm.peer_mut().update_peer_statistics();
         if self.fsm.peer().is_leader() {
             self.fsm.peer_mut().heartbeat_pd(self.store_ctx);
         }
@@ -79,11 +80,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let task = PdTask::Heartbeat(PdHeartbeatTask {
             term: self.term(),
             region: self.region().clone(),
-            down_peers: self.collect_down_peers(ctx),
+            down_peers: self.collect_down_peers(ctx.cfg.max_peer_down_duration.0),
             peer: self.peer().clone(),
             pending_peers: self.collect_pending_peers(ctx),
-            written_bytes: 0,
-            written_keys: 0,
+            written_bytes: self.self_stat().written_bytes,
+            written_keys: self.self_stat().written_keys,
             approximate_size: None,
             approximate_keys: None,
             wait_data_peers: Vec::new(),
@@ -99,28 +100,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         fail_point!("schedule_check_split");
-    }
-
-    /// Collects all down peers.
-    fn collect_down_peers<T>(&mut self, ctx: &StoreContext<EK, ER, T>) -> Vec<pdpb::PeerStats> {
-        let max_duration = ctx.cfg.max_peer_down_duration.0;
-        let mut down_peers = Vec::new();
-        for p in self.region().get_peers() {
-            if p.get_id() == self.peer_id() {
-                continue;
-            }
-            if let Some(instant) = self.peer_heartbeats.get(&p.get_id()) {
-                let elapsed = instant.saturating_elapsed();
-                if elapsed >= max_duration {
-                    let mut stats = pdpb::PeerStats::default();
-                    stats.set_peer(p.clone());
-                    stats.set_down_seconds(elapsed.as_secs());
-                    down_peers.push(stats);
-                }
-            }
-        }
-        // TODO: `refill_disk_full_peers`
-        down_peers
     }
 
     /// Collects all pending peers and update `peers_start_pending_time`.

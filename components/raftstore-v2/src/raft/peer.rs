@@ -1,11 +1,15 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{mem, sync::Arc, time::Instant};
+use std::{
+    mem,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory};
-use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, raft_serverpb::RegionLocalState};
+use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, pdpb, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
 use raft::{RawNode, StateRole};
 use raftstore::{
@@ -44,12 +48,16 @@ const REGION_READ_PROGRESS_CAP: usize = 128;
 pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     raft_group: RawNode<Storage<EK, ER>>,
     tablet: CachedTablet<EK>,
+
+    /// Statistics for self.
+    self_stat: PeerStat,
+
     /// We use a cache for looking up peers. Not all peers exist in region's
     /// peer list, for example, an isolated peer may need to send/receive
     /// messages with unknown peers after recovery.
     peer_cache: Vec<metapb::Peer>,
-    /// Record the last instant of each peer's heartbeat response.
-    pub peer_heartbeats: HashMap<u64, Instant>,
+    /// Statistics for other peers, only maintained when self is the leader.
+    peer_heartbeats: HashMap<u64, Instant>,
 
     /// Encoder for batching proposals and encoding them in a more efficient way
     /// than protobuf.
@@ -125,6 +133,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
         let mut peer = Peer {
             tablet,
+            self_stat: PeerStat::default(),
             peer_cache: vec![],
             peer_heartbeats: HashMap::default(),
             raw_write_encoder: None,
@@ -232,7 +241,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             pessimistic_locks.version = self.region().get_region_epoch().get_version();
         }
 
-        // todo: CoprocessorHost
+        // TODO: CoprocessorHost
     }
 
     #[inline]
@@ -320,6 +329,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.raft_group = raft_group;
     }
 
+    #[inline]
+    pub fn self_stat(&self) -> &PeerStat {
+        &self.self_stat
+    }
+
     /// Mark the peer has a ready so it will be checked at the end of every
     /// processing round.
     #[inline]
@@ -365,6 +379,57 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .iter()
             .find(|p| p.get_id() == peer_id)
             .cloned()
+    }
+
+    #[inline]
+    pub fn update_peer_statistics(&mut self) {
+        if !self.is_leader() {
+            self.peer_heartbeats.clear();
+            return;
+        }
+
+        if self.peer_heartbeats.len() == self.region().get_peers().len() {
+            return;
+        }
+
+        // Insert heartbeats in case that some peers never response heartbeats.
+        let region = self.raft_group.store().region();
+        for peer in region.get_peers() {
+            self.peer_heartbeats
+                .entry(peer.get_id())
+                .or_insert_with(Instant::now);
+        }
+    }
+
+    #[inline]
+    pub fn add_peer_heartbeat(&mut self, peer_id: u64, now: Instant) {
+        self.peer_heartbeats.insert(peer_id, now);
+    }
+
+    #[inline]
+    pub fn remove_peer_heartbeat(&mut self, peer_id: u64) {
+        self.peer_heartbeats.remove(&peer_id);
+    }
+
+    pub fn collect_down_peers(&self, max_duration: Duration) -> Vec<pdpb::PeerStats> {
+        let mut down_peers = Vec::new();
+        let now = Instant::now();
+        for p in self.region().get_peers() {
+            if p.get_id() == self.peer_id() {
+                continue;
+            }
+            if let Some(instant) = self.peer_heartbeats.get(&p.get_id()) {
+                let elapsed = instant.saturating_duration_since(now);
+                if elapsed >= max_duration {
+                    let mut stats = pdpb::PeerStats::default();
+                    stats.set_peer(p.clone());
+                    stats.set_down_seconds(elapsed.as_secs());
+                    down_peers.push(stats);
+                }
+            }
+        }
+        // TODO: `refill_disk_full_peers`
+        down_peers
     }
 
     #[inline]
