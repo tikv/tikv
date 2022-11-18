@@ -12,6 +12,7 @@ use protobuf::ProtobufError;
 use raftstore::Error as RaftServerError;
 use thiserror::Error;
 use tikv_util::{codec::Error as CodecError, worker::ScheduleError};
+use txn_types::Error as TxnError;
 
 use super::snap::Task as SnapTask;
 use crate::storage::{kv::Error as EngineError, Error as StorageError};
@@ -66,6 +67,9 @@ pub enum Error {
 
     #[error("{0:?}")]
     OpenSsl(#[from] OpenSslError),
+
+    #[error("{0:?}")]
+    Txn(#[from] TxnError),
 }
 
 pub type Result<T> = result::Result<T, Error>;
