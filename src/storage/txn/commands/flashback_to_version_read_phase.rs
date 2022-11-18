@@ -11,20 +11,23 @@ use crate::storage::{
         },
         flashback_to_version_read_lock, flashback_to_version_read_write,
         sched_pool::tls_collect_keyread_histogram_vec,
-        Error, ErrorInner, Result,
+        Result,
     },
     Context, ScanMode, Snapshot, Statistics,
 };
 
 #[derive(Debug)]
 pub enum FlashbackToVersionState {
-    ScanLock {
-        next_lock_key: Key,
-        key_locks: Vec<(Key, Lock)>,
+    Lock {
+        key_to_lock: Key,
     },
     ScanWrite {
         next_write_key: Key,
         key_old_writes: Vec<(Key, Option<Write>)>,
+    },
+    ScanLock {
+        next_lock_key: Key,
+        key_locks: Vec<(Key, Lock)>,
     },
 }
 
@@ -42,9 +45,9 @@ pub fn new_flashback_to_version_read_phase_cmd(
         version,
         start_key.clone(),
         end_key,
-        FlashbackToVersionState::ScanLock {
-            next_lock_key: start_key,
-            key_locks: Vec::new(),
+        FlashbackToVersionState::ScanWrite {
+            next_write_key: start_key,
+            key_old_writes: Vec::new(),
         },
         ctx,
     )
@@ -86,47 +89,12 @@ impl CommandExt for FlashbackToVersionReadPhase {
 ///       phase.
 impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
-        if self.commit_ts <= self.start_ts {
-            return Err(Error::from(ErrorInner::InvalidTxnTso {
-                start_ts: self.start_ts,
-                commit_ts: self.commit_ts,
-            }));
-        }
         let tag = self.tag().get_str();
         let mut read_again = false;
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &self.ctx);
         // Separate the lock and write flashback to prevent from putting two writes for
         // the same key in a single batch to make the TiCDC panic.
         let next_state = match self.state {
-            FlashbackToVersionState::ScanLock { next_lock_key, .. } => {
-                let (mut key_locks, has_remain_locks) = flashback_to_version_read_lock(
-                    &mut reader,
-                    next_lock_key,
-                    &self.end_key,
-                    statistics,
-                )?;
-                if key_locks.is_empty() && !has_remain_locks {
-                    // No more locks to flashback, continue to scan the writes.
-                    read_again = true;
-                    FlashbackToVersionState::ScanWrite {
-                        next_write_key: self.start_key.clone(),
-                        key_old_writes: Vec::new(),
-                    }
-                } else {
-                    assert!(!key_locks.is_empty());
-                    tls_collect_keyread_histogram_vec(tag, key_locks.len() as f64);
-                    FlashbackToVersionState::ScanLock {
-                        // DO NOT pop the last key as the next key when it's the only key to prevent
-                        // from making flashback fall into a dead loop.
-                        next_lock_key: if key_locks.len() > 1 {
-                            key_locks.pop().map(|(key, _)| key).unwrap()
-                        } else {
-                            key_locks.last().map(|(key, _)| key.clone()).unwrap()
-                        },
-                        key_locks,
-                    }
-                }
-            }
             FlashbackToVersionState::ScanWrite { next_write_key, .. } => {
                 let mut key_old_writes = flashback_to_version_read_write(
                     &mut reader,
@@ -137,19 +105,47 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     statistics,
                 )?;
                 if key_old_writes.is_empty() {
-                    // No more writes to flashback, just return.
-                    return Ok(ProcessResult::Res);
-                }
-                tls_collect_keyread_histogram_vec(tag, key_old_writes.len() as f64);
-                FlashbackToVersionState::ScanWrite {
-                    next_write_key: if key_old_writes.len() > 1 {
-                        key_old_writes.pop().map(|(key, _)| key).unwrap()
-                    } else {
-                        key_old_writes.last().map(|(key, _)| key.clone()).unwrap()
-                    },
-                    key_old_writes,
+                    // No more writes to flashback, continue to scan the locks.
+                    read_again = true;
+                    FlashbackToVersionState::ScanLock {
+                        next_lock_key: self.start_key.clone(),
+                        key_locks: Vec::new(),
+                    }
+                } else {
+                    tls_collect_keyread_histogram_vec(tag, key_old_writes.len() as f64);
+                    FlashbackToVersionState::ScanWrite {
+                        // DO NOT pop the last key as the next key when it's the only key to prevent
+                        // from making flashback fall into a dead loop.
+                        next_write_key: if key_old_writes.len() > 1 {
+                            key_old_writes.pop().map(|(key, _)| key).unwrap()
+                        } else {
+                            key_old_writes.last().map(|(key, _)| key.clone()).unwrap()
+                        },
+                        key_old_writes,
+                    }
                 }
             }
+            FlashbackToVersionState::ScanLock { next_lock_key, .. } => {
+                let mut key_locks = flashback_to_version_read_lock(
+                    &mut reader,
+                    next_lock_key,
+                    &self.end_key,
+                    statistics,
+                )?;
+                if key_locks.is_empty() {
+                    return Ok(ProcessResult::Res);
+                }
+                tls_collect_keyread_histogram_vec(tag, key_locks.len() as f64);
+                FlashbackToVersionState::ScanLock {
+                    next_lock_key: if key_locks.len() > 1 {
+                        key_locks.pop().map(|(key, _)| key).unwrap()
+                    } else {
+                        key_locks.last().map(|(key, _)| key.clone()).unwrap()
+                    },
+                    key_locks,
+                }
+            }
+            _ => unreachable!(),
         };
         Ok(ProcessResult::NextCommand {
             cmd: if read_again {

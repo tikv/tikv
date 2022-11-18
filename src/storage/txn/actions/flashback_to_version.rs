@@ -15,16 +15,17 @@ pub fn flashback_to_version_read_lock<S: Snapshot>(
     next_lock_key: Key,
     end_key: &Key,
     statistics: &mut Statistics,
-) -> TxnResult<(Vec<(Key, Lock)>, bool)> {
-    let key_locks_result = reader.scan_locks(
+) -> TxnResult<Vec<(Key, Lock)>> {
+    let result = reader.scan_locks(
         Some(&next_lock_key),
         Some(end_key),
-        // To flashback `CF_LOCK`, we need to delete all locks.
+        // To flashback `CF_LOCK`, we need to rollback all locks.
         |_| true,
         FLASHBACK_BATCH_SIZE,
     );
     statistics.add(&reader.statistics);
-    Ok(key_locks_result?)
+    let (key_locks, _) = result?;
+    Ok(key_locks)
 }
 
 pub fn flashback_to_version_read_write<S: Snapshot>(
@@ -134,7 +135,7 @@ pub fn flashback_to_version_write(
             // delete the current key when needed.
             Write::new(WriteType::Delete, start_ts, None)
         };
-        txn.put_write(key.clone(), commit_ts, new_write.as_ref().to_bytes());
+        txn.put_write(key, commit_ts, new_write.as_ref().to_bytes());
     }
     Ok(None)
 }
@@ -175,10 +176,9 @@ pub mod tests {
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &ctx);
         let mut statistics = Statistics::default();
         // Flashback the locks.
-        let (key_locks, has_remain_locks) =
+        let key_locks =
             flashback_to_version_read_lock(&mut reader, key.clone(), &next_key, &mut statistics)
                 .unwrap();
-        assert!(!has_remain_locks);
         let cm = ConcurrencyManager::new(TimeStamp::zero());
         let mut txn = MvccTxn::new(start_ts, cm.clone());
         let snapshot = engine.snapshot(Default::default()).unwrap();
