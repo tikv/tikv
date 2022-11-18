@@ -1457,9 +1457,19 @@ fn future_prepare_flashback_to_version<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     req: PrepareFlashbackToVersionRequest,
 ) -> impl Future<Output = ServerResult<PrepareFlashbackToVersionResponse>> {
-    let f = storage.get_engine().start_flashback(req.get_context());
+    let storage = storage.clone();
     async move {
-        let res = f.await.map_err(storage::Error::from);
+        let f = storage.get_engine().start_flashback(req.get_context());
+        let mut res = f.await.map_err(storage::Error::from);
+        if matches!(res, Ok(())) {
+            // After the region is put into the flashback state, we need to do a special
+            // prewrite to prevent `resolved_ts` from advancing.
+            let (cb, f) = paired_future_callback();
+            res = storage.sched_txn_command(req.clone().into(), cb);
+            if matches!(res, Ok(())) {
+                res = f.await.unwrap_or_else(|e| Err(box_err!(e)));
+            }
+        }
         let mut resp = PrepareFlashbackToVersionResponse::default();
         if let Some(e) = extract_region_error(&res) {
             resp.set_region_error(e);
