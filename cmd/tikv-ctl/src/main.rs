@@ -272,9 +272,20 @@ fn main() {
                     RaftCmd::Region {
                         regions,
                         skip_tombstone,
+                        start,
+                        end,
+                        limit,
                         ..
                     } => {
-                        debug_executor.dump_region_info(regions, skip_tombstone);
+                        let start_key = from_hex(&start).unwrap();
+                        let end_key = from_hex(&end).unwrap();
+                        debug_executor.dump_region_info(
+                            regions,
+                            &start_key,
+                            &end_key,
+                            limit,
+                            skip_tombstone,
+                        );
                     }
                 },
                 Cmd::Size { region, cf } => {
