@@ -61,7 +61,6 @@ pub fn flashback_to_version_read_write<S: Snapshot>(
 
 // To flashback the `CF_LOCK`, we need to rollback all locks whose `start_ts` is
 // greater than the specified version.
-// TODO: `resolved_ts` should be taken into account.
 pub fn flashback_to_version_lock(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<impl Snapshot>,
@@ -79,6 +78,7 @@ pub fn flashback_to_version_lock(
             key.clone(),
             &lock,
             lock.is_pessimistic_txn(),
+            true,
             true,
         )?;
     }
