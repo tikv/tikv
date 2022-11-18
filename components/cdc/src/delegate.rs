@@ -535,6 +535,8 @@ impl Delegate {
                     row_size = 0;
                 }
             }
+            // if the `txn_source` is not 0 and we should filter it out, we should skip it
+            // this event.
             if row.txn_source != 0 && filter_loop {
                 continue;
             }
@@ -631,12 +633,49 @@ impl Delegate {
         if entries.is_empty() {
             return Ok(());
         }
-        let user_change_entries: Vec<EventRow> = entries
-            .iter()
-            .filter(|x| x.txn_source == 0)
-            .cloned()
-            .collect::<Vec<EventRow>>();
-        let user_change_is_empty = user_change_entries.is_empty();
+
+        let downstreams = self.downstreams();
+        assert!(
+            !downstreams.is_empty(),
+            "region {} miss downstream",
+            self.region_id
+        );
+
+        let mut need_filter = false;
+        for ds in downstreams {
+            if ds.filter_loop {
+                need_filter = true;
+                break;
+            }
+        }
+
+        let (filtered, empty) = if need_filter {
+            let filtered = entries
+                .iter()
+                .filter(|x| x.txn_source == 0)
+                .cloned()
+                .collect::<Vec<EventRow>>();
+            let empty = filtered.is_empty();
+            (
+                Event {
+                    region_id: self.region_id,
+                    index,
+                    event: Some(Event_oneof_event::Entries(EventEntries {
+                        entries: filtered.into(),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                },
+                empty,
+            )
+        } else {
+            (
+                Event {
+                    ..Default::default()
+                },
+                true,
+            )
+        };
 
         let event_entries = EventEntries {
             entries: entries.into(),
@@ -649,16 +688,6 @@ impl Delegate {
             ..Default::default()
         };
 
-        let user_change_data_event = Event {
-            region_id: self.region_id,
-            index,
-            event: Some(Event_oneof_event::Entries(EventEntries {
-                entries: user_change_entries.into(),
-                ..Default::default()
-            })),
-            ..Default::default()
-        };
-
         let send = move |downstream: &Downstream| {
             // No ready downstream or a downstream that does not match the kv_api type, will
             // be ignored. There will be one region that contains both Txn & Raw entries.
@@ -666,12 +695,12 @@ impl Delegate {
             if !downstream.state.load().ready_for_change_events() || downstream.kv_api != kv_api {
                 return Ok(());
             }
-            if downstream.filter_loop && user_change_is_empty {
+            if downstream.filter_loop && empty {
                 return Ok(());
             }
 
             let event = if downstream.filter_loop {
-                user_change_data_event.clone()
+                filtered.clone()
             } else {
                 change_data_event.clone()
             };
