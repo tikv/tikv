@@ -59,10 +59,8 @@ pub fn flashback_to_version_read_write<S: Snapshot>(
     Ok(key_old_writes)
 }
 
-// To flashback the `CF_LOCK`, we need to delete all locks records whose
-// `start_ts` is greater than the specified version, and if it's not a
-// short-value `LockType::Put`, we need to delete the actual data from
-// `CF_DEFAULT` as well.
+// To flashback the `CF_LOCK`, we need to rollback all locks whose `start_ts` is
+// greater than the specified version.
 // TODO: `resolved_ts` should be taken into account.
 pub fn flashback_to_version_lock(
     txn: &mut MvccTxn,

@@ -1322,6 +1322,7 @@ where
         self.register_split_region_check_tick();
     }
 
+    // TODO: allow to capture change in flashback state.
     fn on_capture_change(
         &mut self,
         cmd: ChangeObserver,

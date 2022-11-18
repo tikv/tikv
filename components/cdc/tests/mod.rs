@@ -555,4 +555,52 @@ impl TestSuite {
             }
         }
     }
+
+    pub fn must_kv_prepare_flashback(
+        &mut self,
+        region_id: u64,
+        start_key: &[u8],
+        start_ts: TimeStamp,
+    ) {
+        let mut prepare_flashback_req = PrepareFlashbackToVersionRequest::default();
+        prepare_flashback_req.set_context(self.get_context(region_id));
+        prepare_flashback_req.set_start_key(start_key.to_vec());
+        prepare_flashback_req.set_start_ts(start_ts.into_inner());
+        let prepare_flashback_resp = self
+            .get_tikv_client(region_id)
+            .kv_prepare_flashback_to_version(&prepare_flashback_req)
+            .unwrap();
+        assert!(
+            !prepare_flashback_resp.has_region_error(),
+            "{:?}",
+            prepare_flashback_resp.get_region_error()
+        );
+    }
+
+    pub fn must_kv_flashback(
+        &mut self,
+        region_id: u64,
+        start_key: &[u8],
+        end_key: &[u8],
+        start_ts: TimeStamp,
+        commit_ts: TimeStamp,
+        version: TimeStamp,
+    ) {
+        let mut flashback_req = FlashbackToVersionRequest::default();
+        flashback_req.set_context(self.get_context(region_id));
+        flashback_req.set_start_key(start_key.to_vec());
+        flashback_req.set_end_key(end_key.to_vec());
+        flashback_req.set_start_ts(start_ts.into_inner());
+        flashback_req.set_commit_ts(commit_ts.into_inner());
+        flashback_req.set_version(version.into_inner());
+        let flashback_resp = self
+            .get_tikv_client(region_id)
+            .kv_flashback_to_version(&flashback_req)
+            .unwrap();
+        assert!(
+            !flashback_resp.has_region_error(),
+            "{:?}",
+            flashback_resp.get_region_error()
+        );
+    }
 }
