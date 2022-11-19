@@ -966,7 +966,7 @@ fn test_check_conf_change_when_remove_node_from_two_member_cluster() {
         .get_header()
         .get_error()
         .get_message()
-        .contains("can not remove voter directly from a raft group that contains less than 3 voters, please demote voter firstly.");
+        .contains("demote voter firstly");
     assert!(
         exec_res,
         "remove voter directly in 2 replica raft group should failed, but got {:?}",
@@ -979,7 +979,7 @@ fn test_check_conf_change_when_remove_node_from_two_member_cluster() {
         .get_header()
         .get_error()
         .get_message()
-        .contains("can not remove voter directly from a raft group that contains less than 3 voters, please demote voter firstly.");
+        .contains("demote voter firstly");
     assert!(
         exec_res,
         "remove voter directly in 2 replica raft group should failed, but got {:?}",
