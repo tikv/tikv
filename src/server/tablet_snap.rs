@@ -1,7 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    convert::TryFrom,
+    convert::{TryFrom, TryInto},
     fs::{self, File},
     io::{Read, Write},
     marker::PhantomData,
@@ -40,20 +40,19 @@ use tikv_util::{
 };
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 
-use super::{metrics::*, snap::Task, Config, Error, Result};
+use super::{
+    metrics::*,
+    snap::{Task, DEFAULT_POOL_SIZE, SNAP_CHUNK_LEN},
+    Config, Error, Result,
+};
 use crate::tikv_util::{sys::thread::ThreadBuildWrapper, time::Limiter};
-
-pub type Callback = Box<dyn FnOnce(Result<()>) + Send>;
-
-const DEFAULT_POOL_SIZE: usize = 4;
-
-const SNAP_CHUNK_LEN: usize = 1024 * 1024;
 
 struct RecvTabletSnapContext {
     key: TabletSnapKey,
     raft_msg: RaftMessage,
     io_type: IoType,
     start: Instant,
+    chunk_size: usize,
 }
 
 impl RecvTabletSnapContext {
@@ -61,6 +60,11 @@ impl RecvTabletSnapContext {
         if !head.has_message() {
             return Err(box_err!("no raft message in the first chunk"));
         }
+
+        let chunk_size = match head.take_data().try_into() {
+            Ok(buff) => usize::from_ne_bytes(buff),
+            Err(_) => return Err(box_err!("failed to get chunk size")),
+        };
         let meta = head.take_message();
         let snapshot = meta.get_message().get_snapshot();
         let key = TabletSnapKey::from_region_snap(
@@ -84,6 +88,7 @@ impl RecvTabletSnapContext {
             raft_msg: meta,
             io_type,
             start: Instant::now(),
+            chunk_size,
         })
     }
 
@@ -114,6 +119,7 @@ async fn send_snap_files(
     let mut total_sent = msg.compute_size() as u64;
     let mut chunk = SnapshotChunk::default();
     chunk.set_message(msg);
+    chunk.set_data(usize::to_ne_bytes(SNAP_CHUNK_LEN).to_vec());
     sender
         .feed((chunk, WriteFlags::default().buffer_hint(true)))
         .await?;
@@ -124,11 +130,19 @@ async fn send_snap_files(
         buffer.extend_from_slice(name.as_bytes());
         let mut f = File::open(&path)?;
         let mut off = buffer.len();
+        let mut new_len = off;
         loop {
             unsafe { buffer.set_len(SNAP_CHUNK_LEN) }
             let readed = f.read(&mut buffer[off..])?;
+            // It should switch the next file if the current file read eof and the last
+            // read buffer length is less SNAP_CHUNK_LEN.
+            // Notice that, it should send empty snapshot chunk to notify the receiver
+            // switch next file if the last read buffer length is equal SNAP_CHUNK_LEN
+            if readed == 0 && new_len < SNAP_CHUNK_LEN {
+                break;
+            }
             limiter.consume(readed);
-            let new_len = readed + off;
+            new_len = readed + off;
             total_sent += new_len as u64;
             unsafe {
                 buffer.set_len(new_len);
@@ -215,7 +229,7 @@ async fn recv_snap_files(
         .transpose()?
         .ok_or_else(|| Error::Other("empty gRPC stream".into()))?;
     let context = RecvTabletSnapContext::new(head)?;
-
+    let chunk_size = context.chunk_size;
     let path = snap_mgr.get_tmp_path_for_recv(&context.key);
     info!("begin to receive tablet snapshot files"; "file" => %path.display());
     fs::create_dir_all(&path)?;
@@ -236,7 +250,8 @@ async fn recv_snap_files(
         let mut f = File::create(&p)?;
         let mut size = chunk.len() - len - 1;
         f.write_all(&chunk[len + 1..])?;
-        while chunk.len() != 0 {
+        // It should switch next file if the chunk size is less than the SNAP_CHUNK_LEN.
+        while chunk.len() >= chunk_size {
             chunk = match stream.next().await {
                 Some(Ok(mut c)) if !c.has_message() => c.take_data(),
                 Some(_) => return Err(box_err!("duplicated metadata")),

@@ -47,7 +47,7 @@ use crate::tikv_util::sys::thread::ThreadBuildWrapper;
 
 pub type Callback = Box<dyn FnOnce(Result<()>) + Send>;
 
-const DEFAULT_POOL_SIZE: usize = 4;
+pub const DEFAULT_POOL_SIZE: usize = 4;
 
 /// A task for either receiving Snapshot or sending Snapshot
 pub enum Task {
@@ -83,7 +83,7 @@ struct SnapChunk {
     remain_bytes: usize,
 }
 
-const SNAP_CHUNK_LEN: usize = 1024 * 1024;
+pub const SNAP_CHUNK_LEN: usize = 1024 * 1024;
 
 impl Stream for SnapChunk {
     type Item = Result<(SnapshotChunk, WriteFlags)>;
