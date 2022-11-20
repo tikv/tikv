@@ -64,7 +64,7 @@ const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
     store_id: u64,
     /// Used to handle requests related to GC.
-    gc_worker: GcWorker<E>,
+    gc_worker: Option<GcWorker<E>>,
     // For handling KV requests.
     storage: Storage<E, L, F>,
     // For handling coprocessor requests.
@@ -109,7 +109,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
     pub fn new(
         store_id: u64,
         storage: Storage<E, L, F>,
-        gc_worker: GcWorker<E>,
+        gc_worker: impl Into<Option<GcWorker<E>>>,
         copr: Endpoint<E>,
         copr_v2: coprocessor_v2::Endpoint,
         snap_scheduler: Scheduler<SnapTask>,
@@ -121,7 +121,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
     ) -> Self {
         Service {
             store_id,
-            gc_worker,
+            gc_worker: gc_worker.into(),
             storage,
             copr,
             copr_v2,
@@ -495,169 +495,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         ctx.spawn(task);
     }
 
-    fn register_lock_observer(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: RegisterLockObserverRequest,
-        sink: UnarySink<RegisterLockObserverResponse>,
-    ) {
-        let begin_instant = Instant::now();
-
-        let (cb, f) = paired_future_callback();
-        let res = self.gc_worker.start_collecting(req.get_max_ts().into(), cb);
-
-        let task = async move {
-            // Here except for the receiving error of `futures::channel::oneshot`,
-            // other errors will be returned as the successful response of rpc.
-            let res = match res {
-                Err(e) => Err(e),
-                Ok(_) => f.await?,
-            };
-            let mut resp = RegisterLockObserverResponse::default();
-            if let Err(e) = res {
-                resp.set_error(format!("{}", e));
-            }
-            sink.success(resp).await?;
-            GRPC_MSG_HISTOGRAM_STATIC
-                .register_lock_observer
-                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
-            ServerResult::Ok(())
-        }
-        .map_err(|e| {
-            log_net_error!(e, "kv rpc failed";
-                "request" => "register_lock_observer"
-            );
-            GRPC_MSG_FAIL_COUNTER.register_lock_observer.inc();
-        })
-        .map(|_| ());
-
-        ctx.spawn(task);
-    }
-
-    fn check_lock_observer(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: CheckLockObserverRequest,
-        sink: UnarySink<CheckLockObserverResponse>,
-    ) {
-        let begin_instant = Instant::now();
-
-        let (cb, f) = paired_future_callback();
-        let res = self
-            .gc_worker
-            .get_collected_locks(req.get_max_ts().into(), cb);
-
-        let task = async move {
-            let res = match res {
-                Err(e) => Err(e),
-                Ok(_) => f.await?,
-            };
-            let mut resp = CheckLockObserverResponse::default();
-            match res {
-                Ok((locks, is_clean)) => {
-                    resp.set_is_clean(is_clean);
-                    resp.set_locks(locks.into());
-                }
-                Err(e) => resp.set_error(format!("{}", e)),
-            }
-            sink.success(resp).await?;
-            GRPC_MSG_HISTOGRAM_STATIC
-                .check_lock_observer
-                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
-            ServerResult::Ok(())
-        }
-        .map_err(|e| {
-            log_net_error!(e, "kv rpc failed";
-                "request" => "check_lock_observer"
-            );
-            GRPC_MSG_FAIL_COUNTER.check_lock_observer.inc();
-        })
-        .map(|_| ());
-
-        ctx.spawn(task);
-    }
-
-    fn remove_lock_observer(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: RemoveLockObserverRequest,
-        sink: UnarySink<RemoveLockObserverResponse>,
-    ) {
-        let begin_instant = Instant::now();
-
-        let (cb, f) = paired_future_callback();
-        let res = self.gc_worker.stop_collecting(req.get_max_ts().into(), cb);
-
-        let task = async move {
-            let res = match res {
-                Err(e) => Err(e),
-                Ok(_) => f.await?,
-            };
-            let mut resp = RemoveLockObserverResponse::default();
-            if let Err(e) = res {
-                resp.set_error(format!("{}", e));
-            }
-            sink.success(resp).await?;
-            GRPC_MSG_HISTOGRAM_STATIC
-                .remove_lock_observer
-                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
-            ServerResult::Ok(())
-        }
-        .map_err(|e| {
-            log_net_error!(e, "kv rpc failed";
-                "request" => "remove_lock_observer"
-            );
-            GRPC_MSG_FAIL_COUNTER.remove_lock_observer.inc();
-        })
-        .map(|_| ());
-
-        ctx.spawn(task);
-    }
-
-    fn physical_scan_lock(
-        &mut self,
-        ctx: RpcContext<'_>,
-        mut req: PhysicalScanLockRequest,
-        sink: UnarySink<PhysicalScanLockResponse>,
-    ) {
-        let begin_instant = Instant::now();
-
-        let (cb, f) = paired_future_callback();
-        let res = self.gc_worker.physical_scan_lock(
-            req.take_context(),
-            req.get_max_ts().into(),
-            Key::from_raw(req.get_start_key()),
-            req.get_limit() as _,
-            cb,
-        );
-
-        let task = async move {
-            let res = match res {
-                Err(e) => Err(e),
-                Ok(_) => f.await?,
-            };
-            let mut resp = PhysicalScanLockResponse::default();
-            match res {
-                Ok(locks) => resp.set_locks(locks.into()),
-                Err(e) => resp.set_error(format!("{}", e)),
-            }
-            sink.success(resp).await?;
-            GRPC_MSG_HISTOGRAM_STATIC
-                .physical_scan_lock
-                .observe(duration_to_sec(begin_instant.saturating_elapsed()));
-            ServerResult::Ok(())
-        }
-        .map_err(|e| {
-            log_net_error!(e, "kv rpc failed";
-                "request" => "physical_scan_lock"
-            );
-            GRPC_MSG_FAIL_COUNTER.physical_scan_lock.inc();
-        })
-        .map(|_| ());
-
-        ctx.spawn(task);
-    }
-
     fn unsafe_destroy_range(
         &mut self,
         ctx: RpcContext<'_>,
@@ -673,12 +510,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
 
         let source = req.mut_context().take_request_source();
         let (cb, f) = paired_future_callback();
-        let res = self.gc_worker.unsafe_destroy_range(
-            req.take_context(),
-            Key::from_raw(&req.take_start_key()),
-            Key::from_raw(&req.take_end_key()),
-            cb,
-        );
+        let res = match &self.gc_worker {
+            None => return,
+            Some(w) => w.unsafe_destroy_range(
+                req.take_context(),
+                Key::from_raw(&req.take_start_key()),
+                Key::from_raw(&req.take_end_key()),
+                cb,
+            ),
+        };
 
         let task = async move {
             let res = match res {

@@ -2,9 +2,9 @@
 
 mod node;
 
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
-use collections::{HashMap, HashSet};
+use collections::HashMap;
 use crossbeam::channel::TrySendError;
 use engine_traits::{CfName, KvEngine, MvccProperties, RaftEngine};
 use futures::{future::BoxFuture, Future};
@@ -21,7 +21,10 @@ use raftstore::{
     store::{cmd_resp, RegionSnapshot},
     DiscardReason,
 };
-use raftstore_v2::router::{CmdResChannel, CmdResSubscriber, PeerMsg, RaftRequest, RaftRouter};
+use raftstore_v2::{
+    router::{CmdResChannel, CmdResSubscriber, PeerMsg, RaftRequest, RaftRouter},
+    StoreRouter,
+};
 use tikv_kv::{
     raft_extension::RaftExtension, Engine, Modify, OnReturnCallback, SnapContext, WriteData,
     WriteSubscriber,
@@ -64,7 +67,13 @@ impl WriteSubscriber for Wrap {
 
 #[derive(Clone)]
 pub struct RouterWrap<EK: KvEngine, ER: RaftEngine> {
-    router: RaftRouter<EK, ER>,
+    router: StoreRouter<EK, ER>,
+}
+
+impl<EK: KvEngine, ER: RaftEngine> RouterWrap<EK, ER> {
+    pub fn new(router: StoreRouter<EK, ER>) -> Self {
+        Self { router }
+    }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> RaftExtension for RouterWrap<EK, ER> {
@@ -124,8 +133,8 @@ impl<EK: KvEngine, ER: RaftEngine> RaftExtension for RouterWrap<EK, ER> {
 #[derive(Clone)]
 pub struct RaftKvV2<EK: KvEngine, ER: RaftEngine> {
     extension: RouterWrap<EK, ER>,
+    router: RaftRouter<EK, ER>,
     txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
-    region_leaders: Arc<RwLock<HashSet<u64>>>,
 }
 
 impl<EK, ER> RaftKvV2<EK, ER>
@@ -133,12 +142,16 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    pub fn new(router: RaftRouter<EK, ER>, region_leaders: Arc<RwLock<HashSet<u64>>>) -> Self {
+    pub fn new(router: RaftRouter<EK, ER>) -> Self {
         Self {
-            extension: RouterWrap { router },
-            region_leaders,
+            extension: RouterWrap::new(router.store_router().clone()),
+            router,
             txn_extra_scheduler: None,
         }
+    }
+
+    pub fn set_txn_extra_scheduler(&mut self, txn_extra_scheduler: Arc<dyn TxnExtraScheduler>) {
+        self.txn_extra_scheduler = Some(txn_extra_scheduler);
     }
 }
 
@@ -165,12 +178,9 @@ where
         &self.extension
     }
 
-    fn precheck_write_with_ctx(&self, ctx: &Context) -> kv::Result<()> {
-        let region_id = ctx.get_region_id();
-        match self.region_leaders.read().unwrap().get(&region_id) {
-            Some(_) => Ok(()),
-            None => Err(raftstore_v2::Error::NotLeader(region_id, None).into()),
-        }
+    fn precheck_write_with_ctx(&self, _ctx: &Context) -> kv::Result<()> {
+        // TODO
+        Ok(())
     }
 
     type WriteSubscriber = impl WriteSubscriber;
@@ -248,7 +258,7 @@ where
         };
         if res.is_ok() {
             let msg = PeerMsg::RaftCommand(RaftRequest::new(cmd, ch));
-            if let Err(e) = self.extension.router.send(region_id, msg) {
+            if let Err(e) = self.router.send(region_id, msg) {
                 match e {
                     TrySendError::Full(PeerMsg::RaftCommand(req)) => {
                         req.ch
@@ -318,7 +328,7 @@ where
         cmd.set_header(header);
         cmd.set_requests(vec![req].into());
 
-        let res = self.extension.router.snapshot(cmd);
+        let res = self.router.snapshot(cmd);
         async move {
             fail_point!("raftkv_async_snapshot_err", |_| Err(box_err!(
                 "injected error for async_snapshot"

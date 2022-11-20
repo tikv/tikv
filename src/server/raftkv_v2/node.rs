@@ -2,11 +2,11 @@
 
 use std::sync::{Arc, Mutex};
 
-use engine_traits::{Engines, KvEngine, OpenOptions, RaftEngine, TabletFactory};
+use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory};
 use kvproto::{metapb, replication_modepb::ReplicationStatus};
 use pd_client::PdClient;
 use raftstore::store::{GlobalReplicationState, TabletSnapManager, Transport, RAFT_INIT_LOG_INDEX};
-use raftstore_v2::{router::RaftRouter, Bootstrap, StoreMeta, StoreSystem};
+use raftstore_v2::{router::RaftRouter, Bootstrap, StoreSystem};
 use slog::{o, Logger};
 use tikv_util::{config::VersionTrack, worker::Worker};
 
@@ -61,15 +61,14 @@ where
         }
     }
 
-    pub fn try_bootstrap_store(&mut self, engines: Engines<EK, ER>) -> Result<()> {
+    pub fn try_bootstrap_store(&mut self, raft_engine: &ER) -> Result<()> {
         let store_id = Bootstrap::new(
-            &engines.raft,
+            raft_engine,
             self.cluster_id,
             &*self.pd_client,
             self.logger.clone(),
         )
         .bootstrap_store()?;
-        self.check_api_version(&engines)?;
         self.store.set_id(store_id);
         Ok(())
     }
@@ -83,14 +82,13 @@ where
         trans: T,
         router: &RaftRouter<EK, ER>,
         snap_mgr: TabletSnapManager,
-        store_meta: Arc<Mutex<StoreMeta<EK>>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
     {
         let store_id = self.id();
         {
-            let mut meta = store_meta.lock().unwrap();
+            let mut meta = router.store_meta().lock().unwrap();
             meta.store_id = Some(store_id);
         }
         if let Some(region) = Bootstrap::new(
@@ -116,7 +114,7 @@ where
         let status = self.pd_client.put_store(self.store.clone())?;
         self.load_all_stores(status);
 
-        self.start_store(raft_engine, trans, router, snap_mgr, store_meta)?;
+        self.start_store(raft_engine, trans, router, snap_mgr)?;
 
         Ok(())
     }
@@ -133,14 +131,9 @@ where
 
     // TODO: support updating dynamic configuration.
 
-    // During the api version switch only TiDB data are allowed to exist otherwise
-    // returns error.
-    fn check_api_version(&self, _engines: &Engines<EK, ER>) -> Result<()> {
-        // TODO: check api version.
-        // Do we really need to do the check giving we don't consider support upgrade
-        // ATM?
-        Ok(())
-    }
+    // TODO: check api version.
+    // Do we really need to do the check giving we don't consider support upgrade
+    // ATM?
 
     fn load_all_stores(&mut self, status: Option<ReplicationStatus>) {
         info!("initializing replication mode"; "status" => ?status, "store_id" => self.store.id);
@@ -165,7 +158,6 @@ where
         trans: T,
         router: &RaftRouter<EK, ER>,
         snap_mgr: TabletSnapManager,
-        store_meta: Arc<Mutex<StoreMeta<EK>>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -186,7 +178,7 @@ where
             self.factory.clone(),
             trans,
             router.store_router(),
-            store_meta,
+            router.store_meta().clone(),
             snap_mgr,
         )?;
         Ok(())

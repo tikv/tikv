@@ -428,7 +428,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         for addr in address {
             router.force_send(addr, PeerMsg::Start).unwrap();
         }
-        router.send_control(StoreMsg::Start).unwrap();
+        router.send_control(StoreMsg::Start(store_id)).unwrap();
         Ok(())
     }
 
@@ -506,14 +506,13 @@ impl<EK: KvEngine, ER: RaftEngine> DerefMut for StoreRouter<EK, ER> {
 /// Creates the batch system for polling raft activities.
 pub fn create_store_batch_system<EK, ER>(
     cfg: &Config,
-    store_id: u64,
     logger: Logger,
 ) -> (StoreRouter<EK, ER>, StoreSystem<EK, ER>)
 where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    let (store_tx, store_fsm) = StoreFsm::new(cfg, store_id, logger.clone());
+    let (store_tx, store_fsm) = StoreFsm::new(cfg, logger.clone());
     let (router, system) =
         batch_system::create_system(&cfg.store_batch_system, store_tx, store_fsm);
     let system = StoreSystem {

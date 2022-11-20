@@ -68,7 +68,7 @@ pub struct Server<T: RaftExtension + 'static, S: StoreAddrResolver + 'static> {
     trans: ServerTransport<T, S>,
     raft_router: T,
     // For sending/receiving snapshots.
-    snap_mgr: SnapManager,
+    snap_mgr: Option<SnapManager>,
     snap_worker: LazyWorker<SnapTask>,
 
     // Currently load statistics is done in the thread.
@@ -91,8 +91,8 @@ impl<T: RaftExtension + Unpin, S: StoreAddrResolver + 'static> Server<T, S> {
         copr_v2: coprocessor_v2::Endpoint,
         raft_router: T,
         resolver: S,
-        snap_mgr: SnapManager,
-        gc_worker: GcWorker<E>,
+        snap_mgr: impl Into<Option<SnapManager>>,
+        gc_worker: impl Into<Option<GcWorker<E>>>,
         check_leader_scheduler: Scheduler<CheckLeaderTask>,
         env: Arc<Environment>,
         yatp_read_pool: Option<ReadPool>,
@@ -185,7 +185,7 @@ impl<T: RaftExtension + Unpin, S: StoreAddrResolver + 'static> Server<T, S> {
             local_addr: addr,
             trans,
             raft_router,
-            snap_mgr,
+            snap_mgr: snap_mgr.into(),
             snap_worker: lazy_worker,
             stats_pool,
             grpc_thread_load,
@@ -253,14 +253,16 @@ impl<T: RaftExtension + Unpin, S: StoreAddrResolver + 'static> Server<T, S> {
         cfg: Arc<VersionTrack<Config>>,
         security_mgr: Arc<SecurityManager>,
     ) -> Result<()> {
-        let snap_runner = SnapHandler::new(
-            Arc::clone(&self.env),
-            self.snap_mgr.clone(),
-            self.raft_router.clone(),
-            security_mgr,
-            Arc::clone(&cfg),
-        );
-        self.snap_worker.start(snap_runner);
+        if let Some(mgr) = &self.snap_mgr {
+            let snap_runner = SnapHandler::new(
+                Arc::clone(&self.env),
+                mgr.clone(),
+                self.raft_router.clone(),
+                security_mgr,
+                Arc::clone(&cfg),
+            );
+            self.snap_worker.start(snap_runner);
+        }
 
         let mut grpc_server = self.builder_or_server.take().unwrap().right().unwrap();
         info!("listening on addr"; "addr" => &self.local_addr);
