@@ -15,6 +15,7 @@ use engine_traits::{
 use crate::server::engine_factory::KvEngineFactory;
 
 const TOMBSTONE_MARK: &str = "TOMBSTONE_TABLET";
+const TEMP_DB_SUFFIX: &str = "_temptemp";
 
 #[derive(Clone)]
 pub struct KvEngineFactoryV2 {
@@ -121,6 +122,17 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
                 id,
                 path.to_str().unwrap()
             ));
+        }
+
+        if !engine_exist {
+            let temp_path_str = format!("{}_{}", path.to_str().unwrap(), TEMP_DB_SUFFIX);
+            let temp_path = Path::new(temp_path_str.as_str());
+            if temp_path.is_dir() {
+                std::fs::remove_dir_all(temp_path_str.as_str())?;
+            }
+            let temp_db = self.inner.create_tablet(temp_path, id, suffix)?;
+            drop(temp_db);
+            std::fs::rename(temp_path_str, path).unwrap();
         }
 
         let tablet = self.inner.create_tablet(path, id, suffix)?;
@@ -512,5 +524,30 @@ mod tests {
             count += 1;
         });
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_open_tablet_raw_recovery_from_crash() {
+        let cfg = TEST_CONFIG.clone();
+        assert!(cfg.storage.block_cache.shared);
+        let cache = cfg.storage.block_cache.build_shared_cache();
+        let dir = test_util::temp_dir("test_kvengine_factory_v2", false);
+        let env = cfg.build_shared_rocks_env(None, None).unwrap();
+
+        let mut builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
+        if let Some(cache) = cache {
+            builder = builder.block_cache(cache);
+        }
+
+        let factory = builder.build_v2();
+        let path = factory.tablet_path(1, 10);
+        let temp_path = format!("{}_{}/aaa", path.to_str().unwrap(), TEMP_DB_SUFFIX);
+        std::fs::create_dir_all(temp_path.clone()).unwrap();
+        // tablet should be created successfully.
+        let _ = factory
+            .open_tablet(1, Some(10), OpenOptions::default().set_create(true))
+            .unwrap();
+        // the temp folder is deleted;
+        assert!(!Path::new(temp_path.as_str()).is_dir());
     }
 }
