@@ -3778,8 +3778,6 @@ where
                             .raft_group
                             .raft
                             .adjust_max_inflight_msgs(peer_id, self.ctx.cfg.raft_max_inflight_msgs);
-                    } else if self.fsm.peer.peer_id() == peer_id && self.fsm.peer.is_witness() {
-                        let _ = self.fsm.peer.get_store().clear_data();
                     }
                 }
                 ConfChangeType::RemoveNode => {
