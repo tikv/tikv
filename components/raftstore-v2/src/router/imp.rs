@@ -27,6 +27,20 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncReadNotifier for StoreRouter<EK, ER> {
     }
 }
 
+pub struct StoreRouterCompactedEventSender<EK: KvEngine, ER: RaftEngine> {
+    pub router: Mutex<StoreRouter<EK, ER>>,
+}
+
+#[cfg(feature = "engine_rocks")]
+impl<EK: KvEngine, ER: RaftEngine> engine_rocks::CompactedEventSender
+    for StoreRouterCompactedEventSender<EK, ER>
+{
+    #[inline]
+    fn send(&self, event: engine_rocks::RocksCompactedEvent) {
+        // TODO
+    }
+}
+
 /// A router that routes messages to the raftstore
 pub struct RaftRouter<EK, ER>
 where

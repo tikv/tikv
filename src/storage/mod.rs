@@ -2949,6 +2949,12 @@ impl<E: Engine> Engine for TxnTestEngine<E> {
         self.engine.kv_engine()
     }
 
+    type RaftExtension = E::RaftExtension;
+
+    fn raft_extension(&self) -> &Self::RaftExtension {
+        self.engine.raft_extension()
+    }
+
     fn modify_on_kv_engine(
         &self,
         region_modifies: HashMap<u64, Vec<Modify>>,

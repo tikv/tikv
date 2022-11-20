@@ -276,3 +276,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftStoreRouter<EK> for RaftRouter<EK, ER> {
         batch_system::Router::broadcast_normal(self, msg_gen)
     }
 }
+
+// Limitation of Rust: rust-lang/rust#56209, the trait has to add a generic
+// type.
+pub trait GenericRaftStoreRouter<EK: KvEngine> {
+    fn hint_size_changes_in_range(&self, start_key: Vec<u8>, end_key: Vec<u8>);
+}

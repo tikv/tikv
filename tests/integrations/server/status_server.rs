@@ -6,7 +6,10 @@ use hyper::{body, Client, StatusCode, Uri};
 use raftstore::store::region_meta::RegionMeta;
 use security::SecurityConfig;
 use test_raftstore::{new_server_cluster, Simulator};
-use tikv::{config::ConfigController, server::status_server::StatusServer};
+use tikv::{
+    config::ConfigController,
+    server::{raftkv::RouterExtension, status_server::StatusServer},
+};
 use tikv_util::HandyRwLock;
 
 async fn check(authority: SocketAddr, region_id: u64) -> Result<(), Box<dyn Error>> {
@@ -45,7 +48,7 @@ fn test_region_meta_endpoint() {
         1,
         ConfigController::default(),
         Arc::new(SecurityConfig::default()),
-        router.unwrap(),
+        RouterExtension::new(router.unwrap()),
         std::env::temp_dir(),
     )
     .unwrap();

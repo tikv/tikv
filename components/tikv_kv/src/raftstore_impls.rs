@@ -4,7 +4,7 @@ use std::{num::NonZeroU64, sync::Arc};
 
 use engine_traits::{CfName, IterOptions, Peekable, ReadOptions, Snapshot};
 use keys::DataKey;
-use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
+use kvproto::{errorpb, kvrpcpb::ExtraOp as TxnExtraOp};
 use pd_client::BucketMeta;
 use raftstore::{
     store::{RegionIterator, RegionSnapshot, TxnExt},
@@ -19,7 +19,7 @@ use crate::{
 
 impl From<RaftServerError> for Error {
     fn from(e: RaftServerError) -> Error {
-        Error(Box::new(ErrorInner::Request(e.into())))
+        Error(Box::new(ErrorInner::Request(errorpb::Error::from(e))))
     }
 }
 

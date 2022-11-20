@@ -17,7 +17,9 @@ use std::{
 use async_compression::{tokio::write::ZstdEncoder, Level};
 use engine_rocks::ReadPerfInstant;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use futures::{channel::mpsc, executor::block_on, ready, task::Poll, FutureExt, StreamExt};
+use futures::{
+    channel::mpsc, executor::block_on, future::BoxFuture, ready, task::Poll, FutureExt, StreamExt,
+};
 use kvproto::{
     brpb::CompressionType,
     raft_cmdpb::{CmdType, Request},
@@ -44,7 +46,6 @@ use txn_types::{Key, Lock, LockType};
 
 use crate::{
     errors::{Error, Result},
-    metadata::store::BoxFuture,
     router::TaskSelector,
     Task,
 };
@@ -468,7 +469,7 @@ impl CallbackWaitGroup {
     }
 
     /// wait until all running tasks done.
-    pub fn wait(&self) -> BoxFuture<()> {
+    pub fn wait(&self) -> BoxFuture<'static, ()> {
         // Fast path: no uploading.
         if self.running.load(Ordering::SeqCst) == 0 {
             return Box::pin(futures::future::ready(()));

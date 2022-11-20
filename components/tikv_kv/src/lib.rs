@@ -7,6 +7,7 @@
 
 #![feature(min_specialization)]
 #![feature(type_alias_impl_trait)]
+#![feature(associated_type_defaults)]
 
 #[macro_use(fail_point)]
 extern crate fail;
@@ -17,6 +18,7 @@ mod btree_engine;
 mod cursor;
 pub mod metrics;
 mod mock_engine;
+pub mod raft_extension;
 mod raftstore_impls;
 mod rocksdb_engine;
 mod stats;
@@ -36,7 +38,7 @@ use engine_traits::{
     CF_DEFAULT, CF_LOCK,
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
-use futures::{compat::Future01CompatExt, prelude::*};
+use futures::{compat::Future01CompatExt, future::BoxFuture, prelude::*};
 use into_other::IntoOther;
 use kvproto::{
     errorpb::Error as ErrorHeader,
@@ -370,6 +372,12 @@ pub trait Engine: Send + Clone + 'static {
     /// Currently, only multi-rocksdb version will return `None`.
     fn kv_engine(&self) -> Option<Self::Local>;
 
+    type RaftExtension: raft_extension::RaftExtension = raft_extension::NotSupported;
+    /// Get the underlying raft extension.
+    fn raft_extension(&self) -> &Self::RaftExtension {
+        unimplemented!()
+    }
+
     /// Write modifications into internal local engine directly.
     ///
     /// region_modifies records each region's modifications.
@@ -454,9 +462,28 @@ pub trait Engine: Send + Clone + 'static {
         None
     }
 
-    // Some engines have a `TxnExtraScheduler`. This method is to send the extra
-    // to the scheduler.
+    /// Some engines have a `TxnExtraScheduler`. This method is to send the
+    /// extra to the scheduler.
     fn schedule_txn_extra(&self, _txn_extra: TxnExtra) {}
+
+    /// Application may operate on local engine directly, the method is to hint
+    /// the engine there is probably a notable difference in range, so
+    /// engine may update its statistics.
+    fn hint_change_in_range(&self, _start_key: Vec<u8>, _end_key: Vec<u8>) {}
+
+    /// Mark the start of flashback.
+    // Unlike other async method, it's an infrequent API, use trait object for
+    // simplicity.
+    fn start_flashback(&self, _ctx: &Context) -> BoxFuture<'static, Result<()>> {
+        Box::pin(futures::future::ready(Ok(())))
+    }
+
+    /// Mark the end of flashback.
+    // Unlike other async method, it's an infrequent API, use trait object for
+    // simplicity.
+    fn end_flashback(&self, _ctx: &Context) -> BoxFuture<'static, Result<()>> {
+        Box::pin(futures::future::ready(Ok(())))
+    }
 }
 
 /// A Snapshot is a consistent view of the underlying engine at a given point in

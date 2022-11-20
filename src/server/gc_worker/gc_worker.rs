@@ -27,11 +27,7 @@ use kvproto::{
     metapb::Region,
 };
 use pd_client::{FeatureGate, PdClient};
-use raftstore::{
-    coprocessor::{CoprocessorHost, RegionInfoProvider},
-    router::RaftStoreRouter,
-    store::msg::StoreMsg,
-};
+use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
 use tikv_kv::{CfStatistics, CursorBuilder, Modify, SnapContext};
 use tikv_util::{
     config::{Tracker, VersionTrack},
@@ -195,15 +191,12 @@ where
 }
 
 /// Used to perform GC operations on the engine.
-pub struct GcRunner<E, RR>
+pub struct GcRunner<E>
 where
     E: Engine,
-    RR: RaftStoreRouter<E::Local>,
 {
     store_id: u64,
     engine: E,
-
-    raft_store_router: RR,
     flow_info_sender: Sender<FlowInfo>,
 
     /// Used to limit the write flow of GC.
@@ -304,15 +297,10 @@ fn init_snap_ctx(store_id: u64, region: &Region) -> Context {
     ctx
 }
 
-impl<E, RR> GcRunner<E, RR>
-where
-    E: Engine,
-    RR: RaftStoreRouter<E::Local>,
-{
+impl<E: Engine> GcRunner<E> {
     pub fn new(
         store_id: u64,
         engine: E,
-        raft_store_router: RR,
         flow_info_sender: Sender<FlowInfo>,
         cfg_tracker: Tracker<GcConfig>,
         cfg: GcConfig,
@@ -325,7 +313,6 @@ where
         Self {
             store_id,
             engine,
-            raft_store_router,
             flow_info_sender,
             limiter,
             cfg,
@@ -818,15 +805,10 @@ where
                 .send(FlowInfo::AfterUnsafeDestroyRange(ctx.region_id))
                 .unwrap();
 
-            self.raft_store_router
-            .send_store_msg(StoreMsg::ClearRegionSizeInRange {
-                start_key: start_key.as_encoded().to_vec(),
-                end_key: end_key.as_encoded().to_vec(),
-            })
-            .unwrap_or_else(|e| {
-                // Warn and ignore it.
-                warn!("unsafe destroy range: failed sending ClearRegionSizeInRange"; "err" => ?e);
-            });
+            self.engine.hint_change_in_range(
+                start_key.as_encoded().to_vec(),
+                end_key.as_encoded().to_vec(),
+            );
         } else {
             let cfs = &[CF_LOCK, CF_DEFAULT, CF_WRITE];
             let keys = vec![start_key.clone(), end_key.clone()];
@@ -951,11 +933,7 @@ where
     }
 }
 
-impl<E, RR> Runnable for GcRunner<E, RR>
-where
-    E: Engine,
-    RR: RaftStoreRouter<E::Local>,
-{
+impl<E: Engine> Runnable for GcRunner<E> {
     type Task = GcTask<E::Local>;
 
     #[inline]
@@ -1162,16 +1140,8 @@ pub fn sync_gc(
 }
 
 /// Used to schedule GC operations.
-pub struct GcWorker<E, RR>
-where
-    E: Engine,
-    RR: RaftStoreRouter<E::Local> + 'static,
-{
+pub struct GcWorker<E: Engine> {
     engine: E,
-
-    /// `raft_store_router` is useful to signal raftstore clean region size
-    /// informations.
-    raft_store_router: RR,
     /// Used to signal unsafe destroy range is executed.
     flow_info_sender: Option<Sender<FlowInfo>>,
     region_info_provider: Arc<dyn RegionInfoProvider>,
@@ -1190,18 +1160,13 @@ where
     feature_gate: FeatureGate,
 }
 
-impl<E, RR> Clone for GcWorker<E, RR>
-where
-    E: Engine,
-    RR: RaftStoreRouter<E::Local>,
-{
+impl<E: Engine> Clone for GcWorker<E> {
     #[inline]
     fn clone(&self) -> Self {
         self.refs.fetch_add(1, Ordering::SeqCst);
 
         Self {
             engine: self.engine.clone(),
-            raft_store_router: self.raft_store_router.clone(),
             flow_info_sender: self.flow_info_sender.clone(),
             config_manager: self.config_manager.clone(),
             refs: self.refs.clone(),
@@ -1215,11 +1180,7 @@ where
     }
 }
 
-impl<E, RR> Drop for GcWorker<E, RR>
-where
-    E: Engine,
-    RR: RaftStoreRouter<E::Local> + 'static,
-{
+impl<E: Engine> Drop for GcWorker<E> {
     #[inline]
     fn drop(&mut self) {
         let refs = self.refs.fetch_sub(1, Ordering::SeqCst);
@@ -1235,25 +1196,19 @@ where
     }
 }
 
-impl<E, RR> GcWorker<E, RR>
-where
-    E: Engine,
-    RR: RaftStoreRouter<E::Local>,
-{
+impl<E: Engine> GcWorker<E> {
     pub fn new(
         engine: E,
-        raft_store_router: RR,
         flow_info_sender: Sender<FlowInfo>,
         cfg: GcConfig,
         feature_gate: FeatureGate,
         region_info_provider: Arc<dyn RegionInfoProvider>,
-    ) -> GcWorker<E, RR> {
+    ) -> Self {
         let worker_builder = WorkerBuilder::new("gc-worker").pending_capacity(GC_MAX_PENDING_TASKS);
         let worker = worker_builder.create().lazy_build("gc-worker");
         let worker_scheduler = worker.scheduler();
         GcWorker {
             engine,
-            raft_store_router,
             flow_info_sender: Some(flow_info_sender),
             config_manager: GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg))),
             refs: Arc::new(AtomicUsize::new(1)),
@@ -1305,7 +1260,6 @@ where
         let runner = GcRunner::new(
             store_id,
             self.engine.clone(),
-            self.raft_store_router.clone(),
             self.flow_info_sender.take().unwrap(),
             self.config_manager.0.clone().tracker("gc-woker".to_owned()),
             self.config_manager.value().clone(),
@@ -1636,12 +1590,9 @@ mod tests {
         metapb::Peer,
     };
     use raft::StateRole;
-    use raftstore::{
-        coprocessor::{
-            region_info_accessor::{MockRegionInfoProvider, RegionInfoAccessor},
-            RegionChangeEvent,
-        },
-        router::RaftStoreBlackHole,
+    use raftstore::coprocessor::{
+        region_info_accessor::{MockRegionInfoProvider, RegionInfoAccessor},
+        RegionChangeEvent,
     };
     use tempfile::Builder;
     use tikv_kv::Snapshot;
@@ -1790,7 +1741,6 @@ mod tests {
 
         let mut gc_worker = GcWorker::new(
             engine,
-            RaftStoreBlackHole,
             tx,
             GcConfig::default(),
             gate,
@@ -1967,7 +1917,6 @@ mod tests {
         region.mut_peers().push(new_peer(store_id, 0));
         let mut gc_worker = GcWorker::new(
             prefixed_engine,
-            RaftStoreBlackHole,
             tx,
             GcConfig::default(),
             FeatureGate::default(),
@@ -2049,7 +1998,6 @@ mod tests {
 
         let mut gc_worker = GcWorker::new(
             prefixed_engine.clone(),
-            RaftStoreBlackHole,
             tx,
             GcConfig::default(),
             feature_gate,
@@ -2141,7 +2089,6 @@ mod tests {
         let mut runner = GcRunner::new(
             store_id,
             prefixed_engine.clone(),
-            RaftStoreBlackHole,
             tx,
             GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
                 .0
@@ -2204,7 +2151,6 @@ mod tests {
         let mut runner = GcRunner::new(
             store_id,
             prefixed_engine.clone(),
-            RaftStoreBlackHole,
             tx,
             GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
                 .0
@@ -2306,7 +2252,6 @@ mod tests {
         let mut runner = GcRunner::new(
             1,
             prefixed_engine.clone(),
-            RaftStoreBlackHole,
             tx,
             GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
                 .0
@@ -2435,7 +2380,6 @@ mod tests {
 
         let mut gc_worker = GcWorker::new(
             engine.clone(),
-            RaftStoreBlackHole,
             tx,
             GcConfig::default(),
             gate,
@@ -2565,7 +2509,7 @@ mod tests {
     ) -> (
         MultiRocksEngine,
         Arc<MockRegionInfoProvider>,
-        GcRunner<MultiRocksEngine, RaftStoreBlackHole>,
+        GcRunner<MultiRocksEngine>,
         Vec<Region>,
         mpsc::Receiver<FlowInfo>,
     ) {
@@ -2621,7 +2565,6 @@ mod tests {
         let gc_runner = GcRunner::new(
             store_id,
             engine.clone(),
-            RaftStoreBlackHole,
             tx,
             GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
                 .0
@@ -2800,7 +2743,6 @@ mod tests {
         let mut gc_runner = GcRunner::new(
             store_id,
             engine.clone(),
-            RaftStoreBlackHole,
             tx,
             GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
                 .0

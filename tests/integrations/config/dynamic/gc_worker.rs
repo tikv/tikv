@@ -5,9 +5,7 @@ use std::{
     time::Duration,
 };
 
-use raftstore::{
-    coprocessor::region_info_accessor::MockRegionInfoProvider, router::RaftStoreBlackHole,
-};
+use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
 use tikv::{
     config::{ConfigController, Module, TikvConfig},
     server::gc_worker::{GcConfig, GcTask, GcWorker},
@@ -27,15 +25,11 @@ fn test_gc_config_validate() {
 
 fn setup_cfg_controller(
     cfg: TikvConfig,
-) -> (
-    GcWorker<tikv::storage::kv::RocksEngine, RaftStoreBlackHole>,
-    ConfigController,
-) {
+) -> (GcWorker<tikv::storage::kv::RocksEngine>, ConfigController) {
     let engine = TestEngineBuilder::new().build().unwrap();
     let (tx, _rx) = std::sync::mpsc::channel();
     let mut gc_worker = GcWorker::new(
         engine,
-        RaftStoreBlackHole,
         tx,
         cfg.gc.clone(),
         Default::default(),

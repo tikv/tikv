@@ -1,22 +1,31 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod node;
+
 use std::sync::{Arc, RwLock};
 
 use collections::{HashMap, HashSet};
 use crossbeam::channel::TrySendError;
 use engine_traits::{CfName, KvEngine, MvccProperties, RaftEngine};
-use futures::Future;
+use futures::{future::BoxFuture, Future};
 use keys::NoPrefix;
 use kvproto::{
     kvrpcpb::Context,
+    metapb::{Region, RegionEpoch},
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, Request},
+    raft_serverpb::RaftMessage,
 };
+pub use node::NodeV2;
+use raft::SnapshotStatus;
 use raftstore::{
     store::{cmd_resp, RegionSnapshot},
     DiscardReason,
 };
 use raftstore_v2::router::{CmdResChannel, CmdResSubscriber, PeerMsg, RaftRequest, RaftRouter};
-use tikv_kv::{Engine, Modify, OnReturnCallback, SnapContext, WriteData, WriteSubscriber};
+use tikv_kv::{
+    raft_extension::RaftExtension, Engine, Modify, OnReturnCallback, SnapContext, WriteData,
+    WriteSubscriber,
+};
 use tikv_util::{codec::number::NumberEncoder, time::Instant};
 use txn_types::{TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
@@ -54,8 +63,67 @@ impl WriteSubscriber for Wrap {
 }
 
 #[derive(Clone)]
-pub struct RaftKvV2<EK: KvEngine, ER: RaftEngine> {
+pub struct RouterWrap<EK: KvEngine, ER: RaftEngine> {
     router: RaftRouter<EK, ER>,
+}
+
+impl<EK: KvEngine, ER: RaftEngine> RaftExtension for RouterWrap<EK, ER> {
+    #[inline]
+    fn feed(&self, msg: RaftMessage, key_message: bool) {
+        // Channel full and region not found are ignored.
+        let region_id = msg.get_region_id();
+        let msg_ty = msg.get_message().get_msg_type();
+        if let Err(e) = self.router.send_raft_message(Box::new(msg)) && key_message {
+            error!("failed to send raft message"; "region_id" => region_id, "msg_ty" => ?msg_ty, "err" => ?e);
+        }
+    }
+
+    #[inline]
+    fn report_reject_message(&self, _region_id: u64, _from_peer_id: u64) {
+        // TODO
+    }
+
+    #[inline]
+    fn report_peer_unreachable(&self, _region_id: u64, _to_peer_id: u64) {
+        // TODO
+    }
+
+    #[inline]
+    fn report_store_unreachable(&self, _store_id: u64) {
+        // TODO
+    }
+
+    #[inline]
+    fn report_snapshot_status(&self, _region_id: u64, _to_peer_id: u64, _status: SnapshotStatus) {
+        // TODO
+    }
+
+    #[inline]
+    fn report_resolved(&self, _store_id: u64, _group_id: u64) {
+        // TODO
+    }
+
+    #[inline]
+    fn split(
+        &self,
+        _region_id: u64,
+        _region_epoch: RegionEpoch,
+        _split_keys: Vec<Vec<u8>>,
+        _source: String,
+    ) -> BoxFuture<'static, kv::Result<Vec<Region>>> {
+        // TODO
+        unimplemented!()
+    }
+
+    type ReadIndexRes = impl Future<Output = kv::Result<u64>>;
+    fn read_index(&self, _ctx: &Context) -> Self::ReadIndexRes {
+        async move { unimplemented!() }
+    }
+}
+
+#[derive(Clone)]
+pub struct RaftKvV2<EK: KvEngine, ER: RaftEngine> {
+    extension: RouterWrap<EK, ER>,
     txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
     region_leaders: Arc<RwLock<HashSet<u64>>>,
 }
@@ -67,7 +135,7 @@ where
 {
     pub fn new(router: RaftRouter<EK, ER>, region_leaders: Arc<RwLock<HashSet<u64>>>) -> Self {
         Self {
-            router,
+            extension: RouterWrap { router },
             region_leaders,
             txn_extra_scheduler: None,
         }
@@ -89,6 +157,12 @@ where
     fn modify_on_kv_engine(&self, _: HashMap<u64, Vec<Modify>>) -> kv::Result<()> {
         // TODO
         Ok(())
+    }
+
+    type RaftExtension = RouterWrap<EK, ER>;
+
+    fn raft_extension(&self) -> &Self::RaftExtension {
+        &self.extension
     }
 
     fn precheck_write_with_ctx(&self, ctx: &Context) -> kv::Result<()> {
@@ -174,7 +248,7 @@ where
         };
         if res.is_ok() {
             let msg = PeerMsg::RaftCommand(RaftRequest::new(cmd, ch));
-            if let Err(e) = self.router.send(region_id, msg) {
+            if let Err(e) = self.extension.router.send(region_id, msg) {
                 match e {
                     TrySendError::Full(PeerMsg::RaftCommand(req)) => {
                         req.ch
@@ -244,7 +318,7 @@ where
         cmd.set_header(header);
         cmd.set_requests(vec![req].into());
 
-        let res = self.router.snapshot(cmd);
+        let res = self.extension.router.snapshot(cmd);
         async move {
             fail_point!("raftkv_async_snapshot_err", |_| Err(box_err!(
                 "injected error for async_snapshot"
@@ -298,5 +372,15 @@ where
                 tx.schedule(txn_extra);
             }
         }
+    }
+
+    fn start_flashback(&self, _ctx: &Context) -> BoxFuture<'static, kv::Result<()>> {
+        // TODO
+        unimplemented!()
+    }
+
+    fn end_flashback(&self, _ctx: &Context) -> BoxFuture<'static, kv::Result<()>> {
+        // TODO
+        unimplemented!()
     }
 }

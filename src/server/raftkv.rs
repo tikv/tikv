@@ -5,6 +5,7 @@ use std::{
     borrow::Cow,
     fmt::{self, Debug, Display, Formatter},
     io::Error as IoError,
+    marker::PhantomData,
     mem,
     num::NonZeroU64,
     result,
@@ -15,15 +16,20 @@ use std::{
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
-use futures::{Future, StreamExt};
+use futures::{future::BoxFuture, Future, StreamExt};
 use kvproto::{
     errorpb,
-    kvrpcpb::{Context, IsolationLevel},
-    raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response},
+    kvrpcpb::{Context, DiskFullOpt, IsolationLevel},
+    metapb::{Region, RegionEpoch},
+    raft_cmdpb::{
+        AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request,
+        Response,
+    },
+    raft_serverpb::RaftMessage,
 };
 use raft::{
     eraftpb::{self, MessageType},
-    StateRole,
+    SnapshotStatus, StateRole,
 };
 use raftstore::{
     coprocessor::{
@@ -32,13 +38,15 @@ use raftstore::{
     errors::Error as RaftServerError,
     router::{LocalReadRouter, RaftStoreRouter},
     store::{
-        Callback as StoreCallback, RaftCmdExtraOpts, ReadIndexContext, ReadResponse,
-        RegionSnapshot, WriteResponse,
+        region_meta::{RaftStateRole, RegionMeta},
+        Callback as StoreCallback, CasualMessage, PeerMsg, RaftCmdExtraOpts, ReadIndexContext,
+        ReadResponse, RegionSnapshot, SignificantMsg, StoreMsg, WriteResponse,
     },
 };
 use thiserror::Error;
 use tikv_kv::{
-    write_modifies, OnReturnCallback, WriteSubscriber, SUBSCRIBE_COMMITTED, SUBSCRIBE_PROPOSED,
+    raft_extension::RaftExtension, write_modifies, OnReturnCallback, WriteSubscriber,
+    SUBSCRIBE_COMMITTED, SUBSCRIBE_PROPOSED,
 };
 use tikv_util::{codec::number::NumberEncoder, time::Instant};
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
@@ -228,6 +236,158 @@ impl WriteSubscriber for RaftKvWriteSubscriber {
     }
 }
 
+#[derive(Clone)]
+pub struct RouterExtension<E: KvEngine, S: RaftStoreRouter<E> + 'static> {
+    router: S,
+    _phantom: PhantomData<E>,
+}
+
+impl<E: KvEngine, S: RaftStoreRouter<E>> RouterExtension<E, S> {
+    pub fn new(router: S) -> Self {
+        Self {
+            router,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<E: KvEngine, S: RaftStoreRouter<E>> RaftExtension for RouterExtension<E, S> {
+    #[inline]
+    fn feed(&self, msg: RaftMessage, key_message: bool) {
+        // Channel full and region not found are ignored.
+        let region_id = msg.get_region_id();
+        let msg_ty = msg.get_message().get_msg_type();
+        if let Err(e) = self.router.send_raft_msg(msg) && key_message {
+            error!("failed to send raft message"; "region_id" => region_id, "msg_ty" => ?msg_ty, "err" => ?e);
+        }
+    }
+
+    #[inline]
+    fn report_reject_message(&self, region_id: u64, from_peer_id: u64) {
+        let m = CasualMessage::RejectRaftAppend {
+            peer_id: from_peer_id,
+        };
+        let _ = self.router.send_casual_msg(region_id, m);
+    }
+
+    #[inline]
+    fn report_peer_unreachable(&self, region_id: u64, to_peer_id: u64) {
+        let msg = SignificantMsg::Unreachable {
+            region_id,
+            to_peer_id,
+        };
+        let _ = self.router.significant_send(region_id, msg);
+    }
+
+    #[inline]
+    fn report_store_unreachable(&self, store_id: u64) {
+        let _ = self
+            .router
+            .send_store_msg(StoreMsg::StoreUnreachable { store_id });
+    }
+
+    #[inline]
+    fn report_snapshot_status(&self, region_id: u64, to_peer_id: u64, status: SnapshotStatus) {
+        let msg = SignificantMsg::SnapshotStatus {
+            region_id,
+            to_peer_id,
+            status,
+        };
+        if let Err(e) = self.router.significant_send(region_id, msg) {
+            error!(?e;
+                "report snapshot to peer failes";
+                "to_peer_id" => to_peer_id,
+                "status" => ?status,
+                "region_id" => region_id,
+            );
+        }
+    }
+
+    #[inline]
+    fn report_resolved(&self, store_id: u64, group_id: u64) {
+        self.router.broadcast_normal(|| {
+            PeerMsg::SignificantMsg(SignificantMsg::StoreResolved { store_id, group_id })
+        })
+    }
+
+    #[inline]
+    fn split(
+        &self,
+        region_id: u64,
+        region_epoch: RegionEpoch,
+        split_keys: Vec<Vec<u8>>,
+        source: String,
+    ) -> BoxFuture<'static, kv::Result<Vec<Region>>> {
+        let (tx, rx) = futures::channel::oneshot::channel();
+        let req = CasualMessage::SplitRegion {
+            region_epoch,
+            split_keys,
+            callback: raftstore::store::Callback::write(Box::new(move |res| {
+                let _ = tx.send(res);
+            })),
+            source: source.into(),
+        };
+        let res = self.router.send_casual_msg(region_id, req);
+        Box::pin(async move {
+            res?;
+            let mut admin_resp = box_try!(rx.await);
+            check_raft_cmd_response(&mut admin_resp.response)?;
+            let regions = admin_resp
+                .response
+                .mut_admin_response()
+                .mut_splits()
+                .take_regions();
+            Ok(regions.into())
+        })
+    }
+
+    type ReadIndexRes = impl Future<Output = kv::Result<u64>>;
+    fn read_index(&self, _ctx: &Context) -> Self::ReadIndexRes {
+        async move { unimplemented!() }
+    }
+
+    fn query_region(&self, region_id: u64) -> BoxFuture<'static, kv::Result<RegionMeta>> {
+        let (tx, rx) = futures::channel::oneshot::channel();
+        let res = self.router.send_casual_msg(
+            region_id,
+            CasualMessage::AccessPeer(Box::new(move |meta| {
+                if let Err(meta) = tx.send(meta) {
+                    error!("receiver dropped, region meta: {:?}", meta)
+                }
+            })),
+        );
+        Box::pin(async move {
+            res?;
+            Ok(box_try!(rx.await))
+        })
+    }
+
+    fn check_consistency(&self, region_id: u64) -> BoxFuture<'static, kv::Result<()>> {
+        let region = self.query_region(region_id);
+        let router = self.router.clone();
+        Box::pin(async move {
+            let meta: RegionMeta = region.await?;
+            let leader_id = meta.raft_status.soft_state.leader_id;
+            let mut leader = None;
+            for peer in meta.region_state.peers {
+                if peer.id == leader_id {
+                    leader = Some(peer.into());
+                }
+            }
+            if meta.raft_status.soft_state.raft_state != RaftStateRole::Leader {
+                return Err(RaftServerError::NotLeader(region_id, leader).into());
+            }
+            let mut req = RaftCmdRequest::default();
+            req.mut_header().set_region_id(region_id);
+            req.mut_header().set_peer(leader.unwrap());
+            req.mut_admin_request()
+                .set_cmd_type(AdminCmdType::ComputeHash);
+            let f = exec_admin(&router, req);
+            f.await
+        })
+    }
+}
+
 pub fn new_request_header(ctx: &Context) -> RaftRequestHeader {
     let mut header = RaftRequestHeader::default();
     header.set_region_id(ctx.get_region_id());
@@ -248,7 +408,7 @@ where
     E: KvEngine,
     S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
-    router: S,
+    extension: RouterExtension<E, S>,
     engine: E,
     txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
     region_leaders: Arc<RwLock<HashSet<u64>>>,
@@ -262,7 +422,7 @@ where
     /// Create a RaftKv using specified configuration.
     pub fn new(router: S, engine: E, region_leaders: Arc<RwLock<HashSet<u64>>>) -> RaftKv<E, S> {
         RaftKv {
-            router,
+            extension: RouterExtension::new(router),
             engine,
             txn_extra_scheduler: None,
             region_leaders,
@@ -300,7 +460,7 @@ where
         cmd.set_header(header);
         cmd.set_requests(vec![req].into());
         let (tx, rx) = futures::channel::oneshot::channel();
-        let res = self.router.read(
+        let res = self.extension.router.read(
             ctx.read_id,
             cmd,
             StoreCallback::read(Box::new(move |resp| {
@@ -329,6 +489,39 @@ pub fn invalid_resp_type(exp: CmdType, act: CmdType) -> Error {
         "cmd type not match, want {:?}, got {:?}!",
         exp, act
     ))
+}
+
+#[inline]
+pub fn new_flashback_req(ctx: &Context, ty: AdminCmdType) -> RaftCmdRequest {
+    let header = new_request_header(ctx);
+    let mut req = RaftCmdRequest::default();
+    req.set_header(header);
+    req.mut_header()
+        .set_flags(WriteBatchFlags::FLASHBACK.bits());
+    req.mut_admin_request().set_cmd_type(ty);
+    req
+}
+
+fn exec_admin<E: KvEngine, S: RaftStoreRouter<E>>(
+    router: &S,
+    req: RaftCmdRequest,
+) -> BoxFuture<'static, kv::Result<()>> {
+    let (tx, rx) = futures::channel::oneshot::channel();
+    let res = router.send_command(
+        req,
+        raftstore::store::Callback::write(Box::new(move |resp| {
+            let _ = tx.send(resp);
+        })),
+        RaftCmdExtraOpts {
+            deadline: None,
+            disk_full_opt: DiskFullOpt::AllowedOnAlmostFull,
+        },
+    );
+    Box::pin(async move {
+        res?;
+        let mut resp = box_try!(rx.await);
+        check_raft_cmd_response(&mut resp.response).map_err(kv::Error::from)
+    })
 }
 
 impl<E, S> Display for RaftKv<E, S>
@@ -361,6 +554,12 @@ where
 
     fn kv_engine(&self) -> Option<E> {
         Some(self.engine.clone())
+    }
+
+    type RaftExtension = RouterExtension<E, S>;
+
+    fn raft_extension(&self) -> &Self::RaftExtension {
+        &self.extension
     }
 
     fn modify_on_kv_engine(
@@ -515,6 +714,7 @@ where
         }
         if res.is_ok() {
             res = self
+                .extension
                 .router
                 .send_command(cmd, cb, extra_opts)
                 .map_err(KvError::from);
@@ -580,7 +780,7 @@ where
     }
 
     fn release_snapshot(&mut self) {
-        self.router.release_snapshot_cache();
+        self.extension.router.release_snapshot_cache();
     }
 
     fn get_mvcc_properties_cf(
@@ -602,6 +802,26 @@ where
                 tx.schedule(txn_extra);
             }
         }
+    }
+
+    fn hint_change_in_range(&self, start_key: Vec<u8>, end_key: Vec<u8>) {
+        self.extension
+            .router
+            .send_store_msg(StoreMsg::ClearRegionSizeInRange { start_key, end_key })
+            .unwrap_or_else(|e| {
+                // Warn and ignore it.
+                warn!("unsafe destroy range: failed sending ClearRegionSizeInRange"; "err" => ?e);
+            });
+    }
+
+    fn start_flashback(&self, ctx: &Context) -> BoxFuture<'static, kv::Result<()>> {
+        let req = new_flashback_req(ctx, AdminCmdType::PrepareFlashback);
+        exec_admin(&self.extension.router, req)
+    }
+
+    fn end_flashback(&self, ctx: &Context) -> BoxFuture<'static, kv::Result<()>> {
+        let req = new_flashback_req(ctx, AdminCmdType::FinishFlashback);
+        exec_admin(&self.extension.router, req)
     }
 }
 
