@@ -11,11 +11,11 @@ pub use self::response_channel::FlushChannel;
 #[cfg(feature = "testexport")]
 pub use self::response_channel::FlushSubscriber;
 pub use self::{
-    imp::RaftRouter,
+    imp::{RaftRouter, StoreRouterCompactedEventSender},
     internal_message::ApplyRes,
     message::{PeerMsg, PeerTick, RaftRequest, StoreMsg, StoreTick},
     response_channel::{
-        CmdResChannel, DebugInfoChannel, DebugInfoSubscriber, QueryResChannel, QueryResult,
-        ReadResponse,
+        CmdResChannel, CmdResSubscriber, DebugInfoChannel, DebugInfoSubscriber, QueryResChannel,
+        QueryResult, ReadResponse,
     },
 };

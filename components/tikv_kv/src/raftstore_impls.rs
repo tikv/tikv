@@ -3,7 +3,8 @@
 use std::{num::NonZeroU64, sync::Arc};
 
 use engine_traits::{CfName, IterOptions, Peekable, ReadOptions, Snapshot};
-use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
+use keys::DataKey;
+use kvproto::{errorpb, kvrpcpb::ExtraOp as TxnExtraOp};
 use pd_client::BucketMeta;
 use raftstore::{
     store::{RegionIterator, RegionSnapshot, TxnExt},
@@ -18,15 +19,15 @@ use crate::{
 
 impl From<RaftServerError> for Error {
     fn from(e: RaftServerError) -> Error {
-        Error(Box::new(ErrorInner::Request(e.into())))
+        Error(Box::new(ErrorInner::Request(errorpb::Error::from(e))))
     }
 }
 
-pub struct RegionSnapshotExt<'a, S: Snapshot> {
-    snapshot: &'a RegionSnapshot<S>,
+pub struct RegionSnapshotExt<'a, S: Snapshot, K: DataKey> {
+    snapshot: &'a RegionSnapshot<S, K>,
 }
 
-impl<'a, S: Snapshot> SnapshotExt for RegionSnapshotExt<'a, S> {
+impl<'a, S: Snapshot, K: DataKey> SnapshotExt for RegionSnapshotExt<'a, S, K> {
     #[inline]
     fn get_data_version(&self) -> Option<u64> {
         self.snapshot.get_apply_index().ok()
@@ -57,9 +58,9 @@ impl<'a, S: Snapshot> SnapshotExt for RegionSnapshotExt<'a, S> {
     }
 }
 
-impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
-    type Iter = RegionIterator<S>;
-    type Ext<'a> = RegionSnapshotExt<'a, S>;
+impl<S: Snapshot, K: DataKey + 'static> EngineSnapshot for RegionSnapshot<S, K> {
+    type Iter = RegionIterator<S, K>;
+    type Ext<'a> = RegionSnapshotExt<'a, S, K>;
 
     fn get(&self, key: &Key) -> kv::Result<Option<Value>> {
         fail_point!("raftkv_snapshot_get", |_| Err(box_err!(
@@ -102,12 +103,12 @@ impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
         Some(self.get_end_key())
     }
 
-    fn ext(&self) -> RegionSnapshotExt<'_, S> {
+    fn ext(&self) -> RegionSnapshotExt<'_, S, K> {
         RegionSnapshotExt { snapshot: self }
     }
 }
 
-impl<S: Snapshot> EngineIterator for RegionIterator<S> {
+impl<S: Snapshot, K: DataKey> EngineIterator for RegionIterator<S, K> {
     fn next(&mut self) -> kv::Result<bool> {
         RegionIterator::next(self).map_err(KvError::from)
     }

@@ -33,7 +33,7 @@ use pd_client::PdClient;
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionInfoAccessor},
     errors::Error as RaftError,
-    router::{LocalReadRouter, RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter},
+    router::{LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter},
     store::{
         fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
         msg::RaftCmdExtraOpts,
@@ -52,7 +52,6 @@ use tikv::{
     import::{ImportSstService, SstImporter},
     read_pool::ReadPool,
     server::{
-        create_raft_storage,
         gc_worker::GcWorker,
         load_statistics::ThreadLoadPool,
         lock_manager::LockManager,
@@ -64,9 +63,9 @@ use tikv::{
     },
     storage::{
         self,
-        kv::SnapContext,
+        kv::{raft_extension, SnapContext},
         txn::flow_controller::{EngineFlowController, FlowController},
-        Engine,
+        Engine, Storage,
     },
 };
 use tikv_util::{
@@ -83,9 +82,10 @@ use txn_types::TxnExtraScheduler;
 use super::*;
 use crate::Config;
 
+type SimulateRaftExtension = <SimulateEngine as Engine>::RaftExtension;
 type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter<RocksEngine, RaftTestEngine>>;
 type SimulateServerTransport =
-    SimulateTransport<ServerTransport<SimulateStoreTransport, PdStoreAddrResolver, RocksEngine>>;
+    SimulateTransport<ServerTransport<SimulateRaftExtension, PdStoreAddrResolver>>;
 
 pub type SimulateEngine = RaftKv<RocksEngine, SimulateStoreTransport>;
 
@@ -125,12 +125,12 @@ impl StoreAddrResolver for AddressMap {
 
 struct ServerMeta {
     node: Node<TestPdClient, RocksEngine, RaftTestEngine>,
-    server: Server<SimulateStoreTransport, PdStoreAddrResolver, SimulateEngine>,
+    server: Server<SimulateRaftExtension, PdStoreAddrResolver>,
     sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
     raw_router: RaftRouter<RocksEngine, RaftTestEngine>,
     raw_apply_router: ApplyRouter<RocksEngine>,
-    gc_worker: GcWorker<RaftKv<RocksEngine, SimulateStoreTransport>, SimulateStoreTransport>,
+    gc_worker: GcWorker<RaftKv<RocksEngine, SimulateStoreTransport>>,
     rts_worker: Option<LazyWorker<resolved_ts::Task<RocksSnapshot>>>,
     rsmeter_cleanup: Box<dyn FnOnce()>,
 }
@@ -152,7 +152,7 @@ pub struct ServerCluster {
     snap_paths: HashMap<u64, TempDir>,
     snap_mgrs: HashMap<u64, SnapManager>,
     pd_client: Arc<TestPdClient>,
-    raft_client: RaftClient<AddressMap, RaftStoreBlackHole, RocksEngine>,
+    raft_client: RaftClient<AddressMap, raft_extension::NotSupported>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     env: Arc<Environment>,
     pub causal_ts_providers: HashMap<u64, Arc<CausalTsProviderImpl>>,
@@ -176,7 +176,7 @@ impl ServerCluster {
             Arc::default(),
             security_mgr.clone(),
             map.clone(),
-            RaftStoreBlackHole,
+            raft_extension::NotSupported,
             worker.scheduler(),
             Arc::new(ThreadLoadPool::with_threshold(usize::MAX)),
         );
@@ -218,7 +218,7 @@ impl ServerCluster {
     pub fn get_gc_worker(
         &self,
         node_id: u64,
-    ) -> &GcWorker<RaftKv<RocksEngine, SimulateStoreTransport>, SimulateStoreTransport> {
+    ) -> &GcWorker<RaftKv<RocksEngine, SimulateStoreTransport>> {
         &self.metas.get(&node_id).unwrap().gc_worker
     }
 
@@ -334,7 +334,6 @@ impl ServerCluster {
         let (tx, _rx) = std::sync::mpsc::channel();
         let mut gc_worker = GcWorker::new(
             engine.clone(),
-            sim_router.clone(),
             tx,
             cfg.gc.clone(),
             Default::default(),
@@ -356,7 +355,7 @@ impl ServerCluster {
             let rts_endpoint = resolved_ts::Endpoint::new(
                 &cfg.resolved_ts,
                 rts_worker.scheduler(),
-                raft_router.clone(),
+                raft_router,
                 store_meta.clone(),
                 self.pd_client.clone(),
                 concurrency_manager.clone(),
@@ -405,7 +404,7 @@ impl ServerCluster {
             cfg.quota.max_delay_duration,
             cfg.quota.enable_auto_tune,
         ));
-        let store = create_raft_storage::<_, _, _, F, _>(
+        let store = Storage::<_, _, F>::from_engine(
             engine,
             &cfg.storage,
             storage_read_pool.handle(),
@@ -448,8 +447,11 @@ impl ServerCluster {
         let deadlock_service = lock_mgr.deadlock_service();
 
         // Create pd client, snapshot manager, server.
-        let (resolver, state) =
-            resolve::new_resolver(Arc::clone(&self.pd_client), &bg_worker, router.clone());
+        let (resolver, state) = resolve::new_resolver(
+            Arc::clone(&self.pd_client),
+            &bg_worker,
+            store.get_engine().raft_extension().clone(),
+        );
         let snap_mgr = SnapManagerBuilder::default()
             .max_write_bytes_per_sec(cfg.server.snap_max_write_bytes_per_sec.0 as i64)
             .max_total_size(cfg.server.snap_max_total_size.0)
@@ -487,7 +489,7 @@ impl ServerCluster {
         let debug_service = DebugService::new(
             engines.clone(),
             debug_thread_handle,
-            raft_router,
+            store.get_engine().raft_extension().clone(),
             ConfigController::default(),
         );
 
@@ -524,7 +526,7 @@ impl ServerCluster {
                 store.clone(),
                 copr.clone(),
                 copr_v2.clone(),
-                sim_router.clone(),
+                store.get_engine().raft_extension().clone(),
                 resolver.clone(),
                 snap_mgr.clone(),
                 gc_worker.clone(),

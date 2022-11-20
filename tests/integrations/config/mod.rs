@@ -32,7 +32,7 @@ use tikv::{
         lock_manager::Config as PessimisticTxnConfig, Config as ServerConfig,
     },
     storage::config::{
-        BlockCacheConfig, Config as StorageConfig, FlowControlConfig, IoRateLimitConfig,
+        BlockCacheConfig, Config as StorageConfig, EngineType, FlowControlConfig, IoRateLimitConfig,
     },
 };
 use tikv_util::config::{LogFormat, ReadableDuration, ReadableSize};
@@ -665,6 +665,7 @@ fn test_serde_custom_tikv_config() {
     raft_engine_config.memory_limit = Some(RaftEngineReadableSize::gb(1));
     value.storage = StorageConfig {
         data_dir: "/var".to_owned(),
+        engine: EngineType::RaftKvV2,
         gc_ratio_threshold: 1.2,
         max_key_size: 4096,
         scheduler_concurrency: 123,

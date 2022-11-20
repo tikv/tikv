@@ -18,6 +18,7 @@ use engine_traits::{
     CfName, Engines, IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions,
 };
 use file_system::IoRateLimiter;
+use futures::{channel::oneshot, Future};
 use kvproto::{kvrpcpb::Context, metapb, raft_cmdpb};
 use raftstore::coprocessor::CoprocessorHost;
 use tempfile::{Builder, TempDir};
@@ -25,9 +26,10 @@ use tikv_util::worker::{Runnable, Scheduler, Worker};
 use txn_types::{Key, Value};
 
 use super::{
-    write_modifies, Callback, DummySnapshotExt, Engine, Error, ErrorInner, ExtCallback,
+    write_modifies, Callback, DummySnapshotExt, Engine, Error, ErrorInner,
     Iterator as EngineIterator, Modify, Result, SnapContext, Snapshot, WriteData,
 };
+use crate::{raft_extension, FutureAsSubscriber, OnReturnCallback, WriteSubscriber};
 
 // Duplicated in test_engine_builder
 const TEMP_DIR: &str = "";
@@ -78,12 +80,26 @@ impl Drop for RocksEngineCore {
 ///
 /// This is intended for **testing use only**.
 #[derive(Clone)]
-pub struct RocksEngine {
+pub struct RocksEngine<RE = raft_extension::NotSupported> {
     core: Arc<Mutex<RocksEngineCore>>,
     sched: Scheduler<Task>,
     engines: Engines<BaseRocksEngine, BaseRocksEngine>,
     not_leader: Arc<AtomicBool>,
     coprocessor: CoprocessorHost<BaseRocksEngine>,
+    raft_extension: RE,
+}
+
+impl<RE> RocksEngine<RE> {
+    pub fn with_new_extension<NRE>(self, ext: NRE) -> RocksEngine<NRE> {
+        RocksEngine {
+            core: self.core,
+            sched: self.sched,
+            engines: self.engines,
+            not_leader: self.not_leader,
+            coprocessor: self.coprocessor,
+            raft_extension: ext,
+        }
+    }
 }
 
 impl RocksEngine {
@@ -123,9 +139,12 @@ impl RocksEngine {
             not_leader: Arc::new(AtomicBool::new(false)),
             engines,
             coprocessor: CoprocessorHost::default(),
+            raft_extension: raft_extension::NotSupported,
         })
     }
+}
 
+impl<RE> RocksEngine<RE> {
     pub fn trigger_not_leader(&self) {
         self.not_leader.store(true, Ordering::SeqCst);
     }
@@ -187,13 +206,13 @@ impl RocksEngine {
     }
 }
 
-impl Display for RocksEngine {
+impl<RE> Display for RocksEngine<RE> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RocksDB")
     }
 }
 
-impl Debug for RocksEngine {
+impl<RE> Debug for RocksEngine<RE> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -203,12 +222,17 @@ impl Debug for RocksEngine {
     }
 }
 
-impl Engine for RocksEngine {
+impl<RE: raft_extension::RaftExtension + 'static> Engine for RocksEngine<RE> {
     type Snap = Arc<RocksSnapshot>;
     type Local = BaseRocksEngine;
 
     fn kv_engine(&self) -> Option<BaseRocksEngine> {
         Some(self.engines.kv.clone())
+    }
+
+    type RaftExtension = RE;
+    fn raft_extension(&self) -> &RE {
+        &self.raft_extension
     }
 
     fn modify_on_kv_engine(&self, region_modifies: HashMap<u64, Vec<Modify>>) -> Result<()> {
@@ -223,48 +247,71 @@ impl Engine for RocksEngine {
         Ok(())
     }
 
-    fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> Result<()> {
-        self.async_write_ext(ctx, batch, cb, None, None)
-    }
-
-    fn async_write_ext(
+    type WriteSubscriber = impl WriteSubscriber;
+    fn async_write(
         &self,
-        _: &Context,
+        _ctx: &Context,
         batch: WriteData,
-        cb: Callback<()>,
-        proposed_cb: Option<ExtCallback>,
-        committed_cb: Option<ExtCallback>,
-    ) -> Result<()> {
-        fail_point!("rockskv_async_write", |_| Err(box_err!("write failed")));
+        _subscribe_event: u8,
+        on_return: Option<OnReturnCallback<()>>,
+    ) -> Self::WriteSubscriber {
+        let rx = (|| {
+            fail_point!("rockskv_async_write", |_| Err(box_err!("write failed")));
 
-        if batch.modifies.is_empty() {
-            return Err(Error::from(ErrorInner::EmptyRequest));
-        }
+            if batch.modifies.is_empty() {
+                return Err(Error::from(ErrorInner::EmptyRequest));
+            }
 
-        let batch = self.pre_propose(batch)?;
+            let batch = self.pre_propose(batch)?;
 
-        if let Some(cb) = proposed_cb {
-            cb();
+            let (tx, rx) = oneshot::channel();
+            box_try!(self.sched.schedule(Task::Write(
+                batch.modifies,
+                Box::new(move |mut res| {
+                    if let Some(cb) = on_return {
+                        cb(&mut res);
+                    }
+                    let _ = tx.send(res);
+                })
+            )));
+            Ok(rx)
+        })();
+
+        let wait_result = rx.is_ok();
+        FutureAsSubscriber {
+            f: async move {
+                match rx {
+                    Ok(rx) => rx.await.ok(),
+                    Err(e) => Some(Err(e)),
+                }
+            },
+            proposed: wait_result,
+            committed: wait_result,
         }
-        if let Some(cb) = committed_cb {
-            cb();
-        }
-        box_try!(self.sched.schedule(Task::Write(batch.modifies, cb)));
-        Ok(())
     }
 
-    fn async_snapshot(&mut self, _: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()> {
-        fail_point!("rockskv_async_snapshot", |_| Err(box_err!(
-            "snapshot failed"
-        )));
-        fail_point!("rockskv_async_snapshot_not_leader", |_| {
-            Err(self.not_leader_error())
-        });
-        if self.not_leader.load(Ordering::SeqCst) {
-            return Err(self.not_leader_error());
+    type SnapshotRes = impl Future<Output = Result<Self::Snap>>;
+    fn async_snapshot(&mut self, _: SnapContext<'_>) -> Self::SnapshotRes {
+        let res = (|| {
+            fail_point!("rockskv_async_snapshot", |_| Err(box_err!(
+                "snapshot failed"
+            )));
+            fail_point!("rockskv_async_snapshot_not_leader", |_| {
+                Err(self.not_leader_error())
+            });
+            if self.not_leader.load(Ordering::SeqCst) {
+                return Err(self.not_leader_error());
+            }
+            let (tx, rx) = oneshot::channel();
+            box_try!(self.sched.schedule(Task::Snapshot(Box::new(move |s| {
+                let _ = tx.send(s);
+            }))));
+            Ok(rx)
+        })();
+        async move {
+            res?.await
+                .map_err(|cancel| Error::from(ErrorInner::Other(box_err!(cancel))))?
         }
-        box_try!(self.sched.schedule(Task::Snapshot(cb)));
-        Ok(())
     }
 }
 

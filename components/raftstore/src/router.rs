@@ -105,7 +105,7 @@ where
     cmd.extra_opts = extra_opts;
     router
         .send(cmd)
-        .map_err(|e| handle_send_error(region_id, e))
+        .map_err(|e| handle_send_error(region_id, &e))
 }
 
 pub trait LocalReadRouter<EK>: Send + Clone
@@ -258,7 +258,7 @@ impl<EK: KvEngine, ER: RaftEngine> LocalReadRouter<EK> for ServerRaftStoreRouter
 }
 
 #[inline]
-pub fn handle_send_error<T>(region_id: u64, e: TrySendError<T>) -> RaftStoreError {
+pub fn handle_send_error<T>(region_id: u64, e: &TrySendError<T>) -> RaftStoreError {
     match e {
         TrySendError::Full(_) => RaftStoreError::Transport(DiscardReason::Full),
         TrySendError::Disconnected(_) => RaftStoreError::RegionNotFound(region_id),
@@ -269,10 +269,16 @@ impl<EK: KvEngine, ER: RaftEngine> RaftStoreRouter<EK> for RaftRouter<EK, ER> {
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
         let region_id = msg.get_region_id();
         self.send_raft_message(msg)
-            .map_err(|e| handle_send_error(region_id, e))
+            .map_err(|e| handle_send_error(region_id, &e))
     }
 
     fn broadcast_normal(&self, msg_gen: impl FnMut() -> PeerMsg<EK>) {
         batch_system::Router::broadcast_normal(self, msg_gen)
     }
+}
+
+// Limitation of Rust: rust-lang/rust#56209, the trait has to add a generic
+// type.
+pub trait GenericRaftStoreRouter<EK: KvEngine> {
+    fn hint_size_changes_in_range(&self, start_key: Vec<u8>, end_key: Vec<u8>);
 }

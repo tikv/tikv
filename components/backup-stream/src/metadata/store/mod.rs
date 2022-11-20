@@ -10,10 +10,11 @@ pub mod slash_etc;
 pub use slash_etc::SlashEtcStore;
 
 pub mod etcd;
-use std::{cmp::Ordering, future::Future, pin::Pin, time::Duration};
+use std::{cmp::Ordering, pin::Pin, time::Duration};
 
 use async_trait::async_trait;
 pub use etcd::EtcdStore;
+use futures::future::BoxFuture;
 use tokio_stream::Stream;
 
 // ==== Generic interface definition ====
@@ -21,7 +22,6 @@ use super::keys::{KeyValue, MetaKey};
 use crate::errors::Result;
 
 pub type BoxStream<T> = Pin<Box<dyn Stream<Item = T> + Send>>;
-pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
 #[derive(Debug, Default)]
 pub struct Transaction {
@@ -177,7 +177,7 @@ pub struct Subscription<Event> {
     pub stream: BoxStream<Event>,
     /// Futures in rust are lazy.
     /// This is actually `async FnOnce()`.
-    pub cancel: BoxFuture<()>,
+    pub cancel: BoxFuture<'static, ()>,
 }
 
 /// The cancelable stream of kv events.

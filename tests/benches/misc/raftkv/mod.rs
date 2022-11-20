@@ -25,7 +25,7 @@ use tempfile::{Builder, TempDir};
 use tikv::{
     server::raftkv::{CmdRes, RaftKv},
     storage::{
-        kv::{Callback as EngineCallback, Modify, SnapContext, WriteData},
+        kv::{Callback as EngineCallback, Modify, SnapContext, WriteData, BASIC_EVENT},
         Engine,
     },
 };
@@ -191,14 +191,15 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(leader);
     b.iter(|| {
-        let on_finished: EngineCallback<RegionSnapshot<RocksSnapshot>> = Box::new(move |results| {
-            let _ = test::black_box(results);
-        });
         let snap_ctx = SnapContext {
             pb_ctx: &ctx,
             ..Default::default()
         };
-        kv.async_snapshot(snap_ctx, on_finished).unwrap();
+        let f = kv.async_snapshot(snap_ctx);
+        futures::executor::block_on(async move {
+            let res = f.await;
+            let _ = test::black_box(res);
+        });
     });
 }
 
@@ -224,17 +225,17 @@ fn bench_async_write(b: &mut test::Bencher) {
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(leader);
     b.iter(|| {
-        let on_finished: EngineCallback<()> = Box::new(|_| {
+        let on_finished = Box::new(|_: &mut _| {
             test::black_box(());
         });
-        kv.async_write(
+        let _ = kv.async_write(
             &ctx,
             WriteData::from_modifies(vec![Modify::Delete(
                 CF_DEFAULT,
                 Key::from_encoded(b"fooo".to_vec()),
             )]),
-            on_finished,
-        )
-        .unwrap();
+            BASIC_EVENT,
+            Some(on_finished),
+        );
     });
 }

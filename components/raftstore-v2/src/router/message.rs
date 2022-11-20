@@ -195,7 +195,7 @@ pub enum StoreMsg {
     RaftMessage(Box<RaftMessage>),
     SplitInit(Box<SplitInit>),
     Tick(StoreTick),
-    Start,
+    Start(u64),
 }
 
 impl fmt::Debug for StoreMsg {
@@ -204,7 +204,7 @@ impl fmt::Debug for StoreMsg {
             StoreMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
             StoreMsg::SplitInit(_) => write!(fmt, "Split initialization"),
             StoreMsg::Tick(tick) => write!(fmt, "StoreTick {:?}", tick),
-            StoreMsg::Start => write!(fmt, "Start store"),
+            StoreMsg::Start(store_id) => write!(fmt, "Start store {}", store_id),
         }
     }
 }

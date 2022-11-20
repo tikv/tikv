@@ -227,11 +227,8 @@ impl RunningState {
                 .unwrap();
         }
 
-        let (router, mut system) = create_store_batch_system::<KvTestEngine, RaftTestEngine>(
-            &cfg.value(),
-            store_id,
-            logger.clone(),
-        );
+        let (router, mut system) =
+            create_store_batch_system::<KvTestEngine, RaftTestEngine>(&cfg.value(), logger.clone());
 
         let router = RaftRouter::new(store_id, router);
         let store_meta = router.store_meta().clone();

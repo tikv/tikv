@@ -14,13 +14,15 @@ use std::{
 use collections::HashMap;
 use engine_panic::PanicEngine;
 use engine_traits::{CfName, IterOptions, ReadOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use futures::Future;
 use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};
 
 use super::SnapContext;
 use crate::{
-    Callback as EngineCallback, DummySnapshotExt, Engine, Error as EngineError,
-    ErrorInner as EngineErrorInner, Iterator, Modify, Result as EngineResult, Snapshot, WriteData,
+    DummySnapshotExt, Engine, Error as EngineError, ErrorInner as EngineErrorInner,
+    FutureAsSubscriber, Iterator, Modify, OnReturnCallback, Result as EngineResult, Snapshot,
+    WriteData, WriteSubscriber,
 };
 
 type RwLockTree = RwLock<BTreeMap<Key, Value>>;
@@ -86,29 +88,36 @@ impl Engine for BTreeEngine {
         unimplemented!();
     }
 
+    type WriteSubscriber = impl WriteSubscriber;
     fn async_write(
         &self,
         _ctx: &Context,
         batch: WriteData,
-        cb: EngineCallback<()>,
-    ) -> EngineResult<()> {
-        if batch.modifies.is_empty() {
-            return Err(EngineError::from(EngineErrorInner::EmptyRequest));
-        }
-        cb(write_modifies(self, batch.modifies));
+        _subscribed_event: u8,
+        on_return: Option<OnReturnCallback<()>>,
+    ) -> Self::WriteSubscriber {
+        let mut res = if !batch.modifies.is_empty() {
+            write_modifies(self, batch.modifies)
+        } else {
+            Err(EngineError::from(EngineErrorInner::EmptyRequest))
+        };
 
-        Ok(())
+        if let Some(cb) = on_return {
+            cb(&mut res);
+        }
+
+        FutureAsSubscriber {
+            f: futures::future::ready(Some(res)),
+            proposed: false,
+            committed: false,
+        }
     }
 
+    type SnapshotRes = impl Future<Output = EngineResult<Self::Snap>>;
     /// warning: It returns a fake snapshot whose content will be affected by
     /// the later modifies!
-    fn async_snapshot(
-        &mut self,
-        _ctx: SnapContext<'_>,
-        cb: EngineCallback<Self::Snap>,
-    ) -> EngineResult<()> {
-        cb(Ok(BTreeEngineSnapshot::new(self)));
-        Ok(())
+    fn async_snapshot(&mut self, _ctx: SnapContext<'_>) -> Self::SnapshotRes {
+        futures::future::ok(BTreeEngineSnapshot::new(self))
     }
 }
 

@@ -6,10 +6,14 @@ use std::{
 };
 
 use collections::HashMap;
+use futures::Future;
 use kvproto::kvrpcpb::Context;
 
 use super::Result;
-use crate::{Callback, Engine, ExtCallback, Modify, RocksEngine, SnapContext, WriteData};
+use crate::{
+    Engine, Modify, OnReturnCallback, RocksEngine, SnapContext, WriteData, WriteSubscriber,
+    SUBSCRIBE_COMMITTED, SUBSCRIBE_PROPOSED,
+};
 
 /// A mock engine is a simple wrapper around RocksEngine
 /// but with the ability to assert the modifies,
@@ -82,6 +86,35 @@ impl ExpectedWrite {
     }
 }
 
+pub struct MockSubscriber<S> {
+    sub: S,
+    expected_proposed: Option<bool>,
+    expected_committed: Option<bool>,
+}
+
+impl<S: WriteSubscriber + 'static> WriteSubscriber for MockSubscriber<S> {
+    type ProposedWaiter<'a> = S::ProposedWaiter<'a>;
+    fn wait_proposed(&mut self) -> Self::ProposedWaiter<'_> {
+        assert_ne!(self.expected_proposed, Some(false));
+        self.expected_proposed = Some(false);
+        self.sub.wait_proposed()
+    }
+
+    type CommittedWaiter<'a> = S::CommittedWaiter<'a>;
+    fn wait_committed(&mut self) -> Self::CommittedWaiter<'_> {
+        assert_ne!(self.expected_committed, Some(false));
+        self.expected_committed = Some(false);
+        self.sub.wait_committed()
+    }
+
+    type ResultWaiter = S::ResultWaiter;
+    fn result(self) -> Self::ResultWaiter {
+        assert_ne!(self.expected_committed, Some(true));
+        assert_ne!(self.expected_proposed, Some(true));
+        self.sub.result()
+    }
+}
+
 /// `ExpectedWriteList` represents a list of writes expected to write to the
 /// engine
 struct ExpectedWriteList(Mutex<LinkedList<ExpectedWrite>>);
@@ -145,6 +178,24 @@ fn check_expected_write(
     }
 }
 
+fn check_callback(
+    expected_writes: &LinkedList<ExpectedWrite>,
+    f: impl Fn(&ExpectedWrite) -> Option<bool>,
+) -> Option<bool> {
+    expected_writes.iter().fold(None, |acc, w| {
+        let expected = f(w);
+        match (acc, expected) {
+            (None, None) => None,
+            (None, Some(b)) => Some(b),
+            (Some(b), None) => Some(b),
+            (Some(a), Some(b)) => {
+                assert_eq!(a, b, "expected callback not match");
+                Some(a)
+            }
+        }
+    })
+}
+
 impl Engine for MockEngine {
     type Snap = <RocksEngine as Engine>::Snap;
     type Local = <RocksEngine as Engine>::Local;
@@ -157,35 +208,45 @@ impl Engine for MockEngine {
         self.base.modify_on_kv_engine(region_modifies)
     }
 
-    fn async_snapshot(&mut self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()> {
-        self.base.async_snapshot(ctx, cb)
+    type SnapshotRes = impl Future<Output = Result<Self::Snap>>;
+    fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes {
+        self.base.async_snapshot(ctx)
     }
 
-    fn async_write(&self, ctx: &Context, batch: WriteData, write_cb: Callback<()>) -> Result<()> {
-        self.async_write_ext(ctx, batch, write_cb, None, None)
-    }
-
-    fn async_write_ext(
+    type WriteSubscriber = MockSubscriber<<RocksEngine as Engine>::WriteSubscriber>;
+    fn async_write(
         &self,
         ctx: &Context,
         batch: WriteData,
-        write_cb: Callback<()>,
-        proposed_cb: Option<ExtCallback>,
-        committed_cb: Option<ExtCallback>,
-    ) -> Result<()> {
-        if let Some(expected_modifies) = self.expected_modifies.as_ref() {
-            let mut expected_writes = expected_modifies.0.lock().unwrap();
-            check_expected_write(
-                &mut expected_writes,
-                &batch.modifies,
-                proposed_cb.is_some(),
-                committed_cb.is_some(),
-            );
-        }
+        subscribed_event: u8,
+        on_return: Option<OnReturnCallback<()>>,
+    ) -> Self::WriteSubscriber {
+        let (expected_proposed, expected_committed) =
+            if let Some(expected_modifies) = self.expected_modifies.as_ref() {
+                let mut expected_writes = expected_modifies.0.lock().unwrap();
+                check_expected_write(
+                    &mut expected_writes,
+                    &batch.modifies,
+                    subscribed_event & SUBSCRIBE_PROPOSED != 0,
+                    subscribed_event & SUBSCRIBE_COMMITTED != 0,
+                );
+                (
+                    check_callback(&expected_writes, |w| w.use_proposed_cb),
+                    check_callback(&expected_writes, |w| w.use_committed_cb),
+                )
+            } else {
+                (None, None)
+            };
         let mut last_modifies = self.last_modifies.lock().unwrap();
         last_modifies.push(batch.modifies.clone());
-        self.base
-            .async_write_ext(ctx, batch, write_cb, proposed_cb, committed_cb)
+        let sub = self
+            .base
+            .async_write(ctx, batch, subscribed_event, on_return);
+        MockSubscriber {
+            sub,
+            expected_proposed,
+            expected_committed,
+        }
     }
 }
 

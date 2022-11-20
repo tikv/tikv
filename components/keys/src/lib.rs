@@ -7,7 +7,7 @@
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
-use std::mem;
+use std::{borrow::Cow, mem};
 
 use byteorder::{BigEndian, ByteOrder};
 use kvproto::metapb::Region;
@@ -197,6 +197,74 @@ pub fn region_meta_prefix(region_id: u64) -> [u8; 10] {
 
 pub fn region_state_key(region_id: u64) -> [u8; 11] {
     make_region_meta_key(region_id, REGION_STATE_SUFFIX)
+}
+
+pub trait DataKey: Send + Sync {
+    fn validate(key: &[u8]) -> bool;
+    fn key(key: &[u8]) -> Cow<'_, [u8]>;
+    fn replace_encode(key: &[u8], buffer: &mut Vec<u8>);
+    fn origin(key: &[u8]) -> &[u8];
+}
+
+#[derive(Debug)]
+pub struct Prefix;
+
+impl DataKey for Prefix {
+    #[inline]
+    fn validate(key: &[u8]) -> bool {
+        key.starts_with(DATA_PREFIX_KEY)
+    }
+
+    #[inline]
+    fn key(key: &[u8]) -> Cow<'_, [u8]> {
+        let mut v = Vec::with_capacity(DATA_PREFIX_KEY.len() + key.len());
+        v.extend_from_slice(DATA_PREFIX_KEY);
+        v.extend_from_slice(key);
+        Cow::Owned(v)
+    }
+
+    #[inline]
+    fn replace_encode(key: &[u8], buffer: &mut Vec<u8>) {
+        buffer.clear();
+        buffer.extend_from_slice(DATA_PREFIX_KEY);
+        buffer.extend_from_slice(key);
+    }
+
+    #[inline]
+    fn origin(key: &[u8]) -> &[u8] {
+        assert!(
+            validate_data_key(key),
+            "invalid data key {}",
+            &log_wrappers::Value::key(key)
+        );
+        &key[DATA_PREFIX_KEY.len()..]
+    }
+}
+
+#[derive(Debug)]
+pub struct NoPrefix;
+
+impl DataKey for NoPrefix {
+    #[inline]
+    fn validate(_: &[u8]) -> bool {
+        true
+    }
+
+    #[inline]
+    fn key(key: &[u8]) -> Cow<'_, [u8]> {
+        Cow::Borrowed(key)
+    }
+
+    #[inline]
+    fn replace_encode(key: &[u8], buffer: &mut Vec<u8>) {
+        buffer.clear();
+        buffer.extend_from_slice(key);
+    }
+
+    #[inline]
+    fn origin(key: &[u8]) -> &[u8] {
+        key
+    }
 }
 
 pub fn validate_data_key(key: &[u8]) -> bool {

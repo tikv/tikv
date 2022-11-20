@@ -5,7 +5,7 @@ use criterion::{black_box, BatchSize, Bencher, Criterion};
 use kvproto::kvrpcpb::{AssertionLevel, Context, PrewriteRequestPessimisticAction::*};
 use test_util::KvGenerator;
 use tikv::storage::{
-    kv::{Engine, WriteData},
+    kv::{Engine, WriteData, BASIC_EVENT},
     mvcc::{self, MvccReader, MvccTxn, SnapshotReader},
     txn::{cleanup, commit, prewrite, CommitKind, TransactionKind, TransactionProperties},
 };
@@ -60,7 +60,7 @@ where
         .unwrap();
     }
     let write_data = WriteData::from_modifies(txn.into_modifies());
-    let _ = engine.async_write(&ctx, write_data, Box::new(move |_| {}));
+    let _ = engine.async_write(&ctx, write_data, BASIC_EVENT, None);
     let keys: Vec<Key> = kvs.iter().map(|(k, _)| Key::from_raw(k)).collect();
     let snapshot = engine.snapshot(Default::default()).unwrap();
     (snapshot, keys)

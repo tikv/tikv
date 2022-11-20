@@ -4,7 +4,6 @@
 mod profile;
 use std::{
     error::Error as StdError,
-    marker::PhantomData,
     net::SocketAddr,
     path::PathBuf,
     pin::Pin,
@@ -16,7 +15,6 @@ use std::{
 
 use async_stream::stream;
 use collections::HashMap;
-use engine_traits::KvEngine;
 use flate2::{write::GzEncoder, Compression};
 use futures::{
     compat::{Compat01As03, Stream01CompatExt},
@@ -45,10 +43,10 @@ pub use profile::{
     read_file, start_one_cpu_profile, start_one_heap_profile,
 };
 use prometheus::TEXT_FORMAT;
-use raftstore::store::{transport::CasualRouter, CasualMessage};
 use regex::Regex;
 use security::{self, SecurityConfig};
 use serde_json::Value;
+use tikv_kv::raft_extension::RaftExtension;
 use tikv_util::{
     logger::set_log_level,
     metrics::{dump, dump_to},
@@ -64,6 +62,7 @@ use tokio_openssl::SslStream;
 use crate::{
     config::{ConfigController, LogLevel},
     server::Result,
+    storage::{self, errors::extract_region_error},
     tikv_util::sys::thread::ThreadBuildWrapper,
 };
 
@@ -82,7 +81,7 @@ struct LogLevelRequest {
     pub log_level: LogLevel,
 }
 
-pub struct StatusServer<E, R> {
+pub struct StatusServer<R> {
     thread_pool: Runtime,
     tx: Sender<()>,
     rx: Option<Receiver<()>>,
@@ -91,12 +90,10 @@ pub struct StatusServer<E, R> {
     router: R,
     security_config: Arc<SecurityConfig>,
     store_path: PathBuf,
-    _snap: PhantomData<E>,
 }
 
-impl<E, R> StatusServer<E, R>
+impl<R> StatusServer<R>
 where
-    E: 'static,
     R: 'static + Send,
 {
     pub fn new(
@@ -124,7 +121,6 @@ where
             router,
             security_config,
             store_path,
-            _snap: PhantomData,
         })
     }
 
@@ -423,10 +419,9 @@ where
     }
 }
 
-impl<E, R> StatusServer<E, R>
+impl<R> StatusServer<R>
 where
-    E: KvEngine,
-    R: 'static + Send + CasualRouter<E> + Clone,
+    R: 'static + RaftExtension,
 {
     pub async fn dump_region_meta(req: Request<Body>, router: R) -> hyper::Result<Response<Body>> {
         lazy_static! {
@@ -451,33 +446,17 @@ where
                 ));
             }
         };
-        let (tx, rx) = oneshot::channel();
-        match router.send(
-            id,
-            CasualMessage::AccessPeer(Box::new(move |meta| {
-                if let Err(meta) = tx.send(meta) {
-                    error!("receiver dropped, region meta: {:?}", meta)
-                }
-            })),
-        ) {
-            Ok(_) => (),
-            Err(raftstore::Error::RegionNotFound(_)) => {
-                return not_found(format!("region({}) not found", id));
-            }
-            Err(err) => {
-                return Ok(make_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("channel pending or disconnect: {}", err),
-                ));
-            }
-        }
-
-        let meta = match rx.await {
+        let meta = router.query_region(id);
+        let meta = match meta.await {
             Ok(meta) => meta,
-            Err(_) => {
+            Err(e) => {
+                let e: storage::Result<()> = Err(storage::Error::from(e));
+                if let Some(pb) = extract_region_error(&e) && pb.has_region_not_found() {
+                    return not_found(format!("region {} not found", id));
+                }
                 return Ok(make_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    "query cancelled",
+                    format!("query region {} failed: {:?}", id, e),
                 ));
             }
         };
@@ -938,30 +917,35 @@ mod tests {
     use std::{env, io::Read, path::PathBuf, sync::Arc};
 
     use collections::HashSet;
-    use engine_test::kv::KvTestEngine;
     use flate2::read::GzDecoder;
-    use futures::{executor::block_on, future::ok, prelude::*};
+    use futures::{
+        executor::block_on,
+        future::{ok, BoxFuture},
+        prelude::*,
+    };
     use http::header::{HeaderValue, ACCEPT_ENCODING};
     use hyper::{body::Buf, client::HttpConnector, Body, Client, Method, Request, StatusCode, Uri};
     use hyper_openssl::HttpsConnector;
     use online_config::OnlineConfig;
     use openssl::ssl::{SslConnector, SslFiletype, SslMethod};
-    use raftstore::store::{transport::CasualRouter, CasualMessage};
+    use raftstore::store::region_meta::RegionMeta;
     use security::SecurityConfig;
     use test_util::new_security_cfg;
+    use tikv_kv::raft_extension::RaftExtension;
     use tikv_util::logger::get_log_level;
 
     use crate::{
         config::{ConfigController, TikvConfig},
         server::status_server::{profile::TEST_PROFILE_MUTEX, LogLevelRequest, StatusServer},
+        storage::kv,
     };
 
     #[derive(Clone)]
     struct MockRouter;
 
-    impl CasualRouter<KvTestEngine> for MockRouter {
-        fn send(&self, region_id: u64, _: CasualMessage<KvTestEngine>) -> raftstore::Result<()> {
-            Err(raftstore::Error::RegionNotFound(region_id))
+    impl RaftExtension for MockRouter {
+        fn query_region(&self, region_id: u64) -> BoxFuture<'static, kv::Result<RegionMeta>> {
+            Box::pin(async move { Err(raftstore::Error::RegionNotFound(region_id).into()) })
         }
     }
 

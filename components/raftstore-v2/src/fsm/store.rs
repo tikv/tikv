@@ -53,23 +53,23 @@ impl<E: KvEngine> Default for StoreMeta<E> {
     }
 }
 pub struct Store {
-    id: u64,
+    id: Option<u64>,
     // Unix time when it's started.
     start_time: Option<u64>,
     logger: Logger,
 }
 
 impl Store {
-    pub fn new(id: u64, logger: Logger) -> Store {
+    pub fn new(logger: Logger) -> Store {
         Store {
-            id,
+            id: None,
             start_time: None,
-            logger: logger.new(o!("store_id" => id)),
+            logger,
         }
     }
 
     pub fn store_id(&self) -> u64 {
-        self.id
+        self.id.unwrap()
     }
 
     pub fn start_time(&self) -> Option<u64> {
@@ -87,14 +87,10 @@ pub struct StoreFsm {
 }
 
 impl StoreFsm {
-    pub fn new(
-        cfg: &Config,
-        store_id: u64,
-        logger: Logger,
-    ) -> (LooseBoundedSender<StoreMsg>, Box<Self>) {
+    pub fn new(cfg: &Config, logger: Logger) -> (LooseBoundedSender<StoreMsg>, Box<Self>) {
         let (tx, rx) = mpsc::loose_bounded(cfg.notify_capacity);
         let fsm = Box::new(StoreFsm {
-            store: Store::new(store_id, logger),
+            store: Store::new(logger),
             receiver: rx,
         });
         (tx, fsm)
@@ -135,16 +131,18 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
         Self { fsm, store_ctx }
     }
 
-    fn on_start(&mut self) {
+    fn on_start(&mut self, store_id: u64) {
         if self.fsm.store.start_time.is_some() {
             panic!("{:?} unable to start again", self.fsm.store.logger.list(),);
         }
 
+        self.fsm.store.id = Some(store_id);
         self.fsm.store.start_time = Some(
             SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs()),
         );
+        self.fsm.store.logger = self.fsm.store.logger.new(o!("store_id" => store_id));
     }
 
     fn on_tick(&mut self, tick: StoreTick) {
@@ -154,7 +152,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
     pub fn handle_msgs(&mut self, store_msg_buf: &mut Vec<StoreMsg>) {
         for msg in store_msg_buf.drain(..) {
             match msg {
-                StoreMsg::Start => self.on_start(),
+                StoreMsg::Start(store_id) => self.on_start(store_id),
                 StoreMsg::Tick(tick) => self.on_tick(tick),
                 StoreMsg::RaftMessage(msg) => self.fsm.store.on_raft_message(self.store_ctx, msg),
                 StoreMsg::SplitInit(msg) => self.fsm.store.on_split_init(self.store_ctx, msg),

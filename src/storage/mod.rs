@@ -87,7 +87,7 @@ use pd_client::FeatureGate;
 use raftstore::store::{util::build_key_range, ReadStats, TxnExt, WriteStats};
 use rand::prelude::*;
 use resource_metering::{FutureExt, ResourceTagFactory};
-use tikv_kv::SnapshotExt;
+use tikv_kv::{OnReturnCallback, SnapshotExt, WriteSubscriber, BASIC_EVENT};
 use tikv_util::{
     deadline::Deadline,
     quota_limiter::QuotaLimiter,
@@ -1548,11 +1548,16 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
         let mut batch = WriteData::from_modifies(modifies);
         batch.set_allowed_on_disk_almost_full();
-        self.engine.async_write(
+        // We rely on raftstore thread to call the callback directly.
+        let _ = self.engine.async_write(
             &ctx,
             batch,
-            Box::new(|res| callback(res.map_err(Error::from))),
-        )?;
+            BASIC_EVENT,
+            Some(Box::new(move |res| {
+                let res = std::mem::replace(res, Ok(()));
+                callback(res.map_err(Error::from))
+            })),
+        );
         KV_COMMAND_COUNTER_VEC_STATIC.delete_range.inc();
         Ok(())
     }
@@ -1951,14 +1956,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
             let mut batch = WriteData::from_modifies(vec![m]);
             batch.set_allowed_on_disk_almost_full();
-            let (cb, f) = tikv_util::future::paired_future_callback();
-            let async_ret =
-                engine.async_write(&ctx, batch, Box::new(|res| cb(res.map_err(Error::from))));
-            let v: Result<()> = match async_ret {
-                Err(e) => Err(Error::from(e)),
-                Ok(_) => f.await.unwrap(),
-            };
-            callback(v);
+            let sub = engine.async_write(&ctx, batch, BASIC_EVENT, None);
+            if let Some(res) = sub.result().await {
+                callback(res.map_err(From::from));
+            }
             KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
             SCHED_STAGE_COUNTER_VEC.get(CMD).write_finish.inc();
             SCHED_HISTOGRAM_VEC_STATIC
@@ -2054,14 +2055,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls, ts.unwrap());
             let mut batch = WriteData::from_modifies(modifies);
             batch.set_allowed_on_disk_almost_full();
-            let (cb, f) = tikv_util::future::paired_future_callback();
-            let async_ret =
-                engine.async_write(&ctx, batch, Box::new(|res| cb(res.map_err(Error::from))));
-            let v: Result<()> = match async_ret {
-                Err(e) => Err(Error::from(e)),
-                Ok(_) => f.await.unwrap(),
-            };
-            callback(v);
+            let sub = engine.async_write(&ctx, batch, BASIC_EVENT, None);
+            if let Some(res) = sub.result().await {
+                callback(res.map_err(From::from));
+            }
             KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
             SCHED_STAGE_COUNTER_VEC.get(CMD).write_finish.inc();
             SCHED_HISTOGRAM_VEC_STATIC
@@ -2118,14 +2115,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             let m = Self::raw_delete_request_to_modify(cf, key, ts.unwrap());
             let mut batch = WriteData::from_modifies(vec![m]);
             batch.set_allowed_on_disk_almost_full();
-            let (cb, f) = tikv_util::future::paired_future_callback();
-            let async_ret =
-                engine.async_write(&ctx, batch, Box::new(|res| cb(res.map_err(Error::from))));
-            let v: Result<()> = match async_ret {
-                Err(e) => Err(Error::from(e)),
-                Ok(_) => f.await.unwrap(),
-            };
-            callback(v);
+            let sub = engine.async_write(&ctx, batch, BASIC_EVENT, None);
+            if let Some(res) = sub.result().await {
+                callback(res.map_err(From::from));
+            }
             KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
             SCHED_STAGE_COUNTER_VEC.get(CMD).write_finish.inc();
             SCHED_HISTOGRAM_VEC_STATIC
@@ -2171,14 +2164,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             batch.set_allowed_on_disk_almost_full();
 
             // TODO: special notification channel for API V2.
-            let (cb, f) = tikv_util::future::paired_future_callback();
-            let async_ret =
-                engine.async_write(&ctx, batch, Box::new(|res| cb(res.map_err(Error::from))));
-            let v: Result<()> = match async_ret {
-                Err(e) => Err(Error::from(e)),
-                Ok(_) => f.await.unwrap(),
-            };
-            callback(v);
+            let sub = engine.async_write(&ctx, batch, BASIC_EVENT, None);
+            if let Some(res) = sub.result().await {
+                callback(res.map_err(From::from));
+            }
             KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
             SCHED_STAGE_COUNTER_VEC.get(CMD).write_finish.inc();
             SCHED_HISTOGRAM_VEC_STATIC
@@ -2231,14 +2220,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 .collect();
             let mut batch = WriteData::from_modifies(modifies);
             batch.set_allowed_on_disk_almost_full();
-            let (cb, f) = tikv_util::future::paired_future_callback();
-            let async_ret =
-                engine.async_write(&ctx, batch, Box::new(|res| cb(res.map_err(Error::from))));
-            let v: Result<()> = match async_ret {
-                Err(e) => Err(Error::from(e)),
-                Ok(_) => f.await.unwrap(),
-            };
-            callback(v);
+            let sub = engine.async_write(&ctx, batch, BASIC_EVENT, None);
+            if let Some(res) = sub.result().await {
+                callback(res.map_err(From::from));
+            }
             KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
             SCHED_STAGE_COUNTER_VEC.get(CMD).write_finish.inc();
             SCHED_HISTOGRAM_VEC_STATIC
@@ -2976,6 +2961,12 @@ impl<E: Engine> Engine for TxnTestEngine<E> {
         self.engine.kv_engine()
     }
 
+    type RaftExtension = E::RaftExtension;
+
+    fn raft_extension(&self) -> &Self::RaftExtension {
+        self.engine.raft_extension()
+    }
+
     fn modify_on_kv_engine(
         &self,
         region_modifies: HashMap<u64, Vec<Modify>>,
@@ -2983,27 +2974,24 @@ impl<E: Engine> Engine for TxnTestEngine<E> {
         self.engine.modify_on_kv_engine(region_modifies)
     }
 
-    fn async_snapshot(
-        &mut self,
-        ctx: SnapContext<'_>,
-        cb: tikv_kv::Callback<Self::Snap>,
-    ) -> tikv_kv::Result<()> {
+    type SnapshotRes = impl Future<Output = tikv_kv::Result<Self::Snap>>;
+    fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes {
         let txn_ext = self.txn_ext.clone();
-        self.engine.async_snapshot(
-            ctx,
-            Box::new(move |snapshot| {
-                cb(snapshot.map(|snapshot| TxnTestSnapshot { snapshot, txn_ext }))
-            }),
-        )
+        self.engine
+            .async_snapshot(ctx)
+            .map_ok(|snapshot| TxnTestSnapshot { snapshot, txn_ext })
     }
 
+    type WriteSubscriber = impl WriteSubscriber;
     fn async_write(
         &self,
         ctx: &Context,
         batch: WriteData,
-        write_cb: tikv_kv::Callback<()>,
-    ) -> tikv_kv::Result<()> {
-        self.engine.async_write(ctx, batch, write_cb)
+        subscribed_event: u8,
+        on_return: Option<OnReturnCallback<()>>,
+    ) -> Self::WriteSubscriber {
+        self.engine
+            .async_write(ctx, batch, subscribed_event, on_return)
     }
 }
 

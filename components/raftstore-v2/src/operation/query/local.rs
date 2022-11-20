@@ -9,6 +9,8 @@ use std::{
 use batch_system::Router;
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine};
+use futures::{Future, FutureExt};
+use keys::NoPrefix;
 use kvproto::{
     errorpb,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse},
@@ -26,6 +28,7 @@ use slog::{debug, Logger};
 use tikv_util::{
     box_err,
     codec::number::decode_u64,
+    defer,
     time::{monotonic_raw_now, ThreadReadId},
 };
 use time::Timespec;
@@ -105,7 +108,7 @@ where
     fn try_get_snapshot(
         &mut self,
         req: RaftCmdRequest,
-    ) -> std::result::Result<Option<RegionSnapshot<E::Snapshot>>, RaftCmdResponse> {
+    ) -> std::result::Result<Option<RegionSnapshot<E::Snapshot, NoPrefix>>, RaftCmdResponse> {
         match self.pre_propose_raft_command(&req) {
             Ok(Some((mut delegate, policy))) => match policy {
                 RequestPolicy::ReadLocal => {
@@ -157,47 +160,18 @@ where
         }
     }
 
-    pub async fn snapshot(
-        &mut self,
-        mut req: RaftCmdRequest,
-    ) -> std::result::Result<RegionSnapshot<E::Snapshot>, RaftCmdResponse> {
-        let region_id = req.header.get_ref().region_id;
-        if let Some(snap) = self.try_get_snapshot(req.clone())? {
-            return Ok(snap);
-        }
-
-        if let Some(query_res) = self.try_to_renew_lease(region_id, &req).await? {
-            // If query successful, try again.
-            if query_res.read().is_some() {
-                req.mut_header().set_read_quorum(false);
-                if let Some(snap) = self.try_get_snapshot(req)? {
-                    return Ok(snap);
-                }
-            }
-        }
-
-        let mut err = errorpb::Error::default();
-        err.set_message(format!(
-            "Fail to get snapshot from LocalReader for region {}. \
-            Maybe due to `not leader`, `region not found` or `not applied to the current term`",
-            region_id
-        ));
-        let mut resp = RaftCmdResponse::default();
-        resp.mut_header().set_error(err);
-        Err(resp)
-    }
-
     // try to renew the lease by sending read query where the reading process may
     // renew the lease
-    async fn try_to_renew_lease(
-        &self,
+    // Mark it mut so Send will not require it to be `Sync`.
+    fn try_to_renew_lease(
+        &mut self,
         region_id: u64,
         req: &RaftCmdRequest,
-    ) -> std::result::Result<Option<QueryResult>, RaftCmdResponse> {
+    ) -> impl Future<Output = std::result::Result<Option<QueryResult>, RaftCmdResponse>> {
         let (msg, sub) = PeerMsg::raft_query(req.clone());
         let mut err = errorpb::Error::default();
         match MsgRouter::send(&self.router, region_id, msg) {
-            Ok(()) => return Ok(sub.result().await),
+            Ok(()) => (),
             Err(TrySendError::Full(c)) => {
                 TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.channel_full.inc());
                 err.set_message(RAFTSTORE_IS_BUSY.to_owned());
@@ -211,9 +185,15 @@ where
             }
         }
 
-        let mut resp = RaftCmdResponse::default();
-        resp.mut_header().set_error(err);
-        Err(resp)
+        async move {
+            if err.get_message().is_empty() {
+                Ok(sub.result().await)
+            } else {
+                let mut resp = RaftCmdResponse::default();
+                resp.mut_header().set_error(err);
+                Err(resp)
+            }
+        }
     }
 
     // If the remote lease will be expired in near future send message
@@ -239,6 +219,55 @@ where
                 "region" => region_id,
                 "error" => ?e
             )
+        }
+    }
+}
+
+impl<E, C> LocalReader<E, C>
+where
+    E: KvEngine + Clone,
+    C: MsgRouter + Clone,
+{
+    pub fn snapshot(
+        &mut self,
+        mut req: RaftCmdRequest,
+    ) -> impl Future<Output = std::result::Result<RegionSnapshot<E::Snapshot, NoPrefix>, RaftCmdResponse>>
+    {
+        let region_id = req.header.get_ref().region_id;
+        let snap = self.try_get_snapshot(req.clone());
+        let reader = if matches!(snap, Ok(Some(_))) {
+            None
+        } else {
+            // In most case, lease check should succeed.
+            Some(self.clone())
+        };
+
+        async move {
+            defer!(raftstore::store::maybe_tls_local_read_metrics_flush());
+            if let Some(snap) = snap? {
+                return Ok(snap);
+            }
+            let mut reader = reader.unwrap();
+
+            if let Some(query_res) = reader.try_to_renew_lease(region_id, &req).await? {
+                // If query successful, try again.
+                if query_res.read().is_some() {
+                    req.mut_header().set_read_quorum(false);
+                    if let Some(snap) = reader.try_get_snapshot(req)? {
+                        return Ok(snap);
+                    }
+                }
+            }
+
+            let mut err = errorpb::Error::default();
+            err.set_message(format!(
+                "Fail to get snapshot from LocalReader for region {}. \
+                Maybe due to `not leader`, `region not found` or `not applied to the current term`",
+                region_id
+            ));
+            let mut resp = RaftCmdResponse::default();
+            resp.mut_header().set_error(err);
+            Err(resp)
         }
     }
 }
@@ -449,6 +478,7 @@ mod tests {
     use super::*;
     use crate::router::{QueryResult, ReadResponse};
 
+    #[derive(Clone)]
     struct MockRouter {
         p_router: SyncSender<(u64, PeerMsg)>,
     }
@@ -681,10 +711,11 @@ mod tests {
             ))
             .unwrap();
         let snap = block_on(reader.snapshot(cmd.clone())).unwrap();
-        // Updating lease makes cache miss.
+        // Updating lease makes cache miss. And because the cache is updated on cloned
+        // copy, so the old cache will still need to be updated again.
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.cache_miss.get()),
-            4
+            5
         );
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.lease_expire.get()),

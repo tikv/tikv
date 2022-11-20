@@ -232,33 +232,23 @@ impl<I: Iterator> Iterator for RawMvccIterator<I> {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        fmt::Debug,
-        iter::Iterator as StdIterator,
-        sync::mpsc::{channel, Sender},
-    };
+    use std::iter::Iterator as StdIterator;
 
     use api_version::{ApiV2, KvFormat, RawValue};
     use engine_traits::{raw_ttl::ttl_to_expire_ts, CF_DEFAULT};
     use kvproto::kvrpcpb::Context;
-    use tikv_kv::{Engine, Iterator as EngineIterator, Modify, WriteData};
+    use tikv_kv::{
+        Engine, Iterator as EngineIterator, Modify, WriteData, WriteSubscriber, BASIC_EVENT,
+    };
 
     use super::*;
     use crate::storage::{raw::encoded::RawEncodeSnapshot, TestEngineBuilder};
-
-    fn expect_ok_callback<T: Debug>(done: Sender<i32>, id: i32) -> tikv_kv::Callback<T> {
-        Box::new(move |x: tikv_kv::Result<T>| {
-            x.unwrap();
-            done.send(id).unwrap();
-        })
-    }
 
     #[test]
     fn test_raw_mvcc_snapshot() {
         // Use `Engine` to be independent to `Storage`.
         // Do not set "api version" to use `Engine` as a raw RocksDB.
         let mut engine = TestEngineBuilder::new().build().unwrap();
-        let (tx, rx) = channel();
         let ctx = Context::default();
 
         // TODO: Consider another way other than hard coding, to generate keys' prefix
@@ -291,10 +281,10 @@ mod tests {
                 ApiV2::encode_raw_value_owned(raw_value),
             );
             let batch = WriteData::from_modifies(vec![m]);
-            engine
-                .async_write(&ctx, batch, expect_ok_callback(tx.clone(), 0))
-                .unwrap();
-            rx.recv().unwrap();
+            let sub = engine.async_write(&ctx, batch, BASIC_EVENT, None);
+            futures::executor::block_on(sub.result())
+                .unwrap()
+                .unwrap_or_else(|e| panic!("{}: {:?}", ts, e));
         }
 
         // snapshot

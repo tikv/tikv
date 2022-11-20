@@ -9,7 +9,6 @@ use std::{
     time::Duration,
 };
 
-use engine_rocks::RocksEngine;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use grpcio::{
     ClientStreamingSink, Environment, RequestStream, RpcContext, RpcStatus, RpcStatusCode, Server,
@@ -20,19 +19,18 @@ use kvproto::{
     tikvpb::BatchRaftMessage,
 };
 use raft::eraftpb::Entry;
-use raftstore::{
-    errors::DiscardReason,
-    router::{RaftStoreBlackHole, RaftStoreRouter},
-    store::StoreMsg,
-};
-use tikv::server::{
-    self, load_statistics::ThreadLoadPool, resolve, resolve::Callback, Config, ConnectionBuilder,
-    RaftClient, StoreAddrResolver, TestRaftStoreRouter,
+use raftstore::errors::DiscardReason;
+use tikv::{
+    server::{
+        self, load_statistics::ThreadLoadPool, resolve, resolve::Callback,
+        server::test_router::Report, Config, ConnectionBuilder, RaftClient, StoreAddrResolver,
+        TestRaftStoreRouter,
+    },
+    storage::kv::raft_extension::{self, RaftExtension},
 };
 use tikv_util::{
     config::{ReadableDuration, VersionTrack},
     worker::{Builder as WorkerBuilder, LazyWorker},
-    Either,
 };
 
 use super::*;
@@ -55,9 +53,9 @@ impl StoreAddrResolver for StaticResolver {
     }
 }
 
-fn get_raft_client<R, T>(router: R, resolver: T) -> RaftClient<T, R, RocksEngine>
+fn get_raft_client<R, T>(router: R, resolver: T) -> RaftClient<T, R>
 where
-    R: RaftStoreRouter<RocksEngine> + Unpin + 'static,
+    R: RaftExtension + Unpin + 'static,
     T: StoreAddrResolver + 'static,
 {
     let env = Arc::new(Environment::new(2));
@@ -80,10 +78,8 @@ where
     RaftClient::new(builder)
 }
 
-fn get_raft_client_by_port(
-    port: u16,
-) -> RaftClient<StaticResolver, RaftStoreBlackHole, RocksEngine> {
-    get_raft_client(RaftStoreBlackHole, StaticResolver::new(port))
+fn get_raft_client_by_port(port: u16) -> RaftClient<StaticResolver, raft_extension::NotSupported> {
+    get_raft_client(raft_extension::NotSupported, StaticResolver::new(port))
 }
 
 #[derive(Clone)]
@@ -181,8 +177,7 @@ fn test_raft_client_reconnect() {
     let (mut mock_server, port) = create_mock_server(service, 60100, 60200).unwrap();
 
     let (tx, rx) = mpsc::channel();
-    let (significant_msg_sender, _significant_msg_receiver) = mpsc::channel();
-    let router = TestRaftStoreRouter::new(tx, significant_msg_sender);
+    let router = TestRaftStoreRouter::new(tx);
     let mut raft_client = get_raft_client(router, StaticResolver::new(port));
     (0..50).for_each(|_| raft_client.send(RaftMessage::default()).unwrap());
     raft_client.flush();
@@ -221,8 +216,7 @@ fn test_raft_client_report_unreachable() {
     let (mut mock_server, port) = create_mock_server(service, 60100, 60200).unwrap();
 
     let (tx, rx) = mpsc::channel();
-    let (significant_msg_sender, _significant_msg_receiver) = mpsc::channel();
-    let router = TestRaftStoreRouter::new(tx, significant_msg_sender);
+    let router = TestRaftStoreRouter::new(tx);
     let mut raft_client = get_raft_client(router, StaticResolver::new(port));
 
     // server is disconnected
@@ -231,11 +225,15 @@ fn test_raft_client_report_unreachable() {
 
     raft_client.send(RaftMessage::default()).unwrap();
     let msg = rx.recv_timeout(Duration::from_millis(200)).unwrap();
-    if let Either::Right(StoreMsg::StoreUnreachable { store_id }) = msg {
-        assert_eq!(store_id, 0);
-    } else {
-        panic!("expect StoreUnreachable");
-    }
+    assert_eq!(
+        msg,
+        Report::PeerUnreachable {
+            region_id: 0,
+            to_peer_id: 0
+        }
+    );
+    let msg = rx.recv_timeout(Duration::from_millis(200)).unwrap();
+    assert_eq!(msg, Report::StoreUnreachable { store_id: 0 });
     // no more unreachable message is sent until it's connected again.
     rx.recv_timeout(Duration::from_millis(200)).unwrap_err();
 
@@ -254,11 +252,7 @@ fn test_raft_client_report_unreachable() {
     mock_server.take().unwrap().shutdown();
 
     let msg = rx.recv_timeout(Duration::from_millis(200)).unwrap();
-    if let Either::Right(StoreMsg::StoreUnreachable { store_id }) = msg {
-        assert_eq!(store_id, 0);
-    } else {
-        panic!("expect StoreUnreachable");
-    }
+    assert_eq!(msg, Report::StoreUnreachable { store_id: 0 });
     // no more unreachable message is sent until it's connected again.
     rx.recv_timeout(Duration::from_millis(200)).unwrap_err();
 }
@@ -387,14 +381,14 @@ fn test_tombstone_block_list() {
         .thread_count(2)
         .create();
     let resolver =
-        resolve::new_resolver::<_, _, RocksEngine>(pd_client, &bg_worker, RaftStoreBlackHole).0;
+        resolve::new_resolver::<_, _>(pd_client, &bg_worker, raft_extension::NotSupported).0;
 
     let msg_count = Arc::new(AtomicUsize::new(0));
     let batch_msg_count = Arc::new(AtomicUsize::new(0));
     let service = MockKvForRaft::new(Arc::clone(&msg_count), Arc::clone(&batch_msg_count), true);
     let (_mock_server, port) = create_mock_server(service, 60200, 60300).unwrap();
 
-    let mut raft_client = get_raft_client(RaftStoreBlackHole, resolver);
+    let mut raft_client = get_raft_client(raft_extension::NotSupported, resolver);
 
     let mut store1 = metapb::Store::default();
     store1.set_id(1);
@@ -444,8 +438,8 @@ fn test_store_allowlist() {
         .thread_count(2)
         .create();
     let resolver =
-        resolve::new_resolver::<_, _, RocksEngine>(pd_client, &bg_worker, RaftStoreBlackHole).0;
-    let mut raft_client = get_raft_client(RaftStoreBlackHole, resolver);
+        resolve::new_resolver::<_, _>(pd_client, &bg_worker, raft_extension::NotSupported).0;
+    let mut raft_client = get_raft_client(raft_extension::NotSupported, resolver);
 
     let msg_count1 = Arc::new(AtomicUsize::new(0));
     let batch_msg_count1 = Arc::new(AtomicUsize::new(0));

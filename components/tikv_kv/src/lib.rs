@@ -6,6 +6,8 @@
 //! [`RocksEngine`](RocksEngine) are used for testing only.
 
 #![feature(min_specialization)]
+#![feature(type_alias_impl_trait)]
+#![feature(associated_type_defaults)]
 
 #[macro_use(fail_point)]
 extern crate fail;
@@ -16,6 +18,7 @@ mod btree_engine;
 mod cursor;
 pub mod metrics;
 mod mock_engine;
+pub mod raft_extension;
 mod raftstore_impls;
 mod rocksdb_engine;
 mod stats;
@@ -35,7 +38,7 @@ use engine_traits::{
     CF_DEFAULT, CF_LOCK,
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
-use futures::prelude::*;
+use futures::{compat::Future01CompatExt, future::BoxFuture, prelude::*};
 use into_other::IntoOther;
 use kvproto::{
     errorpb::Error as ErrorHeader,
@@ -45,7 +48,7 @@ use kvproto::{
 use pd_client::BucketMeta;
 use raftstore::store::{PessimisticLockPair, TxnExt};
 use thiserror::Error;
-use tikv_util::{deadline::Deadline, escape, time::ThreadReadId};
+use tikv_util::{deadline::Deadline, escape, time::ThreadReadId, timer::GLOBAL_TIMER_HANDLE};
 use tracker::with_tls_tracker;
 use txn_types::{Key, PessimisticLock, TimeStamp, TxnExtra, Value};
 
@@ -66,6 +69,7 @@ const DEFAULT_TIMEOUT_SECS: u64 = 5;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 pub type ExtCallback = Box<dyn FnOnce() + Send>;
 pub type Result<T> = result::Result<T, Error>;
+pub type OnReturnCallback<T> = Box<dyn FnOnce(&mut Result<T>) + Send>;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Modify {
@@ -247,6 +251,102 @@ impl WriteData {
     }
 }
 
+pub const SUBSCRIBE_PROPOSED: u8 = 1;
+pub const SUBSCRIBE_COMMITTED: u8 = 1 << 1;
+pub const ALL_EVENT: u8 = SUBSCRIBE_PROPOSED | SUBSCRIBE_COMMITTED;
+pub const BASIC_EVENT: u8 = 0;
+
+/// A subscriber that can wait on processing event of a write.
+pub trait WriteSubscriber: Send {
+    type ProposedWaiter<'a>: Future<Output = bool> + Send
+    where
+        Self: 'a;
+    /// Wait till the write is proposed. Returns false means the write is
+    /// finished (not necessary succeeded) before notifying proposed.
+    fn wait_proposed(&mut self) -> Self::ProposedWaiter<'_>;
+
+    type CommittedWaiter<'a>: Future<Output = bool> + Send
+    where
+        Self: 'a;
+    /// Wait till the write is committed. Returns false means the write is
+    /// finished (not necessary succeeded) before notifying committed.
+    fn wait_committed(&mut self) -> Self::CommittedWaiter<'_>;
+
+    type ResultWaiter: Future<Output = Option<Result<()>>> + Send;
+    /// Wait till the result is ready. if `None` is returned, then a write is
+    /// untracked before taking any actions. It's unknown whether the write
+    /// will be finished successfully. This can happen if the callback is
+    /// dropped during shutdown or any other cases that the underlying
+    /// engine thinks inappropriate to send back a result. Caller may not
+    /// release any lock in this case to guarantee correctness.
+    fn result(self) -> Self::ResultWaiter;
+
+    /// Call the hook when the result is received.
+    #[inline]
+    fn map<F>(self, f: F) -> MapSubscriber<Self, F>
+    where
+        Self: Sized,
+        F: FnOnce(Result<()>) -> Result<()> + Send,
+    {
+        MapSubscriber { sub: self, f }
+    }
+}
+
+pub struct MapSubscriber<S, F> {
+    sub: S,
+    f: F,
+}
+
+impl<S, F> WriteSubscriber for MapSubscriber<S, F>
+where
+    S: WriteSubscriber,
+    F: FnOnce(Result<()>) -> Result<()> + Send,
+{
+    type ProposedWaiter<'a> = S::ProposedWaiter<'a> where Self: 'a;
+    #[inline]
+    fn wait_proposed(&mut self) -> Self::ProposedWaiter<'_> {
+        self.sub.wait_proposed()
+    }
+
+    type CommittedWaiter<'a> = S::CommittedWaiter<'a> where Self: 'a;
+    #[inline]
+    fn wait_committed(&mut self) -> Self::CommittedWaiter<'_> {
+        self.sub.wait_committed()
+    }
+
+    type ResultWaiter = impl Future<Output = Option<Result<()>>>;
+    #[inline]
+    fn result(self) -> Self::ResultWaiter {
+        async move { self.sub.result().await.map(self.f) }
+    }
+}
+
+pub struct FutureAsSubscriber<F> {
+    f: F,
+    proposed: bool,
+    committed: bool,
+}
+
+impl<F> WriteSubscriber for FutureAsSubscriber<F>
+where
+    F: Future<Output = Option<Result<()>>> + Send + 'static,
+{
+    type ProposedWaiter<'a> = futures::future::Ready<bool> where F: 'a;
+    fn wait_proposed(&mut self) -> Self::ProposedWaiter<'_> {
+        futures::future::ready(self.proposed)
+    }
+
+    type CommittedWaiter<'a> = futures::future::Ready<bool> where F: 'a;
+    fn wait_committed(&mut self) -> Self::CommittedWaiter<'_> {
+        futures::future::ready(self.committed)
+    }
+
+    type ResultWaiter = F;
+    fn result(self) -> Self::ResultWaiter {
+        self.f
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SnapContext<'a> {
     pub pb_ctx: &'a Context,
@@ -272,47 +372,65 @@ pub trait Engine: Send + Clone + 'static {
     /// Currently, only multi-rocksdb version will return `None`.
     fn kv_engine(&self) -> Option<Self::Local>;
 
+    type RaftExtension: raft_extension::RaftExtension = raft_extension::NotSupported;
+    /// Get the underlying raft extension.
+    fn raft_extension(&self) -> &Self::RaftExtension {
+        unimplemented!()
+    }
+
     /// Write modifications into internal local engine directly.
     ///
     /// region_modifies records each region's modifications.
     fn modify_on_kv_engine(&self, region_modifies: HashMap<u64, Vec<Modify>>) -> Result<()>;
 
-    fn async_snapshot(&mut self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()>;
+    type SnapshotRes: Future<Output = Result<Self::Snap>> + Send;
+    fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes;
 
     /// Precheck request which has write with it's context.
     fn precheck_write_with_ctx(&self, _ctx: &Context) -> Result<()> {
         Ok(())
     }
 
-    fn async_write(&self, ctx: &Context, batch: WriteData, write_cb: Callback<()>) -> Result<()>;
-
-    /// Writes data to the engine asynchronously with some extensions.
+    type WriteSubscriber: WriteSubscriber;
+    /// Write data into engine asynchronously.
     ///
-    /// When the write request is proposed successfully, the `proposed_cb` is
-    /// invoked. When the write request is finished, the `write_cb` is invoked.
-    fn async_write_ext(
+    /// `on_return` will be called when the write is finished. It's guaranteed
+    /// that when `Subscriber::result` returns `Some`, `on_return` must be
+    /// called already in the generating result thread.
+    #[must_use]
+    fn async_write(
         &self,
         ctx: &Context,
         batch: WriteData,
-        write_cb: Callback<()>,
-        _proposed_cb: Option<ExtCallback>,
-        _committed_cb: Option<ExtCallback>,
-    ) -> Result<()> {
-        self.async_write(ctx, batch, write_cb)
-    }
+        subscribe_events: u8,
+        on_return: Option<OnReturnCallback<()>>,
+    ) -> Self::WriteSubscriber;
 
     fn write(&self, ctx: &Context, batch: WriteData) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-        wait_op!(|cb| self.async_write(ctx, batch, cb), timeout)
-            .unwrap_or_else(|| Err(Error::from(ErrorInner::Timeout(timeout))))
+        let timeout_f = GLOBAL_TIMER_HANDLE.delay(Instant::now() + timeout);
+        futures::executor::block_on(async move {
+            let res = futures::select! {
+                res = self.async_write(ctx, batch, BASIC_EVENT, None).result().fuse() => res,
+                _ = timeout_f.compat().fuse() => Some(Err(Error::from(ErrorInner::Timeout(timeout)))),
+            };
+            // None result means the write is undeterministic and caller should be blocked
+            // forever.
+            res.unwrap_or_else(|| Err(Error::from(ErrorInner::Timeout(timeout))))
+        })
     }
 
     fn release_snapshot(&mut self) {}
 
     fn snapshot(&mut self, ctx: SnapContext<'_>) -> Result<Self::Snap> {
-        let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-        wait_op!(|cb| self.async_snapshot(ctx, cb), timeout)
-            .unwrap_or_else(|| Err(Error::from(ErrorInner::Timeout(timeout))))
+        let timeout =
+            GLOBAL_TIMER_HANDLE.delay(Instant::now() + Duration::from_secs(DEFAULT_TIMEOUT_SECS));
+        futures::executor::block_on(async move {
+            futures::select! {
+                res = self.async_snapshot(ctx).fuse() => res,
+                _ = timeout.compat().fuse() => Err(Error::from(ErrorInner::Timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS)))),
+            }
+        })
     }
 
     fn put(&self, ctx: &Context, key: Key, value: Value) -> Result<()> {
@@ -344,9 +462,28 @@ pub trait Engine: Send + Clone + 'static {
         None
     }
 
-    // Some engines have a `TxnExtraScheduler`. This method is to send the extra
-    // to the scheduler.
+    /// Some engines have a `TxnExtraScheduler`. This method is to send the
+    /// extra to the scheduler.
     fn schedule_txn_extra(&self, _txn_extra: TxnExtra) {}
+
+    /// Application may operate on local engine directly, the method is to hint
+    /// the engine there is probably a notable difference in range, so
+    /// engine may update its statistics.
+    fn hint_change_in_range(&self, _start_key: Vec<u8>, _end_key: Vec<u8>) {}
+
+    /// Mark the start of flashback.
+    // Unlike other async method, it's an infrequent API, use trait object for
+    // simplicity.
+    fn start_flashback(&self, _ctx: &Context) -> BoxFuture<'static, Result<()>> {
+        Box::pin(futures::future::ready(Ok(())))
+    }
+
+    /// Mark the end of flashback.
+    // Unlike other async method, it's an infrequent API, use trait object for
+    // simplicity.
+    fn end_flashback(&self, _ctx: &Context) -> BoxFuture<'static, Result<()>> {
+        Box::pin(futures::future::ready(Ok(())))
+    }
 }
 
 /// A Snapshot is a consistent view of the underlying engine at a given point in
@@ -586,20 +723,15 @@ pub fn snapshot<E: Engine>(
     ctx: SnapContext<'_>,
 ) -> impl std::future::Future<Output = Result<E::Snap>> {
     let begin = Instant::now();
-    let (callback, future) =
-        tikv_util::future::paired_must_called_future_callback(drop_snapshot_callback::<E>);
-    let val = engine.async_snapshot(ctx, callback);
     // make engine not cross yield point
+    let res = engine.async_snapshot(ctx);
     async move {
-        val?; // propagate error
-        let result = future
-            .map_err(|cancel| Error::from(ErrorInner::Other(box_err!(cancel))))
-            .await?;
+        let val = res.await;
         with_tls_tracker(|tracker| {
             tracker.metrics.get_snapshot_nanos += begin.elapsed().as_nanos() as u64;
         });
         fail_point!("after-snapshot");
-        result
+        val
     }
 }
 

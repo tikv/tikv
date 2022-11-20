@@ -61,7 +61,7 @@ impl CasualRouter<RocksEngine> for MockRaftStoreRouter {
         let mut senders = self.senders.lock().unwrap();
         if let Some(tx) = senders.get_mut(&region_id) {
             tx.try_send(PeerMsg::CasualMessage(msg))
-                .map_err(|e| handle_send_error(region_id, e))
+                .map_err(|e| handle_send_error(region_id, &e))
         } else {
             Err(RaftStoreError::RegionNotFound(region_id))
         }
