@@ -666,6 +666,7 @@ where
             "peer_id" => self.peer_id,
             "region" => ?region,
             "state" => ?self.apply_state(),
+            "for_witness" => for_witness,
         );
 
         Ok((region, for_witness))

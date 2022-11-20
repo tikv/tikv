@@ -2172,6 +2172,18 @@ where
             return;
         }
 
+        // Keep ticking if there are non-witness peers waiting for snapshot.
+        if !self.fsm.peer.wait_data_peers.is_empty() {
+            self.register_raft_base_tick();
+            return;
+        }
+
+        // Keep ticking if is waiting for snapshot.
+        if self.fsm.peer.wait_data {
+            self.register_raft_base_tick();
+            return;
+        }
+
         debug!("stop ticking"; "res" => ?res,
             "region_id" => self.region_id(),
             "peer_id" => self.fsm.peer_id(),
@@ -2263,6 +2275,9 @@ where
                     "peer_id" => self.fsm.peer_id(),
                     "res" => ?res,
                 );
+                if self.fsm.peer.wait_data {
+                    return;
+                }
                 self.on_ready_result(&mut res.exec_res, &res.metrics);
                 if self.fsm.stopped {
                     return;
@@ -2614,6 +2629,7 @@ where
     fn on_hibernate_request(&mut self, from: &metapb::Peer) {
         if !self.ctx.cfg.hibernate_regions
             || self.fsm.peer.has_uncommitted_log()
+            || self.fsm.peer.wait_data
             || from.get_id() != self.fsm.peer.leader_id()
         {
             // Ignore the message means rejecting implicitly.

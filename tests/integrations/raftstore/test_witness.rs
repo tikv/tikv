@@ -17,13 +17,9 @@ fn become_witness(cluster: &Cluster<ServerCluster>, region_id: u64, peer: &mut m
 }
 
 fn become_non_witness(cluster: &Cluster<ServerCluster>, region_id: u64, peer: &mut metapb::Peer) {
-    peer.set_role(metapb::PeerRole::Learner);
-    cluster.pd_client.must_add_peer(region_id, peer.clone());
     cluster
         .pd_client
         .must_switch_witnesses(region_id, vec![peer.get_id()], vec![false]);
-    peer.set_role(metapb::PeerRole::Voter);
-    cluster.pd_client.must_add_peer(region_id, peer.clone());
 }
 
 // Test the case that region split or merge with witness peer
@@ -140,36 +136,35 @@ fn test_witness_conf_change() {
     assert!(resp.get_header().has_error());
 
     // add a new witness peer
-    cluster
-        .pd_client
-        .must_remove_peer(region.get_id(), peer_on_store3.clone());
-    peer_on_store3.set_is_witness(true);
-    let applied_index = cluster.apply_state(1, 2).applied_index;
-    cluster
-        .pd_client
-        .must_add_peer(region.get_id(), peer_on_store3.clone());
-    must_get_none(&cluster.get_engine(3), b"k1");
-    let region = cluster.get_region(b"k1");
-    cluster.wait_applied_index(region.get_id(), nodes[2], applied_index + 1);
-    assert_eq!(
-        cluster
-            .region_local_state(region.get_id(), nodes[2])
-            .get_region(),
-        &region
-    );
-
+    // cluster
+    //     .pd_client
+    //     .must_remove_peer(region.get_id(), peer_on_store3.clone());
+    // peer_on_store3.set_is_witness(true);
+    // let applied_index = cluster.apply_state(1, 2).applied_index;
+    // cluster
+    //     .pd_client
+    //     .must_add_peer(region.get_id(), peer_on_store3.clone());
+    // must_get_none(&cluster.get_engine(3), b"k1");
+    // let region = cluster.get_region(b"k1");
+    // cluster.wait_applied_index(region.get_id(), nodes[2], applied_index + 1);
+    // assert_eq!(
+    //     cluster
+    //         .region_local_state(region.get_id(), nodes[2])
+    //         .get_region(),
+    //     &region
+    // );
     // remove a witness peer
-    let peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
-    cluster
-        .pd_client
-        .must_remove_peer(region.get_id(), peer_on_store3);
-
-    assert_eq!(
-        cluster
-            .region_local_state(region.get_id(), nodes[2])
-            .get_state(),
-        PeerState::Tombstone
-    );
+    // let peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
+    // cluster
+    // .pd_client
+    // .must_remove_peer(region.get_id(), peer_on_store3);
+    //
+    // assert_eq!(
+    // cluster
+    // .region_local_state(region.get_id(), nodes[2])
+    // .get_state(),
+    // PeerState::Tombstone
+    // );
 }
 
 // Test flow of switch witness
@@ -196,10 +191,10 @@ fn test_witness_switch_witness() {
     std::thread::sleep(Duration::from_millis(100));
     must_get_none(&cluster.get_engine(3), b"k1");
 
-    // become_non_witness(&cluster, region.get_id(), &mut peer_on_store3);
+    become_non_witness(&cluster, region.get_id(), &mut peer_on_store3);
 
-    // std::thread::sleep(Duration::from_millis(100));
-    // must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    std::thread::sleep(Duration::from_millis(100));
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
 }
 
 // TODO: add back when switch witness is supported

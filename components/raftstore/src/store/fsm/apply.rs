@@ -631,6 +631,9 @@ where
         delegate: &mut ApplyDelegate<EK>,
         results: VecDeque<ExecResult<EK::Snapshot>>,
     ) {
+        if delegate.wait_data && results.is_empty() {
+            return;
+        }
         if self.host.pre_persist(&delegate.region, true, None) {
             if !delegate.pending_remove {
                 delegate.maybe_write_apply_state(self);
