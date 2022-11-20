@@ -225,6 +225,14 @@ fn test_raft_client_report_unreachable() {
 
     raft_client.send(RaftMessage::default()).unwrap();
     let msg = rx.recv_timeout(Duration::from_millis(200)).unwrap();
+    assert_eq!(
+        msg,
+        Report::PeerUnreachable {
+            region_id: 0,
+            to_peer_id: 0
+        }
+    );
+    let msg = rx.recv_timeout(Duration::from_millis(200)).unwrap();
     assert_eq!(msg, Report::StoreUnreachable { store_id: 0 });
     // no more unreachable message is sent until it's connected again.
     rx.recv_timeout(Duration::from_millis(200)).unwrap_err();

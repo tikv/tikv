@@ -28,6 +28,7 @@ use slog::{debug, Logger};
 use tikv_util::{
     box_err,
     codec::number::decode_u64,
+    defer,
     time::{monotonic_raw_now, ThreadReadId},
 };
 use time::Timespec;
@@ -185,7 +186,7 @@ where
         }
 
         async move {
-            if !err.get_message().is_empty() {
+            if err.get_message().is_empty() {
                 Ok(sub.result().await)
             } else {
                 let mut resp = RaftCmdResponse::default();
@@ -242,6 +243,7 @@ where
         };
 
         async move {
+            defer!(raftstore::store::maybe_tls_local_read_metrics_flush());
             if let Some(snap) = snap? {
                 return Ok(snap);
             }
@@ -709,10 +711,11 @@ mod tests {
             ))
             .unwrap();
         let snap = block_on(reader.snapshot(cmd.clone())).unwrap();
-        // Updating lease makes cache miss.
+        // Updating lease makes cache miss. And because the cache is updated on cloned
+        // copy, so the old cache will still need to be updated again.
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.cache_miss.get()),
-            4
+            5
         );
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.lease_expire.get()),
