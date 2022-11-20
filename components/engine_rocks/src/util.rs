@@ -14,6 +14,8 @@ use crate::{
     rocks_metrics_defs::*,
 };
 
+const TEMP_DB_SUFFIX: &str = "_temptemp";
+
 pub fn new_temp_engine(path: &tempfile::TempDir) -> Engines<RocksEngine, RocksEngine> {
     let raft_path = path.path().join(std::path::Path::new("raft"));
     Engines::new(
@@ -57,8 +59,22 @@ pub fn new_engine_opt(
         db_opt.create_if_missing(true);
         db_opt.create_missing_column_families(true);
 
+        let temp_path = format!("{}{}", path, TEMP_DB_SUFFIX);
+        {
+            let path = Path::new(temp_path.as_str());
+            if path.is_dir() {
+                std::fs::remove_dir_all(path)?;
+            }
+            let _ = DB::open_cf(
+                db_opt.clone(),
+                temp_path.as_str(),
+                cf_opts.clone().into_iter().collect(),
+            )
+            .map_err(r2e)?;
+        }
+        std::fs::rename(temp_path, path)?;
+        db_opt.create_if_missing(false);
         let db = DB::open_cf(db_opt, path, cf_opts.into_iter().collect()).map_err(r2e)?;
-
         return Ok(RocksEngine::new(db));
     }
 
@@ -433,5 +449,30 @@ mod tests {
         assert!(!tmp_cf_opts.get_level_compaction_dynamic_level_bytes());
         let tmp_cf_opts = db.get_options_cf("cf_dynamic_level_bytes").unwrap();
         assert!(tmp_cf_opts.get_level_compaction_dynamic_level_bytes());
+    }
+
+    #[test]
+    fn test_new_engine_opt_with_prev_failure() {
+        let path = Builder::new()
+            .prefix("_util_rocksdb_test_check_column_families")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+
+        // create a file to simulate the db created is corrupted;
+        let temp_db_path = format!("{}{}/file", path_str, TEMP_DB_SUFFIX);
+        std::fs::create_dir_all(temp_db_path.as_str()).unwrap();
+
+        // create db when db not exist
+        let mut cfs_opts = vec![(CF_DEFAULT, RocksCfOptions::default())];
+        let mut opts = RocksCfOptions::default();
+        opts.set_level_compaction_dynamic_level_bytes(true);
+        cfs_opts.push(("cf_dynamic_level_bytes", opts.clone()));
+        let db = new_engine_opt(path_str, RocksDbOptions::default(), cfs_opts).unwrap();
+        column_families_must_eq(path_str, vec![CF_DEFAULT, "cf_dynamic_level_bytes"]);
+        check_dynamic_level_bytes(&db);
+        drop(db);
+        // the temp_db_path should be renamed as thus it's empty;
+        assert!(Path::new(temp_db_path.as_str()).is_dir() == false);
     }
 }
