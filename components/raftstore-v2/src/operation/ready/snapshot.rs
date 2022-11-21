@@ -322,7 +322,6 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let term = entry.truncated_term();
         let index = entry.truncated_index();
         entry.set_applied_term(term);
-        entry.set_last_term(term);
         entry.apply_state_mut().set_applied_index(index);
         self.region_state_mut().set_tablet_index(index);
     }
@@ -343,7 +342,6 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
 
         let mut snap_data = RaftSnapshotData::default();
         snap_data.merge_from_bytes(snap.get_data())?;
-
         let region = snap_data.take_region();
         if region.get_id() != region_id {
             return Err(box_err!(
@@ -355,20 +353,17 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
 
         let last_index = snap.get_metadata().get_index();
         let last_term = snap.get_metadata().get_term();
-
         self.region_state_mut().set_state(PeerState::Normal);
         self.region_state_mut().set_region(region);
-
         self.entry_storage_mut()
             .raft_state_mut()
             .set_last_index(last_index);
-
         self.entry_storage_mut().set_truncated_index(last_index);
         self.entry_storage_mut().set_truncated_term(last_term);
+        self.entry_storage_mut().set_last_term(last_term);
 
         let key = TabletSnapKey::new(region_id, peer_id, last_term, last_index);
-        let mut path = snap_mgr.get_recv_tablet_path(&key);
-
+        let mut path = snap_mgr.recv_tablet_path(&key);
         let logger = self.logger().clone();
         // The snapshot require no additional processing such as ingest them to DB, but
         // it should load it into the factory after it persisted.

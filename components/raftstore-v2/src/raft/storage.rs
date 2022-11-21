@@ -534,17 +534,16 @@ mod tests {
         assert_eq!(PeerState::Normal, s.region_state().get_state());
         assert_eq!(10, s.entry_storage().truncated_index());
         assert_eq!(1, s.entry_storage().truncated_term());
+        assert_eq!(1, s.entry_storage().last_term());
         assert_eq!(10, s.entry_storage().raft_state().last_index);
         // This index can't be set before load tablet.
         assert_ne!(10, s.entry_storage().applied_index());
-        assert_ne!(1, s.entry_storage().last_term());
         assert_ne!(1, s.entry_storage().applied_term());
         assert_ne!(10, s.region_state().get_tablet_index());
         assert!(task.persisted_cb.is_some());
 
         s.on_applied_snapshot();
         assert_eq!(10, s.entry_storage().applied_index());
-        assert_eq!(1, s.entry_storage().last_term());
         assert_eq!(1, s.entry_storage().applied_term());
         assert_eq!(10, s.region_state().get_tablet_index());
     }
@@ -612,7 +611,7 @@ mod tests {
         assert_eq!(snap.get_metadata().get_term(), 0);
         assert_eq!(snap.get_data().is_empty(), false);
         let snap_key = TabletSnapKey::from_region_snap(4, 7, &snap);
-        let checkpointer_path = mgr.get_tablet_checkpointer_path(&snap_key);
+        let checkpointer_path = mgr.tablet_checkpointer_path(&snap_key);
         assert!(checkpointer_path.exists());
 
         // Test cancel snapshot
