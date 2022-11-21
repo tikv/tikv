@@ -79,6 +79,11 @@ impl Latch {
         self.waiting.push_back(Some((key_hash, cid)));
     }
 
+    /// Pushes the cid to the front of the queue. Be careful when using it.
+    fn push_preemptive(&mut self, key_hash: u64, cid: u64) {
+        self.waiting.push_front(Some((key_hash, cid)));
+    }
+
     /// For some hot keys, the waiting list maybe very long, so we should shrink
     /// the waiting VecDeque after pop.
     fn maybe_shrink(&mut self) {
@@ -135,6 +140,12 @@ impl Lock {
     /// otherwise.
     pub fn acquired(&self) -> bool {
         self.required_hashes.len() == self.owned_count
+    }
+
+    /// Force set the state of the `Lock` to be already-acquired. Be careful
+    /// when using it.
+    pub fn force_assume_acquired(&mut self) {
+        self.owned_count = self.required_hashes.len();
     }
 
     pub fn is_write_lock(&self) -> bool {
@@ -196,19 +207,62 @@ impl Latches {
     /// Releases all latches owned by the `lock` of command with ID `who`,
     /// returns the wakeup list.
     ///
+    /// Optionally, this function can release partial of the given `Lock` while
+    /// leaving the renaming unlocked, so that some of the latches can be
+    /// used in another command. This can be done by passing the cid of the
+    /// command who will use the kept latch slots later, and the `Lock` that
+    /// need to be kept via the parameter `keep_latches_for_next_cmd`. Note
+    /// that the lock in it is assumed to be a subset of the parameter
+    /// `lock` which is going to be released.
+    ///
     /// Preconditions: the caller must ensure the command is at the front of the
     /// latches.
-    pub fn release(&self, lock: &Lock, who: u64) -> Vec<u64> {
+    pub fn release(
+        &self,
+        lock: &Lock,
+        who: u64,
+        keep_latches_for_next_cmd: Option<(u64, &Lock)>,
+    ) -> Vec<u64> {
+        // Used to
+        let dummy_vec = vec![];
+        let (keep_latches_for_cid, mut keep_latches_it) = match keep_latches_for_next_cmd {
+            Some((cid, lock)) => (Some(cid), lock.required_hashes.iter().peekable()),
+            None => (None, dummy_vec.iter().peekable()),
+        };
+
+        // `keep_latches_it` must be sorted and deduped since it's retrieved from a
+        // `Lock` object.
+
         let mut wakeup_list: Vec<u64> = vec![];
         for &key_hash in &lock.required_hashes[..lock.owned_count] {
             let mut latch = self.lock_latch(key_hash);
             let (v, front) = latch.pop_front(key_hash).unwrap();
             assert_eq!(front, who);
             assert_eq!(v, key_hash);
-            if let Some(wakeup) = latch.get_first_req_by_hash(key_hash) {
-                wakeup_list.push(wakeup);
+
+            let keep_for_next_cmd = if let Some(&&next_keep_hash) = keep_latches_it.peek() {
+                assert!(next_keep_hash >= key_hash);
+                if next_keep_hash == key_hash {
+                    keep_latches_it.next();
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+
+            if !keep_for_next_cmd {
+                if let Some(wakeup) = latch.get_first_req_by_hash(key_hash) {
+                    wakeup_list.push(wakeup);
+                }
+            } else {
+                latch.push_preemptive(key_hash, keep_latches_for_cid.unwrap());
             }
         }
+
+        assert!(keep_latches_it.next().is_none());
+
         wakeup_list
     }
 
@@ -242,7 +296,7 @@ mod tests {
         assert_eq!(acquired_b, false);
 
         // a release lock, and get wakeup list
-        let wakeup = latches.release(&lock_a, cid_a);
+        let wakeup = latches.release(&lock_a, cid_a, None);
         assert_eq!(wakeup[0], cid_b);
 
         // b acquire lock success
@@ -277,7 +331,7 @@ mod tests {
         assert_eq!(acquired_c, false);
 
         // a release lock, and get wakeup list
-        let wakeup = latches.release(&lock_a, cid_a);
+        let wakeup = latches.release(&lock_a, cid_a, None);
         assert_eq!(wakeup[0], cid_c);
 
         // c acquire lock failed again, cause b occupied slot 4
@@ -285,7 +339,7 @@ mod tests {
         assert_eq!(acquired_c, false);
 
         // b release lock, and get wakeup list
-        let wakeup = latches.release(&lock_b, cid_b);
+        let wakeup = latches.release(&lock_b, cid_b, None);
         assert_eq!(wakeup[0], cid_c);
 
         // finally c acquire lock success
@@ -326,7 +380,7 @@ mod tests {
         assert_eq!(acquired_d, false);
 
         // a release lock, and get wakeup list
-        let wakeup = latches.release(&lock_a, cid_a);
+        let wakeup = latches.release(&lock_a, cid_a, None);
         assert_eq!(wakeup[0], cid_c);
 
         // c acquire lock success
@@ -334,7 +388,7 @@ mod tests {
         assert_eq!(acquired_c, true);
 
         // b release lock, and get wakeup list
-        let wakeup = latches.release(&lock_b, cid_b);
+        let wakeup = latches.release(&lock_b, cid_b, None);
         assert_eq!(wakeup[0], cid_d);
 
         // finally d acquire lock success
