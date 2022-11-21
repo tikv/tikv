@@ -7,11 +7,11 @@ use std::{
 };
 
 use kvproto::metapb::Region;
-use raft::StateRole;
+use raft::{eraftpb::ConfChangeType, StateRole};
 use raftstore::coprocessor::{RangeKey, RegionInfo, RegionInfoAccessor};
 use test_raftstore::{configure_for_merge, new_node_cluster, Cluster, NodeCluster};
 use tikv_util::{
-    store::{find_peer, new_peer},
+    store::{find_peer, new_learner_peer, new_peer},
     HandyRwLock,
 };
 
@@ -152,7 +152,23 @@ fn test_region_info_accessor_impl(cluster: &mut Cluster<NodeCluster>, c: &Region
         &[(&b""[..], &b"k1"[..]), (b"k1", b"k4"), (b"k4", b"")],
     );
 
-    pd_client.must_remove_peer(region3.get_id(), find_peer(&region3, 1).unwrap().clone());
+    pd_client.must_joint_confchange(
+        region3.get_id(),
+        vec![(
+            ConfChangeType::AddLearnerNode,
+            new_learner_peer(
+                find_peer(&region3, 1).unwrap().get_store_id(),
+                find_peer(&region3, 1).unwrap().get_id(),
+            ),
+        )],
+    );
+    pd_client.must_remove_peer(
+        region3.get_id(),
+        new_learner_peer(
+            find_peer(&region3, 1).unwrap().get_store_id(),
+            find_peer(&region3, 1).unwrap().get_id(),
+        ),
+    );
 
     let mut regions_after_removing = Vec::new();
     // It seems region_info_accessor is a little delayed than raftstore...

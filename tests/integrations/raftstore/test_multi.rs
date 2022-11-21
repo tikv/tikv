@@ -603,15 +603,26 @@ fn test_remove_leader_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
     // guarantee peer 1 is leader
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
-    // stop peer 2 replicate messages.
+    // stop peer 2 and 3 replicate messages.
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(1, 2)
             .msg_type(MessageType::MsgAppend)
             .direction(Direction::Recv),
     ));
-    // peer 2 can't step to leader.
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(1, 3)
+            .msg_type(MessageType::MsgAppend)
+            .direction(Direction::Recv),
+    ));
+
+    // peer 2 and 3 can't step to leader.
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(1, 2)
+            .msg_type(MessageType::MsgRequestVote)
+            .direction(Direction::Send),
+    ));
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(1, 3)
             .msg_type(MessageType::MsgRequestVote)
             .direction(Direction::Send),
     ));
@@ -644,13 +655,13 @@ fn test_remove_leader_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
 
 #[test]
 fn test_node_remove_leader_with_uncommitted_log() {
-    let mut cluster = new_node_cluster(0, 2);
+    let mut cluster = new_node_cluster(0, 3);
     test_remove_leader_with_uncommitted_log(&mut cluster);
 }
 
 #[test]
 fn test_server_remove_leader_with_uncommitted_log() {
-    let mut cluster = new_server_cluster(0, 2);
+    let mut cluster = new_server_cluster(0, 3);
     test_remove_leader_with_uncommitted_log(&mut cluster);
 }
 

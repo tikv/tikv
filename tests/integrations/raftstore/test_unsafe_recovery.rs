@@ -330,9 +330,17 @@ fn test_unsafe_recovery_early_return_after_exit_joint_state() {
         region.get_id(),
         new_learner_peer(nodes[0], peer_on_store0.get_id()),
     );
-    cluster
-        .pd_client
-        .must_remove_peer(region.get_id(), peer_on_store2.clone());
+    cluster.pd_client.must_joint_confchange(
+        region.get_id(),
+        vec![(
+            ConfChangeType::AddLearnerNode,
+            new_learner_peer(peer_on_store2.get_store_id(), peer_on_store2.get_id()),
+        )],
+    );
+    cluster.pd_client.must_remove_peer(
+        region.get_id(),
+        new_learner_peer(peer_on_store2.get_store_id(), peer_on_store2.get_id()),
+    );
     cluster.pd_client.must_add_peer(
         region.get_id(),
         new_learner_peer(nodes[2], peer_on_store2.get_id()),
@@ -483,6 +491,16 @@ fn test_force_leader_three_nodes() {
     cluster
         .pd_client
         .must_remove_peer(region.get_id(), find_peer(&region, 2).unwrap().clone());
+    cluster.pd_client.must_joint_confchange(
+        region.get_id(),
+        vec![(
+            ConfChangeType::AddLearnerNode,
+            new_learner_peer(
+                find_peer(&region, 3).unwrap().get_store_id(),
+                find_peer(&region, 3).unwrap().get_id(),
+            ),
+        )],
+    );
     cluster
         .pd_client
         .must_remove_peer(region.get_id(), find_peer(&region, 3).unwrap().clone());
@@ -872,6 +890,13 @@ fn test_force_leader_with_uncommitted_conf_change() {
     cluster
         .pd_client
         .must_remove_peer(region.get_id(), find_peer(&region, 4).unwrap().clone());
+    cluster.pd_client.must_joint_confchange(
+        region.get_id(),
+        vec![(
+            ConfChangeType::AddLearnerNode,
+            new_learner_peer(5, find_peer(&region, 5).unwrap().get_id()),
+        )],
+    );
     cluster
         .pd_client
         .must_remove_peer(region.get_id(), find_peer(&region, 5).unwrap().clone());

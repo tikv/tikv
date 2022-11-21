@@ -15,7 +15,7 @@ use std::{
 use futures::executor::block_on;
 use kvproto::raft_serverpb::RaftMessage;
 use pd_client::PdClient;
-use raft::eraftpb::MessageType;
+use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::{store::ReadIndexContext, Result};
 use test_raftstore::*;
 use tikv_util::{config::*, time::Instant, HandyRwLock};
@@ -315,7 +315,11 @@ fn test_read_index_out_of_order() {
     let resp1 = async_read_on_peer(&mut cluster, new_peer(1, 1), r1.clone(), b"k1", true, true);
     resp1.recv_timeout(Duration::from_secs(2)).unwrap_err();
 
-    pd_client.must_remove_peer(rid, new_peer(2, 2));
+    pd_client.must_joint_confchange(
+        rid,
+        vec![(ConfChangeType::AddLearnerNode, new_learner_peer(2, 2))],
+    );
+    pd_client.must_remove_peer(rid, new_learner_peer(2, 2));
 
     // After peer 2 is removed, we can get 2 read responses.
     let resp2 = async_read_on_peer(&mut cluster, new_peer(1, 1), r1, b"k1", true, true);

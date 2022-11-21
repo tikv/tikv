@@ -21,7 +21,12 @@ use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::Result;
 use test_pd_client::TestPdClient;
 use test_raftstore::*;
-use tikv_util::{config::ReadableDuration, store::is_learner, time::Instant, HandyRwLock};
+use tikv_util::{
+    config::ReadableDuration,
+    store::{is_learner, new_learner_peer},
+    time::Instant,
+    HandyRwLock,
+};
 
 fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -586,7 +591,11 @@ fn test_conf_change_safe<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Ensure it works to remove one node from the cluster that has only two healthy
     // nodes.
-    pd_client.must_remove_peer(region_id, new_peer(2, 2));
+    pd_client.must_joint_confchange(
+        region_id,
+        vec![(ConfChangeType::AddLearnerNode, new_learner_peer(2, 2))],
+    );
+    pd_client.must_remove_peer(region_id, new_learner_peer(2, 2));
 }
 
 fn test_transfer_leader_safe<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -930,4 +939,50 @@ fn test_conf_change_fast() {
     pd_client.must_add_peer(r1, new_peer(2, 2));
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
     assert!(timer.saturating_elapsed() < Duration::from_secs(5));
+}
+
+/// Test if check_conf_change rejects removing node from two-replicas cluster.
+#[test]
+fn test_check_conf_change_when_remove_node_from_two_member_cluster() {
+    let mut cluster = new_node_cluster(0, 2);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+
+    cluster.must_put(b"k", b"v");
+
+    // Ensure 1 is leader
+    let region = pd_client.get_region(b"k").unwrap();
+    let peer_on_store1 = find_peer(&region, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1);
+
+    cluster.must_put(b"k1", b"v");
+
+    let resp =
+        call_conf_change(&mut cluster, r1, ConfChangeType::RemoveNode, new_peer(1, 1)).unwrap();
+    let exec_res = resp
+        .get_header()
+        .get_error()
+        .get_message()
+        .contains("demote voter firstly");
+    assert!(
+        exec_res,
+        "remove voter directly in 2 replica raft group should failed, but got {:?}",
+        resp
+    );
+
+    let resp =
+        call_conf_change(&mut cluster, r1, ConfChangeType::RemoveNode, new_peer(2, 2)).unwrap();
+    let exec_res = resp
+        .get_header()
+        .get_error()
+        .get_message()
+        .contains("demote voter firstly");
+    assert!(
+        exec_res,
+        "remove voter directly in 2 replica raft group should failed, but got {:?}",
+        resp
+    );
 }

@@ -11,6 +11,7 @@ use engine_traits::{Peekable, WriteBatch};
 use grpcio::{ChannelBuilder, Environment};
 use keys::data_key;
 use kvproto::{kvrpcpb::*, metapb::Region, tikvpb::TikvClient};
+use raft::eraftpb::ConfChangeType;
 use raftstore::coprocessor::{
     RegionInfo, RegionInfoCallback, RegionInfoProvider, Result as CopResult, SeekRegionCallback,
 };
@@ -293,7 +294,17 @@ fn test_collect_applying_locks() {
     // Transfer the region from store-1 to store-2.
     fail::remove(new_leader_apply_fp);
     cluster.must_transfer_leader(region_id, new_peer);
-    cluster.pd_client.must_remove_peer(region_id, leader);
+    cluster.pd_client.must_joint_confchange(
+        region_id,
+        vec![(
+            ConfChangeType::AddLearnerNode,
+            new_learner_peer(leader.get_store_id(), leader.get_id()),
+        )],
+    );
+    cluster.pd_client.must_remove_peer(
+        region_id,
+        new_learner_peer(leader.get_store_id(), leader.get_id()),
+    );
     // Wait for store-1 desroying the region.
     std::thread::sleep(Duration::from_secs(3));
 
