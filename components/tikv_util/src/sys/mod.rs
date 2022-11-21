@@ -191,14 +191,13 @@ pub fn path_in_diff_mount_point(path1: &str, path2: &str) -> bool {
 
 #[cfg(not(target_os = "linux"))]
 pub fn path_in_diff_mount_point(_path1: &str, _path2: &str) -> bool {
-    return false;
+    false
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn test_path_in_diff_mount_point() {
         let (empty_path1, path2) = ("", "/");

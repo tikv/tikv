@@ -15,10 +15,14 @@ use std::{
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
+use futures::future::BoxFuture;
 use kvproto::{
     errorpb,
     kvrpcpb::{Context, IsolationLevel},
-    raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response},
+    raft_cmdpb::{
+        AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request,
+        Response,
+    },
 };
 use raft::{
     eraftpb::{self, MessageType},
@@ -37,7 +41,7 @@ use raftstore::{
 };
 use thiserror::Error;
 use tikv_kv::write_modifies;
-use tikv_util::{codec::number::NumberEncoder, time::Instant};
+use tikv_util::{codec::number::NumberEncoder, future::paired_future_callback, time::Instant};
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
 use super::metrics::*;
@@ -149,6 +153,49 @@ where
     }
 }
 
+#[inline]
+pub fn new_request_header(ctx: &Context) -> RaftRequestHeader {
+    let mut header = RaftRequestHeader::default();
+    header.set_region_id(ctx.get_region_id());
+    header.set_peer(ctx.get_peer().clone());
+    header.set_region_epoch(ctx.get_region_epoch().clone());
+    if ctx.get_term() != 0 {
+        header.set_term(ctx.get_term());
+    }
+    header.set_sync_log(ctx.get_sync_log());
+    header.set_replica_read(ctx.get_replica_read());
+    header
+}
+
+#[inline]
+pub fn new_flashback_req(ctx: &Context, ty: AdminCmdType) -> RaftCmdRequest {
+    let header = new_request_header(ctx);
+    let mut req = RaftCmdRequest::default();
+    req.set_header(header);
+    req.mut_header()
+        .set_flags(WriteBatchFlags::FLASHBACK.bits());
+    req.mut_admin_request().set_cmd_type(ty);
+    req
+}
+
+fn exec_admin<E: KvEngine, S: RaftStoreRouter<E>>(
+    router: &S,
+    req: RaftCmdRequest,
+) -> BoxFuture<'static, kv::Result<()>> {
+    let (cb, f) = paired_future_callback();
+    let res = router.send_command(
+        req,
+        raftstore::store::Callback::write(cb),
+        RaftCmdExtraOpts::default(),
+    );
+    Box::pin(async move {
+        res?;
+        let mut resp = box_try!(f.await);
+        check_raft_cmd_response(&mut resp.response)?;
+        Ok(())
+    })
+}
+
 /// `RaftKv` is a storage engine base on `RaftStore`.
 #[derive(Clone)]
 pub struct RaftKv<E, S>
@@ -181,26 +228,13 @@ where
         self.txn_extra_scheduler = Some(txn_extra_scheduler);
     }
 
-    fn new_request_header(&self, ctx: &Context) -> RaftRequestHeader {
-        let mut header = RaftRequestHeader::default();
-        header.set_region_id(ctx.get_region_id());
-        header.set_peer(ctx.get_peer().clone());
-        header.set_region_epoch(ctx.get_region_epoch().clone());
-        if ctx.get_term() != 0 {
-            header.set_term(ctx.get_term());
-        }
-        header.set_sync_log(ctx.get_sync_log());
-        header.set_replica_read(ctx.get_replica_read());
-        header
-    }
-
     fn exec_snapshot(
         &mut self,
         ctx: SnapContext<'_>,
         req: Request,
         cb: Callback<CmdRes<E::Snapshot>>,
     ) -> Result<()> {
-        let mut header = self.new_request_header(ctx.pb_ctx);
+        let mut header = new_request_header(ctx.pb_ctx);
         let mut flags = 0;
         if ctx.pb_ctx.get_stale_read() && ctx.start_ts.map_or(true, |ts| !ts.is_zero()) {
             let mut data = [0u8; 8];
@@ -257,7 +291,7 @@ where
 
         let reqs: Vec<Request> = batch.modifies.into_iter().map(Into::into).collect();
         let txn_extra = batch.extra;
-        let mut header = self.new_request_header(ctx);
+        let mut header = new_request_header(ctx);
         let mut flags = 0;
         if txn_extra.one_pc {
             flags |= WriteBatchFlags::ONE_PC.bits();
@@ -508,6 +542,24 @@ where
                 tx.schedule(txn_extra);
             }
         }
+    }
+
+    fn start_flashback(&self, ctx: &Context) -> BoxFuture<'static, kv::Result<()>> {
+        // Send an `AdminCmdType::PrepareFlashback` to prepare the raftstore for the
+        // later flashback. Once invoked, we will update the persistent region meta and
+        // the memory state of the flashback in Peer FSM to reject all read, write
+        // and scheduling operations for this region when propose/apply before we
+        // start the actual data flashback transaction command in the next phase.
+        let req = new_flashback_req(ctx, AdminCmdType::PrepareFlashback);
+        exec_admin(&self.router, req)
+    }
+
+    fn end_flashback(&self, ctx: &Context) -> BoxFuture<'static, kv::Result<()>> {
+        // Send an `AdminCmdType::FinishFlashback` to unset the persistence state
+        // in `RegionLocalState` and region's meta, and when that admin cmd is applied,
+        // will update the memory state of the flashback
+        let req = new_flashback_req(ctx, AdminCmdType::FinishFlashback);
+        exec_admin(&self.router, req)
     }
 }
 
