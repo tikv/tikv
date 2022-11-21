@@ -95,6 +95,7 @@ const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 pub const DEFAULT_EXECUTION_DURATION_LIMIT: Duration = Duration::from_secs(24 * 60 * 60);
 
 const IN_MEMORY_PESSIMISTIC_LOCK: Feature = Feature::require(6, 0, 0);
+pub const LAST_CHANGE_TS: Feature = Feature::require(6, 5, 0);
 
 /// Task is a running command.
 pub(super) struct Task {
@@ -391,12 +392,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 engine.clone(),
                 config.scheduler_worker_pool_size,
                 reporter.clone(),
+                feature_gate.clone(),
                 "sched-worker-pool",
             ),
             high_priority_pool: SchedPool::new(
                 engine,
                 std::cmp::max(1, config.scheduler_worker_pool_size / 2),
                 reporter,
+                feature_gate.clone(),
                 "sched-high-pri-pool",
             ),
             control_mutex: Arc::new(tokio::sync::Mutex::new(false)),
@@ -1072,8 +1075,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         let mut pr = Some(pr);
 
-        // TODO: Lock wait handling here.
-        if let Some(lock_info) = lock_info {
+        if !lock_info.is_empty() {
+            assert_eq!(lock_info.len(), 1);
+            let lock_info = lock_info.into_iter().next().unwrap();
+
             // Only handle lock waiting if `wait_timeout` is set. Otherwise it indicates
             // that it's a lock-no-wait request and we need to report error
             // immediately.
@@ -1424,6 +1429,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             key: lock_info.key,
             lock_hash: lock_info.lock_digest.hash,
             parameters: lock_info.parameters,
+            should_not_exist: lock_info.should_not_exist,
             lock_wait_token,
             legacy_wake_up_index: None,
             key_cb: Some(ctx.get_callback_for_blocked_key().into()),
@@ -1489,7 +1495,7 @@ mod tests {
     use kvproto::kvrpcpb::{BatchRollbackRequest, CheckTxnStatusRequest, Context};
     use raftstore::store::{ReadStats, WriteStats};
     use tikv_util::{config::ReadableSize, future::paired_future_callback};
-    use txn_types::{Key, OldValues, TimeStamp};
+    use txn_types::{Key, TimeStamp};
 
     use super::*;
     use crate::storage::{
@@ -1572,7 +1578,7 @@ mod tests {
                 Some(WaitTimeout::Default),
                 false,
                 TimeStamp::default(),
-                OldValues::default(),
+                false,
                 false,
                 false,
                 Context::default(),
@@ -1655,7 +1661,7 @@ mod tests {
                 assert!(latches.acquire(&mut lock, id));
             }
             let unlocked = latches.release(&lock, id);
-            if id as u64 == max_id {
+            if id == max_id {
                 assert!(unlocked.is_empty());
             } else {
                 assert_eq!(unlocked, vec![id + 1]);

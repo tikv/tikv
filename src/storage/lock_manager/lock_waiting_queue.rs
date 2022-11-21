@@ -80,12 +80,12 @@ use crate::storage::{
     metrics::*,
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
     txn::Error as TxnError,
-    types::{PessimisticLockParameters, PessimisticLockRes},
+    types::{PessimisticLockKeyResult, PessimisticLockParameters},
     Error as StorageError,
 };
 
 pub type CallbackWithSharedError<T> = Box<dyn FnOnce(Result<T, SharedError>) + Send + 'static>;
-pub type PessimisticLockKeyCallback = CallbackWithSharedError<PessimisticLockRes>;
+pub type PessimisticLockKeyCallback = CallbackWithSharedError<PessimisticLockKeyResult>;
 
 /// Represents an `AcquirePessimisticLock` request that's waiting for a lock,
 /// and contains the request's parameters.
@@ -93,6 +93,9 @@ pub struct LockWaitEntry {
     pub key: Key,
     pub lock_hash: u64,
     pub parameters: PessimisticLockParameters,
+    // `parameters` provides parameter for a request, but `should_not_exist` is specified key-wise.
+    // Put it in a separated field.
+    pub should_not_exist: bool,
     pub lock_wait_token: LockWaitToken,
     pub legacy_wake_up_index: Option<usize>,
     pub key_cb: Option<SyncWrapper<PessimisticLockKeyCallback>>,
@@ -616,7 +619,7 @@ mod tests {
 
     struct TestLockWaitEntryHandle {
         token: LockWaitToken,
-        wake_up_rx: Receiver<Result<PessimisticLockRes, SharedError>>,
+        wake_up_rx: Receiver<Result<PessimisticLockKeyResult, SharedError>>,
         cancel_cb: Box<dyn FnOnce()>,
     }
 
@@ -624,7 +627,7 @@ mod tests {
         fn wait_for_result_timeout(
             &self,
             timeout: Duration,
-        ) -> Option<Result<PessimisticLockRes, SharedError>> {
+        ) -> Option<Result<PessimisticLockKeyResult, SharedError>> {
             match self.wake_up_rx.recv_timeout(timeout) {
                 Ok(res) => Some(res),
                 Err(RecvTimeoutError::Timeout) => None,
@@ -635,7 +638,7 @@ mod tests {
             }
         }
 
-        fn wait_for_result(self) -> Result<PessimisticLockRes, SharedError> {
+        fn wait_for_result(self) -> Result<PessimisticLockKeyResult, SharedError> {
             self.wake_up_rx
                 .recv_timeout(Duration::from_secs(10))
                 .unwrap()
@@ -687,6 +690,7 @@ mod tests {
                 min_commit_ts: 0.into(),
                 check_existence: false,
                 is_first_lock: false,
+                lock_only_if_exists: false,
                 allow_lock_with_conflict: false,
             };
 
@@ -697,6 +701,7 @@ mod tests {
                 key,
                 lock_hash,
                 parameters,
+                should_not_exist: false,
                 lock_wait_token: token,
                 legacy_wake_up_index: None,
                 key_cb: Some(SyncWrapper::new(Box::new(move |res| tx.send(res).unwrap()))),

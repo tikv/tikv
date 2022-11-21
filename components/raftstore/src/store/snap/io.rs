@@ -152,7 +152,7 @@ where
                 Ok(new_sst_writer) => {
                     let old_writer = sst_writer.replace(new_sst_writer);
                     box_try!(old_writer.finish());
-                    box_try!(File::open(&prev_path).and_then(|f| f.sync_all()));
+                    box_try!(File::open(prev_path).and_then(|f| f.sync_all()));
                 }
                 Err(e) => {
                     let io_error = io::Error::new(io::ErrorKind::Other, e);

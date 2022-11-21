@@ -9,7 +9,7 @@ use kvproto::{
     raft_serverpb::RaftMessage,
 };
 use raft::eraftpb::Snapshot as RaftSnapshot;
-use raftstore::store::{AsyncReadNotifier, FetchedLogs, RegionSnapshot};
+use raftstore::store::{AsyncReadNotifier, FetchedLogs, GenSnapRes, RegionSnapshot};
 use slog::Logger;
 
 use super::PeerMsg;
@@ -20,7 +20,7 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncReadNotifier for StoreRouter<EK, ER> {
         let _ = self.force_send(region_id, PeerMsg::LogsFetched(fetched_logs));
     }
 
-    fn notify_snapshot_generated(&self, region_id: u64, snapshot: Box<RaftSnapshot>) {
+    fn notify_snapshot_generated(&self, region_id: u64, snapshot: GenSnapRes) {
         let _ = self.force_send(region_id, PeerMsg::SnapshotGenerated(snapshot));
     }
 }

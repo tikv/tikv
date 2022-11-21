@@ -9,11 +9,15 @@ pub mod ioload;
 pub mod thread;
 
 // re-export some traits for ease of use
+#[cfg(target_os = "linux")]
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use fail::fail_point;
 #[cfg(target_os = "linux")]
 use lazy_static::lazy_static;
+#[cfg(target_os = "linux")]
+use mnt::get_mount;
 use sysinfo::RefreshKind;
 pub use sysinfo::{DiskExt, NetworkExt, ProcessExt, ProcessorExt, SystemExt};
 
@@ -155,4 +159,62 @@ pub fn cache_size(level: usize) -> Option<u64> {
 /// It will only return `Some` on Linux.
 pub fn cache_line_size(level: usize) -> Option<u64> {
     read_size_in_cache(level, "coherency_line_size")
+}
+
+#[cfg(target_os = "linux")]
+pub fn path_in_diff_mount_point(path1: &str, path2: &str) -> bool {
+    if path1.is_empty() || path2.is_empty() {
+        return false;
+    }
+    let path1 = PathBuf::from(path1);
+    let path2 = PathBuf::from(path2);
+    match (get_mount(&path1), get_mount(&path2)) {
+        (Err(e1), _) => {
+            warn!("Get mount point error for path {}, {}", path1.display(), e1);
+            false
+        }
+        (_, Err(e2)) => {
+            warn!("Get mount point error for path {}, {}", path2.display(), e2);
+            false
+        }
+        (Ok(None), _) => {
+            warn!("No mount point for {}", path1.display());
+            false
+        }
+        (_, Ok(None)) => {
+            warn!("No mount point for {}", path2.display());
+            false
+        }
+        (Ok(Some(mount1)), Ok(Some(mount2))) => mount1 != mount2,
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn path_in_diff_mount_point(_path1: &str, _path2: &str) -> bool {
+    return false;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_path_in_diff_mount_point() {
+        let (empty_path1, path2) = ("", "/");
+        let result = path_in_diff_mount_point(empty_path1, path2);
+        assert_eq!(result, false);
+
+        let (no_mount_point_path, path2) = ("no_mount_point_path_w943nn", "/");
+        let result = path_in_diff_mount_point(no_mount_point_path, path2);
+        assert_eq!(result, false);
+
+        let (not_existed_path, path2) = ("/non_existed_path_eu2yndh", "/");
+        let result = path_in_diff_mount_point(not_existed_path, path2);
+        assert_eq!(result, false);
+
+        let (normal_path1, normal_path2) = ("/", "/");
+        let result = path_in_diff_mount_point(normal_path1, normal_path2);
+        assert_eq!(result, false);
+    }
 }

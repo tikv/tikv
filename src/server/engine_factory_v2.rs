@@ -156,7 +156,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
         let path = self.tablet_path(region_id, suffix).join(TOMBSTONE_MARK);
         // When the full directory path does not exsit, create will return error and in
         // this case, we just ignore it.
-        let _ = std::fs::File::create(&path);
+        let _ = std::fs::File::create(path);
         debug!("tombstone tablet"; "region_id" => region_id, "suffix" => suffix);
         {
             let mut reg = self.registry.lock().unwrap();
@@ -201,7 +201,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
         }
 
         let db_path = self.tablet_path(region_id, suffix);
-        std::fs::rename(path, &db_path)?;
+        std::fs::rename(path, db_path)?;
         self.open_tablet(
             region_id,
             Some(suffix),

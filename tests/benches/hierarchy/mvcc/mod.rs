@@ -47,6 +47,7 @@ where
             need_old_value: false,
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
+            txn_source: 0,
         };
         prewrite(
             &mut txn,
@@ -97,6 +98,7 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &B
                     need_old_value: false,
                     is_retry_request: false,
                     assertion_level: AssertionLevel::Off,
+                    txn_source: 0,
                 };
                 prewrite(
                     &mut txn,
