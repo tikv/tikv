@@ -712,7 +712,7 @@ pub mod tests {
         for (i, (remain, usage, need_flush, expected)) in cases.into_iter().enumerate() {
             let batch_list = Arc::new(TsoBatchList {
                 inner: Default::default(),
-                tso_remain: AtomicI32::new(remain as i32),
+                tso_remain: AtomicI32::new(remain),
                 tso_usage: AtomicU32::new(usage),
                 capacity: cache_multiplier,
             });

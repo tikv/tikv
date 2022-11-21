@@ -1012,11 +1012,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let pd_client = self.pd_client.clone();
         let scheduler = self.scheduler.clone();
         let raft_router = self.raft_router.clone();
-        let regions: Vec<u64> = self
-            .capture_regions
-            .iter()
-            .map(|(region_id, _)| *region_id)
-            .collect();
+        let regions: Vec<u64> = self.capture_regions.keys().copied().collect();
         let cm: ConcurrencyManager = self.concurrency_manager.clone();
         let hibernate_regions_compatible = self.config.hibernate_regions_compatible;
         let causal_ts_provider = self.causal_ts_provider.clone();

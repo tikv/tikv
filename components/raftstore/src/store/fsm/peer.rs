@@ -694,7 +694,7 @@ where
             .raft_metrics
             .event_time
             .peer_msg
-            .observe(duration_to_sec(timer.saturating_elapsed()) as f64);
+            .observe(duration_to_sec(timer.saturating_elapsed()));
     }
 
     #[inline]
@@ -3703,6 +3703,11 @@ where
         self.update_region(cp.region);
 
         fail_point!("change_peer_after_update_region");
+        fail_point!(
+            "change_peer_after_update_region_store_3",
+            self.store_id() == 3,
+            |_| panic!("should not use return")
+        );
 
         let now = Instant::now();
         let (mut remove_self, mut need_ping) = (false, false);

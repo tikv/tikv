@@ -1139,9 +1139,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-channel"
-version = "0.5.1"
+version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06ed27e177f16d65f0f0c22a213e17c696ace5dd64b14258b52f9417ccb52db4"
+checksum = "c2dd04ddaf88237dc3b8d8f9a3c1004b506b54b3313403944054d23c0870c521"
 dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-utils 0.8.8",
@@ -2694,7 +2694,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#65d0ae8fa853c1e41b43f329afbf60616bdd4d18"
+source = "git+https://github.com/pingcap/kvproto.git#51120697d051df163ec8aa313ee1916a68b07984"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -3118,6 +3118,15 @@ checksum = "0bc85448a6006dd2ba26a385a564a8a0f1f2c7e78c70f1a70b2e0f4af286b823"
 dependencies = [
  "libc 0.1.12",
  "tempdir",
+]
+
+[[package]]
+name = "mnt"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1587ebb20a5b04738f16cffa7e2526f1b8496b84f92920facd518362ff1559eb"
+dependencies = [
+ "libc 0.2.132",
 ]
 
 [[package]]
@@ -4124,7 +4133,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.3.0"
-source = "git+https://github.com/tikv/raft-engine.git#a0d29980f1448565a6d03f911ebb103c4266f1f4"
+source = "git+https://github.com/tikv/raft-engine.git#82f6da7b8dff1856483e8e72a59dda903fb2499b"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4158,7 +4167,7 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.3.0"
-source = "git+https://github.com/tikv/raft-engine.git#a0d29980f1448565a6d03f911ebb103c4266f1f4"
+source = "git+https://github.com/tikv/raft-engine.git#82f6da7b8dff1856483e8e72a59dda903fb2499b"
 dependencies = [
  "clap 3.1.6",
  "env_logger",
@@ -6475,6 +6484,7 @@ dependencies = [
  "libc 0.2.132",
  "log",
  "log_wrappers",
+ "mnt",
  "nix 0.24.1",
  "num-traits",
  "num_cpus",
