@@ -49,15 +49,8 @@ pub fn check_txn_status_lock_exists(
             MVCC_CHECK_TXN_STATUS_COUNTER_VEC.pessimistic_rollback.inc();
             Ok((TxnStatus::PessimisticRollBack, released))
         } else {
-            let released = rollback_lock(
-                txn,
-                reader,
-                primary_key,
-                &lock,
-                is_pessimistic_txn,
-                true,
-                false,
-            )?;
+            let released =
+                rollback_lock(txn, reader, primary_key, &lock, is_pessimistic_txn, true)?;
             MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
             Ok((TxnStatus::TtlExpire, released))
         };
@@ -158,13 +151,10 @@ pub fn rollback_lock(
     lock: &Lock,
     is_pessimistic_txn: bool,
     collapse_rollback: bool,
-    for_flashback: bool,
 ) -> Result<Option<ReleasedLock>> {
     let overlapped_write = match reader.get_txn_commit_record(&key)? {
         TxnCommitRecord::None { overlapped_write } => overlapped_write,
-        TxnCommitRecord::SingleRecord { write, .. }
-            if write.write_type != WriteType::Rollback && !for_flashback =>
-        {
+        TxnCommitRecord::SingleRecord { write, .. } if write.write_type != WriteType::Rollback => {
             panic!("txn record found but not expected: {:?}", txn)
         }
         _ => return Ok(txn.unlock_key(key, is_pessimistic_txn, TimeStamp::zero())),

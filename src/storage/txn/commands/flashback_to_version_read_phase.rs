@@ -18,7 +18,7 @@ use crate::storage::{
 
 #[derive(Debug)]
 pub enum FlashbackToVersionState {
-    Lock {
+    Prewrite {
         key_to_lock: Key,
     },
     ScanWrite {
@@ -28,6 +28,9 @@ pub enum FlashbackToVersionState {
     ScanLock {
         next_lock_key: Key,
         key_locks: Vec<(Key, Lock)>,
+    },
+    Commit {
+        key_to_commit: Key,
     },
 }
 
@@ -79,19 +82,22 @@ impl CommandExt for FlashbackToVersionReadPhase {
     }
 }
 
-/// The whole flashback progress contains there phases:
-///   1. Lock phase:
-///     - Lock the `self.start_key` specifically to prevent the `resolved_ts`
-///       from advancing.
+/// The whole flashback progress contains four phases:
+///   1. Prewrite phase:
+///     - Prewrite the `self.start_key` specifically to prevent the
+///       `resolved_ts` from advancing.
 ///   2. Read-and-flashback writes phase:
 ///     - Scan all the latest writes and their corresponding values at
 ///       `self.version`.
 ///     - Write the old MVCC version writes again for all these keys with
-///       `self.commit_ts`.
+///       `self.commit_ts` excluding the `self.start_key` .
 ///   3. Read-and-rollback locks phase:
 ///     - Scan all locks.
-///     - Rollback all these locks including the `self.start_key` lock we write
+///     - Rollback all these locks excluding the `self.start_key` lock we write
 ///       at the first phase.
+///  4. Commit phase:
+///     - Commit the `self.start_key` we write at the first phase to finish the
+///       flashback.
 impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
         let tag = self.tag().get_str();
@@ -104,6 +110,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                 let mut key_old_writes = flashback_to_version_read_write(
                     &mut reader,
                     next_write_key,
+                    &self.start_key,
                     &self.end_key,
                     self.version,
                     self.commit_ts,
@@ -134,20 +141,24 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                 let mut key_locks = flashback_to_version_read_lock(
                     &mut reader,
                     next_lock_key,
+                    &self.start_key,
                     &self.end_key,
                     statistics,
                 )?;
                 if key_locks.is_empty() {
-                    return Ok(ProcessResult::Res);
-                }
-                tls_collect_keyread_histogram_vec(tag, key_locks.len() as f64);
-                FlashbackToVersionState::ScanLock {
-                    next_lock_key: if key_locks.len() > 1 {
-                        key_locks.pop().map(|(key, _)| key).unwrap()
-                    } else {
-                        key_locks.last().map(|(key, _)| key.clone()).unwrap()
-                    },
-                    key_locks,
+                    FlashbackToVersionState::Commit {
+                        key_to_commit: self.start_key.clone(),
+                    }
+                } else {
+                    tls_collect_keyread_histogram_vec(tag, key_locks.len() as f64);
+                    FlashbackToVersionState::ScanLock {
+                        next_lock_key: if key_locks.len() > 1 {
+                            key_locks.pop().map(|(key, _)| key).unwrap()
+                        } else {
+                            key_locks.last().map(|(key, _)| key.clone()).unwrap()
+                        },
+                        key_locks,
+                    }
                 }
             }
             _ => unreachable!(),

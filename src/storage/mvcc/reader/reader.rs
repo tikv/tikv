@@ -522,7 +522,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
         limit: usize,
     ) -> Result<(Vec<(Key, Lock)>, bool)>
     where
-        F: Fn(&Lock) -> bool,
+        F: Fn(&Key, &Lock) -> bool,
     {
         self.create_lock_cursor()?;
         let cursor = self.lock_cursor.as_mut().unwrap();
@@ -545,7 +545,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             }
 
             let lock = Lock::parse(cursor.value(&mut self.statistics.lock))?;
-            if filter(&lock) {
+            if filter(&key, &lock) {
                 locks.push((key, lock));
                 if limit > 0 && locks.len() == limit {
                     has_remain = true;
@@ -1691,7 +1691,7 @@ pub mod tests {
                 .scan_locks(
                     start_key.as_ref(),
                     end_key.as_ref(),
-                    |l| l.ts <= 10.into(),
+                    |_, l| l.ts <= 10.into(),
                     limit,
                 )
                 .unwrap();
