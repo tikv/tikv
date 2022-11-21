@@ -113,7 +113,7 @@ pub fn must_prewrite_put_impl_with_should_not_exist<E: Engine>(
     assertion_level: AssertionLevel,
     should_not_exist: bool,
     region_id: Option<u64>,
-    txn_source: u32,
+    txn_source: u64,
 ) {
     let mut ctx = Context::default();
     ctx.set_txn_source(txn_source);
@@ -158,7 +158,7 @@ pub fn must_prewrite_put_impl_with_should_not_exist<E: Engine>(
             need_old_value: false,
             is_retry_request,
             assertion_level,
-            txn_source: txn_source as u8,
+            txn_source,
         },
         mutation,
         secondary_keys,
@@ -230,7 +230,7 @@ pub fn must_prewrite_put_with_txn_soucre<E: Engine>(
     value: &[u8],
     pk: &[u8],
     ts: impl Into<TimeStamp>,
-    txn_source: u32,
+    txn_source: u64,
 ) {
     must_prewrite_put_impl_with_should_not_exist(
         engine,
