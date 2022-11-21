@@ -93,7 +93,6 @@ impl RecvTabletSnapContext {
     }
 
     fn finish<R: RaftStoreRouter<impl KvEngine>>(self, raft_router: R) -> Result<()> {
-        let _with_io_type = WithIoType::new(self.io_type);
         let key = self.key;
         if let Err(e) = raft_router.send_raft_msg(self.raft_msg) {
             return Err(box_err!("{} failed to send snapshot to raft: {}", key, e));
@@ -130,29 +129,31 @@ async fn send_snap_files(
         buffer.extend_from_slice(name.as_bytes());
         let mut f = File::open(&path)?;
         let mut off = buffer.len();
-        let mut new_len = off;
         loop {
-            unsafe { buffer.set_len(SNAP_CHUNK_LEN) }
-            let readed = f.read(&mut buffer[off..])?;
-            // It should switch the next file if the current file read eof and the last
-            // read buffer length is less SNAP_CHUNK_LEN.
-            // Notice that, it should send empty snapshot chunk to notify the receiver
-            // switch next file if the last read buffer length is equal SNAP_CHUNK_LEN
-            if readed == 0 && new_len < SNAP_CHUNK_LEN {
-                break;
-            }
-            limiter.consume(readed);
-            new_len = readed + off;
-            total_sent += new_len as u64;
             unsafe {
-                buffer.set_len(new_len);
+                buffer.set_len(SNAP_CHUNK_LEN);
             }
+            // it should break if readed len is zero or the buffer is full.
+            while off < SNAP_CHUNK_LEN {
+                let readed = f.read(&mut buffer[off..])?;
+                if readed == 0 {
+                    unsafe {
+                        buffer.set_len(off);
+                    }
+                    break;
+                }
+                off += readed;
+            }
+            limiter.consume(off);
+            total_sent += off as u64;
             let mut chunk = SnapshotChunk::default();
             chunk.set_data(buffer);
             sender
                 .feed((chunk, WriteFlags::default().buffer_hint(true)))
                 .await?;
-            if readed == 0 {
+            // It should switch the next file if the read buffer len is less than the
+            // SNAP_CHUNK_LEN.
+            if off < SNAP_CHUNK_LEN {
                 break;
             }
             buffer = Vec::with_capacity(SNAP_CHUNK_LEN);
@@ -489,7 +490,6 @@ mod tests {
     };
     use futures_util::StreamExt;
     use grpcio::WriteFlags;
-    // use futures_util::SinkExt;
     use kvproto::raft_serverpb::{RaftMessage, SnapshotChunk};
     use raftstore::store::snap::{TabletSnapKey, TabletSnapManager};
     use tempfile::TempDir;
