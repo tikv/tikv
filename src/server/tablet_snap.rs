@@ -71,7 +71,7 @@ impl RecvTabletSnapContext {
             meta.get_to_peer().get_id(),
             meta.get_message().get_snapshot(),
         );
-        let io_type = get_io_type_from_raft_message(&meta)?;
+        let io_type = io_type_from_raft_message(&meta)?;
 
         Ok(RecvTabletSnapContext {
             key,
@@ -92,7 +92,7 @@ impl RecvTabletSnapContext {
     }
 }
 
-fn get_io_type_from_raft_message(msg: &RaftMessage) -> Result<IoType> {
+fn io_type_from_raft_message(msg: &RaftMessage) -> Result<IoType> {
     let snapshot = msg.get_message().get_snapshot();
     let data = snapshot.get_data();
     let mut snapshot_data = RaftSnapshotData::default();
@@ -118,7 +118,7 @@ async fn send_snap_files(
         .map(|f| Ok(f?.path()))
         .filter(|f| f.is_ok() && f.as_ref().unwrap().is_file())
         .collect::<Result<Vec<_>>>()?;
-    let io_type = get_io_type_from_raft_message(&msg)?;
+    let io_type = io_type_from_raft_message(&msg)?;
     let _with_io_type = WithIoType::new(io_type);
     let mut total_sent = msg.compute_size() as u64;
     let mut chunk = SnapshotChunk::default();
