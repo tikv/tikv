@@ -28,9 +28,9 @@ pub fn new_flashback_to_version_prewrite_cmd(
 ) -> TypedCommand<()> {
     FlashbackToVersion::new(
         start_ts,
-        TimeStamp::zero(),
-        TimeStamp::zero(),
         // Just pass some dummy values since we don't need them in this phase.
+        TimeStamp::zero(),
+        TimeStamp::zero(),
         Key::from_raw(b""),
         Key::from_raw(b""),
         FlashbackToVersionState::Prewrite {
@@ -61,24 +61,20 @@ impl CommandExt for FlashbackToVersion {
 
     fn gen_lock(&self) -> latch::Lock {
         match &self.state {
-            FlashbackToVersionState::Prewrite { key_to_lock, .. } => {
-                latch::Lock::new([key_to_lock])
-            }
+            FlashbackToVersionState::Prewrite { key_to_lock } => latch::Lock::new([key_to_lock]),
             FlashbackToVersionState::ScanLock { key_locks, .. } => {
                 latch::Lock::new(key_locks.iter().map(|(key, _)| key))
             }
             FlashbackToVersionState::ScanWrite { key_old_writes, .. } => {
                 latch::Lock::new(key_old_writes.iter().map(|(key, _)| key))
             }
-            FlashbackToVersionState::Commit { key_to_commit, .. } => {
-                latch::Lock::new([key_to_commit])
-            }
+            FlashbackToVersionState::Commit { key_to_commit } => latch::Lock::new([key_to_commit]),
         }
     }
 
     fn write_bytes(&self) -> usize {
         match &self.state {
-            FlashbackToVersionState::Prewrite { key_to_lock, .. } => key_to_lock.as_encoded().len(),
+            FlashbackToVersionState::Prewrite { key_to_lock } => key_to_lock.as_encoded().len(),
             FlashbackToVersionState::ScanLock { key_locks, .. } => key_locks
                 .iter()
                 .map(|(key, _)| key.as_encoded().len())
@@ -87,9 +83,7 @@ impl CommandExt for FlashbackToVersion {
                 .iter()
                 .map(|(key, _)| key.as_encoded().len())
                 .sum(),
-            FlashbackToVersionState::Commit { key_to_commit, .. } => {
-                key_to_commit.as_encoded().len()
-            }
+            FlashbackToVersionState::Commit { key_to_commit } => key_to_commit.as_encoded().len(),
         }
     }
 }
