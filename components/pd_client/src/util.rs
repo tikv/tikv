@@ -535,7 +535,7 @@ pub type StubTuple = (
 
 #[derive(Clone)]
 pub struct PdConnector {
-    env: Arc<Environment>,
+    pub(crate) env: Arc<Environment>,
     security_mgr: Arc<SecurityManager>,
 }
 

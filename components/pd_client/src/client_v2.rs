@@ -17,7 +17,7 @@ use std::{
     pin::Pin,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex as StdMutex,
+        Arc, Mutex,
     },
     time::Duration,
     u64,
@@ -25,7 +25,7 @@ use std::{
 
 use fail::fail_point;
 use futures::{
-    compat::Future01CompatExt,
+    compat::{Compat, Future01CompatExt},
     executor::block_on,
     future::{FutureExt, TryFutureExt},
     select,
@@ -54,7 +54,7 @@ use tikv_util::{
     timer::GLOBAL_TIMER_HANDLE,
     warn,
 };
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::broadcast;
 use txn_types::TimeStamp;
 
 use super::{
@@ -132,26 +132,57 @@ impl RawClient {
     }
 }
 
-/// A shared [`RawClient`] with a local copy of cache.
-#[derive(Clone)]
-pub struct CachedRawClient {
-    context: Arc<ConnectContext>,
+struct CachedRawClientCore {
+    context: ConnectContext,
 
     latest: Arc<Mutex<Option<RawClient>>>,
     version: Arc<AtomicU64>,
-    on_reconnect_notify: Arc<Notify>,
+    on_reconnect_tx: broadcast::Sender<()>,
+}
+
+impl CachedRawClientCore {
+    // Get around reference sharing issue. Remove this when grpcio is updated.
+    fn grab_a_channel(&self) -> &Channel {
+        unimplemented!()
+    }
+}
+
+/// A shared [`RawClient`] with a local copy of cache.
+pub struct CachedRawClient {
+    core: Arc<CachedRawClientCore>,
+    on_reconnect_rx: broadcast::Receiver<()>,
 
     cache: Option<RawClient>,
     cache_version: u64,
 }
 
-impl CachedRawClient {
-    fn new(context: ConnectContext, on_reconnect_notify: Arc<Notify>) -> Self {
+impl Clone for CachedRawClient {
+    fn clone(&self) -> Self {
         Self {
-            context: Arc::new(context),
+            core: self.core.clone(),
+            on_reconnect_rx: self.core.on_reconnect_tx.subscribe(),
+            cache: self.cache.clone(),
+            cache_version: self.cache_version,
+        }
+    }
+}
+
+impl CachedRawClient {
+    fn new(cfg: Config, env: Arc<Environment>, security_mgr: Arc<SecurityManager>) -> Self {
+        let context = ConnectContext {
+            cfg,
+            connector: PdConnector::new(env, security_mgr),
+        };
+        let (tx, rx) = broadcast::channel(1);
+        let core = CachedRawClientCore {
+            context,
             latest: Arc::new(Mutex::new(None)),
             version: Arc::new(AtomicU64::new(0)),
-            on_reconnect_notify,
+            on_reconnect_tx: tx,
+        };
+        Self {
+            core: Arc::new(core),
+            on_reconnect_rx: rx,
             cache: None,
             cache_version: 0,
         }
@@ -159,10 +190,10 @@ impl CachedRawClient {
 
     #[inline]
     async fn refresh_cache(&mut self) -> bool {
-        if self.cache_version < self.version.load(Ordering::Acquire) {
-            let latest = self.latest.lock().await;
+        if self.cache_version < self.core.version.load(Ordering::Acquire) {
+            let latest = self.core.latest.lock().unwrap();
             self.cache = (*latest).clone();
-            self.cache_version = self.version.load(Ordering::Relaxed);
+            self.cache_version = self.core.version.load(Ordering::Relaxed);
             true
         } else {
             false
@@ -172,12 +203,36 @@ impl CachedRawClient {
     #[inline]
     async fn publish_cache(&mut self) {
         let latest_version = {
-            let mut latest = self.latest.lock().await;
+            let mut latest = self.core.latest.lock().unwrap();
             *latest = self.cache.clone();
-            self.version.fetch_add(1, Ordering::AcqRel) + 1
+            let _ = self.core.on_reconnect_tx.send(());
+            self.core.version.fetch_add(1, Ordering::Relaxed) + 1
         };
         debug_assert!(self.cache_version < latest_version);
         self.cache_version = latest_version;
+    }
+
+    #[inline]
+    async fn wait_for_a_new_client(
+        rx: &mut broadcast::Receiver<()>,
+        current_version: u64,
+        latest_version: &AtomicU64,
+    ) -> bool {
+        let deadline = std::time::Instant::now() + REQUEST_TIMEOUT;
+        loop {
+            if GLOBAL_TIMER_HANDLE
+                .timeout(Compat::new(Box::pin(rx.recv())), deadline)
+                .compat()
+                .await
+                .is_ok()
+            {
+                if current_version < latest_version.load(Ordering::Acquire) {
+                    return true;
+                }
+            } else {
+                return false;
+            }
+        }
     }
 
     /// Refreshes the local cache with latest client, then waits for the
@@ -186,28 +241,28 @@ impl CachedRawClient {
     async fn wait_for_ready(&mut self) -> Result<()> {
         self.refresh_cache().await;
         if self.cache.is_none() {
-            if tokio::time::timeout(REQUEST_TIMEOUT, self.on_reconnect_notify.notified())
-                .await
-                .is_ok()
+            if !Self::wait_for_a_new_client(
+                &mut self.on_reconnect_rx,
+                self.cache_version,
+                self.core.version.as_ref(),
+            )
+            .await
             {
-                self.refresh_cache().await;
-                debug_assert!(self.cache.is_some());
-            }
-            if self.cache.is_none() {
                 return Err(box_err!("Connection is not initialized in time"));
             }
+            assert!(self.cache.is_some());
         }
         select! {
-            r = self.channel().wait_for_connected(REQUEST_TIMEOUT).fuse() => {
+            r = self.core.grab_a_channel().wait_for_connected(REQUEST_TIMEOUT).fuse() => {
                 if r {
                     return Ok(());
                 }
             }
-            _ = self.on_reconnect_notify.notified().fuse() => {
-                let _prev_version = self.cache_version;
-                self.refresh_cache().await;
-                debug_assert!(_prev_version < self.cache_version);
-                return Ok(())
+            r = Self::wait_for_a_new_client(&mut self.on_reconnect_rx, self.cache_version, self.core.version.as_ref()).fuse() => {
+                if r {
+                    assert!(self.refresh_cache().await);
+                    return Ok(());
+                }
             }
         }
         Err(box_err!(
@@ -220,15 +275,16 @@ impl CachedRawClient {
     async fn connect(&mut self) -> Result<()> {
         debug_assert!(self.cache.is_none());
         // -1 means the max.
-        let retries = match self.context.cfg.retry_max_count {
+        let retries = match self.core.context.cfg.retry_max_count {
             -1 => std::isize::MAX,
             v => v.saturating_add(1),
         };
         for i in 0..retries {
             match self
+                .core
                 .context
                 .connector
-                .validate_endpoints(&self.context.cfg, false)
+                .validate_endpoints(&self.core.context.cfg, false)
                 .await
             {
                 Ok((stub, target_info, members, _)) => {
@@ -240,11 +296,11 @@ impl CachedRawClient {
                     self.publish_cache().await;
                 }
                 Err(e) => {
-                    if i as usize % self.context.cfg.retry_log_every == 0 {
+                    if i as usize % self.core.context.cfg.retry_log_every == 0 {
                         warn!("validate PD endpoints failed"; "err" => ?e);
                     }
                     let _ = GLOBAL_TIMER_HANDLE
-                        .delay(std::time::Instant::now() + self.context.cfg.retry_interval.0)
+                        .delay(std::time::Instant::now() + self.core.context.cfg.retry_interval.0)
                         .compat()
                         .await;
                 }
@@ -262,7 +318,7 @@ impl CachedRawClient {
             .cache
             .as_mut()
             .unwrap()
-            .maybe_reconnect(&self.context, force)
+            .maybe_reconnect(&self.core.context, force)
             .await?
         {
             self.publish_cache().await;
@@ -309,6 +365,11 @@ impl CachedRawClient {
         header
     }
 
+    #[inline]
+    fn env(&self) -> &Arc<Environment> {
+        &self.core.context.connector.env
+    }
+
     /// Might panic if `wait_for_ready` isn't called up-front.
     #[cfg(feature = "testexport")]
     #[inline]
@@ -345,8 +406,8 @@ impl<T: Debug> Stream for CachedDuplexResponse<T> {
     }
 }
 
-type DuplexResponseHolder<T> = Arc<StdMutex<Option<ClientDuplexReceiver<T>>>>;
-type CallbackHolder = Arc<StdMutex<Option<Box<dyn Fn() + Sync + Send + 'static>>>>;
+type DuplexResponseHolder<T> = Arc<Mutex<Option<ClientDuplexReceiver<T>>>>;
+type CallbackHolder = Arc<Mutex<Option<Box<dyn Fn() + Sync + Send + 'static>>>>;
 
 #[derive(Clone)]
 pub struct RpcClient {
@@ -355,16 +416,10 @@ pub struct RpcClient {
     on_reconnect_cb: CallbackHolder,
 }
 
-async fn reconnect_loop(
-    mut client: CachedRawClient,
-    on_reconnect_notify: Arc<Notify>,
-    on_reconnect_cb: CallbackHolder,
-) {
+async fn reconnect_loop(mut client: CachedRawClient, on_reconnect_cb: CallbackHolder, cfg: Config) {
     if let Err(e) = client.connect().await {
         error!("failed to connect pd"; "err" => ?e);
         return;
-    } else {
-        on_reconnect_notify.notify_waiters();
     }
     loop {
         if client.channel().wait_for_connected(REQUEST_TIMEOUT).await {
@@ -372,7 +427,7 @@ async fn reconnect_loop(
             // Checks for leader change periodically.
             client
                 .channel()
-                .wait_for_state_change(state, REQUEST_TIMEOUT)
+                .wait_for_state_change(state, cfg.update_interval.0)
                 .await;
         }
         match client.reconnect().await {
@@ -380,7 +435,6 @@ async fn reconnect_loop(
                 if let Some(ref f) = *on_reconnect_cb.lock().unwrap() {
                     f();
                 }
-                on_reconnect_notify.notify_waiters();
             }
             Err(e) => {
                 warn!("failed to reconnect pd"; "err" => ?e);
@@ -406,18 +460,13 @@ impl RpcClient {
         });
 
         let on_reconnect_cb: CallbackHolder = Default::default();
-        let on_reconnect_notify = Arc::new(Notify::new());
-        let context = ConnectContext {
-            cfg: cfg.clone(),
-            connector: PdConnector::new(env.clone(), security_mgr),
-        };
-        let raw_client = CachedRawClient::new(context, on_reconnect_notify.clone());
+        let raw_client = CachedRawClient::new(cfg.clone(), env.clone(), security_mgr);
 
         let lame_client = PdClientStub::new(Channel::lame(env, "0.0.0.0:0"));
         lame_client.spawn(reconnect_loop(
             raw_client.clone(),
-            on_reconnect_notify,
             on_reconnect_cb.clone(),
+            cfg.clone(),
         ));
 
         Ok(Self {
@@ -428,7 +477,18 @@ impl RpcClient {
     }
 
     pub fn set_on_reconnect<F: Fn() + Sync + Send + 'static>(&self, f: F) {
-        *self.on_reconnect_cb.lock().unwrap() = Some(Box::new(f));
+        let lame_client =
+            PdClientStub::new(Channel::lame(self.raw_client.env().clone(), "0.0.0.0:0"));
+        let mut rx = self.raw_client.clone().on_reconnect_rx;
+        lame_client.spawn(async move {
+            loop {
+                if rx.recv().await.is_err() {
+                    break;
+                } else {
+                    f();
+                }
+            }
+        });
     }
 
     #[cfg(feature = "testexport")]
