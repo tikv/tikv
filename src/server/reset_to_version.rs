@@ -85,10 +85,7 @@ impl ResetToVersionWorker {
 
     fn next_write(&mut self) -> Result<Option<(Vec<u8>, Write)>> {
         if self.write_iter.valid().unwrap() {
-            let mut state = self
-                .state
-                .lock()
-                .expect("failed to lock ResetToVersionWorker::state");
+            let mut state = self.state.lock().unwrap();
             debug_assert!(matches!(
                 *state,
                 ResetToVersionState::RemovingWrite { scanned: _ }
@@ -149,16 +146,14 @@ impl ResetToVersionWorker {
         let mut has_more = true;
         for _ in 0..batch_size {
             if self.lock_iter.valid().unwrap() {
-                let mut state = self
-                    .state
-                    .lock()
-                    .expect("failed to lock ResetToVersionWorker::state");
-                debug_assert!(matches!(
-                    *state,
-                    ResetToVersionState::RemovingLock { scanned: _ }
-                ));
-                *state.scanned() += 1;
-                drop(state);
+                {
+                    let mut state = self.state.lock().unwrap();
+                    debug_assert!(matches!(
+                        *state,
+                        ResetToVersionState::RemovingLock { scanned: _ }
+                    ));
+                    *state.scanned() += 1;
+                }
 
                 box_try!(wb.delete_cf(CF_LOCK, self.lock_iter.key()));
                 self.lock_iter.next().unwrap();
@@ -197,6 +192,12 @@ impl Clone for ResetToVersionManager {
     }
 }
 
+impl Drop for ResetToVersionManager {
+    fn drop(&mut self) {
+        self.wait();
+    }
+}
+
 #[allow(dead_code)]
 impl ResetToVersionManager {
     pub fn new(engine: RocksEngine) -> Self {
@@ -225,26 +226,30 @@ impl ResetToVersionManager {
             warn!("A reset-to-version process is already in progress! Wait until it finish first.");
             self.wait();
         }
-        *self.worker_handle.borrow_mut() = Some(std::thread::Builder::new()
-            .name("reset_to_version".to_string())
-            .spawn_wrapper(move || {
-                tikv_util::thread_group::set_properties(props);
-                tikv_alloc::add_thread_memory_accessor();
+        *self.worker_handle.borrow_mut() = Some(
+            std::thread::Builder::new()
+                .name("reset_to_version".to_string())
+                .spawn_wrapper(move || {
+                    tikv_util::thread_group::set_properties(props);
+                    tikv_alloc::add_thread_memory_accessor();
 
-                while worker.process_next_batch(BATCH_SIZE, &mut wb).expect("reset_to_version failed when removing invalid writes") {
-                }
-                *worker.state.lock()
-                        .expect("failed to lock `ResetToVersionWorker::state` in `ResetToVersionWorker::process_next_batch`")
-                    = ResetToVersionState::RemovingLock { scanned: 0 };
-                while worker.process_next_batch_lock(BATCH_SIZE, &mut wb).expect("reset_to_version failed when removing invalid locks") {
-                }
-                *worker.state.lock()
-                        .expect("failed to lock `ResetToVersionWorker::state` in `ResetToVersionWorker::process_next_batch_lock`")
-                    = ResetToVersionState::Done;
-                info!("Reset to version done!");
-                tikv_alloc::remove_thread_memory_accessor();
-            })
-            .expect("failed to spawn reset_to_version thread"));
+                    while worker
+                        .process_next_batch(BATCH_SIZE, &mut wb)
+                        .expect("process_next_batch")
+                    {}
+                    *worker.state.lock().unwrap() =
+                        ResetToVersionState::RemovingLock { scanned: 0 };
+                    while worker
+                        .process_next_batch_lock(BATCH_SIZE, &mut wb)
+                        .expect("process_next_batch_lock")
+                    {}
+                    *worker.state.lock().unwrap() = ResetToVersionState::Done;
+                    info!("Reset to version done!");
+
+                    tikv_alloc::remove_thread_memory_accessor();
+                })
+                .expect("failed to spawn reset_to_version thread"),
+        );
     }
 
     /// Current process state.
