@@ -801,7 +801,7 @@ mod test {
         errors::Error, router::TaskSelector, GetCheckpointResult, RegionCheckpointOperation,
         RegionSet, Task,
     };
-    use futures::StreamExt;
+    use futures::{future::Ready, Future, Stream, StreamExt};
     use pd_client::PdClient;
     use tikv_util::{box_err, defer, info, HandyRwLock};
     use tokio::time::timeout;
@@ -1231,6 +1231,17 @@ mod test {
         );
     }
 
+    async fn collect_current<T>(mut s: impl Stream<Item = T> + Unpin, goal: usize) -> Vec<T> {
+        let mut r = vec![];
+        while let Ok(Some(x)) = timeout(Duration::from_secs(10), s.next()).await {
+            r.push(x);
+            if r.len() >= goal {
+                return r;
+            }
+        }
+        r
+    }
+
     #[test]
     fn subscribe_flushing() {
         let mut suite = super::SuiteBuilder::new_named("sub_flush").build();
@@ -1248,16 +1259,12 @@ mod test {
         suite.force_flush_files("sub_flush");
 
         let mut items = run_async_test(async {
-            timeout(
-                Duration::from_secs(10),
-                stream
-                    .take(2)
-                    .flat_map(|(_, r)| futures::stream::iter(r.events.into_iter()))
-                    .collect::<Vec<_>>(),
+            collect_current(
+                stream.flat_map(|(_, r)| futures::stream::iter(r.events.into_iter())),
+                10,
             )
             .await
-        })
-        .expect("timed out");
+        });
 
         items.sort_by(|x, y| x.start_key.cmp(&y.start_key));
 
