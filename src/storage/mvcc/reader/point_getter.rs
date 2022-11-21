@@ -5,6 +5,7 @@ use std::borrow::Cow;
 
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{IsolationLevel, WriteConflictReason};
+use tikv_kv::SEEK_BOUND;
 use txn_types::{Key, Lock, LockType, TimeStamp, TsSet, Value, WriteRef, WriteType};
 
 use crate::storage::{
@@ -281,10 +282,9 @@ impl<S: Snapshot> PointGetter<S> {
             return Ok(None);
         }
 
+        let mut write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
+        let mut owned_value: Vec<u8>; // To work around lifetime problem
         loop {
-            // No need to compare user key because it uses prefix seek.
-            let write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
-
             if !write.check_gc_fence_as_latest_version(self.ts) {
                 return Ok(None);
             }
@@ -315,13 +315,35 @@ impl<S: Snapshot> PointGetter<S> {
                     return Ok(None);
                 }
                 WriteType::Lock | WriteType::Rollback => {
-                    // Continue iterate next `write`.
+                    if write.versions_to_last_change < SEEK_BOUND || write.last_change_ts.is_zero()
+                    {
+                        // Continue iterate next `write`.
+                    } else {
+                        let commit_ts = write.last_change_ts;
+                        let key_with_ts = user_key.clone().append_ts(commit_ts);
+                        match self.snapshot.get_cf(CF_WRITE, &key_with_ts)? {
+                            Some(v) => owned_value = v,
+                            None => return Ok(None),
+                        }
+                        self.statistics.write.get += 1;
+                        write = WriteRef::parse(&owned_value)?;
+                        assert!(
+                            write.write_type == WriteType::Put
+                                || write.write_type == WriteType::Delete,
+                            "Write record pointed by last_change_ts {} should be Put or Delete, but got {:?}",
+                            commit_ts,
+                            write.write_type,
+                        );
+                        continue;
+                    }
                 }
             }
 
             if !self.write_cursor.next(&mut self.statistics.write) {
                 return Ok(None);
             }
+            // No need to compare user key because it uses prefix seek.
+            write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
         }
     }
 
@@ -611,7 +633,7 @@ mod tests {
         must_get_value(&mut getter, b"foo2", b"foo2v");
         let s = getter.take_statistics();
         // We have to check every version
-        assert_seek_next_prev(&s.write, 1, 40, 0);
+        assert_seek_next_prev(&s.write, 1, 0, 0);
         assert_eq!(
             s.processed_size,
             Key::from_raw(b"foo2").len()
@@ -621,7 +643,8 @@ mod tests {
         // Get again
         must_get_value(&mut getter, b"foo2", b"foo2v");
         let s = getter.take_statistics();
-        assert_seek_next_prev(&s.write, 1, 40, 0);
+        assert_seek_next_prev(&s.write, 1, 0, 0);
+        assert_eq!(s.write.get, 1);
         assert_eq!(
             s.processed_size,
             Key::from_raw(b"foo2").len()

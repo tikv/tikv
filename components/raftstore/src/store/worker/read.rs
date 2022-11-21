@@ -785,15 +785,6 @@ where
             return Err(e);
         }
 
-        // Check witness
-        if find_peer_by_id(&delegate.region, delegate.peer_id)
-            .unwrap()
-            .is_witness
-        {
-            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.witness.inc());
-            return Err(Error::RecoveryInProgress(region_id));
-        }
-
         // Check term.
         if let Err(e) = util::check_term(req, delegate.term) {
             debug!(
@@ -811,6 +802,12 @@ where
             // Stale epoch, redirect it to raftstore to get the latest region.
             debug!("rejected by epoch not match"; "tag" => &delegate.tag);
             return Ok(None);
+        }
+
+        // Check witness
+        if find_peer_by_id(&delegate.region, delegate.peer_id).map_or(true, |p| p.is_witness) {
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.witness.inc());
+            return Err(Error::RecoveryInProgress(region_id));
         }
 
         // Check whether the region is in the flashback state and the local read could
