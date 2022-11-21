@@ -355,15 +355,17 @@ pub mod tests {
 
     #[test]
     fn test_2pc_with_txn_source() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
+        for source in [0x1, 0x85] {
+            let mut engine = TestEngineBuilder::new().build().unwrap();
 
-        let k = b"k";
-        // WriteType is Put
-        must_prewrite_put_with_txn_soucre(&mut engine, k, b"v2", k, 25, 1);
-        let lock = must_locked(&mut engine, k, 25);
-        assert_eq!(lock.txn_source, 1);
-        must_succeed(&mut engine, k, 25, 30);
-        let write = must_written(&mut engine, k, 25, 30, WriteType::Put);
-        assert_eq!(write.txn_source, 1);
+            let k = b"k";
+            // WriteType is Put
+            must_prewrite_put_with_txn_soucre(&mut engine, k, b"v2", k, 25, source);
+            let lock = must_locked(&mut engine, k, 25);
+            assert_eq!(lock.txn_source, source);
+            must_succeed(&mut engine, k, 25, 30);
+            let write = must_written(&mut engine, k, 25, 30, WriteType::Put);
+            assert_eq!(write.txn_source, source);
+        }
     }
 }

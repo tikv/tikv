@@ -785,15 +785,6 @@ where
             return Err(e);
         }
 
-        // Check witness
-        if find_peer_by_id(&delegate.region, delegate.peer_id)
-            .unwrap()
-            .is_witness
-        {
-            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.witness.inc());
-            return Err(Error::RecoveryInProgress(region_id));
-        }
-
         // Check term.
         if let Err(e) = util::check_term(req, delegate.term) {
             debug!(
@@ -810,6 +801,29 @@ where
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.epoch.inc());
             // Stale epoch, redirect it to raftstore to get the latest region.
             debug!("rejected by epoch not match"; "tag" => &delegate.tag);
+            return Ok(None);
+        }
+
+        // Check witness
+        if find_peer_by_id(&delegate.region, delegate.peer_id).map_or(true, |p| p.is_witness) {
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.witness.inc());
+            return Err(Error::RecoveryInProgress(region_id));
+        }
+
+        // Check whether the region is in the flashback state and the local read could
+        // be performed.
+        let is_in_flashback = delegate.region.is_in_flashback;
+        if let Err(e) = util::check_flashback_state(is_in_flashback, req, region_id) {
+            TLS_LOCAL_READ_METRICS.with(|m| match e {
+                Error::FlashbackNotPrepared(_) => {
+                    m.borrow_mut().reject_reason.flashback_not_prepared.inc()
+                }
+                Error::FlashbackInProgress(_) => {
+                    m.borrow_mut().reject_reason.flashback_in_progress.inc()
+                }
+                _ => unreachable!(),
+            });
+            debug!("rejected by flashback state"; "is_in_flashback" => is_in_flashback, "tag" => &delegate.tag);
             return Ok(None);
         }
 
