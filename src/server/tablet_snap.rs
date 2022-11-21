@@ -66,22 +66,12 @@ impl RecvTabletSnapContext {
             Err(_) => return Err(box_err!("failed to get chunk size")),
         };
         let meta = head.take_message();
-        let snapshot = meta.get_message().get_snapshot();
         let key = TabletSnapKey::from_region_snap(
             meta.get_region_id(),
             meta.get_to_peer().get_id(),
             meta.get_message().get_snapshot(),
         );
-
-        let data = snapshot.get_data();
-        let mut snapshot_data = RaftSnapshotData::default();
-        snapshot_data.merge_from_bytes(data)?;
-        let snapshot_meta = snapshot_data.take_meta();
-        let io_type = if snapshot_meta.get_for_balance() {
-            IoType::LoadBalance
-        } else {
-            IoType::Replication
-        };
+        let io_type = get_io_type_from_raft_message(&meta)?;
 
         Ok(RecvTabletSnapContext {
             key,
@@ -102,6 +92,19 @@ impl RecvTabletSnapContext {
     }
 }
 
+fn get_io_type_from_raft_message(msg: &RaftMessage) -> Result<IoType> {
+    let snapshot = msg.get_message().get_snapshot();
+    let data = snapshot.get_data();
+    let mut snapshot_data = RaftSnapshotData::default();
+    snapshot_data.merge_from_bytes(data)?;
+    let snapshot_meta = snapshot_data.get_meta();
+    if snapshot_meta.get_for_balance() {
+        Ok(IoType::LoadBalance)
+    } else {
+        Ok(IoType::Replication)
+    }
+}
+
 async fn send_snap_files(
     mgr: &TabletSnapManager,
     mut sender: impl Sink<(SnapshotChunk, WriteFlags), Error = Error> + Unpin,
@@ -115,6 +118,8 @@ async fn send_snap_files(
         .map(|f| Ok(f?.path()))
         .filter(|f| f.is_ok() && f.as_ref().unwrap().is_file())
         .collect::<Result<Vec<_>>>()?;
+    let io_type = get_io_type_from_raft_message(&msg)?;
+    let _with_io_type = WithIoType::new(io_type);
     let mut total_sent = msg.compute_size() as u64;
     let mut chunk = SnapshotChunk::default();
     chunk.set_message(msg);

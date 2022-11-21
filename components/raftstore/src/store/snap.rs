@@ -1972,10 +1972,11 @@ impl TabletSnapManager {
 
     pub fn delete_snapshot(&self, key: &TabletSnapKey) -> bool {
         let path = self.get_final_path_for_gen(key);
-        if path.exists() && fs::remove_dir_all(path.as_path()).is_err() {
-            warn!(
+        if path.exists() && let Err(e) = fs::remove_dir_all(path.as_path()) {
+            error!(
                 "delete snapshot failed";
                 "path" => %path.display(),
+                "err" => ?e,
             );
             false
         } else {
