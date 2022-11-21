@@ -45,6 +45,7 @@ use crate::storage::{
 };
 
 /// Process result of a command.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum ProcessResult {
     Res,

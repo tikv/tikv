@@ -124,7 +124,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
                     cmd: Command::FlashbackToVersionReadPhase(next_cmd),
                 }
             })(),
-            lock_info: None,
+            lock_info: vec![],
             released_locks: ReleasedLocks::new(),
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
