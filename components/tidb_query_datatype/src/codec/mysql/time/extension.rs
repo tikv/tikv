@@ -95,7 +95,7 @@ impl DateTimeExtension for Time {
         }
 
         if week_year && days >= 52 * 7 {
-            weekday = (weekday + calc_days_in_year(year as i32)) % 7;
+            weekday = (weekday + calc_days_in_year(year)) % 7;
             if (!first_weekday && weekday < 4) || (first_weekday && weekday == 0) {
                 year += 1;
                 return (year, 1);

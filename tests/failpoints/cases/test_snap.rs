@@ -163,7 +163,7 @@ fn assert_snapshot(snap_dir: &str, region_id: u64, exist: bool) {
     let region_id = format!("{}", region_id);
     let timer = Instant::now();
     loop {
-        for p in fs::read_dir(&snap_dir).unwrap() {
+        for p in fs::read_dir(snap_dir).unwrap() {
             let name = p.unwrap().file_name().into_string().unwrap();
             let mut parts = name.split('_');
             parts.next();
@@ -354,12 +354,12 @@ fn test_shutdown_when_snap_gc() {
     pd_client.must_add_peer(r1, new_learner_peer(2, 2));
 
     // Snapshot directory on store 2 shouldn't be empty.
-    let snap_dir = cluster.get_snap_dir(2);
+    let snap_dir = &cluster.get_snap_dir(2);
     for i in 0..=100 {
         if i == 100 {
             panic!("store 2 snap dir must not be empty");
         }
-        let dir = fs::read_dir(&snap_dir).unwrap();
+        let dir = fs::read_dir(snap_dir).unwrap();
         if dir.count() > 0 {
             break;
         }
@@ -377,7 +377,7 @@ fn test_shutdown_when_snap_gc() {
     cluster.stop_node(2);
 
     let snap_dir = cluster.get_snap_dir(2);
-    let dir = fs::read_dir(&snap_dir).unwrap();
+    let dir = fs::read_dir(snap_dir).unwrap();
     if dir.count() == 0 {
         panic!("store 2 snap dir must not be empty");
     }
@@ -591,7 +591,7 @@ fn test_snapshot_gc_after_failed() {
             let mut snap_file_path = PathBuf::from(&snap_dir);
             snap_file_path.push(&f);
             let snap_file_path = snap_file_path.as_path();
-            let mut file = match File::create(&snap_file_path) {
+            let mut file = match File::create(snap_file_path) {
                 Err(why) => panic!("couldn't create {:?}: {}", snap_file_path, why),
                 Ok(file) => file,
             };

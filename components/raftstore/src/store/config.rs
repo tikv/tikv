@@ -438,6 +438,24 @@ impl Config {
         Config::default()
     }
 
+    pub fn new_raft_config(&self, peer_id: u64, applied_index: u64) -> raft::Config {
+        raft::Config {
+            id: peer_id,
+            election_tick: self.raft_election_timeout_ticks,
+            heartbeat_tick: self.raft_heartbeat_ticks,
+            min_election_tick: self.raft_min_election_timeout_ticks,
+            max_election_tick: self.raft_max_election_timeout_ticks,
+            max_size_per_msg: self.raft_max_size_per_msg.0,
+            max_inflight_msgs: self.raft_max_inflight_msgs,
+            applied: applied_index,
+            check_quorum: true,
+            skip_bcast_commit: true,
+            pre_vote: self.prevote,
+            max_committed_size_per_ready: ReadableSize::mb(16).0,
+            ..Default::default()
+        }
+    }
+
     pub fn raft_store_max_leader_lease(&self) -> TimeDuration {
         TimeDuration::from_std(self.raft_store_max_leader_lease.0).unwrap()
     }
@@ -557,7 +575,7 @@ impl Config {
 
         let election_timeout =
             self.raft_base_tick_interval.as_millis() * self.raft_election_timeout_ticks as u64;
-        let lease = self.raft_store_max_leader_lease.as_millis() as u64;
+        let lease = self.raft_store_max_leader_lease.as_millis();
         if election_timeout < lease {
             return Err(box_err!(
                 "election timeout {} ms is less than lease {} ms",
@@ -566,7 +584,7 @@ impl Config {
             ));
         }
 
-        let tick = self.raft_base_tick_interval.as_millis() as u64;
+        let tick = self.raft_base_tick_interval.as_millis();
         if lease > election_timeout - tick {
             return Err(box_err!(
                 "lease {} ms should not be greater than election timeout {} ms - 1 tick({} ms)",
@@ -580,7 +598,7 @@ impl Config {
             return Err(box_err!("raftstore.merge-check-tick-interval can't be 0."));
         }
 
-        let stale_state_check = self.peer_stale_state_check_interval.as_millis() as u64;
+        let stale_state_check = self.peer_stale_state_check_interval.as_millis();
         if stale_state_check < election_timeout * 2 {
             return Err(box_err!(
                 "peer stale state check interval {} ms is less than election timeout x 2 {} ms",
@@ -595,7 +613,7 @@ impl Config {
             ));
         }
 
-        let abnormal_leader_missing = self.abnormal_leader_missing_duration.as_millis() as u64;
+        let abnormal_leader_missing = self.abnormal_leader_missing_duration.as_millis();
         if abnormal_leader_missing < stale_state_check {
             return Err(box_err!(
                 "abnormal leader missing {} ms is less than peer stale state check interval {} ms",
@@ -604,7 +622,7 @@ impl Config {
             ));
         }
 
-        let max_leader_missing = self.max_leader_missing_duration.as_millis() as u64;
+        let max_leader_missing = self.max_leader_missing_duration.as_millis();
         if max_leader_missing < abnormal_leader_missing {
             return Err(box_err!(
                 "max leader missing {} ms is less than abnormal leader missing {} ms",
