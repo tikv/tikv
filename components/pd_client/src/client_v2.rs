@@ -378,45 +378,13 @@ impl CachedRawClient {
     }
 }
 
-pub struct CachedDuplexResponse<T> {
-    latest: DuplexResponseHolder<T>,
-    cache: Option<ClientDuplexReceiver<T>>,
-}
-
-impl<T: Debug> Stream for CachedDuplexResponse<T> {
-    type Item = Result<T>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        loop {
-            if let Some(ref mut receiver) = self.cache {
-                match Pin::new(receiver).poll_next(cx) {
-                    Poll::Ready(Some(Ok(item))) => return Poll::Ready(Some(Ok(item))),
-                    Poll::Pending => return Poll::Pending,
-                    // If it's None or there's error, we need to update receiver.
-                    _ => {}
-                }
-            }
-
-            let latest = self.latest.lock().unwrap().take();
-            self.cache = latest;
-            if self.cache.is_none() {
-                return Poll::Pending;
-            }
-        }
-    }
-}
-
-type DuplexResponseHolder<T> = Arc<Mutex<Option<ClientDuplexReceiver<T>>>>;
-type CallbackHolder = Arc<Mutex<Option<Box<dyn Fn() + Sync + Send + 'static>>>>;
-
 #[derive(Clone)]
 pub struct RpcClient {
     raw_client: CachedRawClient,
     feature_gate: FeatureGate,
-    on_reconnect_cb: CallbackHolder,
 }
 
-async fn reconnect_loop(mut client: CachedRawClient, on_reconnect_cb: CallbackHolder, cfg: Config) {
+async fn reconnect_loop(mut client: CachedRawClient, cfg: Config) {
     if let Err(e) = client.connect().await {
         error!("failed to connect pd"; "err" => ?e);
         return;
@@ -432,9 +400,7 @@ async fn reconnect_loop(mut client: CachedRawClient, on_reconnect_cb: CallbackHo
         }
         match client.reconnect().await {
             Ok(true) => {
-                if let Some(ref f) = *on_reconnect_cb.lock().unwrap() {
-                    f();
-                }
+                info!("pd reconnected");
             }
             Err(e) => {
                 warn!("failed to reconnect pd"; "err" => ?e);
@@ -459,20 +425,17 @@ impl RpcClient {
             )
         });
 
-        let on_reconnect_cb: CallbackHolder = Default::default();
         let raw_client = CachedRawClient::new(cfg.clone(), env.clone(), security_mgr);
 
         let lame_client = PdClientStub::new(Channel::lame(env, "0.0.0.0:0"));
         lame_client.spawn(reconnect_loop(
             raw_client.clone(),
-            on_reconnect_cb.clone(),
             cfg.clone(),
         ));
 
         Ok(Self {
             raw_client,
             feature_gate: Default::default(),
-            on_reconnect_cb,
         })
     }
 
@@ -620,6 +583,34 @@ pub trait PdClient {
     ) -> PdFuture<()>;
 
     fn report_min_resolved_ts(&mut self, store_id: u64, min_resolved_ts: u64) -> PdFuture<()>;
+}
+
+pub struct CachedDuplexResponse<T> {
+    latest: Arc<Mutex<Option<ClientDuplexReceiver<T>>>>,
+    cache: Option<ClientDuplexReceiver<T>>,
+}
+
+impl<T: Debug> Stream for CachedDuplexResponse<T> {
+    type Item = Result<T>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        loop {
+            if let Some(ref mut receiver) = self.cache {
+                match Pin::new(receiver).poll_next(cx) {
+                    Poll::Ready(Some(Ok(item))) => return Poll::Ready(Some(Ok(item))),
+                    Poll::Pending => return Poll::Pending,
+                    // If it's None or there's error, we need to update receiver.
+                    _ => {}
+                }
+            }
+
+            let latest = self.latest.lock().unwrap().take();
+            self.cache = latest;
+            if self.cache.is_none() {
+                return Poll::Pending;
+            }
+        }
+    }
 }
 
 impl PdClient for RpcClient {
