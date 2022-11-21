@@ -160,6 +160,8 @@ fn test_witness_conf_change() {
         .pd_client
         .must_remove_peer(region.get_id(), peer_on_store3);
 
+    std::thread::sleep(Duration::from_millis(10));
+
     assert_eq!(
         cluster
             .region_local_state(region.get_id(), nodes[2])
