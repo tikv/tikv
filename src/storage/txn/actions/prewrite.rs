@@ -172,7 +172,7 @@ pub struct TransactionProperties<'a> {
     pub need_old_value: bool,
     pub is_retry_request: bool,
     pub assertion_level: AssertionLevel,
-    pub txn_source: u8,
+    pub txn_source: u64,
 }
 
 impl<'a> TransactionProperties<'a> {
