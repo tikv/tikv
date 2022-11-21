@@ -21,8 +21,8 @@ use crate::storage::{
     Context, ProcessResult, Snapshot,
 };
 
-pub fn new_flashback_to_version_lock_cmd(
-    key_to_lock: Key,
+pub fn new_flashback_to_version_prewrite_cmd(
+    start_key: Key,
     start_ts: TimeStamp,
     ctx: Context,
 ) -> TypedCommand<()> {
@@ -30,9 +30,12 @@ pub fn new_flashback_to_version_lock_cmd(
         start_ts,
         TimeStamp::zero(),
         TimeStamp::zero(),
+        // Just pass some dummy values since we don't need them in this phase.
         Key::from_raw(b""),
         Key::from_raw(b""),
-        FlashbackToVersionState::Lock { key_to_lock },
+        FlashbackToVersionState::Prewrite {
+            key_to_lock: start_key,
+        },
         ctx,
     )
 }
@@ -58,19 +61,24 @@ impl CommandExt for FlashbackToVersion {
 
     fn gen_lock(&self) -> latch::Lock {
         match &self.state {
-            FlashbackToVersionState::Lock { key_to_lock, .. } => latch::Lock::new([key_to_lock]),
+            FlashbackToVersionState::Prewrite { key_to_lock, .. } => {
+                latch::Lock::new([key_to_lock])
+            }
             FlashbackToVersionState::ScanLock { key_locks, .. } => {
                 latch::Lock::new(key_locks.iter().map(|(key, _)| key))
             }
             FlashbackToVersionState::ScanWrite { key_old_writes, .. } => {
                 latch::Lock::new(key_old_writes.iter().map(|(key, _)| key))
             }
+            FlashbackToVersionState::Commit { key_to_commit, .. } => {
+                latch::Lock::new([key_to_commit])
+            }
         }
     }
 
     fn write_bytes(&self) -> usize {
         match &self.state {
-            FlashbackToVersionState::Lock { key_to_lock, .. } => key_to_lock.as_encoded().len(),
+            FlashbackToVersionState::Prewrite { key_to_lock, .. } => key_to_lock.as_encoded().len(),
             FlashbackToVersionState::ScanLock { key_locks, .. } => key_locks
                 .iter()
                 .map(|(key, _)| key.as_encoded().len())
@@ -79,6 +87,9 @@ impl CommandExt for FlashbackToVersion {
                 .iter()
                 .map(|(key, _)| key.as_encoded().len())
                 .sum(),
+            FlashbackToVersionState::Commit { key_to_commit, .. } => {
+                key_to_commit.as_encoded().len()
+            }
         }
     }
 }
@@ -90,14 +101,14 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
             context.statistics,
         );
         let mut txn = MvccTxn::new(TimeStamp::zero(), context.concurrency_manager);
-        // - `FlashbackToVersionState::Lock` is to write a lock into `CF_LOCK` to
-        //   prevent `resolved_ts` from advancing before we perform the actual
-        //   flashback.
+        // - `FlashbackToVersionState::Prewrite` and `FlashbackToVersionState::Commit`
+        //   are to lock/commit the `self.start_key` to prevent `resolved_ts` from
+        //   advancing before we finish the actual flashback.
         // - `FlashbackToVersionState::ScanWrite` and
         //   `FlashbackToVersionState::ScanLock` are to flashback the actual writes and
         //   locks.
         match self.state {
-            FlashbackToVersionState::Lock { ref key_to_lock } => {
+            FlashbackToVersionState::Prewrite { ref key_to_lock } => {
                 txn.put_lock(
                     key_to_lock.clone(),
                     &Lock::new(
@@ -111,16 +122,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
                         TimeStamp::zero(),
                     ),
                 );
-            }
-            FlashbackToVersionState::ScanLock {
-                ref mut next_lock_key,
-                ref mut key_locks,
-            } => {
-                if let Some(new_next_lock_key) =
-                    flashback_to_version_lock(&mut txn, &mut reader, mem::take(key_locks))?
-                {
-                    *next_lock_key = new_next_lock_key;
-                }
             }
             FlashbackToVersionState::ScanWrite {
                 ref mut next_write_key,
@@ -136,13 +137,44 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
                     *next_write_key = new_next_write_key;
                 }
             }
+            FlashbackToVersionState::ScanLock {
+                ref mut next_lock_key,
+                ref mut key_locks,
+            } => {
+                if let Some(new_next_lock_key) =
+                    flashback_to_version_lock(&mut txn, &mut reader, mem::take(key_locks))?
+                {
+                    *next_lock_key = new_next_lock_key;
+                }
+            }
+            FlashbackToVersionState::Commit { ref key_to_commit } => {
+                // Flashback the key first.
+                let old_write = reader
+                    .get_write_with_commit_ts(key_to_commit, self.version)?
+                    .map(|(write, _)| write);
+                flashback_to_version_write(
+                    &mut txn,
+                    &mut reader,
+                    vec![(key_to_commit.clone(), old_write)],
+                    self.start_ts,
+                    self.commit_ts,
+                )?;
+                // Unlock the key then.
+                txn.unlock_key(key_to_commit.clone(), false, self.commit_ts);
+            }
         }
         let rows = txn.modifies.len();
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
         // To let the flashback modification could be proposed and applied successfully.
         write_data.extra.for_flashback = true;
-        // To let the CDC treat the flashback modification as an 1PC transaction.
-        write_data.extra.one_pc = true;
+        let is_unlock_or_lock_phase = matches!(
+            self.state,
+            FlashbackToVersionState::Prewrite { .. } | FlashbackToVersionState::Commit { .. }
+        );
+        if !is_unlock_or_lock_phase {
+            // To let the CDC treat the flashback modification as an 1PC transaction.
+            write_data.extra.one_pc = true;
+        }
         Ok(WriteResult {
             ctx: self.ctx.clone(),
             to_be_write: write_data,
@@ -151,7 +183,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
                 fail_point!("flashback_failed_after_first_batch", |_| {
                     ProcessResult::Res
                 });
-                if matches!(self.state, FlashbackToVersionState::Lock { .. }) {
+                if is_unlock_or_lock_phase {
                     return ProcessResult::Res;
                 }
                 let next_cmd = FlashbackToVersionReadPhase {

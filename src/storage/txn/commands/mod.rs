@@ -41,7 +41,7 @@ pub use cleanup::Cleanup;
 pub use commit::Commit;
 pub use compare_and_swap::RawCompareAndSwap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
-pub use flashback_to_version::{new_flashback_to_version_lock_cmd, FlashbackToVersion};
+pub use flashback_to_version::{new_flashback_to_version_prewrite_cmd, FlashbackToVersion};
 pub use flashback_to_version_read_phase::{
     new_flashback_to_version_read_phase_cmd, FlashbackToVersionReadPhase, FlashbackToVersionState,
 };
@@ -358,7 +358,7 @@ impl From<MvccGetByStartTsRequest> for TypedCommand<Option<(Key, MvccInfo)>> {
 
 impl From<PrepareFlashbackToVersionRequest> for TypedCommand<()> {
     fn from(mut req: PrepareFlashbackToVersionRequest) -> Self {
-        new_flashback_to_version_lock_cmd(
+        new_flashback_to_version_prewrite_cmd(
             Key::from_raw(req.get_start_key()),
             req.get_start_ts().into(),
             req.take_context(),

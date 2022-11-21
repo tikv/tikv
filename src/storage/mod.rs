@@ -1367,7 +1367,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         .scan_locks(
                             start_key.as_ref(),
                             end_key.as_ref(),
-                            |lock| lock.ts <= max_ts,
+                            |_,lock| lock.ts <= max_ts,
                             limit,
                         )
                         .map_err(txn::Error::from);

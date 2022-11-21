@@ -10,17 +10,18 @@ use crate::storage::{
 
 pub const FLASHBACK_BATCH_SIZE: usize = 256 + 1 /* To store the next key for multiple batches */;
 
-pub fn flashback_to_version_read_lock<S: Snapshot>(
-    reader: &mut MvccReader<S>,
+pub fn flashback_to_version_read_lock(
+    reader: &mut MvccReader<impl Snapshot>,
     next_lock_key: Key,
+    start_key: &Key,
     end_key: &Key,
     statistics: &mut Statistics,
 ) -> TxnResult<Vec<(Key, Lock)>> {
     let result = reader.scan_locks(
         Some(&next_lock_key),
         Some(end_key),
-        // To flashback `CF_LOCK`, we need to rollback all locks.
-        |_| true,
+        // Skip the `start_key`.
+        |key, _| key != start_key,
         FLASHBACK_BATCH_SIZE,
     );
     statistics.add(&reader.statistics);
@@ -28,9 +29,10 @@ pub fn flashback_to_version_read_lock<S: Snapshot>(
     Ok(key_locks)
 }
 
-pub fn flashback_to_version_read_write<S: Snapshot>(
-    reader: &mut MvccReader<S>,
+pub fn flashback_to_version_read_write(
+    reader: &mut MvccReader<impl Snapshot>,
     next_write_key: Key,
+    start_key: &Key,
     end_key: &Key,
     flashback_version: TimeStamp,
     flashback_commit_ts: TimeStamp,
@@ -43,14 +45,17 @@ pub fn flashback_to_version_read_write<S: Snapshot>(
         Some(&next_write_key),
         Some(end_key),
         Some(flashback_version),
-        |_, latest_commit_ts| {
+        |key, latest_commit_ts| {
             // There is no any other write could happen after the flashback begins.
             assert!(latest_commit_ts <= flashback_commit_ts);
+            // - Skip the `start_key`.
             // - No need to find an old version for the key if its latest `commit_ts` is
             // smaller than or equal to the flashback version.
             // - No need to flashback a key twice if its latest `commit_ts` is equal to the
             //   flashback `commit_ts`.
-            latest_commit_ts > flashback_version && latest_commit_ts < flashback_commit_ts
+            key != start_key
+                && latest_commit_ts > flashback_version
+                && latest_commit_ts < flashback_commit_ts
         },
         FLASHBACK_BATCH_SIZE,
     );
@@ -78,7 +83,6 @@ pub fn flashback_to_version_lock(
             key.clone(),
             &lock,
             lock.is_pessimistic_txn(),
-            true,
             true,
         )?;
     }
@@ -174,9 +178,14 @@ pub mod tests {
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &ctx);
         let mut statistics = Statistics::default();
         // Flashback the locks.
-        let key_locks =
-            flashback_to_version_read_lock(&mut reader, key.clone(), &next_key, &mut statistics)
-                .unwrap();
+        let key_locks = flashback_to_version_read_lock(
+            &mut reader,
+            key.clone(),
+            &Key::from_raw(b""),
+            &next_key,
+            &mut statistics,
+        )
+        .unwrap();
         let cm = ConcurrencyManager::new(TimeStamp::zero());
         let mut txn = MvccTxn::new(start_ts, cm.clone());
         let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -188,6 +197,7 @@ pub mod tests {
         let key_old_writes = flashback_to_version_read_write(
             &mut reader,
             key,
+            &Key::from_raw(b""),
             &next_key,
             version,
             commit_ts,

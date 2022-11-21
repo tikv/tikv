@@ -46,7 +46,6 @@ pub fn cleanup<S: Snapshot>(
                 lock,
                 lock.is_pessimistic_txn(),
                 !protect_rollback,
-                false,
             )
         }
         l => match check_txn_status_missing_lock(
