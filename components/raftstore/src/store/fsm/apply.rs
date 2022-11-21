@@ -3148,7 +3148,7 @@ where
                         return Err(box_err!(
                             "can't duplicated switch peer {:?} on region {:?}",
                             find_peer_by_id(&self.region, peer_id),
-                            self.region
+                            region
                         ));
                     }
                     p.is_witness = is_witness;

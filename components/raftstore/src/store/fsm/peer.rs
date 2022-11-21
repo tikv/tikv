@@ -5092,6 +5092,23 @@ where
             // TODO: use a dedicated error type
             return Err(Error::RecoveryInProgress(self.region_id()));
         }
+
+        // Forbid requests to switch it into a witness when it's a leader
+        if self.fsm.peer.is_leader()
+            && msg.has_admin_request()
+            && msg.get_admin_request().get_cmd_type() == AdminCmdType::BatchSwitchWitness
+            && msg
+                .get_admin_request()
+                .get_switch_witnesses()
+                .get_switch_witnesses()
+                .iter()
+                .any(|s| s.get_peer_id() == self.fsm.peer.peer.get_id() && s.get_is_witness())
+        {
+            self.ctx.raft_metrics.invalid_proposal.witness.inc();
+            // TODO: use a dedicated error type
+            return Err(Error::RecoveryInProgress(self.region_id()));
+        }
+
         // Forbid requets when it becomes to non-witness but not finish applying
         // snapshot.
         if self.fsm.peer.wait_data {

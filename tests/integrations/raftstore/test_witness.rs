@@ -8,7 +8,7 @@ use pd_client::PdClient;
 // use protobuf::Message;
 use raft::eraftpb::ConfChangeType;
 use test_raftstore::*;
-use tikv_util::{config::ReadableDuration, store::find_peer};
+use tikv_util::store::find_peer;
 
 fn become_witness(cluster: &Cluster<ServerCluster>, region_id: u64, peer: &mut metapb::Peer) {
     cluster
@@ -198,46 +198,44 @@ fn test_witness_switch_witness() {
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
 }
 
-// TODO: add back when switch witness is supported
-// // Test the case that leader is forbidden to become witness
-// #[test]
-// fn test_witness_leader() {
-//     let mut cluster = new_server_cluster(0, 3);
-//     cluster.run();
-//     let nodes = Vec::from_iter(cluster.get_node_ids());
-//     assert_eq!(nodes.len(), 3);
+// Test the case that leader is forbidden to become witness
+#[test]
+fn test_witness_leader() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+    let nodes = Vec::from_iter(cluster.get_node_ids());
+    assert_eq!(nodes.len(), 3);
 
-//     let pd_client = Arc::clone(&cluster.pd_client);
-//     pd_client.disable_default_operator();
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
 
-//     cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k1", b"v1");
 
-//     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
-//     let mut peer_on_store1 = find_peer(&region, nodes[0]).unwrap().clone();
-//     cluster.must_transfer_leader(region.get_id(), peer_on_store1.clone());
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+    let peer_on_store1 = find_peer(&region, nodes[0]).unwrap().clone();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1.clone());
 
-//     // can't make leader to witness
-//     peer_on_store1.set_is_witness(true);
-//     cluster
-//         .pd_client
-//         .add_peer(region.get_id(), peer_on_store1.clone());
+    // can't make leader to witness
+    cluster
+        .pd_client
+        .switch_witnesses(region.get_id(), vec![peer_on_store1.get_id()], vec![true]);
 
-//     std::thread::sleep(Duration::from_millis(100));
-//     assert_eq!(
-//         cluster.leader_of_region(region.get_id()).unwrap().store_id,
-//         1
-//     );
-//     // leader changes to witness failed, so still can get the value
-//     must_get_equal(&cluster.get_engine(nodes[0]), b"k1", b"v1");
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(
+        cluster.leader_of_region(region.get_id()).unwrap().store_id,
+        1
+    );
+    // leader changes to witness failed, so still can get the value
+    must_get_equal(&cluster.get_engine(nodes[0]), b"k1", b"v1");
 
-//     let mut peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
-//     // can't transfer leader to witness
-//     cluster.transfer_leader(region.get_id(), &mut peer_on_store3);
-//     assert_eq!(
-//         cluster.leader_of_region(region.get_id()).unwrap().store_id,
-//         nodes[0],
-//     );
-// }
+    let peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
+    // can't transfer leader to witness
+    cluster.transfer_leader(region.get_id(), peer_on_store3);
+    assert_eq!(
+        cluster.leader_of_region(region.get_id()).unwrap().store_id,
+        nodes[0],
+    );
+}
 
 // TODO: add back when election priority is supported
 // // Test the case that witness can't be elected as leader based on election
@@ -465,58 +463,54 @@ fn must_get_error_recovery_in_progress<T: Simulator>(
     );
 }
 
-// fn test_non_witness_availability(fp: &str) {
-// let mut cluster = new_node_cluster(0, 3);
-// cluster.cfg.raft_store.pd_heartbeat_tick_interval =
-// ReadableDuration::millis(100); cluster.cfg.raft_store.
-// check_peers_availability_interval = ReadableDuration::millis(20);
-// cluster.run();
-// let nodes = Vec::from_iter(cluster.get_node_ids());
-// assert_eq!(nodes.len(), 3);
-//
-// cluster.must_put(b"k1", b"v1");
-//
-// let pd_client = Arc::clone(&cluster.pd_client);
-// pd_client.disable_default_operator();
-//
-// let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
-// let peer_on_store1 = find_peer(&region, nodes[1]).unwrap();
-// cluster.must_transfer_leader(region.get_id(), peer_on_store1.clone());
-//
-// non-witness -> witness
-// let mut peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
-// cluster.pd_client.must_switch_witnesses(
-// region.get_id(),
-// vec![peer_on_store3.get_id()],
-// vec![true],
-// );
-// std::thread::sleep(Duration::from_millis(10));
-// must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
-//
-// fail::cfg(fp, "return").unwrap();
-// witness -> non-witness, step1: demote voter to learner
-// peer_on_store3.set_role(metapb::PeerRole::Learner);
-// cluster
-// .pd_client
-// .must_add_peer(region.get_id(), peer_on_store3.clone());
-// std::thread::sleep(Duration::from_millis(20));
-//
-// witness -> non-witness, step2: switch to non-witness
-// must_get_none(&cluster.get_engine(3), b"k1");
-// assert_eq!(cluster.pd_client.get_pending_peers().len(), 1);
-// std::thread::sleep(Duration::from_millis(200));
-// snapshot applied
-// must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
-// assert_eq!(cluster.pd_client.get_pending_peers().len(), 0);
-// fail::remove(fp);
-// }
-//
-// #[test]
-// fn test_pull_non_witness_availability() {
-// test_non_witness_availability("ignore notify leader non-witness is
-// available"); }
-//
-// #[test]
-// fn test_push_non_witness_availability() {
-// test_non_witness_availability("ignore schedule check non-witness availability
-// tick"); }
+// Test the case that witness replicate logs to lagging behind follower when
+// leader is down
+#[test]
+fn test_witness_leader_down() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+    let nodes = Vec::from_iter(cluster.get_node_ids());
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.must_put(b"k0", b"v0");
+
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+    let peer_on_store1 = find_peer(&region, nodes[0]).unwrap().clone();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1);
+
+    let mut peer_on_store2 = find_peer(&region, nodes[1]).unwrap().clone();
+    // nonwitness -> witness
+    become_witness(&cluster, region.get_id(), &mut peer_on_store2);
+
+    // the other follower is isolated
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    for i in 1..10 {
+        cluster.must_put(format!("k{}", i).as_bytes(), format!("v{}", i).as_bytes());
+    }
+    // the leader is down
+    cluster.stop_node(1);
+
+    // witness would help to replicate the logs
+    cluster.clear_send_filters();
+
+    // forbid writes
+    let put = new_put_cmd(b"k3", b"v3");
+    must_get_error_recovery_in_progress(&mut cluster, &region, put);
+    // forbid reads
+    let get = new_get_cmd(b"k1");
+    must_get_error_recovery_in_progress(&mut cluster, &region, get);
+    //  forbid read index
+    let read_index = new_read_index_cmd();
+    must_get_error_recovery_in_progress(&mut cluster, &region, read_index);
+
+    let peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store3);
+    cluster.must_put(b"k1", b"v1");
+    assert_eq!(
+        cluster.leader_of_region(region.get_id()).unwrap().store_id,
+        nodes[2],
+    );
+    assert_eq!(cluster.must_get(b"k9"), Some(b"v9".to_vec()));
+}
