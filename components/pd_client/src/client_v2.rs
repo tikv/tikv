@@ -189,7 +189,7 @@ impl CachedRawClient {
     }
 
     #[inline]
-    async fn refresh_cache(&mut self) -> bool {
+    fn refresh_cache(&mut self) -> bool {
         if self.cache_version < self.core.version.load(Ordering::Acquire) {
             let latest = self.core.latest.lock().unwrap();
             self.cache = (*latest).clone();
@@ -239,7 +239,7 @@ impl CachedRawClient {
     /// connection to be ready.
     /// The connection must be available if this function returns `Ok(())`.
     async fn wait_for_ready(&mut self) -> Result<()> {
-        self.refresh_cache().await;
+        self.refresh_cache();
         if self.cache.is_none() {
             if !Self::wait_for_a_new_client(
                 &mut self.on_reconnect_rx,
@@ -250,6 +250,7 @@ impl CachedRawClient {
             {
                 return Err(box_err!("Connection is not initialized in time"));
             }
+            assert!(self.refresh_cache());
             assert!(self.cache.is_some());
         }
         select! {
@@ -258,9 +259,13 @@ impl CachedRawClient {
                     return Ok(());
                 }
             }
-            r = Self::wait_for_a_new_client(&mut self.on_reconnect_rx, self.cache_version, self.core.version.as_ref()).fuse() => {
+            r = Self::wait_for_a_new_client(
+                &mut self.on_reconnect_rx,
+                self.cache_version,
+                self.core.version.as_ref()
+            ).fuse() => {
                 if r {
-                    assert!(self.refresh_cache().await);
+                    assert!(self.refresh_cache());
                     return Ok(());
                 }
             }
@@ -428,10 +433,7 @@ impl RpcClient {
         let raw_client = CachedRawClient::new(cfg.clone(), env.clone(), security_mgr);
 
         let lame_client = PdClientStub::new(Channel::lame(env, "0.0.0.0:0"));
-        lame_client.spawn(reconnect_loop(
-            raw_client.clone(),
-            cfg.clone(),
-        ));
+        lame_client.spawn(reconnect_loop(raw_client.clone(), cfg.clone()));
 
         Ok(Self {
             raw_client,
