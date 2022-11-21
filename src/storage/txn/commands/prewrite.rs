@@ -511,7 +511,7 @@ impl<K: PrewriteKind> Prewriter<K> {
             need_old_value: extra_op == ExtraOp::ReadOldValue,
             is_retry_request: self.ctx.is_retry_request,
             assertion_level: self.assertion_level,
-            txn_source: self.ctx.get_txn_source() as u8,
+            txn_source: self.ctx.get_txn_source(),
         };
 
         let async_commit_pk = self
