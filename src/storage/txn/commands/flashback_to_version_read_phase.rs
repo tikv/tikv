@@ -21,11 +21,11 @@ pub enum FlashbackToVersionState {
     Prewrite {
         key_to_lock: Key,
     },
-    ScanWrite {
+    FlashbackWrite {
         next_write_key: Key,
         key_old_writes: Vec<(Key, Option<Write>)>,
     },
-    ScanLock {
+    FlashbackLock {
         next_lock_key: Key,
         key_locks: Vec<(Key, Lock)>,
     },
@@ -48,7 +48,7 @@ pub fn new_flashback_to_version_read_phase_cmd(
         version,
         start_key.clone(),
         end_key,
-        FlashbackToVersionState::ScanWrite {
+        FlashbackToVersionState::FlashbackWrite {
             next_write_key: start_key,
             key_old_writes: Vec::new(),
         },
@@ -106,7 +106,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
         // Separate the lock and write flashback to prevent from putting two writes for
         // the same key in a single batch to make the TiCDC panic.
         let next_state = match self.state {
-            FlashbackToVersionState::ScanWrite { next_write_key, .. } => {
+            FlashbackToVersionState::FlashbackWrite { next_write_key, .. } => {
                 let mut key_old_writes = flashback_to_version_read_write(
                     &mut reader,
                     next_write_key,
@@ -119,13 +119,13 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                 if key_old_writes.is_empty() {
                     // No more writes to flashback, continue to scan the locks.
                     read_again = true;
-                    FlashbackToVersionState::ScanLock {
+                    FlashbackToVersionState::FlashbackLock {
                         next_lock_key: self.start_key.clone(),
                         key_locks: Vec::new(),
                     }
                 } else {
                     tls_collect_keyread_histogram_vec(tag, key_old_writes.len() as f64);
-                    FlashbackToVersionState::ScanWrite {
+                    FlashbackToVersionState::FlashbackWrite {
                         // DO NOT pop the last key as the next key when it's the only key to prevent
                         // from making flashback fall into a dead loop.
                         next_write_key: if key_old_writes.len() > 1 {
@@ -137,7 +137,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     }
                 }
             }
-            FlashbackToVersionState::ScanLock { next_lock_key, .. } => {
+            FlashbackToVersionState::FlashbackLock { next_lock_key, .. } => {
                 let mut key_locks = flashback_to_version_read_lock(
                     &mut reader,
                     next_lock_key,
@@ -151,7 +151,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     }
                 } else {
                     tls_collect_keyread_histogram_vec(tag, key_locks.len() as f64);
-                    FlashbackToVersionState::ScanLock {
+                    FlashbackToVersionState::FlashbackLock {
                         next_lock_key: if key_locks.len() > 1 {
                             key_locks.pop().map(|(key, _)| key).unwrap()
                         } else {

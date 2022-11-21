@@ -62,10 +62,10 @@ impl CommandExt for FlashbackToVersion {
     fn gen_lock(&self) -> latch::Lock {
         match &self.state {
             FlashbackToVersionState::Prewrite { key_to_lock } => latch::Lock::new([key_to_lock]),
-            FlashbackToVersionState::ScanLock { key_locks, .. } => {
+            FlashbackToVersionState::FlashbackLock { key_locks, .. } => {
                 latch::Lock::new(key_locks.iter().map(|(key, _)| key))
             }
-            FlashbackToVersionState::ScanWrite { key_old_writes, .. } => {
+            FlashbackToVersionState::FlashbackWrite { key_old_writes, .. } => {
                 latch::Lock::new(key_old_writes.iter().map(|(key, _)| key))
             }
             FlashbackToVersionState::Commit { key_to_commit } => latch::Lock::new([key_to_commit]),
@@ -75,11 +75,11 @@ impl CommandExt for FlashbackToVersion {
     fn write_bytes(&self) -> usize {
         match &self.state {
             FlashbackToVersionState::Prewrite { key_to_lock } => key_to_lock.as_encoded().len(),
-            FlashbackToVersionState::ScanLock { key_locks, .. } => key_locks
+            FlashbackToVersionState::FlashbackLock { key_locks, .. } => key_locks
                 .iter()
                 .map(|(key, _)| key.as_encoded().len())
                 .sum(),
-            FlashbackToVersionState::ScanWrite { key_old_writes, .. } => key_old_writes
+            FlashbackToVersionState::FlashbackWrite { key_old_writes, .. } => key_old_writes
                 .iter()
                 .map(|(key, _)| key.as_encoded().len())
                 .sum(),
@@ -98,9 +98,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
         // - `FlashbackToVersionState::Prewrite` and `FlashbackToVersionState::Commit`
         //   are to lock/commit the `self.start_key` to prevent `resolved_ts` from
         //   advancing before we finish the actual flashback.
-        // - `FlashbackToVersionState::ScanWrite` and
-        //   `FlashbackToVersionState::ScanLock` are to flashback the actual writes and
-        //   locks.
+        // - `FlashbackToVersionState::FlashbackWrite` and
+        //   `FlashbackToVersionState::FlashbackLock` are to flashback the actual writes
+        //   and locks with 1PC.
         match self.state {
             FlashbackToVersionState::Prewrite { ref key_to_lock } => {
                 txn.put_lock(
@@ -117,7 +117,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
                     ),
                 );
             }
-            FlashbackToVersionState::ScanWrite {
+            FlashbackToVersionState::FlashbackWrite {
                 ref mut next_write_key,
                 ref mut key_old_writes,
             } => {
@@ -131,7 +131,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
                     *next_write_key = new_next_write_key;
                 }
             }
-            FlashbackToVersionState::ScanLock {
+            FlashbackToVersionState::FlashbackLock {
                 ref mut next_lock_key,
                 ref mut key_locks,
             } => {

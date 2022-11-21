@@ -2444,6 +2444,7 @@ fn test_flashback() {
         }
         let events = cde.mut_events();
         if !events.is_empty() {
+            assert_eq!(events.len(), 1);
             match events.pop().unwrap().event.unwrap() {
                 Event_oneof_event::Entries(entries) => {
                     assert_eq!(entries.entries.len(), 1);
@@ -2453,7 +2454,7 @@ fn test_flashback() {
                     assert_eq!(e.get_op_type(), EventRowOpType::Delete);
                     match e.get_type() {
                         EventLogType::Committed => {
-                            // First entry should be a 1PC flashback.
+                            // First entry should be an 1PC flashback.
                             assert_eq!(e.get_key(), b"key1");
                             assert_eq!(event_counter, 1);
                         }
