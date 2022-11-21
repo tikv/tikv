@@ -9,17 +9,19 @@ use futures::{channel::oneshot, executor::block_on};
 use kvproto::{
     errorpb::FlashbackInProgress,
     metapb,
-    raft_cmdpb::{AdminCmdType, CmdType, Request},
+    raft_cmdpb::{AdminCmdType, RaftCmdResponse, Request},
 };
 use raftstore::store::Callback;
 use test_raftstore::*;
 use txn_types::WriteBatchFlags;
 
+const TEST_KEY: &[u8] = b"k1";
+const TEST_VALUE: &[u8] = b"v1";
+
 #[test]
 fn test_prepare_flashback_after_split() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.run();
-
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
     let old_region = cluster.get_region(b"a");
@@ -126,56 +128,42 @@ fn test_prepare_flashback_after_conf_change() {
 fn test_flashback_unprepared() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.run();
-
-    cluster.must_transfer_leader(1, new_peer(2, 2));
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
-    let mut region = cluster.get_region(b"k1");
-    let mut cmd = Request::default();
-    cmd.set_cmd_type(CmdType::Put);
-    let mut req = new_request(
-        region.get_id(),
-        region.take_region_epoch(),
-        vec![cmd],
-        false,
+    let mut region = cluster.get_region(TEST_KEY);
+    must_get_flashback_not_prepared_error(
+        &mut cluster,
+        &mut region,
+        new_put_cmd(TEST_KEY, TEST_VALUE),
     );
-    let new_leader = cluster.query_leader(1, region.get_id(), Duration::from_secs(1));
-    req.mut_header().set_peer(new_leader.unwrap());
-    req.mut_header()
-        .set_flags(WriteBatchFlags::FLASHBACK.bits());
-    let resp = cluster.call_command(req, Duration::from_secs(3)).unwrap();
-    assert!(resp.get_header().get_error().has_flashback_not_prepared());
 }
 
 #[test]
 fn test_flashback_for_schedule() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.run();
-
     cluster.must_transfer_leader(1, new_peer(2, 2));
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
-    // Prepare for flashback
-    let region = cluster.get_region(b"k1");
+    // Prepare flashback.
+    let region = cluster.get_region(TEST_KEY);
     cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::PrepareFlashback);
-
-    // Verify the schedule is disabled.
-    let mut region = cluster.get_region(b"k3");
+    // Make sure the schedule is disabled.
+    let mut region = cluster.get_region(TEST_KEY);
     let admin_req = new_transfer_leader_cmd(new_peer(2, 2));
     let transfer_leader =
         new_admin_request(region.get_id(), &region.take_region_epoch(), admin_req);
     let resp = cluster
         .call_command_on_leader(transfer_leader, Duration::from_secs(3))
         .unwrap();
-    let e = resp.get_header().get_error();
     assert_eq!(
-        e.get_flashback_in_progress(),
+        resp.get_header().get_error().get_flashback_in_progress(),
         &FlashbackInProgress {
             region_id: region.get_id(),
             ..Default::default()
         }
     );
-
+    // Finish flashback.
     cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::FinishFlashback);
     // Transfer leader to (2, 2) should succeed.
     cluster.must_transfer_leader(1, new_peer(2, 2));
@@ -187,27 +175,33 @@ fn test_flashback_for_write() {
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
-    // Write for cluster
-    let value = vec![1_u8; 8096];
-    multi_do_cmd(&mut cluster, new_put_cf_cmd("write", b"k1", &value));
-
-    // Prepare for flashback
-    let region = cluster.get_region(b"k1");
-    cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::PrepareFlashback);
-
-    // Write will be blocked
-    let value = vec![1_u8; 8096];
-    must_get_error_flashback_in_progress(&mut cluster, &region, new_put_cmd(b"k1", &value));
-    // Write with flashback flag will succeed
-    must_do_cmd_with_flashback_flag(
+    // Write without flashback flag.
+    let mut region = cluster.get_region(TEST_KEY);
+    must_request_without_flashback_flag(
         &mut cluster,
         &mut region.clone(),
-        new_put_cmd(b"k1", &value),
+        new_put_cmd(TEST_KEY, TEST_VALUE),
     );
-
+    // Prepare flashback.
+    cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::PrepareFlashback);
+    // Write will be blocked
+    must_get_flashback_in_progress_error(
+        &mut cluster,
+        &mut region.clone(),
+        new_put_cmd(TEST_KEY, TEST_VALUE),
+    );
+    // Write with flashback flag will succeed.
+    must_request_with_flashback_flag(
+        &mut cluster,
+        &mut region.clone(),
+        new_put_cmd(TEST_KEY, TEST_VALUE),
+    );
     cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::FinishFlashback);
-
-    multi_do_cmd(&mut cluster, new_put_cf_cmd("write", b"k1", &value));
+    must_request_without_flashback_flag(
+        &mut cluster,
+        &mut region,
+        new_put_cmd(TEST_KEY, TEST_VALUE),
+    );
 }
 
 #[test]
@@ -216,30 +210,18 @@ fn test_flashback_for_read() {
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
-    // Write for cluster
-    let value = vec![1_u8; 8096];
-    multi_do_cmd(&mut cluster, new_put_cf_cmd("write", b"k1", &value));
-    // read for cluster
-    multi_do_cmd(&mut cluster, new_get_cf_cmd("write", b"k1"));
-
-    // Prepare for flashback
-    let region = cluster.get_region(b"k1");
+    // Read without flashback flag.
+    let mut region = cluster.get_region(TEST_KEY);
+    must_request_without_flashback_flag(&mut cluster, &mut region.clone(), new_get_cmd(TEST_KEY));
+    // Prepare flashback.
     cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::PrepareFlashback);
-
-    // read will be blocked
-    must_get_error_flashback_in_progress(&mut cluster, &region, new_get_cf_cmd("write", b"k1"));
-
-    // Verify the read can be executed if add flashback flag in request's
-    // header.
-    must_do_cmd_with_flashback_flag(
-        &mut cluster,
-        &mut region.clone(),
-        new_get_cf_cmd("write", b"k1"),
-    );
-
+    // Read will be blocked.
+    must_get_flashback_in_progress_error(&mut cluster, &mut region.clone(), new_get_cmd(TEST_KEY));
+    // Read with flashback flag will succeed.
+    must_request_with_flashback_flag(&mut cluster, &mut region.clone(), new_get_cmd(TEST_KEY));
+    // Finish flashback.
     cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::FinishFlashback);
-
-    multi_do_cmd(&mut cluster, new_get_cf_cmd("write", b"k1"));
+    must_request_without_flashback_flag(&mut cluster, &mut region, new_get_cmd(TEST_KEY));
 }
 
 // LocalReader will attempt to renew the lease.
@@ -249,62 +231,44 @@ fn test_flashback_for_read() {
 fn test_flashback_for_local_read() {
     let mut cluster = new_node_cluster(0, 3);
     let election_timeout = configure_for_lease_read(&mut cluster, Some(50), None);
-
     // Avoid triggering the log compaction in this test case.
     cluster.cfg.raft_store.raft_log_gc_threshold = 100;
-
+    cluster.run();
+    cluster.must_put(TEST_KEY, TEST_VALUE);
+    let mut region = cluster.get_region(TEST_KEY);
     let store_id = 3;
     let peer = new_peer(store_id, 3);
-    cluster.run();
-
-    cluster.must_put(b"k1", b"v1");
-    let region = cluster.get_region(b"k1");
-    cluster.must_transfer_leader(region.get_id(), peer.clone());
+    cluster.must_transfer_leader(region.get_id(), peer);
 
     // Check local read before prepare flashback
     let state = cluster.raft_local_state(region.get_id(), store_id);
     let last_index = state.get_last_index();
     // Make sure the leader transfer procedure timeouts.
     sleep(election_timeout * 2);
-    must_read_on_peer(&mut cluster, peer.clone(), region.clone(), b"k1", b"v1");
+    must_request_without_flashback_flag(&mut cluster, &mut region.clone(), new_get_cmd(TEST_KEY));
     // Check the leader does a local read.
     let state = cluster.raft_local_state(region.get_id(), store_id);
     assert_eq!(state.get_last_index(), last_index);
 
-    // Prepare for flashback
+    // Prepare flashback.
     cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::PrepareFlashback);
-
     // Check the leader does a local read.
     let state = cluster.raft_local_state(region.get_id(), store_id);
     assert_eq!(state.get_last_index(), last_index + 1);
     // Wait for apply_res to set leader lease.
     sleep_ms(500);
-
-    must_error_read_on_peer(
-        &mut cluster,
-        peer.clone(),
-        region.clone(),
-        b"k1",
-        Duration::from_secs(1),
-    );
-
+    // Read should fail.
+    must_get_flashback_in_progress_error(&mut cluster, &mut region.clone(), new_get_cmd(TEST_KEY));
     // Wait for the leader's lease to expire to ensure that a renew lease interval
     // has elapsed.
     sleep(election_timeout * 2);
-    must_error_read_on_peer(
-        &mut cluster,
-        peer.clone(),
-        region.clone(),
-        b"k1",
-        Duration::from_secs(1),
-    );
-
+    // Read should fail.
+    must_get_flashback_in_progress_error(&mut cluster, &mut region.clone(), new_get_cmd(TEST_KEY));
     // Also check read by propose was blocked
     let state = cluster.raft_local_state(region.get_id(), store_id);
     assert_eq!(state.get_last_index(), last_index + 1);
-
+    // Finish flashback.
     cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::FinishFlashback);
-
     let state = cluster.raft_local_state(region.get_id(), store_id);
     assert_eq!(state.get_last_index(), last_index + 2);
 
@@ -313,11 +277,12 @@ fn test_flashback_for_local_read() {
     let last_index = state.get_last_index();
     // Make sure the leader transfer procedure timeouts.
     sleep(election_timeout * 2);
-    must_read_on_peer(&mut cluster, peer, region.clone(), b"k1", b"v1");
-
+    must_request_without_flashback_flag(&mut cluster, &mut region.clone(), new_get_cmd(TEST_KEY));
     // Check the leader does a local read.
     let state = cluster.raft_local_state(region.get_id(), store_id);
     assert_eq!(state.get_last_index(), last_index);
+    // A local read with flashback flag will also be blocked.
+    must_get_flashback_not_prepared_error(&mut cluster, &mut region, new_get_cmd(TEST_KEY));
 }
 
 #[test]
@@ -326,7 +291,7 @@ fn test_flashback_for_status_cmd_as_region_detail() {
     cluster.run();
 
     let leader = cluster.leader_of_region(1).unwrap();
-    let region = cluster.get_region(b"k1");
+    let region = cluster.get_region(TEST_KEY);
     cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::PrepareFlashback);
 
     let region_detail = cluster.region_detail(region.get_id(), leader.get_store_id());
@@ -420,58 +385,63 @@ fn must_check_flashback_state(
     );
 }
 
-fn multi_do_cmd<T: Simulator>(cluster: &mut Cluster<T>, cmd: Request) {
-    for _ in 0..100 {
-        let mut reqs = vec![];
-        for _ in 0..100 {
-            reqs.push(cmd.clone());
-        }
-        cluster.batch_put(b"k1", reqs).unwrap();
-    }
-}
-
-fn must_do_cmd_with_flashback_flag<T: Simulator>(
+fn request<T: Simulator>(
     cluster: &mut Cluster<T>,
     region: &mut metapb::Region,
-    cmd: Request,
-) {
-    // Verify the read can be executed if add flashback flag in request's
-    // header.
-    let mut req = new_request(
+    req: Request,
+    with_flashback_flag: bool,
+) -> RaftCmdResponse {
+    let mut cmd_req = new_request(
         region.get_id(),
         region.take_region_epoch(),
-        vec![cmd],
+        vec![req],
         false,
     );
     let new_leader = cluster.query_leader(1, region.get_id(), Duration::from_secs(1));
-    req.mut_header().set_peer(new_leader.unwrap());
-    req.mut_header()
-        .set_flags(WriteBatchFlags::FLASHBACK.bits());
-    let resp = cluster.call_command(req, Duration::from_secs(3)).unwrap();
+    let header = cmd_req.mut_header();
+    header.set_peer(new_leader.unwrap());
+    if with_flashback_flag {
+        header.set_flags(WriteBatchFlags::FLASHBACK.bits());
+    }
+    cluster
+        .call_command(cmd_req, Duration::from_secs(3))
+        .unwrap()
+}
+
+// Make sure the request could be executed with flashback flag.
+fn must_request_with_flashback_flag<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    region: &mut metapb::Region,
+    req: Request,
+) {
+    let resp = request(cluster, region, req, true);
     assert!(!resp.get_header().has_error());
 }
 
-fn must_get_error_flashback_in_progress<T: Simulator>(
+fn must_get_flashback_not_prepared_error<T: Simulator>(
     cluster: &mut Cluster<T>,
-    region: &metapb::Region,
-    cmd: Request,
+    region: &mut metapb::Region,
+    req: Request,
 ) {
-    for _ in 0..100 {
-        let mut reqs = vec![];
-        for _ in 0..100 {
-            reqs.push(cmd.clone());
-        }
-        match cluster.batch_put(b"k1", reqs) {
-            Ok(_) => {}
-            Err(e) => {
-                assert_eq!(
-                    e.get_flashback_in_progress(),
-                    &FlashbackInProgress {
-                        region_id: region.get_id(),
-                        ..Default::default()
-                    }
-                );
-            }
-        }
-    }
+    let resp = request(cluster, region, req, true);
+    assert!(resp.get_header().get_error().has_flashback_not_prepared());
+}
+
+// Make sure the request could be executed without flashback flag.
+fn must_request_without_flashback_flag<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    region: &mut metapb::Region,
+    req: Request,
+) {
+    let resp = request(cluster, region, req, false);
+    assert!(!resp.get_header().has_error());
+}
+
+fn must_get_flashback_in_progress_error<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    region: &mut metapb::Region,
+    req: Request,
+) {
+    let resp = request(cluster, region, req, false);
+    assert!(resp.get_header().get_error().has_flashback_in_progress());
 }

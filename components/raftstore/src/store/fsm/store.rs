@@ -699,7 +699,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             .raft_metrics
             .event_time
             .get(tick.tag())
-            .observe(duration_to_sec(elapsed) as f64);
+            .observe(duration_to_sec(elapsed));
         slow_log!(
             elapsed,
             "[store {}] handle timeout {:?}",
@@ -767,7 +767,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             .raft_metrics
             .event_time
             .store_msg
-            .observe(duration_to_sec(timer.saturating_elapsed()) as f64);
+            .observe(duration_to_sec(timer.saturating_elapsed()));
     }
 
     fn start(&mut self, store: metapb::Store) {

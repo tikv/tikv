@@ -322,7 +322,7 @@ where
         for mailbox in mailboxes.map.values() {
             let _ = mailbox.force_send(msg_gen(), &self.normal_scheduler);
         }
-        BROADCAST_NORMAL_DURATION.observe(duration_to_sec(timer.saturating_elapsed()) as f64);
+        BROADCAST_NORMAL_DURATION.observe(duration_to_sec(timer.saturating_elapsed()));
     }
 
     /// Try to notify all FSMs that the cluster is being shutdown.

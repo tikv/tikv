@@ -68,6 +68,7 @@ pub struct RaftLogGcTask {
     pub to: u64,
 }
 
+// TODO: Refactor common methods between Kv and Raft engine into a shared trait.
 pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send + 'static {
     type LogBatch: RaftLogBatch;
 
@@ -139,6 +140,9 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
     fn dump_stats(&self) -> Result<String>;
 
     fn get_engine_size(&self) -> Result<u64>;
+
+    /// The path to the directory on the filesystem where the raft log is stored
+    fn get_engine_path(&self) -> &str;
 
     /// Visit all available raft groups.
     ///
