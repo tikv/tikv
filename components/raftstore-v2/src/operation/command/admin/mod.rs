@@ -1,8 +1,9 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod commit_merge;
 mod conf_change;
-mod merge;
 mod prepare_merge;
+mod rollback_merge;
 mod split;
 
 use engine_traits::{KvEngine, RaftEngine};

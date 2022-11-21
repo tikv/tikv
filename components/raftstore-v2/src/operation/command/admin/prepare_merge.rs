@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! This module contains merge related processing logic.
+//! The handling of `PrepareMerge` command.
 //!
 //! ## Propose (`Peer::propose_prepare_merge`)
 //!
@@ -391,8 +391,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.pending_merge_state = Some(res.state);
         let state = self.pending_merge_state.as_ref().unwrap();
 
-        // TODO: catch_up_logs
-
+        self.update_merge_progress_on_ready_prepare_merge();
         self.on_merge_check_tick();
     }
 }
