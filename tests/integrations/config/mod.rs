@@ -671,6 +671,7 @@ fn test_serde_custom_tikv_config() {
         scheduler_worker_pool_size: 1,
         scheduler_pending_write_threshold: ReadableSize::kb(123),
         reserve_space: ReadableSize::gb(10),
+        reserve_raft_space: ReadableSize::gb(2),
         enable_async_apply_prewrite: true,
         api_version: 1,
         enable_ttl: true,

@@ -13,7 +13,7 @@ mod imp {
 
     #[allow(dead_code)]
     pub fn wait_for_signal(engines: Option<Engines<impl KvEngine, impl RaftEngine>>) {
-        let mut signals = Signals::new(&[SIGTERM, SIGINT, SIGHUP, SIGUSR1, SIGUSR2]).unwrap();
+        let mut signals = Signals::new([SIGTERM, SIGINT, SIGHUP, SIGUSR1, SIGUSR2]).unwrap();
         for signal in &mut signals {
             match signal {
                 SIGTERM | SIGINT | SIGHUP => {

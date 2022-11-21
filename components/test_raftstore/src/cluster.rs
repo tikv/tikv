@@ -1202,7 +1202,7 @@ impl<T: Simulator> Cluster<T> {
         self.get_engine(store_id)
             .get_msg_cf::<RaftApplyState>(engine_traits::CF_RAFT, &key)
             .unwrap()
-            .unwrap()
+            .unwrap_or_default()
     }
 
     pub fn get_raft_local_state(&self, region_id: u64, store_id: u64) -> Option<RaftLocalState> {
