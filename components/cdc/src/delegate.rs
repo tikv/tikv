@@ -535,8 +535,7 @@ impl Delegate {
                     row_size = 0;
                 }
             }
-            // if the `txn_source` is not 0 and we should filter it out, we should skip it
-            // this event.
+            // if the `txn_source` is not 0 and we should filter it out, skip this event.
             if row.txn_source != 0 && filter_loop {
                 continue;
             }
@@ -649,6 +648,9 @@ impl Delegate {
             }
         }
 
+        // collect the change event cause by user write, which is `txn_source` = 0.
+        // for changefeed which only need the user write, send the `filtered`, or else,
+        // send them all.
         let (filtered, empty) = if need_filter {
             let filtered = entries
                 .iter()
@@ -992,6 +994,7 @@ fn decode_write(
     row.commit_ts = commit_ts;
     row.key = key.truncate_ts().unwrap().into_raw().unwrap();
     row.op_type = op_type as _;
+    // used for filter out the event. see `txn_source` field for more detial.
     row.txn_source = write.txn_source;
     set_event_row_type(row, r_type);
     if let Some(value) = write.short_value {
@@ -1019,6 +1022,7 @@ fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow, has_value: &mut boo
     row.start_ts = lock.ts.into_inner();
     row.key = key.into_raw().unwrap();
     row.op_type = op_type as _;
+    // used for filter out the event. see `txn_source` field for more detial.
     row.txn_source = lock.txn_source;
     set_event_row_type(row, EventLogType::Prewrite);
     if let Some(value) = lock.short_value {
