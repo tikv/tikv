@@ -138,10 +138,10 @@ fn test_snapshot_failed() {
 #[test]
 fn test_snapshot_failed_2() {
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &[]);
+    let (store, endpoint) = init_with_data(&product, &[]);
     let req = DagSelect::from(&product).build();
 
-    fail::cfg("rockskv_async_snapshot_not_leader", "return()").unwrap();
+    store.get_engine().trigger_not_leader();
     let resp = handle_request(&endpoint, req);
 
     assert!(resp.get_region_error().has_not_leader());

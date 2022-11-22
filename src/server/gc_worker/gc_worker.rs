@@ -1287,6 +1287,7 @@ pub mod test_gc_worker {
 
     use collections::HashMap;
     use engine_rocks::{RocksEngine, RocksSnapshot};
+    use futures::Future;
     use kvproto::{
         kvrpcpb::Context,
         metapb::{Peer, Region},
@@ -1378,22 +1379,16 @@ pub mod test_gc_worker {
             self.0.async_write(ctx, batch, callback)
         }
 
-        fn async_snapshot(
-            &mut self,
-            ctx: SnapContext<'_>,
-            callback: EngineCallback<Self::Snap>,
-        ) -> EngineResult<()> {
-            self.0.async_snapshot(
-                ctx,
-                Box::new(move |r| {
-                    callback(r.map(|snap| {
-                        let mut region = Region::default();
-                        // Add a peer to pass initialized check.
-                        region.mut_peers().push(Peer::default());
-                        RegionSnapshot::from_snapshot(snap, Arc::new(region))
-                    }))
-                }),
-            )
+        type SnapshotRes = impl Future<Output = EngineResult<Self::Snap>> + Send;
+        fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes {
+            let f = self.0.async_snapshot(ctx);
+            async move {
+                let snap = f.await?;
+                let mut region = Region::default();
+                // Add a peer to pass initialized check.
+                region.mut_peers().push(Peer::default());
+                Ok(RegionSnapshot::from_snapshot(snap, Arc::new(region)))
+            }
         }
     }
 
@@ -1441,18 +1436,15 @@ pub mod test_gc_worker {
             self.engines.lock().unwrap()[&ctx.region_id].async_write(ctx, batch, callback)
         }
 
-        fn async_snapshot(
-            &mut self,
-            ctx: SnapContext<'_>,
-            callback: EngineCallback<Self::Snap>,
-        ) -> EngineResult<()> {
+        type SnapshotRes = impl Future<Output = EngineResult<Self::Snap>> + Send;
+        fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes {
             let region_id = ctx.pb_ctx.region_id;
             self.engines
                 .lock()
                 .unwrap()
                 .get_mut(&region_id)
                 .unwrap()
-                .async_snapshot(ctx, callback)
+                .async_snapshot(ctx)
         }
     }
 }
