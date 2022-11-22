@@ -20,7 +20,7 @@ use grpcio_health::{proto::HealthCheckRequest, *};
 use kvproto::{
     coprocessor::*,
     debugpb,
-    kvrpcpb::{self, PrewriteRequestPessimisticAction::*, *},
+    kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
     metapb, raft_serverpb,
     raft_serverpb::*,
     tikvpb::*,
@@ -937,32 +937,6 @@ fn test_split_region_impl<F: KvFormat>(is_raw_kv: bool) {
 }
 
 #[test]
-fn test_read_index() {
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
-
-    // Read index
-    let mut req = ReadIndexRequest::default();
-    req.set_context(ctx.clone());
-    let mut resp = client.read_index(&req).unwrap();
-    let last_index = resp.get_read_index();
-    assert_eq!(last_index > 0, true);
-
-    // Raw put
-    let (k, v) = (b"key".to_vec(), b"value".to_vec());
-    let mut put_req = RawPutRequest::default();
-    put_req.set_context(ctx);
-    put_req.key = k;
-    put_req.value = v;
-    let put_resp = client.raw_put(&put_req).unwrap();
-    assert!(!put_resp.has_region_error());
-    assert!(put_resp.error.is_empty());
-
-    // Read index again
-    resp = client.read_index(&req).unwrap();
-    assert_eq!(last_index + 1, resp.get_read_index());
-}
-
-#[test]
 fn test_debug_get() {
     let (cluster, debug_client, store_id) = must_new_cluster_and_debug_client();
     let (k, v) = (b"key", b"value");
@@ -1458,90 +1432,6 @@ fn test_async_commit_check_txn_status() {
 }
 
 #[test]
-fn test_read_index_check_memory_locks() {
-    let mut cluster = new_server_cluster(0, 3);
-    cluster.cfg.raft_store.hibernate_regions = false;
-    cluster.run();
-
-    // make sure leader has been elected.
-    assert_eq!(cluster.must_get(b"k"), None);
-
-    let region = cluster.get_region(b"");
-    let leader = cluster.leader_of_region(region.get_id()).unwrap();
-    let leader_cm = cluster.sim.rl().get_concurrency_manager(leader.get_id());
-
-    let keys: Vec<_> = vec![b"k", b"l"]
-        .into_iter()
-        .map(|k| Key::from_raw(k))
-        .collect();
-    let guards = block_on(leader_cm.lock_keys(keys.iter()));
-    let lock = Lock::new(
-        LockType::Put,
-        b"k".to_vec(),
-        1.into(),
-        20000,
-        None,
-        1.into(),
-        1,
-        2.into(),
-    );
-    guards[0].with_lock(|l| *l = Some(lock.clone()));
-
-    // read on follower
-    let mut follower_peer = None;
-    let peers = region.get_peers();
-    for p in peers {
-        if p.get_id() != leader.get_id() {
-            follower_peer = Some(p.clone());
-            break;
-        }
-    }
-    let follower_peer = follower_peer.unwrap();
-    let addr = cluster.sim.rl().get_addr(follower_peer.get_store_id());
-
-    let env = Arc::new(Environment::new(1));
-    let channel = ChannelBuilder::new(env).connect(&addr);
-    let client = TikvClient::new(channel);
-
-    let mut ctx = Context::default();
-    ctx.set_region_id(region.get_id());
-    ctx.set_region_epoch(region.get_region_epoch().clone());
-    ctx.set_peer(follower_peer);
-
-    let read_index = |ranges: &[(&[u8], &[u8])]| {
-        let mut req = ReadIndexRequest::default();
-        let start_ts = block_on(cluster.pd_client.get_tso()).unwrap();
-        req.set_context(ctx.clone());
-        req.set_start_ts(start_ts.into_inner());
-        for &(start_key, end_key) in ranges {
-            let mut range = kvrpcpb::KeyRange::default();
-            range.set_start_key(start_key.to_vec());
-            range.set_end_key(end_key.to_vec());
-            req.mut_ranges().push(range);
-        }
-        let resp = client.read_index(&req).unwrap();
-        (resp, start_ts)
-    };
-
-    // wait a while until the node updates its own max ts
-    thread::sleep(Duration::from_millis(300));
-
-    let (resp, start_ts) = read_index(&[(b"l", b"yz")]);
-    assert!(!resp.has_locked());
-    assert_eq!(leader_cm.max_ts(), start_ts);
-
-    let (resp, start_ts) = read_index(&[(b"a", b"b"), (b"j", b"k0")]);
-    assert_eq!(resp.get_locked(), &lock.into_lock_info(b"k".to_vec()));
-    assert_eq!(leader_cm.max_ts(), start_ts);
-
-    drop(guards);
-
-    let (resp, start_ts) = read_index(&[(b"a", b"z")]);
-    assert!(!resp.has_locked());
-    assert_eq!(leader_cm.max_ts(), start_ts);
-}
-
-#[test]
 fn test_prewrite_check_max_commit_ts() {
     let mut cluster = new_server_cluster(0, 1);
     cluster.run();
@@ -1882,7 +1772,6 @@ fn test_tikv_forwarding() {
         req.set_split_key(b"k1".to_vec());
         req
     });
-    test_func_init!(client, ctx, call_opt, read_index, ReadIndexRequest);
 
     // Test if duplex can be redirect correctly.
     let cases = vec![
