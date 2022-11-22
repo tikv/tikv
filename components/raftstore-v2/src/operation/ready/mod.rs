@@ -417,18 +417,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         /// - Wait for async writer to load this tablet
         /// In this step, the snapshot has loaded finish, but some apply state
         /// need to update.
-        if first_index == persisted_index && has_snapshot {
-            let region_id = self.region_id();
-            let tablet = ctx
-                .tablet_factory
-                .open_tablet(region_id, Some(first_index), OpenOptions::default())
-                .unwrap();
-            self.tablet_mut().set(tablet);
-            self.schedule_apply_fsm(ctx);
-            self.storage_mut().on_applied_snapshot();
-            self.raft_group_mut().advance_apply_to(first_index);
-            self.read_progress_mut().update_applied_core(first_index);
-            info!(self.logger, "apply tablet snapshot completely");
+        if has_snapshot {
+            self.on_applied_snapshot(ctx);
         }
 
         self.storage_mut()

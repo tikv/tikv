@@ -28,13 +28,13 @@ use std::{
     },
 };
 
-use engine_traits::{KvEngine, RaftEngine, TabletFactory};
+use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory};
 use kvproto::raft_serverpb::{PeerState, RaftSnapshotData, RegionLocalState};
 use protobuf::Message;
 use raft::eraftpb::Snapshot;
 use raftstore::store::{
     metrics::STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER, GenSnapRes, ReadTask, TabletSnapKey,
-    TabletSnapManager, WriteTask,
+    TabletSnapManager, Transport, WriteTask,
 };
 use slog::{error, info, warn};
 use tikv_util::{box_err, box_try, worker::Scheduler};
@@ -43,7 +43,7 @@ use crate::{
     fsm::ApplyResReporter,
     raft::{Apply, Peer, Storage},
     router::{ApplyTask, PeerTick},
-    Result,
+    Result, StoreContext,
 };
 
 #[derive(Debug)]
@@ -116,6 +116,29 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if self.storage_mut().on_snapshot_generated(snapshot) {
             self.raft_group_mut().ping();
             self.set_has_ready();
+        }
+    }
+
+    pub fn on_applied_snapshot<T: Transport>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
+        let persisted_index = self.raft_group().raft.raft_log.persisted;
+        let first_index = self.storage().entry_storage().truncated_index();
+        /// The apply snapshot process order would be:
+        /// - Get the snapshot from the ready
+        /// - Wait for async writer to load this tablet
+        /// In this step, the snapshot has loaded finish, but some apply state
+        /// need to update.
+        if first_index == persisted_index {
+            let region_id = self.region_id();
+            let tablet = ctx
+                .tablet_factory
+                .open_tablet(region_id, Some(first_index), OpenOptions::default())
+                .unwrap();
+            self.tablet_mut().set(tablet);
+            self.schedule_apply_fsm(ctx);
+            self.storage_mut().on_applied_snapshot();
+            self.raft_group_mut().advance_apply_to(first_index);
+            self.read_progress_mut().update_applied_core(first_index);
+            info!(self.logger, "apply tablet snapshot completely");
         }
     }
 }
