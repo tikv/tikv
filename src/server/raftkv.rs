@@ -441,7 +441,7 @@ where
 
     type SnapshotRes = impl Future<Output = kv::Result<Self::Snap>> + Send;
     fn async_snapshot(&mut self, mut ctx: SnapContext<'_>) -> Self::SnapshotRes {
-        let mut res = (|| {
+        let mut res: kv::Result<()> = (|| {
             fail_point!("raftkv_async_snapshot_err", |_| {
                 Err(box_err!("injected error for async_snapshot"))
             });
@@ -479,20 +479,23 @@ where
         cmd.set_header(header);
         cmd.set_requests(vec![req].into());
         if res.is_ok() {
-            res = self.router.read(
-                ctx.read_id,
-                cmd,
-                StoreCallback::read(Box::new(move |resp| {
-                    cb(on_read_result(resp).map_err(Error::into));
-                })),
-            );
+            res = self
+                .router
+                .read(
+                    ctx.read_id,
+                    cmd,
+                    StoreCallback::read(Box::new(move |resp| {
+                        cb(on_read_result(resp).map_err(Error::into));
+                    })),
+                )
+                .map_err(kv::Error::from);
         }
         async move {
             // It's impossible to return cancel because the callback will be invoked if it's
             // destroyed.
             let res = match res {
                 Ok(()) => f.await.unwrap(),
-                Err(e) => Err(e.into()),
+                Err(e) => Err(e),
             };
             match res {
                 Ok(CmdRes::Resp(mut r)) => {
