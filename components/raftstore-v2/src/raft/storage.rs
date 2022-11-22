@@ -611,7 +611,7 @@ mod tests {
         assert_eq!(snap.get_metadata().get_term(), 0);
         assert_eq!(snap.get_data().is_empty(), false);
         let snap_key = TabletSnapKey::from_region_snap(4, 7, &snap);
-        let checkpointer_path = mgr.tablet_checkpointer_path(&snap_key);
+        let checkpointer_path = mgr.tablet_gen_path(&snap_key);
         assert!(checkpointer_path.exists());
 
         // Test cancel snapshot

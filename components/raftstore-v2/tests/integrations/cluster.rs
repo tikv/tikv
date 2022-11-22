@@ -496,8 +496,8 @@ impl Cluster {
                     );
                     let from_snap_mgr = self.node(from_offset).snap_mgr().unwrap();
                     let to_snap_mgr = self.node(offset).snap_mgr().unwrap();
-                    let gen_path = from_snap_mgr.tablet_checkpointer_path(&key);
-                    let recv_path = to_snap_mgr.recv_tablet_path(&key);
+                    let gen_path = from_snap_mgr.tablet_gen_path(&key);
+                    let recv_path = to_snap_mgr.final_recv_path(&key);
                     assert!(gen_path.exists());
                     std::fs::rename(gen_path, recv_path.clone()).unwrap();
                     assert!(recv_path.exists());

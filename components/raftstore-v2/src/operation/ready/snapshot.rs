@@ -363,7 +363,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         self.entry_storage_mut().set_last_term(last_term);
 
         let key = TabletSnapKey::new(region_id, peer_id, last_term, last_index);
-        let mut path = snap_mgr.recv_tablet_path(&key);
+        let mut path = snap_mgr.final_recv_path(&key);
         let logger = self.logger().clone();
         // The snapshot require no additional processing such as ingest them to DB, but
         // it should load it into the factory after it persisted.
