@@ -13,15 +13,13 @@ pub const FLASHBACK_BATCH_SIZE: usize = 256 + 1 /* To store the next key for mul
 pub fn flashback_to_version_read_lock(
     reader: &mut MvccReader<impl Snapshot>,
     next_lock_key: Key,
-    start_key: &Key,
     end_key: &Key,
     statistics: &mut Statistics,
 ) -> TxnResult<Vec<(Key, Lock)>> {
     let result = reader.scan_locks(
         Some(&next_lock_key),
         Some(end_key),
-        // Skip the `start_key`.
-        |key, _| key != start_key,
+        |_| true,
         FLASHBACK_BATCH_SIZE,
     );
     statistics.add(&reader.statistics);
@@ -64,9 +62,9 @@ pub fn flashback_to_version_read_write(
     Ok(key_old_writes)
 }
 
-// To flashback the `CF_LOCK`, we need to rollback all locks whose `start_ts` is
-// greater than the specified version.
-pub fn flashback_to_version_lock(
+// At the very first beginning of flashback, we need to rollback all locks in
+// `CF_LOCK`.
+pub fn rollback_locks(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<impl Snapshot>,
     key_locks: Vec<(Key, Lock)>,
@@ -142,6 +140,8 @@ pub fn flashback_to_version_write(
     Ok(None)
 }
 
+// Prewrite the `key_to_lock`, namely the `self.start_key`, to do a special 2PC
+// transaction.
 pub fn prewrite_flashback_key(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<impl Snapshot>,
@@ -149,9 +149,7 @@ pub fn prewrite_flashback_key(
     flashback_version: TimeStamp,
     flashback_start_ts: TimeStamp,
 ) -> TxnResult<()> {
-    let old_write = reader
-        .get_write_with_commit_ts(key_to_lock, flashback_version)?
-        .map(|(write, _)| write);
+    let old_write = reader.get_write(key_to_lock, flashback_version)?;
     // Flashback the value in `CF_DEFAULT` as well if the old write is a
     // `WriteType::Put`.
     if let Some(old_write) = old_write.as_ref() {
@@ -192,8 +190,6 @@ pub fn commit_flashback_key(
     start_ts: TimeStamp,
     commit_ts: TimeStamp,
 ) -> TxnResult<()> {
-    // If the key is not locked, it means that the key has been committed before and
-    // we are in a retry.
     if let Some(mut lock) = reader.load_lock(key_to_commit)? {
         txn.put_write(
             key_to_commit.clone(),
@@ -249,19 +245,14 @@ pub mod tests {
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &ctx);
         let mut statistics = Statistics::default();
         // Flashback the locks.
-        let key_locks = flashback_to_version_read_lock(
-            &mut reader,
-            key.clone(),
-            &Key::from_raw(b""),
-            &next_key,
-            &mut statistics,
-        )
-        .unwrap();
+        let key_locks =
+            flashback_to_version_read_lock(&mut reader, key.clone(), &next_key, &mut statistics)
+                .unwrap();
         let cm = ConcurrencyManager::new(TimeStamp::zero());
         let mut txn = MvccTxn::new(start_ts, cm.clone());
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut snap_reader = SnapshotReader::new_with_ctx(version, snapshot, &ctx);
-        flashback_to_version_lock(&mut txn, &mut snap_reader, key_locks).unwrap();
+        rollback_locks(&mut txn, &mut snap_reader, key_locks).unwrap();
         let mut rows = txn.modifies.len();
         write(engine, &ctx, txn.into_modifies());
         // Flashback the writes.

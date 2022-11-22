@@ -1210,6 +1210,10 @@ pub fn must_flashback_to_version(
 ) {
     let mut prepare_req = PrepareFlashbackToVersionRequest::default();
     prepare_req.set_context(ctx.clone());
+    prepare_req.set_start_ts(start_ts);
+    prepare_req.version = version;
+    prepare_req.start_key = b"a".to_vec();
+    prepare_req.end_key = b"z".to_vec();
     client
         .kv_prepare_flashback_to_version(&prepare_req)
         .unwrap();

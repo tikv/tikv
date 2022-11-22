@@ -1367,7 +1367,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         .scan_locks(
                             start_key.as_ref(),
                             end_key.as_ref(),
-                            |_, lock| lock.ts <= max_ts,
+                            |lock| lock.ts <= max_ts,
                             limit,
                         )
                         .map_err(txn::Error::from);
@@ -3481,9 +3481,7 @@ mod tests {
         mvcc::tests::{must_unlocked, must_written},
         test_util::*,
         txn::{
-            commands::{
-                new_flashback_to_version_prewrite_cmd, new_flashback_to_version_read_phase_cmd,
-            },
+            commands::{new_flashback_rollback_lock_cmd, new_flashback_write_cmd},
             FLASHBACK_BATCH_SIZE,
         },
         *,
@@ -4792,10 +4790,11 @@ mod tests {
         let (tx, rx) = channel();
         storage
             .sched_txn_command(
-                new_flashback_to_version_prewrite_cmd(
-                    start_key.clone(),
+                new_flashback_rollback_lock_cmd(
                     start_ts,
                     version,
+                    start_key.clone(),
+                    end_key.clone(),
                     Context::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -4804,7 +4803,7 @@ mod tests {
         rx.recv().unwrap();
         storage
             .sched_txn_command(
-                new_flashback_to_version_read_phase_cmd(
+                new_flashback_write_cmd(
                     start_ts,
                     commit_ts,
                     version,

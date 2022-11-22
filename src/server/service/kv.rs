@@ -1452,6 +1452,8 @@ fn future_delete_range<E: Engine, L: LockManager, F: KvFormat>(
 // Preparing the flashback for a region will "lock" the region so that
 // there is no any read, write or scheduling operation could be proposed before
 // the actual flashback operation.
+// NOTICE: the caller needs to make sure the version we want to flashback won't
+// be between any transactions that have not been fully committed.
 fn future_prepare_flashback_to_version<E: Engine, L: LockManager, F: KvFormat>(
     // Keep this param to hint the type of E for the compiler.
     storage: &Storage<E, L, F>,

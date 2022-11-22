@@ -18,6 +18,10 @@ use crate::storage::{
 
 #[derive(Debug)]
 pub enum FlashbackToVersionState {
+    RollbackLock {
+        next_lock_key: Key,
+        key_locks: Vec<(Key, Lock)>,
+    },
     Prewrite {
         key_to_lock: Key,
     },
@@ -25,16 +29,33 @@ pub enum FlashbackToVersionState {
         next_write_key: Key,
         key_old_writes: Vec<(Key, Option<Write>)>,
     },
-    FlashbackLock {
-        next_lock_key: Key,
-        key_locks: Vec<(Key, Lock)>,
-    },
     Commit {
         key_to_commit: Key,
     },
 }
 
-pub fn new_flashback_to_version_read_phase_cmd(
+pub fn new_flashback_rollback_lock_cmd(
+    start_ts: TimeStamp,
+    version: TimeStamp,
+    start_key: Key,
+    end_key: Key,
+    ctx: Context,
+) -> TypedCommand<()> {
+    FlashbackToVersionReadPhase::new(
+        start_ts,
+        TimeStamp::zero(),
+        version,
+        start_key.clone(),
+        end_key,
+        FlashbackToVersionState::RollbackLock {
+            next_lock_key: start_key,
+            key_locks: Vec::new(),
+        },
+        ctx,
+    )
+}
+
+pub fn new_flashback_write_cmd(
     start_ts: TimeStamp,
     commit_ts: TimeStamp,
     version: TimeStamp,
@@ -83,30 +104,56 @@ impl CommandExt for FlashbackToVersionReadPhase {
 }
 
 /// The whole flashback progress contains four phases:
-///   1. Prewrite phase:
+///   1. RollbackLock phase:
+///     - Scan all locks.
+///     - Rollback all these locks.
+///   2. Prewrite phase:
 ///     - Prewrite the `self.start_key` specifically to prevent the
 ///       `resolved_ts` from advancing.
-///   2. Read-and-flashback writes phase:
+///   3. FlashbackWrite phase:
 ///     - Scan all the latest writes and their corresponding values at
 ///       `self.version`.
 ///     - Write the old MVCC version writes again for all these keys with
-///       `self.commit_ts` excluding the `self.start_key` .
-///   3. Read-and-rollback locks phase:
-///     - Scan all locks.
-///     - Rollback all these locks excluding the `self.start_key` lock we write
-///       at the first phase.
-///  4. Commit phase:
-///     - Commit the `self.start_key` we write at the first phase to finish the
+///       `self.commit_ts` excluding the `self.start_key`.
+///   4. Commit phase:
+///     - Commit the `self.start_key` we write at the second phase to finish the
 ///       flashback.
 impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
         let tag = self.tag().get_str();
-        let mut read_again = false;
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &self.ctx);
-        // Separate the lock and write flashback to prevent from putting two writes for
-        // the same key in a single batch to make the TiCDC panic.
         let next_state = match self.state {
+            FlashbackToVersionState::RollbackLock { next_lock_key, .. } => {
+                let mut key_locks = flashback_to_version_read_lock(
+                    &mut reader,
+                    next_lock_key,
+                    &self.end_key,
+                    statistics,
+                )?;
+                if key_locks.is_empty() {
+                    // No more locks to rollback, continue to the prewrite phase.
+                    FlashbackToVersionState::Prewrite {
+                        key_to_lock: self.start_key.clone(),
+                    }
+                } else {
+                    tls_collect_keyread_histogram_vec(tag, key_locks.len() as f64);
+                    FlashbackToVersionState::RollbackLock {
+                        next_lock_key: if key_locks.len() > 1 {
+                            key_locks.pop().map(|(key, _)| key).unwrap()
+                        } else {
+                            key_locks.last().map(|(key, _)| key.clone()).unwrap()
+                        },
+                        key_locks,
+                    }
+                }
+            }
             FlashbackToVersionState::FlashbackWrite { next_write_key, .. } => {
+                // If the key is not locked, it means that the key has been committed before and
+                // we are in a retry.
+                if next_write_key == self.start_key && reader.load_lock(&next_write_key)?.is_none()
+                {
+                    return Ok(ProcessResult::Res);
+                }
                 let mut key_old_writes = flashback_to_version_read_write(
                     &mut reader,
                     next_write_key,
@@ -117,11 +164,8 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     statistics,
                 )?;
                 if key_old_writes.is_empty() {
-                    // No more writes to flashback, continue to scan the locks.
-                    read_again = true;
-                    FlashbackToVersionState::FlashbackLock {
-                        next_lock_key: self.start_key.clone(),
-                        key_locks: Vec::new(),
+                    FlashbackToVersionState::Commit {
+                        key_to_commit: self.start_key.clone(),
                     }
                 } else {
                     tls_collect_keyread_histogram_vec(tag, key_old_writes.len() as f64);
@@ -137,56 +181,19 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     }
                 }
             }
-            FlashbackToVersionState::FlashbackLock { next_lock_key, .. } => {
-                let mut key_locks = flashback_to_version_read_lock(
-                    &mut reader,
-                    next_lock_key,
-                    &self.start_key,
-                    &self.end_key,
-                    statistics,
-                )?;
-                if key_locks.is_empty() {
-                    FlashbackToVersionState::Commit {
-                        key_to_commit: self.start_key.clone(),
-                    }
-                } else {
-                    tls_collect_keyread_histogram_vec(tag, key_locks.len() as f64);
-                    FlashbackToVersionState::FlashbackLock {
-                        next_lock_key: if key_locks.len() > 1 {
-                            key_locks.pop().map(|(key, _)| key).unwrap()
-                        } else {
-                            key_locks.last().map(|(key, _)| key.clone()).unwrap()
-                        },
-                        key_locks,
-                    }
-                }
-            }
             _ => unreachable!(),
         };
         Ok(ProcessResult::NextCommand {
-            cmd: if read_again {
-                Command::FlashbackToVersionReadPhase(FlashbackToVersionReadPhase {
-                    ctx: self.ctx,
-                    deadline: self.deadline,
-                    start_ts: self.start_ts,
-                    commit_ts: self.commit_ts,
-                    version: self.version,
-                    start_key: self.start_key,
-                    end_key: self.end_key,
-                    state: next_state,
-                })
-            } else {
-                Command::FlashbackToVersion(FlashbackToVersion {
-                    ctx: self.ctx,
-                    deadline: self.deadline,
-                    start_ts: self.start_ts,
-                    commit_ts: self.commit_ts,
-                    version: self.version,
-                    start_key: self.start_key,
-                    end_key: self.end_key,
-                    state: next_state,
-                })
-            },
+            cmd: Command::FlashbackToVersion(FlashbackToVersion {
+                ctx: self.ctx,
+                deadline: self.deadline,
+                start_ts: self.start_ts,
+                commit_ts: self.commit_ts,
+                version: self.version,
+                start_key: self.start_key,
+                end_key: self.end_key,
+                state: next_state,
+            }),
         })
     }
 }
