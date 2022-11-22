@@ -1083,57 +1083,6 @@ pub fn must_check_txn_status(
     resp
 }
 
-pub fn must_physical_scan_lock(
-    client: &TikvClient,
-    ctx: Context,
-    max_ts: u64,
-    start_key: &[u8],
-    limit: usize,
-) -> Vec<LockInfo> {
-    let mut req = PhysicalScanLockRequest::default();
-    req.set_context(ctx);
-    req.set_max_ts(max_ts);
-    req.set_start_key(start_key.to_owned());
-    req.set_limit(limit as _);
-    let mut resp = client.physical_scan_lock(&req).unwrap();
-    resp.take_locks().into()
-}
-
-pub fn register_lock_observer(client: &TikvClient, max_ts: u64) -> RegisterLockObserverResponse {
-    let mut req = RegisterLockObserverRequest::default();
-    req.set_max_ts(max_ts);
-    client.register_lock_observer(&req).unwrap()
-}
-
-pub fn must_register_lock_observer(client: &TikvClient, max_ts: u64) {
-    let resp = register_lock_observer(client, max_ts);
-    assert!(resp.get_error().is_empty(), "{:?}", resp.get_error());
-}
-
-pub fn check_lock_observer(client: &TikvClient, max_ts: u64) -> CheckLockObserverResponse {
-    let mut req = CheckLockObserverRequest::default();
-    req.set_max_ts(max_ts);
-    client.check_lock_observer(&req).unwrap()
-}
-
-pub fn must_check_lock_observer(client: &TikvClient, max_ts: u64, clean: bool) -> Vec<LockInfo> {
-    let mut resp = check_lock_observer(client, max_ts);
-    assert!(resp.get_error().is_empty(), "{:?}", resp.get_error());
-    assert_eq!(resp.get_is_clean(), clean);
-    resp.take_locks().into()
-}
-
-pub fn remove_lock_observer(client: &TikvClient, max_ts: u64) -> RemoveLockObserverResponse {
-    let mut req = RemoveLockObserverRequest::default();
-    req.set_max_ts(max_ts);
-    client.remove_lock_observer(&req).unwrap()
-}
-
-pub fn must_remove_lock_observer(client: &TikvClient, max_ts: u64) {
-    let resp = remove_lock_observer(client, max_ts);
-    assert!(resp.get_error().is_empty(), "{:?}", resp.get_error());
-}
-
 pub fn get_tso(pd_client: &TestPdClient) -> u64 {
     block_on(pd_client.get_tso()).unwrap().into_inner()
 }
