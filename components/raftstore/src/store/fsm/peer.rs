@@ -2528,7 +2528,7 @@ where
                     self.ctx.snap_mgr.delete_snapshot(&key, s.as_ref(), false);
                 } else if self.fsm.peer.wait_data {
                     // If the key in none, it is because there is witness -> non-witness switch,
-                    // and the peer requests snapshot from leader but leader doesn't appliy the
+                    // and the peer requests snapshot from leader but leader hasn't applied the
                     // switch yet. In that case, the snapshot is a witness snapshot whereas
                     // non-witness snapshot is expected. So request the snapshot again.
                     self.on_request_snapshot_tick();
@@ -5109,7 +5109,7 @@ where
             return Err(Error::RecoveryInProgress(self.region_id()));
         }
 
-        // Forbid requets when it becomes to non-witness but not finish applying
+        // Forbid requests when it becomes to non-witness but not finish applying
         // snapshot.
         if self.fsm.peer.wait_data {
             self.ctx.raft_metrics.invalid_proposal.non_witness.inc();

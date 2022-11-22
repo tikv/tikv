@@ -3,22 +3,9 @@
 use std::{iter::FromIterator, sync::Arc, time::Duration};
 
 use futures::executor::block_on;
-use kvproto::metapb;
 use pd_client::PdClient;
 use test_raftstore::*;
 use tikv_util::{config::ReadableDuration, store::find_peer};
-
-fn become_witness(cluster: &Cluster<ServerCluster>, region_id: u64, peer: &mut metapb::Peer) {
-    cluster
-        .pd_client
-        .must_switch_witnesses(region_id, vec![peer.get_id()], vec![true]);
-}
-
-fn become_non_witness(cluster: &Cluster<ServerCluster>, region_id: u64, peer: &mut metapb::Peer) {
-    cluster
-        .pd_client
-        .switch_witnesses(region_id, vec![peer.get_id()], vec![false]);
-}
 
 // Test the case local reader works well with witness peer.
 #[test]
@@ -35,8 +22,12 @@ fn test_witness_update_region_in_local_reader() {
     let peer_on_store1 = find_peer(&region, nodes[0]).unwrap().clone();
     cluster.must_transfer_leader(region.get_id(), peer_on_store1);
     // nonwitness -> witness
-    let mut peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
-    become_witness(&cluster, region.get_id(), &mut peer_on_store3);
+    let peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
+    cluster.pd_client.must_switch_witnesses(
+        region.get_id(),
+        vec![peer_on_store3.get_id()],
+        vec![true],
+    );
 
     cluster.must_put(b"k0", b"v0");
 
@@ -86,8 +77,12 @@ fn test_request_snapshot_after_reboot() {
     let peer_on_store1 = find_peer(&region, nodes[1]).unwrap();
     cluster.must_transfer_leader(region.get_id(), peer_on_store1.clone());
     // nonwitness -> witness
-    let mut peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
-    become_witness(&cluster, region.get_id(), &mut peer_on_store3);
+    let peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
+    cluster.pd_client.must_switch_witnesses(
+        region.get_id(),
+        vec![peer_on_store3.get_id()],
+        vec![true],
+    );
 
     cluster.must_put(b"k1", b"v1");
 
@@ -97,7 +92,9 @@ fn test_request_snapshot_after_reboot() {
     // witness -> nonwitness
     let fp = "ignore request snapshot";
     fail::cfg(fp, "return").unwrap();
-    become_non_witness(&cluster, region.get_id(), &mut peer_on_store3);
+    cluster
+        .pd_client
+        .switch_witnesses(region.get_id(), vec![peer_on_store3.get_id()], vec![false]);
     std::thread::sleep(Duration::from_millis(500));
     // as we ignore request snapshot, so snapshot should still not applied yet
     assert_eq!(cluster.pd_client.get_pending_peers().len(), 1);
@@ -131,8 +128,12 @@ fn test_non_witness_availability(fp: &str) {
     cluster.must_transfer_leader(region.get_id(), peer_on_store1.clone());
 
     // non-witness -> witness
-    let mut peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
-    become_witness(&cluster, region.get_id(), &mut peer_on_store3);
+    let peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
+    cluster.pd_client.must_switch_witnesses(
+        region.get_id(),
+        vec![peer_on_store3.get_id()],
+        vec![true],
+    );
 
     cluster.must_put(b"k1", b"v1");
 
@@ -142,7 +143,9 @@ fn test_non_witness_availability(fp: &str) {
     fail::cfg(fp, "return").unwrap();
 
     // witness -> non-witness
-    become_non_witness(&cluster, region.get_id(), &mut peer_on_store3);
+    cluster
+        .pd_client
+        .switch_witnesses(region.get_id(), vec![peer_on_store3.get_id()], vec![false]);
     std::thread::sleep(Duration::from_millis(500));
     // snapshot applied
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");

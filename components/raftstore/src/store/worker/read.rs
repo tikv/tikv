@@ -418,6 +418,7 @@ pub struct ReadDelegate {
     pub txn_ext: Arc<TxnExt>,
     pub read_progress: Arc<RegionReadProgress>,
     pub pending_remove: bool,
+    /// Indicates whether the peer is waiting data. See more in `Peer`.
     pub wait_data: bool,
 
     // `track_ver` used to keep the local `ReadDelegate` in `LocalReader`
@@ -789,12 +790,6 @@ where
             return Err(e);
         }
 
-        // Check non-witness hasn't finish applying snapshot yet.
-        if delegate.wait_data {
-            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.non_witness.inc());
-            return Err(Error::RecoveryInProgress(region_id));
-        }
-
         // Check term.
         if let Err(e) = util::check_term(req.get_header(), delegate.term) {
             debug!(
@@ -817,6 +812,12 @@ where
         // Check witness
         if find_peer_by_id(&delegate.region, delegate.peer_id).map_or(true, |p| p.is_witness) {
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.witness.inc());
+            return Err(Error::RecoveryInProgress(region_id));
+        }
+
+        // Check non-witness hasn't finish applying snapshot yet.
+        if delegate.wait_data {
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.wait_data.inc());
             return Err(Error::RecoveryInProgress(region_id));
         }
 

@@ -5,22 +5,9 @@ use std::{iter::FromIterator, sync::Arc, time::Duration};
 use futures::executor::block_on;
 use kvproto::{metapb, raft_cmdpb::ChangePeerRequest, raft_serverpb::PeerState};
 use pd_client::PdClient;
-// use protobuf::Message;
 use raft::eraftpb::ConfChangeType;
 use test_raftstore::*;
 use tikv_util::store::find_peer;
-
-fn become_witness(cluster: &Cluster<ServerCluster>, region_id: u64, peer: &mut metapb::Peer) {
-    cluster
-        .pd_client
-        .must_switch_witnesses(region_id, vec![peer.get_id()], vec![true]);
-}
-
-fn become_non_witness(cluster: &Cluster<ServerCluster>, region_id: u64, peer: &mut metapb::Peer) {
-    cluster
-        .pd_client
-        .must_switch_witnesses(region_id, vec![peer.get_id()], vec![false]);
-}
 
 // Test the case that region split or merge with witness peer
 #[test]
@@ -35,9 +22,12 @@ fn test_witness_split_merge() {
 
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
     // nonwitness -> witness
-    let mut peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
-    become_witness(&cluster, region.get_id(), &mut peer_on_store3);
-
+    let peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
+    cluster.pd_client.must_switch_witnesses(
+        region.get_id(),
+        vec![peer_on_store3.get_id()],
+        vec![true],
+    );
     let before = cluster
         .apply_state(region.get_id(), nodes[2])
         .get_applied_index();
@@ -82,8 +72,12 @@ fn test_witness_split_merge() {
     assert!(find_peer(&right, nodes[2]).unwrap().is_witness);
 
     // can't merge with different witness location
-    let mut peer_on_store3 = find_peer(&left, nodes[2]).unwrap().clone();
-    become_non_witness(&cluster, left.get_id(), &mut peer_on_store3);
+    let peer_on_store3 = find_peer(&left, nodes[2]).unwrap().clone();
+    cluster.pd_client.must_switch_witnesses(
+        left.get_id(),
+        vec![peer_on_store3.get_id()],
+        vec![false],
+    );
     let left = cluster.get_region(b"k1");
     let req = new_admin_request(
         left.get_id(),
@@ -188,13 +182,22 @@ fn test_witness_switch_witness() {
     cluster.must_transfer_leader(region.get_id(), peer_on_store1.clone());
 
     // nonwitness -> witness
-    let mut peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
-    become_witness(&cluster, region.get_id(), &mut peer_on_store3);
+    let peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
+    cluster.pd_client.must_switch_witnesses(
+        region.get_id(),
+        vec![peer_on_store3.get_id()],
+        vec![true],
+    );
 
     std::thread::sleep(Duration::from_millis(100));
     must_get_none(&cluster.get_engine(3), b"k1");
 
-    become_non_witness(&cluster, region.get_id(), &mut peer_on_store3);
+    // witness -> non-witness
+    cluster.pd_client.must_switch_witnesses(
+        region.get_id(),
+        vec![peer_on_store3.get_id()],
+        vec![false],
+    );
 
     std::thread::sleep(Duration::from_millis(100));
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
@@ -416,8 +419,12 @@ fn test_witness_replica_read() {
     let peer_on_store1 = find_peer(&region, nodes[0]).unwrap().clone();
     cluster.must_transfer_leader(region.get_id(), peer_on_store1);
     // nonwitness -> witness
-    let mut peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
-    become_witness(&cluster, region.get_id(), &mut peer_on_store3);
+    let peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
+    cluster.pd_client.must_switch_witnesses(
+        region.get_id(),
+        vec![peer_on_store3.get_id()],
+        vec![true],
+    );
 
     let mut request = new_request(
         region.get_id(),
@@ -482,9 +489,13 @@ fn test_witness_leader_down() {
     let peer_on_store1 = find_peer(&region, nodes[0]).unwrap().clone();
     cluster.must_transfer_leader(region.get_id(), peer_on_store1);
 
-    let mut peer_on_store2 = find_peer(&region, nodes[1]).unwrap().clone();
+    let peer_on_store2 = find_peer(&region, nodes[1]).unwrap().clone();
     // nonwitness -> witness
-    become_witness(&cluster, region.get_id(), &mut peer_on_store2);
+    cluster.pd_client.must_switch_witnesses(
+        region.get_id(),
+        vec![peer_on_store2.get_id()],
+        vec![true],
+    );
 
     // the other follower is isolated
     cluster.add_send_filter(IsolationFilterFactory::new(3));

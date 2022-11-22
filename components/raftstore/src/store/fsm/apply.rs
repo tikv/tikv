@@ -1109,7 +1109,22 @@ where
 
             match res {
                 ApplyResult::None => {}
-                ApplyResult::Res(res) => results.push_back(res),
+                ApplyResult::Res(res) => {
+                    results.push_back(res);
+                    if self.wait_data {
+                        apply_ctx.committed_count -= committed_entries_drainer.len();
+                        let mut pending_entries =
+                            Vec::with_capacity(committed_entries_drainer.len());
+                        pending_entries.extend(committed_entries_drainer);
+                        apply_ctx.finish_for(self, results);
+                        self.yield_state = Some(YieldState {
+                            pending_entries,
+                            pending_msgs: Vec::default(),
+                            heap_size: None,
+                        });
+                        return;
+                    }
+                }
                 ApplyResult::Yield | ApplyResult::WaitMergeSource(_) => {
                     // Both cancel and merge will yield current processing.
                     apply_ctx.committed_count -= committed_entries_drainer.len() + 1;
@@ -1181,14 +1196,6 @@ where
 
         if !data.is_empty() {
             if !self.peer.is_witness || !can_witness_skip(entry) {
-                // If it's witness before, but a command changes it to non-witness,
-                // and starts applying all following commands. It can cause problem
-                // if the command depends on previous side effect. So stop applying
-                // following commands when `wait_data` is set, until the snapshot is
-                // applied.
-                if self.wait_data {
-                    return ApplyResult::Yield;
-                }
                 let cmd = util::parse_data_at(data, index, &self.tag);
                 if apply_ctx.yield_high_latency_operation && has_high_latency_operation(&cmd) {
                     self.priority = Priority::Low;
@@ -3865,6 +3872,14 @@ where
     }
 
     fn resume_pending(&mut self, ctx: &mut ApplyContext<EK>) {
+        // If it's witness before, but a command changes it to non-witness,
+        // and starts applying all following commands. It can cause problem
+        // if the command depends on previous side effect. So stop applying
+        // following commands when `wait_data` is set, until the snapshot is
+        // applied.
+        if self.delegate.wait_data {
+            return;
+        }
         if let Some(ref state) = self.delegate.wait_merge_state {
             let source_region_id = state.logs_up_to_date.load(Ordering::SeqCst);
             if source_region_id == 0 {
@@ -3938,7 +3953,7 @@ where
             return;
         }
         if self.delegate.peer.is_witness || self.delegate.wait_data {
-            // witness or non-witess hasn't finish applying snapshot shouldn't generate
+            // witness or non-witness hasn't finish applying snapshot shouldn't generate
             // snapshot.
             return;
         }
