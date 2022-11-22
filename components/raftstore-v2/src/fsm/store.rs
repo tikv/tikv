@@ -150,6 +150,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs()),
         );
+
+        self.on_pd_store_heartbeat();
     }
 
     pub fn schedule_tick(&mut self, tick: StoreTick, timeout: Duration) {
