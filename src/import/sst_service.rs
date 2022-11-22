@@ -436,7 +436,6 @@ where
         let router = self.router.clone();
         let limiter = self.limiter.clone();
         let start = Instant::now();
-        let mut start_apply = Instant::now();
         let raft_size = self.raft_entry_max_size;
 
         let handle_task = async move {
@@ -444,6 +443,7 @@ where
             sst_importer::metrics::IMPORTER_APPLY_DURATION
                 .with_label_values(&["queue"])
                 .observe(start.saturating_elapsed().as_secs_f64());
+            let mut start_apply = Instant::now();
             let mut futs = vec![];
             let mut apply_resp = ApplyResponse::default();
             let context = req.take_context();
@@ -490,16 +490,20 @@ where
                         &rules[i],
                         &mut build_req_fn,
                     )?;
+
                     if let Some(mut r) = r {
-                        range = range.map_or(Some(r.clone()), |mut v| {
-                            let s = v.take_start().min(r.take_start());
-                            let e = v.take_end().max(r.take_end());
-                            Some(Range {
-                                start: s,
-                                end: e,
-                                ..Default::default()
-                            })
-                        });
+                        range = match range {
+                            Some(mut v) => {
+                                let s = v.take_start().min(r.take_start());
+                                let e = v.take_end().max(r.take_end());
+                                Some(Range {
+                                    start: s,
+                                    end: e,
+                                    ..Default::default()
+                                })
+                            }
+                            None => Some(r),
+                        };
                     }
                 }
 
