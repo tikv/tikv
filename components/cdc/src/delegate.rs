@@ -986,6 +986,7 @@ fn decode_write(
         }
     };
     let commit_ts = if write.write_type == WriteType::Rollback {
+        assert_eq!(write.txn_source, 0);
         0
     } else {
         key.decode_ts().unwrap().into_inner()
@@ -994,7 +995,7 @@ fn decode_write(
     row.commit_ts = commit_ts;
     row.key = key.truncate_ts().unwrap().into_raw().unwrap();
     row.op_type = op_type as _;
-    // used for filter out the event. see `txn_source` field for more detial.
+    // used for filter out the event. see `txn_source` field for more detail.
     row.txn_source = write.txn_source;
     set_event_row_type(row, r_type);
     if let Some(value) = write.short_value {
@@ -1022,7 +1023,7 @@ fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow, has_value: &mut boo
     row.start_ts = lock.ts.into_inner();
     row.key = key.into_raw().unwrap();
     row.op_type = op_type as _;
-    // used for filter out the event. see `txn_source` field for more detial.
+    // used for filter out the event. see `txn_source` field for more detail.
     row.txn_source = lock.txn_source;
     set_event_row_type(row, EventLogType::Prewrite);
     if let Some(value) = lock.short_value {

@@ -2359,3 +2359,69 @@ fn test_prewrite_without_value() {
     let event = receive_event(false);
     assert_eq!(event.get_events()[0].get_entries().entries[0].commit_ts, 14);
 }
+
+#[test]
+fn test_filter_loop() {
+    test_kv_format_impl!(test_filter_loop_impl<ApiV1 ApiV2>);
+}
+
+fn test_filter_loop_impl<F: KvFormat>() {
+    let mut suite = TestSuite::new(1, F::TAG);
+    let mut req = suite.new_changedata_request(1);
+    req.set_extra_op(ExtraOp::ReadOldValue);
+    req.set_filter_loop(true);
+    let (mut req_tx, event_feed_wrap, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(1));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let mut events = receive_event(false).events.to_vec();
+    match events.remove(0).event.unwrap() {
+        Event_oneof_event::Entries(mut es) => {
+            let row = &es.take_entries().to_vec()[0];
+            assert_eq!(row.get_type(), EventLogType::Initialized);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+
+    // Insert value, simulate INSERT INTO.
+    let mut m1 = Mutation::default();
+    let k1 = b"xk1".to_vec();
+    m1.set_op(Op::Insert);
+    m1.key = k1.clone();
+    m1.value = b"v1".to_vec();
+    suite.must_kv_prewrite_with_source(1, vec![m1], k1.clone(), 10.into(), 1);
+    let mut m2 = Mutation::default();
+    let k2 = b"xk2".to_vec();
+    m2.set_op(Op::Insert);
+    m2.key = k2.clone();
+    m2.value = b"v2".to_vec();
+    suite.must_kv_prewrite_with_source(1, vec![m2], k2.clone(), 12.into(), 0);
+    let mut events = receive_event(false).events.to_vec();
+    match events.remove(0).event.unwrap() {
+        Event_oneof_event::Entries(mut es) => {
+            let events = es.take_entries().to_vec();
+            assert_eq!(events.len(), 1);
+            let row = &events[0];
+            assert_eq!(row.get_value(), b"v2");
+            assert_eq!(row.get_old_value(), b"");
+            assert_eq!(row.get_type(), EventLogType::Prewrite);
+            assert_eq!(row.get_start_ts(), 12);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+    suite.must_kv_commit_with_source(1, vec![k1], 10.into(), 15.into(), 1);
+    suite.must_kv_commit_with_source(1, vec![k2], 12.into(), 17.into(), 0);
+    let mut events = receive_event(false).events.to_vec();
+    match events.remove(0).event.unwrap() {
+        Event_oneof_event::Entries(mut es) => {
+            let events = es.take_entries().to_vec();
+            assert_eq!(events.len(), 1);
+            let row = &events[0];
+            assert_eq!(row.get_type(), EventLogType::Commit);
+            assert_eq!(row.get_commit_ts(), 17);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+
+    event_feed_wrap.replace(None);
+    suite.stop();
+}
