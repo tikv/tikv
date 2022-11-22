@@ -94,6 +94,7 @@ where
     ER: RaftEngine,
     T: PdClient + 'static,
 {
+    store_id: u64,
     pd_client: Arc<T>,
     raft_engine: ER,
     tablet_factory: Arc<dyn TabletFactory<EK>>,
@@ -109,6 +110,7 @@ where
 
     // For heartbeat.
     region_cpu_records: HashMap<u64, u32>,
+    is_hb_receiver_scheduled: bool,
 
     // For update_max_timestamp.
     concurrency_manager: ConcurrencyManager,
@@ -124,6 +126,7 @@ where
     T: PdClient + 'static,
 {
     pub fn new(
+        store_id: u64,
         pd_client: Arc<T>,
         raft_engine: ER,
         tablet_factory: Arc<dyn TabletFactory<EK>>,
@@ -134,6 +137,7 @@ where
         logger: Logger,
     ) -> Self {
         Self {
+            store_id,
             pd_client,
             raft_engine,
             tablet_factory,
@@ -143,6 +147,7 @@ where
             start_ts: UnixSecs::zero(),
             store_stat: store_heartbeat::StoreStat::default(),
             region_cpu_records: HashMap::default(),
+            is_hb_receiver_scheduled: false,
             concurrency_manager,
             causal_ts_provider,
             logger,
@@ -158,6 +163,7 @@ where
     type Task = Task;
 
     fn run(&mut self, task: Task) {
+        self.maybe_schedule_heartbeat_receiver();
         match task {
             Task::Heartbeat(task) => self.handle_heartbeat(task),
             Task::StoreHeartbeat { stats } => self.handle_store_heartbeat(stats),

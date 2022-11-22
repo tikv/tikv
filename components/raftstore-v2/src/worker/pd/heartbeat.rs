@@ -3,12 +3,21 @@
 use std::time::Duration;
 
 use engine_traits::{KvEngine, RaftEngine};
-use kvproto::{metapb, pdpb};
-use pd_client::{PdClient, RegionStat};
-use slog::debug;
+use kvproto::{
+    metapb, pdpb,
+    raft_cmdpb::{
+        AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest,
+        SplitRequest,
+    },
+    raft_serverpb::RaftMessage,
+    replication_modepb::{RegionReplicationStatus, StoreDrAutoSyncStatus},
+};
+use pd_client::{metrics::PD_HEARTBEAT_COUNTER_VEC, PdClient, RegionStat};
+use raft::eraftpb::ConfChangeType;
+use slog::{debug, error, info};
 use tikv_util::{store::QueryStats, time::UnixSecs};
 
-use super::Runner;
+use super::{send_admin_request, Runner};
 
 pub struct HeartbeatTask {
     pub term: u64,
@@ -151,4 +160,139 @@ where
         };
         self.remote.spawn(f);
     }
+
+    pub fn maybe_schedule_heartbeat_receiver(&mut self) {
+        if self.is_hb_receiver_scheduled {
+            return;
+        }
+        let router = self.router.clone();
+        let store_id = self.store_id;
+        let logger = self.logger.clone();
+
+        let fut =
+            self.pd_client
+                .handle_region_heartbeat_response(self.store_id, move |mut resp| {
+                    let region_id = resp.get_region_id();
+                    let epoch = resp.take_region_epoch();
+                    let peer = resp.take_target_peer();
+
+                    if resp.has_change_peer() {
+                        PD_HEARTBEAT_COUNTER_VEC
+                            .with_label_values(&["change peer"])
+                            .inc();
+
+                        let mut change_peer = resp.take_change_peer();
+                        info!(
+                            logger,
+                            "try to change peer";
+                            "region_id" => region_id,
+                            "change_type" => ?change_peer.get_change_type(),
+                            "peer" => ?change_peer.get_peer()
+                        );
+                        let req = new_change_peer_request(
+                            change_peer.get_change_type(),
+                            change_peer.take_peer(),
+                        );
+                        send_admin_request(&logger, &router, region_id, epoch, peer, req);
+                    } else if resp.has_change_peer_v2() {
+                        PD_HEARTBEAT_COUNTER_VEC
+                            .with_label_values(&["change peer"])
+                            .inc();
+
+                        let mut change_peer_v2 = resp.take_change_peer_v2();
+                        info!(
+                            logger,
+                            "try to change peer";
+                            "region_id" => region_id,
+                            "changes" => ?change_peer_v2.get_changes(),
+                        );
+                        let req = new_change_peer_v2_request(change_peer_v2.take_changes().into());
+                        send_admin_request(&logger, &router, region_id, epoch, peer, req);
+                    } else if resp.has_transfer_leader() {
+                        PD_HEARTBEAT_COUNTER_VEC
+                            .with_label_values(&["transfer leader"])
+                            .inc();
+
+                        let mut transfer_leader = resp.take_transfer_leader();
+                        info!(
+                            logger,
+                            "try to transfer leader";
+                            "region_id" => region_id,
+                            "from_peer" => ?peer,
+                            "to_peer" => ?transfer_leader.get_peer(),
+                            "to_peers" => ?transfer_leader.get_peers(),
+                        );
+                        let req = new_transfer_leader_request(
+                            transfer_leader.take_peer(),
+                            transfer_leader.take_peers().into(),
+                        );
+                        send_admin_request(&logger, &router, region_id, epoch, peer, req);
+                    } else if resp.has_split_region() {
+                        // TODO
+                        info!(logger, "pd asks for split but ignored");
+                    } else if resp.has_merge() {
+                        // TODO
+                        info!(logger, "pd asks for merge but ignored");
+                    } else {
+                        PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["noop"]).inc();
+                    }
+                });
+        let logger = self.logger.clone();
+        let f = async move {
+            match fut.await {
+                Ok(_) => {
+                    info!(
+                        logger,
+                        "region heartbeat response handler exit";
+                        "store_id" => store_id,
+                    );
+                }
+                Err(e) => panic!("unexpected error: {:?}", e),
+            }
+        };
+        self.remote.spawn(f);
+        self.is_hb_receiver_scheduled = true;
+    }
+}
+
+fn new_change_peer_request(change_type: ConfChangeType, peer: metapb::Peer) -> AdminRequest {
+    let mut req = AdminRequest::default();
+    req.set_cmd_type(AdminCmdType::ChangePeer);
+    req.mut_change_peer().set_change_type(change_type);
+    req.mut_change_peer().set_peer(peer);
+    req
+}
+
+pub fn new_change_peer_v2_request(changes: Vec<pdpb::ChangePeer>) -> AdminRequest {
+    let mut req = AdminRequest::default();
+    req.set_cmd_type(AdminCmdType::ChangePeerV2);
+    let change_peer_reqs = changes
+        .into_iter()
+        .map(|mut c| {
+            let mut cp = ChangePeerRequest::default();
+            cp.set_change_type(c.get_change_type());
+            cp.set_peer(c.take_peer());
+            cp
+        })
+        .collect();
+    let mut cp = ChangePeerV2Request::default();
+    cp.set_changes(change_peer_reqs);
+    req.set_change_peer_v2(cp);
+    req
+}
+
+fn new_transfer_leader_request(peer: metapb::Peer, peers: Vec<metapb::Peer>) -> AdminRequest {
+    let mut req = AdminRequest::default();
+    req.set_cmd_type(AdminCmdType::TransferLeader);
+    req.mut_transfer_leader().set_peer(peer);
+    req.mut_transfer_leader().set_peers(peers.into());
+    req
+}
+
+fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
+    let mut req = AdminRequest::default();
+    req.set_cmd_type(AdminCmdType::PrepareMerge);
+    req.mut_prepare_merge()
+        .set_target(merge.get_target().to_owned());
+    req
 }

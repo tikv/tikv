@@ -306,7 +306,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     derived_index,
                     tablet_index,
                 }) => self.on_ready_split_region(ctx, derived_index, tablet_index, regions),
-                AdminCmdResult::SplitRegion(_) => unimplemented!(),
             }
         }
 
