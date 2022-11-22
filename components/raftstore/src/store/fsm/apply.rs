@@ -235,7 +235,6 @@ impl Range {
 
 #[derive(Default, Debug)]
 pub struct SwitchWitness {
-    pub succeeded: bool,
     pub switches: Vec<SwitchWitnessRequest>,
     pub region: Region,
 }
@@ -1262,14 +1261,6 @@ where
         fail_point!("yield_apply_conf_change_3", self.id() == 3, |_| {
             ApplyResult::Yield
         });
-        // If it's witness before, but a command changes it to non-witness,
-        // and starts applying all following commands. It can case problem
-        // if the command depends on previous side effect. So stop applying
-        // following commands when `wait_data` is set, until the snapshot is
-        // applied.
-        if self.wait_data {
-            return ApplyResult::Yield;
-        }
         let (index, term) = (entry.get_index(), entry.get_term());
         let conf_change: ConfChangeV2 = match entry.get_entry_type() {
             EntryType::EntryConfChange => {
@@ -3119,34 +3110,8 @@ where
             "epoch" => ?self.region.get_region_epoch(),
         );
 
-        let region = self.apply_batch_switch_witness(switches.as_slice())?;
-
-        let state = if self.pending_remove {
-            PeerState::Tombstone
-        } else if self.wait_data {
-            PeerState::Unavailable
-        } else {
-            PeerState::Normal
-        };
-
-        if let Err(e) = write_peer_state(ctx.kv_wb_mut(), &region, state, None) {
-            panic!("{} failed to update region state: {:?}", self.tag, e);
-        }
-
-        let resp = AdminResponse::default();
-        Ok((
-            resp,
-            ApplyResult::Res(ExecResult::BatchSwitchWitness(SwitchWitness {
-                succeeded: true,
-                switches,
-                region,
-            })),
-        ))
-    }
-
-    fn apply_batch_switch_witness(&mut self, switches: &[SwitchWitnessRequest]) -> Result<Region> {
         let mut region = self.region.clone();
-        for s in switches {
+        for s in switches.as_slice() {
             PEER_ADMIN_CMD_COUNTER.batch_switch_witness.all.inc();
             let (peer_id, is_witness) = (s.get_peer_id(), s.get_is_witness());
             for p in region.mut_peers().iter_mut() {
@@ -3178,7 +3143,27 @@ where
             "original region" => ?&self.region,
             "current region" => ?&region,
         );
-        Ok(region)
+
+        let state = if self.pending_remove {
+            PeerState::Tombstone
+        } else if self.wait_data {
+            PeerState::Unavailable
+        } else {
+            PeerState::Normal
+        };
+
+        if let Err(e) = write_peer_state(ctx.kv_wb_mut(), &region, state, None) {
+            panic!("{} failed to update region state: {:?}", self.tag, e);
+        }
+
+        let resp = AdminResponse::default();
+        Ok((
+            resp,
+            ApplyResult::Res(ExecResult::BatchSwitchWitness(SwitchWitness {
+                switches,
+                region,
+            })),
+        ))
     }
 
     fn update_memory_trace(&mut self, event: &mut TraceEvent) {

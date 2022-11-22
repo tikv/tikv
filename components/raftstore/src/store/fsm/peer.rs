@@ -6339,11 +6339,6 @@ where
     }
 
     fn on_ready_batch_switch_witness(&mut self, sw: SwitchWitness) {
-        if !sw.succeeded {
-            // Apply failed, skip.
-            return;
-        }
-
         {
             let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.set_region(
