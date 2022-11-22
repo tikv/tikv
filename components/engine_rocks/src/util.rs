@@ -5,7 +5,7 @@ use std::{fs, path::Path, str::FromStr, sync::Arc};
 use engine_traits::{Engines, Range, Result, CF_DEFAULT};
 use rocksdb::{
     load_latest_options, CColumnFamilyDescriptor, CFHandle, ColumnFamilyOptions, Env,
-    Range as RocksRange, SliceTransform, DB,
+    Range as RocksRange, SliceTransform, Statistics, DB,
 };
 use slog_global::warn;
 
@@ -28,7 +28,7 @@ pub fn new_default_engine(path: &str) -> Result<RocksEngine> {
 
 pub fn new_engine(path: &str, cfs: &[&str]) -> Result<RocksEngine> {
     let mut db_opts = RocksDbOptions::default();
-    db_opts.enable_statistics(true);
+    db_opts.set_statistics(&Statistics::new_titan());
     let cf_opts = cfs.iter().map(|name| (*name, Default::default())).collect();
     new_engine_opt(path, db_opts, cf_opts)
 }

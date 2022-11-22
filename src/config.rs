@@ -1028,6 +1028,7 @@ pub struct DbConfig {
     #[online_config(skip)]
     pub create_if_missing: bool,
     pub max_open_files: i32,
+    // deprecated.
     #[online_config(skip)]
     pub enable_statistics: bool,
     #[online_config(skip)]
@@ -1147,7 +1148,6 @@ impl DbConfig {
         opts.set_max_manifest_file_size(self.max_manifest_file_size.0);
         opts.create_if_missing(self.create_if_missing);
         opts.set_max_open_files(self.max_open_files);
-        opts.enable_statistics(self.enable_statistics);
         opts.set_stats_dump_period_sec(self.stats_dump_period.as_secs() as usize);
         opts.set_compaction_readahead_size(self.compaction_readahead_size.0);
         opts.set_max_log_file_size(self.info_log_max_size.0);
@@ -1456,7 +1456,6 @@ impl RaftDbConfig {
         opts.set_max_manifest_file_size(self.max_manifest_file_size.0);
         opts.create_if_missing(self.create_if_missing);
         opts.set_max_open_files(self.max_open_files);
-        opts.enable_statistics(self.enable_statistics);
         opts.set_stats_dump_period_sec(self.stats_dump_period.as_secs() as usize);
         opts.set_compaction_readahead_size(self.compaction_readahead_size.0);
         opts.set_max_log_file_size(self.info_log_max_size.0);

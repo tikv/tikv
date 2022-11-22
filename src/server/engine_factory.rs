@@ -6,7 +6,7 @@ use std::{
 };
 
 use engine_rocks::{
-    raw::{Cache, Env},
+    raw::{Cache, Env, Statistics},
     CompactedEventSender, CompactionListener, FlowListener, RocksCompactionJobInfo, RocksEngine,
     RocksEventListener,
 };
@@ -23,6 +23,7 @@ use crate::config::{DbConfig, TikvConfig, DEFAULT_ROCKSDB_SUB_DIR};
 
 struct FactoryInner {
     env: Arc<Env>,
+    statistics: Statistics,
     region_info_accessor: Option<RegionInfoAccessor>,
     block_cache: Option<Cache>,
     rocksdb_config: Arc<DbConfig>,
@@ -43,6 +44,7 @@ impl KvEngineFactoryBuilder {
         Self {
             inner: FactoryInner {
                 env,
+                statistics: Statistics::new_titan(),
                 region_info_accessor: None,
                 block_cache: None,
                 rocksdb_config: Arc::new(config.rocksdb.clone()),
@@ -138,6 +140,7 @@ impl KvEngineFactory {
         // Create kv engine.
         let mut kv_db_opts = self.inner.rocksdb_config.build_opt();
         kv_db_opts.set_env(self.inner.env.clone());
+        kv_db_opts.set_statistics(&self.inner.statistics);
         kv_db_opts.add_event_listener(RocksEventListener::new(
             "kv",
             self.inner.sst_recovery_sender.clone(),
