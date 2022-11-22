@@ -937,32 +937,6 @@ fn test_split_region_impl<F: KvFormat>(is_raw_kv: bool) {
 }
 
 #[test]
-fn test_read_index() {
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
-
-    // Read index
-    let mut req = ReadIndexRequest::default();
-    req.set_context(ctx.clone());
-    let mut resp = client.read_index(&req).unwrap();
-    let last_index = resp.get_read_index();
-    assert_eq!(last_index > 0, true);
-
-    // Raw put
-    let (k, v) = (b"key".to_vec(), b"value".to_vec());
-    let mut put_req = RawPutRequest::default();
-    put_req.set_context(ctx);
-    put_req.key = k;
-    put_req.value = v;
-    let put_resp = client.raw_put(&put_req).unwrap();
-    assert!(!put_resp.has_region_error());
-    assert!(put_resp.error.is_empty());
-
-    // Read index again
-    resp = client.read_index(&req).unwrap();
-    assert_eq!(last_index + 1, resp.get_read_index());
-}
-
-#[test]
 fn test_debug_get() {
     let (cluster, debug_client, store_id) = must_new_cluster_and_debug_client();
     let (k, v) = (b"key", b"value");
@@ -1882,7 +1856,6 @@ fn test_tikv_forwarding() {
         req.set_split_key(b"k1".to_vec());
         req
     });
-    test_func_init!(client, ctx, call_opt, read_index, ReadIndexRequest);
 
     // Test if duplex can be redirect correctly.
     let cases = vec![
