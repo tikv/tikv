@@ -305,6 +305,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         self.post_split();
 
+        if self.is_leader() {
+            self.heartbeat_pd(store_ctx);
+            // Notify pd immediately to let it update the region meta.
+            info!(
+                self.logger,
+                "notify pd with split";
+                "region_id" => self.region_id(),
+                "peer_id" => self.peer_id(),
+                "split_count" => regions.len(),
+            );
+            // Now pd only uses ReportBatchSplit for history operation show,
+            // so we send it independently here.
+            self.report_batch_split_pd(store_ctx, regions.to_vec());
+        }
+
         let last_region_id = regions.last().unwrap().get_id();
         for (new_region, locks) in regions.into_iter().zip(region_locks) {
             let new_region_id = new_region.get_id();

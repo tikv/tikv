@@ -165,7 +165,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if let Err(e) = ctx.pd_scheduler.schedule(task) {
             error!(
                 self.logger,
-                "failed to notify pd";
+                "failed to notify pd with DestroyPeer";
                 "region_id" => self.region_id(),
                 "peer_id" => self.peer_id(),
                 "err" => %e,
@@ -187,9 +187,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if let Err(e) = ctx.pd_scheduler.schedule(task) {
             error!(
                 self.logger,
-                "failed to notify pd to split";
+                "failed to notify pd with AskBatchSplit";
                 "region_id" => self.region_id(),
                 "peer_id" => self.peer_id(),
+                "err" => %e,
+            );
+        }
+    }
+
+    pub fn report_batch_split_pd<T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        regions: Vec<metapb::Region>,
+    ) {
+        let task = PdTask::ReportBatchSplit { regions };
+        if let Err(e) = ctx.pd_scheduler.schedule(task) {
+            error!(
+                self.logger,
+                "failed to notify pd with ReportBatchSplit";
                 "err" => %e,
             );
         }
