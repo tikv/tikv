@@ -897,7 +897,7 @@ where
             let snap = self.get_snapshot(store_id, &region)?;
             let mut reader = MvccReader::new(snap, Some(ScanMode::Forward), false);
             let (locks_this_region, _) = reader
-                .scan_locks(Some(&start_key), None, |_, l| l.ts <= max_ts, limit)
+                .scan_locks(Some(&start_key), None, |l| l.ts <= max_ts, limit)
                 .map_err(TxnError::from_mvcc)?;
 
             locks.extend(locks_this_region);
