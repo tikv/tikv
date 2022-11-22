@@ -229,7 +229,15 @@ impl TabletAccessor<RocksEngine> for KvEngineFactoryV2 {
         }
     }
 
-    // it have multi tablets.
+    #[inline]
+    fn for_one_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &RocksEngine)) {
+        let reg = self.registry.lock().unwrap();
+        if let Some((id, (tablet, suffix))) = (*reg).iter().next() {
+            f(*id, *suffix, tablet);
+        }
+    }
+
+    #[inline]
     fn is_single_engine(&self) -> bool {
         false
     }

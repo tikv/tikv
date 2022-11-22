@@ -84,6 +84,8 @@ pub trait TabletAccessor<EK> {
     /// Loop visit all opened tablets by the specified function.
     fn for_each_opened_tablet(&self, _f: &mut (dyn FnMut(u64, u64, &EK)));
 
+    fn for_one_opened_tablet(&self, _f: &mut (dyn FnMut(u64, u64, &EK)));
+
     /// return true if it's single engine;
     /// return false if it's a multi-tablet factory;
     fn is_single_engine(&self) -> bool;
@@ -359,6 +361,12 @@ where
     EK: CfOptionsExt + Clone + Send + 'static,
 {
     fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &EK)) {
+        if let Some(engine) = &self.engine {
+            f(0, 0, engine);
+        }
+    }
+
+    fn for_one_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &EK)) {
         if let Some(engine) = &self.engine {
             f(0, 0, engine);
         }

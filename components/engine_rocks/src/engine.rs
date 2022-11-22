@@ -114,6 +114,10 @@ impl TabletAccessor<RocksEngine> for RocksEngine {
         f(0, 0, self);
     }
 
+    fn for_one_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &RocksEngine)) {
+        f(0, 0, self);
+    }
+
     fn is_single_engine(&self) -> bool {
         true
     }

@@ -294,12 +294,21 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
 }
 
 impl TabletAccessor<RocksEngine> for KvEngineFactory {
+    #[inline]
     fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &RocksEngine)) {
         let db = self.inner.root_db.lock().unwrap();
         let db = db.as_ref().unwrap();
         f(0, 0, db);
     }
 
+    #[inline]
+    fn for_one_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &RocksEngine)) {
+        let db = self.inner.root_db.lock().unwrap();
+        let db = db.as_ref().unwrap();
+        f(0, 0, db);
+    }
+
+    #[inline]
     fn is_single_engine(&self) -> bool {
         true
     }

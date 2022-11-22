@@ -220,6 +220,12 @@ pub mod kv {
             f(0, 0, db);
         }
 
+        fn for_one_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &KvTestEngine)) {
+            let db = self.root_db.lock().unwrap();
+            let db = db.as_ref().unwrap();
+            f(0, 0, db);
+        }
+
         fn is_single_engine(&self) -> bool {
             true
         }
@@ -414,7 +420,15 @@ pub mod kv {
             }
         }
 
-        // it have multi tablets.
+        #[inline]
+        fn for_one_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &KvTestEngine)) {
+            let reg = self.registry.lock().unwrap();
+            if let Some((id, (tablet, suffix))) = (*reg).iter().next() {
+                f(*id, *suffix, tablet);
+            }
+        }
+
+        #[inline]
         fn is_single_engine(&self) -> bool {
             false
         }

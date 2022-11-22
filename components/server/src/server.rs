@@ -1360,7 +1360,8 @@ where
         engines_info: Arc<EnginesResourceInfo>,
     ) {
         let mut engine_metrics = EngineMetricsManager::<RocksEngine, ER>::new(
-            self.engines.as_ref().unwrap().engines.clone(),
+            self.tablet_factory.clone().unwrap(),
+            self.engines.as_ref().unwrap().engines.raft.clone(),
         );
         let mut io_metrics = IoMetricsManager::new(fetcher);
         let engines_info_clone = engines_info.clone();
@@ -1973,25 +1974,35 @@ impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
     }
 }
 
-pub struct EngineMetricsManager<EK: KvEngine, R: RaftEngine> {
-    engines: Engines<EK, R>,
+pub struct EngineMetricsManager<EK: KvEngine, ER: RaftEngine> {
+    tablet_factory: Arc<dyn TabletFactory<EK> + Sync + Send>,
+    raft_engine: ER,
     last_reset: Instant,
 }
 
-impl<EK: KvEngine, R: RaftEngine> EngineMetricsManager<EK, R> {
-    pub fn new(engines: Engines<EK, R>) -> Self {
+impl<EK: KvEngine, ER: RaftEngine> EngineMetricsManager<EK, ER> {
+    pub fn new(tablet_factory: Arc<dyn TabletFactory<EK> + Sync + Send>, raft_engine: ER) -> Self {
         EngineMetricsManager {
-            engines,
+            tablet_factory,
+            raft_engine,
             last_reset: Instant::now(),
         }
     }
 
     pub fn flush(&mut self, now: Instant) {
-        KvEngine::flush_metrics(&self.engines.kv, "kv");
-        self.engines.raft.flush_metrics("raft");
-        if now.saturating_duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
-            KvEngine::reset_statistics(&self.engines.kv);
-            self.engines.raft.reset_statistics();
+        let should_reset =
+            now.saturating_duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL;
+        // We assumes all tablets shared the same statistics.
+        self.tablet_factory
+            .for_one_opened_tablet(&mut |_, _, db: &EK| {
+                KvEngine::flush_metrics(db, "kv");
+                if should_reset {
+                    KvEngine::reset_statistics(db);
+                }
+            });
+        self.raft_engine.flush_metrics("raft");
+        if should_reset {
+            self.raft_engine.reset_statistics();
             self.last_reset = now;
         }
     }
