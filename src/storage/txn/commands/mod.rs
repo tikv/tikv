@@ -361,6 +361,7 @@ impl From<PrepareFlashbackToVersionRequest> for TypedCommand<()> {
         new_flashback_to_version_prewrite_cmd(
             Key::from_raw(req.get_start_key()),
             req.get_start_ts().into(),
+            req.get_version().into(),
             req.take_context(),
         )
     }
