@@ -129,7 +129,7 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
         unimplemented!()
     }
 
-    fn flush_metrics(&self, _instance: &str) {}
+    fn flush_metrics(&self, _instance: &str, _flush_shared_metrics: bool) {}
     fn flush_stats(&self) -> Option<CacheStats> {
         None
     }

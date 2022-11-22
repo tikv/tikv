@@ -74,24 +74,26 @@ impl KvEngine for RocksEngine {
         self.db.sync_wal().map_err(r2e)
     }
 
-    fn flush_metrics(&self, instance: &str) {
-        for t in ENGINE_TICKER_TYPES {
-            let v = self.db.get_and_reset_statistics_ticker_count(*t);
-            flush_engine_ticker_metrics(*t, v, instance);
-        }
-        for t in ENGINE_HIST_TYPES {
-            if let Some(v) = self.db.get_statistics_histogram(*t) {
-                flush_engine_histogram_metrics(*t, v, instance);
-            }
-        }
-        if self.db.is_titan() {
-            for t in TITAN_ENGINE_TICKER_TYPES {
+    fn flush_metrics(&self, instance: &str, flush_shared_metrics: bool) {
+        if flush_shared_metrics {
+            for t in ENGINE_TICKER_TYPES {
                 let v = self.db.get_and_reset_statistics_ticker_count(*t);
                 flush_engine_ticker_metrics(*t, v, instance);
             }
-            for t in TITAN_ENGINE_HIST_TYPES {
+            for t in ENGINE_HIST_TYPES {
                 if let Some(v) = self.db.get_statistics_histogram(*t) {
                     flush_engine_histogram_metrics(*t, v, instance);
+                }
+            }
+            if self.db.is_titan() {
+                for t in TITAN_ENGINE_TICKER_TYPES {
+                    let v = self.db.get_and_reset_statistics_ticker_count(*t);
+                    flush_engine_ticker_metrics(*t, v, instance);
+                }
+                for t in TITAN_ENGINE_HIST_TYPES {
+                    if let Some(v) = self.db.get_statistics_histogram(*t) {
+                        flush_engine_histogram_metrics(*t, v, instance);
+                    }
                 }
             }
         }
@@ -111,10 +113,6 @@ impl KvEngine for RocksEngine {
 
 impl TabletAccessor<RocksEngine> for RocksEngine {
     fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &RocksEngine)) {
-        f(0, 0, self);
-    }
-
-    fn for_one_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &RocksEngine)) {
         f(0, 0, self);
     }
 

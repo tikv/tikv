@@ -1992,15 +1992,16 @@ impl<EK: KvEngine, ER: RaftEngine> EngineMetricsManager<EK, ER> {
     pub fn flush(&mut self, now: Instant) {
         let should_reset =
             now.saturating_duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL;
-        // We assumes all tablets shared the same statistics.
+        let mut is_first_instance = true;
         self.tablet_factory
-            .for_one_opened_tablet(&mut |_, _, db: &EK| {
-                KvEngine::flush_metrics(db, "kv");
+            .for_each_opened_tablet(&mut |_, _, db: &EK| {
+                KvEngine::flush_metrics(db, "kv", is_first_instance);
+                is_first_instance = false;
                 if should_reset {
                     KvEngine::reset_statistics(db);
                 }
             });
-        self.raft_engine.flush_metrics("raft");
+        self.raft_engine.flush_metrics("raft", true);
         if should_reset {
             self.raft_engine.reset_statistics();
             self.last_reset = now;

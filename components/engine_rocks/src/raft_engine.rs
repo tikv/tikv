@@ -320,8 +320,8 @@ impl RaftEngine for RocksEngine {
         Ok(total)
     }
 
-    fn flush_metrics(&self, instance: &str) {
-        KvEngine::flush_metrics(self, instance)
+    fn flush_metrics(&self, instance: &str, flush_shared_metrics: bool) {
+        KvEngine::flush_metrics(self, instance, flush_shared_metrics)
     }
 
     fn reset_statistics(&self) {

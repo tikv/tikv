@@ -29,10 +29,6 @@ impl TabletAccessor<PanicEngine> for PanicEngine {
         panic!()
     }
 
-    fn for_one_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &PanicEngine)) {
-        panic!()
-    }
-
     fn is_single_engine(&self) -> bool {
         panic!()
     }

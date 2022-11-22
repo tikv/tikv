@@ -55,7 +55,7 @@ pub trait KvEngine:
     /// Flush metrics to prometheus
     ///
     /// `instance` is the label of the metric to flush.
-    fn flush_metrics(&self, _instance: &str) {}
+    fn flush_metrics(&self, _instance: &str, _flush_shared_metrics: bool) {}
 
     /// Reset internal statistics
     fn reset_statistics(&self) {}
@@ -83,8 +83,6 @@ pub trait KvEngine:
 pub trait TabletAccessor<EK> {
     /// Loop visit all opened tablets by the specified function.
     fn for_each_opened_tablet(&self, _f: &mut (dyn FnMut(u64, u64, &EK)));
-
-    fn for_one_opened_tablet(&self, _f: &mut (dyn FnMut(u64, u64, &EK)));
 
     /// return true if it's single engine;
     /// return false if it's a multi-tablet factory;
@@ -361,12 +359,6 @@ where
     EK: CfOptionsExt + Clone + Send + 'static,
 {
     fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &EK)) {
-        if let Some(engine) = &self.engine {
-            f(0, 0, engine);
-        }
-    }
-
-    fn for_one_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &EK)) {
         if let Some(engine) = &self.engine {
             f(0, 0, engine);
         }
