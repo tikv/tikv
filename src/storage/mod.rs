@@ -3485,7 +3485,7 @@ mod tests {
         mvcc::tests::{must_unlocked, must_written},
         test_util::*,
         txn::{
-            commands::{new_flashback_rollback_lock_cmd, new_flashback_write_cmd},
+            commands::{new_flashback_commit_cmd, new_flashback_prewrite_cmd},
             FLASHBACK_BATCH_SIZE,
         },
         *,
@@ -4794,7 +4794,7 @@ mod tests {
         let (tx, rx) = channel();
         storage
             .sched_txn_command(
-                new_flashback_rollback_lock_cmd(
+                new_flashback_prewrite_cmd(
                     start_ts,
                     version,
                     start_key.clone(),
@@ -4807,7 +4807,7 @@ mod tests {
         rx.recv().unwrap();
         storage
             .sched_txn_command(
-                new_flashback_write_cmd(
+                new_flashback_commit_cmd(
                     start_ts,
                     commit_ts,
                     version,

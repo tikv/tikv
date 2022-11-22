@@ -597,8 +597,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 };
                 if matches!(
                     task.cmd,
-                    Command::FlashbackToVersionReadPhase { .. }
-                        | Command::FlashbackToVersion { .. }
+                    Command::FlashbackToVersionPrewrite { .. }
+                        | Command::FlashbackToVersionCommit { .. }
                 ) {
                     snap_ctx.for_flashback = true;
                 }

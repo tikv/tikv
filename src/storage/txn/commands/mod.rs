@@ -12,8 +12,8 @@ pub(crate) mod check_txn_status;
 pub(crate) mod cleanup;
 pub(crate) mod commit;
 pub(crate) mod compare_and_swap;
-pub(crate) mod flashback_to_version;
-pub(crate) mod flashback_to_version_read_phase;
+pub(crate) mod flashback_commit;
+pub(crate) mod flashback_prewrite;
 pub(crate) mod mvcc_by_key;
 pub(crate) mod mvcc_by_start_ts;
 pub(crate) mod pause;
@@ -41,11 +41,8 @@ pub use cleanup::Cleanup;
 pub use commit::Commit;
 pub use compare_and_swap::RawCompareAndSwap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
-pub use flashback_to_version::FlashbackToVersion;
-pub use flashback_to_version_read_phase::{
-    new_flashback_rollback_lock_cmd, new_flashback_write_cmd, FlashbackToVersionReadPhase,
-    FlashbackToVersionState,
-};
+pub use flashback_commit::{new_flashback_commit_cmd, FlashbackToVersionCommit};
+pub use flashback_prewrite::{new_flashback_prewrite_cmd, FlashbackToVersionPrewrite};
 use kvproto::kvrpcpb::*;
 pub use mvcc_by_key::MvccByKey;
 pub use mvcc_by_start_ts::MvccByStartTs;
@@ -102,8 +99,8 @@ pub enum Command {
     MvccByStartTs(MvccByStartTs),
     RawCompareAndSwap(RawCompareAndSwap),
     RawAtomicStore(RawAtomicStore),
-    FlashbackToVersionReadPhase(FlashbackToVersionReadPhase),
-    FlashbackToVersion(FlashbackToVersion),
+    FlashbackToVersionPrewrite(FlashbackToVersionPrewrite),
+    FlashbackToVersionCommit(FlashbackToVersionCommit),
 }
 
 /// A `Command` with its return type, reified as the generic parameter `T`.
@@ -359,7 +356,7 @@ impl From<MvccGetByStartTsRequest> for TypedCommand<Option<(Key, MvccInfo)>> {
 
 impl From<PrepareFlashbackToVersionRequest> for TypedCommand<()> {
     fn from(mut req: PrepareFlashbackToVersionRequest) -> Self {
-        new_flashback_rollback_lock_cmd(
+        new_flashback_prewrite_cmd(
             req.get_start_ts().into(),
             req.get_version().into(),
             Key::from_raw(req.get_start_key()),
@@ -371,7 +368,7 @@ impl From<PrepareFlashbackToVersionRequest> for TypedCommand<()> {
 
 impl From<FlashbackToVersionRequest> for TypedCommand<()> {
     fn from(mut req: FlashbackToVersionRequest) -> Self {
-        new_flashback_write_cmd(
+        new_flashback_commit_cmd(
             req.get_start_ts().into(),
             req.get_commit_ts().into(),
             req.get_version().into(),
@@ -614,8 +611,8 @@ impl Command {
             Command::MvccByStartTs(t) => t,
             Command::RawCompareAndSwap(t) => t,
             Command::RawAtomicStore(t) => t,
-            Command::FlashbackToVersionReadPhase(t) => t,
-            Command::FlashbackToVersion(t) => t,
+            Command::FlashbackToVersionPrewrite(t) => t,
+            Command::FlashbackToVersionCommit(t) => t,
         }
     }
 
@@ -640,8 +637,8 @@ impl Command {
             Command::MvccByStartTs(t) => t,
             Command::RawCompareAndSwap(t) => t,
             Command::RawAtomicStore(t) => t,
-            Command::FlashbackToVersionReadPhase(t) => t,
-            Command::FlashbackToVersion(t) => t,
+            Command::FlashbackToVersionPrewrite(t) => t,
+            Command::FlashbackToVersionCommit(t) => t,
         }
     }
 
@@ -654,7 +651,8 @@ impl Command {
             Command::ResolveLockReadPhase(t) => t.process_read(snapshot, statistics),
             Command::MvccByKey(t) => t.process_read(snapshot, statistics),
             Command::MvccByStartTs(t) => t.process_read(snapshot, statistics),
-            Command::FlashbackToVersionReadPhase(t) => t.process_read(snapshot, statistics),
+            Command::FlashbackToVersionPrewrite(t) => t.process_read(snapshot, statistics),
+            Command::FlashbackToVersionCommit(t) => t.process_read(snapshot, statistics),
             _ => panic!("unsupported read command"),
         }
     }
@@ -681,7 +679,8 @@ impl Command {
             Command::Pause(t) => t.process_write(snapshot, context),
             Command::RawCompareAndSwap(t) => t.process_write(snapshot, context),
             Command::RawAtomicStore(t) => t.process_write(snapshot, context),
-            Command::FlashbackToVersion(t) => t.process_write(snapshot, context),
+            Command::FlashbackToVersionPrewrite(t) => t.process_write(snapshot, context),
+            Command::FlashbackToVersionCommit(t) => t.process_write(snapshot, context),
             _ => panic!("unsupported write command"),
         }
     }
