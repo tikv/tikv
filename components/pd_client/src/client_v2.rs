@@ -135,8 +135,8 @@ impl RawClient {
 struct CachedRawClientCore {
     context: ConnectContext,
 
-    latest: Arc<Mutex<Option<RawClient>>>,
-    version: Arc<AtomicU64>,
+    latest: Mutex<Option<RawClient>>,
+    version: AtomicU64,
     on_reconnect_tx: broadcast::Sender<()>,
 }
 
@@ -176,8 +176,8 @@ impl CachedRawClient {
         let (tx, rx) = broadcast::channel(1);
         let core = CachedRawClientCore {
             context,
-            latest: Arc::new(Mutex::new(None)),
-            version: Arc::new(AtomicU64::new(0)),
+            latest: Mutex::new(None),
+            version: AtomicU64::new(0),
             on_reconnect_tx: tx,
         };
         Self {
@@ -244,7 +244,7 @@ impl CachedRawClient {
             if !Self::wait_for_a_new_client(
                 &mut self.on_reconnect_rx,
                 self.cache_version,
-                self.core.version.as_ref(),
+                &self.core.version,
             )
             .await
             {
@@ -252,6 +252,9 @@ impl CachedRawClient {
             }
             assert!(self.refresh_cache());
             assert!(self.cache.is_some());
+        }
+        if self.channel().check_connectivity_state(false) == ConnectivityState::GRPC_CHANNEL_READY {
+            return Ok(());
         }
         select! {
             r = self.core.grab_a_channel().wait_for_connected(REQUEST_TIMEOUT).fuse() => {
@@ -262,7 +265,7 @@ impl CachedRawClient {
             r = Self::wait_for_a_new_client(
                 &mut self.on_reconnect_rx,
                 self.cache_version,
-                self.core.version.as_ref()
+                &self.core.version,
             ).fuse() => {
                 if r {
                     assert!(self.refresh_cache());
@@ -403,14 +406,8 @@ async fn reconnect_loop(mut client: CachedRawClient, cfg: Config) {
                 .wait_for_state_change(state, cfg.update_interval.0)
                 .await;
         }
-        match client.reconnect().await {
-            Ok(true) => {
-                info!("pd reconnected");
-            }
-            Err(e) => {
-                warn!("failed to reconnect pd"; "err" => ?e);
-            }
-            _ => {}
+        if let Err(e) = client.reconnect().await {
+            warn!("failed to reconnect pd"; "err" => ?e);
         }
     }
 }
@@ -441,10 +438,16 @@ impl RpcClient {
         })
     }
 
+    #[inline]
+    pub fn subscribe_reconnect(&self) -> broadcast::Receiver<()> {
+        self.raw_client.clone().on_reconnect_rx
+    }
+
+    #[cfg(feature = "testexport")]
     pub fn set_on_reconnect<F: Fn() + Sync + Send + 'static>(&self, f: F) {
         let lame_client =
             PdClientStub::new(Channel::lame(self.raw_client.env().clone(), "0.0.0.0:0"));
-        let mut rx = self.raw_client.clone().on_reconnect_rx;
+        let mut rx = self.subscribe_reconnect();
         lame_client.spawn(async move {
             loop {
                 if rx.recv().await.is_err() {
@@ -470,11 +473,6 @@ impl RpcClient {
     #[cfg(feature = "testexport")]
     pub fn reconnect(&mut self) -> Result<bool> {
         block_on(self.raw_client.reconnect())
-    }
-
-    #[cfg(feature = "testexport")]
-    pub fn cluster_id(&self) -> u64 {
-        self.raw_client.cluster_id()
     }
 }
 
@@ -588,8 +586,21 @@ pub trait PdClient {
 }
 
 pub struct CachedDuplexResponse<T> {
-    latest: Arc<Mutex<Option<ClientDuplexReceiver<T>>>>,
+    latest: mpsc::Receiver<ClientDuplexReceiver<T>>,
     cache: Option<ClientDuplexReceiver<T>>,
+}
+
+impl<T> CachedDuplexResponse<T> {
+    fn new() -> (mpsc::Sender<ClientDuplexReceiver<T>>, Self) {
+        let (tx, rx) = mpsc::unbounded(mpsc::WakePolicy::Immediately);
+        (
+            tx,
+            Self {
+                latest: rx,
+                cache: None,
+            },
+        )
+    }
 }
 
 impl<T: Debug> Stream for CachedDuplexResponse<T> {
@@ -606,10 +617,10 @@ impl<T: Debug> Stream for CachedDuplexResponse<T> {
                 }
             }
 
-            let latest = self.latest.lock().unwrap().take();
-            self.cache = latest;
-            if self.cache.is_none() {
-                return Poll::Pending;
+            match Pin::new(&mut self.latest).poll_next(cx) {
+                Poll::Ready(Some(receiver)) => self.cache = Some(receiver),
+                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Pending => return Poll::Pending,
             }
         }
     }
@@ -626,8 +637,7 @@ impl PdClient for RpcClient {
         Self::ResponseChannel<RegionHeartbeatResponse>,
     )> {
         let (tx, rx) = mpsc::unbounded(wake_policy);
-        let response_holder = Arc::new(std::sync::Mutex::new(None));
-        let response_holder_clone = response_holder.clone();
+        let (resp_tx, resp_rx) = CachedDuplexResponse::<RegionHeartbeatResponse>::new();
         let mut raw_client = self.raw_client.clone();
         let mut requests = Box::pin(rx).map(|r| {
             fail::fail_point!("region_heartbeat_send_failed", |_| {
@@ -641,30 +651,26 @@ impl PdClient for RpcClient {
                     warn!("failed to acquire client for RegionHeartbeat stream"; "err" => ?e);
                     continue;
                 }
-                let (mut bk_tx, bk_rx) = raw_client
+                let (mut hb_tx, hb_rx) = raw_client
                     .stub()
                     .region_heartbeat_opt(raw_client.call_option())
                     .unwrap_or_else(|e| {
                         panic!("fail to request PD {} err {:?}", "region_heartbeat", e)
                     });
-                *response_holder_clone.lock().unwrap() = Some(bk_rx);
-                let res = bk_tx.send_all(&mut requests).await;
+                if resp_tx.send(hb_rx).is_err() {
+                    break;
+                }
+                let res = hb_tx.send_all(&mut requests).await;
                 if res.is_ok() {
                     // requests are drained.
                     break;
                 } else {
                     warn!("region heartbeat stream exited"; "res" => ?res);
                 }
-                let _ = bk_tx.close().await;
+                let _ = hb_tx.close().await;
             }
         });
-        Ok((
-            tx,
-            CachedDuplexResponse {
-                latest: response_holder,
-                cache: None,
-            },
-        ))
+        Ok((tx, resp_rx))
     }
 
     fn create_report_region_buckets_stream(
@@ -710,8 +716,7 @@ impl PdClient for RpcClient {
         wake_policy: mpsc::WakePolicy,
     ) -> Result<(mpsc::Sender<TsoRequest>, Self::ResponseChannel<TsoResponse>)> {
         let (tx, rx) = mpsc::unbounded(wake_policy);
-        let response_holder = Arc::new(std::sync::Mutex::new(None));
-        let response_holder_clone = response_holder.clone();
+        let (resp_tx, resp_rx) = CachedDuplexResponse::<TsoResponse>::new();
         let mut raw_client = self.raw_client.clone();
         let mut requests = Box::pin(rx).map(|r| Ok((r, WriteFlags::default())));
         self.raw_client.stub().spawn(async move {
@@ -720,28 +725,24 @@ impl PdClient for RpcClient {
                     warn!("failed to acquire client for Tso stream"; "err" => ?e);
                     continue;
                 }
-                let (mut bk_tx, bk_rx) = raw_client
+                let (mut tso_tx, tso_rx) = raw_client
                     .stub()
                     .tso_opt(raw_client.call_option())
                     .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "tso", e));
-                *response_holder_clone.lock().unwrap() = Some(bk_rx);
-                let res = bk_tx.send_all(&mut requests).await;
+                if resp_tx.send(tso_rx).is_err() {
+                    break;
+                }
+                let res = tso_tx.send_all(&mut requests).await;
                 if res.is_ok() {
                     // requests are drained.
                     break;
                 } else {
                     warn!("tso exited"; "res" => ?res);
                 }
-                let _ = bk_tx.close().await;
+                let _ = tso_tx.close().await;
             }
         });
-        Ok((
-            tx,
-            CachedDuplexResponse {
-                latest: response_holder,
-                cache: None,
-            },
-        ))
+        Ok((tx, resp_rx))
     }
 
     fn load_global_config(&mut self, list: Vec<String>) -> PdFuture<HashMap<String, String>> {

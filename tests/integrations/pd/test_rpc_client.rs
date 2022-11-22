@@ -23,7 +23,7 @@ use txn_types::TimeStamp;
 fn must_get_tso(client: &mut RpcClientV2, count: u32) -> TimeStamp {
     let (tx, mut responses) = client.create_tso_stream(WakePolicy::Immediately).unwrap();
     let mut req = pdpb::TsoRequest::default();
-    req.mut_header().cluster_id = client.cluster_id();
+    req.mut_header().cluster_id = client.get_cluster_id().unwrap();
     req.count = count;
     tx.send(req).unwrap();
     let resp = block_on(responses.next()).unwrap().unwrap();
