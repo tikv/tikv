@@ -35,7 +35,7 @@ fn test_simple_change() {
     let match_index = meta.raft_apply.applied_index;
     assert_eq!(meta.region_state.epoch.version, epoch.get_version());
     assert_eq!(meta.region_state.epoch.conf_ver, new_conf_ver);
-    assert_eq!(meta.region_state.peers, vec![leader_peer.clone(), new_peer]);
+    assert_eq!(meta.region_state.peers, vec![leader_peer, new_peer]);
 
     // So heartbeat will create a learner.
     cluster.dispatch(2, vec![]);

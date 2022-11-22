@@ -514,7 +514,7 @@ mod tests {
         let send_path = TempDir::new().unwrap();
         let send_snap_mgr =
             TabletSnapManager::new(send_path.path().join("snap_dir").to_str().unwrap());
-        let snap_path = send_snap_mgr.get_final_path_for_gen(&snap_key);
+        let snap_path = send_snap_mgr.tablet_gen_path(&snap_key);
         create_dir_all(snap_path.as_path()).unwrap();
         // send file should skip directory
         create_dir_all(snap_path.join("dir")).unwrap();
@@ -545,7 +545,7 @@ mod tests {
         .unwrap();
 
         let stream = rx.map(|x: (SnapshotChunk, WriteFlags)| Ok(x.0));
-        let final_path = recv_snap_manager.get_final_path_for_recv(&snap_key);
+        let final_path = recv_snap_manager.final_recv_path(&snap_key);
         let r = block_on(recv_snap_files(recv_snap_manager, stream, limiter)).unwrap();
         assert_eq!(r.key, snap_key);
         std::thread::sleep(std::time::Duration::from_secs(1));
