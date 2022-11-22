@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use txn_types::{Key, Lock, TimeStamp, Write, WriteType};
+use txn_types::{Key, Lock, LockType, TimeStamp, Write, WriteType};
 
 use crate::storage::{
     mvcc::{MvccReader, MvccTxn, SnapshotReader, MAX_TXN_WRITE_SIZE},
@@ -140,6 +140,77 @@ pub fn flashback_to_version_write(
         txn.put_write(key, commit_ts, new_write.as_ref().to_bytes());
     }
     Ok(None)
+}
+
+pub fn prewrite_flashback_key(
+    txn: &mut MvccTxn,
+    reader: &mut SnapshotReader<impl Snapshot>,
+    key_to_lock: &Key,
+    flashback_version: TimeStamp,
+    flashback_start_ts: TimeStamp,
+) -> TxnResult<()> {
+    let old_write = reader
+        .get_write_with_commit_ts(key_to_lock, flashback_version)?
+        .map(|(write, _)| write);
+    // Flashback the value in `CF_DEFAULT` as well if the old write is a
+    // `WriteType::Put`.
+    if let Some(old_write) = old_write.as_ref() {
+        if old_write.short_value.is_none() && old_write.write_type == WriteType::Put {
+            txn.put_value(
+                key_to_lock.clone(),
+                flashback_start_ts,
+                reader.load_data(key_to_lock, old_write.clone())?,
+            );
+        }
+    }
+    txn.put_lock(
+        key_to_lock.clone(),
+        &Lock::new(
+            old_write.as_ref().map_or(LockType::Delete, |write| {
+                if write.write_type == WriteType::Delete {
+                    LockType::Delete
+                } else {
+                    LockType::Put
+                }
+            }),
+            key_to_lock.as_encoded().to_vec(),
+            flashback_start_ts,
+            0,
+            old_write.and_then(|write| write.short_value),
+            TimeStamp::zero(),
+            1,
+            TimeStamp::zero(),
+        ),
+    );
+    Ok(())
+}
+
+pub fn commit_flashback_key(
+    txn: &mut MvccTxn,
+    reader: &mut SnapshotReader<impl Snapshot>,
+    key_to_commit: &Key,
+    start_ts: TimeStamp,
+    commit_ts: TimeStamp,
+) -> TxnResult<()> {
+    // If the key is not locked, it means that the key has been committed before and
+    // we are in a retry.
+    if let Some(mut lock) = reader.load_lock(key_to_commit)? {
+        txn.put_write(
+            key_to_commit.clone(),
+            commit_ts,
+            Write::new(
+                WriteType::from_lock_type(lock.lock_type).unwrap(),
+                start_ts,
+                lock.short_value.take(),
+            )
+            .set_last_change(lock.last_change_ts, lock.versions_to_last_change)
+            .set_txn_source(lock.txn_source)
+            .as_ref()
+            .to_bytes(),
+        );
+        txn.unlock_key(key_to_commit.clone(), lock.is_pessimistic_txn(), commit_ts);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
