@@ -3,7 +3,8 @@
 use std::{
     borrow::Cow,
     collections::HashMap,
-    io,
+    fs::File,
+    io::{self, BufReader, Read},
     ops::Bound,
     path::{Path, PathBuf},
     sync::{
@@ -307,7 +308,15 @@ impl SstImporter {
         Ok(())
     }
 
-    pub fn shrink_cache_by_tick(&self) {
+    pub fn shrink_by_tick(&self) {
+        if self.import_support_download() {
+            self.shrink_space_by_tick();
+        } else {
+            self.shrink_cache_by_tick();
+        }
+    }
+
+    pub fn shrink_cache_by_tick(&self) -> u64 {
         let mut shrink_size: usize = 0;
         let mut retain_size: usize = 0;
 
@@ -322,8 +331,44 @@ impl SstImporter {
             need_retain
         });
 
-        self.dec_mem(shrink_size as _);
         info!("shrink cache by tick"; "shrink size" => shrink_size, "retain size" => retain_size);
+        self.dec_mem(shrink_size as _);
+        shrink_size as _
+    }
+
+    pub fn shrink_space_by_tick(&self) -> u64 {
+        let mut files: Vec<String> = Vec::new();
+        let mut retain_cnt = 0;
+
+        self.file_locks.retain(|filename, (_, refcnt, start)| {
+            let need_retain =
+                *refcnt > 0 as u64 || start.saturating_elapsed() < Duration::from_secs(600);
+            if !need_retain {
+                files.push(filename.clone());
+            } else {
+                retain_cnt += 1;
+            }
+            need_retain
+        });
+
+        let shrint_file_cnt = files.len();
+        info!("shrink space by tick"; "shrink files count" => shrint_file_cnt, "retain files count" => retain_cnt);
+        for f in files {
+            let path = self.dir.get_import_path(&f);
+            if path.is_ok() {
+                let save_path = path.unwrap().save;
+                if let Err(e) = file_system::remove_file(save_path.clone()) {
+                    info!("failed to remove file"; "filename" => ?save_path, "error" => ?e);
+                }
+            }
+        }
+        shrint_file_cnt as _
+    }
+
+    // If mem_limit is 0, which represent download kv-file when import.
+    // Or read kv-file into buffer directly.
+    pub fn import_support_download(&self) -> bool {
+        return self.mem_limit == ReadableSize(0);
     }
 
     fn inc_mem_and_check(&self, meta: &KvMeta) -> bool {
@@ -342,7 +387,7 @@ impl SstImporter {
         self.mem_use.fetch_sub(size, Ordering::Relaxed);
     }
 
-    pub fn clear_kv_buff(&self, meta: &KvMeta) {
+    pub fn dec_kvfile_refcnt(&self, meta: &KvMeta) {
         let dst_name = format!("{}_{}", meta.get_name(), meta.get_range_offset());
         self.file_locks.entry(dst_name).and_modify(|v| {
             v.1 -= 1;
@@ -484,6 +529,29 @@ impl SstImporter {
         Ok(buff)
     }
 
+    pub fn read_from_kv_file(
+        &self,
+        meta: &KvMeta,
+        rewrite_rule: &RewriteRule,
+        ext_storage: Arc<Box<dyn external_storage_export::ExternalStorage>>,
+        backend: &StorageBackend,
+        speed_limiter: &Limiter,
+    ) -> Result<Arc<Vec<u8>>> {
+        if self.import_support_download() {
+            let tmp_file = self.do_download_kv_file(meta, backend, speed_limiter)?;
+            let file = File::open(&tmp_file)?;
+            let mut reader = BufReader::new(file);
+            let mut buffer = Vec::new();
+            reader.read_to_end(&mut buffer)?;
+
+            let rewrite_buff = self.rewrite_kv_file(buffer, rewrite_rule)?;
+            Ok(Arc::new(rewrite_buff))
+        } else {
+            let buffer = self.do_read_kv_file(meta, rewrite_rule, ext_storage, speed_limiter)?;
+            Ok(buffer)
+        }
+    }
+
     pub fn do_download_kv_file(
         &self,
         meta: &KvMeta,
@@ -501,16 +569,15 @@ impl SstImporter {
         } else {
             None
         };
-        if path.save.exists() {
-            return Ok(path.save);
-        }
 
-        let lock =
+        let mut lock =
             self.file_locks
                 .entry(dst_name.clone())
-                .or_insert((Arc::default(), 1, Instant::now()));
+                .or_insert((Arc::default(), 0, Instant::now()));
 
         if path.save.exists() {
+            lock.1 += 1;
+            lock.2 = Instant::now();
             return Ok(path.save);
         }
 
@@ -550,9 +617,7 @@ impl SstImporter {
         }
 
         file_system::rename(path.temp, path.save.clone())?;
-
-        drop(lock);
-        self.file_locks.remove(&dst_name);
+        *lock = (Arc::default(), 1, Instant::now());
 
         IMPORTER_APPLY_DURATION
             .with_label_values(&["download"])
@@ -663,9 +728,11 @@ impl SstImporter {
             largest_key = largest_key
                 .map_or_else(|| Some(key.clone()), |v: Vec<u8>| Some(v.max(key.clone())));
         }
-        info!("build download request file done"; "total keys" => %total_key,
+        if total_key != not_in_range {
+            info!("build download request file done"; "total keys" => %total_key,
             "ts filtered keys" => %ts_not_expected,
             "range filtered keys" => %not_in_range);
+        }
 
         IMPORTER_APPLY_DURATION
             .with_label_values(&["normal"])
@@ -1007,6 +1074,7 @@ fn is_after_end_bound<K: AsRef<[u8]>>(value: &[u8], bound: &Bound<K>) -> bool {
 mod tests {
     use std::{
         io::{self, BufWriter, Write},
+        ops::Sub,
         usize,
     };
 
@@ -1523,6 +1591,55 @@ mod tests {
     }
 
     #[test]
+    fn test_do_read_kv_file() {
+        // create a sample kv file.
+        let (_temp_dir, backend, kv_meta, buff) = create_sample_external_kv_file().unwrap();
+
+        // create importer object.
+        let import_dir = tempfile::tempdir().unwrap();
+        let (_, key_manager) = new_key_manager_for_test();
+        let importer = SstImporter::new(
+            &Config::default(),
+            import_dir,
+            Some(key_manager.clone()),
+            ApiVersion::V1,
+        )
+        .unwrap();
+        let ext_storage = {
+            let inner = importer.create_external_storage(&backend, false).unwrap();
+            Arc::new(inner)
+        };
+
+        // test do_read_kv_file()
+        let rewrite_rule = &new_rewrite_rule(b"", b"", 12345);
+        let output = importer
+            .do_read_kv_file(
+                &kv_meta,
+                rewrite_rule,
+                ext_storage,
+                &Limiter::new(f64::INFINITY),
+            )
+            .unwrap();
+        assert_eq!(buff, *output);
+
+        // test dec_kvfile_refcnt()
+        importer.dec_kvfile_refcnt(&kv_meta);
+
+        // Do not shrint cache because the shrint interval does reach.
+        let shrink_size = importer.shrink_cache_by_tick();
+        assert_eq!(shrink_size, 0);
+        assert_eq!(importer.file_locks.len(), 1);
+
+        // set expired instance in Dashmap
+        for mut kv in importer.file_locks.iter_mut() {
+            kv.2 = Instant::now().sub(Duration::from_secs(61));
+        }
+        let shrink_size = importer.shrink_cache_by_tick();
+        assert_eq!(shrink_size, (buff.len() as u64));
+        assert!(importer.file_locks.is_empty());
+    }
+
+    #[test]
     fn test_read_kv_files_from_external_storage() {
         // create a sample kv file.
         let (_temp_dir, backend, kv_meta, buff) = create_sample_external_kv_file().unwrap();
@@ -1582,6 +1699,64 @@ mod tests {
             )
             .unwrap();
         assert_eq!(&buff[offset as _..(offset + len) as _], &output[..]);
+    }
+
+    #[test]
+    fn test_do_download_kv_file() {
+        // create a sample kv file.
+        let (_temp_dir, backend, kv_meta, buff) = create_sample_external_kv_file().unwrap();
+
+        // create importer object.
+        let import_dir = tempfile::tempdir().unwrap();
+        let (_, key_manager) = new_key_manager_for_test();
+        let cfg = Config {
+            memory_use_ratio: 0.0,
+            ..Default::default()
+        };
+        let importer =
+            SstImporter::new(&cfg, import_dir, Some(key_manager.clone()), ApiVersion::V1).unwrap();
+        let rewrite_rule = &new_rewrite_rule(b"", b"", 12345);
+        let ext_storage = {
+            let inner = importer.create_external_storage(&backend, false).unwrap();
+            Arc::new(inner)
+        };
+        let path = importer
+            .dir
+            .get_import_path(
+                format!("{}_{}", kv_meta.get_name(), kv_meta.get_range_offset()).as_str(),
+            )
+            .unwrap();
+
+        // test do_download_kv_file().
+        assert!(importer.import_support_download());
+        let output = importer
+            .read_from_kv_file(
+                &kv_meta,
+                rewrite_rule,
+                ext_storage,
+                &backend,
+                &Limiter::new(f64::INFINITY),
+            )
+            .unwrap();
+        assert_eq!(*output, buff);
+        check_file_exists(&path.save, None);
+
+        // test shrink nothing.
+        let shrint_files_cnt = importer.shrink_space_by_tick();
+        assert_eq!(shrint_files_cnt, 0);
+
+        // set expired instance in Dashmap.
+        for mut kv in importer.file_locks.iter_mut() {
+            kv.2 = Instant::now().sub(Duration::from_secs(601));
+        }
+        let shrint_files_cnt = importer.shrink_space_by_tick();
+        assert_eq!(shrint_files_cnt, 0);
+
+        // shrink file.
+        importer.dec_kvfile_refcnt(&kv_meta);
+        let shrint_files_cnt = importer.shrink_space_by_tick();
+        assert_eq!(shrint_files_cnt, 1);
+        check_file_not_exists(&path.save, None);
     }
 
     #[test]
@@ -2419,5 +2594,55 @@ mod tests {
             };
             assert_eq!(sst_reader.compression_name(), expected_compression_name);
         }
+    }
+
+    #[test]
+    fn test_import_support_download() {
+        let import_dir = tempfile::tempdir().unwrap();
+        let importer =
+            SstImporter::new(&Config::default(), import_dir, None, ApiVersion::V1).unwrap();
+        assert_eq!(importer.import_support_download(), false);
+
+        let import_dir = tempfile::tempdir().unwrap();
+        let importer = SstImporter::new(
+            &Config {
+                memory_use_ratio: 0.0,
+                ..Default::default()
+            },
+            import_dir,
+            None,
+            ApiVersion::V1,
+        )
+        .unwrap();
+        assert_eq!(importer.import_support_download(), true);
+    }
+
+    #[test]
+    fn test_inc_mem_and_check() {
+        // create importer object.
+        let import_dir = tempfile::tempdir().unwrap();
+        let importer =
+            SstImporter::new(&Config::default(), import_dir, None, ApiVersion::V1).unwrap();
+        assert_eq!(importer.mem_use.load(Ordering::Relaxed), 0);
+
+        // test inc_mem_and_check() and dec_mem() successfully.
+        let meta = KvMeta {
+            length: 100,
+            ..Default::default()
+        };
+        let check = importer.inc_mem_and_check(&meta);
+        assert!(check);
+        assert_eq!(importer.mem_use.load(Ordering::Relaxed), meta.get_length());
+
+        importer.dec_mem(meta.get_length());
+        assert_eq!(importer.mem_use.load(Ordering::Relaxed), 0);
+
+        // test inc_mem_and_check() failed.
+        let meta = KvMeta {
+            length: u64::MAX,
+            ..Default::default()
+        };
+        let check = importer.inc_mem_and_check(&meta);
+        assert!(!check);
     }
 }

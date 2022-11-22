@@ -46,9 +46,9 @@ impl Config {
             );
             self.stream_channel_window = default_cfg.stream_channel_window;
         }
-        if self.memory_use_ratio > 1.0 {
+        if self.memory_use_ratio > 1.0 || self.memory_use_ratio < 0.0 {
             warn!(
-                "import.mem_ratio can not be bigger than 1.0, change it to {}",
+                "import.mem_ratio should belong to [0.0, 1.0], change it to {}",
                 default_cfg.memory_use_ratio,
             );
             self.memory_use_ratio = default_cfg.memory_use_ratio;

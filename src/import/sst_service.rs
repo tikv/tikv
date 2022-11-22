@@ -123,8 +123,8 @@ where
 
     async fn tick(importer: Arc<SstImporter>) {
         loop {
-            sleep(Duration::from_secs(5));
-            importer.shrink_cache_by_tick();
+            sleep(Duration::from_secs(10));
+            importer.shrink_by_tick();
         }
     }
 
@@ -508,13 +508,14 @@ where
                         context.clone(),
                     );
 
-                    let buff = importer.do_read_kv_file(
+                    let buff = importer.read_from_kv_file(
                         &meta,
                         &rules[i],
                         ext_storage.clone(),
+                        req.get_storage_backend(),
                         &limiter,
                     )?;
-                    defer!({ importer.clear_kv_buff(&meta) });
+                    defer!({ importer.dec_kvfile_refcnt(&meta) });
                     let r: Option<Range> = importer.do_apply_kv_file(
                         meta.get_start_key(),
                         meta.get_end_key(),
