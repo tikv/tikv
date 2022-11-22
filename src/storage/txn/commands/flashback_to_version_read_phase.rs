@@ -11,7 +11,7 @@ use crate::storage::{
         },
         flashback_to_version_read_lock, flashback_to_version_read_write,
         sched_pool::tls_collect_keyread_histogram_vec,
-        Result,
+        Error, ErrorInner, Result,
     },
     Context, ScanMode, Snapshot, Statistics,
 };
@@ -104,18 +104,18 @@ impl CommandExt for FlashbackToVersionReadPhase {
 }
 
 /// The whole flashback progress contains four phases:
-///   1. RollbackLock phase:
+///   1. [PrepareFlashback] RollbackLock phase:
 ///     - Scan all locks.
 ///     - Rollback all these locks.
-///   2. Prewrite phase:
+///   2. [PrepareFlashback] Prewrite phase:
 ///     - Prewrite the `self.start_key` specifically to prevent the
 ///       `resolved_ts` from advancing.
-///   3. FlashbackWrite phase:
+///   3. [FinishFlashback] FlashbackWrite phase:
 ///     - Scan all the latest writes and their corresponding values at
 ///       `self.version`.
 ///     - Write the old MVCC version writes again for all these keys with
 ///       `self.commit_ts` excluding the `self.start_key`.
-///   4. Commit phase:
+///   4. [FinishFlashback] Commit phase:
 ///     - Commit the `self.start_key` we write at the second phase to finish the
 ///       flashback.
 impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
@@ -148,6 +148,12 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                 }
             }
             FlashbackToVersionState::FlashbackWrite { next_write_key, .. } => {
+                if self.commit_ts <= self.start_ts {
+                    return Err(Error::from(ErrorInner::InvalidTxnTso {
+                        start_ts: self.start_ts,
+                        commit_ts: self.commit_ts,
+                    }));
+                }
                 // If the key is not locked, it means that the key has been committed before and
                 // we are in a retry.
                 if next_write_key == self.start_key && reader.load_lock(&next_write_key)?.is_none()
