@@ -73,7 +73,7 @@ impl SoftLimit {
         Ok(())
     }
 
-    /// returns the maxmium of tasks can be executed concurrently for now.
+    /// returns the maximium of tasks can be executed concurrently for now.
     pub fn current_cap(&self) -> usize {
         self.0.cap.load(Ordering::SeqCst)
     }
