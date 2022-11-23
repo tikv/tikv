@@ -10,7 +10,7 @@ use crate::cluster::Cluster;
 #[test]
 fn test_region_heartbeat() {
     let region_id = 2;
-    let cluster = Cluster::with_node_count(2, None);
+    let cluster = Cluster::with_node_count(1, None);
     let router = cluster.router(0);
 
     // When there is only one peer, it should campaign immediately.
@@ -36,4 +36,19 @@ fn test_region_heartbeat() {
     assert_eq!(region.get_id(), region_id);
     assert_eq!(peer.get_id(), 3);
     assert_eq!(peer.get_store_id(), 1);
+}
+
+#[test]
+fn test_store_heartbeat() {
+    let cluster = Cluster::with_node_count(1, None);
+    let store_id = cluster.node(0).id();
+    for _ in 0..5 {
+        let stats = block_on(cluster.node(0).pd_client().get_store_stats_async(store_id)).unwrap();
+        if stats.get_start_time() > 0 {
+            assert_ne!(stats.get_capacity(), 0);
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    panic!("failed to get store stats");
 }
