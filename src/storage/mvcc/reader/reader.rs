@@ -367,8 +367,9 @@ impl<S: EngineSnapshot> MvccReader<S> {
         mut ts: TimeStamp,
         gc_fence_limit: Option<TimeStamp>,
     ) -> Result<Option<(Write, TimeStamp)>> {
+        let mut seek_res = self.seek_write(key, ts)?;
         loop {
-            match self.seek_write(key, ts)? {
+            match seek_res {
                 Some((commit_ts, write)) => {
                     if let Some(limit) = gc_fence_limit {
                         if !write.as_ref().check_gc_fence_as_latest_version(limit) {
@@ -404,13 +405,15 @@ impl<S: EngineSnapshot> MvccReader<S> {
                                     commit_ts,
                                     write.write_type,
                                 );
-                                return Ok(Some((write, commit_ts)));
+                                seek_res = Some((commit_ts, write));
+                                continue;
                             }
                         }
                     }
                 }
                 None => return Ok(None),
             }
+            seek_res = self.seek_write(key, ts)?;
         }
     }
 
@@ -2540,8 +2543,17 @@ pub mod tests {
         engine.prewrite(m, k, 1);
         engine.commit(k, 1, 2);
 
-        // Write enough ROLLBACK/LOCK recrods
+        // Write enough LOCK recrods
         for start_ts in (6..30).into_iter().step_by(2) {
+            engine.lock(k, start_ts, start_ts + 1);
+        }
+
+        let m = Mutation::make_delete(Key::from_raw(k));
+        engine.prewrite(m, k, 45);
+        engine.commit(k, 45, 46);
+
+        // Write enough LOCK recrods
+        for start_ts in (50..80).into_iter().step_by(2) {
             engine.lock(k, start_ts, start_ts + 1);
         }
 
@@ -2563,6 +2575,18 @@ pub mod tests {
             .unwrap();
         assert_eq!(commit_ts, 2.into());
         assert_eq!(write, w2);
+        // versions_to_last_change should be large enough to trigger a second get
+        // instead of calling a series of next, so the count of next should be 0 instead
+        assert_eq!(reader.statistics.write.next, 0);
+        assert_eq!(reader.statistics.write.get, 1);
+
+        // Clear statistics first
+        reader.statistics = Statistics::default();
+        let res = reader
+            .get_write_with_commit_ts(&key, 80.into(), None)
+            .unwrap();
+        // If the type is Delete, get_write_with_commit_ts should return None.
+        assert!(res.is_none());
         // versions_to_last_change should be large enough to trigger a second get
         // instead of calling a series of next, so the count of next should be 0 instead
         assert_eq!(reader.statistics.write.next, 0);
