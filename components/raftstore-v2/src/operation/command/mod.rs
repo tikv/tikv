@@ -465,7 +465,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 AdminCmdType::InvalidAdmin => {
                     return Err(box_err!("invalid admin command type"));
                 }
-                _ => unimplemented!(),
             };
 
             self.push_admin_result(admin_result);

@@ -82,6 +82,35 @@ struct RawClient {
 }
 
 impl RawClient {
+    async fn connect(ctx: &ConnectContext) -> Result<Self> {
+        // -1 means the max.
+        let retries = match ctx.cfg.retry_max_count {
+            -1 => std::isize::MAX,
+            v => v.saturating_add(1),
+        };
+        for i in 0..retries {
+            match ctx.connector.validate_endpoints(&ctx.cfg, false).await {
+                Ok((stub, target_info, members, _)) => {
+                    return Ok(RawClient {
+                        stub,
+                        target_info,
+                        members,
+                    });
+                }
+                Err(e) => {
+                    if i as usize % ctx.cfg.retry_log_every == 0 {
+                        warn!("validate PD endpoints failed"; "err" => ?e);
+                    }
+                    let _ = GLOBAL_TIMER_HANDLE
+                        .delay(std::time::Instant::now() + ctx.cfg.retry_interval.0)
+                        .compat()
+                        .await;
+                }
+            }
+        }
+        Err(box_err!("PD endpoints are invalid"))
+    }
+
     /// Returns Ok(true) when a new connection is established.
     async fn maybe_reconnect(&mut self, ctx: &ConnectContext, force: bool) -> Result<bool> {
         PD_RECONNECT_COUNTER_VEC.with_label_values(&["try"]).inc();
@@ -140,13 +169,6 @@ struct CachedRawClientCore {
     on_reconnect_tx: broadcast::Sender<()>,
 }
 
-impl CachedRawClientCore {
-    // Get around reference sharing issue. Remove this when grpcio is updated.
-    fn grab_a_channel(&self) -> &Channel {
-        unimplemented!()
-    }
-}
-
 /// A shared [`RawClient`] with a local copy of cache.
 pub struct CachedRawClient {
     core: Arc<CachedRawClientCore>,
@@ -201,7 +223,7 @@ impl CachedRawClient {
     }
 
     #[inline]
-    async fn publish_cache(&mut self) {
+    fn publish_cache(&mut self) {
         let latest_version = {
             let mut latest = self.core.latest.lock().unwrap();
             *latest = self.cache.clone();
@@ -257,7 +279,16 @@ impl CachedRawClient {
             return Ok(());
         }
         select! {
-            r = self.core.grab_a_channel().wait_for_connected(REQUEST_TIMEOUT).fuse() => {
+            r = self
+                .cache
+                .as_ref()
+                .unwrap()
+                .stub
+                .client
+                .channel()
+                .wait_for_connected(REQUEST_TIMEOUT)
+                .fuse() =>
+            {
                 if r {
                     return Ok(());
                 }
@@ -282,39 +313,9 @@ impl CachedRawClient {
     /// Makes the first connection.
     async fn connect(&mut self) -> Result<()> {
         debug_assert!(self.cache.is_none());
-        // -1 means the max.
-        let retries = match self.core.context.cfg.retry_max_count {
-            -1 => std::isize::MAX,
-            v => v.saturating_add(1),
-        };
-        for i in 0..retries {
-            match self
-                .core
-                .context
-                .connector
-                .validate_endpoints(&self.core.context.cfg, false)
-                .await
-            {
-                Ok((stub, target_info, members, _)) => {
-                    self.cache = Some(RawClient {
-                        stub,
-                        target_info,
-                        members,
-                    });
-                    self.publish_cache().await;
-                }
-                Err(e) => {
-                    if i as usize % self.core.context.cfg.retry_log_every == 0 {
-                        warn!("validate PD endpoints failed"; "err" => ?e);
-                    }
-                    let _ = GLOBAL_TIMER_HANDLE
-                        .delay(std::time::Instant::now() + self.core.context.cfg.retry_interval.0)
-                        .compat()
-                        .await;
-                }
-            }
-        }
-        Err(box_err!("endpoints are invalid"))
+        self.cache = Some(RawClient::connect(&self.core.context).await?);
+        self.publish_cache();
+        Ok(())
     }
 
     /// Increases global version only when a new connection is established.
@@ -329,7 +330,7 @@ impl CachedRawClient {
             .maybe_reconnect(&self.core.context, force)
             .await?
         {
-            self.publish_cache().await;
+            self.publish_cache();
             return Ok(true);
         }
         Ok(false)
@@ -344,8 +345,7 @@ impl CachedRawClient {
     /// Might panic if `wait_for_ready` isn't called up-front.
     #[inline]
     fn channel(&self) -> &Channel {
-        // self.cache.stub.client.channel()
-        unimplemented!()
+        self.cache.as_ref().unwrap().stub.client.channel()
     }
 
     /// Might panic if `wait_for_ready` isn't called up-front.

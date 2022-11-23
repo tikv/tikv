@@ -2251,30 +2251,33 @@ dependencies = [
 
 [[package]]
 name = "grpcio"
-version = "0.12.0"
-source = "git+https://github.com/BusyJay/grpc-rs?branch=allow-access-channel#36a92a70366e10b8cde06646ef0fb909215790cd"
+version = "0.10.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f2506de56197d01821c2d1d21082d2dcfd6c82d7a1d6e04d33f37aab6130632"
 dependencies = [
  "futures-executor",
  "futures-util",
  "grpcio-sys",
  "libc 0.2.132",
  "log",
- "parking_lot 0.12.0",
+ "parking_lot 0.11.1",
  "protobuf",
 ]
 
 [[package]]
 name = "grpcio-compiler"
-version = "0.12.0"
-source = "git+https://github.com/BusyJay/grpc-rs?branch=allow-access-channel#9949dc8749b54f92f453b410d9f9b0405dc42be3"
+version = "0.10.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed97a17310fd00ff4109357584a00244e2a785d05b7ee0ef4d1e8fb1d84266df"
 dependencies = [
  "protobuf",
 ]
 
 [[package]]
 name = "grpcio-health"
-version = "0.12.0"
-source = "git+https://github.com/BusyJay/grpc-rs?branch=allow-access-channel#36a92a70366e10b8cde06646ef0fb909215790cd"
+version = "0.10.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a37eae605cd21f144b7c7fd0e64e57af9f73d132756fef5b706db110c3ec7ea0"
 dependencies = [
  "futures-executor",
  "futures-util",
@@ -2285,8 +2288,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio-sys"
-version = "0.12.0+1.46.5-patched"
-source = "git+https://github.com/BusyJay/grpc-rs?branch=allow-access-channel#36a92a70366e10b8cde06646ef0fb909215790cd"
+version = "0.10.3+1.44.0-patched"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f23adc509a3c4dea990e0ab8d2add4a65389ee69c288b7851d75dd1df7a6d6c6"
 dependencies = [
  "bindgen 0.59.2",
  "cc",
@@ -2690,7 +2694,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/tabokie/kvproto?branch=221117-grpcio-12#2865bbb458627f6640eca82dde6271e688cbe158"
+source = "git+https://github.com/tabokie/kvproto?branch=221117-grpcio-104#eccc9490d1938ecc9aaf2a4478cab572bd3597cf"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -6543,7 +6547,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/tabokie/tipb?branch=221117-grpcio-12#1745fe9cb4faa80b8db028bd7527a1c465ccc5db"
+source = "git+https://github.com/tabokie/tipb?branch=221117-grpcio-104#338ce83d3eee1b92e051b73f2d2f048ffeaf3da0"
 dependencies = [
  "futures 0.3.15",
  "grpcio",

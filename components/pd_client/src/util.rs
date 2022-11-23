@@ -612,7 +612,7 @@ impl PdConnector {
                 GetMembersResponse::default(),
             ))
         });
-        let client = PdClientStub::new(channel);
+        let client = PdClientStub::new(channel.clone());
         let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
         let response = client
             .get_members_async_opt(&GetMembersRequest::default(), option)

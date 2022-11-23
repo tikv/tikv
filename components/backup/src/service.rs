@@ -131,7 +131,6 @@ mod tests {
 
     use engine_rocks::RocksEngine;
     use external_storage_export::make_local_backend;
-    use grpcio::ServerCredentials;
     use raftstore::router::RaftStoreBlackHole;
     use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
@@ -145,14 +144,11 @@ mod tests {
         let (scheduler, rx) = dummy_scheduler();
         let backup_service =
             super::Service::<RocksEngine, RaftStoreBlackHole>::new(scheduler, RaftStoreBlackHole);
-        let mut server = ServerBuilder::new(env.clone())
-            .register_service(create_backup(backup_service))
-            .build()
-            .unwrap();
-        let port = server
-            .add_listening_port("127.0.0.1:0", ServerCredentials::insecure())
-            .unwrap();
+        let builder =
+            ServerBuilder::new(env.clone()).register_service(create_backup(backup_service));
+        let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
         server.start();
+        let (_, port) = server.bind_addrs().next().unwrap();
         let addr = format!("127.0.0.1:{}", port);
         let channel = ChannelBuilder::new(env).connect(&addr);
         let client = BackupClient::new(channel);
