@@ -160,15 +160,7 @@ fn test_connect_follower() {
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let mut client1 = RpcClientV2::new(&cfg, None, mgr).unwrap();
     fail::cfg(connect_leader_fp, "return").unwrap();
-    let res = format!("{}", client1.alloc_id().unwrap_err());
-    let err = format!(
-        "{}",
-        PdError::Grpc(GrpcError::RpcFailure(RpcStatus::with_message(
-            RpcStatusCode::UNAVAILABLE,
-            "".to_string(),
-        )))
-    );
-    assert_eq!(res, err);
+    client1.alloc_id().unwrap_err();
 
     cfg.enable_forwarding = true;
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());

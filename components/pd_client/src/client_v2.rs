@@ -211,6 +211,14 @@ impl CachedRawClient {
     }
 
     #[inline]
+    fn new_lame_client(&self) -> PdClientStub {
+        PdClientStub::new(Channel::lame(
+            self.core.context.connector.env.clone(),
+            "0.0.0.0:0",
+        ))
+    }
+
+    #[inline]
     fn refresh_cache(&mut self) -> bool {
         if self.cache_version < self.core.version.load(Ordering::Acquire) {
             let latest = self.core.latest.lock().unwrap();
@@ -386,12 +394,6 @@ impl CachedRawClient {
     }
 }
 
-#[derive(Clone)]
-pub struct RpcClient {
-    raw_client: CachedRawClient,
-    feature_gate: FeatureGate,
-}
-
 async fn reconnect_loop(mut client: CachedRawClient, cfg: Config) {
     if let Err(e) = client.connect().await {
         error!("failed to connect pd"; "err" => ?e);
@@ -412,6 +414,12 @@ async fn reconnect_loop(mut client: CachedRawClient, cfg: Config) {
     }
 }
 
+#[derive(Clone)]
+pub struct RpcClient {
+    raw_client: CachedRawClient,
+    feature_gate: FeatureGate,
+}
+
 impl RpcClient {
     pub fn new(
         cfg: &Config,
@@ -428,9 +436,9 @@ impl RpcClient {
         });
 
         let raw_client = CachedRawClient::new(cfg.clone(), env.clone(), security_mgr);
-
-        let lame_client = PdClientStub::new(Channel::lame(env, "0.0.0.0:0"));
-        lame_client.spawn(reconnect_loop(raw_client.clone(), cfg.clone()));
+        raw_client
+            .new_lame_client()
+            .spawn(reconnect_loop(raw_client.clone(), cfg.clone()));
 
         Ok(Self {
             raw_client,
@@ -472,6 +480,7 @@ impl RpcClient {
 
     #[cfg(feature = "testexport")]
     pub fn reconnect(&mut self) -> Result<bool> {
+        block_on(self.raw_client.wait_for_ready())?;
         block_on(self.raw_client.reconnect())
     }
 }
@@ -645,7 +654,7 @@ impl PdClient for RpcClient {
             });
             Ok((r, WriteFlags::default()))
         });
-        self.raw_client.stub().spawn(async move {
+        self.raw_client.new_lame_client().spawn(async move {
             loop {
                 if let Err(e) = raw_client.wait_for_ready().await {
                     warn!("failed to acquire client for RegionHeartbeat stream"; "err" => ?e);
@@ -680,7 +689,7 @@ impl PdClient for RpcClient {
         let (tx, rx) = mpsc::unbounded(wake_policy);
         let mut raw_client = self.raw_client.clone();
         let mut requests = Box::pin(rx).map(|r| Ok((r, WriteFlags::default())));
-        self.raw_client.stub().spawn(async move {
+        self.raw_client.new_lame_client().spawn(async move {
             loop {
                 if let Err(e) = raw_client.wait_for_ready().await {
                     warn!("failed to acquire client for ReportRegionBuckets stream"; "err" => ?e);
@@ -719,7 +728,7 @@ impl PdClient for RpcClient {
         let (resp_tx, resp_rx) = CachedDuplexResponse::<TsoResponse>::new();
         let mut raw_client = self.raw_client.clone();
         let mut requests = Box::pin(rx).map(|r| Ok((r, WriteFlags::default())));
-        self.raw_client.stub().spawn(async move {
+        self.raw_client.new_lame_client().spawn(async move {
             loop {
                 if let Err(e) = raw_client.wait_for_ready().await {
                     warn!("failed to acquire client for Tso stream"; "err" => ?e);
