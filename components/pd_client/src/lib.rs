@@ -1,5 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+#![feature(let_chains)]
+
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
