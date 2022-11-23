@@ -12,7 +12,7 @@ use std::{
 };
 
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{KvEngine, Snapshot};
+use engine_traits::KvEngine;
 use grpcio::Environment;
 use kvproto::{metapb::Region, raft_cmdpb::AdminCmdType};
 use online_config::{self, ConfigChange, ConfigManager, OnlineConfig};
@@ -23,7 +23,6 @@ use raftstore::{
     store::{
         fsm::StoreMeta,
         util::{self, RegionReadProgress, RegionReadProgressRegistry},
-        RegionSnapshot,
     },
 };
 use security::SecurityManager;
@@ -41,7 +40,6 @@ use crate::{
     metrics::*,
     resolver::Resolver,
     scanner::{ScanEntry, ScanMode, ScanTask, ScannerPool},
-    sinker::{CmdSinker, SinkCmd},
 };
 
 enum ResolverStatus {
@@ -264,7 +262,7 @@ impl ObserveRegion {
     }
 }
 
-pub struct Endpoint<T, E: KvEngine, C> {
+pub struct Endpoint<T, E: KvEngine> {
     store_id: Option<u64>,
     cfg: ResolvedTsConfig,
     cfg_update_notify: Arc<Notify>,
@@ -272,28 +270,25 @@ pub struct Endpoint<T, E: KvEngine, C> {
     region_read_progress: RegionReadProgressRegistry,
     regions: HashMap<u64, ObserveRegion>,
     scanner_pool: ScannerPool<T, E>,
-    scheduler: Scheduler<Task<E::Snapshot>>,
-    sinker: C,
-    advance_worker: AdvanceTsWorker<E>,
+    scheduler: Scheduler<Task>,
+    advance_worker: AdvanceTsWorker,
     _phantom: PhantomData<(T, E)>,
 }
 
-impl<T, E, C> Endpoint<T, E, C>
+impl<T, E> Endpoint<T, E>
 where
     T: 'static + RaftStoreRouter<E>,
     E: KvEngine,
-    C: CmdSinker<E::Snapshot>,
 {
     pub fn new(
         cfg: &ResolvedTsConfig,
-        scheduler: Scheduler<Task<E::Snapshot>>,
+        scheduler: Scheduler<Task>,
         raft_router: T,
         store_meta: Arc<Mutex<StoreMeta>>,
         pd_client: Arc<dyn PdClient>,
         concurrency_manager: ConcurrencyManager,
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
-        sinker: C,
     ) -> Self {
         let (region_read_progress, store_id) = {
             let meta = store_meta.lock().unwrap();
@@ -320,7 +315,6 @@ where
             region_read_progress,
             advance_worker,
             scanner_pool,
-            sinker,
             regions: HashMap::default(),
             _phantom: PhantomData::default(),
         };
@@ -502,64 +496,42 @@ where
         if regions.is_empty() {
             return;
         }
-
-        let mut min_ts = TimeStamp::max();
         for region_id in regions.iter() {
             if let Some(observe_region) = self.regions.get_mut(region_id) {
                 if let ResolverStatus::Ready = observe_region.resolver_status {
-                    let resolved_ts = observe_region.resolver.resolve(ts);
-                    if resolved_ts < min_ts {
-                        min_ts = resolved_ts;
-                    }
+                    let _ = observe_region.resolver.resolve(ts);
                 }
             }
         }
-        self.sinker.sink_resolved_ts(regions, ts);
     }
 
     // Tracking or untracking locks with incoming commands that corresponding
     // observe id is valid.
     #[allow(clippy::drop_ref)]
-    fn handle_change_log(
-        &mut self,
-        cmd_batch: Vec<CmdBatch>,
-        snapshot: Option<RegionSnapshot<E::Snapshot>>,
-    ) {
+    fn handle_change_log(&mut self, cmd_batch: Vec<CmdBatch>) {
         let size = cmd_batch.iter().map(|b| b.size()).sum::<usize>();
         RTS_CHANNEL_PENDING_CMD_BYTES.sub(size as i64);
-        let logs = cmd_batch
-            .into_iter()
-            .filter_map(|batch| {
-                if !batch.is_empty() {
-                    if let Some(observe_region) = self.regions.get_mut(&batch.region_id) {
-                        let observe_id = batch.rts_id;
-                        let region_id = observe_region.meta.id;
-                        if observe_region.handle.id == observe_id {
-                            let logs = ChangeLog::encode_change_log(region_id, batch);
-                            if let Err(e) = observe_region.track_change_log(&logs) {
-                                drop(observe_region);
-                                self.re_register_region(region_id, observe_id, e)
-                            }
-                            return Some(SinkCmd {
-                                region_id,
-                                observe_id,
-                                logs,
-                            });
-                        } else {
-                            debug!("resolved ts CmdBatch discarded";
-                                "region_id" => batch.region_id,
-                                "observe_id" => ?batch.rts_id,
-                                "current" => ?observe_region.handle.id,
-                            );
-                        }
+        for batch in cmd_batch {
+            if batch.is_empty() {
+                continue;
+            }
+            if let Some(observe_region) = self.regions.get_mut(&batch.region_id) {
+                let observe_id = batch.rts_id;
+                let region_id = observe_region.meta.id;
+                if observe_region.handle.id == observe_id {
+                    let logs = ChangeLog::encode_change_log(region_id, batch);
+                    if let Err(e) = observe_region.track_change_log(&logs) {
+                        drop(observe_region);
+                        self.re_register_region(region_id, observe_id, e);
                     }
+                } else {
+                    debug!("resolved ts CmdBatch discarded";
+                        "region_id" => batch.region_id,
+                        "observe_id" => ?batch.rts_id,
+                        "current" => ?observe_region.handle.id,
+                    );
                 }
-                None
-            })
-            .collect();
-        match snapshot {
-            Some(snap) => self.sinker.sink_cmd_with_old_value(logs, snap),
-            None => self.sinker.sink_cmd(logs),
+            }
         }
     }
 
@@ -615,7 +587,7 @@ where
     }
 }
 
-pub enum Task<S: Snapshot> {
+pub enum Task {
     RegionUpdated(Region),
     RegionDestroyed(Region),
     RegisterRegion {
@@ -638,7 +610,6 @@ pub enum Task<S: Snapshot> {
     },
     ChangeLog {
         cmd_batch: Vec<CmdBatch>,
-        snapshot: Option<RegionSnapshot<S>>,
     },
     ScanLocks {
         region_id: u64,
@@ -651,7 +622,7 @@ pub enum Task<S: Snapshot> {
     },
 }
 
-impl<S: Snapshot> fmt::Debug for Task<S> {
+impl fmt::Debug for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut de = f.debug_struct("ResolvedTsTask");
         match self {
@@ -710,21 +681,20 @@ impl<S: Snapshot> fmt::Debug for Task<S> {
     }
 }
 
-impl<S: Snapshot> fmt::Display for Task<S> {
+impl fmt::Display for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}", self)
     }
 }
 
-impl<T, E, C> Runnable for Endpoint<T, E, C>
+impl<T, E> Runnable for Endpoint<T, E>
 where
     T: 'static + RaftStoreRouter<E>,
     E: KvEngine,
-    C: CmdSinker<E::Snapshot>,
 {
-    type Task = Task<E::Snapshot>;
+    type Task = Task;
 
-    fn run(&mut self, task: Task<E::Snapshot>) {
+    fn run(&mut self, task: Task) {
         debug!("run resolved-ts task"; "task" => ?task);
         match task {
             Task::RegionDestroyed(region) => self.region_destroyed(region),
@@ -742,10 +712,7 @@ where
             Task::ResolvedTsAdvanced { regions, ts } => {
                 self.handle_resolved_ts_advanced(regions, ts)
             }
-            Task::ChangeLog {
-                cmd_batch,
-                snapshot,
-            } => self.handle_change_log(cmd_batch, snapshot),
+            Task::ChangeLog { cmd_batch } => self.handle_change_log(cmd_batch),
             Task::ScanLocks {
                 region_id,
                 observe_id,
@@ -757,15 +724,15 @@ where
     }
 }
 
-pub struct ResolvedTsConfigManager<S: Snapshot>(Scheduler<Task<S>>);
+pub struct ResolvedTsConfigManager(Scheduler<Task>);
 
-impl<S: Snapshot> ResolvedTsConfigManager<S> {
-    pub fn new(scheduler: Scheduler<Task<S>>) -> ResolvedTsConfigManager<S> {
+impl ResolvedTsConfigManager {
+    pub fn new(scheduler: Scheduler<Task>) -> ResolvedTsConfigManager {
         ResolvedTsConfigManager(scheduler)
     }
 }
 
-impl<S: Snapshot> ConfigManager for ResolvedTsConfigManager<S> {
+impl ConfigManager for ResolvedTsConfigManager {
     fn dispatch(&mut self, change: ConfigChange) -> online_config::Result<()> {
         if let Err(e) = self.0.schedule(Task::ChangeConfig { change }) {
             error!("failed to schedule ChangeConfig task"; "err" => ?e);
@@ -776,11 +743,10 @@ impl<S: Snapshot> ConfigManager for ResolvedTsConfigManager<S> {
 
 const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
 
-impl<T, E, C> RunnableWithTimer for Endpoint<T, E, C>
+impl<T, E> RunnableWithTimer for Endpoint<T, E>
 where
     T: 'static + RaftStoreRouter<E>,
     E: KvEngine,
-    C: CmdSinker<E::Snapshot>,
 {
     fn on_timeout(&mut self) {
         let store_id = self.get_or_init_store_id();
