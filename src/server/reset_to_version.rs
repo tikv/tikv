@@ -222,10 +222,8 @@ impl ResetToVersionManager {
         let mut worker = ResetToVersionWorker::new(write_iter, lock_iter, ts, self.state.clone());
         let mut wb = self.engine.write_batch();
         let props = tikv_util::thread_group::current_properties();
-        if self.worker_handle.borrow().is_some() {
-            warn!("A reset-to-version process is already in progress! Wait until it finish first.");
-            self.wait();
-        }
+        self.wait();
+
         *self.worker_handle.borrow_mut() = Some(
             std::thread::Builder::new()
                 .name("reset_to_version".to_string())
@@ -262,7 +260,10 @@ impl ResetToVersionManager {
 
     /// Wait until the process finished.
     pub fn wait(&self) {
-        self.worker_handle.take().unwrap().join().unwrap();
+        if let Some(handle) = self.worker_handle.take() {
+            info!("Wait for the reset-to-version task to complete.");
+            handle.join().unwrap();
+        }
     }
 }
 

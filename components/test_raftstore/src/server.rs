@@ -341,9 +341,6 @@ impl ServerCluster {
             Arc::new(region_info_accessor.clone()),
         );
         gc_worker.start(node_id).unwrap();
-        gc_worker
-            .start_observe_lock_apply(&mut coprocessor_host, concurrency_manager.clone())
-            .unwrap();
 
         let rts_worker = if cfg.resolved_ts.enable {
             // Resolved ts worker
