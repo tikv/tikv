@@ -524,7 +524,6 @@ where
     }
 }
 
-// TODO: remove `Channel` when `PdClientStub::channel()` is available.
 pub type StubTuple = (
     PdClientStub,
     TargetInfo,

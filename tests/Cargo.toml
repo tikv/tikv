@@ -83,7 +83,7 @@ file_system = { workspace = true }
 futures = "0.3"
 grpcio = { workspace = true }
 grpcio-health = { version = "0.10", default-features = false }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { workspace = true }
 libc = "0.2"
 log_wrappers = { workspace = true }
 more-asserts = "0.2"
@@ -106,7 +106,7 @@ tidb_query_expr = { workspace = true }
 tikv = { workspace = true }
 tikv_util = { workspace = true }
 time = "0.1"
-tipb = { git = "https://github.com/pingcap/tipb.git" }
+tipb = { workspace = true }
 toml = "0.5"
 txn_types = { workspace = true }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
