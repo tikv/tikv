@@ -8,7 +8,7 @@ use kvproto::{
 use pd_client::PdClient;
 use slog::{info, warn};
 
-use super::{send_admin_request, Runner};
+use super::{requests::*, Runner};
 
 fn new_batch_split_region_request(
     split_keys: Vec<Vec<u8>>,

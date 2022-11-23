@@ -588,7 +588,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .advance_apply(apply_index, term, region);
     }
 
-    pub fn require_updating_max_ts(&self, pd_scheduler: &Scheduler<PdTask>) {
+    // TODO: find a better place to put all txn related stuff.
+    pub fn require_updating_max_ts<T>(&self, ctx: &StoreContext<EK, ER, T>) {
         let epoch = self.region().get_region_epoch();
         let term_low_bits = self.term() & ((1 << 32) - 1); // 32 bits
         let version_lot_bits = epoch.get_version() & ((1 << 31) - 1); // 31 bits
@@ -596,21 +597,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.txn_ext
             .max_ts_sync_status
             .store(initial_status, Ordering::SeqCst);
-        info!(
-            self.logger,
-            "require updating max ts";
-            "initial_status" => initial_status,
-        );
-        if let Err(e) = pd_scheduler.schedule(PdTask::UpdateMaxTimestamp {
-            region_id: self.region().id,
-            initial_status,
-            txn_ext: self.txn_ext.clone(),
-        }) {
-            error!(
-                self.logger,
-                "failed to update max ts";
-                "err" => ?e,
-            );
-        }
+
+        self.update_max_timestamp_pd(ctx, initial_status);
     }
 }

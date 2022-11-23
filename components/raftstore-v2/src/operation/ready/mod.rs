@@ -450,11 +450,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
                     // A more recent read may happen on the old leader. So max ts should
                     // be updated after a peer becomes leader.
-                    self.require_updating_max_ts(&ctx.pd_scheduler);
+                    self.require_updating_max_ts(ctx);
                     // Exit entry cache warmup state when the peer becomes leader.
                     self.entry_storage_mut().clear_entry_cache_warmup_state();
 
-                    self.heartbeat_pd(ctx);
+                    self.region_heartbeat_pd(ctx);
                 }
                 StateRole::Follower => {
                     self.leader_lease_mut().expire();

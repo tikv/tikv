@@ -156,7 +156,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "notify pd with change peer region";
                 "region" => ?self.region(),
             );
-            self.heartbeat_pd(ctx);
+            self.region_heartbeat_pd(ctx);
             let demote_self = tikv_util::store::is_learner(self.peer());
             if remove_self || demote_self {
                 warn!(self.logger, "removing or demoting leader"; "remove" => remove_self, "demote" => demote_self);

@@ -16,10 +16,11 @@ use crate::{
     fsm::{PeerFsmDelegate, Store, StoreFsmDelegate},
     raft::Peer,
     router::{PeerTick, StoreTick},
-    worker::{PdHeartbeatTask, PdTask},
+    worker::{PdRegionHeartbeatTask, PdTask},
 };
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
+    #[inline]
     pub fn on_pd_store_heartbeat(&mut self) {
         self.fsm.store.store_heartbeat_pd(self.store_ctx);
         self.schedule_tick(
@@ -30,7 +31,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
 }
 
 impl Store {
-    pub fn store_heartbeat_pd<EK, ER, T>(&mut self, ctx: &mut StoreContext<EK, ER, T>)
+    pub fn store_heartbeat_pd<EK, ER, T>(&self, ctx: &StoreContext<EK, ER, T>)
     where
         EK: KvEngine,
         ER: RaftEngine,
@@ -65,10 +66,11 @@ impl Store {
 }
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
+    #[inline]
     pub fn on_pd_heartbeat(&mut self) {
         self.fsm.peer_mut().update_peer_statistics();
         if self.fsm.peer().is_leader() {
-            self.fsm.peer_mut().heartbeat_pd(self.store_ctx);
+            self.fsm.peer_mut().region_heartbeat_pd(self.store_ctx);
         }
         // TODO: hibernate region
         self.schedule_tick(PeerTick::PdHeartbeat);
@@ -76,8 +78,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
-    pub fn heartbeat_pd<T>(&mut self, ctx: &StoreContext<EK, ER, T>) {
-        let task = PdTask::Heartbeat(PdHeartbeatTask {
+    #[inline]
+    pub fn region_heartbeat_pd<T>(&self, ctx: &StoreContext<EK, ER, T>) {
+        let task = PdTask::RegionHeartbeat(PdRegionHeartbeatTask {
             term: self.term(),
             region: self.region().clone(),
             down_peers: self.collect_down_peers(ctx.cfg.max_peer_down_duration.0),
@@ -103,7 +106,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     /// Collects all pending peers and update `peers_start_pending_time`.
-    fn collect_pending_peers<T>(&mut self, ctx: &StoreContext<EK, ER, T>) -> Vec<metapb::Peer> {
+    fn collect_pending_peers<T>(&self, ctx: &StoreContext<EK, ER, T>) -> Vec<metapb::Peer> {
         let mut pending_peers = Vec::with_capacity(self.region().get_peers().len());
         let status = self.raft_group().status();
         let truncated_idx = self
@@ -158,7 +161,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         pending_peers
     }
 
-    pub fn destroy_peer_pd<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
+    #[inline]
+    pub fn destroy_peer_pd<T>(&self, ctx: &StoreContext<EK, ER, T>) {
         let task = PdTask::DestroyPeer {
             region_id: self.region_id(),
         };
@@ -173,11 +177,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
-    pub fn ask_batch_split_pd<T>(
-        &mut self,
-        ctx: &mut StoreContext<EK, ER, T>,
-        split_keys: Vec<Vec<u8>>,
-    ) {
+    #[inline]
+    pub fn ask_batch_split_pd<T>(&self, ctx: &StoreContext<EK, ER, T>, split_keys: Vec<Vec<u8>>) {
         let task = PdTask::AskBatchSplit {
             region: self.region().clone(),
             split_keys,
@@ -195,9 +196,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
+    #[inline]
     pub fn report_batch_split_pd<T>(
-        &mut self,
-        ctx: &mut StoreContext<EK, ER, T>,
+        &self,
+        ctx: &StoreContext<EK, ER, T>,
         regions: Vec<metapb::Region>,
     ) {
         let task = PdTask::ReportBatchSplit { regions };
@@ -205,6 +207,22 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             error!(
                 self.logger,
                 "failed to notify pd with ReportBatchSplit";
+                "err" => %e,
+            );
+        }
+    }
+
+    #[inline]
+    pub fn update_max_timestamp_pd<T>(&self, ctx: &StoreContext<EK, ER, T>, initial_status: u64) {
+        let task = PdTask::UpdateMaxTimestamp {
+            region_id: self.region_id(),
+            initial_status,
+            txn_ext: self.txn_ext().clone(),
+        };
+        if let Err(e) = ctx.pd_scheduler.schedule(task) {
+            error!(
+                self.logger,
+                "failed to notify pd with UpdateMaxTimestamp";
                 "err" => %e,
             );
         }

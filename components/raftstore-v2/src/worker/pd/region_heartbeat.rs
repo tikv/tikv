@@ -17,9 +17,9 @@ use raft::eraftpb::ConfChangeType;
 use slog::{debug, error, info};
 use tikv_util::{store::QueryStats, time::UnixSecs};
 
-use super::{send_admin_request, Runner};
+use super::{requests::*, Runner};
 
-pub struct HeartbeatTask {
+pub struct RegionHeartbeatTask {
     pub term: u64,
     pub region: metapb::Region,
     pub peer: metapb::Peer,
@@ -59,7 +59,7 @@ where
     ER: RaftEngine,
     T: PdClient + 'static,
 {
-    pub fn handle_heartbeat(&mut self, task: HeartbeatTask) {
+    pub fn handle_region_heartbeat(&mut self, task: RegionHeartbeatTask) {
         // HACK! In order to keep the compatible of protos, we use 0 to identify
         // the size uninitialized regions, and use 1 to identify the empty regions.
         //
@@ -253,46 +253,4 @@ where
         self.remote.spawn(f);
         self.is_hb_receiver_scheduled = true;
     }
-}
-
-fn new_change_peer_request(change_type: ConfChangeType, peer: metapb::Peer) -> AdminRequest {
-    let mut req = AdminRequest::default();
-    req.set_cmd_type(AdminCmdType::ChangePeer);
-    req.mut_change_peer().set_change_type(change_type);
-    req.mut_change_peer().set_peer(peer);
-    req
-}
-
-pub fn new_change_peer_v2_request(changes: Vec<pdpb::ChangePeer>) -> AdminRequest {
-    let mut req = AdminRequest::default();
-    req.set_cmd_type(AdminCmdType::ChangePeerV2);
-    let change_peer_reqs = changes
-        .into_iter()
-        .map(|mut c| {
-            let mut cp = ChangePeerRequest::default();
-            cp.set_change_type(c.get_change_type());
-            cp.set_peer(c.take_peer());
-            cp
-        })
-        .collect();
-    let mut cp = ChangePeerV2Request::default();
-    cp.set_changes(change_peer_reqs);
-    req.set_change_peer_v2(cp);
-    req
-}
-
-fn new_transfer_leader_request(peer: metapb::Peer, peers: Vec<metapb::Peer>) -> AdminRequest {
-    let mut req = AdminRequest::default();
-    req.set_cmd_type(AdminCmdType::TransferLeader);
-    req.mut_transfer_leader().set_peer(peer);
-    req.mut_transfer_leader().set_peers(peers.into());
-    req
-}
-
-fn new_merge_request(merge: pdpb::Merge) -> AdminRequest {
-    let mut req = AdminRequest::default();
-    req.set_cmd_type(AdminCmdType::PrepareMerge);
-    req.mut_prepare_merge()
-        .set_target(merge.get_target().to_owned());
-    req
 }

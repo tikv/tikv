@@ -306,7 +306,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.post_split();
 
         if self.is_leader() {
-            self.heartbeat_pd(store_ctx);
+            self.region_heartbeat_pd(store_ctx);
             // Notify pd immediately to let it update the region meta.
             info!(
                 self.logger,
@@ -440,7 +440,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 *self.txn_ext().pessimistic_locks.write() = split_init.locks;
                 // The new peer is likely to become leader, send a heartbeat immediately to
                 // reduce client query miss.
-                self.heartbeat_pd(store_ctx);
+                self.region_heartbeat_pd(store_ctx);
             }
 
             meta.tablet_caches.insert(region_id, self.tablet().clone());
