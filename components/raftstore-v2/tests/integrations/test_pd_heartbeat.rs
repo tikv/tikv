@@ -25,17 +25,23 @@ fn test_region_heartbeat() {
         new_peer(1, 3)
     );
 
-    let (region, peer) = block_on(
-        cluster
-            .node(0)
-            .pd_client()
-            .get_region_leader_by_id(region_id),
-    )
-    .unwrap()
-    .unwrap();
-    assert_eq!(region.get_id(), region_id);
-    assert_eq!(peer.get_id(), 3);
-    assert_eq!(peer.get_store_id(), 1);
+    for _ in 0..5 {
+        let resp = block_on(
+            cluster
+                .node(0)
+                .pd_client()
+                .get_region_leader_by_id(region_id),
+        )
+        .unwrap();
+        if let Some((region, peer)) = resp {
+            assert_eq!(region.get_id(), region_id);
+            assert_eq!(peer.get_id(), 3);
+            assert_eq!(peer.get_store_id(), 1);
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    panic!("failed to get region leader");
 }
 
 #[test]

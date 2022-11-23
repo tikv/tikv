@@ -2,7 +2,10 @@
 
 use std::{
     fmt::{self, Display, Formatter},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
 
 use causal_ts::CausalTsProviderImpl;
@@ -114,6 +117,7 @@ where
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
 
     logger: Logger,
+    shutdown: Arc<AtomicBool>,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -132,6 +136,7 @@ where
         concurrency_manager: ConcurrencyManager,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         logger: Logger,
+        shutdown: Arc<AtomicBool>,
     ) -> Self {
         Self {
             store_id,
@@ -148,9 +153,11 @@ where
             concurrency_manager,
             causal_ts_provider,
             logger,
+            shutdown,
         }
     }
 }
+
 impl<EK, ER, T> Runnable for Runner<EK, ER, T>
 where
     EK: KvEngine,

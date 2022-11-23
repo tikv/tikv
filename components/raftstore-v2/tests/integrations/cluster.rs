@@ -44,7 +44,6 @@ use tikv_util::{
     config::{ReadableDuration, VersionTrack},
     store::new_peer,
 };
-use txn_types::TimeStamp;
 
 #[derive(Clone)]
 pub struct TestRouter(RaftRouter<KvTestEngine, RaftTestEngine>);
@@ -302,7 +301,7 @@ impl TestNode {
             self.path.path(),
             cfg,
             trans,
-            ConcurrencyManager::new(TimeStamp::zero()), // todo
+            ConcurrencyManager::new(1.into()),
             None,
             &self.logger,
         );

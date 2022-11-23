@@ -3,7 +3,10 @@
 use std::{
     ops::{Deref, DerefMut},
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 
@@ -369,6 +372,7 @@ pub struct StoreSystem<EK: KvEngine, ER: RaftEngine> {
     system: BatchSystem<PeerFsm<EK, ER>, StoreFsm>,
     workers: Option<Workers<EK, ER>>,
     logger: Logger,
+    shutdown: Arc<AtomicBool>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
@@ -421,6 +425,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
                 concurrency_manager,
                 causal_ts_provider,
                 self.logger.clone(),
+                self.shutdown.clone(),
             ),
         );
 
@@ -472,6 +477,8 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
     }
 
     pub fn shutdown(&mut self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+
         if self.workers.is_none() {
             return;
         }
@@ -483,6 +490,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
 
         workers.store_writers.shutdown();
         workers.async_read_worker.stop();
+        workers.pd_worker.stop();
     }
 }
 
@@ -559,6 +567,7 @@ where
         system,
         workers: None,
         logger: logger.clone(),
+        shutdown: Arc::new(AtomicBool::new(false)),
     };
     (StoreRouter { router, logger }, system)
 }

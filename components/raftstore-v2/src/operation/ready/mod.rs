@@ -276,7 +276,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         ctx.has_ready = true;
 
-        if !self.raft_group().has_ready() && (self.serving() || self.postpond_destroy()) {
+        if !self.raft_group().has_ready() && (self.serving() || self.postponed_destroy()) {
             #[cfg(feature = "testexport")]
             self.async_writer.notify_flush();
             return;

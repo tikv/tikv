@@ -33,10 +33,13 @@ where
         let concurrency_manager = self.concurrency_manager.clone();
         let causal_ts_provider = self.causal_ts_provider.clone();
         let logger = self.logger.clone();
+        let shutdown = self.shutdown.clone();
 
         let f = async move {
             let mut success = false;
-            while txn_ext.max_ts_sync_status.load(Ordering::SeqCst) == initial_status {
+            while txn_ext.max_ts_sync_status.load(Ordering::SeqCst) == initial_status
+                && !shutdown.load(Ordering::Relaxed)
+            {
                 // On leader transfer / region merge, RawKV API v2 need to
                 // invoke causal_ts_provider.flush() to renew
                 // cached TSO, to ensure that the next TSO
