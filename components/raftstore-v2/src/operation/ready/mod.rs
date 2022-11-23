@@ -411,7 +411,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let persisted_number = self.async_writer.persisted_number();
         self.raft_group_mut().on_persist_ready(persisted_number);
         let persisted_index = self.raft_group().raft.raft_log.persisted;
-        let first_index = self.storage().first_index().unwrap() - 1;
         /// The apply snapshot process order would be:
         /// - Get the snapshot from the ready
         /// - Wait for async writer to load this tablet

@@ -121,23 +121,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     pub fn on_applied_snapshot<T: Transport>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
         let persisted_index = self.raft_group().raft.raft_log.persisted;
-        let first_index = self.storage().entry_storage().truncated_index();
-        /// The apply snapshot process order would be:
-        /// - Get the snapshot from the ready
-        /// - Wait for async writer to load this tablet
-        /// In this step, the snapshot has loaded finish, but some apply state
-        /// need to update.
-        if first_index == persisted_index {
+        let first_index = self.storage().entry_storage().first_index();
+        if first_index == persisted_index + 1 {
             let region_id = self.region_id();
             let tablet = ctx
                 .tablet_factory
-                .open_tablet(region_id, Some(first_index), OpenOptions::default())
+                .open_tablet(region_id, Some(persisted_index), OpenOptions::default())
                 .unwrap();
             self.tablet_mut().set(tablet);
             self.schedule_apply_fsm(ctx);
             self.storage_mut().on_applied_snapshot();
-            self.raft_group_mut().advance_apply_to(first_index);
-            self.read_progress_mut().update_applied_core(first_index);
+            self.raft_group_mut().advance_apply_to(persisted_index);
+            self.read_progress_mut()
+                .update_applied_core(persisted_index);
             info!(self.logger, "apply tablet snapshot completely");
         }
     }
@@ -392,7 +388,12 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         // it should load it into the factory after it persisted.
         let hook = move || {
             if let Err(e) = tablet_factory.load_tablet(path.as_path(), region_id, last_index) {
-                error!(logger, "failed to load tablet";"path" => path.display(),"err" => ?e);
+                panic!(
+                    "{:?} failed to load tablet, path: {}, {:?}",
+                    logger.list(),
+                    path.display(),
+                    e
+                );
             }
         };
         task.persisted_cb = (Some(Box::new(hook)));
