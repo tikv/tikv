@@ -1168,6 +1168,11 @@ where
         let mut p = self.pool.lock().unwrap();
         p.set_store_allowlist(stores);
     }
+
+    pub fn is_tombstone_store(&self, store_id: u64) -> bool {
+        let pool = self.pool.lock().unwrap();
+        pool.tombstone_stores.contains(&store_id) 
+    }
 }
 
 impl<S, R, E> Clone for RaftClient<S, R, E>

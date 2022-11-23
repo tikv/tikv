@@ -356,6 +356,10 @@ impl Transport for TestTransport {
     fn flush(&mut self) {
         self.flush_cnt.fetch_add(1, Ordering::SeqCst);
     }
+
+    fn is_tombstone_store(&self, _store_id: u64) -> bool {
+        false
+    }
 }
 
 // TODO: remove following when we finally integrate it in tikv-server binary.

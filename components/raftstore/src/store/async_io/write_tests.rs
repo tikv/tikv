@@ -82,6 +82,10 @@ impl Transport for TestTransport {
         false
     }
     fn flush(&mut self) {}
+
+    fn is_tombstone_store(&self, _store_id: u64) -> bool {
+        false
+    }
 }
 
 fn must_have_same_count_msg(msg_count: u32, msg_rx: &Receiver<RaftMessage>) {

@@ -72,6 +72,18 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub read_scheduler: Scheduler<ReadTask<EK>>,
 }
 
+impl<EK, ER, T> StoreContext<EK, ER, T>
+where 
+    EK: KvEngine,
+    ER: RaftEngine
+{
+    pub fn update_ticks_timeout(&mut self) {
+        self.tick_batch[PeerTick::Raft as usize].wait_duration = self.cfg.raft_base_tick_interval.0;
+        self.tick_batch[PeerTick::CheckPeerStaleState as usize].wait_duration =
+            self.cfg.peer_stale_state_check_interval.0;
+    }
+}
+
 /// A [`PollHandler`] that handles updates of [`StoreFsm`]s and [`PeerFsm`]s.
 ///
 /// It is responsible for:
@@ -144,6 +156,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
                 self.apply_buf_capacity();
             }
             update_cfg(&self.poll_ctx.cfg.store_batch_system);
+            self.poll_ctx.update_ticks_timeout();
         }
     }
 
@@ -314,7 +327,7 @@ where
 
     fn build(&mut self, priority: batch_system::Priority) -> Self::Handler {
         let cfg = self.cfg.value().clone();
-        let poll_ctx = StoreContext {
+        let mut poll_ctx = StoreContext {
             logger: self.logger.clone(),
             trans: self.trans.clone(),
             current_time: None,
@@ -331,6 +344,7 @@ where
             apply_pool: self.apply_pool.clone(),
             read_scheduler: self.read_scheduler.clone(),
         };
+        poll_ctx.update_ticks_timeout();
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
         StorePoller::new(poll_ctx, cfg_tracker)
     }

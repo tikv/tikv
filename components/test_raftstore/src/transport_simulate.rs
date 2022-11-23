@@ -212,6 +212,10 @@ impl<C: Transport> Transport for SimulateTransport<C> {
     fn flush(&mut self) {
         self.ch.flush();
     }
+
+    fn is_tombstone_store(&self, _store_id: u64) -> bool {
+        false
+    }
 }
 
 impl<C: RaftStoreRouter<RocksEngine>> StoreRouter<RocksEngine> for SimulateTransport<C> {

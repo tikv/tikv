@@ -70,4 +70,8 @@ where
     fn flush(&mut self) {
         self.raft_client.flush();
     }
+
+    fn is_tombstone_store(&self, store_id: u64) -> bool {
+        self.raft_client.is_tombstone_store(store_id)
+    }
 }

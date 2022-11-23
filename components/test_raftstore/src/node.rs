@@ -145,6 +145,10 @@ impl Transport for ChannelTransport {
     }
 
     fn flush(&mut self) {}
+
+    fn is_tombstone_store(&self, _store_id: u64) -> bool {
+        false
+    }
 }
 
 type SimulateChannelTransport = SimulateTransport<ChannelTransport>;
