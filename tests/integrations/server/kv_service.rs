@@ -276,33 +276,7 @@ fn test_mvcc_basic() {
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
 
     let mut ts = 0;
-
-    // Prewrite
-    ts += 1;
-    let prewrite_start_version = ts;
-    let mut mutation = Mutation::default();
-    mutation.set_op(Op::Put);
-    mutation.set_key(k.clone());
-    mutation.set_value(v.clone());
-    must_kv_prewrite(
-        &client,
-        ctx.clone(),
-        vec![mutation],
-        k.clone(),
-        prewrite_start_version,
-    );
-
-    // Commit
-    ts += 1;
-    let commit_version = ts;
-    must_kv_commit(
-        &client,
-        ctx.clone(),
-        vec![k.clone()],
-        prewrite_start_version,
-        commit_version,
-        commit_version,
-    );
+    write_and_read_key(&client, &ctx, &mut ts, k.clone(), v.clone());
 
     // Get
     ts += 1;
@@ -365,33 +339,7 @@ fn test_mvcc_rollback_and_cleanup() {
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
 
     let mut ts = 0;
-
-    // Prewrite
-    ts += 1;
-    let prewrite_start_version = ts;
-    let mut mutation = Mutation::default();
-    mutation.set_op(Op::Put);
-    mutation.set_key(k.clone());
-    mutation.set_value(v);
-    must_kv_prewrite(
-        &client,
-        ctx.clone(),
-        vec![mutation],
-        k.clone(),
-        prewrite_start_version,
-    );
-
-    // Commit
-    ts += 1;
-    let commit_version = ts;
-    must_kv_commit(
-        &client,
-        ctx.clone(),
-        vec![k.clone()],
-        prewrite_start_version,
-        commit_version,
-        commit_version,
-    );
+    write_and_read_key(&client, &ctx, &mut ts, k.clone(), v);
 
     // Prewrite puts some locks.
     ts += 1;
@@ -607,13 +555,15 @@ fn test_mvcc_flashback_failed_after_first_batch() {
     for i in 0..FLASHBACK_BATCH_SIZE * 2 {
         // Meet the constraints of the alphabetical order for test
         let k = format!("key@{}", from_u32(i as u32).unwrap()).into_bytes();
-        complete_data_commit(&client, &ctx, ts, k.clone(), b"value@0".to_vec());
+        write_and_read_key(&client, &ctx, &mut ts, k.clone(), b"value@0".to_vec());
+        ts -= 3;
     }
     ts += 3;
     let check_ts = ts;
     for i in 0..FLASHBACK_BATCH_SIZE * 2 {
         let k = format!("key@{}", from_u32(i as u32).unwrap()).into_bytes();
-        complete_data_commit(&client, &ctx, ts, k.clone(), b"value@1".to_vec());
+        write_and_read_key(&client, &ctx, &mut ts, k.clone(), b"value@1".to_vec());
+        ts -= 3;
     }
     ts += 3;
     // Flashback
@@ -716,34 +666,7 @@ fn test_mvcc_flashback() {
     for i in 0..2000 {
         let v = format!("value@{}", i).into_bytes();
         let k = format!("key@{}", i % 1000).into_bytes();
-        // Prewrite
-        ts += 1;
-        let prewrite_start_version = ts;
-        let mut mutation = Mutation::default();
-        mutation.set_op(Op::Put);
-        mutation.set_key(k.clone());
-        mutation.set_value(v.clone());
-        must_kv_prewrite(
-            &client,
-            ctx.clone(),
-            vec![mutation],
-            k.clone(),
-            prewrite_start_version,
-        );
-        // Commit
-        ts += 1;
-        let commit_version = ts;
-        must_kv_commit(
-            &client,
-            ctx.clone(),
-            vec![k.clone()],
-            prewrite_start_version,
-            commit_version,
-            commit_version,
-        );
-        // Get
-        ts += 1;
-        must_kv_read_equal(&client, ctx.clone(), k.clone(), v.clone(), ts)
+        write_and_read_key(&client, &ctx, &mut ts, k.clone(), v.clone());
     }
     // Prewrite to leave a lock.
     let k = b"key@1".to_vec();
@@ -837,15 +760,8 @@ fn test_mvcc_flashback_block_scheduling() {
 fn test_mvcc_flashback_unprepared() {
     let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
-    // Prewrite
-    let mut mutation = Mutation::default();
-    mutation.set_op(Op::Put);
-    mutation.set_key(k.clone());
-    mutation.set_value(v.clone());
-    must_kv_prewrite(&client, ctx.clone(), vec![mutation], k.clone(), 1);
-    // Commit
-    must_kv_commit(&client, ctx.clone(), vec![k.clone()], 1, 2, 2);
-    must_kv_read_equal(&client, ctx.clone(), k.clone(), v.clone(), 3);
+    let mut ts = 0;
+    write_and_read_key(&client, &ctx, &mut ts, k.clone(), v.clone());
     // Try to flashback without preparing first.
     let mut req = FlashbackToVersionRequest::default();
     req.set_context(ctx.clone());
