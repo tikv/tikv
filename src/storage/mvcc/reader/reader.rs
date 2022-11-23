@@ -2541,7 +2541,6 @@ pub mod tests {
         engine.commit(k, 1, 2);
 
         // Write enough ROLLBACK/LOCK recrods
-        engine.rollback(k, 5);
         for start_ts in (6..30).into_iter().step_by(2) {
             engine.lock(k, start_ts, start_ts + 1);
         }

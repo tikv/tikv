@@ -1625,7 +1625,8 @@ mod latest_kv_tests {
         for start_ts in (10..30).into_iter().step_by(2) {
             must_prewrite_lock(&mut engine, b"k1", b"k1", start_ts);
             must_commit(&mut engine, b"k1", start_ts, start_ts + 1);
-            must_rollback(&mut engine, b"k3", start_ts + 1, true);
+            must_prewrite_lock(&mut engine, b"k3", b"k1", start_ts);
+            must_commit(&mut engine, b"k3", start_ts, start_ts + 1);
         }
 
         must_prewrite_put(&mut engine, b"k1", b"v13", b"k1", 40);
@@ -1647,10 +1648,10 @@ mod latest_kv_tests {
         // k2  |     46    |   PUT    | v22
         // k2  |      6    |   PUT    | v21
         // k3  |     47    |   PUT    | v32
-        // k3  |     29    | ROLLBACK |
-        // k3  |     27    | ROLLBACK |
-        // k3  |    ...    | ROLLBACK |
-        // k3  |     11    | ROLLBACK |
+        // k3  |     29    |   LOCK   |
+        // k3  |     27    |   LOCK   |
+        // k3  |    ...    |   LOCK   |
+        // k3  |     11    |   LOCK   |
         // k3  |      7    |   PUT    | v31
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
