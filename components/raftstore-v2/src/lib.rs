@@ -22,7 +22,7 @@
 // using a standalone modules.
 
 #![allow(unused)]
-#![feature(let_else)]
+#![feature(let_chains)]
 #![feature(array_windows)]
 
 mod batch;

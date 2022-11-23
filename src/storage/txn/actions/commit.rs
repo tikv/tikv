@@ -91,7 +91,9 @@ pub fn commit<S: Snapshot>(
         WriteType::from_lock_type(lock.lock_type).unwrap(),
         reader.start_ts,
         lock.short_value.take(),
-    );
+    )
+    .set_last_change(lock.last_change_ts, lock.versions_to_last_change)
+    .set_txn_source(lock.txn_source);
 
     for ts in &lock.rollback_ts {
         if *ts == commit_ts {
@@ -116,7 +118,8 @@ pub mod tests {
     #[cfg(test)]
     use crate::storage::txn::tests::{
         must_acquire_pessimistic_lock_for_large_txn, must_prewrite_delete, must_prewrite_lock,
-        must_prewrite_put, must_prewrite_put_for_large_txn, must_prewrite_put_impl, must_rollback,
+        must_prewrite_put, must_prewrite_put_for_large_txn, must_prewrite_put_impl,
+        must_prewrite_put_with_txn_soucre, must_rollback,
     };
     #[cfg(test)]
     use crate::storage::{
@@ -319,5 +322,50 @@ pub mod tests {
         must_large_txn_locked(&mut engine, k, ts(60, 0), 100, ts(70, 1), false);
         must_err(&mut engine, k, ts(60, 0), ts(65, 0));
         must_succeed(&mut engine, k, ts(60, 0), ts(80, 0));
+    }
+
+    #[test]
+    fn test_inherit_last_change_info_from_lock() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+
+        let k = b"k";
+        must_prewrite_put(&mut engine, k, b"v1", k, 5);
+        must_succeed(&mut engine, k, 5, 10);
+
+        // WriteType is Lock
+        must_prewrite_lock(&mut engine, k, k, 15);
+        let lock = must_locked(&mut engine, k, 15);
+        assert_eq!(lock.last_change_ts, 10.into());
+        assert_eq!(lock.versions_to_last_change, 1);
+        must_succeed(&mut engine, k, 15, 20);
+        let write = must_written(&mut engine, k, 15, 20, WriteType::Lock);
+        assert_eq!(write.last_change_ts, 10.into());
+        assert_eq!(write.versions_to_last_change, 1);
+
+        // WriteType is Put
+        must_prewrite_put(&mut engine, k, b"v2", k, 25);
+        let lock = must_locked(&mut engine, k, 25);
+        assert!(lock.last_change_ts.is_zero());
+        assert_eq!(lock.versions_to_last_change, 0);
+        must_succeed(&mut engine, k, 25, 30);
+        let write = must_written(&mut engine, k, 25, 30, WriteType::Put);
+        assert!(write.last_change_ts.is_zero());
+        assert_eq!(write.versions_to_last_change, 0);
+    }
+
+    #[test]
+    fn test_2pc_with_txn_source() {
+        for source in [0x1, 0x85] {
+            let mut engine = TestEngineBuilder::new().build().unwrap();
+
+            let k = b"k";
+            // WriteType is Put
+            must_prewrite_put_with_txn_soucre(&mut engine, k, b"v2", k, 25, source);
+            let lock = must_locked(&mut engine, k, 25);
+            assert_eq!(lock.txn_source, source);
+            must_succeed(&mut engine, k, 25, 30);
+            let write = must_written(&mut engine, k, 25, 30, WriteType::Put);
+            assert_eq!(write.txn_source, source);
+        }
     }
 }

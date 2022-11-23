@@ -6,7 +6,6 @@
 //! [`RocksEngine`](RocksEngine) are used for testing only.
 
 #![feature(min_specialization)]
-#![feature(generic_associated_types)]
 
 #[macro_use(fail_point)]
 extern crate fail;
@@ -36,7 +35,7 @@ use engine_traits::{
     CF_DEFAULT, CF_LOCK,
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
-use futures::prelude::*;
+use futures::{future::BoxFuture, prelude::*};
 use into_other::IntoOther;
 use kvproto::{
     errorpb::Error as ErrorHeader,
@@ -348,6 +347,18 @@ pub trait Engine: Send + Clone + 'static {
     // Some engines have a `TxnExtraScheduler`. This method is to send the extra
     // to the scheduler.
     fn schedule_txn_extra(&self, _txn_extra: TxnExtra) {}
+
+    /// Mark the start of flashback.
+    // It's an infrequent API, use trait object for simplicity.
+    fn start_flashback(&self, _ctx: &Context) -> BoxFuture<'static, Result<()>> {
+        Box::pin(futures::future::ready(Ok(())))
+    }
+
+    /// Mark the end of flashback.
+    // It's an infrequent API, use trait object for simplicity.
+    fn end_flashback(&self, _ctx: &Context) -> BoxFuture<'static, Result<()>> {
+        Box::pin(futures::future::ready(Ok(())))
+    }
 }
 
 /// A Snapshot is a consistent view of the underlying engine at a given point in

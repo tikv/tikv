@@ -20,6 +20,7 @@ pub mod server;
 pub mod service;
 pub mod snap;
 pub mod status_server;
+pub mod tablet_snap;
 pub mod transport;
 pub mod ttl;
 

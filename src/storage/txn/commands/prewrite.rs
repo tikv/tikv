@@ -14,7 +14,10 @@ use kvproto::kvrpcpb::{
     PrewriteRequestPessimisticAction::{self, *},
 };
 use tikv_kv::SnapshotExt;
-use txn_types::{Key, Mutation, OldValue, OldValues, TimeStamp, TxnExtra, Write, WriteType};
+use txn_types::{
+    insert_old_value_if_resolved, Key, Mutation, OldValue, OldValues, TimeStamp, TxnExtra, Write,
+    WriteType,
+};
 
 use super::ReaderWithStats;
 use crate::storage::{
@@ -508,6 +511,7 @@ impl<K: PrewriteKind> Prewriter<K> {
             need_old_value: extra_op == ExtraOp::ReadOldValue,
             is_retry_request: self.ctx.is_retry_request,
             assertion_level: self.assertion_level,
+            txn_source: self.ctx.get_txn_source(),
         };
 
         let async_commit_pk = self
@@ -568,11 +572,13 @@ impl<K: PrewriteKind> Prewriter<K> {
                     if need_min_commit_ts && final_min_commit_ts < ts {
                         final_min_commit_ts = ts;
                     }
-                    if old_value.resolved() {
-                        let key = key.append_ts(txn.start_ts);
-                        self.old_values
-                            .insert(key, (old_value, Some(mutation_type)));
-                    }
+                    insert_old_value_if_resolved(
+                        &mut self.old_values,
+                        key,
+                        txn.start_ts,
+                        old_value,
+                        Some(mutation_type),
+                    );
                 }
                 Ok((..)) => {
                     // If it needs min_commit_ts but min_commit_ts is zero, the lock
@@ -680,7 +686,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                 to_be_write,
                 rows,
                 pr,
-                lock_info: None,
+                lock_info: vec![],
                 released_locks,
                 lock_guards,
                 response_policy: ResponsePolicy::OnApplied,
@@ -699,7 +705,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                 to_be_write: WriteData::default(),
                 rows,
                 pr,
-                lock_info: None,
+                lock_info: vec![],
                 released_locks: ReleasedLocks::new(),
                 lock_guards: vec![],
                 response_policy: ResponsePolicy::OnApplied,
@@ -848,7 +854,9 @@ fn handle_1pc_locks(txn: &mut MvccTxn, commit_ts: TimeStamp) -> ReleasedLocks {
             WriteType::from_lock_type(lock.lock_type).unwrap(),
             txn.start_ts,
             lock.short_value,
-        );
+        )
+        .set_last_change(lock.last_change_ts, lock.versions_to_last_change)
+        .set_txn_source(lock.txn_source);
         // Transactions committed with 1PC should be impossible to overwrite rollback
         // records.
         txn.put_write(key.clone(), commit_ts, write.as_ref().to_bytes());
@@ -1070,6 +1078,42 @@ mod tests {
         let d = perf.delta();
         assert_eq!(1, statistic.write.seek);
         assert_eq!(d.internal_delete_skipped_count, 0);
+    }
+
+    #[test]
+    fn test_prewrite_1pc_with_txn_source() {
+        use crate::storage::mvcc::tests::{must_get, must_get_commit_ts, must_unlocked};
+
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let cm = concurrency_manager::ConcurrencyManager::new(1.into());
+
+        let key = b"k";
+        let value = b"v";
+        let mutations = vec![Mutation::make_put(Key::from_raw(key), value.to_vec())];
+
+        let mut statistics = Statistics::default();
+        let mut ctx = Context::default();
+        ctx.set_txn_source(1);
+        let cmd = Prewrite::new(
+            mutations,
+            key.to_vec(),
+            TimeStamp::from(10),
+            0,
+            false,
+            0,
+            TimeStamp::default(),
+            TimeStamp::from(15),
+            None,
+            true,
+            AssertionLevel::Off,
+            ctx,
+        );
+        prewrite_command(&mut engine, cm, &mut statistics, cmd).unwrap();
+
+        must_unlocked(&mut engine, key);
+        must_get(&mut engine, key, 12, value);
+        must_get_commit_ts(&mut engine, key, 10, 11);
+        must_get_txn_source(&mut engine, key, 11, 1);
     }
 
     #[test]
@@ -2504,5 +2548,188 @@ mod tests {
         // It should return the real commit TS as the min_commit_ts in the result.
         assert_eq!(res.min_commit_ts, 18.into(), "{:?}", res);
         must_unlocked(&mut engine, b"k2");
+    }
+
+    #[test]
+    fn test_1pc_calculate_last_change_ts() {
+        use pd_client::FeatureGate;
+
+        use crate::storage::txn::sched_pool::set_tls_feature_gate;
+
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let cm = concurrency_manager::ConcurrencyManager::new(1.into());
+
+        let key = b"k";
+        let value = b"v";
+        must_prewrite_put(&mut engine, key, value, key, 10);
+        must_commit(&mut engine, key, 10, 20);
+
+        // 1PC write a new LOCK
+        let mutations = vec![Mutation::make_lock(Key::from_raw(key))];
+        let mut statistics = Statistics::default();
+        let res = prewrite_with_cm(
+            &mut engine,
+            cm.clone(),
+            &mut statistics,
+            mutations.clone(),
+            key.to_vec(),
+            30,
+            Some(40),
+        )
+        .unwrap();
+        must_unlocked(&mut engine, key);
+        let write = must_written(&mut engine, key, 30, res.one_pc_commit_ts, WriteType::Lock);
+        assert_eq!(write.last_change_ts, 20.into());
+        assert_eq!(write.versions_to_last_change, 1);
+
+        // 1PC write another LOCK
+        let res = prewrite_with_cm(
+            &mut engine,
+            cm.clone(),
+            &mut statistics,
+            mutations,
+            key.to_vec(),
+            50,
+            Some(60),
+        )
+        .unwrap();
+        must_unlocked(&mut engine, key);
+        let write = must_written(&mut engine, key, 50, res.one_pc_commit_ts, WriteType::Lock);
+        assert_eq!(write.last_change_ts, 20.into());
+        assert_eq!(write.versions_to_last_change, 2);
+
+        // 1PC write a PUT
+        let mutations = vec![Mutation::make_put(Key::from_raw(key), b"v2".to_vec())];
+        let res = prewrite_with_cm(
+            &mut engine,
+            cm.clone(),
+            &mut statistics,
+            mutations,
+            key.to_vec(),
+            70,
+            Some(80),
+        )
+        .unwrap();
+        must_unlocked(&mut engine, key);
+        let write = must_written(&mut engine, key, 70, res.one_pc_commit_ts, WriteType::Put);
+        assert_eq!(write.last_change_ts, TimeStamp::zero());
+        assert_eq!(write.versions_to_last_change, 0);
+
+        // TiKV 6.4 should not have last_change_ts.
+        let feature_gate = FeatureGate::default();
+        feature_gate.set_version("6.4.0").unwrap();
+        set_tls_feature_gate(feature_gate);
+        let mutations = vec![Mutation::make_lock(Key::from_raw(key))];
+        let res = prewrite_with_cm(
+            &mut engine,
+            cm,
+            &mut statistics,
+            mutations,
+            key.to_vec(),
+            80,
+            Some(90),
+        )
+        .unwrap();
+        must_unlocked(&mut engine, key);
+        let write = must_written(&mut engine, key, 80, res.one_pc_commit_ts, WriteType::Lock);
+        assert_eq!(write.last_change_ts, TimeStamp::zero());
+        assert_eq!(write.versions_to_last_change, 0);
+    }
+
+    #[test]
+    fn test_pessimistic_1pc_calculate_last_change_ts() {
+        use pd_client::FeatureGate;
+
+        use crate::storage::txn::sched_pool::set_tls_feature_gate;
+
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let cm = concurrency_manager::ConcurrencyManager::new(1.into());
+
+        let key = b"k";
+        let value = b"v";
+        must_prewrite_put(&mut engine, key, value, key, 10);
+        must_commit(&mut engine, key, 10, 20);
+
+        // Pessimistic 1PC write a new LOCK
+        must_acquire_pessimistic_lock(&mut engine, key, key, 30, 30);
+        let mutations = vec![(Mutation::make_lock(Key::from_raw(key)), DoPessimisticCheck)];
+        let mut statistics = Statistics::default();
+        let res = pessimistic_prewrite_with_cm(
+            &mut engine,
+            cm.clone(),
+            &mut statistics,
+            mutations.clone(),
+            key.to_vec(),
+            30,
+            30,
+            Some(40),
+        )
+        .unwrap();
+        must_unlocked(&mut engine, key);
+        let write = must_written(&mut engine, key, 30, res.one_pc_commit_ts, WriteType::Lock);
+        assert_eq!(write.last_change_ts, 20.into());
+        assert_eq!(write.versions_to_last_change, 1);
+
+        // Pessimistic 1PC write another LOCK
+        must_acquire_pessimistic_lock(&mut engine, key, key, 50, 50);
+        let res = pessimistic_prewrite_with_cm(
+            &mut engine,
+            cm.clone(),
+            &mut statistics,
+            mutations,
+            key.to_vec(),
+            50,
+            50,
+            Some(60),
+        )
+        .unwrap();
+        must_unlocked(&mut engine, key);
+        let write = must_written(&mut engine, key, 50, res.one_pc_commit_ts, WriteType::Lock);
+        assert_eq!(write.last_change_ts, 20.into());
+        assert_eq!(write.versions_to_last_change, 2);
+
+        // Pessimistic 1PC write a PUT
+        must_acquire_pessimistic_lock(&mut engine, key, key, 70, 70);
+        let mutations = vec![(
+            Mutation::make_put(Key::from_raw(key), b"v2".to_vec()),
+            DoPessimisticCheck,
+        )];
+        let res = pessimistic_prewrite_with_cm(
+            &mut engine,
+            cm.clone(),
+            &mut statistics,
+            mutations,
+            key.to_vec(),
+            70,
+            70,
+            Some(80),
+        )
+        .unwrap();
+        must_unlocked(&mut engine, key);
+        let write = must_written(&mut engine, key, 70, res.one_pc_commit_ts, WriteType::Put);
+        assert_eq!(write.last_change_ts, TimeStamp::zero());
+        assert_eq!(write.versions_to_last_change, 0);
+
+        // TiKV 6.4 should not have last_change_ts.
+        let feature_gate = FeatureGate::default();
+        feature_gate.set_version("6.4.0").unwrap();
+        set_tls_feature_gate(feature_gate);
+        must_acquire_pessimistic_lock(&mut engine, key, key, 80, 80);
+        let mutations = vec![(Mutation::make_lock(Key::from_raw(key)), DoPessimisticCheck)];
+        let res = pessimistic_prewrite_with_cm(
+            &mut engine,
+            cm,
+            &mut statistics,
+            mutations,
+            key.to_vec(),
+            80,
+            80,
+            Some(90),
+        )
+        .unwrap();
+        must_unlocked(&mut engine, key);
+        let write = must_written(&mut engine, key, 80, res.one_pc_commit_ts, WriteType::Lock);
+        assert_eq!(write.last_change_ts, TimeStamp::zero());
+        assert_eq!(write.versions_to_last_change, 0);
     }
 }

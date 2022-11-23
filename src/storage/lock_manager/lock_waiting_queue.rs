@@ -93,6 +93,9 @@ pub struct LockWaitEntry {
     pub key: Key,
     pub lock_hash: u64,
     pub parameters: PessimisticLockParameters,
+    // `parameters` provides parameter for a request, but `should_not_exist` is specified key-wise.
+    // Put it in a separated field.
+    pub should_not_exist: bool,
     pub lock_wait_token: LockWaitToken,
     pub legacy_wake_up_index: Option<usize>,
     pub key_cb: Option<SyncWrapper<PessimisticLockKeyCallback>>,
@@ -687,6 +690,7 @@ mod tests {
                 min_commit_ts: 0.into(),
                 check_existence: false,
                 is_first_lock: false,
+                lock_only_if_exists: false,
                 allow_lock_with_conflict: false,
             };
 
@@ -697,6 +701,7 @@ mod tests {
                 key,
                 lock_hash,
                 parameters,
+                should_not_exist: false,
                 lock_wait_token: token,
                 legacy_wake_up_index: None,
                 key_cb: Some(SyncWrapper::new(Box::new(move |res| tx.send(res).unwrap()))),
