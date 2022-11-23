@@ -509,13 +509,13 @@ where
                     );
 
                     let buff = importer.read_from_kv_file(
-                        &meta,
+                        meta,
                         &rules[i],
                         ext_storage.clone(),
                         req.get_storage_backend(),
                         &limiter,
                     )?;
-                    defer!({ importer.dec_kvfile_refcnt(&meta) });
+                    defer!({ importer.dec_kvfile_refcnt(meta) });
                     let r: Option<Range> = importer.do_apply_kv_file(
                         meta.get_start_key(),
                         meta.get_end_key(),

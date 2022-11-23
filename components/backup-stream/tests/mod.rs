@@ -476,7 +476,7 @@ impl Suite {
                     decoder.close().await.unwrap();
                     let content = decoder.into_inner();
 
-                    let mut iter = EventIterator::new(content);
+                    let mut iter = EventIterator::new(&content);
                     loop {
                         if !iter.valid() {
                             break;

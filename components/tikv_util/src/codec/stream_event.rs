@@ -26,7 +26,7 @@ pub struct EventIterator<'a> {
 }
 
 impl EventIterator<'_> {
-    pub fn new(buf: &[u8]) -> EventIterator {
+    pub fn new(buf: &[u8]) -> EventIterator<'_> {
         EventIterator {
             buf,
             offset: 0,
@@ -141,7 +141,7 @@ mod tests {
             vals.push(val);
         }
 
-        let mut iter = EventIterator::new(event);
+        let mut iter = EventIterator::new(&event);
 
         let mut index = 0_usize;
         loop {

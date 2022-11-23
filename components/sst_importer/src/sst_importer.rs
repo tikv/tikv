@@ -322,7 +322,7 @@ impl SstImporter {
 
         self.file_locks.retain(|_, (buff, refcnt, start)| {
             let need_retain =
-                *refcnt > 0 as u64 || start.saturating_elapsed() < Duration::from_secs(60);
+                *refcnt > 0_u64 || start.saturating_elapsed() < Duration::from_secs(60);
             if need_retain {
                 retain_size += buff.len();
             } else {
@@ -342,7 +342,7 @@ impl SstImporter {
 
         self.file_locks.retain(|filename, (_, refcnt, start)| {
             let need_retain =
-                *refcnt > 0 as u64 || start.saturating_elapsed() < Duration::from_secs(600);
+                *refcnt > 0_u64 || start.saturating_elapsed() < Duration::from_secs(600);
             if !need_retain {
                 files.push(filename.clone());
             } else {
@@ -353,12 +353,12 @@ impl SstImporter {
 
         let shrint_file_cnt = files.len();
         info!("shrink space by tick"; "shrink files count" => shrint_file_cnt, "retain files count" => retain_cnt);
+
         for f in files {
             let path = self.dir.get_import_path(&f);
-            if path.is_ok() {
-                let save_path = path.unwrap().save;
-                if let Err(e) = file_system::remove_file(save_path.clone()) {
-                    info!("failed to remove file"; "filename" => ?save_path, "error" => ?e);
+            if let Ok(import_path) = path {
+                if let Err(e) = file_system::remove_file(import_path.save.clone()) {
+                    info!("failed to remove file"; "filename" => ?import_path.save, "error" => ?e);
                 }
             }
         }
@@ -368,7 +368,7 @@ impl SstImporter {
     // If mem_limit is 0, which represent download kv-file when import.
     // Or read kv-file into buffer directly.
     pub fn import_support_download(&self) -> bool {
-        return self.mem_limit == ReadableSize(0);
+        self.mem_limit == ReadableSize(0)
     }
 
     fn inc_mem_and_check(&self, meta: &KvMeta) -> bool {
@@ -378,9 +378,10 @@ impl SstImporter {
         // If the memory is limited, roll backup the mem_use and return false.
         if old + size > self.mem_limit.0 {
             self.mem_use.fetch_sub(size, Ordering::Relaxed);
-            return false;
+            false
+        } else {
+            true
         }
-        return true;
     }
 
     fn dec_mem(&self, size: u64) {
@@ -539,7 +540,7 @@ impl SstImporter {
     ) -> Result<Arc<Vec<u8>>> {
         if self.import_support_download() {
             let tmp_file = self.do_download_kv_file(meta, backend, speed_limiter)?;
-            let file = File::open(&tmp_file)?;
+            let file = File::open(tmp_file)?;
             let mut reader = BufReader::new(file);
             let mut buffer = Vec::new();
             reader.read_to_end(&mut buffer)?;
@@ -572,7 +573,7 @@ impl SstImporter {
 
         let mut lock =
             self.file_locks
-                .entry(dst_name.clone())
+                .entry(dst_name)
                 .or_insert((Arc::default(), 0, Instant::now()));
 
         if path.save.exists() {
@@ -1601,7 +1602,7 @@ mod tests {
         let importer = SstImporter::new(
             &Config::default(),
             import_dir,
-            Some(key_manager.clone()),
+            Some(key_manager),
             ApiVersion::V1,
         )
         .unwrap();
@@ -1650,7 +1651,7 @@ mod tests {
         let importer = SstImporter::new(
             &Config::default(),
             import_dir,
-            Some(key_manager.clone()),
+            Some(key_manager),
             ApiVersion::V1,
         )
         .unwrap();
@@ -1714,7 +1715,7 @@ mod tests {
             ..Default::default()
         };
         let importer =
-            SstImporter::new(&cfg, import_dir, Some(key_manager.clone()), ApiVersion::V1).unwrap();
+            SstImporter::new(&cfg, import_dir, Some(key_manager), ApiVersion::V1).unwrap();
         let rewrite_rule = &new_rewrite_rule(b"", b"", 12345);
         let ext_storage = {
             let inner = importer.create_external_storage(&backend, false).unwrap();
