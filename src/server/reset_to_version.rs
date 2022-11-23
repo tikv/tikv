@@ -213,38 +213,12 @@ impl ResetToVersionManager {
         let mut worker = ResetToVersionWorker::new(write_iter, lock_iter, ts, self.state.clone());
         let mut wb = self.engine.write_batch();
         let props = tikv_util::thread_group::current_properties();
-<<<<<<< HEAD
-        if self.worker_handle.borrow().is_some() {
-            warn!("A reset-to-version process is already in progress! Wait until it finish first.");
-            self.wait();
-        }
-        *self.worker_handle.borrow_mut() = Some(std::thread::Builder::new()
-            .name("reset_to_version".to_string())
-            .spawn(move || {
-                tikv_util::thread_group::set_properties(props);
-                tikv_alloc::add_thread_memory_accessor();
-
-                while worker.process_next_batch(BATCH_SIZE, &mut wb).expect("reset_to_version failed when removing invalid writes") {
-                }
-                *worker.state.lock()
-                        .expect("failed to lock `ResetToVersionWorker::state` in `ResetToVersionWorker::process_next_batch`")
-                    = ResetToVersionState::RemovingLock { scanned: 0 };
-                while worker.process_next_batch_lock(BATCH_SIZE, &mut wb).expect("reset_to_version failed when removing invalid locks") {
-                }
-                *worker.state.lock()
-                        .expect("failed to lock `ResetToVersionWorker::state` in `ResetToVersionWorker::process_next_batch_lock`")
-                    = ResetToVersionState::Done;
-
-                tikv_alloc::remove_thread_memory_accessor();
-            })
-            .expect("failed to spawn reset_to_version thread"));
-=======
         self.wait();
 
         *self.worker_handle.borrow_mut() = Some(
             std::thread::Builder::new()
                 .name("reset_to_version".to_string())
-                .spawn_wrapper(move || {
+                .spawn(move || {
                     tikv_util::thread_group::set_properties(props);
                     tikv_alloc::add_thread_memory_accessor();
 
@@ -265,7 +239,6 @@ impl ResetToVersionManager {
                 })
                 .expect("failed to spawn reset_to_version thread"),
         );
->>>>>>> fd197f0831 (server: wait for reset-to-version task completion (#13830))
     }
 
     /// Current process state.
