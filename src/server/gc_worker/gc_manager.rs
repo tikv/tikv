@@ -653,7 +653,6 @@ mod tests {
             } => callback,
             GcTask::GcKeys { .. } => unreachable!(),
             GcTask::RawGcKeys { .. } => unreachable!(),
-            GcTask::PhysicalScanLock { .. } => unreachable!(),
             GcTask::OrphanVersions { .. } => unreachable!(),
             GcTask::Validate(_) => unreachable!(),
         };

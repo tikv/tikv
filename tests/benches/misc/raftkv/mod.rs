@@ -6,6 +6,7 @@ use collections::HashSet;
 use crossbeam::channel::TrySendError;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngine, ALL_CFS, CF_DEFAULT};
+use futures::future::FutureExt;
 use kvproto::{
     kvrpcpb::{Context, ExtraOp as TxnExtraOp},
     metapb::Region,
@@ -191,14 +192,15 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(leader);
     b.iter(|| {
-        let on_finished: EngineCallback<RegionSnapshot<RocksSnapshot>> = Box::new(move |results| {
-            let _ = test::black_box(results);
-        });
         let snap_ctx = SnapContext {
             pb_ctx: &ctx,
             ..Default::default()
         };
-        kv.async_snapshot(snap_ctx, on_finished).unwrap();
+        let f = kv.async_snapshot(snap_ctx);
+        let res = f.map(|res| {
+            let _ = test::black_box(res);
+        });
+        let _ = test::black_box(res);
     });
 }
 
