@@ -386,7 +386,8 @@ impl<S: EngineSnapshot> MvccReader<S> {
                         WriteType::Lock | WriteType::Rollback => {
                             if write.versions_to_last_change > 0 && write.last_change_ts.is_zero() {
                                 return Ok(None);
-                            } else if write.versions_to_last_change < SEEK_BOUND {
+                            }
+                            if write.versions_to_last_change < SEEK_BOUND {
                                 ts = commit_ts.prev();
                             } else {
                                 let commit_ts = write.last_change_ts;

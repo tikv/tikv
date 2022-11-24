@@ -474,7 +474,8 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
                 WriteType::Lock | WriteType::Rollback => {
                     if write.versions_to_last_change > 0 && write.last_change_ts.is_zero() {
                         break None;
-                    } else if write.versions_to_last_change < SEEK_BOUND {
+                    }
+                    if write.versions_to_last_change < SEEK_BOUND {
                         // Continue iterate next `write`.
                         cursors.write.next(&mut statistics.write);
                     } else {
