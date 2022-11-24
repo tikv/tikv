@@ -338,7 +338,7 @@ impl SstImporter {
 
     pub fn shrink_space_by_tick(&self) -> u64 {
         let mut files: Vec<String> = Vec::new();
-        let mut retain_cnt = 0;
+        let mut retain_cnt = 0_u32;
 
         self.file_locks.retain(|filename, (_, refcnt, start)| {
             let need_retain =
@@ -2645,5 +2645,32 @@ mod tests {
         };
         let check = importer.inc_mem_and_check(&meta);
         assert!(!check);
+    }
+
+    #[test]
+    fn test_dashmap_lock() {
+        let import_dir = tempfile::tempdir().unwrap();
+        let importer =
+            SstImporter::new(&Config::default(), import_dir, None, ApiVersion::V1).unwrap();
+        assert_eq!(importer.mem_use.load(Ordering::Relaxed), 0);
+
+        let key = "file1";
+        let value = (Arc::default(), 0, Instant::now());
+        let lock = importer.file_locks.entry(key.to_string()).or_insert(value);
+
+        // test locked by try_entry()
+        let lock2 = importer.file_locks.try_entry(key.to_string());
+        assert!(lock2.is_none());
+        let lock2 = importer.file_locks.try_get(key);
+        assert!(lock2.is_locked());
+
+        // test unlocked by entry()
+        drop(lock);
+        let _ = importer
+            .file_locks
+            .entry(key.to_string())
+            .and_modify(|v| v.1 += 1);
+        let v = importer.file_locks.get(key).unwrap();
+        assert_eq!(v.1, 1)
     }
 }
