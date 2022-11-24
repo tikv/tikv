@@ -925,9 +925,9 @@ pub fn flush_engine_iostall_properties(engine: &DB, name: &str) {
         }
     }
     for i in 0..stall_num {
-        STORE_ENGINE_WRITE_STALL_REASON_GAUGE_VEC
+        STORE_ENGINE_WRITE_STALL_REASON_HISTOGRAM_VEC
             .with_label_values(&[name, ROCKSDB_IOSTALL_TYPE[i]])
-            .set(counter[i]);
+            .observe(counter[i] as f64);
     }
 }
 
@@ -937,9 +937,9 @@ pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool
         // It is important to monitor each cf's size, especially the "raft" and "lock"
         // column families.
         let cf_used_size = crate::util::get_engine_cf_used_size(engine, handle);
-        STORE_ENGINE_SIZE_GAUGE_VEC
+        STORE_ENGINE_SIZE_HISTOGRAM_VEC
             .with_label_values(&[name, cf])
-            .set(cf_used_size as i64);
+            .observe(cf_used_size as f64);
 
         if !shared_block_cache {
             let block_cache_usage = engine.get_block_cache_usage_cf(handle);
@@ -957,34 +957,34 @@ pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool
         // Refer: https://github.com/facebook/rocksdb/wiki/Memory-usage-in-RocksDB
         // For index and filter blocks memory
         if let Some(readers_mem) = engine.get_property_int_cf(handle, ROCKSDB_TABLE_READERS_MEM) {
-            STORE_ENGINE_MEMORY_GAUGE_VEC
+            STORE_ENGINE_MEMORY_HISTOGRAM_VEC
                 .with_label_values(&[name, cf, "readers-mem"])
-                .set(readers_mem as i64);
+                .observe(readers_mem as f64);
         }
 
         // For memtable
         if let Some(mem_table) = engine.get_property_int_cf(handle, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES)
         {
-            STORE_ENGINE_MEMORY_GAUGE_VEC
+            STORE_ENGINE_MEMORY_HISTOGRAM_VEC
                 .with_label_values(&[name, cf, "mem-tables"])
-                .set(mem_table as i64);
+                .observe(mem_table as f64);
         }
 
         // TODO: add cache usage and pinned usage.
 
         if let Some(num_keys) = engine.get_property_int_cf(handle, ROCKSDB_ESTIMATE_NUM_KEYS) {
-            STORE_ENGINE_ESTIMATE_NUM_KEYS_VEC
+            STORE_ENGINE_ESTIMATE_NUM_KEYS_HISTOGRAM_VEC
                 .with_label_values(&[name, cf])
-                .set(num_keys as i64);
+                .observe(num_keys as f64);
         }
 
         // Pending compaction bytes
         if let Some(pending_compaction_bytes) =
             crate::util::get_cf_pending_compaction_bytes(engine, handle)
         {
-            STORE_ENGINE_PENDING_COMPACTION_BYTES_VEC
+            STORE_ENGINE_PENDING_COMPACTION_BYTES_HISTOGRAM_VEC
                 .with_label_values(&[name, cf])
-                .set(pending_compaction_bytes as i64);
+                .observe(pending_compaction_bytes as f64);
         }
 
         let opts = engine.get_options_cf(handle);
@@ -1000,114 +1000,114 @@ pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool
 
             // Num files at levels
             if let Some(v) = crate::util::get_cf_num_files_at_level(engine, handle, level) {
-                STORE_ENGINE_NUM_FILES_AT_LEVEL_VEC
+                STORE_ENGINE_NUM_FILES_AT_LEVEL_HISTOGRAM_VEC
                     .with_label_values(&[name, cf, &level.to_string()])
-                    .set(v as i64);
+                    .observe(v as f64);
             }
 
             // Titan Num blob files at levels
             if let Some(v) = crate::util::get_cf_num_blob_files_at_level(engine, handle, level) {
-                STORE_ENGINE_TITANDB_NUM_BLOB_FILES_AT_LEVEL_VEC
+                STORE_ENGINE_TITANDB_NUM_BLOB_FILES_AT_LEVEL_HISTOGRAM_VEC
                     .with_label_values(&[name, cf, &level.to_string()])
-                    .set(v as i64);
+                    .observe(v as f64);
             }
         }
 
         // Num immutable mem-table
         if let Some(v) = crate::util::get_cf_num_immutable_mem_table(engine, handle) {
-            STORE_ENGINE_NUM_IMMUTABLE_MEM_TABLE_VEC
+            STORE_ENGINE_NUM_IMMUTABLE_MEM_TABLE_HISTOGRAM_VEC
                 .with_label_values(&[name, cf])
-                .set(v as i64);
+                .observe(v as f64);
         }
 
         // Titan live blob size
         if let Some(v) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_LIVE_BLOB_SIZE) {
-            STORE_ENGINE_TITANDB_LIVE_BLOB_SIZE_VEC
+            STORE_ENGINE_TITANDB_LIVE_BLOB_SIZE_HISTOGRAM_VEC
                 .with_label_values(&[name, cf])
-                .set(v as i64);
+                .observe(v as f64);
         }
 
         // Titan num live blob file
         if let Some(v) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_NUM_LIVE_BLOB_FILE) {
-            STORE_ENGINE_TITANDB_NUM_LIVE_BLOB_FILE_VEC
+            STORE_ENGINE_TITANDB_NUM_LIVE_BLOB_FILE_HISTOGRAM_VEC
                 .with_label_values(&[name, cf])
-                .set(v as i64);
+                .observe(v as f64);
         }
 
         // Titan num obsolete blob file
         if let Some(v) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_NUM_OBSOLETE_BLOB_FILE)
         {
-            STORE_ENGINE_TITANDB_NUM_OBSOLETE_BLOB_FILE_VEC
+            STORE_ENGINE_TITANDB_NUM_OBSOLETE_BLOB_FILE_HISTOGRAM_VEC
                 .with_label_values(&[name, cf])
-                .set(v as i64);
+                .observe(v as f64);
         }
 
         // Titan live blob file size
         if let Some(v) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_LIVE_BLOB_FILE_SIZE) {
-            STORE_ENGINE_TITANDB_LIVE_BLOB_FILE_SIZE_VEC
+            STORE_ENGINE_TITANDB_LIVE_BLOB_FILE_SIZE_HISTOGRAM_VEC
                 .with_label_values(&[name, cf])
-                .set(v as i64);
+                .observe(v as f64);
         }
 
         // Titan obsolete blob file size
         if let Some(v) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_OBSOLETE_BLOB_FILE_SIZE)
         {
-            STORE_ENGINE_TITANDB_OBSOLETE_BLOB_FILE_SIZE_VEC
+            STORE_ENGINE_TITANDB_OBSOLETE_BLOB_FILE_SIZE_HISTOGRAM_VEC
                 .with_label_values(&[name, cf])
-                .set(v as i64);
+                .observe(v as f64);
         }
 
         // Titan blob file discardable ratio
         if let Some(v) =
             engine.get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE0_FILE)
         {
-            STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
+            STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_HISTOGRAM_VEC
                 .with_label_values(&[name, cf, "le0"])
-                .set(v as i64);
+                .observe(v as f64);
         }
         if let Some(v) =
             engine.get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE20_FILE)
         {
-            STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
+            STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_HISTOGRAM_VEC
                 .with_label_values(&[name, cf, "le20"])
-                .set(v as i64);
+                .observe(v as f64);
         }
         if let Some(v) =
             engine.get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE50_FILE)
         {
-            STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
+            STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_HISTOGRAM_VEC
                 .with_label_values(&[name, cf, "le50"])
-                .set(v as i64);
+                .observe(v as f64);
         }
         if let Some(v) =
             engine.get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE80_FILE)
         {
-            STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
+            STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_HISTOGRAM_VEC
                 .with_label_values(&[name, cf, "le80"])
-                .set(v as i64);
+                .observe(v as f64);
         }
         if let Some(v) =
             engine.get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE100_FILE)
         {
-            STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
+            STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_HISTOGRAM_VEC
                 .with_label_values(&[name, cf, "le100"])
-                .set(v as i64);
+                .observe(v as f64);
         }
     }
 
     // For snapshot
     if let Some(n) = engine.get_property_int(ROCKSDB_NUM_SNAPSHOTS) {
-        STORE_ENGINE_NUM_SNAPSHOTS_GAUGE_VEC
+        STORE_ENGINE_NUM_SNAPSHOTS_HISTOGRAM_VEC
             .with_label_values(&[name])
-            .set(n as i64);
+            .observe(n as f64);
     }
     if let Some(t) = engine.get_property_int(ROCKSDB_OLDEST_SNAPSHOT_TIME) {
         // RocksDB returns 0 if no snapshots.
         let now = time::get_time().sec as u64;
         let d = if t > 0 && now > t { now - t } else { 0 };
-        STORE_ENGINE_OLDEST_SNAPSHOT_DURATION_GAUGE_VEC
+        STORE_ENGINE_OLDEST_SNAPSHOT_DURATION_HISTOGRAM_VEC
             .with_label_values(&[name])
-            .set(d as i64);
+            .observe(d as f64);
     }
 
     if shared_block_cache {
@@ -1124,11 +1124,12 @@ pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool
 // For property metrics
 #[rustfmt::skip]
 lazy_static! {
-    pub static ref STORE_ENGINE_SIZE_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
+    pub static ref STORE_ENGINE_SIZE_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_size_bytes",
         "Sizes of each column families",
         &["db", "type"]
     ).unwrap();
+    // TODO: use histogram for cache as well. Not really required because cache is usually shared.
     pub static ref STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_engine_block_cache_size_bytes",
         "Usage of each column families' block cache",
@@ -1139,77 +1140,78 @@ lazy_static! {
         "Usage of each column families' blob cache",
         &["db", "cf"]
     ).unwrap();
-    pub static ref STORE_ENGINE_MEMORY_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
+    pub static ref STORE_ENGINE_MEMORY_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_memory_bytes",
         "Sizes of each column families",
         &["db", "cf", "type"]
     ).unwrap();
-    pub static ref STORE_ENGINE_ESTIMATE_NUM_KEYS_VEC: IntGaugeVec = register_int_gauge_vec!(
+    pub static ref STORE_ENGINE_ESTIMATE_NUM_KEYS_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_estimate_num_keys",
         "Estimate num keys of each column families",
         &["db", "cf"]
     ).unwrap();
-    pub static ref STORE_ENGINE_PENDING_COMPACTION_BYTES_VEC: IntGaugeVec = register_int_gauge_vec!(
+    pub static ref STORE_ENGINE_PENDING_COMPACTION_BYTES_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_pending_compaction_bytes",
         "Pending compaction bytes",
         &["db", "cf"]
     ).unwrap();
+    // TODO: aggregate based on size of each tablet.
     pub static ref STORE_ENGINE_COMPRESSION_RATIO_VEC: GaugeVec = register_gauge_vec!(
         "tikv_engine_compression_ratio",
         "Compression ratio at different levels",
         &["db", "cf", "level"]
     ).unwrap();
-    pub static ref STORE_ENGINE_NUM_FILES_AT_LEVEL_VEC: IntGaugeVec = register_int_gauge_vec!(
+    pub static ref STORE_ENGINE_NUM_FILES_AT_LEVEL_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_num_files_at_level",
         "Number of files at each level",
         &["db", "cf", "level"]
     ).unwrap();
-    pub static ref STORE_ENGINE_NUM_SNAPSHOTS_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
+    pub static ref STORE_ENGINE_NUM_SNAPSHOTS_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_num_snapshots",
         "Number of unreleased snapshots",
         &["db"]
     ).unwrap();
-    pub static ref STORE_ENGINE_OLDEST_SNAPSHOT_DURATION_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
+    pub static ref STORE_ENGINE_OLDEST_SNAPSHOT_DURATION_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_oldest_snapshot_duration",
         "Oldest unreleased snapshot duration in seconds",
         &["db"]
     ).unwrap();
-    pub static ref STORE_ENGINE_WRITE_STALL_REASON_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
+    pub static ref STORE_ENGINE_WRITE_STALL_REASON_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_write_stall_reason",
         "QPS of each reason which cause tikv write stall",
         &["db", "type"]
     ).unwrap();
-    pub static ref STORE_ENGINE_TITANDB_NUM_BLOB_FILES_AT_LEVEL_VEC: IntGaugeVec = register_int_gauge_vec!(
+    pub static ref STORE_ENGINE_TITANDB_NUM_BLOB_FILES_AT_LEVEL_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_titandb_num_blob_files_at_level",
         "Number of blob files at each level",
         &["db", "cf", "level"]
     ).unwrap();
-    pub static ref STORE_ENGINE_TITANDB_LIVE_BLOB_SIZE_VEC: IntGaugeVec = register_int_gauge_vec!(
+    pub static ref STORE_ENGINE_TITANDB_LIVE_BLOB_SIZE_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_titandb_live_blob_size",
         "Total titan blob value size referenced by LSM tree",
         &["db", "cf"]
     ).unwrap();
-    pub static ref STORE_ENGINE_TITANDB_NUM_LIVE_BLOB_FILE_VEC: IntGaugeVec = register_int_gauge_vec!(
+    pub static ref STORE_ENGINE_TITANDB_NUM_LIVE_BLOB_FILE_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_titandb_num_live_blob_file",
         "Number of live blob file",
         &["db", "cf"]
     ).unwrap();
-    pub static ref STORE_ENGINE_TITANDB_NUM_OBSOLETE_BLOB_FILE_VEC: IntGaugeVec = register_int_gauge_vec!(
+    pub static ref STORE_ENGINE_TITANDB_NUM_OBSOLETE_BLOB_FILE_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_titandb_num_obsolete_blob_file",
         "Number of obsolete blob file",
         &["db", "cf"]
     ).unwrap();
-    pub static ref STORE_ENGINE_TITANDB_LIVE_BLOB_FILE_SIZE_VEC: IntGaugeVec = register_int_gauge_vec!(
+    pub static ref STORE_ENGINE_TITANDB_LIVE_BLOB_FILE_SIZE_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_titandb_live_blob_file_size",
         "Size of live blob file",
         &["db", "cf"]
     ).unwrap();
-    pub static ref STORE_ENGINE_TITANDB_OBSOLETE_BLOB_FILE_SIZE_VEC: IntGaugeVec = register_int_gauge_vec!(
+    pub static ref STORE_ENGINE_TITANDB_OBSOLETE_BLOB_FILE_SIZE_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_titandb_obsolete_blob_file_size",
         "Size of obsolete blob file",
         &["db", "cf"]
     ).unwrap();
-    pub static ref STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC: IntGaugeVec = register_int_gauge_vec!(
+    pub static ref STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_titandb_blob_file_discardable_ratio",
         "Size of obsolete blob file",
         &["db", "cf", "ratio"]
@@ -1355,7 +1357,7 @@ lazy_static! {
         "Number of engine events",
         &["db", "cf", "type"]
     ).unwrap();
-    pub static ref STORE_ENGINE_NUM_IMMUTABLE_MEM_TABLE_VEC: IntGaugeVec = register_int_gauge_vec!(
+    pub static ref STORE_ENGINE_NUM_IMMUTABLE_MEM_TABLE_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_num_immutable_mem_table",
         "Number of immutable mem-table",
         &["db", "cf"]

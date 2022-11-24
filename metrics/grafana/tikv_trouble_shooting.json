@@ -7030,7 +7030,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "avg(tikv_engine_num_files_at_level{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", db=\"kv\", level=\"0\"}) by (instance, cf)",
+              "expr": "avg(rate(tikv_engine_num_files_at_level_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", db=\"kv\", level=\"0\"}[1m])) by (instance, cf)",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "{{instance}} {{cf}}",
@@ -7126,7 +7126,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "avg(tikv_engine_num_immutable_mem_table{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", db=\"$db\"}) by (instance, cf)",
+              "expr": "avg(rate(tikv_engine_num_immutable_mem_table_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", db=\"$db\"}[1m])) by (instance, cf)",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "{{instance}} {{cf}}",
@@ -7222,7 +7222,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "tikv_engine_pending_compaction_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", db=\"$db\"}",
+              "expr": "sum(rate(tikv_engine_pending_compaction_bytes_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", db=\"$db\"}[1m]))",
               "format": "time_series",
               "instant": false,
               "intervalFactor": 1,

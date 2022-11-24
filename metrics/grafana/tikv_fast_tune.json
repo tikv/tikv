@@ -1795,7 +1795,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum(tikv_engine_pending_compaction_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", db=\"kv\"})",
+          "expr": "sum(rate(tikv_engine_pending_compaction_bytes_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", db=\"kv\"}[1m]))",
           "format": "time_series",
           "hide": false,
           "intervalFactor": 1,
@@ -1811,7 +1811,7 @@
           "refId": "A"
         },
         {
-          "expr": "sum(tikv_engine_pending_compaction_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", db=\"raft\"})",
+          "expr": "sum(rate(tikv_engine_pending_compaction_bytes_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", db=\"raft\"}[1m]))",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "pending-bytes-raft",
@@ -1933,7 +1933,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum(tikv_engine_pending_compaction_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", db=\"kv\"}) by (instance)",
+          "expr": "sum(rate(tikv_engine_pending_compaction_bytes_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", db=\"kv\"}[1m])) by (instance)",
           "format": "time_series",
           "hide": false,
           "intervalFactor": 1,
