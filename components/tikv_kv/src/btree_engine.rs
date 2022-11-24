@@ -14,6 +14,7 @@ use std::{
 use collections::HashMap;
 use engine_panic::PanicEngine;
 use engine_traits::{CfName, IterOptions, ReadOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use futures::Future;
 use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};
 
@@ -100,15 +101,11 @@ impl Engine for BTreeEngine {
         Ok(())
     }
 
+    type SnapshotRes = impl Future<Output = EngineResult<Self::Snap>> + Send;
     /// warning: It returns a fake snapshot whose content will be affected by
     /// the later modifies!
-    fn async_snapshot(
-        &mut self,
-        _ctx: SnapContext<'_>,
-        cb: EngineCallback<Self::Snap>,
-    ) -> EngineResult<()> {
-        cb(Ok(BTreeEngineSnapshot::new(self)));
-        Ok(())
+    fn async_snapshot(&mut self, _ctx: SnapContext<'_>) -> Self::SnapshotRes {
+        futures::future::ready(Ok(BTreeEngineSnapshot::new(self)))
     }
 }
 
