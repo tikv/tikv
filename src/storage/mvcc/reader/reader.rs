@@ -638,13 +638,18 @@ impl<S: EngineSnapshot> MvccReader<S> {
                             break;
                         }
                         WriteType::Lock | WriteType::Rollback => {
-                            // We should find the latest visible version after it.
+                            // Only return the PUT/DELETE write record.
+                            write = None;
+                            // Reach the end.
+                            if !cursor.valid()? {
+                                break;
+                            }
+                            // Try to find the latest visible version before it.
                             let key =
                                 Key::from_encoded_slice(cursor.key(&mut self.statistics.write));
                             // Could not find the visible version, current cursor is on the next
-                            // key, so we set both `write` and `cur_key` to `None`.
+                            // key, so we set `cur_key` to `None`.
                             if key.truncate_ts()? != user_key {
-                                write = None;
                                 cur_key = None;
                                 break;
                             }
@@ -1836,6 +1841,13 @@ pub mod tests {
             8,
         );
         engine.commit(b"k3", 8, 9);
+        // Prewrite and rollback k4.
+        engine.prewrite(
+            Mutation::make_put(Key::from_raw(b"k4"), b"v4@1".to_vec()),
+            b"k4",
+            10,
+        );
+        engine.rollback(b"k4", 10);
 
         // Current MVCC keys in `CF_WRITE` should be:
         // PUT      k0 -> v0@999
@@ -1847,6 +1859,7 @@ pub mod tests {
         // PUT      k3 -> v3@8
         // ROLLBACK k3 -> v3@7
         // PUT      k3 -> v3@5
+        // ROLLBACK k4 -> v4@1
 
         struct Case {
             start_key: Option<Key>,
@@ -2083,14 +2096,24 @@ pub mod tests {
                 start_key: None,
                 end_key: None,
                 version: Some(0),
-                limit: 5,
+                limit: 6,
                 expect_res: vec![
                     (Key::from_raw(b"k0"), None),
                     (Key::from_raw(b"k1"), None),
                     (Key::from_raw(b"k2"), None),
                     (Key::from_raw(b"k3"), None),
+                    (Key::from_raw(b"k4"), None),
                 ],
                 expect_is_remain: false,
+            },
+            // Test the invisible record.
+            Case {
+                start_key: Some(Key::from_raw(b"k4")),
+                end_key: None,
+                version: Some(10),
+                limit: 1,
+                expect_res: vec![(Key::from_raw(b"k4"), None)],
+                expect_is_remain: true,
             },
         ];
 
