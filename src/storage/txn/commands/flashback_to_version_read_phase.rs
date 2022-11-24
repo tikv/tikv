@@ -24,7 +24,7 @@ pub enum FlashbackToVersionState {
     },
     ScanWrite {
         next_write_key: Key,
-        key_old_writes: Vec<(Key, Option<Write>)>,
+        key_writes: Vec<(Key, Option<Write>)>,
     },
 }
 
@@ -110,7 +110,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     read_again = true;
                     FlashbackToVersionState::ScanWrite {
                         next_write_key: self.start_key.clone(),
-                        key_old_writes: Vec::new(),
+                        key_writes: Vec::new(),
                     }
                 } else {
                     assert!(!key_locks.is_empty());
@@ -128,7 +128,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                 }
             }
             FlashbackToVersionState::ScanWrite { next_write_key, .. } => {
-                let mut key_old_writes = flashback_to_version_read_write(
+                let mut key_writes = flashback_to_version_read_write(
                     &mut reader,
                     next_write_key,
                     &self.end_key,
@@ -136,18 +136,18 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     self.commit_ts,
                     statistics,
                 )?;
-                if key_old_writes.is_empty() {
+                if key_writes.is_empty() {
                     // No more writes to flashback, just return.
                     return Ok(ProcessResult::Res);
                 }
-                tls_collect_keyread_histogram_vec(tag, key_old_writes.len() as f64);
+                tls_collect_keyread_histogram_vec(tag, key_writes.len() as f64);
                 FlashbackToVersionState::ScanWrite {
-                    next_write_key: if key_old_writes.len() > 1 {
-                        key_old_writes.pop().map(|(key, _)| key).unwrap()
+                    next_write_key: if key_writes.len() > 1 {
+                        key_writes.pop().map(|(key, _)| key).unwrap()
                     } else {
-                        key_old_writes.last().map(|(key, _)| key.clone()).unwrap()
+                        key_writes.last().map(|(key, _)| key.clone()).unwrap()
                     },
-                    key_old_writes,
+                    key_writes,
                 }
             }
         };

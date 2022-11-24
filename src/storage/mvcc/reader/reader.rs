@@ -1,6 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use std::ops::Bound;
+
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::{
     errorpb::{self, EpochNotMatch, StaleCommand},
@@ -127,6 +129,8 @@ pub struct MvccReader<S: EngineSnapshot> {
     lower_bound: Option<Key>,
     upper_bound: Option<Key>,
 
+    hint_min_ts: Option<Bound<TimeStamp>>,
+
     /// None means following operations are performed on a single user key,
     /// i.e., different versions of the same key. It can use prefix seek to
     /// speed up reads from the write-cf.
@@ -154,6 +158,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             write_cursor: None,
             lower_bound: None,
             upper_bound: None,
+            hint_min_ts: None,
             scan_mode,
             current_key: None,
             fill_cache,
@@ -171,6 +176,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             write_cursor: None,
             lower_bound: None,
             upper_bound: None,
+            hint_min_ts: None,
             scan_mode,
             current_key: None,
             fill_cache: !ctx.get_not_fill_cache(),
@@ -470,6 +476,8 @@ impl<S: EngineSnapshot> MvccReader<S> {
                 .prefix_seek(self.scan_mode.is_none())
                 .scan_mode(self.get_scan_mode(true))
                 .range(self.lower_bound.clone(), self.upper_bound.clone())
+                // `hint_min_ts` is only meaningful when it's the `commit_ts`.
+                .hint_min_ts(self.hint_min_ts)
                 .build()?;
             self.write_cursor = Some(cursor);
         }
@@ -776,6 +784,10 @@ impl<S: EngineSnapshot> MvccReader<S> {
     pub fn set_range(&mut self, lower: Option<Key>, upper: Option<Key>) {
         self.lower_bound = lower;
         self.upper_bound = upper;
+    }
+
+    pub fn set_hint_min_ts(&mut self, ts_bound: Option<Bound<TimeStamp>>) {
+        self.hint_min_ts = ts_bound;
     }
 }
 

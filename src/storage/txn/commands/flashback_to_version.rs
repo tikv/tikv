@@ -45,8 +45,8 @@ impl CommandExt for FlashbackToVersion {
             FlashbackToVersionState::ScanLock { key_locks, .. } => {
                 latch::Lock::new(key_locks.iter().map(|(key, _)| key))
             }
-            FlashbackToVersionState::ScanWrite { key_old_writes, .. } => {
-                latch::Lock::new(key_old_writes.iter().map(|(key, _)| key))
+            FlashbackToVersionState::ScanWrite { key_writes, .. } => {
+                latch::Lock::new(key_writes.iter().map(|(key, _)| key))
             }
         }
     }
@@ -57,7 +57,7 @@ impl CommandExt for FlashbackToVersion {
                 .iter()
                 .map(|(key, _)| key.as_encoded().len())
                 .sum(),
-            FlashbackToVersionState::ScanWrite { key_old_writes, .. } => key_old_writes
+            FlashbackToVersionState::ScanWrite { key_writes, .. } => key_writes
                 .iter()
                 .map(|(key, _)| key.as_encoded().len())
                 .sum(),
@@ -86,12 +86,13 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
             }
             FlashbackToVersionState::ScanWrite {
                 ref mut next_write_key,
-                ref mut key_old_writes,
+                ref mut key_writes,
             } => {
                 if let Some(new_next_write_key) = flashback_to_version_write(
                     &mut txn,
                     &mut reader,
-                    mem::take(key_old_writes),
+                    mem::take(key_writes),
+                    self.version,
                     self.start_ts,
                     self.commit_ts,
                 )? {
