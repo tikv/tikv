@@ -4282,22 +4282,27 @@ name = "raftstore-v2"
 version = "0.1.0"
 dependencies = [
  "batch-system",
+ "causal_ts",
  "collections",
+ "concurrency_manager",
  "crossbeam",
  "engine_test",
  "engine_traits",
  "error_code",
  "fail",
  "file_system",
+ "fs2",
  "futures 0.3.15",
  "keys",
  "kvproto",
  "log_wrappers",
  "pd_client",
+ "prometheus",
  "protobuf",
  "raft",
  "raft-proto",
  "raftstore",
+ "resource_metering",
  "slog",
  "slog-global",
  "smallvec",
@@ -4308,6 +4313,7 @@ dependencies = [
  "time",
  "tracker",
  "txn_types",
+ "yatp",
 ]
 
 [[package]]
