@@ -64,23 +64,27 @@ impl SubscriptionManager {
                 }
                 SubscriptionOp::Emit(events) => {
                     let mut canceled = vec![];
-                    'outer: for (id, sub) in &mut self.subscribers {
-                        for es in events.chunks(1024) {
-                            let mut resp = SubscribeFlushEventResponse::new();
-                            resp.set_events(es.to_vec().into());
-                            let r = sub.feed((resp, WriteFlags::default())).await;
-                            match r {
-                                Err(grpcio::Error::RemoteStopped) => {
-                                    canceled.push(*id);
-                                    break 'outer;
-                                }
-                                Err(err) => {
-                                    Error::from(err).report("sending subscription");
-                                }
-                                _ => {}
+                    for (id, sub) in &mut self.subscribers {
+                        let send_all = async {
+                            for es in events.chunks(1024) {
+                                let mut resp = SubscribeFlushEventResponse::new();
+                                resp.set_events(es.to_vec().into());
+                                sub.feed((resp, WriteFlags::default())).await?;
                             }
+                            sub.flush().await
+                        };
+
+                        match send_all.await {
+                            Err(grpcio::Error::RemoteStopped) => {
+                                canceled.push(*id);
+                            }
+                            Err(err) => {
+                                Error::from(err).report("sending subscription");
+                            }
+                            _ => {}
                         }
                     }
+
                     for c in canceled {
                         match self.subscribers.remove(&c) {
                             Some(mut sub) => {
