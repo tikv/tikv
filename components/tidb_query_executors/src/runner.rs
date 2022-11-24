@@ -149,7 +149,6 @@ impl BatchExecutorsRunner<()> {
                 ExecType::TypePartitionTableScan => {
                     other_err!("PartitionTableScan executor not implemented");
                 }
-                _ => unimplemented!(),
             }
         }
 
