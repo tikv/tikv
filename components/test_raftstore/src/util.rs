@@ -1211,9 +1211,9 @@ pub fn must_flashback_to_version(
     let mut prepare_req = PrepareFlashbackToVersionRequest::default();
     prepare_req.set_context(ctx.clone());
     prepare_req.set_start_ts(start_ts);
-    prepare_req.version = version;
-    prepare_req.start_key = b"a".to_vec();
-    prepare_req.end_key = b"z".to_vec();
+    prepare_req.set_version(version);
+    prepare_req.set_start_key(b"a".to_vec());
+    prepare_req.set_end_key(b"z".to_vec());
     client
         .kv_prepare_flashback_to_version(&prepare_req)
         .unwrap();
@@ -1221,9 +1221,9 @@ pub fn must_flashback_to_version(
     req.set_context(ctx);
     req.set_start_ts(start_ts);
     req.set_commit_ts(commit_ts);
-    req.version = version;
-    req.start_key = b"a".to_vec();
-    req.end_key = b"z".to_vec();
+    req.set_version(version);
+    req.set_start_key(b"a".to_vec());
+    req.set_end_key(b"z".to_vec());
     let resp = client.kv_flashback_to_version(&req).unwrap();
     assert!(!resp.has_region_error());
     assert!(resp.get_error().is_empty());
