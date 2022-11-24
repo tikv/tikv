@@ -1,17 +1,22 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use batch_system::Fsm;
 use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
+use futures::{compat::Future01CompatExt, FutureExt};
 use kvproto::{metapb::Region, raft_serverpb::RaftMessage};
 use raftstore::{
     coprocessor::RegionChangeReason,
     store::{Config, ReadDelegate, RegionReadProgressRegistry},
 };
-use slog::{o, Logger};
-use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
+use slog::{info, o, Logger};
+use tikv_util::{
+    future::poll_future_notify,
+    is_zero_duration,
+    mpsc::{self, LooseBoundedSender, Receiver},
+};
 
 use crate::{
     batch::StoreContext,
@@ -82,7 +87,7 @@ impl Store {
 }
 
 pub struct StoreFsm {
-    store: Store,
+    pub store: Store,
     receiver: Receiver<StoreMsg>,
 }
 
@@ -126,8 +131,8 @@ impl Fsm for StoreFsm {
 }
 
 pub struct StoreFsmDelegate<'a, EK: KvEngine, ER: RaftEngine, T> {
-    fsm: &'a mut StoreFsm,
-    store_ctx: &'a mut StoreContext<EK, ER, T>,
+    pub fsm: &'a mut StoreFsm,
+    pub store_ctx: &'a mut StoreContext<EK, ER, T>,
 }
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
@@ -145,10 +150,33 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs()),
         );
+
+        self.on_pd_store_heartbeat();
+    }
+
+    pub fn schedule_tick(&mut self, tick: StoreTick, timeout: Duration) {
+        if !is_zero_duration(&timeout) {
+            let mb = self.store_ctx.router.control_mailbox();
+            let logger = self.fsm.store.logger().clone();
+            let delay = self.store_ctx.timer.delay(timeout).compat().map(move |_| {
+                if let Err(e) = mb.force_send(StoreMsg::Tick(tick)) {
+                    info!(
+                        logger,
+                        "failed to schedule store tick, are we shutting down?";
+                        "tick" => ?tick,
+                        "err" => ?e
+                    );
+                }
+            });
+            poll_future_notify(delay);
+        }
     }
 
     fn on_tick(&mut self, tick: StoreTick) {
-        unimplemented!()
+        match tick {
+            StoreTick::PdStoreHeartbeat => self.on_pd_store_heartbeat(),
+            _ => unimplemented!(),
+        }
     }
 
     pub fn handle_msgs(&mut self, store_msg_buf: &mut Vec<StoreMsg>) {

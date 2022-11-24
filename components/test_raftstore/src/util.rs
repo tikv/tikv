@@ -817,10 +817,15 @@ pub fn must_kv_read_equal(client: &TikvClient, ctx: Context, key: Vec<u8>, val: 
     assert_eq!(get_resp.take_value(), val);
 }
 
-// TODO: replace the redundant code
-pub fn complete_data_commit(client: &TikvClient, ctx: &Context, ts: u64, k: Vec<u8>, v: Vec<u8>) {
+pub fn write_and_read_key(
+    client: &TikvClient,
+    ctx: &Context,
+    ts: &mut u64,
+    k: Vec<u8>,
+    v: Vec<u8>,
+) {
     // Prewrite
-    let prewrite_start_version = ts + 1;
+    let prewrite_start_version = *ts + 1;
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
     mutation.set_key(k.clone());
@@ -833,7 +838,7 @@ pub fn complete_data_commit(client: &TikvClient, ctx: &Context, ts: u64, k: Vec<
         prewrite_start_version,
     );
     // Commit
-    let commit_version = ts + 2;
+    let commit_version = *ts + 2;
     must_kv_commit(
         client,
         ctx.clone(),
@@ -843,7 +848,8 @@ pub fn complete_data_commit(client: &TikvClient, ctx: &Context, ts: u64, k: Vec<
         commit_version,
     );
     // Get
-    must_kv_read_equal(client, ctx.clone(), k, v, ts + 3);
+    *ts += 3;
+    must_kv_read_equal(client, ctx.clone(), k, v, *ts);
 }
 
 pub fn kv_read(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) -> GetResponse {
@@ -1081,57 +1087,6 @@ pub fn must_check_txn_status(
     assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
     assert!(resp.error.is_none(), "{:?}", resp.get_error());
     resp
-}
-
-pub fn must_physical_scan_lock(
-    client: &TikvClient,
-    ctx: Context,
-    max_ts: u64,
-    start_key: &[u8],
-    limit: usize,
-) -> Vec<LockInfo> {
-    let mut req = PhysicalScanLockRequest::default();
-    req.set_context(ctx);
-    req.set_max_ts(max_ts);
-    req.set_start_key(start_key.to_owned());
-    req.set_limit(limit as _);
-    let mut resp = client.physical_scan_lock(&req).unwrap();
-    resp.take_locks().into()
-}
-
-pub fn register_lock_observer(client: &TikvClient, max_ts: u64) -> RegisterLockObserverResponse {
-    let mut req = RegisterLockObserverRequest::default();
-    req.set_max_ts(max_ts);
-    client.register_lock_observer(&req).unwrap()
-}
-
-pub fn must_register_lock_observer(client: &TikvClient, max_ts: u64) {
-    let resp = register_lock_observer(client, max_ts);
-    assert!(resp.get_error().is_empty(), "{:?}", resp.get_error());
-}
-
-pub fn check_lock_observer(client: &TikvClient, max_ts: u64) -> CheckLockObserverResponse {
-    let mut req = CheckLockObserverRequest::default();
-    req.set_max_ts(max_ts);
-    client.check_lock_observer(&req).unwrap()
-}
-
-pub fn must_check_lock_observer(client: &TikvClient, max_ts: u64, clean: bool) -> Vec<LockInfo> {
-    let mut resp = check_lock_observer(client, max_ts);
-    assert!(resp.get_error().is_empty(), "{:?}", resp.get_error());
-    assert_eq!(resp.get_is_clean(), clean);
-    resp.take_locks().into()
-}
-
-pub fn remove_lock_observer(client: &TikvClient, max_ts: u64) -> RemoveLockObserverResponse {
-    let mut req = RemoveLockObserverRequest::default();
-    req.set_max_ts(max_ts);
-    client.remove_lock_observer(&req).unwrap()
-}
-
-pub fn must_remove_lock_observer(client: &TikvClient, max_ts: u64) {
-    let resp = remove_lock_observer(client, max_ts);
-    assert!(resp.get_error().is_empty(), "{:?}", resp.get_error());
 }
 
 pub fn get_tso(pd_client: &TestPdClient) -> u64 {

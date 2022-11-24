@@ -19,7 +19,7 @@ pub struct Service {
     id_allocator: AtomicUsize,
     members_resp: Mutex<Option<GetMembersResponse>>,
     is_bootstrapped: AtomicBool,
-    stores: Mutex<HashMap<u64, Store>>,
+    stores: Mutex<HashMap<u64, (Store, StoreStats)>>,
     regions: Mutex<HashMap<u64, Region>>,
     leaders: Mutex<HashMap<u64, Peer>>,
     feature_gate: Mutex<String>,
@@ -47,7 +47,10 @@ impl Service {
     /// Add an arbitrary store.
     pub fn add_store(&self, store: Store) {
         let store_id = store.get_id();
-        self.stores.lock().unwrap().insert(store_id, store);
+        self.stores
+            .lock()
+            .unwrap()
+            .insert(store_id, (store, StoreStats::new()));
     }
 
     pub fn set_cluster_version(&self, version: String) {
@@ -107,7 +110,7 @@ impl PdMocker for Service {
         self.stores
             .lock()
             .unwrap()
-            .insert(store.get_id(), store.clone());
+            .insert(store.get_id(), (store.clone(), StoreStats::new()));
         self.regions
             .lock()
             .unwrap()
@@ -138,9 +141,10 @@ impl PdMocker for Service {
         let mut resp = GetStoreResponse::default();
         let stores = self.stores.lock().unwrap();
         match stores.get(&req.get_store_id()) {
-            Some(store) => {
+            Some((store, stats)) => {
                 resp.set_header(Service::header());
                 resp.set_store(store.clone());
+                resp.set_stats(stats.clone());
                 Some(Ok(resp))
             }
             None => {
@@ -160,7 +164,7 @@ impl PdMocker for Service {
         resp.set_header(Service::header());
         let exclude_tombstone = req.get_exclude_tombstone_stores();
         let stores = self.stores.lock().unwrap();
-        for store in stores.values() {
+        for (store, _) in stores.values() {
             if exclude_tombstone && store.get_state() == StoreState::Tombstone {
                 continue;
             }
@@ -244,11 +248,22 @@ impl PdMocker for Service {
         Some(Ok(resp))
     }
 
-    fn store_heartbeat(&self, _: &StoreHeartbeatRequest) -> Option<Result<StoreHeartbeatResponse>> {
+    fn store_heartbeat(
+        &self,
+        req: &StoreHeartbeatRequest,
+    ) -> Option<Result<StoreHeartbeatResponse>> {
         let mut resp = StoreHeartbeatResponse::default();
         let header = Service::header();
         resp.set_header(header);
         resp.set_cluster_version(self.feature_gate.lock().unwrap().to_owned());
+        if let Some((_, stats)) = self
+            .stores
+            .lock()
+            .unwrap()
+            .get_mut(&req.get_stats().get_store_id())
+        {
+            *stats = req.get_stats().clone();
+        }
         Some(Ok(resp))
     }
 
