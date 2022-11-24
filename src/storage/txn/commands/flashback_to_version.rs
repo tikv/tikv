@@ -124,12 +124,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
         // To let the flashback modification could be proposed and applied successfully.
         write_data.extra.for_flashback = true;
-        let is_prewrite_or_commit_phase = matches!(
-            self.state,
-            FlashbackToVersionState::Prewrite { .. } | FlashbackToVersionState::Commit { .. }
-        );
-        if !is_prewrite_or_commit_phase {
-            // To let the CDC treat the flashback modification as an 1PC transaction.
+        // To let the CDC treat the flashback modification as an 1PC transaction.
+        if matches!(self.state, FlashbackToVersionState::FlashbackWrite { .. }) {
             write_data.extra.one_pc = true;
         }
         Ok(WriteResult {
@@ -137,7 +133,11 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
             to_be_write: write_data,
             rows,
             pr: (move || {
-                if is_prewrite_or_commit_phase {
+                if matches!(
+                    self.state,
+                    FlashbackToVersionState::Prewrite { .. }
+                        | FlashbackToVersionState::Commit { .. }
+                ) {
                     return ProcessResult::Res;
                 }
 
