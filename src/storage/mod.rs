@@ -96,7 +96,7 @@ use tikv_util::{
 use tracker::{
     clear_tls_tracker_token, set_tls_tracker_token, with_tls_tracker, TrackedFuture, TrackerToken,
 };
-use txn_types::{Key, KvPair, Lock, LockType, OldValues, TimeStamp, TsSet, Value};
+use txn_types::{Key, KvPair, Lock, LockType, TimeStamp, TsSet, Value};
 
 pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
@@ -1416,7 +1416,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         callback: Callback<T>,
     ) -> Result<()> {
         use crate::storage::txn::commands::{
-            AcquirePessimisticLock, Prewrite, PrewritePessimistic,
+            AcquirePessimisticLock, AcquirePessimisticLockResumed, Prewrite, PrewritePessimistic,
         };
 
         let cmd: Command = cmd.into();
@@ -1448,6 +1448,18 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     self.api_version,
                     cmd.ctx().api_version,
                     CommandKind::prewrite,
+                    keys.clone(),
+                )?;
+                check_key_size!(keys, self.max_key_size, callback);
+            }
+            Command::AcquirePessimisticLockResumed(AcquirePessimisticLockResumed {
+                items, ..
+            }) => {
+                let keys = items.iter().map(|item| item.key.as_encoded());
+                Self::check_api_version(
+                    self.api_version,
+                    cmd.ctx().api_version,
+                    CommandKind::acquire_pessimistic_lock_resumed,
                     keys.clone(),
                 )?;
                 check_key_size!(keys, self.max_key_size, callback);
@@ -2971,18 +2983,14 @@ impl<E: Engine> Engine for TxnTestEngine<E> {
         self.engine.modify_on_kv_engine(region_modifies)
     }
 
-    fn async_snapshot(
-        &mut self,
-        ctx: SnapContext<'_>,
-        cb: tikv_kv::Callback<Self::Snap>,
-    ) -> tikv_kv::Result<()> {
+    type SnapshotRes = impl Future<Output = tikv_kv::Result<Self::Snap>> + Send;
+    fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes {
         let txn_ext = self.txn_ext.clone();
-        self.engine.async_snapshot(
-            ctx,
-            Box::new(move |snapshot| {
-                cb(snapshot.map(|snapshot| TxnTestSnapshot { snapshot, txn_ext }))
-            }),
-        )
+        let f = self.engine.async_snapshot(ctx);
+        async move {
+            let snapshot = f.await?;
+            Ok(TxnTestSnapshot { snapshot, txn_ext })
+        }
     }
 
     fn async_write(
@@ -3341,8 +3349,8 @@ pub mod test_util {
             Some(WaitTimeout::Default),
             return_values,
             for_update_ts.next(),
-            OldValues::default(),
             check_existence,
+            false,
             false,
             Context::default(),
         )
@@ -8193,7 +8201,7 @@ mod tests {
                     Some(WaitTimeout::Millis(100)),
                     false,
                     21.into(),
-                    OldValues::default(),
+                    false,
                     false,
                     false,
                     Context::default(),
@@ -8285,7 +8293,7 @@ mod tests {
                             Some(WaitTimeout::Millis(5000)),
                             false,
                             (lock_ts + 1).into(),
-                            OldValues::default(),
+                            false,
                             false,
                             false,
                             Context::default(),
@@ -8870,7 +8878,7 @@ mod tests {
                     None,
                     false,
                     0.into(),
-                    OldValues::default(),
+                    false,
                     false,
                     false,
                     Default::default(),
@@ -8893,7 +8901,7 @@ mod tests {
                     None,
                     false,
                     0.into(),
-                    OldValues::default(),
+                    false,
                     false,
                     false,
                     Default::default(),
@@ -9123,7 +9131,7 @@ mod tests {
                 None,
                 false,
                 TimeStamp::new(12),
-                OldValues::default(),
+                false,
                 false,
                 false,
                 Context::default(),
@@ -9149,7 +9157,7 @@ mod tests {
                 None,
                 false,
                 TimeStamp::new(12),
-                OldValues::default(),
+                false,
                 false,
                 false,
                 Context::default(),

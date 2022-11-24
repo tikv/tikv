@@ -361,7 +361,7 @@ pub fn greatest_cmp_string_as_time(
                     Ok(t) => greatest = max(greatest, Some(t)),
                     Err(_) => {
                         return ctx
-                            .handle_invalid_time_error(Error::invalid_time_format(&s))
+                            .handle_invalid_time_error(Error::invalid_time_format(s))
                             .map(|_| Ok(None))?;
                     }
                 }
@@ -398,7 +398,7 @@ pub fn least_cmp_string_as_time(
                     Ok(t) => least = min(least, Some(t)),
                     Err(_) => {
                         return ctx
-                            .handle_invalid_time_error(Error::invalid_time_format(&s))
+                            .handle_invalid_time_error(Error::invalid_time_format(s))
                             .map(|_| Ok(None))?;
                     }
                 }
@@ -434,7 +434,7 @@ pub fn greatest_cmp_string_as_date(
                     Ok(t) => greatest = max(greatest, Some(t)),
                     Err(_) => {
                         return ctx
-                            .handle_invalid_time_error(Error::invalid_time_format(&s))
+                            .handle_invalid_time_error(Error::invalid_time_format(s))
                             .map(|_| Ok(None))?;
                     }
                 }
@@ -471,7 +471,7 @@ pub fn least_cmp_string_as_date(
                     Ok(t) => least = min(least, Some(t)),
                     Err(_) => {
                         return ctx
-                            .handle_invalid_time_error(Error::invalid_time_format(&s))
+                            .handle_invalid_time_error(Error::invalid_time_format(s))
                             .map(|_| Ok(None))?;
                     }
                 }

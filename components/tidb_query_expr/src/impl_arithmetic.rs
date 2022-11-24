@@ -44,7 +44,7 @@ impl ArithmeticOp for IntIntPlus {
 
     fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
         lhs.checked_add(*rhs)
-            .ok_or_else(|| Error::overflow("BIGINT", &format!("({} + {})", lhs, rhs)).into())
+            .ok_or_else(|| Error::overflow("BIGINT", format!("({} + {})", lhs, rhs)).into())
             .map(Some)
     }
 }
@@ -61,10 +61,8 @@ impl ArithmeticOp for IntUintPlus {
         } else {
             (*rhs as u64).checked_sub(lhs.overflowing_neg().0 as u64)
         };
-        res.ok_or_else(|| {
-            Error::overflow("BIGINT UNSIGNED", &format!("({} + {})", lhs, rhs)).into()
-        })
-        .map(|v| Some(v as i64))
+        res.ok_or_else(|| Error::overflow("BIGINT UNSIGNED", format!("({} + {})", lhs, rhs)).into())
+            .map(|v| Some(v as i64))
     }
 }
 
@@ -89,7 +87,7 @@ impl ArithmeticOp for UintUintPlus {
         (*lhs as u64)
             .checked_add(*rhs as u64)
             .ok_or_else(|| {
-                Error::overflow("BIGINT UNSIGNED", &format!("({} + {})", lhs, rhs)).into()
+                Error::overflow("BIGINT UNSIGNED", format!("({} + {})", lhs, rhs)).into()
             })
             .map(|v| Some(v as i64))
     }
@@ -104,7 +102,7 @@ impl ArithmeticOp for RealPlus {
     fn calc(lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
         let res = *lhs + *rhs;
         if !res.is_finite() {
-            return Err(Error::overflow("DOUBLE", &format!("({} + {})", lhs, rhs)).into());
+            return Err(Error::overflow("DOUBLE", format!("({} + {})", lhs, rhs)).into());
         }
         Ok(Some(res))
     }
@@ -130,7 +128,7 @@ impl ArithmeticOp for IntIntMinus {
 
     fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
         lhs.checked_sub(*rhs)
-            .ok_or_else(|| Error::overflow("BIGINT", &format!("({} - {})", lhs, rhs)).into())
+            .ok_or_else(|| Error::overflow("BIGINT", format!("({} - {})", lhs, rhs)).into())
             .map(Some)
     }
 }
@@ -145,10 +143,10 @@ impl ArithmeticOp for IntUintMinus {
         if *lhs >= 0 {
             (*lhs as u64)
                 .checked_sub(*rhs as u64)
-                .ok_or_else(|| Error::overflow("BIGINT", &format!("({} - {})", lhs, rhs)).into())
+                .ok_or_else(|| Error::overflow("BIGINT", format!("({} - {})", lhs, rhs)).into())
                 .map(|v| Some(v as i64))
         } else {
-            Err(Error::overflow("BIGINT", &format!("({} - {})", lhs, rhs)).into())
+            Err(Error::overflow("BIGINT", format!("({} - {})", lhs, rhs)).into())
         }
     }
 }
@@ -165,7 +163,7 @@ impl ArithmeticOp for UintIntMinus {
         } else {
             (*lhs as u64).checked_add(rhs.overflowing_neg().0 as u64)
         };
-        res.ok_or_else(|| Error::overflow("BIGINT", &format!("({} - {})", lhs, rhs)).into())
+        res.ok_or_else(|| Error::overflow("BIGINT", format!("({} - {})", lhs, rhs)).into())
             .map(|v| Some(v as i64))
     }
 }
@@ -180,7 +178,7 @@ impl ArithmeticOp for UintUintMinus {
         (*lhs as u64)
             .checked_sub(*rhs as u64)
             .ok_or_else(|| {
-                Error::overflow("BIGINT UNSIGNED", &format!("({} - {})", lhs, rhs)).into()
+                Error::overflow("BIGINT UNSIGNED", format!("({} - {})", lhs, rhs)).into()
             })
             .map(|v| Some(v as i64))
     }
@@ -195,7 +193,7 @@ impl ArithmeticOp for RealMinus {
     fn calc(lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
         let res = *lhs - *rhs;
         if !res.is_finite() {
-            return Err(Error::overflow("DOUBLE", &format!("({} - {})", lhs, rhs)).into());
+            return Err(Error::overflow("DOUBLE", format!("({} - {})", lhs, rhs)).into());
         }
         Ok(Some(res))
     }
@@ -332,7 +330,7 @@ impl ArithmeticOp for RealMultiply {
     fn calc(lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
         let res = *lhs * *rhs;
         if res.is_infinite() {
-            Err(Error::overflow("REAL", &format!("({} * {})", lhs, rhs)).into())
+            Err(Error::overflow("REAL", format!("({} * {})", lhs, rhs)).into())
         } else {
             Ok(Some(res))
         }
@@ -346,7 +344,7 @@ impl ArithmeticOp for IntIntMultiply {
     type T = Int;
     fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
         lhs.checked_mul(*rhs)
-            .ok_or_else(|| Error::overflow("BIGINT", &format!("({} * {})", lhs, rhs)).into())
+            .ok_or_else(|| Error::overflow("BIGINT", format!("({} * {})", lhs, rhs)).into())
             .map(Some)
     }
 }
@@ -362,7 +360,7 @@ impl ArithmeticOp for IntUintMultiply {
         } else {
             None
         }
-        .ok_or_else(|| Error::overflow("BIGINT UNSIGNED", &format!("({} * {})", lhs, rhs)).into())
+        .ok_or_else(|| Error::overflow("BIGINT UNSIGNED", format!("({} * {})", lhs, rhs)).into())
         .map(Some)
     }
 }
@@ -386,7 +384,7 @@ impl ArithmeticOp for UintUintMultiply {
         (*lhs as u64)
             .checked_mul(*rhs as u64)
             .ok_or_else(|| {
-                Error::overflow("BIGINT UNSIGNED", &format!("({} * {})", lhs, rhs)).into()
+                Error::overflow("BIGINT UNSIGNED", format!("({} * {})", lhs, rhs)).into()
             })
             .map(|v| Some(v as i64))
     }
@@ -500,7 +498,7 @@ impl ArithmeticOpWithCtx for RealDivide {
         } else {
             let result = *lhs / *rhs;
             if result.is_infinite() {
-                ctx.handle_overflow_err(Error::overflow("DOUBLE", &format!("{} / {}", lhs, rhs)))
+                ctx.handle_overflow_err(Error::overflow("DOUBLE", format!("{} / {}", lhs, rhs)))
                     .map(|_| None)?
             } else {
                 Some(result)
