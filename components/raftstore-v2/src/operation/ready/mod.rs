@@ -239,6 +239,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // asynchronously.
         if self.is_leader() {
             for entry in committed_entries.iter().rev() {
+                self.raft_log_size_hint += entry.get_data().len() as u64;
                 // TODO: handle raft_log_size_hint
                 let propose_time = self
                     .proposals()

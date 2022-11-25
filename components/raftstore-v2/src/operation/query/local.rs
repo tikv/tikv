@@ -16,9 +16,9 @@ use kvproto::{
 use raftstore::{
     errors::RAFTSTORE_IS_BUSY,
     store::{
-        cmd_resp, util::LeaseState, LocalReadContext, LocalReaderCore, ReadDelegate, ReadExecutor,
-        ReadExecutorProvider, RegionSnapshot, RequestInspector, RequestPolicy,
-        TLS_LOCAL_READ_METRICS,
+        cmd_resp, util::LeaseState, worker::metrics::TLS_LOCAL_READ_METRICS, LocalReadContext,
+        LocalReaderCore, ReadDelegate, ReadExecutor, ReadExecutorProvider, RegionSnapshot,
+        RequestInspector, RequestPolicy,
     },
     Error, Result,
 };
@@ -437,8 +437,8 @@ mod tests {
     use futures::executor::block_on;
     use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, raft_cmdpb::*};
     use raftstore::store::{
-        util::Lease, ReadCallback, ReadProgress, RegionReadProgress, TrackVer, TxnExt,
-        TLS_LOCAL_READ_METRICS,
+        util::Lease, worker::metrics::TLS_LOCAL_READ_METRICS, ReadCallback, ReadProgress,
+        RegionReadProgress, TrackVer, TxnExt,
     };
     use slog::o;
     use tempfile::Builder;

@@ -4309,6 +4309,7 @@ dependencies = [
  "tempfile",
  "test_pd",
  "test_util",
+ "thiserror",
  "tikv_util",
  "time",
  "tracker",
