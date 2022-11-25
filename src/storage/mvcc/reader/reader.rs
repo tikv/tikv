@@ -476,7 +476,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
                 .prefix_seek(self.scan_mode.is_none())
                 .scan_mode(self.get_scan_mode(true))
                 .range(self.lower_bound.clone(), self.upper_bound.clone())
-                // `hint_min_ts` is only meaningful when it's the `commit_ts`.
+                // `hint_min_ts` filters data by the `commit_ts`.
                 .hint_min_ts(self.hint_min_ts)
                 .build()?;
             self.write_cursor = Some(cursor);

@@ -92,14 +92,13 @@ pub fn flashback_to_version_lock(
 }
 
 // To flashback the `CF_WRITE` and `CF_DEFAULT`, we need to write a new MVCC
-// record for each key in `key_writes` with its old value at
-// `flashback_version`, specifically, the flashback will have the following
-// behavior:
-//   - If a key doesn't exist at `flashback_version`, it will be put a
-//     `WriteType::Delete`.
-//   - If a key exists at `flashback_version`, it will be put the exact same
-//     record in `CF_WRITE` and `CF_DEFAULT` with `self.commit_ts` and
-//     `self.start_ts`.
+// record for each key in keys with its old value at `flashback_version`,
+// specifically, the flashback will have the following behavior:
+//   - If a key doesn't exist or isn't invisible at `flashback_version`, it will
+//     be put a `WriteType::Delete`.
+//   - If a key exists and is visible at `flashback_version`, it will be put the
+//     exact same record in `CF_WRITE` and `CF_DEFAULT` with `self.commit_ts`
+//     and `self.start_ts`.
 pub fn flashback_to_version_write(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<impl Snapshot>,
@@ -200,7 +199,7 @@ pub mod tests {
         let mut rows = txn.modifies.len();
         write(engine, &ctx, txn.into_modifies());
         // Flashback the writes.
-        let key_writes = flashback_to_version_read_write(
+        let keys = flashback_to_version_read_write(
             &mut reader,
             key,
             &next_key,
@@ -215,7 +214,7 @@ pub mod tests {
         flashback_to_version_write(
             &mut txn,
             &mut snap_reader,
-            key_writes,
+            keys,
             version,
             start_ts,
             commit_ts,
