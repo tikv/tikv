@@ -20,7 +20,7 @@
 mod async_writer;
 mod snapshot;
 
-use std::{cmp, path::PathBuf, sync::Arc};
+use std::{cmp, time::Instant};
 
 use engine_traits::{KvEngine, MiscExt, OpenOptions, RaftEngine, TabletFactory};
 use error_code::ErrorCodeExt;
@@ -29,22 +29,10 @@ use kvproto::{
     raft_serverpb::{PeerState, RaftMessage, RaftSnapshotData},
 };
 use protobuf::Message as _;
-use raft::{
-    eraftpb::{self, MessageType, Snapshot},
-    Ready, StateRole, Storage as rStorage,
-};
-use raftstore::{
-    coprocessor::ApplySnapshotObserver,
-    store::{
-        util, ExtraStates, FetchedLogs, ReadProgress, SnapKey, TabletSnapKey, TabletSnapManager,
-        Transport, WriteTask,
-    },
-};
-use slog::{debug, error, info, trace, warn};
-use tikv_util::{
-    box_err,
-    time::{duration_to_sec, monotonic_raw_now},
-};
+use raft::{eraftpb, Ready, StateRole, INVALID_ID};
+use raftstore::store::{util, ExtraStates, FetchedLogs, ReadProgress, Transport, WriteTask};
+use slog::{debug, error, trace, warn};
+use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 
 pub use self::{
     async_writer::AsyncWriter,
@@ -57,6 +45,7 @@ use crate::{
     router::{ApplyTask, PeerTick},
     Result,
 };
+
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
     /// Raft relies on periodic ticks to keep the state machine sync with other
     /// peers.
@@ -127,7 +116,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         // TODO: drop all msg append when the peer is uninitialized and has conflict
         // ranges with other peers.
-        self.insert_peer_cache(msg.take_from_peer());
+        let from_peer = msg.take_from_peer();
+        if self.is_leader() && from_peer.get_id() != INVALID_ID {
+            self.add_peer_heartbeat(from_peer.get_id(), Instant::now());
+        }
+        self.insert_peer_cache(from_peer);
         if let Err(e) = self.raft_group_mut().step(msg.take_message()) {
             error!(self.logger, "raft step error"; "err" => ?e);
         }
@@ -287,7 +280,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         ctx.has_ready = true;
 
-        if !self.raft_group().has_ready() && (self.serving() || self.postpond_destroy()) {
+        if !self.raft_group().has_ready() && (self.serving() || self.postponed_destroy()) {
             #[cfg(feature = "testexport")]
             self.async_writer.notify_flush();
             return;
@@ -469,8 +462,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     // latency.
                     self.raft_group_mut().skip_bcast_commit(false);
 
+                    // A more recent read may happen on the old leader. So max ts should
+                    // be updated after a peer becomes leader.
+                    self.require_updating_max_ts(ctx);
                     // Exit entry cache warmup state when the peer becomes leader.
                     self.entry_storage_mut().clear_entry_cache_warmup_state();
+
+                    self.region_heartbeat_pd(ctx);
                 }
                 StateRole::Follower => {
                     self.leader_lease_mut().expire();

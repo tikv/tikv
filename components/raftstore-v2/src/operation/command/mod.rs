@@ -299,14 +299,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         for admin_res in apply_res.admin_result {
             match admin_res {
                 AdminCmdResult::ConfChange(conf_change) => {
-                    self.on_apply_res_conf_change(conf_change)
+                    self.on_apply_res_conf_change(ctx, conf_change)
                 }
                 AdminCmdResult::SplitRegion(SplitResult {
                     regions,
                     derived_index,
                     tablet_index,
                 }) => self.on_ready_split_region(ctx, derived_index, tablet_index, regions),
-                AdminCmdResult::SplitRegion(_) => unimplemented!(),
             }
         }
 

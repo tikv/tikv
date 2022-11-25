@@ -1,6 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-mod applied_lock_collector;
 pub mod compaction_filter;
 mod config;
 mod gc_manager;
