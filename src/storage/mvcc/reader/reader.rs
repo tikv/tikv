@@ -384,9 +384,10 @@ impl<S: EngineSnapshot> MvccReader<S> {
                             return Ok(None);
                         }
                         WriteType::Lock | WriteType::Rollback => {
-                            if write.versions_to_last_change < SEEK_BOUND
-                                || write.last_change_ts.is_zero()
-                            {
+                            if write.versions_to_last_change > 0 && write.last_change_ts.is_zero() {
+                                return Ok(None);
+                            }
+                            if write.versions_to_last_change < SEEK_BOUND {
                                 ts = commit_ts.prev();
                             } else {
                                 let commit_ts = write.last_change_ts;
@@ -1679,6 +1680,10 @@ pub mod tests {
                     for_update_ts,
                     0,
                     TimeStamp::zero(),
+                )
+                .set_last_change(
+                    TimeStamp::zero(),
+                    (lock_type == LockType::Lock || lock_type == LockType::Pessimistic) as u64,
                 ),
             )
         })
@@ -2614,5 +2619,36 @@ pub mod tests {
         // instead of calling a series of next, so the count of next should be 0 instead
         assert_eq!(reader.statistics.write.next, 0);
         assert_eq!(reader.statistics.write.get, 1);
+    }
+
+    #[test]
+    fn test_get_write_not_exist_skip_lock() {
+        let path = tempfile::Builder::new()
+            .prefix("_test_storage_mvcc_reader_get_write_not_exist_skip_lock")
+            .tempdir()
+            .unwrap();
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![], vec![]);
+        let db = open_db(path, true);
+        let mut engine = RegionEngine::new(&db, &region);
+        let k = b"k";
+
+        // Write enough LOCK recrods
+        for start_ts in (6..30).into_iter().step_by(2) {
+            engine.lock(k, start_ts, start_ts + 1);
+        }
+
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db, region);
+        let mut reader = MvccReader::new(snap, None, false);
+
+        let res = reader
+            .get_write_with_commit_ts(&Key::from_raw(k), 40.into(), None)
+            .unwrap();
+        // We can know the key doesn't exist without skipping all these locks according
+        // to last_change_ts and versions_to_last_change.
+        assert!(res.is_none());
+        assert_eq!(reader.statistics.write.seek, 1);
+        assert_eq!(reader.statistics.write.next, 0);
+        assert_eq!(reader.statistics.write.get, 0);
     }
 }
