@@ -801,7 +801,7 @@ mod test {
         errors::Error, router::TaskSelector, GetCheckpointResult, RegionCheckpointOperation,
         RegionSet, Task,
     };
-    use futures::{future::Ready, Future, Stream, StreamExt};
+    use futures::{Stream, StreamExt};
     use pd_client::PdClient;
     use tikv_util::{box_err, defer, info, HandyRwLock};
     use tokio::time::timeout;
