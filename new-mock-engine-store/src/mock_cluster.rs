@@ -92,7 +92,7 @@ pub struct TestData {
 
 pub struct Cluster<T: Simulator<TiFlashEngine>> {
     // Helper to set ffi_helper_set.
-    ffi_helper_lst: Vec<FFIHelperSet>,
+    pub ffi_helper_lst: Vec<FFIHelperSet>,
     pub ffi_helper_set: Arc<Mutex<HashMap<u64, FFIHelperSet>>>,
 
     pub cfg: Config,
@@ -111,6 +111,8 @@ pub struct Cluster<T: Simulator<TiFlashEngine>> {
     pub pd_client: Arc<TestPdClient>,
     pub test_data: TestData,
 }
+
+impl<T: Simulator<TiFlashEngine>> std::panic::UnwindSafe for Cluster<T> {}
 
 impl<T: Simulator<TiFlashEngine>> Cluster<T> {
     pub fn new(
@@ -245,17 +247,28 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
     pub fn run(&mut self) {
         self.create_engines();
         self.bootstrap_region().unwrap();
+        self.bootstrap_ffi_helper_set();
         self.start().unwrap();
     }
 
     pub fn run_conf_change(&mut self) -> u64 {
         self.create_engines();
         let region_id = self.bootstrap_conf_change();
+        self.bootstrap_ffi_helper_set();
         // Will not start new nodes in `start`
         self.start().unwrap();
         region_id
     }
 
+    pub fn run_conf_change_no_start(&mut self) -> u64 {
+        self.create_engines();
+        let region_id = self.bootstrap_conf_change();
+        self.bootstrap_ffi_helper_set();
+        region_id
+    }
+
+    /// We need to create FFIHelperSet while we create engine.
+    /// And later set its `node_id` when we are allocated one when start.
     pub fn create_ffi_helper_set(
         &mut self,
         engines: Engines<TiFlashEngine, engine_rocks::RocksEngine>,
@@ -294,6 +307,9 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         self.ffi_helper_lst.push(ffi_helper_set);
     }
 
+    // If index is None, use the last in the list, which is added by
+    // create_ffi_helper_set. In most cases, index is `Some(0)`, which means we
+    // will use the first.
     pub fn associate_ffi_helper_set(&mut self, index: Option<usize>, node_id: u64) {
         let mut ffi_helper_set = if let Some(i) = index {
             self.ffi_helper_lst.remove(i)
@@ -305,6 +321,17 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
             .lock()
             .unwrap()
             .insert(node_id, ffi_helper_set);
+    }
+
+    pub fn bootstrap_ffi_helper_set(&mut self) {
+        let mut node_ids: Vec<u64> = self.engines.iter().map(|(&id, _)| id).collect();
+        // We force iterate engines in sorted order.
+        node_ids.sort();
+        for (_, node_id) in node_ids.iter().enumerate() {
+            let node_id = *node_id;
+            // Always at the front of the vector.
+            self.associate_ffi_helper_set(Some(0), node_id);
+        }
     }
 
     pub fn create_engine(
@@ -325,16 +352,24 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
     }
 
     pub fn start(&mut self) -> ServerResult<()> {
+        self.start_with(Default::default())
+    }
+
+    pub fn start_with(&mut self, skip_set: HashSet<usize>) -> ServerResult<()> {
         init_global_ffi_helper_set();
 
         // Try recover from last shutdown.
-        let node_ids: Vec<u64> = self.engines.iter().map(|(&id, _)| id).collect();
-        for node_id in node_ids {
+        // `self.engines` is inited in bootstrap_region or bootstrap_conf_change.
+        let mut node_ids: Vec<u64> = self.engines.iter().map(|(&id, _)| id).collect();
+        // We force iterate engines in sorted order.
+        node_ids.sort();
+        for (cnt, node_id) in node_ids.iter().enumerate() {
+            let node_id = *node_id;
+            if skip_set.contains(&cnt) {
+                tikv_util::info!("skip start at {} is {}", cnt, node_id);
+                continue;
+            }
             debug!("recover node"; "node_id" => node_id);
-            let _engines = self.engines.get_mut(&node_id).unwrap().clone();
-            let _key_mgr = self.key_managers_map[&node_id].clone();
-            // Always at the front of the vector.
-            self.associate_ffi_helper_set(Some(0), node_id);
             // Like TiKVServer::init
             self.run_node(node_id)?;
             // Since we use None to create_ffi_helper_set, we must init again.
@@ -349,7 +384,12 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         }
 
         // Try start new nodes.
+        // Normally, this branch will not be called, since self.engines are already
+        // added in bootstrap_region or bootstrap_conf_change.
         for _ in 0..self.count - self.engines.len() {
+            if !skip_set.is_empty() {
+                panic!("Error when start with skip set");
+            }
             let (router, system) = create_raft_batch_system(&self.cfg.raft_store);
             self.create_engine(Some(router.clone()));
 
@@ -380,6 +420,8 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
             self.key_managers_map.insert(node_id, key_manager.clone());
             self.associate_ffi_helper_set(None, node_id);
         }
+        assert_eq!(self.count, self.engines.len());
+        assert_eq!(self.count, self.dbs.len());
         Ok(())
     }
 
@@ -1013,6 +1055,10 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
 
     pub fn get_tiflash_engine(&self, node_id: u64) -> &TiFlashEngine {
         &self.engines[&node_id].kv
+    }
+
+    pub fn get_engines(&self, node_id: u64) -> &Engines<TiFlashEngine, engine_rocks::RocksEngine> {
+        &self.engines[&node_id]
     }
 
     pub fn get_raw_engine(&self, node_id: u64) -> Arc<DB> {

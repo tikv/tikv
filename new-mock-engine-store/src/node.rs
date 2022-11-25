@@ -176,6 +176,8 @@ pub struct NodeCluster {
     pub importer: Option<Arc<SstImporter>>,
 }
 
+impl std::panic::UnwindSafe for NodeCluster {}
+
 impl NodeCluster {
     pub fn new(pd_client: Arc<TestPdClient>) -> NodeCluster {
         NodeCluster {
@@ -340,6 +342,7 @@ impl Simulator<TiFlashEngine> for NodeCluster {
         );
 
         node.try_bootstrap_store(engines.clone())?;
+
         node.start(
             engines.clone(),
             simulate_trans.clone(),

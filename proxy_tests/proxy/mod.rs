@@ -11,6 +11,7 @@ mod config;
 mod flashback;
 mod normal;
 mod proxy;
+mod region;
 mod server_cluster_test;
 mod snapshot;
 mod util;

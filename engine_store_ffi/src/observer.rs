@@ -269,9 +269,13 @@ impl AdminObserver for TiFlashObserver {
                     index,
                     term,
                 ) {
-                    info!("can't flush data, should filter CompactLog";
-                        "region" => ?ob_ctx.region(),
-                        "req" => ?req,
+                    info!("can't flush data, filter CompactLog";
+                        "region_id" => ?ob_ctx.region().get_id(),
+                        "region_epoch" => ?ob_ctx.region().get_region_epoch(),
+                        "index" => index,
+                        "term" => term,
+                        "compact_index" => req.get_compact_log().get_compact_index(),
+                        "compact_term" => req.get_compact_log().get_compact_term(),
                     );
                     return true;
                 }

@@ -1,16 +1,21 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::ops::RangeBounds;
 pub use std::{
     collections::HashMap,
     io::Write,
+    iter::FromIterator,
     ops::DerefMut,
     path::{Path, PathBuf},
     str::FromStr,
     sync::{atomic::Ordering, mpsc, Arc, RwLock},
 };
 
+pub use collections::HashSet;
 pub use engine_store_ffi::{KVGetStatus, RaftStoreProxyFFI};
-pub use engine_traits::{MiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE};
+pub use engine_traits::{
+    MiscExt, Mutable, RaftEngineDebug, RaftLogBatch, WriteBatch, CF_DEFAULT, CF_LOCK, CF_WRITE,
+};
 // use engine_store_ffi::config::{ensure_no_common_unrecognized_keys, ProxyConfig};
 pub use engine_traits::{Peekable, CF_RAFT};
 pub use kvproto::{
@@ -18,22 +23,24 @@ pub use kvproto::{
     metapb,
     metapb::RegionEpoch,
     raft_cmdpb::{AdminCmdType, AdminRequest, CmdType, Request},
-    raft_serverpb::{PeerState, RaftApplyState, RegionLocalState, StoreIdent},
+    raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
 };
 pub use new_mock_engine_store::{
     config::Config,
+    make_new_region,
     mock_cluster::{new_put_cmd, new_request, FFIHelperSet},
     must_get_equal, must_get_none,
     node::NodeCluster,
     transport_simulate::{
         CloneFilterFactory, CollectSnapshotFilter, Direction, RegionPacketFilter,
     },
-    Cluster, ProxyConfig, Simulator, TestPdClient,
+    write_kv_in_mem, Cluster, ProxyConfig, RegionStats, Simulator, TestPdClient,
 };
-pub use raft::eraftpb::MessageType;
+pub use raft::eraftpb::{ConfChangeType, MessageType};
 pub use raftstore::coprocessor::ConsistencyCheckMethod;
-pub use test_raftstore::new_peer;
+pub use test_raftstore::{new_learner_peer, new_peer};
 pub use tikv_util::{
+    box_err, box_try,
     config::{ReadableDuration, ReadableSize},
     store::find_peer,
     time::Duration,
@@ -63,6 +70,13 @@ pub fn get_apply_state(engine: &engine_rocks::RocksEngine, region_id: u64) -> Ra
     apply_state
 }
 
+pub fn get_raft_local_state<ER: engine_traits::RaftEngine>(
+    raft_engine: &ER,
+    region_id: u64,
+) -> RaftLocalState {
+    raft_engine.get_raft_state(region_id).unwrap().unwrap()
+}
+
 pub fn new_compute_hash_request() -> AdminRequest {
     let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::ComputeHash);
@@ -85,6 +99,7 @@ pub struct States {
     pub in_memory_applied_term: u64,
     pub in_disk_apply_state: RaftApplyState,
     pub in_disk_region_state: RegionLocalState,
+    pub in_disk_raft_state: RaftLocalState,
     pub ident: StoreIdent,
 }
 
@@ -113,12 +128,13 @@ pub fn maybe_collect_states(
     let mut prev_state: HashMap<u64, States> = HashMap::default();
     iter_ffi_helpers(
         cluster,
-        None,
+        store_ids,
         &mut |id: u64, engine: &engine_rocks::RocksEngine, ffi: &mut FFIHelperSet| {
             let server = &ffi.engine_store_server;
+            let raft_engine = &cluster.get_engines(id).raft;
             if let Some(region) = server.kvstore.get(&region_id) {
                 let ident = match engine.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY) {
-                    Ok(Some(i)) => (i),
+                    Ok(Some(i)) => i,
                     _ => unreachable!(),
                 };
                 prev_state.insert(
@@ -128,6 +144,7 @@ pub fn maybe_collect_states(
                         in_memory_applied_term: region.applied_term,
                         in_disk_apply_state: get_apply_state(&engine, region_id),
                         in_disk_region_state: get_region_local_state(&engine, region_id),
+                        in_disk_raft_state: get_raft_local_state(raft_engine, region_id),
                         ident,
                     },
                 );
@@ -195,6 +212,55 @@ pub fn must_get_mem(
         cf,
         last_res,
     )
+}
+
+pub fn must_put_and_check_key_with_generator<F: Fn(u64) -> (String, String)>(
+    cluster: &mut Cluster<NodeCluster>,
+    gen: F,
+    from: u64,
+    to: u64,
+    in_mem: Option<bool>,
+    in_disk: Option<bool>,
+    engines: Option<Vec<u64>>,
+) {
+    for i in from..to {
+        let (k, v) = gen(i);
+        cluster.must_put(k.as_bytes(), v.as_bytes());
+    }
+    for i in from..to {
+        let (k, v) = gen(i);
+        check_key(
+            &cluster,
+            k.as_bytes(),
+            v.as_bytes(),
+            in_mem,
+            in_disk,
+            engines.clone(),
+        );
+    }
+}
+
+pub fn must_put_and_check_key(
+    cluster: &mut Cluster<NodeCluster>,
+    from: u64,
+    to: u64,
+    in_mem: Option<bool>,
+    in_disk: Option<bool>,
+    engines: Option<Vec<u64>>,
+) {
+    must_put_and_check_key_with_generator(
+        cluster,
+        |i: u64| {
+            let k = format!("k{}", i);
+            let v = format!("v{}", i);
+            (k, v)
+        },
+        from,
+        to,
+        in_mem,
+        in_disk,
+        engines.clone(),
+    );
 }
 
 pub fn check_key(
@@ -295,8 +361,24 @@ pub fn check_apply_state(
 }
 
 pub fn get_valid_compact_index(states: &HashMap<u64, States>) -> (u64, u64) {
+    get_valid_compact_index_by(states, None)
+}
+
+pub fn get_valid_compact_index_by(
+    states: &HashMap<u64, States>,
+    use_nodes: Option<Vec<u64>>,
+) -> (u64, u64) {
+    let set = use_nodes.map_or(None, |nodes| {
+        Some(HashSet::from_iter(nodes.clone().into_iter()))
+    });
     states
         .iter()
+        .filter(|(k, _)| {
+            if let Some(ref s) = set {
+                return s.contains(k);
+            }
+            true
+        })
         .map(|(_, s)| {
             (
                 s.in_memory_apply_state.get_applied_index(),

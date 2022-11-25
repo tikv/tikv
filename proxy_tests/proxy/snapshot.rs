@@ -1,6 +1,10 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 use crate::proxy::*;
 
+// This is a panic while panic test, which we can not handle.
+// This double panic is due to:
+// 1. check_applying_snap after apply_snap.
+// 2. Drop in PeerFsm which leads to check_applying_snap.
 // #[test]
 #[should_panic]
 fn test_delete_snapshot_after_apply() {

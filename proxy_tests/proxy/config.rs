@@ -2,10 +2,8 @@
 use clap::{App, Arg};
 use proxy_server::{
     config::{
-        address_proxy_config, ensure_no_common_unrecognized_keys, get_last_config,
-        memory_limit_for_cf, setup_default_tikv_config, validate_and_persist_config,
-        TIFLASH_DEFAULT_ADVERTISE_LISTENING_ADDR, TIFLASH_DEFAULT_LISTENING_ADDR,
-        TIFLASH_DEFAULT_STATUS_ADDR,
+        address_proxy_config, memory_limit_for_cf, TIFLASH_DEFAULT_ADVERTISE_LISTENING_ADDR,
+        TIFLASH_DEFAULT_LISTENING_ADDR, TIFLASH_DEFAULT_STATUS_ADDR,
     },
     proxy::{gen_proxy_config, gen_tikv_config},
     setup::overwrite_config_with_cmd_args,

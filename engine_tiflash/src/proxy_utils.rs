@@ -1,6 +1,7 @@
 use crate::util::get_cf_handle;
 
 pub fn do_write(cf: &str, key: &[u8]) -> bool {
+    fail::fail_point!("before_tiflash_do_write", |_| true);
     match cf {
         engine_traits::CF_RAFT => true,
         engine_traits::CF_DEFAULT => {
@@ -32,6 +33,7 @@ fn cf_to_name(batch: &crate::RocksWriteBatchVec, cf: u32) -> &'static str {
 fn check_double_write(batch: &crate::RocksWriteBatchVec) {
     // It will fire if we write by both observer(compat_old_proxy is not enabled)
     // and TiKV's WriteBatch.
+    fail::fail_point!("before_tiflash_check_double_write", |_| {});
     tikv_util::debug!("check if double write happens");
     for wb in batch.wbs.iter() {
         for (_, cf, k, _) in wb.iter() {
