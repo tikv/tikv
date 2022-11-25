@@ -238,7 +238,21 @@ pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
     get_error_kind_from_header(header).get_str()
 }
 
+fn check_engine_corruption_err<T>(res: &Result<T>) {
+    if let Err(err) = res {
+        if let ErrorInner::Engine(engine_traits::Error::Engine(e)) = err.0.as_ref() {
+            // Hack! it depend on the error message to identify the engine corruption error
+            if e.to_string().to_lowercase().contains("corruption") {
+                tikv_util::set_panic_mark();
+                panic!("kv request met engine corruption error: {:?}", e);
+            }
+        }
+    }
+}
+
 pub fn extract_region_error<T>(res: &Result<T>) -> Option<errorpb::Error> {
+    // Check engine corruption error
+    check_engine_corruption_err(res);
     match *res {
         // TODO: use `Error::cause` instead.
         Err(Error(box ErrorInner::Kv(KvError(box KvErrorInner::Request(ref e)))))

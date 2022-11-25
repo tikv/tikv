@@ -654,11 +654,23 @@ impl<E: Engine> Endpoint<E> {
     }
 }
 
+fn is_engine_corruption_error(e: &Error) -> bool {
+    // Hack! it depend on the error message to identify the engine corruption error
+    let err_msg = e.to_string().to_lowercase();
+    err_msg.contains("engine") && err_msg.contains("corruption")
+}
+
 fn make_error_response(e: Error) -> coppb::Response {
     warn!(
         "error-response";
         "err" => %e
     );
+
+    if is_engine_corruption_error(&e) {
+        tikv_util::set_panic_mark();
+        panic!("met engine corruption error: {:?}", e);
+    }
+
     let mut resp = coppb::Response::default();
     let tag;
     match e {
