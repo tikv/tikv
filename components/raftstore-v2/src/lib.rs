@@ -24,6 +24,7 @@
 #![allow(unused)]
 #![feature(let_chains)]
 #![feature(array_windows)]
+#![feature(div_duration)]
 
 mod batch;
 mod bootstrap;
@@ -32,6 +33,7 @@ mod operation;
 mod raft;
 pub mod router;
 mod tablet;
+mod worker;
 
 pub(crate) use batch::StoreContext;
 pub use batch::{create_store_batch_system, StoreRouter, StoreSystem};

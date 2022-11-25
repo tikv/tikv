@@ -6,6 +6,7 @@
 //! [`RocksEngine`](RocksEngine) are used for testing only.
 
 #![feature(min_specialization)]
+#![feature(type_alias_impl_trait)]
 
 #[macro_use(fail_point)]
 extern crate fail;
@@ -35,7 +36,7 @@ use engine_traits::{
     CF_DEFAULT, CF_LOCK,
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
-use futures::prelude::*;
+use futures::{compat::Future01CompatExt, future::BoxFuture, prelude::*};
 use into_other::IntoOther;
 use kvproto::{
     errorpb::Error as ErrorHeader,
@@ -45,7 +46,7 @@ use kvproto::{
 use pd_client::BucketMeta;
 use raftstore::store::{PessimisticLockPair, TxnExt};
 use thiserror::Error;
-use tikv_util::{deadline::Deadline, escape, time::ThreadReadId};
+use tikv_util::{deadline::Deadline, escape, time::ThreadReadId, timer::GLOBAL_TIMER_HANDLE};
 use tracker::with_tls_tracker;
 use txn_types::{Key, PessimisticLock, TimeStamp, TxnExtra, Value};
 
@@ -61,7 +62,7 @@ pub use self::{
 };
 
 pub const SEEK_BOUND: u64 = 8;
-const DEFAULT_TIMEOUT_SECS: u64 = 5;
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 pub type ExtCallback = Box<dyn FnOnce() + Send>;
@@ -277,7 +278,8 @@ pub trait Engine: Send + Clone + 'static {
     /// region_modifies records each region's modifications.
     fn modify_on_kv_engine(&self, region_modifies: HashMap<u64, Vec<Modify>>) -> Result<()>;
 
-    fn async_snapshot(&mut self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()>;
+    type SnapshotRes: Future<Output = Result<Self::Snap>> + Send + 'static;
+    fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes;
 
     /// Precheck request which has write with it's context.
     fn precheck_write_with_ctx(&self, _ctx: &Context) -> Result<()> {
@@ -302,17 +304,21 @@ pub trait Engine: Send + Clone + 'static {
     }
 
     fn write(&self, ctx: &Context, batch: WriteData) -> Result<()> {
-        let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-        wait_op!(|cb| self.async_write(ctx, batch, cb), timeout)
-            .unwrap_or_else(|| Err(Error::from(ErrorInner::Timeout(timeout))))
+        wait_op!(|cb| self.async_write(ctx, batch, cb), DEFAULT_TIMEOUT)
+            .unwrap_or_else(|| Err(Error::from(ErrorInner::Timeout(DEFAULT_TIMEOUT))))
     }
 
     fn release_snapshot(&mut self) {}
 
     fn snapshot(&mut self, ctx: SnapContext<'_>) -> Result<Self::Snap> {
-        let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-        wait_op!(|cb| self.async_snapshot(ctx, cb), timeout)
-            .unwrap_or_else(|| Err(Error::from(ErrorInner::Timeout(timeout))))
+        let deadline = Instant::now() + DEFAULT_TIMEOUT;
+        let timeout = GLOBAL_TIMER_HANDLE.delay(deadline).compat();
+        futures::executor::block_on(async move {
+            futures::select! {
+                res = self.async_snapshot(ctx).fuse() => res,
+                _ = timeout.fuse() => Err(Error::from(ErrorInner::Timeout(DEFAULT_TIMEOUT))),
+            }
+        })
     }
 
     fn put(&self, ctx: &Context, key: Key, value: Value) -> Result<()> {
@@ -347,6 +353,18 @@ pub trait Engine: Send + Clone + 'static {
     // Some engines have a `TxnExtraScheduler`. This method is to send the extra
     // to the scheduler.
     fn schedule_txn_extra(&self, _txn_extra: TxnExtra) {}
+
+    /// Mark the start of flashback.
+    // It's an infrequent API, use trait object for simplicity.
+    fn start_flashback(&self, _ctx: &Context) -> BoxFuture<'static, Result<()>> {
+        Box::pin(futures::future::ready(Ok(())))
+    }
+
+    /// Mark the end of flashback.
+    // It's an infrequent API, use trait object for simplicity.
+    fn end_flashback(&self, _ctx: &Context) -> BoxFuture<'static, Result<()>> {
+        Box::pin(futures::future::ready(Ok(())))
+    }
 }
 
 /// A Snapshot is a consistent view of the underlying engine at a given point in
@@ -586,29 +604,16 @@ pub fn snapshot<E: Engine>(
     ctx: SnapContext<'_>,
 ) -> impl std::future::Future<Output = Result<E::Snap>> {
     let begin = Instant::now();
-    let (callback, future) =
-        tikv_util::future::paired_must_called_future_callback(drop_snapshot_callback::<E>);
-    let val = engine.async_snapshot(ctx, callback);
+    let val = engine.async_snapshot(ctx);
     // make engine not cross yield point
     async move {
-        val?; // propagate error
-        let result = future
-            .map_err(|cancel| Error::from(ErrorInner::Other(box_err!(cancel))))
-            .await?;
+        let result = val.await;
         with_tls_tracker(|tracker| {
             tracker.metrics.get_snapshot_nanos += begin.elapsed().as_nanos() as u64;
         });
         fail_point!("after-snapshot");
         result
     }
-}
-
-pub fn drop_snapshot_callback<E: Engine>() -> Result<E::Snap> {
-    let bt = backtrace::Backtrace::new();
-    warn!("async snapshot callback is dropped"; "backtrace" => ?bt);
-    let mut err = ErrorHeader::default();
-    err.set_message("async snapshot callback is dropped".to_string());
-    Err(Error::from(ErrorInner::Request(err)))
 }
 
 /// Write modifications into a `BaseRocksEngine` instance.
