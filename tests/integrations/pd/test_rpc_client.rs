@@ -1,13 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
-    thread,
-    time::Duration,
-};
+use std::{sync::Arc, thread, time::Duration};
 
 use error_code::ErrorCodeExt;
 use futures::{executor::block_on, StreamExt};
@@ -17,8 +10,16 @@ use pd_client::{Error as PdError, Feature, PdClientV2, PdConnector, RpcClientV2}
 use security::{SecurityConfig, SecurityManager};
 use test_pd::{mocker::*, util::*, Server as MockServer};
 use tikv_util::{config::ReadableDuration, mpsc::future::WakePolicy};
-use tokio::runtime::Builder;
+use tokio::runtime::{Builder, Runtime};
 use txn_types::TimeStamp;
+
+fn setup_runtime() -> Runtime {
+    Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap()
+}
 
 fn must_get_tso(client: &mut RpcClientV2, count: u32) -> TimeStamp {
     let (tx, mut responses) = client.create_tso_stream(WakePolicy::Immediately).unwrap();
@@ -53,11 +54,11 @@ fn test_retry_rpc_client() {
 
 #[test]
 fn test_rpc_client() {
+    let rt = setup_runtime();
+    let _g = rt.enter();
     let eps_count = 1;
     let server = MockServer::new(eps_count);
     let eps = server.bind_addrs();
-    let rt = Builder::new_multi_thread().enable_time().build().unwrap();
-    let _guard = rt.handle().enter();
 
     let mut client = new_client_v2(eps.clone(), None);
     assert_ne!(client.get_cluster_id().unwrap(), 0);
@@ -386,16 +387,14 @@ fn test_restart_leader_secure() {
 
 #[test]
 fn test_change_leader_async() {
+    let rt = setup_runtime();
+    let _g = rt.enter();
     let eps_count = 3;
     let server = MockServer::with_case(eps_count, Arc::new(LeaderChange::new()));
     let eps = server.bind_addrs();
 
-    let counter = Arc::new(AtomicUsize::new(0));
     let mut client = new_client_v2(eps, None);
-    let counter1 = Arc::clone(&counter);
-    client.set_on_reconnect(move || {
-        counter1.fetch_add(1, Ordering::SeqCst);
-    });
+    let mut reconnect_recv = client.subscribe_reconnect();
     let leader = client.get_leader();
 
     for _ in 0..5 {
@@ -404,7 +403,10 @@ fn test_change_leader_async() {
 
         let new = client.get_leader();
         if new != leader {
-            assert!(counter.load(Ordering::SeqCst) >= 1);
+            assert!(matches!(
+                reconnect_recv.try_recv(),
+                Ok(_) | Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_))
+            ));
             return;
         }
         thread::sleep(LeaderChange::get_leader_interval());
@@ -429,16 +431,12 @@ fn test_pd_client_ok_when_cluster_not_ready() {
 
 #[test]
 fn test_pd_client_heartbeat_send_failed() {
+    let rt = setup_runtime();
+    let _g = rt.enter();
     let pd_client_send_fail_fp = "region_heartbeat_send_failed";
     fail::cfg(pd_client_send_fail_fp, "return()").unwrap();
     let server = MockServer::with_case(1, Arc::new(AlreadyBootstrapped));
     let eps = server.bind_addrs();
-    let rt = Builder::new_multi_thread()
-        .worker_threads(1)
-        .enable_all()
-        .build()
-        .unwrap();
-    let _guard = rt.handle().enter();
 
     let mut client = new_client_v2(eps, None);
 
@@ -483,15 +481,11 @@ fn test_pd_client_heartbeat_send_failed() {
 
 #[test]
 fn test_region_heartbeat_on_leader_change() {
+    let rt = setup_runtime();
+    let _g = rt.enter();
     let eps_count = 3;
     let server = MockServer::with_case(eps_count, Arc::new(LeaderChange::new()));
     let eps = server.bind_addrs();
-    let rt = Builder::new_multi_thread()
-        .worker_threads(1)
-        .enable_all()
-        .build()
-        .unwrap();
-    let _guard = rt.handle().enter();
 
     let mut client = new_client_v2(eps, None);
 
@@ -542,22 +536,23 @@ fn test_region_heartbeat_on_leader_change() {
 
 #[test]
 fn test_periodical_update() {
+    let rt = setup_runtime();
+    let _g = rt.enter();
     let eps_count = 3;
     let server = MockServer::with_case(eps_count, Arc::new(LeaderChange::new()));
     let eps = server.bind_addrs();
 
-    let counter = Arc::new(AtomicUsize::new(0));
     let mut client = new_client_v2_with_update_interval(eps, None, ReadableDuration::secs(3));
-    let counter1 = Arc::clone(&counter);
-    client.set_on_reconnect(move || {
-        counter1.fetch_add(1, Ordering::SeqCst);
-    });
+    let mut reconnect_recv = client.subscribe_reconnect();
     let leader = client.get_leader();
 
     for _ in 0..5 {
         let new = client.get_leader();
         if new != leader {
-            assert!(counter.load(Ordering::SeqCst) >= 1);
+            assert!(matches!(
+                reconnect_recv.try_recv(),
+                Ok(_) | Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_))
+            ));
             return;
         }
         thread::sleep(LeaderChange::get_leader_interval());

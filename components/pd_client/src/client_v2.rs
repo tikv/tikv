@@ -372,11 +372,6 @@ impl CachedRawClient {
         header
     }
 
-    #[inline]
-    fn env(&self) -> &Arc<Environment> {
-        &self.core.context.connector.env
-    }
-
     /// Might panic if `wait_for_ready` isn't called up-front.
     #[cfg(feature = "testexport")]
     #[inline]
@@ -454,22 +449,6 @@ impl RpcClient {
     #[inline]
     pub fn subscribe_reconnect(&self) -> broadcast::Receiver<()> {
         self.raw_client.clone().on_reconnect_rx
-    }
-
-    #[cfg(feature = "testexport")]
-    pub fn set_on_reconnect<F: Fn() + Sync + Send + 'static>(&self, f: F) {
-        let lame_client =
-            PdClientStub::new(Channel::lame(self.raw_client.env().clone(), "0.0.0.0:0"));
-        let mut rx = self.subscribe_reconnect();
-        lame_client.spawn(async move {
-            loop {
-                if rx.recv().await.is_err() {
-                    break;
-                } else {
-                    f();
-                }
-            }
-        });
     }
 
     #[cfg(feature = "testexport")]
