@@ -56,6 +56,11 @@ lazy_static! {
         "tikv_import_download_bytes",
         "Bucketed histogram of importer download bytes",
         exponential_buckets(1024.0, 2.0, 20).unwrap()
+    ).unwrap();
+    pub static ref IMPORTER_APPLY_BYTES: Histogram = register_histogram!(
+        "tikv_import_apply_bytes",
+        "Bucketed histogram of importer apply bytes",
+        exponential_buckets(1024.0, 2.0, 20).unwrap()
     )
     .unwrap();
     pub static ref IMPORTER_INGEST_DURATION: HistogramVec = register_histogram_vec!(

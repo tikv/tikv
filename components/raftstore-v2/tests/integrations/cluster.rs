@@ -11,7 +11,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+use causal_ts::CausalTsProviderImpl;
 use collections::HashSet;
+use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{self, Receiver, Sender, TrySendError};
 use engine_test::{
     ctor::{CfOptions, DbOptions},
@@ -189,10 +191,12 @@ pub struct RunningState {
 
 impl RunningState {
     fn new(
-        pd_client: &RpcClient,
+        pd_client: &Arc<RpcClient>,
         path: &Path,
         cfg: Arc<VersionTrack<Config>>,
         transport: TestTransport,
+        concurrency_manager: ConcurrencyManager,
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
         logger: &Logger,
     ) -> (TestRouter, Self) {
         let cf_opts = ALL_CFS
@@ -208,7 +212,7 @@ impl RunningState {
         let raft_engine =
             engine_test::raft::new_engine(&format!("{}", path.join("raft").display()), None)
                 .unwrap();
-        let mut bootstrap = Bootstrap::new(&raft_engine, 0, pd_client, logger.clone());
+        let mut bootstrap = Bootstrap::new(&raft_engine, 0, pd_client.as_ref(), logger.clone());
         let store_id = bootstrap.bootstrap_store().unwrap();
         let mut store = Store::default();
         store.set_id(store_id);
@@ -243,9 +247,12 @@ impl RunningState {
                 raft_engine.clone(),
                 factory.clone(),
                 transport.clone(),
+                pd_client.clone(),
                 router.store_router(),
                 store_meta.clone(),
                 snap_mgr,
+                concurrency_manager,
+                causal_ts_provider,
             )
             .unwrap();
 
@@ -269,7 +276,7 @@ impl Drop for RunningState {
 }
 
 pub struct TestNode {
-    pd_client: RpcClient,
+    pd_client: Arc<RpcClient>,
     path: TempDir,
     running_state: Option<RunningState>,
     logger: Logger,
@@ -277,7 +284,7 @@ pub struct TestNode {
 
 impl TestNode {
     fn with_pd(pd_server: &test_pd::Server<Service>, logger: Logger) -> TestNode {
-        let pd_client = test_pd::util::new_client(pd_server.bind_addrs(), None);
+        let pd_client = Arc::new(test_pd::util::new_client(pd_server.bind_addrs(), None));
         let path = TempDir::new().unwrap();
 
         TestNode {
@@ -289,14 +296,25 @@ impl TestNode {
     }
 
     fn start(&mut self, cfg: Arc<VersionTrack<Config>>, trans: TestTransport) -> TestRouter {
-        let (router, state) =
-            RunningState::new(&self.pd_client, self.path.path(), cfg, trans, &self.logger);
+        let (router, state) = RunningState::new(
+            &self.pd_client,
+            self.path.path(),
+            cfg,
+            trans,
+            ConcurrencyManager::new(1.into()),
+            None,
+            &self.logger,
+        );
         self.running_state = Some(state);
         router
     }
 
     pub fn tablet_factory(&self) -> &Arc<TestTabletFactoryV2> {
         &self.running_state().unwrap().factory
+    }
+
+    pub fn pd_client(&self) -> &Arc<RpcClient> {
+        &self.pd_client
     }
 
     fn stop(&mut self) {

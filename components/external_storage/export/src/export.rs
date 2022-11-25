@@ -18,13 +18,10 @@ use encryption::DataKeyManager;
 use external_storage::dylib_client;
 #[cfg(feature = "cloud-storage-grpc")]
 use external_storage::grpc_client;
-use external_storage::{
-    compression_reader_dispatcher, encrypt_wrap_reader, record_storage_create, BackendConfig,
-    ExternalData, HdfsStorage,
-};
 pub use external_storage::{
-    read_external_storage_into_file, ExternalStorage, LocalStorage, NoopStorage, RestoreConfig,
-    UnpinReader,
+    compression_reader_dispatcher, encrypt_wrap_reader, read_external_storage_into_file,
+    record_storage_create, BackendConfig, ExternalData, ExternalStorage, HdfsStorage, LocalStorage,
+    NoopStorage, RestoreConfig, UnpinReader,
 };
 #[cfg(feature = "cloud-gcp")]
 pub use gcp::{Config as GcsConfig, GcsStorage};

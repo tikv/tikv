@@ -367,8 +367,9 @@ impl<S: EngineSnapshot> MvccReader<S> {
         mut ts: TimeStamp,
         gc_fence_limit: Option<TimeStamp>,
     ) -> Result<Option<(Write, TimeStamp)>> {
+        let mut seek_res = self.seek_write(key, ts)?;
         loop {
-            match self.seek_write(key, ts)? {
+            match seek_res {
                 Some((commit_ts, write)) => {
                     if let Some(limit) = gc_fence_limit {
                         if !write.as_ref().check_gc_fence_as_latest_version(limit) {
@@ -404,13 +405,15 @@ impl<S: EngineSnapshot> MvccReader<S> {
                                     commit_ts,
                                     write.write_type,
                                 );
-                                return Ok(Some((write, commit_ts)));
+                                seek_res = Some((commit_ts, write));
+                                continue;
                             }
                         }
                     }
                 }
                 None => return Ok(None),
             }
+            seek_res = self.seek_write(key, ts)?;
         }
     }
 
@@ -635,13 +638,18 @@ impl<S: EngineSnapshot> MvccReader<S> {
                             break;
                         }
                         WriteType::Lock | WriteType::Rollback => {
-                            // We should find the latest visible version after it.
+                            // Only return the PUT/DELETE write record.
+                            write = None;
+                            // Reach the end.
+                            if !cursor.valid()? {
+                                break;
+                            }
+                            // Try to find the latest visible version before it.
                             let key =
                                 Key::from_encoded_slice(cursor.key(&mut self.statistics.write));
                             // Could not find the visible version, current cursor is on the next
-                            // key, so we set both `write` and `cur_key` to `None`.
+                            // key, so we set `cur_key` to `None`.
                             if key.truncate_ts()? != user_key {
-                                write = None;
                                 cur_key = None;
                                 break;
                             }
@@ -1833,6 +1841,13 @@ pub mod tests {
             8,
         );
         engine.commit(b"k3", 8, 9);
+        // Prewrite and rollback k4.
+        engine.prewrite(
+            Mutation::make_put(Key::from_raw(b"k4"), b"v4@1".to_vec()),
+            b"k4",
+            10,
+        );
+        engine.rollback(b"k4", 10);
 
         // Current MVCC keys in `CF_WRITE` should be:
         // PUT      k0 -> v0@999
@@ -1844,6 +1859,7 @@ pub mod tests {
         // PUT      k3 -> v3@8
         // ROLLBACK k3 -> v3@7
         // PUT      k3 -> v3@5
+        // ROLLBACK k4 -> v4@1
 
         struct Case {
             start_key: Option<Key>,
@@ -2080,14 +2096,24 @@ pub mod tests {
                 start_key: None,
                 end_key: None,
                 version: Some(0),
-                limit: 5,
+                limit: 6,
                 expect_res: vec![
                     (Key::from_raw(b"k0"), None),
                     (Key::from_raw(b"k1"), None),
                     (Key::from_raw(b"k2"), None),
                     (Key::from_raw(b"k3"), None),
+                    (Key::from_raw(b"k4"), None),
                 ],
                 expect_is_remain: false,
+            },
+            // Test the invisible record.
+            Case {
+                start_key: Some(Key::from_raw(b"k4")),
+                end_key: None,
+                version: Some(10),
+                limit: 1,
+                expect_res: vec![(Key::from_raw(b"k4"), None)],
+                expect_is_remain: true,
             },
         ];
 
@@ -2540,9 +2566,17 @@ pub mod tests {
         engine.prewrite(m, k, 1);
         engine.commit(k, 1, 2);
 
-        // Write enough ROLLBACK/LOCK recrods
-        engine.rollback(k, 5);
+        // Write enough LOCK recrods
         for start_ts in (6..30).into_iter().step_by(2) {
+            engine.lock(k, start_ts, start_ts + 1);
+        }
+
+        let m = Mutation::make_delete(Key::from_raw(k));
+        engine.prewrite(m, k, 45);
+        engine.commit(k, 45, 46);
+
+        // Write enough LOCK recrods
+        for start_ts in (50..80).into_iter().step_by(2) {
             engine.lock(k, start_ts, start_ts + 1);
         }
 
@@ -2564,6 +2598,18 @@ pub mod tests {
             .unwrap();
         assert_eq!(commit_ts, 2.into());
         assert_eq!(write, w2);
+        // versions_to_last_change should be large enough to trigger a second get
+        // instead of calling a series of next, so the count of next should be 0 instead
+        assert_eq!(reader.statistics.write.next, 0);
+        assert_eq!(reader.statistics.write.get, 1);
+
+        // Clear statistics first
+        reader.statistics = Statistics::default();
+        let res = reader
+            .get_write_with_commit_ts(&key, 80.into(), None)
+            .unwrap();
+        // If the type is Delete, get_write_with_commit_ts should return None.
+        assert!(res.is_none());
         // versions_to_last_change should be large enough to trigger a second get
         // instead of calling a series of next, so the count of next should be 0 instead
         assert_eq!(reader.statistics.write.next, 0);
