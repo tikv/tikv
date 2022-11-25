@@ -1956,22 +1956,23 @@ impl TabletSnapManager {
         Ok(())
     }
 
-    pub fn get_final_path_for_gen(&self, key: &TabletSnapKey) -> PathBuf {
+    pub fn tablet_gen_path(&self, key: &TabletSnapKey) -> PathBuf {
         let prefix = format!("{}_{}", SNAP_GEN_PREFIX, key);
         PathBuf::from(&self.base).join(prefix)
     }
 
-    pub fn get_final_path_for_recv(&self, key: &TabletSnapKey) -> PathBuf {
+    pub fn final_recv_path(&self, key: &TabletSnapKey) -> PathBuf {
         let prefix = format!("{}_{}", SNAP_REV_PREFIX, key);
         PathBuf::from(&self.base).join(prefix)
     }
-    pub fn get_tmp_path_for_recv(&self, key: &TabletSnapKey) -> PathBuf {
+
+    pub fn tmp_recv_path(&self, key: &TabletSnapKey) -> PathBuf {
         let prefix = format!("{}_{}{}", SNAP_REV_PREFIX, key, TMP_FILE_SUFFIX);
         PathBuf::from(&self.base).join(prefix)
     }
 
     pub fn delete_snapshot(&self, key: &TabletSnapKey) -> bool {
-        let path = self.get_final_path_for_gen(key);
+        let path = self.tablet_gen_path(key);
         if path.exists() && let Err(e) = fs::remove_dir_all(path.as_path()) {
             error!(
                 "delete snapshot failed";
