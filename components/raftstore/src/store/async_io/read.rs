@@ -120,7 +120,7 @@ impl<EK: KvEngine, ER: RaftEngine, N: AsyncReadNotifier> ReadRunner<EK, ER, N> {
     }
 
     fn generate_snap(&self, snap_key: &TabletSnapKey, tablet: EK) -> crate::Result<()> {
-        let checkpointer_path = self.snap_mgr().get_final_path_for_gen(snap_key);
+        let checkpointer_path = self.snap_mgr().tablet_gen_path(snap_key);
         if checkpointer_path.as_path().exists() {
             // Remove the old checkpoint directly.
             std::fs::remove_dir_all(checkpointer_path.as_path())?;

@@ -169,12 +169,15 @@ where
     ready_number: u64,
     pub send_time: Instant,
     pub raft_wb: Option<ER::LogBatch>,
+    // called after writing to kvdb and raftdb.
+    pub persisted_cb: Option<Box<dyn FnOnce() + Send>>,
     pub entries: Vec<Entry>,
     pub cut_logs: Option<(u64, u64)>,
     pub raft_state: Option<RaftLocalState>,
     pub extra_write: ExtraWrite<EK::WriteBatch>,
     pub messages: Vec<RaftMessage>,
     pub trackers: Vec<TimeTracker>,
+    pub has_snapshot: bool,
 }
 
 impl<EK, ER> WriteTask<EK, ER>
@@ -195,6 +198,8 @@ where
             extra_write: ExtraWrite::None,
             messages: vec![],
             trackers: vec![],
+            persisted_cb: None,
+            has_snapshot: false,
         }
     }
 
@@ -361,6 +366,7 @@ where
     pub extra_batch_write: ExtraBatchWrite<EK::WriteBatch>,
     pub state_size: usize,
     pub tasks: Vec<WriteTask<EK, ER>>,
+    pub persisted_cbs: Vec<Box<dyn FnOnce() + Send>>,
     // region_id -> (peer_id, ready_number)
     pub readies: HashMap<u64, (u64, u64)>,
 }
@@ -377,6 +383,7 @@ where
             extra_batch_write: ExtraBatchWrite::None,
             state_size: 0,
             tasks: vec![],
+            persisted_cbs: vec![],
             readies: HashMap::default(),
         }
     }
@@ -430,7 +437,9 @@ where
                 );
             }
         }
-
+        if let Some(v) = task.persisted_cb.take() {
+            self.persisted_cbs.push(v);
+        };
         self.tasks.push(task);
     }
 
@@ -508,6 +517,12 @@ where
                     });
                 }
             }
+        }
+    }
+
+    fn after_write_all(&mut self) {
+        for hook in mem::take(&mut self.persisted_cbs) {
+            hook();
         }
     }
 
@@ -706,10 +721,8 @@ where
                 write_kv_time = duration_to_sec(now.saturating_elapsed());
                 STORE_WRITE_KVDB_DURATION_HISTOGRAM.observe(write_kv_time);
             }
-
             self.batch.after_write_to_kv_db(&self.metrics);
         }
-
         fail_point!("raft_between_save");
 
         let mut write_raft_time = 0f64;
@@ -745,6 +758,8 @@ where
         fail_point!("raft_after_save");
 
         self.batch.after_write_to_raft_db(&self.metrics);
+
+        self.batch.after_write_all();
 
         fail_point!("raft_before_follower_send");
 
