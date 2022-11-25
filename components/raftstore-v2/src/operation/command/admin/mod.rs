@@ -85,6 +85,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     "Split is deprecated. Please use BatchSplit instead."
                 )),
                 AdminCmdType::BatchSplit => self.propose_split(ctx, req),
+                AdminCmdType::CompactLog => self.propose_compact_log(ctx, req),
                 _ => unimplemented!(),
             }
         };
