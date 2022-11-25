@@ -177,6 +177,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
     fn on_start(&mut self) {
         self.schedule_tick(PeerTick::Raft);
+        self.schedule_tick(PeerTick::PdHeartbeat);
+        self.schedule_tick(PeerTick::RaftLogGc);
         if self.fsm.peer.storage().is_initialized() {
             self.fsm.peer.schedule_apply_fsm(self.store_ctx);
         }
