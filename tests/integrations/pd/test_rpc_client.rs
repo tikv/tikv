@@ -387,8 +387,6 @@ fn test_restart_leader_secure() {
 
 #[test]
 fn test_change_leader_async() {
-    let rt = setup_runtime();
-    let _g = rt.enter();
     let eps_count = 3;
     let server = MockServer::with_case(eps_count, Arc::new(LeaderChange::new()));
     let eps = server.bind_addrs();
@@ -536,8 +534,6 @@ fn test_region_heartbeat_on_leader_change() {
 
 #[test]
 fn test_periodical_update() {
-    let rt = setup_runtime();
-    let _g = rt.enter();
     let eps_count = 3;
     let server = MockServer::with_case(eps_count, Arc::new(LeaderChange::new()));
     let eps = server.bind_addrs();
