@@ -436,9 +436,10 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             ),
         );
 
-        let raft_log_gc_scheduler = workers
-            .raft_log_gc_worker
-            .start("raft-log-gc", RaftLogGcRunner::<EK, ER>::dummy());
+        let raft_log_gc_scheduler = workers.raft_log_gc_worker.start(
+            "raft-log-gc",
+            RaftLogGcRunner::new(raft_engine.clone(), self.logger.clone()),
+        );
 
         let mut builder = StorePollerBuilder::new(
             cfg.clone(),
