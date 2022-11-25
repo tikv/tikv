@@ -36,7 +36,7 @@ pub fn flashback_to_version_read_write<S: Snapshot>(
     flashback_version: TimeStamp,
     flashback_commit_ts: TimeStamp,
     statistics: &mut Statistics,
-) -> TxnResult<Vec<(Key, Option<Write>)>> {
+) -> TxnResult<Vec<Key>> {
     // Filter out the SST that does not have a newer version than
     // `flashback_version` in `CF_WRITE`, i.e, whose latest `commit_ts` <=
     // `flashback_version`. By doing this, we can only flashback those keys that
@@ -44,10 +44,9 @@ pub fn flashback_to_version_read_write<S: Snapshot>(
     reader.set_hint_min_ts(Some(Bound::Excluded(flashback_version)));
     // To flashback the data, we need to get all the latest visible keys first by
     // scanning every unique key in `CF_WRITE`.
-    let key_writes_result = reader.scan_writes(
+    let keys_result = reader.scan_latest_user_keys(
         Some(&next_write_key),
         Some(end_key),
-        None,
         |_, latest_commit_ts| {
             // There is no any other write could happen after the flashback begins.
             assert!(latest_commit_ts <= flashback_commit_ts);
@@ -60,8 +59,8 @@ pub fn flashback_to_version_read_write<S: Snapshot>(
         FLASHBACK_BATCH_SIZE,
     );
     statistics.add(&reader.statistics);
-    let (key_writes, _) = key_writes_result?;
-    Ok(key_writes)
+    let (keys, _) = keys_result?;
+    Ok(keys)
 }
 
 // To flashback the `CF_LOCK`, we need to delete all locks records whose
@@ -104,12 +103,12 @@ pub fn flashback_to_version_lock(
 pub fn flashback_to_version_write(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<impl Snapshot>,
-    key_writes: Vec<(Key, Option<Write>)>,
+    keys: Vec<Key>,
     flashback_version: TimeStamp,
     flashback_start_ts: TimeStamp,
     flashback_commit_ts: TimeStamp,
 ) -> TxnResult<Option<Key>> {
-    for (key, _) in key_writes {
+    for key in keys {
         #[cfg(feature = "failpoints")]
         {
             let should_skip = || {
