@@ -9,7 +9,10 @@ use std::{
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory};
-use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, pdpb, raft_serverpb::RegionLocalState};
+use kvproto::{
+    kvrpcpb::ExtraOp as TxnExtraOp, metapb, pdpb, raft_cmdpb::RaftCmdRequest,
+    raft_serverpb::RegionLocalState,
+};
 use pd_client::BucketStat;
 use raft::{RawNode, StateRole};
 use raftstore::{
@@ -61,6 +64,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     pub(crate) peer_heartbeats: HashMap<u64, Instant>,
 
     /// For gc.
+    pub last_compacted_index: u64,
     pub skip_gc_raft_log_ticks: usize,
     pub raft_log_size_hint: u64,
 
@@ -141,6 +145,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self_stat: PeerStat::default(),
             peer_cache: vec![],
             peer_heartbeats: HashMap::default(),
+            last_compacted_index: 0,
             skip_gc_raft_log_ticks: 0,
             raft_log_size_hint: 0,
             raw_write_encoder: None,
@@ -605,5 +610,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .store(initial_status, Ordering::SeqCst);
 
         self.update_max_timestamp_pd(ctx, initial_status);
+    }
+
+    #[inline]
+    pub fn new_admin_request(&self) -> RaftCmdRequest {
+        let mut request = RaftCmdRequest::default();
+        request.mut_header().set_region_id(self.region_id());
+        request.mut_header().set_peer(self.peer().clone());
+        request
     }
 }

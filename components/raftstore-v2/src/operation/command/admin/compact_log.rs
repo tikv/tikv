@@ -28,7 +28,7 @@ use raftstore::{
     },
     Result,
 };
-use slog::{error, info, warn, Logger};
+use slog::{debug, error, info, warn, Logger};
 use tikv_util::box_err;
 
 use crate::{
@@ -37,6 +37,7 @@ use crate::{
     operation::AdminCmdResult,
     raft::{write_initial_states, Apply, Peer, Storage},
     router::{ApplyRes, PeerMsg, StoreMsg},
+    worker::RaftLogGcTask,
 };
 
 #[derive(Debug)]
@@ -50,9 +51,42 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         res: CompactLogResult,
     ) {
-        self.schedule_raftlog_gc(store_ctx, res.compact_to);
+        // TODO: check entry_cache_warmup_state
+        self.schedule_raft_log_gc(store_ctx, res.compact_to);
         self.entry_storage_mut().compact_entry_cache(res.compact_to);
         // TODO: cancel_generating_snap
+    }
+
+    pub fn schedule_raft_log_gc<T>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        compact_to: u64,
+    ) {
+        let task = RaftLogGcTask::gc(self.region_id(), self.last_compacted_index, compact_to);
+        debug!(
+            self.logger,
+            "scheduling raft log gc task";
+            "region_id" => self.region_id(),
+            "peer_id" => self.peer_id(),
+            "task" => %task,
+        );
+        if let Err(e) = store_ctx.raft_log_gc_scheduler.schedule(task) {
+            error!(
+                self.logger,
+                "failed to schedule raft log gc task";
+                "region_id" => self.region_id(),
+                "peer_id" => self.peer_id(),
+                "err" => %e,
+            );
+        } else {
+            self.last_compacted_index = compact_to;
+
+            let total_cnt = self.storage().apply_state().get_applied_index()
+                - self.storage().entry_storage().first_index();
+            // the size of current CompactLog command can be ignored.
+            let remain_cnt = self.storage().apply_state().get_applied_index() - compact_to - 1;
+            self.raft_log_size_hint = self.raft_log_size_hint * remain_cnt / total_cnt;
+        }
     }
 }
 
@@ -62,6 +96,14 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         req: &AdminRequest,
         log_index: u64,
     ) -> Result<(AdminResponse, AdminCmdResult)> {
-        unimplemented!()
+        let compact_index = req.get_compact_log().get_compact_index();
+        let resp = AdminResponse::default();
+        // TODO: check before propose?
+        Ok((
+            resp,
+            AdminCmdResult::CompactLog(CompactLogResult {
+                compact_to: compact_index,
+            }),
+        ))
     }
 }
