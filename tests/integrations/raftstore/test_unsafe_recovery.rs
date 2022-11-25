@@ -677,7 +677,6 @@ fn test_force_leader_on_hibernated_leader() {
 // previous follower.
 #[test]
 fn test_force_leader_on_hibernated_follower() {
-    test_util::init_log_for_test();
     let mut cluster = new_node_cluster(0, 5);
     cluster.pd_client.disable_default_operator();
 

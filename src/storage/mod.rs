@@ -96,7 +96,7 @@ use tikv_util::{
 use tracker::{
     clear_tls_tracker_token, set_tls_tracker_token, with_tls_tracker, TrackedFuture, TrackerToken,
 };
-use txn_types::{Key, KvPair, Lock, LockType, OldValues, TimeStamp, TsSet, Value};
+use txn_types::{Key, KvPair, Lock, LockType, TimeStamp, TsSet, Value};
 
 pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
@@ -1416,7 +1416,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         callback: Callback<T>,
     ) -> Result<()> {
         use crate::storage::txn::commands::{
-            AcquirePessimisticLock, Prewrite, PrewritePessimistic,
+            AcquirePessimisticLock, AcquirePessimisticLockResumed, Prewrite, PrewritePessimistic,
         };
 
         let cmd: Command = cmd.into();
@@ -1448,6 +1448,18 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     self.api_version,
                     cmd.ctx().api_version,
                     CommandKind::prewrite,
+                    keys.clone(),
+                )?;
+                check_key_size!(keys, self.max_key_size, callback);
+            }
+            Command::AcquirePessimisticLockResumed(AcquirePessimisticLockResumed {
+                items, ..
+            }) => {
+                let keys = items.iter().map(|item| item.key.as_encoded());
+                Self::check_api_version(
+                    self.api_version,
+                    cmd.ctx().api_version,
+                    CommandKind::acquire_pessimistic_lock_resumed,
                     keys.clone(),
                 )?;
                 check_key_size!(keys, self.max_key_size, callback);
@@ -2971,18 +2983,14 @@ impl<E: Engine> Engine for TxnTestEngine<E> {
         self.engine.modify_on_kv_engine(region_modifies)
     }
 
-    fn async_snapshot(
-        &mut self,
-        ctx: SnapContext<'_>,
-        cb: tikv_kv::Callback<Self::Snap>,
-    ) -> tikv_kv::Result<()> {
+    type SnapshotRes = impl Future<Output = tikv_kv::Result<Self::Snap>> + Send;
+    fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes {
         let txn_ext = self.txn_ext.clone();
-        self.engine.async_snapshot(
-            ctx,
-            Box::new(move |snapshot| {
-                cb(snapshot.map(|snapshot| TxnTestSnapshot { snapshot, txn_ext }))
-            }),
-        )
+        let f = self.engine.async_snapshot(ctx);
+        async move {
+            let snapshot = f.await?;
+            Ok(TxnTestSnapshot { snapshot, txn_ext })
+        }
     }
 
     fn async_write(
@@ -3341,8 +3349,8 @@ pub mod test_util {
             Some(WaitTimeout::Default),
             return_values,
             for_update_ts.next(),
-            OldValues::default(),
             check_existence,
+            false,
             false,
             Context::default(),
         )
@@ -3472,7 +3480,7 @@ mod tests {
     use super::{
         mvcc::tests::{must_unlocked, must_written},
         test_util::*,
-        txn::FLASHBACK_BATCH_SIZE,
+        txn::{commands::new_flashback_to_version_read_phase_cmd, FLASHBACK_BATCH_SIZE},
         *,
     };
     use crate::{
@@ -4745,13 +4753,12 @@ mod tests {
             let version = write.2;
             storage
                 .sched_txn_command(
-                    commands::FlashbackToVersionReadPhase::new(
+                    new_flashback_to_version_read_phase_cmd(
                         start_ts,
                         commit_ts,
                         version,
-                        None,
-                        Some(key.clone()),
-                        Some(key.clone()),
+                        key.clone(),
+                        Key::from_raw(b"z"),
                         Context::default(),
                     ),
                     expect_ok_callback(tx.clone(), 2),
@@ -4836,13 +4843,12 @@ mod tests {
         let commit_ts = *ts.incr();
         storage
             .sched_txn_command(
-                commands::FlashbackToVersionReadPhase::new(
+                new_flashback_to_version_read_phase_cmd(
                     start_ts,
                     commit_ts,
                     2.into(),
-                    None,
-                    Some(Key::from_raw(b"k")),
-                    Some(Key::from_raw(b"k")),
+                    Key::from_raw(b"k"),
+                    Key::from_raw(b"z"),
                     Context::default(),
                 ),
                 expect_ok_callback(tx.clone(), 3),
@@ -4859,13 +4865,12 @@ mod tests {
         let commit_ts = *ts.incr();
         storage
             .sched_txn_command(
-                commands::FlashbackToVersionReadPhase::new(
+                new_flashback_to_version_read_phase_cmd(
                     start_ts,
                     commit_ts,
                     1.into(),
-                    None,
-                    Some(Key::from_raw(b"k")),
-                    Some(Key::from_raw(b"k")),
+                    Key::from_raw(b"k"),
+                    Key::from_raw(b"z"),
                     Context::default(),
                 ),
                 expect_ok_callback(tx, 4),
@@ -4950,30 +4955,115 @@ mod tests {
                     .0,
             );
         }
-        // Flashback all records.
+        // Flashback all records multiple times to make sure the flashback operation is
+        // idempotent.
+        let flashback_start_ts = *ts.incr();
+        let flashback_commit_ts = *ts.incr();
+        for _ in 0..10 {
+            storage
+                .sched_txn_command(
+                    new_flashback_to_version_read_phase_cmd(
+                        flashback_start_ts,
+                        flashback_commit_ts,
+                        TimeStamp::zero(),
+                        Key::from_raw(b"k"),
+                        Key::from_raw(b"z"),
+                        Context::default(),
+                    ),
+                    expect_ok_callback(tx.clone(), 2),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+            for i in 1..=FLASHBACK_BATCH_SIZE * 4 {
+                let key = Key::from_raw(format!("k{}", i).as_bytes());
+                expect_none(
+                    block_on(storage.get(Context::default(), key, *ts.incr()))
+                        .unwrap()
+                        .0,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_flashback_to_version_deleted_key() {
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+        let mut ts = TimeStamp::zero();
+        let (k, v) = (Key::from_raw(b"k"), b"v".to_vec());
+        // Write a key.
         storage
             .sched_txn_command(
-                commands::FlashbackToVersionReadPhase::new(
+                commands::Prewrite::with_defaults(
+                    vec![Mutation::make_put(k.clone(), v.clone())],
+                    k.as_encoded().to_vec(),
                     *ts.incr(),
-                    *ts.incr(),
-                    TimeStamp::zero(),
-                    None,
-                    Some(Key::from_raw(b"k")),
-                    Some(Key::from_raw(b"k")),
-                    Context::default(),
                 ),
-                expect_ok_callback(tx, 2),
+                expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
         rx.recv().unwrap();
-        for i in 1..=FLASHBACK_BATCH_SIZE * 4 {
-            let key = Key::from_raw(format!("k{}", i).as_bytes());
-            expect_none(
-                block_on(storage.get(Context::default(), key, *ts.incr()))
-                    .unwrap()
-                    .0,
-            );
-        }
+        storage
+            .sched_txn_command(
+                commands::Commit::new(vec![k.clone()], ts, *ts.incr(), Context::default()),
+                expect_value_callback(tx.clone(), 1, TxnStatus::committed(ts)),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_value(
+            v,
+            block_on(storage.get(Context::default(), k.clone(), ts))
+                .unwrap()
+                .0,
+        );
+        // Delete the key.
+        storage
+            .sched_txn_command(
+                commands::Prewrite::with_defaults(
+                    vec![Mutation::make_delete(k.clone())],
+                    k.as_encoded().to_vec(),
+                    *ts.incr(),
+                ),
+                expect_ok_callback(tx.clone(), 2),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .sched_txn_command(
+                commands::Commit::new(vec![k.clone()], ts, *ts.incr(), Context::default()),
+                expect_value_callback(tx.clone(), 3, TxnStatus::committed(ts)),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_none(
+            block_on(storage.get(Context::default(), Key::from_raw(b"k"), ts))
+                .unwrap()
+                .0,
+        );
+        // Flashback the key.
+        let flashback_start_ts = *ts.incr();
+        let flashback_commit_ts = *ts.incr();
+        storage
+            .sched_txn_command(
+                new_flashback_to_version_read_phase_cmd(
+                    flashback_start_ts,
+                    flashback_commit_ts,
+                    1.into(),
+                    Key::from_raw(b"k"),
+                    Key::from_raw(b"z"),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx, 4),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_none(
+            block_on(storage.get(Context::default(), k, flashback_commit_ts))
+                .unwrap()
+                .0,
+        );
     }
 
     #[test]
@@ -8111,7 +8201,7 @@ mod tests {
                     Some(WaitTimeout::Millis(100)),
                     false,
                     21.into(),
-                    OldValues::default(),
+                    false,
                     false,
                     false,
                     Context::default(),
@@ -8203,7 +8293,7 @@ mod tests {
                             Some(WaitTimeout::Millis(5000)),
                             false,
                             (lock_ts + 1).into(),
-                            OldValues::default(),
+                            false,
                             false,
                             false,
                             Context::default(),
@@ -8788,7 +8878,7 @@ mod tests {
                     None,
                     false,
                     0.into(),
-                    OldValues::default(),
+                    false,
                     false,
                     false,
                     Default::default(),
@@ -8811,7 +8901,7 @@ mod tests {
                     None,
                     false,
                     0.into(),
-                    OldValues::default(),
+                    false,
                     false,
                     false,
                     Default::default(),
@@ -9041,7 +9131,7 @@ mod tests {
                 None,
                 false,
                 TimeStamp::new(12),
-                OldValues::default(),
+                false,
                 false,
                 false,
                 Context::default(),
@@ -9067,7 +9157,7 @@ mod tests {
                 None,
                 false,
                 TimeStamp::new(12),
-                OldValues::default(),
+                false,
                 false,
                 false,
                 Context::default(),

@@ -24,8 +24,8 @@ pub use self::{
         cleanup::cleanup,
         commit::commit,
         flashback_to_version::{
-            flashback_to_version, flashback_to_version_read_lock, flashback_to_version_read_write,
-            FLASHBACK_BATCH_SIZE,
+            flashback_to_version_lock, flashback_to_version_read_lock,
+            flashback_to_version_read_write, flashback_to_version_write, FLASHBACK_BATCH_SIZE,
         },
         gc::gc,
         prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties},
@@ -45,6 +45,7 @@ use crate::storage::{
 };
 
 /// Process result of a command.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum ProcessResult {
     Res,

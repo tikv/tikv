@@ -4,7 +4,7 @@ use txn_types::{Key, Lock, TimeStamp, Write, WriteType};
 
 use crate::storage::{
     mvcc::{MvccReader, MvccTxn, SnapshotReader, MAX_TXN_WRITE_SIZE},
-    txn::{actions::check_txn_status::rollback_lock, Error, ErrorInner, Result as TxnResult},
+    txn::{actions::check_txn_status::rollback_lock, Result as TxnResult},
     Snapshot, Statistics,
 };
 
@@ -12,16 +12,13 @@ pub const FLASHBACK_BATCH_SIZE: usize = 256 + 1 /* To store the next key for mul
 
 pub fn flashback_to_version_read_lock<S: Snapshot>(
     reader: &mut MvccReader<S>,
-    next_lock_key: &Option<Key>,
-    end_key: &Option<Key>,
+    next_lock_key: Key,
+    end_key: &Key,
     statistics: &mut Statistics,
 ) -> TxnResult<(Vec<(Key, Lock)>, bool)> {
-    if next_lock_key.is_none() {
-        return Ok((vec![], false));
-    }
     let key_locks_result = reader.scan_locks(
-        next_lock_key.as_ref(),
-        end_key.as_ref(),
+        Some(&next_lock_key),
+        Some(end_key),
         // To flashback `CF_LOCK`, we need to delete all locks.
         |_| true,
         FLASHBACK_BATCH_SIZE,
@@ -32,74 +29,48 @@ pub fn flashback_to_version_read_lock<S: Snapshot>(
 
 pub fn flashback_to_version_read_write<S: Snapshot>(
     reader: &mut MvccReader<S>,
-    key_locks_len: usize,
-    next_write_key: &Option<Key>,
-    end_key: &Option<Key>,
+    next_write_key: Key,
+    end_key: &Key,
     flashback_version: TimeStamp,
-    flashback_start_ts: TimeStamp,
     flashback_commit_ts: TimeStamp,
     statistics: &mut Statistics,
-) -> TxnResult<(Vec<(Key, Option<Write>)>, bool)> {
-    if next_write_key.is_none() {
-        return Ok((vec![], false));
-    } else if key_locks_len >= FLASHBACK_BATCH_SIZE {
-        // The batch is full, we need to read the writes in the next batch later.
-        return Ok((vec![], true));
-    }
+) -> TxnResult<Vec<(Key, Option<Write>)>> {
     // To flashback the data, we need to get all the latest keys first by scanning
     // every unique key in `CF_WRITE` and to get its corresponding old MVCC write
     // record if exists.
-    let (key_ts_old_writes, has_remain_writes) = reader.scan_writes(
-        next_write_key.as_ref(),
-        end_key.as_ref(),
+    let result = reader.scan_writes(
+        Some(&next_write_key),
+        Some(end_key),
         Some(flashback_version),
-        // No need to find an old version for the key if its latest `commit_ts` is smaller
-        // than or equal to the version.
-        |key| key.decode_ts().unwrap_or(TimeStamp::zero()) > flashback_version,
-        FLASHBACK_BATCH_SIZE - key_locks_len,
-    )?;
+        |_, latest_commit_ts| {
+            // There is no any other write could happen after the flashback begins.
+            assert!(latest_commit_ts <= flashback_commit_ts);
+            // - No need to find an old version for the key if its latest `commit_ts` is
+            // smaller than or equal to the flashback version.
+            // - No need to flashback a key twice if its latest `commit_ts` is equal to the
+            //   flashback `commit_ts`.
+            latest_commit_ts > flashback_version && latest_commit_ts < flashback_commit_ts
+        },
+        FLASHBACK_BATCH_SIZE,
+    );
     statistics.add(&reader.statistics);
-    let mut key_old_writes = Vec::with_capacity(FLASHBACK_BATCH_SIZE - key_locks_len);
-    // Check the latest commit ts to make sure there is no commit change during the
-    // flashback, otherwise, we need to abort the flashback.
-    for (key, commit_ts, old_write) in key_ts_old_writes {
-        if commit_ts > flashback_commit_ts {
-            return Err(Error::from(ErrorInner::InvalidTxnTso {
-                start_ts: flashback_start_ts,
-                commit_ts: flashback_commit_ts,
-            }));
-        }
-        // Since the first flashback preparation phase make sure there will be no writes
-        // other than flashback after it, so we need to check if there is already a
-        // successful flashback result, and if so, just finish the flashback ASAP.
-        if commit_ts == flashback_commit_ts {
-            key_old_writes.clear();
-            return Ok((key_old_writes, false));
-        }
-        key_old_writes.push((key, old_write));
-    }
-    Ok((key_old_writes, has_remain_writes))
+    let (key_old_writes, _) = result?;
+    Ok(key_old_writes)
 }
 
-pub fn flashback_to_version(
+// To flashback the `CF_LOCK`, we need to delete all locks records whose
+// `start_ts` is greater than the specified version, and if it's not a
+// short-value `LockType::Put`, we need to delete the actual data from
+// `CF_DEFAULT` as well.
+// TODO: `resolved_ts` should be taken into account.
+pub fn flashback_to_version_lock(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<impl Snapshot>,
-    next_lock_key: &mut Option<Key>,
-    next_write_key: &mut Option<Key>,
     key_locks: Vec<(Key, Lock)>,
-    key_old_writes: Vec<(Key, Option<Write>)>,
-    start_ts: TimeStamp,
-    commit_ts: TimeStamp,
-) -> TxnResult<usize> {
-    // To flashback the `CF_LOCK`, we need to delete all locks records whose
-    // `start_ts` is greater than the specified version, and if it's not a
-    // short-value `LockType::Put`, we need to delete the actual data from
-    // `CF_DEFAULT` as well.
-    // TODO: `resolved_ts` should be taken into account.
+) -> TxnResult<Option<Key>> {
     for (key, lock) in key_locks {
         if txn.write_size() >= MAX_TXN_WRITE_SIZE {
-            *next_lock_key = Some(key);
-            break;
+            return Ok(Some(key));
         }
         // To guarantee rollback with start ts of the locks
         reader.start_ts = lock.ts;
@@ -112,18 +83,36 @@ pub fn flashback_to_version(
             true,
         )?;
     }
-    // To flashback the `CF_WRITE` and `CF_DEFAULT`, we need to write a new MVCC
-    // record for each key in `self.keys` with its old value at `self.version`,
-    // specifically, the flashback will have the following behavior:
-    //   - If a key doesn't exist at `self.version`, it will be put a
-    //     `WriteType::Delete`.
-    //   - If a key exists at `self.version`, it will be put the exact same record
-    //     in `CF_WRITE` and `CF_DEFAULT` if needed with `self.commit_ts` and
-    //     `self.start_ts`.
+    Ok(None)
+}
+
+// To flashback the `CF_WRITE` and `CF_DEFAULT`, we need to write a new MVCC
+// record for each key in `self.keys` with its old value at `self.version`,
+// specifically, the flashback will have the following behavior:
+//   - If a key doesn't exist at `self.version`, it will be put a
+//     `WriteType::Delete`.
+//   - If a key exists at `self.version`, it will be put the exact same record
+//     in `CF_WRITE` and `CF_DEFAULT` with `self.commit_ts` and `self.start_ts`.
+pub fn flashback_to_version_write(
+    txn: &mut MvccTxn,
+    reader: &mut SnapshotReader<impl Snapshot>,
+    key_old_writes: Vec<(Key, Option<Write>)>,
+    start_ts: TimeStamp,
+    commit_ts: TimeStamp,
+) -> TxnResult<Option<Key>> {
     for (key, old_write) in key_old_writes {
+        #[cfg(feature = "failpoints")]
+        {
+            let should_skip = || {
+                fail::fail_point!("flashback_skip_1_key_in_write", |_| true);
+                false
+            };
+            if should_skip() {
+                continue;
+            }
+        }
         if txn.write_size() >= MAX_TXN_WRITE_SIZE {
-            *next_write_key = Some(key);
-            break;
+            return Ok(Some(key.clone()));
         }
         let new_write = if let Some(old_write) = old_write {
             // If it's not a short value and it's a `WriteType::Put`, we should put the old
@@ -135,20 +124,19 @@ pub fn flashback_to_version(
                     reader.load_data(&key, old_write.clone())?,
                 );
             }
-            Write::new(old_write.write_type, start_ts, old_write.short_value)
+            Write::new(
+                old_write.write_type,
+                start_ts,
+                old_write.short_value.clone(),
+            )
         } else {
             // If the old write doesn't exist, we should put a `WriteType::Delete` record to
             // delete the current key when needed.
-            if let Some((_, latest_write)) = reader.seek_write(&key, commit_ts)? {
-                if latest_write.write_type == WriteType::Delete {
-                    continue;
-                }
-            }
             Write::new(WriteType::Delete, start_ts, None)
         };
         txn.put_write(key.clone(), commit_ts, new_write.as_ref().to_bytes());
     }
-    Ok(txn.modifies.len())
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -179,43 +167,47 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
     ) -> usize {
+        let next_key = Key::from_raw(keys::next_key(key).as_slice());
         let key = Key::from_raw(key);
         let (version, start_ts, commit_ts) = (version.into(), start_ts.into(), commit_ts.into());
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &ctx);
         let mut statistics = Statistics::default();
+        // Flashback the locks.
         let (key_locks, has_remain_locks) =
-            flashback_to_version_read_lock(&mut reader, &Some(key.clone()), &None, &mut statistics)
+            flashback_to_version_read_lock(&mut reader, key.clone(), &next_key, &mut statistics)
                 .unwrap();
         assert!(!has_remain_locks);
-        let (key_old_writes, has_remain_writes) = flashback_to_version_read_write(
+        let cm = ConcurrencyManager::new(TimeStamp::zero());
+        let mut txn = MvccTxn::new(start_ts, cm.clone());
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut snap_reader = SnapshotReader::new_with_ctx(version, snapshot, &ctx);
+        flashback_to_version_lock(&mut txn, &mut snap_reader, key_locks).unwrap();
+        let mut rows = txn.modifies.len();
+        write(engine, &ctx, txn.into_modifies());
+        // Flashback the writes.
+        let key_old_writes = flashback_to_version_read_write(
             &mut reader,
-            0,
-            &Some(key.clone()),
-            &None,
+            key,
+            &next_key,
             version,
-            start_ts,
             commit_ts,
             &mut statistics,
         )
         .unwrap();
-        assert!(!has_remain_writes);
-        let cm = ConcurrencyManager::new(TimeStamp::zero());
         let mut txn = MvccTxn::new(start_ts, cm);
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = SnapshotReader::new_with_ctx(version, snapshot, &ctx);
-        let rows = flashback_to_version(
+        let mut snap_reader = SnapshotReader::new_with_ctx(version, snapshot, &ctx);
+        flashback_to_version_write(
             &mut txn,
-            &mut reader,
-            &mut None,
-            &mut Some(key),
-            key_locks,
+            &mut snap_reader,
             key_old_writes,
             start_ts,
             commit_ts,
         )
         .unwrap();
+        rows += txn.modifies.len();
         write(engine, &ctx, txn.into_modifies());
         rows
     }
@@ -301,11 +293,11 @@ pub mod tests {
         must_get(&mut engine, k, ts, v);
         must_prewrite_delete(&mut engine, k, k, *ts.incr());
         must_commit(&mut engine, k, ts, *ts.incr());
-        // Since the key has been deleted, flashback to version 1 should not do
-        // anything.
+        // Though the key has been deleted, flashback to version 1 still needs to write
+        // a new `WriteType::Delete` with the flashback `commit_ts`.
         assert_eq!(
             must_flashback_to_version(&mut engine, k, 1, *ts.incr(), *ts.incr()),
-            0
+            1
         );
         must_get_none(&mut engine, k, ts);
     }
