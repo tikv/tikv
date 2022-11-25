@@ -35,7 +35,7 @@ use futures::{
 };
 use grpcio::{
     CallOption, Channel, ClientDuplexReceiver, ConnectivityState, EnvBuilder, Environment,
-    Error as GrpcError, Result as GrpcResult, RpcStatusCode, WriteFlags,
+    Error as GrpcError, Result as GrpcResult, WriteFlags,
 };
 use kvproto::{
     metapb,
@@ -164,7 +164,7 @@ impl RawClient {
 struct CachedRawClientCore {
     context: ConnectContext,
 
-    latest: Mutex<Option<RawClient>>,
+    latest: Mutex<RawClient>,
     version: AtomicU64,
     on_reconnect_tx: broadcast::Sender<()>,
 }
@@ -175,7 +175,7 @@ pub struct CachedRawClient {
     should_reconnect_tx: mpsc::Sender<u64>,
     on_reconnect_rx: broadcast::Receiver<()>,
 
-    cache: Option<RawClient>,
+    cache: RawClient,
     cache_version: u64,
 }
 
@@ -198,6 +198,12 @@ impl CachedRawClient {
         security_mgr: Arc<SecurityManager>,
         should_reconnect_tx: mpsc::Sender<u64>,
     ) -> Self {
+        let lame_stub = PdClientStub::new(Channel::lame(env.clone(), "0.0.0.0:0"));
+        let client = RawClient {
+            stub: lame_stub,
+            target_info: TargetInfo::new("0.0.0.0:0".to_string(), ""),
+            members: GetMembersResponse::new(),
+        };
         let context = ConnectContext {
             cfg,
             connector: PdConnector::new(env, security_mgr),
@@ -205,7 +211,7 @@ impl CachedRawClient {
         let (tx, rx) = broadcast::channel(1);
         let core = CachedRawClientCore {
             context,
-            latest: Mutex::new(None),
+            latest: Mutex::new(client.clone()),
             version: AtomicU64::new(0),
             on_reconnect_tx: tx,
         };
@@ -213,17 +219,9 @@ impl CachedRawClient {
             core: Arc::new(core),
             should_reconnect_tx,
             on_reconnect_rx: rx,
-            cache: None,
+            cache: client,
             cache_version: 0,
         }
-    }
-
-    #[inline]
-    fn new_lame_client(&self) -> PdClientStub {
-        PdClientStub::new(Channel::lame(
-            self.core.context.connector.env.clone(),
-            "0.0.0.0:0",
-        ))
     }
 
     #[inline]
@@ -278,27 +276,12 @@ impl CachedRawClient {
     /// The connection must be available if this function returns `Ok(())`.
     async fn wait_for_ready(&mut self) -> Result<()> {
         self.refresh_cache();
-        if self.cache.is_none() {
-            if !Self::wait_for_a_new_client(
-                &mut self.on_reconnect_rx,
-                self.cache_version,
-                &self.core.version,
-            )
-            .await
-            {
-                return Err(box_err!("Connection is not initialized in time"));
-            }
-            assert!(self.refresh_cache());
-            assert!(self.cache.is_some());
-        }
         if self.channel().check_connectivity_state(false) == ConnectivityState::GRPC_CHANNEL_READY {
             return Ok(());
         }
         select! {
             r = self
                 .cache
-                .as_ref()
-                .unwrap()
                 .stub
                 .client
                 .channel()
@@ -328,8 +311,7 @@ impl CachedRawClient {
 
     /// Makes the first connection.
     async fn connect(&mut self) -> Result<()> {
-        debug_assert!(self.cache.is_none());
-        self.cache = Some(RawClient::connect(&self.core.context).await?);
+        self.cache = RawClient::connect(&self.core.context).await?;
         self.publish_cache();
         Ok(())
     }
@@ -341,8 +323,6 @@ impl CachedRawClient {
             == ConnectivityState::GRPC_CHANNEL_SHUTDOWN;
         if self
             .cache
-            .as_mut()
-            .unwrap()
             .maybe_reconnect(&self.core.context, force)
             .await?
         {
@@ -354,7 +334,7 @@ impl CachedRawClient {
 
     #[inline]
     fn check_resp<T>(&mut self, resp: GrpcResult<T>) -> GrpcResult<T> {
-        if let Err(GrpcError::RpcFailure(ref status)) = resp && status.code() == RpcStatusCode::UNKNOWN {
+        if matches!(resp, Err(GrpcError::RpcFailure(_))) {
             let _ = self.should_reconnect_tx.send(self.cache_version);
         }
         resp
@@ -363,30 +343,25 @@ impl CachedRawClient {
     /// Might panic if `wait_for_ready` isn't called up-front.
     #[inline]
     fn stub(&self) -> &PdClientStub {
-        &self.cache.as_ref().unwrap().stub
+        &self.cache.stub
     }
 
     /// Might panic if `wait_for_ready` isn't called up-front.
     #[inline]
     fn channel(&self) -> &Channel {
-        self.cache.as_ref().unwrap().stub.client.channel()
+        self.cache.stub.client.channel()
     }
 
     /// Might panic if `wait_for_ready` isn't called up-front.
     #[inline]
     fn call_option(&self) -> CallOption {
-        self.cache.as_ref().unwrap().target_info.call_option()
+        self.cache.target_info.call_option()
     }
 
     /// Might panic if `wait_for_ready` isn't called up-front.
     #[inline]
     fn cluster_id(&self) -> u64 {
-        self.cache
-            .as_ref()
-            .unwrap()
-            .members
-            .get_header()
-            .get_cluster_id()
+        self.cache.members.get_header().get_cluster_id()
     }
 
     /// Might panic if `wait_for_ready` isn't called up-front.
@@ -406,7 +381,7 @@ impl CachedRawClient {
     #[cfg(feature = "testexport")]
     #[inline]
     fn leader(&self) -> pdpb::Member {
-        self.cache.as_ref().unwrap().members.get_leader().clone()
+        self.cache.members.get_leader().clone()
     }
 }
 
@@ -445,7 +420,7 @@ async fn reconnect_loop(
 
 #[derive(Clone)]
 pub struct RpcClient {
-    raw_client: CachedRawClient,
+    pub raw_client: CachedRawClient,
     feature_gate: FeatureGate,
 }
 
@@ -467,7 +442,7 @@ impl RpcClient {
         let (tx, rx) = mpsc::unbounded(mpsc::WakePolicy::Immediately);
         let raw_client = CachedRawClient::new(cfg.clone(), env, security_mgr, tx);
         raw_client
-            .new_lame_client()
+            .stub()
             .spawn(reconnect_loop(raw_client.clone(), cfg.clone(), rx));
 
         Ok(Self {
@@ -684,7 +659,7 @@ impl PdClient for RpcClient {
             });
             Ok((r, WriteFlags::default()))
         });
-        self.raw_client.new_lame_client().spawn(async move {
+        self.raw_client.stub().spawn(async move {
             loop {
                 if let Err(e) = raw_client.wait_for_ready().await {
                     warn!("failed to acquire client for RegionHeartbeat stream"; "err" => ?e);
@@ -704,6 +679,7 @@ impl PdClient for RpcClient {
                     // requests are drained.
                     break;
                 } else {
+                    let res = raw_client.check_resp(res);
                     warn!("region heartbeat stream exited"; "res" => ?res);
                 }
                 let _ = hb_tx.close().await;
@@ -719,7 +695,7 @@ impl PdClient for RpcClient {
         let (tx, rx) = mpsc::unbounded(wake_policy);
         let mut raw_client = self.raw_client.clone();
         let mut requests = Box::pin(rx).map(|r| Ok((r, WriteFlags::default())));
-        self.raw_client.new_lame_client().spawn(async move {
+        self.raw_client.stub().spawn(async move {
             loop {
                 if let Err(e) = raw_client.wait_for_ready().await {
                     warn!("failed to acquire client for ReportRegionBuckets stream"; "err" => ?e);
@@ -737,11 +713,13 @@ impl PdClient for RpcClient {
                             // requests are drained.
                             break;
                         } else {
-                            warn!("region buckets stream exited: {:?}", send_res);
+                            let res = raw_client.check_resp(send_res);
+                            warn!("region buckets stream exited: {:?}", res);
                         }
                     }
                     recv_res = bk_rx.fuse() => {
-                        warn!("region buckets stream exited: {:?}", recv_res);
+                        let res = raw_client.check_resp(recv_res);
+                        warn!("region buckets stream exited: {:?}", res);
                     }
                 }
                 let _ = bk_tx.close().await;
@@ -758,7 +736,7 @@ impl PdClient for RpcClient {
         let (resp_tx, resp_rx) = CachedDuplexResponse::<TsoResponse>::new();
         let mut raw_client = self.raw_client.clone();
         let mut requests = Box::pin(rx).map(|r| Ok((r, WriteFlags::default())));
-        self.raw_client.new_lame_client().spawn(async move {
+        self.raw_client.stub().spawn(async move {
             loop {
                 if let Err(e) = raw_client.wait_for_ready().await {
                     warn!("failed to acquire client for Tso stream"; "err" => ?e);
@@ -776,6 +754,7 @@ impl PdClient for RpcClient {
                     // requests are drained.
                     break;
                 } else {
+                    let res = raw_client.check_resp(res);
                     warn!("tso exited"; "res" => ?res);
                 }
                 let _ = tso_tx.close().await;
@@ -939,7 +918,7 @@ impl PdClient for RpcClient {
         &mut self,
         store_id: u64,
     ) -> PdFuture<(metapb::Store, pdpb::StoreStats)> {
-        let timer = Instant::now();
+        let timer = Instant::now_coarse();
 
         let mut req = pdpb::GetStoreRequest::default();
         req.set_store_id(store_id);
@@ -1027,9 +1006,7 @@ impl PdClient for RpcClient {
         &mut self,
         key: &[u8],
     ) -> PdFuture<(metapb::Region, Option<metapb::Peer>)> {
-        let _timer = PD_REQUEST_HISTOGRAM_VEC
-            .with_label_values(&["get_region"])
-            .start_coarse_timer();
+        let timer = Instant::now_coarse();
 
         let mut req = pdpb::GetRegionRequest::default();
         req.set_region_key(key.to_vec());
@@ -1045,6 +1022,9 @@ impl PdClient for RpcClient {
                     panic!("fail to request PD {} err {:?}", "get_region_async_opt", e)
                 })
                 .await;
+            PD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["get_region"])
+                .observe(duration_to_sec(timer.saturating_elapsed()));
             let mut resp = raw_client.check_resp(resp)?;
             check_resp_header(resp.get_header())?;
             let region = if resp.has_region() {
@@ -1080,7 +1060,7 @@ impl PdClient for RpcClient {
     }
 
     fn get_region_by_id(&mut self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
-        let timer = Instant::now();
+        let timer = Instant::now_coarse();
 
         let mut req = pdpb::GetRegionByIdRequest::default();
         req.set_region_id(region_id);
@@ -1113,7 +1093,7 @@ impl PdClient for RpcClient {
         &mut self,
         region_id: u64,
     ) -> PdFuture<Option<(metapb::Region, metapb::Peer)>> {
-        let timer = Instant::now();
+        let timer = Instant::now_coarse();
 
         let mut req = pdpb::GetRegionByIdRequest::default();
         req.set_region_id(region_id);
@@ -1146,7 +1126,7 @@ impl PdClient for RpcClient {
     }
 
     fn ask_split(&mut self, region: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
-        let timer = Instant::now();
+        let timer = Instant::now_coarse();
 
         let mut req = pdpb::AskSplitRequest::default();
         req.set_region(region);
@@ -1176,7 +1156,7 @@ impl PdClient for RpcClient {
         region: metapb::Region,
         count: usize,
     ) -> PdFuture<pdpb::AskBatchSplitResponse> {
-        let timer = Instant::now();
+        let timer = Instant::now_coarse();
 
         let mut req = pdpb::AskBatchSplitRequest::default();
         req.set_region(region);
@@ -1208,7 +1188,7 @@ impl PdClient for RpcClient {
         store_report: Option<pdpb::StoreReport>,
         dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     ) -> PdFuture<pdpb::StoreHeartbeatResponse> {
-        let timer = Instant::now();
+        let timer = Instant::now_coarse();
 
         let mut req = pdpb::StoreHeartbeatRequest::default();
         stats
@@ -1249,7 +1229,7 @@ impl PdClient for RpcClient {
     }
 
     fn report_batch_split(&mut self, regions: Vec<metapb::Region>) -> PdFuture<()> {
-        let timer = Instant::now();
+        let timer = Instant::now_coarse();
 
         let mut req = pdpb::ReportBatchSplitRequest::default();
         req.set_regions(regions.into());
@@ -1300,7 +1280,7 @@ impl PdClient for RpcClient {
     }
 
     fn get_gc_safe_point(&mut self) -> PdFuture<u64> {
-        let timer = Instant::now();
+        let timer = Instant::now_coarse();
 
         let mut req = pdpb::GetGcSafePointRequest::default();
 
@@ -1354,7 +1334,7 @@ impl PdClient for RpcClient {
         safe_point: TimeStamp,
         ttl: Duration,
     ) -> PdFuture<()> {
-        let timer = Instant::now();
+        let timer = Instant::now_coarse();
         let mut req = pdpb::UpdateServiceGcSafePointRequest::default();
         req.set_service_id(name.into());
         req.set_ttl(ttl.as_secs() as _);
@@ -1387,7 +1367,7 @@ impl PdClient for RpcClient {
     }
 
     fn report_min_resolved_ts(&mut self, store_id: u64, min_resolved_ts: u64) -> PdFuture<()> {
-        let timer = Instant::now();
+        let timer = Instant::now_coarse();
 
         let mut req = pdpb::ReportMinResolvedTsRequest::default();
         req.set_store_id(store_id);

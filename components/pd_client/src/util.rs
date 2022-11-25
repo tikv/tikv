@@ -58,7 +58,7 @@ pub struct TargetInfo {
 }
 
 impl TargetInfo {
-    fn new(target_url: String, via: &str) -> TargetInfo {
+    pub(crate) fn new(target_url: String, via: &str) -> TargetInfo {
         TargetInfo {
             target_url,
             via: trim_http_prefix(via).to_string(),
