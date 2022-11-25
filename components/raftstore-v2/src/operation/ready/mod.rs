@@ -27,7 +27,9 @@ use error_code::ErrorCodeExt;
 use kvproto::{raft_cmdpb::AdminCmdType, raft_serverpb::RaftMessage};
 use protobuf::Message as _;
 use raft::{eraftpb, Ready, StateRole, INVALID_ID};
-use raftstore::store::{util, ExtraStates, FetchedLogs, ReadProgress, Transport, WriteTask};
+use raftstore::store::{
+    needs_evict_entry_cache, util, ExtraStates, FetchedLogs, ReadProgress, Transport, WriteTask,
+};
 use slog::{debug, error, trace, warn};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 
@@ -257,6 +259,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     break;
                 }
             }
+        }
+        if needs_evict_entry_cache(ctx.cfg.evict_cache_on_memory_ratio) {
+            // Compact all cached entries instead of half evict.
+            self.entry_storage_mut().evict_entry_cache(false);
         }
         self.schedule_apply_committed_entries(ctx, committed_entries);
     }
