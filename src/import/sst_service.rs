@@ -5,7 +5,6 @@ use std::{
     future::Future,
     path::PathBuf,
     sync::{Arc, Mutex},
-    thread::sleep,
     time::Duration,
 };
 
@@ -41,6 +40,7 @@ use tikv_util::{
     sys::thread::ThreadBuildWrapper,
     time::{Instant, Limiter},
 };
+use tokio::time::sleep;
 use txn_types::{Key, WriteRef, WriteType};
 
 use super::make_rpc_error;
@@ -84,7 +84,7 @@ where
     ) -> ImportSstService<E, Router> {
         let props = tikv_util::thread_group::current_properties();
         let threads = ThreadPoolBuilder::new()
-            .pool_size(cfg.num_threads)
+            .pool_size(cfg.num_threads + 1)
             .name_prefix("sst-importer")
             .after_start_wrapper(move || {
                 tikv_util::thread_group::set_properties(props.clone());
@@ -95,19 +95,7 @@ where
             .create()
             .unwrap();
         importer.start_switch_mode_check(&threads, engine.clone());
-
-        let thread = ThreadPoolBuilder::new()
-            .pool_size(1)
-            .name_prefix("sst-importer")
-            .after_start_wrapper(move || {
-                tikv_alloc::add_thread_memory_accessor();
-                set_io_type(IoType::Import);
-            })
-            .before_stop_wrapper(move || tikv_alloc::remove_thread_memory_accessor())
-            .create()
-            .unwrap();
-
-        thread.spawn_ok(Self::tick(importer.clone()));
+        threads.spawn_ok(Self::tick(importer.clone()));
 
         ImportSstService {
             cfg,
@@ -123,7 +111,7 @@ where
 
     async fn tick(importer: Arc<SstImporter>) {
         loop {
-            sleep(Duration::from_secs(10));
+            sleep(Duration::from_secs(10)).await;
             importer.shrink_by_tick();
         }
     }
@@ -488,7 +476,7 @@ where
                 let ext_storage = {
                     let inner =
                         importer.create_external_storage(req.get_storage_backend(), false)?;
-                    Arc::new(inner)
+                    Arc::from(inner)
                 };
 
                 for (i, meta) in metas.iter().enumerate() {
@@ -511,7 +499,7 @@ where
                     let buff = importer.read_from_kv_file(
                         meta,
                         &rules[i],
-                        ext_storage.clone(),
+                        Arc::clone(&ext_storage),
                         req.get_storage_backend(),
                         &limiter,
                     )?;

@@ -373,11 +373,11 @@ impl SstImporter {
 
     fn inc_mem_and_check(&self, meta: &KvMeta) -> bool {
         let size = meta.get_length();
-        let old = self.mem_use.fetch_add(size, Ordering::Relaxed);
+        let old = self.mem_use.fetch_add(size, Ordering::SeqCst);
 
         // If the memory is limited, roll backup the mem_use and return false.
         if old + size > self.mem_limit.0 {
-            self.mem_use.fetch_sub(size, Ordering::Relaxed);
+            self.mem_use.fetch_sub(size, Ordering::SeqCst);
             false
         } else {
             true
@@ -385,7 +385,7 @@ impl SstImporter {
     }
 
     fn dec_mem(&self, size: u64) {
-        self.mem_use.fetch_sub(size, Ordering::Relaxed);
+        self.mem_use.fetch_sub(size, Ordering::SeqCst);
     }
 
     pub fn dec_kvfile_refcnt(&self, meta: &KvMeta) {
@@ -399,7 +399,7 @@ impl SstImporter {
         &self,
         meta: &KvMeta,
         rewrite_rule: &RewriteRule,
-        ext_storage: Arc<Box<dyn external_storage_export::ExternalStorage>>,
+        ext_storage: Arc<dyn external_storage_export::ExternalStorage>,
         speed_limiter: &Limiter,
     ) -> Result<Arc<Vec<u8>>> {
         let start = Instant::now();
@@ -471,17 +471,14 @@ impl SstImporter {
         // files are not encrypted when log-backup. It is different from
         // sst-files because sst-files is encrypted when saved with rocksdb env
         // with KMS. to do: support KMS when log-backup and restore point.
-        let ext_storage: Box<dyn external_storage_export::ExternalStorage> = if support_kms {
-            if let Some(key_manager) = &self.key_manager {
+        let ext_storage = match (support_kms, self.key_manager.clone()) {
+            (true, Some(key_manager)) => {
                 Box::new(external_storage_export::EncryptedExternalStorage {
-                    key_manager: (*key_manager).clone(),
+                    key_manager,
                     storage: ext_storage,
-                }) as _
-            } else {
-                ext_storage as _
+                })
             }
-        } else {
-            ext_storage as _
+            _ => ext_storage,
         };
         Ok(ext_storage)
     }
@@ -490,7 +487,7 @@ impl SstImporter {
         &self,
         file_length: u64,
         file_name: &str,
-        ext_storage: Arc<Box<dyn external_storage_export::ExternalStorage>>,
+        ext_storage: Arc<dyn external_storage_export::ExternalStorage>,
         speed_limiter: &Limiter,
         restore_config: RestoreConfig,
     ) -> Result<Vec<u8>> {
@@ -534,7 +531,7 @@ impl SstImporter {
         &self,
         meta: &KvMeta,
         rewrite_rule: &RewriteRule,
-        ext_storage: Arc<Box<dyn external_storage_export::ExternalStorage>>,
+        ext_storage: Arc<dyn external_storage_export::ExternalStorage>,
         backend: &StorageBackend,
         speed_limiter: &Limiter,
     ) -> Result<Arc<Vec<u8>>> {
@@ -2624,7 +2621,7 @@ mod tests {
         let import_dir = tempfile::tempdir().unwrap();
         let importer =
             SstImporter::new(&Config::default(), import_dir, None, ApiVersion::V1).unwrap();
-        assert_eq!(importer.mem_use.load(Ordering::Relaxed), 0);
+        assert_eq!(importer.mem_use.load(Ordering::SeqCst), 0);
 
         // test inc_mem_and_check() and dec_mem() successfully.
         let meta = KvMeta {
@@ -2633,10 +2630,10 @@ mod tests {
         };
         let check = importer.inc_mem_and_check(&meta);
         assert!(check);
-        assert_eq!(importer.mem_use.load(Ordering::Relaxed), meta.get_length());
+        assert_eq!(importer.mem_use.load(Ordering::SeqCst), meta.get_length());
 
         importer.dec_mem(meta.get_length());
-        assert_eq!(importer.mem_use.load(Ordering::Relaxed), 0);
+        assert_eq!(importer.mem_use.load(Ordering::SeqCst), 0);
 
         // test inc_mem_and_check() failed.
         let meta = KvMeta {
@@ -2652,7 +2649,7 @@ mod tests {
         let import_dir = tempfile::tempdir().unwrap();
         let importer =
             SstImporter::new(&Config::default(), import_dir, None, ApiVersion::V1).unwrap();
-        assert_eq!(importer.mem_use.load(Ordering::Relaxed), 0);
+        assert_eq!(importer.mem_use.load(Ordering::SeqCst), 0);
 
         let key = "file1";
         let value = (Arc::default(), 0, Instant::now());
