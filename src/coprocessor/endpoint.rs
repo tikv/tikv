@@ -564,8 +564,7 @@ impl<E: Engine> Endpoint<E> {
                 new_req
             })
             .collect();
-        let mut index = 0;
-        for cur_req in batch_reqs.into_iter() {
+        for (index, cur_req) in batch_reqs.into_iter().enumerate() {
             let request_info = RequestInfo::new(
                 cur_req.get_context(),
                 RequestType::Unknown,
@@ -582,7 +581,6 @@ impl<E: Engine> Endpoint<E> {
                     make_error_batch_response(&mut batch_responses[index], e);
                 }
             }
-            index += 1;
         }
         let all_batch_futs = join_all(batch_futs);
         Some(async move {
