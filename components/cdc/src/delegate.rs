@@ -651,15 +651,16 @@ impl Delegate {
         // collect the change event cause by user write, which is `txn_source` = 0.
         // for changefeed which only need the user write, send the `filtered`, or else,
         // send them all.
-        let (filtered, empty) = if need_filter {
+        let filtered = if need_filter {
             let filtered = entries
                 .iter()
                 .filter(|x| x.txn_source == 0)
                 .cloned()
                 .collect::<Vec<EventRow>>();
-            let empty = filtered.is_empty();
-            (
-                Event {
+            if filtered.is_empty() {
+                None
+            } else {
+                Some(Event {
                     region_id: self.region_id,
                     index,
                     event: Some(Event_oneof_event::Entries(EventEntries {
@@ -667,16 +668,10 @@ impl Delegate {
                         ..Default::default()
                     })),
                     ..Default::default()
-                },
-                empty,
-            )
+                })
+            }
         } else {
-            (
-                Event {
-                    ..Default::default()
-                },
-                true,
-            )
+            None
         };
 
         let event_entries = EventEntries {
@@ -697,12 +692,12 @@ impl Delegate {
             if !downstream.state.load().ready_for_change_events() || downstream.kv_api != kv_api {
                 return Ok(());
             }
-            if downstream.filter_loop && empty {
+            if downstream.filter_loop && filtered.is_none() {
                 return Ok(());
             }
 
             let event = if downstream.filter_loop {
-                filtered.clone()
+                filtered.clone().unwrap()
             } else {
                 change_data_event.clone()
             };
