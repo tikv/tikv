@@ -131,7 +131,7 @@ struct ServerMeta {
     raw_router: RaftRouter<RocksEngine, RaftTestEngine>,
     raw_apply_router: ApplyRouter<RocksEngine>,
     gc_worker: GcWorker<RaftKv<RocksEngine, SimulateStoreTransport>, SimulateStoreTransport>,
-    rts_worker: Option<LazyWorker<resolved_ts::Task<RocksSnapshot>>>,
+    rts_worker: Option<LazyWorker<resolved_ts::Task>>,
     rsmeter_cleanup: Box<dyn FnOnce()>,
 }
 
@@ -341,9 +341,6 @@ impl ServerCluster {
             Arc::new(region_info_accessor.clone()),
         );
         gc_worker.start(node_id).unwrap();
-        gc_worker
-            .start_observe_lock_apply(&mut coprocessor_host, concurrency_manager.clone())
-            .unwrap();
 
         let rts_worker = if cfg.resolved_ts.enable {
             // Resolved ts worker
@@ -362,7 +359,6 @@ impl ServerCluster {
                 concurrency_manager.clone(),
                 self.env.clone(),
                 self.security_mgr.clone(),
-                resolved_ts::DummySinker::new(),
             );
             // Start the worker
             rts_worker.start(rts_endpoint);

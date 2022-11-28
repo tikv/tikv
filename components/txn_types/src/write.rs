@@ -160,7 +160,7 @@ pub struct Write {
     /// to find the latest PUT/DELETE record
     pub versions_to_last_change: u64,
     /// The source of this txn.
-    pub txn_source: u8,
+    pub txn_source: u64,
 }
 
 impl std::fmt::Debug for Write {
@@ -248,7 +248,7 @@ impl Write {
 
     #[inline]
     #[must_use]
-    pub fn set_txn_source(mut self, source: u8) -> Self {
+    pub fn set_txn_source(mut self, source: u64) -> Self {
         self.txn_source = source;
         self
     }
@@ -281,11 +281,11 @@ impl Write {
         match self.write_type {
             WriteType::Put | WriteType::Delete => (commit_ts, 1),
             WriteType::Lock | WriteType::Rollback => {
-                // If `last_change_ts` is zero, do not set `last_change_ts` to indicate we don't
-                // know where is the last change.
+                // If neither `last_change_ts` nor `versions_to_last_change` exists, do not
+                // set `last_change_ts` to indicate we don't know where is the last change.
                 // This should not happen if data is written in new version TiKV. If we hope to
                 // support data from old TiKV, consider iterating to the last change to find it.
-                if !self.last_change_ts.is_zero() {
+                if !self.last_change_ts.is_zero() || self.versions_to_last_change != 0 {
                     (self.last_change_ts, self.versions_to_last_change + 1)
                 } else {
                     (TimeStamp::zero(), 0)
@@ -320,10 +320,12 @@ pub struct WriteRef<'a> {
     /// It only exists if this is a LOCK/ROLLBACK record.
     pub last_change_ts: TimeStamp,
     /// The number of versions that need skipping from this record
-    /// to find the latest PUT/DELETE record
+    /// to find the latest PUT/DELETE record.
+    /// If versions_to_last_change > 0 but last_change_ts == 0, the key does not
+    /// have a PUT/DELETE record before this write record.
     pub versions_to_last_change: u64,
     /// The source of this txn.
-    pub txn_source: u8,
+    pub txn_source: u64,
 }
 
 impl WriteRef<'_> {
@@ -373,9 +375,7 @@ impl WriteRef<'_> {
                     versions_to_last_change = number::decode_var_u64(&mut b)?;
                 }
                 TXN_SOURCE_PREFIX => {
-                    txn_source = b
-                        .read_u8()
-                        .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?
+                    txn_source = number::decode_var_u64(&mut b)?;
                 }
                 _ => {
                     // To support forward compatibility, all fields should be serialized in order
@@ -413,14 +413,14 @@ impl WriteRef<'_> {
             b.push(GC_FENCE_PREFIX);
             b.encode_u64(ts.into_inner()).unwrap();
         }
-        if !self.last_change_ts.is_zero() {
+        if !self.last_change_ts.is_zero() || self.versions_to_last_change != 0 {
             b.push(LAST_CHANGE_PREFIX);
             b.encode_u64(self.last_change_ts.into_inner()).unwrap();
             b.encode_var_u64(self.versions_to_last_change).unwrap();
         }
         if self.txn_source != 0 {
             b.push(TXN_SOURCE_PREFIX);
-            b.push(self.txn_source);
+            b.encode_var_u64(self.txn_source).unwrap();
         }
         b
     }
@@ -434,11 +434,11 @@ impl WriteRef<'_> {
         if self.gc_fence.is_some() {
             size += 1 + size_of::<u64>();
         }
-        if !self.last_change_ts.is_zero() {
+        if !self.last_change_ts.is_zero() || self.versions_to_last_change != 0 {
             size += 1 + size_of::<u64>() + MAX_VAR_U64_LEN;
         }
         if self.txn_source != 0 {
-            size += 2;
+            size += 1 + MAX_VAR_U64_LEN;
         }
         size
     }
@@ -549,6 +549,7 @@ mod tests {
             Write::new(WriteType::Put, 456.into(), Some(b"short_value".to_vec()))
                 .set_overlapped_rollback(true, Some(421397468076048385.into())),
             Write::new(WriteType::Lock, 456.into(), None).set_last_change(345.into(), 11),
+            Write::new(WriteType::Lock, 456.into(), None).set_last_change(0.into(), 11),
             Write::new(WriteType::Lock, 456.into(), None).set_txn_source(1),
         ];
         for (i, write) in writes.drain(..).enumerate() {

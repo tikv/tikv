@@ -47,20 +47,20 @@ use crate::{endpoint::Task, metrics::*};
 
 const DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS: u64 = 5_000; // 5s
 
-pub struct AdvanceTsWorker<E: KvEngine> {
+pub struct AdvanceTsWorker {
     pd_client: Arc<dyn PdClient>,
     timer: SteadyTimer,
     worker: Runtime,
-    scheduler: Scheduler<Task<E::Snapshot>>,
+    scheduler: Scheduler<Task>,
     /// The concurrency manager for transactions. It's needed for CDC to check
     /// locks when calculating resolved_ts.
     concurrency_manager: ConcurrencyManager,
 }
 
-impl<E: KvEngine> AdvanceTsWorker<E> {
+impl AdvanceTsWorker {
     pub fn new(
         pd_client: Arc<dyn PdClient>,
-        scheduler: Scheduler<Task<E::Snapshot>>,
+        scheduler: Scheduler<Task>,
         concurrency_manager: ConcurrencyManager,
     ) -> Self {
         let worker = Builder::new_multi_thread()
@@ -81,7 +81,7 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
     }
 }
 
-impl<E: KvEngine> AdvanceTsWorker<E> {
+impl AdvanceTsWorker {
     // Advance ts asynchronously and register RegisterAdvanceEvent when its done.
     pub fn advance_ts_for_regions(
         &self,

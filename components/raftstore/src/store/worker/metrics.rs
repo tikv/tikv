@@ -57,6 +57,8 @@ make_static_metric! {
         cache_miss,
         safe_ts,
         witness,
+        flashback_not_prepared,
+        flashback_in_progress,
     }
 
     pub struct LocalReadRejectCounter : LocalIntCounter {

@@ -4,6 +4,7 @@ use std::{
     cmp::{self, Ordering as CmpOrdering, Reverse},
     error::Error as StdError,
     fmt::{self, Display, Formatter},
+    fs,
     io::{self, ErrorKind, Read, Write},
     path::{Path, PathBuf},
     result, str,
@@ -56,6 +57,7 @@ pub const SNAPSHOT_CFS_ENUM_PAIR: &[(CfNames, CfName)] = &[
     (CfNames::write, CF_WRITE),
 ];
 pub const SNAPSHOT_VERSION: u64 = 2;
+pub const TABLET_SNAPSHOT_VERSION: u64 = 3;
 pub const IO_LIMITER_CHUNK_SIZE: usize = 4 * 1024;
 
 /// Name prefix for the self-generated snapshot file.
@@ -1926,7 +1928,6 @@ impl Display for TabletSnapKey {
 /// It's similar `SnapManager`, but simpler in tablet version.
 ///
 ///  TODO:
-///     - add Limiter to control send/recv speed
 ///     - clean up expired tablet checkpointer
 #[derive(Clone)]
 pub struct TabletSnapManager {
@@ -1955,9 +1956,33 @@ impl TabletSnapManager {
         Ok(())
     }
 
-    pub fn get_tablet_checkpointer_path(&self, key: &TabletSnapKey) -> PathBuf {
+    pub fn tablet_gen_path(&self, key: &TabletSnapKey) -> PathBuf {
         let prefix = format!("{}_{}", SNAP_GEN_PREFIX, key);
         PathBuf::from(&self.base).join(prefix)
+    }
+
+    pub fn final_recv_path(&self, key: &TabletSnapKey) -> PathBuf {
+        let prefix = format!("{}_{}", SNAP_REV_PREFIX, key);
+        PathBuf::from(&self.base).join(prefix)
+    }
+
+    pub fn tmp_recv_path(&self, key: &TabletSnapKey) -> PathBuf {
+        let prefix = format!("{}_{}{}", SNAP_REV_PREFIX, key, TMP_FILE_SUFFIX);
+        PathBuf::from(&self.base).join(prefix)
+    }
+
+    pub fn delete_snapshot(&self, key: &TabletSnapKey) -> bool {
+        let path = self.tablet_gen_path(key);
+        if path.exists() && let Err(e) = fs::remove_dir_all(path.as_path()) {
+            error!(
+                "delete snapshot failed";
+                "path" => %path.display(),
+                "err" => ?e,
+            );
+            false
+        } else {
+            true
+        }
     }
 }
 

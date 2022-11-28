@@ -300,7 +300,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             match admin_res {
                 AdminCmdResult::None => unreachable!(),
                 AdminCmdResult::ConfChange(conf_change) => {
-                    self.on_apply_res_conf_change(conf_change)
+                    self.on_apply_res_conf_change(ctx, conf_change)
                 }
                 AdminCmdResult::SplitRegion(SplitResult {
                     regions,
