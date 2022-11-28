@@ -30,27 +30,33 @@ cloud-azure = ["raftstore/cloud-azure"]
 
 [dependencies]
 batch-system = { workspace = true }
+causal_ts = { workspace = true }
 collections = { workspace = true }
+concurrency_manager = { workspace = true }
 crossbeam = "0.8"
 engine_traits = { workspace = true }
 error_code = { workspace = true }
 fail = "0.5"
 file_system = { workspace = true }
+fs2 = "0.4"
 futures = { version = "0.3", features = ["compat"] }
 keys = { workspace = true }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 log_wrappers = { workspace = true }
 pd_client = { workspace = true }
+prometheus = { version = "0.13", features = ["nightly"] }
 protobuf = { version = "2.8", features = ["bytes"] }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raft-proto = { version = "0.7.0" }
 raftstore = { workspace = true }
+resource_metering = { workspace = true }
 slog = "2.3"
 smallvec = "1.4"
 tikv_util = { workspace = true }
 time = "0.1"
 tracker = { workspace = true }
 txn_types = { workspace = true }
+yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [dev-dependencies]
 engine_test = { workspace = true }

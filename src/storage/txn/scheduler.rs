@@ -449,7 +449,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     /// Releases all the latches held by a command.
     fn release_lock(&self, lock: &Lock, cid: u64) {
-        let wakeup_list = self.inner.latches.release(lock, cid);
+        let wakeup_list = self.inner.latches.release(lock, cid, None);
         for wcid in wakeup_list {
             self.try_to_wake_up(wcid);
         }
@@ -1660,7 +1660,7 @@ mod tests {
             if id != 0 {
                 assert!(latches.acquire(&mut lock, id));
             }
-            let unlocked = latches.release(&lock, id);
+            let unlocked = latches.release(&lock, id, None);
             if id == max_id {
                 assert!(unlocked.is_empty());
             } else {

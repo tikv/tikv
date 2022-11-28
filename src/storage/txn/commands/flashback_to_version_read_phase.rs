@@ -1,7 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use txn_types::{Key, Lock, TimeStamp, Write};
+use txn_types::{Key, Lock, TimeStamp};
 
 use crate::storage::{
     mvcc::MvccReader,
@@ -27,7 +27,7 @@ pub enum FlashbackToVersionState {
     },
     FlashbackWrite {
         next_write_key: Key,
-        key_old_writes: Vec<(Key, Option<Write>)>,
+        keys: Vec<Key>,
     },
     Commit {
         key_to_commit: Key,
@@ -71,7 +71,7 @@ pub fn new_flashback_write_cmd(
         end_key,
         FlashbackToVersionState::FlashbackWrite {
             next_write_key: start_key,
-            key_old_writes: Vec::new(),
+            keys: Vec::new(),
         },
         ctx,
     )
@@ -160,7 +160,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                 {
                     return Ok(ProcessResult::Res);
                 }
-                let mut key_old_writes = flashback_to_version_read_write(
+                let mut keys = flashback_to_version_read_write(
                     &mut reader,
                     next_write_key,
                     &self.start_key,
@@ -169,21 +169,21 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     self.commit_ts,
                     statistics,
                 )?;
-                if key_old_writes.is_empty() {
+                if keys.is_empty() {
                     FlashbackToVersionState::Commit {
                         key_to_commit: self.start_key.clone(),
                     }
                 } else {
-                    tls_collect_keyread_histogram_vec(tag, key_old_writes.len() as f64);
+                    tls_collect_keyread_histogram_vec(tag, keys.len() as f64);
                     FlashbackToVersionState::FlashbackWrite {
                         // DO NOT pop the last key as the next key when it's the only key to prevent
                         // from making flashback fall into a dead loop.
-                        next_write_key: if key_old_writes.len() > 1 {
-                            key_old_writes.pop().map(|(key, _)| key).unwrap()
+                        next_write_key: if keys.len() > 1 {
+                            keys.pop().unwrap()
                         } else {
-                            key_old_writes.last().map(|(key, _)| key.clone()).unwrap()
+                            keys.last().unwrap().clone()
                         },
-                        key_old_writes,
+                        keys,
                     }
                 }
             }

@@ -49,9 +49,7 @@ impl CommandExt for FlashbackToVersion {
                 latch::Lock::new(key_locks.iter().map(|(key, _)| key))
             }
             FlashbackToVersionState::Prewrite { key_to_lock } => latch::Lock::new([key_to_lock]),
-            FlashbackToVersionState::FlashbackWrite { key_old_writes, .. } => {
-                latch::Lock::new(key_old_writes.iter().map(|(key, _)| key))
-            }
+            FlashbackToVersionState::FlashbackWrite { keys, .. } => latch::Lock::new(keys.iter()),
             FlashbackToVersionState::Commit { key_to_commit } => latch::Lock::new([key_to_commit]),
         }
     }
@@ -63,10 +61,9 @@ impl CommandExt for FlashbackToVersion {
                 .map(|(key, _)| key.as_encoded().len())
                 .sum(),
             FlashbackToVersionState::Prewrite { key_to_lock } => key_to_lock.as_encoded().len(),
-            FlashbackToVersionState::FlashbackWrite { key_old_writes, .. } => key_old_writes
-                .iter()
-                .map(|(key, _)| key.as_encoded().len())
-                .sum(),
+            FlashbackToVersionState::FlashbackWrite { keys, .. } => {
+                keys.iter().map(|key| key.as_encoded().len()).sum()
+            }
             FlashbackToVersionState::Commit { key_to_commit } => key_to_commit.as_encoded().len(),
         }
     }
@@ -100,12 +97,13 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
             )?,
             FlashbackToVersionState::FlashbackWrite {
                 ref mut next_write_key,
-                ref mut key_old_writes,
+                ref mut keys,
             } => {
                 if let Some(new_next_write_key) = flashback_to_version_write(
                     &mut txn,
                     &mut reader,
-                    mem::take(key_old_writes),
+                    mem::take(keys),
+                    self.version,
                     self.start_ts,
                     self.commit_ts,
                 )? {
