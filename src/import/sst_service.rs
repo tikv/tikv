@@ -1017,8 +1017,11 @@ where
 {
     // use callback to collect kv data.
     Box::new(move |k: Vec<u8>, v: Vec<u8>| {
-        let mut req = Request::default();
+        if k.len() == 0 || v.len() == 0 {
+            return;
+        }
 
+        let mut req = Request::default();
         if is_delete {
             let mut del = DeleteRequest::default();
             del.set_key(k);
