@@ -11,7 +11,7 @@ use async_stream::try_stream;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::PerfLevel;
 use futures::{channel::mpsc, prelude::*};
-use kvproto::{coprocessor as coppb, coprocessor::StoreBatchTaskResponse, errorpb, kvrpcpb};
+use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 use protobuf::{CodedInputStream, Message};
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
 use tidb_query_common::execute_stats::ExecSummary;
@@ -531,7 +531,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req: &mut coppb::Request,
         peer: &Option<String>,
-    ) -> impl Future<Output = Vec<StoreBatchTaskResponse>> {
+    ) -> impl Future<Output = Vec<coppb::StoreBatchTaskResponse>> {
         let mut batch_futs = Vec::with_capacity(req.tasks.len());
         let batch_reqs: Vec<(coppb::Request, u64)> = req
             .take_tasks()

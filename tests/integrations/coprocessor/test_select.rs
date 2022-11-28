@@ -2216,9 +2216,6 @@ fn test_batch_request() {
                     1,
                     TimeStamp::zero(),
                 );
-                info!("[for debug] lock key";
-                    "locked key" => ?&lock_key,
-                );
                 cluster.must_put_cf(CF_LOCK, lock_key.as_encoded(), lock.to_bytes().as_slice());
             }
         }
