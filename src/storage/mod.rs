@@ -10393,7 +10393,7 @@ mod tests {
                         for_update_ts: 10.into(),
                         min_commit_ts: 11.into(),
                         last_change_ts: TimeStamp::zero(),
-                        versions_to_last_change: 0,
+                        versions_to_last_change: 1,
                     },
                     false
                 )

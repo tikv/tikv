@@ -192,8 +192,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
 
     // Following seek_write read the previous write.
     let (prev_write_loaded, mut prev_write) = (true, None);
-    let mut last_change_ts = TimeStamp::zero();
-    let mut versions_to_last_change = 0;
+    let (mut last_change_ts, mut versions_to_last_change);
     if let Some((commit_ts, write)) = reader.seek_write(&key, TimeStamp::max())? {
         // Find a previous write.
         if need_old_value {
@@ -265,9 +264,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             check_data_constraint(reader, should_not_exist, &write, commit_ts, &key)?;
         }
 
-        if tls_can_enable(LAST_CHANGE_TS) {
-            (last_change_ts, versions_to_last_change) = write.next_last_change_info(commit_ts);
-        }
+        (last_change_ts, versions_to_last_change) = write.next_last_change_info(commit_ts);
 
         // Load value if locked_with_conflict, so that when the client (TiDB) need to
         // read the value during statement retry, it will be possible to read the value
@@ -296,6 +293,13 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 }
             };
         }
+    } else {
+        // last_change_ts == 0 && versions_to_last_change > 0 means the key actually
+        // does not exist.
+        (last_change_ts, versions_to_last_change) = (TimeStamp::zero(), 1);
+    }
+    if !tls_can_enable(LAST_CHANGE_TS) {
+        (last_change_ts, versions_to_last_change) = (TimeStamp::zero(), 0);
     }
 
     let old_value = load_old_value(
@@ -1731,6 +1735,12 @@ pub mod tests {
         assert_eq!(lock.last_change_ts, 40.into());
         assert_eq!(lock.versions_to_last_change, 6);
         pessimistic_rollback::tests::must_success(&mut engine, key, 140, 140);
+
+        // Lock on a key with no write record
+        must_succeed(&mut engine, b"k2", b"k2", 150, 150);
+        let lock = must_pessimistic_locked(&mut engine, b"k2", 150, 150);
+        assert!(lock.last_change_ts.is_zero());
+        assert_eq!(lock.versions_to_last_change, 1);
     }
 
     #[test]
