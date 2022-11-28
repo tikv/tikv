@@ -62,6 +62,8 @@ fn test_witness_update_region_in_local_reader() {
     fail::remove("change_peer_after_update_region_store_3");
 }
 
+// Test the case request snapshot and apply successfully after non-witness
+// restart.
 #[test]
 fn test_request_snapshot_after_reboot() {
     let mut cluster = new_server_cluster(0, 3);
@@ -153,12 +155,17 @@ fn test_non_witness_availability(fp: &str) {
     fail::remove(fp);
 }
 
+// Test the case leader pulls non-witness availability when non-witness failed
+// to push the info.
 #[test]
 fn test_pull_non_witness_availability() {
     test_non_witness_availability("ignore notify leader the peer is available");
 }
 
+// Test the case non-witness pushes its availability without leader pulling.
 #[test]
 fn test_push_non_witness_availability() {
     test_non_witness_availability("ignore schedule check non-witness availability tick");
 }
+
+// TODO: The snapshot would be older than the current commit index

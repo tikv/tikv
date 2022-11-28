@@ -514,7 +514,7 @@ fn test_witness_leader_down() {
     // forbid reads
     let get = new_get_cmd(b"k1");
     must_get_error_recovery_in_progress(&mut cluster, &region, get);
-    //  forbid read index
+    // forbid read index
     let read_index = new_read_index_cmd();
     must_get_error_recovery_in_progress(&mut cluster, &region, read_index);
 

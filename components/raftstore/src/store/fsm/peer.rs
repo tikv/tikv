@@ -5502,7 +5502,9 @@ where
     }
 
     fn on_request_snapshot_tick(&mut self) {
-        fail_point!("ignore request snapshot", |_| {});
+        fail_point!("ignore request snapshot", |_| {
+            self.schedule_tick(PeerTick::RequestSnapshot);
+        });
         assert!(!self.fsm.peer.is_leader());
         if !self.fsm.peer.wait_data {
             return;

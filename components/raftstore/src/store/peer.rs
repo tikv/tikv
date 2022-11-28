@@ -2564,7 +2564,42 @@ where
                 // Update apply index to `last_applying_idx`
                 self.read_progress
                     .update_applied(self.last_applying_idx, &ctx.coprocessor_host);
-                self.notify_leader_the_peer_is_available(ctx);
+                if self.wait_data {
+                    self.notify_leader_the_peer_is_available(ctx);
+                    if self.last_applying_idx < self.get_store().commit_index() {
+                        match self.get_store().entries(
+                            self.last_applying_idx + 1,
+                            self.get_store().commit_index() + 1,
+                            NO_LIMIT,
+                            GetEntriesContext::empty(true),
+                        ) {
+                            Ok(entries) => {
+                                let commit_term =
+                                    self.get_store().term(self.last_applying_idx + 1).unwrap();
+                                let apply = Apply::new(
+                                    self.peer_id(),
+                                    self.region_id,
+                                    self.term(),
+                                    self.last_applying_idx + 1,
+                                    commit_term,
+                                    entries,
+                                    vec![],
+                                    self.region_buckets.as_ref().map(|b| b.meta.clone()),
+                                );
+                                ctx.apply_router
+                                    .schedule_task(self.region_id, ApplyTask::replay(apply));
+                            }
+                            Err(e) => {
+                                panic!("replay failed to get entries, {:?}", e)
+                            }
+                        }
+                    } else {
+                        ctx.apply_router
+                            .schedule_task(self.region_id, ApplyTask::Recover(self.region_id));
+                    }
+                    self.wait_data = false;
+                    return false;
+                }
             }
             CheckApplyingSnapStatus::Idle => {
                 // FIXME: It's possible that the snapshot applying task is canceled.
@@ -2585,22 +2620,19 @@ where
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
     ) {
-        if self.wait_data {
-            self.wait_data = false;
-            fail_point!("ignore notify leader the peer is available", |_| {});
-            let leader_id = self.leader_id();
-            let leader = self.get_peer_from_cache(leader_id);
-            if let Some(leader) = leader {
-                let mut msg = ExtraMessage::default();
-                msg.set_type(ExtraMessageType::MsgAvailabilityResponse);
-                msg.wait_data = false;
-                self.send_extra_message(msg, &mut ctx.trans, &leader);
-                info!(
-                    "notify leader the leader is available";
-                    "region id" => self.region().get_id(),
-                    "peer id" => self.peer.id
-                );
-            }
+        fail_point!("ignore notify leader the peer is available", |_| {});
+        let leader_id = self.leader_id();
+        let leader = self.get_peer_from_cache(leader_id);
+        if let Some(leader) = leader {
+            let mut msg = ExtraMessage::default();
+            msg.set_type(ExtraMessageType::MsgAvailabilityResponse);
+            msg.wait_data = false;
+            self.send_extra_message(msg, &mut ctx.trans, &leader);
+            info!(
+                "notify leader the leader is available";
+                "region id" => self.region().get_id(),
+                "peer id" => self.peer.id
+            );
         }
     }
 
@@ -3023,7 +3055,6 @@ where
                 committed_entries,
                 cbs,
                 self.region_buckets.as_ref().map(|b| b.meta.clone()),
-                self.wait_data,
             );
             apply.on_schedule(&ctx.raft_metrics);
             self.mut_store()

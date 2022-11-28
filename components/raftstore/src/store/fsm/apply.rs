@@ -1029,7 +1029,7 @@ where
             peer: find_peer_by_id(&reg.region, reg.id).unwrap().clone(),
             region: reg.region,
             pending_remove: false,
-            wait_data: reg.wait_data,
+            wait_data: false,
             last_flush_applied_index: reg.apply_state.get_applied_index(),
             apply_state: reg.apply_state,
             applied_term: reg.applied_term,
@@ -1112,16 +1112,7 @@ where
                     results.push_back(res);
                     if self.wait_data {
                         apply_ctx.committed_count -= committed_entries_drainer.len();
-                        let mut pending_entries =
-                            Vec::with_capacity(committed_entries_drainer.len());
-                        pending_entries.extend(committed_entries_drainer);
-                        apply_ctx.finish_for(self, results);
-                        self.yield_state = Some(YieldState {
-                            pending_entries,
-                            pending_msgs: Vec::default(),
-                            heap_size: None,
-                        });
-                        return;
+                        break;
                     }
                 }
                 ApplyResult::Yield | ApplyResult::WaitMergeSource(_) => {
@@ -3269,7 +3260,6 @@ pub struct Apply<C> {
     pub entries_size: usize,
     pub cbs: Vec<Proposal<C>>,
     pub bucket_meta: Option<Arc<BucketMeta>>,
-    pub wait_data: bool,
 }
 
 impl<C: WriteCallback> Apply<C> {
@@ -3282,7 +3272,6 @@ impl<C: WriteCallback> Apply<C> {
         entries: Vec<Entry>,
         cbs: Vec<Proposal<C>>,
         buckets: Option<Arc<BucketMeta>>,
-        wait_data: bool,
     ) -> Apply<C> {
         let mut entries_size = 0;
         for e in &entries {
@@ -3299,7 +3288,6 @@ impl<C: WriteCallback> Apply<C> {
             entries_size,
             cbs,
             bucket_meta: buckets,
-            wait_data,
         }
     }
 
@@ -3354,7 +3342,6 @@ pub struct Registration {
     pub applied_term: u64,
     pub region: Region,
     pub pending_request_snapshot_count: Arc<AtomicUsize>,
-    pub wait_data: bool,
     pub is_merging: bool,
     raft_engine: Box<dyn RaftEngineReadOnly>,
 }
@@ -3368,7 +3355,6 @@ impl Registration {
             applied_term: peer.get_store().applied_term(),
             region: peer.region().clone(),
             pending_request_snapshot_count: peer.pending_request_snapshot_count.clone(),
-            wait_data: peer.wait_data,
             is_merging: peer.pending_merge_state.is_some(),
             raft_engine: Box::new(peer.get_store().engines.raft.clone()),
         }
@@ -3564,6 +3550,11 @@ where
     #[cfg(any(test, feature = "testexport"))]
     #[allow(clippy::type_complexity)]
     Validate(u64, Box<dyn FnOnce(*const u8) + Send>),
+    Replay {
+        start: Instant,
+        apply: Apply<Callback<EK::Snapshot>>,
+    },
+    Recover(u64),
 }
 
 impl<EK> Msg<EK>
@@ -3586,6 +3577,13 @@ where
             region_id,
             merge_from_snapshot,
         })
+    }
+
+    pub fn replay(apply: Apply<Callback<EK::Snapshot>>) -> Msg<EK> {
+        Msg::Replay {
+            start: Instant::now(),
+            apply,
+        }
     }
 }
 
@@ -3611,6 +3609,10 @@ where
             } => write!(f, "[region {}] change cmd", region_id),
             #[cfg(any(test, feature = "testexport"))]
             Msg::Validate(region_id, _) => write!(f, "[region {}] validate", region_id),
+            Msg::Replay { apply, .. } => write!(f, "[region {}] replay", apply.region_id),
+            Msg::Recover(region_id) => {
+                write!(f, "[region {}] recover apply", region_id)
+            }
         }
     }
 }
@@ -3725,7 +3727,9 @@ where
             return;
         }
 
-        self.delegate.wait_data = apply.wait_data;
+        if self.delegate.wait_data {
+            return;
+        }
 
         let mut entries = Vec::new();
 
@@ -3857,14 +3861,6 @@ where
     }
 
     fn resume_pending(&mut self, ctx: &mut ApplyContext<EK>) {
-        // If it's witness before, but a command changes it to non-witness,
-        // and starts applying all following commands. It can cause problem
-        // if the command depends on previous side effect. So stop applying
-        // following commands when `wait_data` is set, until the snapshot is
-        // applied.
-        if self.delegate.wait_data {
-            return;
-        }
         if let Some(ref state) = self.delegate.wait_merge_state {
             let source_region_id = state.logs_up_to_date.load(Ordering::SeqCst);
             if source_region_id == 0 {
@@ -4126,7 +4122,30 @@ where
                             }
                         }
                     }
-                    batch_apply = Some(apply);
+                    if !self.delegate.wait_data {
+                        batch_apply = Some(apply);
+                    }
+                }
+                Msg::Replay { start, apply } => {
+                    self.delegate.wait_data = false;
+                    let apply_wait = start.saturating_elapsed();
+                    apply_ctx.apply_wait.observe(apply_wait.as_secs_f64());
+                    for tracker in apply
+                        .cbs
+                        .iter()
+                        .flat_map(|p| p.cb.write_trackers())
+                        .flat_map(|ts| ts.iter().flat_map(|t| t.as_tracker_token()))
+                    {
+                        GLOBAL_TRACKERS.with_tracker(tracker, |t| {
+                            t.metrics.apply_wait_nanos = apply_wait.as_nanos() as u64;
+                        });
+                    }
+                    self.handle_apply(apply_ctx, batch_apply.take().unwrap());
+                    if let Some(ref mut state) = self.delegate.yield_state {
+                        state.pending_msgs.push(Msg::Apply { start, apply });
+                        state.pending_msgs.extend(drainer);
+                        break;
+                    }
                 }
                 Msg::Registration(reg) => self.handle_registration(reg),
                 Msg::Destroy(d) => self.handle_destroy(apply_ctx, d),
@@ -4143,6 +4162,7 @@ where
                     let delegate = &self.delegate as *const ApplyDelegate<EK> as *const u8;
                     f(delegate)
                 }
+                Msg::Recover { .. } => self.delegate.wait_data = false,
             }
         }
     }
@@ -4553,6 +4573,18 @@ where
                 }
                 #[cfg(any(test, feature = "testexport"))]
                 Msg::Validate(..) => return,
+                Msg::Replay { apply, .. } => {
+                    info!(
+                        "target region is not found, drop proposals";
+                        "region_id" => apply.region_id
+                    );
+                    return;
+                }
+                Msg::Recover(region_id) => {
+                    info!("target region is not found";
+                            "region_id" => region_id);
+                    return;
+                }
             },
             Either::Left(Err(TrySendError::Full(_))) => unreachable!(),
         };
@@ -4685,6 +4717,8 @@ mod memtrace {
                 | Msg::Change { .. } => 0,
                 #[cfg(any(test, feature = "testexport"))]
                 Msg::Validate(..) => 0,
+                Msg::Replay { .. } => 0,
+                Msg::Recover { .. } => 0,
             }
         }
     }
@@ -4805,7 +4839,6 @@ mod tests {
                 applied_term: Default::default(),
                 region: Default::default(),
                 pending_request_snapshot_count: Default::default(),
-                wait_data: Default::default(),
                 is_merging: Default::default(),
                 raft_engine: Box::new(PanicEngine),
             }
@@ -4821,7 +4854,6 @@ mod tests {
                 applied_term: self.applied_term,
                 region: self.region.clone(),
                 pending_request_snapshot_count: self.pending_request_snapshot_count.clone(),
-                wait_data: self.wait_data,
                 is_merging: self.is_merging,
                 raft_engine: Box::new(PanicEngine),
             }
@@ -5027,7 +5059,6 @@ mod tests {
             entries,
             cbs,
             None,
-            false,
         )
     }
 
