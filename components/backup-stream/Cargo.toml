@@ -40,11 +40,11 @@ file_system = { workspace = true }
 futures = "0.3"
 futures-io = "0.3"
 
-# Fixing ahash cyclic dep: https://github.com/tkaitchuck/ahash/issues/95
-indexmap = "=1.6.2"
-
 grpcio = { workspace = true }
 hex = "0.4"
+
+# Fixing ahash cyclic dep: https://github.com/tkaitchuck/ahash/issues/95
+indexmap = "=1.6.2"
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 lazy_static = "1.4"
 log_wrappers = { workspace = true }
@@ -57,6 +57,7 @@ raft = { version = "0.7.0", default-features = false, features = ["protobuf-code
 raftstore = { workspace = true }
 regex = "1"
 resolved_ts = { workspace = true }
+security = { path = "../security" }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 thiserror = "1"
@@ -72,7 +73,6 @@ tonic = "0.8"
 txn_types = { workspace = true }
 uuid = "0.8"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
-security = { path = "../security"}
 
 [dev-dependencies]
 async-trait = "0.1"

@@ -139,9 +139,9 @@ impl SecurityManager {
         })
     }
 
-    pub fn client_suite(&self) -> Option<ClientSuite> {
+    pub fn client_suite(&self) -> Result<ClientSuite, Box<dyn Error>> {
         let (ca, cert, key) = self.cfg.load_certs()?;
-        Some(ClientSuite {
+        Ok(ClientSuite {
             ca: ca.into_boxed_slice(),
             client_cert: cert.into_boxed_slice(),
             client_key: Secret(key.into_boxed_slice()),
