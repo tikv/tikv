@@ -9,7 +9,8 @@ use async_stream::try_stream;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::PerfLevel;
 use futures::{channel::mpsc, prelude::*};
-use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
+use futures_util::future::join_all;
+use kvproto::{coprocessor as coppb, coprocessor::StoreBatchTaskResponse, errorpb, kvrpcpb};
 use protobuf::{CodedInputStream, Message};
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
 use tidb_query_common::execute_stats::ExecSummary;
@@ -485,7 +486,7 @@ impl<E: Engine> Endpoint<E> {
     #[inline]
     pub fn parse_and_handle_unary_request(
         &self,
-        req: coppb::Request,
+        mut req: coppb::Request,
         peer: Option<String>,
     ) -> impl Future<Output = MemoryTraceGuard<coppb::Response>> {
         let tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo::new(
@@ -493,28 +494,122 @@ impl<E: Engine> Endpoint<E> {
             RequestType::Unknown,
             req.start_ts,
         )));
+        let result_of_batch = self.process_batch_tasks(&mut req, &peer);
         set_tls_tracker_token(tracker);
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)
             .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
-
         async move {
-            let res = match result_of_future {
-                Err(e) => make_error_response(e).into(),
-                Ok(handle_fut) => {
-                    let mut response = handle_fut
+            let res = match (result_of_future, result_of_batch) {
+                (Err(e), None) => make_error_response(e).into(),
+                (Ok(handle_fut), None) => {
+                    let mut res = handle_fut
                         .await
                         .unwrap_or_else(|e| make_error_response(e).into());
-                    let scan_detail_v2 = response.mut_exec_details_v2().mut_scan_detail_v2();
                     GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-                        tracker.write_scan_detail(scan_detail_v2);
+                        tracker.write_scan_detail(res.mut_exec_details_v2().mut_scan_detail_v2());
                     });
-                    response
+                    res
+                }
+                (Err(e), Some(batch_fut)) => {
+                    let mut res = make_error_response(e);
+                    let batch_res = batch_fut.await;
+                    res.set_batch_responses(batch_res.into());
+                    res.into()
+                }
+                (Ok(handle_fut), Some(batch_fut)) => {
+                    let (handle_fut_res, batch_fut_res) = futures::join!(handle_fut, batch_fut);
+                    let mut res = handle_fut_res.unwrap_or_else(|e| make_error_response(e).into());
+                    res.set_batch_responses(batch_fut_res.into());
+                    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+                        tracker.write_scan_detail(res.mut_exec_details_v2().mut_scan_detail_v2());
+                    });
+                    res
                 }
             };
             GLOBAL_TRACKERS.remove(tracker);
             res
         }
+    }
+
+    // process_batch_tasks process the input batched coprocessor tasks if any,
+    // prepare all the requests and schedule them into the read pool, then
+    // collect all the responses and convert them into the `StoreBatchResponse`
+    // type.
+    pub fn process_batch_tasks(
+        &self,
+        req: &mut coppb::Request,
+        peer: &Option<String>,
+    ) -> Option<impl Future<Output = Vec<StoreBatchTaskResponse>>> {
+        let batch_task_num = req.tasks.len();
+        if batch_task_num == 0 {
+            return None;
+        }
+        let mut batch_futs = Vec::with_capacity(batch_task_num);
+        let mut batch_extra = Vec::with_capacity(batch_task_num);
+        let mut batch_responses = Vec::with_capacity(batch_task_num);
+        let batch_reqs: Vec<coppb::Request> = req
+            .take_tasks()
+            .iter_mut()
+            .map(|task| {
+                let mut new_req = req.clone();
+                new_req.ranges = task.take_ranges();
+                let new_context = new_req.mut_context();
+                new_context.set_region_id(task.get_region_id());
+                new_context.set_region_epoch(task.take_region_epoch());
+                new_context.set_peer(task.take_peer());
+                let mut response = coppb::StoreBatchTaskResponse::new();
+                response.set_task_id(task.get_task_id());
+                batch_responses.push(response);
+                new_req
+            })
+            .collect();
+        let mut index = 0;
+        for cur_req in batch_reqs.into_iter() {
+            let cur_tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo::new(
+                cur_req.get_context(),
+                RequestType::Unknown,
+                cur_req.start_ts,
+            )));
+            match self.parse_request_and_check_memory_locks(cur_req, peer.clone(), false) {
+                Ok((handler_builder, req_ctx)) => {
+                    set_tls_tracker_token(cur_tracker);
+                    batch_futs.push(self.handle_unary_request(req_ctx, handler_builder));
+                    batch_extra.push((index, cur_tracker));
+                }
+                Err(e) => {
+                    make_error_batch_response(&mut batch_responses[index], e);
+                }
+            }
+            index += 1;
+        }
+        let all_batch_futs = join_all(batch_futs);
+        Some(async move {
+            let batch_results = all_batch_futs.await;
+            for (res, (index, cur_tracker)) in batch_results.into_iter().zip(batch_extra) {
+                match res {
+                    Ok(mut resp) => {
+                        batch_responses[index].set_data(resp.take_data());
+                        batch_responses[index].set_region_error(resp.take_region_error());
+                        batch_responses[index].set_locked(resp.take_locked());
+                        batch_responses[index].set_other_error(resp.take_other_error());
+                        batch_responses[index].set_task_id(index as u64);
+                        GLOBAL_TRACKERS.with_tracker(cur_tracker, |tracker| {
+                            tracker.write_scan_detail(
+                                batch_responses[index]
+                                    .mut_exec_details_v2()
+                                    .mut_scan_detail_v2(),
+                            );
+                        });
+                    }
+                    Err(e) => {
+                        make_error_batch_response(&mut batch_responses[index], e);
+                    }
+                }
+                GLOBAL_TRACKERS.remove(cur_tracker);
+            }
+            batch_responses
+        })
     }
 
     /// The real implementation of handling a stream request.
@@ -652,6 +747,31 @@ impl<E: Engine> Endpoint<E> {
             .or_else(|e| futures::future::ok(make_error_response(e))) // Stream<Resp, ()>
             .map(|item: std::result::Result<_, ()>| item.unwrap())
     }
+}
+
+fn make_error_batch_response(batch_resp: &mut coppb::StoreBatchTaskResponse, e: Error) {
+    match e {
+        Error::Region(e) => {
+            batch_resp.set_region_error(e);
+        }
+        Error::Locked(info) => {
+            batch_resp.set_locked(info);
+        }
+        Error::DeadlineExceeded => {
+            batch_resp.set_other_error(e.to_string());
+        }
+        Error::MaxPendingTasksExceeded => {
+            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
+            server_is_busy_err.set_reason(e.to_string());
+            let mut errorpb = errorpb::Error::default();
+            errorpb.set_message(e.to_string());
+            errorpb.set_server_is_busy(server_is_busy_err);
+            batch_resp.set_region_error(errorpb);
+        }
+        Error::Other(_) => {
+            batch_resp.set_other_error(e.to_string());
+        }
+    };
 }
 
 fn make_error_response(e: Error) -> coppb::Response {
