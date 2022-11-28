@@ -35,6 +35,7 @@ impl ConnectionConfig {
         }
         opts = opts
             .with_keep_alive(self.keep_alive_interval, self.keep_alive_timeout)
+            .with_keep_alive_while_idle(false)
             .with_timeout(RPC_TIMEOUT);
 
         opts
