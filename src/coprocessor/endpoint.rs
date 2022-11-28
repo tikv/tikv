@@ -566,13 +566,14 @@ impl<E: Engine> Endpoint<E> {
             .collect();
         let mut index = 0;
         for cur_req in batch_reqs.into_iter() {
-            let cur_tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo::new(
+            let request_info = RequestInfo::new(
                 cur_req.get_context(),
                 RequestType::Unknown,
                 cur_req.start_ts,
-            )));
+            );
             match self.parse_request_and_check_memory_locks(cur_req, peer.clone(), false) {
                 Ok((handler_builder, req_ctx)) => {
+                    let cur_tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(request_info));
                     set_tls_tracker_token(cur_tracker);
                     batch_futs.push(self.handle_unary_request(req_ctx, handler_builder));
                     batch_extra.push((index, cur_tracker));
