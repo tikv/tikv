@@ -2062,7 +2062,7 @@ fn test_batch_request() {
             ],
             vec![
                 QueryResult::Valid(vec![
-                    (1 as i64, Some("name:0"), 2_i64),
+                    (1_i64, Some("name:0"), 2_i64),
                     (2, Some("name:4"), 3),
                 ]),
                 QueryResult::Valid(vec![(4, Some("name:3"), 1), (5, Some("name:1"), 4)]),
