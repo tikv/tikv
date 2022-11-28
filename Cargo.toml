@@ -231,7 +231,6 @@ resolver = "2"
 members = [
   "cmd/tikv-ctl",
   "cmd/tikv-server",
-  "cmd/tls-test",
   "components/api_version",
   "components/backup",
   "components/backup-stream",
@@ -299,7 +298,7 @@ members = [
   "fuzz/fuzzer-libfuzzer",
   "tests",
 ]
-default-members = ["cmd/tikv-server", "cmd/tikv-ctl", "cmd/tls-test"]
+default-members = ["cmd/tikv-server", "cmd/tikv-ctl"]
 
 [workspace.dependencies]
 api_version = { path = "components/api_version" }
