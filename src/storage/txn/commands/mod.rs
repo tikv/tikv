@@ -213,6 +213,11 @@ impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLock
             })
             .collect();
 
+        let allow_lock_with_conflict = match req.get_wake_up_mode() {
+            PessimisticLockWakeUpMode::WakeUpModeNormal => false,
+            PessimisticLockWakeUpMode::WakeUpModeForceLock => true,
+        };
+
         AcquirePessimisticLock::new(
             keys,
             req.take_primary_lock(),
@@ -225,7 +230,7 @@ impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLock
             req.get_min_commit_ts().into(),
             req.get_check_existence(),
             req.get_lock_only_if_exists(),
-            false,
+            allow_lock_with_conflict,
             req.take_context(),
         )
     }
