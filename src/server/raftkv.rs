@@ -44,6 +44,7 @@ use tikv_kv::{write_modifies, OnAppliedCb, WriteEvent};
 use tikv_util::{
     codec::number::NumberEncoder,
     future::{paired_future_callback, paired_must_called_future_callback},
+    mpsc::future::WakePolicy,
     time::Instant,
 };
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
@@ -360,24 +361,27 @@ where
 
         self.schedule_txn_extra(txn_extra);
 
-        let (mut tx, rx) = futures::channel::mpsc::channel(WriteEvent::event_capacity(subscribed));
+        let (tx, rx) = tikv_util::mpsc::future::bounded(
+            WriteEvent::event_capacity(subscribed),
+            WakePolicy::Immediately,
+        );
         let proposed_cb = if !WriteEvent::subscribed_proposed(subscribed) {
             None
         } else {
-            let mut tx = tx.clone();
+            let tx = tx.clone();
             Some(Box::new(move || {
-                let _ = tx.try_send(WriteEvent::Proposed);
+                let _ = tx.send(WriteEvent::Proposed);
             }) as store::ExtCallback)
         };
         let committed_cb = if !WriteEvent::subscribed_committed(subscribed) {
             None
         } else {
-            let mut tx = tx.clone();
+            let tx = tx.clone();
             Some(Box::new(move || {
-                let _ = tx.try_send(WriteEvent::Committed);
+                let _ = tx.send(WriteEvent::Committed);
             }) as store::ExtCallback)
         };
-        let mut applied_tx = tx.clone();
+        let applied_tx = tx.clone();
         let applied_cb = Box::new(move |resp: WriteResponse| {
             let mut res = match on_write_result::<E::Snapshot>(resp) {
                 Ok(CmdRes::Resp(_)) => {
@@ -390,7 +394,7 @@ where
             if let Some(cb) = on_applied {
                 cb(&mut res);
             }
-            let _ = applied_tx.try_send(WriteEvent::Finished(res));
+            let _ = applied_tx.send(WriteEvent::Finished(res));
         });
 
         let cb = StoreCallback::write_ext(applied_cb, proposed_cb, committed_cb);
@@ -405,7 +409,7 @@ where
                 .map_err(kv::Error::from);
         }
         if res.is_err() {
-            let _ = tx.try_send(WriteEvent::Finished(res));
+            let _ = tx.send(WriteEvent::Finished(res));
         }
         rx.inspect(move |ev| {
             let WriteEvent::Finished(res) = ev else { return };
