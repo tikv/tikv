@@ -5,7 +5,7 @@ use std::{self, time::Duration};
 use engine_traits::{OpenOptions, Peekable, TabletFactory};
 use kvproto::raft_cmdpb::{AdminCmdType, CmdType, Request};
 use raft::prelude::ConfChangeType;
-use raftstore_v2::router::{PeerMsg, PeerTick};
+use raftstore_v2::router::PeerMsg;
 use tikv_util::store::new_learner_peer;
 
 use crate::cluster::Cluster;
@@ -50,11 +50,6 @@ fn test_simple_change() {
         meta.raft_status.soft_state.leader_id,
         req.get_header().get_peer().get_id()
     );
-    // Trigger the raft tick to replica the log to the learner and execute the
-    // snapshot task.
-    router0
-        .send(region_id, PeerMsg::Tick(PeerTick::Raft))
-        .unwrap();
     cluster.dispatch(region_id, vec![]);
 
     // write one kv after snapshot

@@ -115,13 +115,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // return;
         }
 
+        // TODO: drop all msg append when the peer is uninitialized and has conflict
+        // ranges with other peers.
         let from_peer = msg.take_from_peer();
         if self.is_leader() && from_peer.get_id() != INVALID_ID {
             self.add_peer_heartbeat(from_peer.get_id(), Instant::now());
         }
-
-        // TODO: drop all msg append when the peer is uninitialized and has conflict
-        // ranges with other peers.
         self.insert_peer_cache(msg.take_from_peer());
         if msg.get_message().get_msg_type() == MessageType::MsgTransferLeader {
             self.on_transfer_leader_msg(ctx, msg.get_message(), msg.disk_usage)
@@ -412,8 +411,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         /// The apply snapshot process order would be:
         /// - Get the snapshot from the ready
         /// - Wait for async writer to load this tablet
-        /// In this step, the snapshot has loaded finish, but some apply state
-        /// need to update.
+        /// In this step, the snapshot loading has been finished, but some apply
+        /// state need to update.
         if has_snapshot {
             self.on_applied_snapshot(ctx);
         }

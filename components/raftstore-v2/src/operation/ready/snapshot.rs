@@ -136,6 +136,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 .update_applied_core(persisted_index);
             info!(self.logger, "apply tablet snapshot completely");
         }
+        {
+            let mut meta = ctx.store_meta.lock().unwrap();
+            meta.readers
+                .insert(self.region_id(), self.generate_read_delegate());
+            meta.tablet_caches
+                .insert(self.region_id(), self.tablet().clone());
+        }
     }
 }
 

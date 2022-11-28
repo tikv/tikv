@@ -533,7 +533,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// See the comments of `check_snap_status` for more details.
     #[inline]
     pub fn is_handling_snapshot(&self) -> bool {
-        // todo
+        // todo: This method may be unnecessary now?
         false
     }
 
