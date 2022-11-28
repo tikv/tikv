@@ -124,9 +124,9 @@ pub fn flashback_to_version_write(
         }
         let old_write = reader.get_write(&key, flashback_version)?;
         let new_write = if let Some(old_write) = old_write {
-            // If it's not a short value and it's a `WriteType::Put`, we should put the old
+            // If it's a `WriteType::Put` without the short value, we should put the old
             // value in `CF_DEFAULT` with `self.start_ts` as well.
-            if old_write.short_value.is_none() && old_write.write_type == WriteType::Put {
+            if old_write.write_type == WriteType::Put && old_write.short_value.is_none() {
                 txn.put_value(
                     key.clone(),
                     flashback_start_ts,
@@ -159,9 +159,9 @@ pub fn prewrite_flashback_key(
 ) -> TxnResult<()> {
     let old_write = reader.get_write(key_to_lock, flashback_version)?;
     // Flashback the value in `CF_DEFAULT` as well if the old write is a
-    // `WriteType::Put`.
+    // `WriteType::Put` without the short value.
     if let Some(old_write) = old_write.as_ref() {
-        if old_write.short_value.is_none() && old_write.write_type == WriteType::Put {
+        if old_write.write_type == WriteType::Put && old_write.short_value.is_none() {
             txn.put_value(
                 key_to_lock.clone(),
                 flashback_start_ts,
@@ -195,16 +195,16 @@ pub fn commit_flashback_key(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<impl Snapshot>,
     key_to_commit: &Key,
-    start_ts: TimeStamp,
-    commit_ts: TimeStamp,
+    flashback_start_ts: TimeStamp,
+    flashback_commit_ts: TimeStamp,
 ) -> TxnResult<()> {
     if let Some(mut lock) = reader.load_lock(key_to_commit)? {
         txn.put_write(
             key_to_commit.clone(),
-            commit_ts,
+            flashback_commit_ts,
             Write::new(
                 WriteType::from_lock_type(lock.lock_type).unwrap(),
-                start_ts,
+                flashback_start_ts,
                 lock.short_value.take(),
             )
             .set_last_change(lock.last_change_ts, lock.versions_to_last_change)
@@ -212,7 +212,11 @@ pub fn commit_flashback_key(
             .as_ref()
             .to_bytes(),
         );
-        txn.unlock_key(key_to_commit.clone(), lock.is_pessimistic_txn(), commit_ts);
+        txn.unlock_key(
+            key_to_commit.clone(),
+            lock.is_pessimistic_txn(),
+            flashback_commit_ts,
+        );
     }
     Ok(())
 }
