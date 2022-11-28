@@ -1,6 +1,8 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{borrow::Cow, future::Future, marker::PhantomData, sync::Arc, time::Duration};
+use std::{
+    borrow::Cow, future::Future, iter::FromIterator, marker::PhantomData, sync::Arc, time::Duration,
+};
 
 use ::tracker::{
     set_tls_tracker_token, with_tls_tracker, RequestInfo, RequestType, GLOBAL_TRACKERS,
@@ -9,7 +11,6 @@ use async_stream::try_stream;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::PerfLevel;
 use futures::{channel::mpsc, prelude::*};
-use futures_util::future::join_all;
 use kvproto::{coprocessor as coppb, coprocessor::StoreBatchTaskResponse, errorpb, kvrpcpb};
 use protobuf::{CodedInputStream, Message};
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
@@ -500,27 +501,17 @@ impl<E: Engine> Endpoint<E> {
             .parse_request_and_check_memory_locks(req, peer, false)
             .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
         async move {
-            let res = match (result_of_future, result_of_batch) {
-                (Err(e), None) => make_error_response(e).into(),
-                (Ok(handle_fut), None) => {
-                    let mut res = handle_fut
-                        .await
-                        .unwrap_or_else(|e| make_error_response(e).into());
-                    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-                        tracker.write_scan_detail(res.mut_exec_details_v2().mut_scan_detail_v2());
-                    });
-                    res
-                }
-                (Err(e), Some(batch_fut)) => {
+            let res = match result_of_future {
+                Err(e) => {
                     let mut res = make_error_response(e);
-                    let batch_res = batch_fut.await;
+                    let batch_res = result_of_batch.await;
                     res.set_batch_responses(batch_res.into());
                     res.into()
                 }
-                (Ok(handle_fut), Some(batch_fut)) => {
-                    let (handle_fut_res, batch_fut_res) = futures::join!(handle_fut, batch_fut);
-                    let mut res = handle_fut_res.unwrap_or_else(|e| make_error_response(e).into());
-                    res.set_batch_responses(batch_fut_res.into());
+                Ok(handle_fut) => {
+                    let (handle_res, batch_res) = futures::join!(handle_fut, result_of_batch);
+                    let mut res = handle_res.unwrap_or_else(|e| make_error_response(e).into());
+                    res.set_batch_responses(batch_res.into());
                     GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
                         tracker.write_scan_detail(res.mut_exec_details_v2().mut_scan_detail_v2());
                     });
@@ -540,15 +531,9 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req: &mut coppb::Request,
         peer: &Option<String>,
-    ) -> Option<impl Future<Output = Vec<StoreBatchTaskResponse>>> {
-        let batch_task_num = req.tasks.len();
-        if batch_task_num == 0 {
-            return None;
-        }
-        let mut batch_futs = Vec::with_capacity(batch_task_num);
-        let mut batch_extra = Vec::with_capacity(batch_task_num);
-        let mut batch_responses = Vec::with_capacity(batch_task_num);
-        let batch_reqs: Vec<coppb::Request> = req
+    ) -> impl Future<Output = Vec<StoreBatchTaskResponse>> {
+        let mut batch_futs = Vec::with_capacity(req.tasks.len());
+        let batch_reqs: Vec<(coppb::Request, u64)> = req
             .take_tasks()
             .iter_mut()
             .map(|task| {
@@ -560,55 +545,53 @@ impl<E: Engine> Endpoint<E> {
                 new_context.set_peer(task.take_peer());
                 let mut response = coppb::StoreBatchTaskResponse::new();
                 response.set_task_id(task.get_task_id());
-                batch_responses.push(response);
-                new_req
+                (new_req, task.get_task_id())
             })
             .collect();
-        for (index, cur_req) in batch_reqs.into_iter().enumerate() {
+        for (cur_req, task_id) in batch_reqs.into_iter() {
             let request_info = RequestInfo::new(
                 cur_req.get_context(),
                 RequestType::Unknown,
                 cur_req.start_ts,
             );
+            let mut response = coppb::StoreBatchTaskResponse::new();
+            response.set_task_id(task_id);
             match self.parse_request_and_check_memory_locks(cur_req, peer.clone(), false) {
                 Ok((handler_builder, req_ctx)) => {
                     let cur_tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(request_info));
                     set_tls_tracker_token(cur_tracker);
-                    batch_futs.push(self.handle_unary_request(req_ctx, handler_builder));
-                    batch_extra.push((index, cur_tracker));
+                    let fut = self.handle_unary_request(req_ctx, handler_builder);
+                    let fut = async move {
+                        let res = fut.await;
+                        match res {
+                            Ok(mut resp) => {
+                                response.set_data(resp.take_data());
+                                response.set_region_error(resp.take_region_error());
+                                response.set_locked(resp.take_locked());
+                                response.set_other_error(resp.take_other_error());
+                                GLOBAL_TRACKERS.with_tracker(cur_tracker, |tracker| {
+                                    tracker.write_scan_detail(
+                                        response.mut_exec_details_v2().mut_scan_detail_v2(),
+                                    );
+                                });
+                            }
+                            Err(e) => {
+                                make_error_batch_response(&mut response, e);
+                            }
+                        }
+                        GLOBAL_TRACKERS.remove(cur_tracker);
+                        response
+                    };
+
+                    batch_futs.push(future::Either::Left(fut));
                 }
-                Err(e) => {
-                    make_error_batch_response(&mut batch_responses[index], e);
-                }
+                Err(e) => batch_futs.push(future::Either::Right(async move {
+                    make_error_batch_response(&mut response, e);
+                    response
+                })),
             }
         }
-        let all_batch_futs = join_all(batch_futs);
-        Some(async move {
-            let batch_results = all_batch_futs.await;
-            for (res, (index, cur_tracker)) in batch_results.into_iter().zip(batch_extra) {
-                match res {
-                    Ok(mut resp) => {
-                        batch_responses[index].set_data(resp.take_data());
-                        batch_responses[index].set_region_error(resp.take_region_error());
-                        batch_responses[index].set_locked(resp.take_locked());
-                        batch_responses[index].set_other_error(resp.take_other_error());
-                        batch_responses[index].set_task_id(index as u64);
-                        GLOBAL_TRACKERS.with_tracker(cur_tracker, |tracker| {
-                            tracker.write_scan_detail(
-                                batch_responses[index]
-                                    .mut_exec_details_v2()
-                                    .mut_scan_detail_v2(),
-                            );
-                        });
-                    }
-                    Err(e) => {
-                        make_error_batch_response(&mut batch_responses[index], e);
-                    }
-                }
-                GLOBAL_TRACKERS.remove(cur_tracker);
-            }
-            batch_responses
-        })
+        stream::FuturesOrdered::from_iter(batch_futs).collect()
     }
 
     /// The real implementation of handling a stream request.
