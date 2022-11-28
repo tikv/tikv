@@ -1996,10 +1996,10 @@ impl<EK: KvEngine, ER: RaftEngine> EngineMetricsManager<EK, ER> {
         self.tablet_factory
             .for_each_opened_tablet(&mut |_, _, db: &EK| {
                 KvEngine::flush_metrics(db, "kv", is_first_instance);
-                is_first_instance = false;
-                if should_reset {
+                if should_reset && is_first_instance {
                     KvEngine::reset_statistics(db);
                 }
+                is_first_instance = false;
             });
         self.raft_engine.flush_metrics("raft", true);
         if should_reset {

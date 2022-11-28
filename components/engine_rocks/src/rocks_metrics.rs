@@ -1127,7 +1127,8 @@ lazy_static! {
     pub static ref STORE_ENGINE_SIZE_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_size_bytes",
         "Sizes of each column families",
-        &["db", "type"]
+        &["db", "type"],
+        exponential_buckets(1048576.0, 2.0, 20).unwrap()
     ).unwrap();
     // TODO: use histogram for cache as well. Not really required because cache is usually shared.
     pub static ref STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
@@ -1143,17 +1144,20 @@ lazy_static! {
     pub static ref STORE_ENGINE_MEMORY_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_memory_bytes",
         "Sizes of each column families",
-        &["db", "cf", "type"]
+        &["db", "cf", "type"],
+        exponential_buckets(1048576.0, 1.6, 20).unwrap()
     ).unwrap();
     pub static ref STORE_ENGINE_ESTIMATE_NUM_KEYS_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_estimate_num_keys",
         "Estimate num keys of each column families",
-        &["db", "cf"]
+        &["db", "cf"],
+        exponential_buckets(1048576.0, 2.0, 20).unwrap()
     ).unwrap();
     pub static ref STORE_ENGINE_PENDING_COMPACTION_BYTES_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_pending_compaction_bytes",
         "Pending compaction bytes",
-        &["db", "cf"]
+        &["db", "cf"],
+        exponential_buckets(1048576.0, 2.0, 20).unwrap()
     ).unwrap();
     // TODO: aggregate based on size of each tablet.
     pub static ref STORE_ENGINE_COMPRESSION_RATIO_VEC: GaugeVec = register_gauge_vec!(
@@ -1164,57 +1168,68 @@ lazy_static! {
     pub static ref STORE_ENGINE_NUM_FILES_AT_LEVEL_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_num_files_at_level",
         "Number of files at each level",
-        &["db", "cf", "level"]
+        &["db", "cf", "level"],
+        exponential_buckets(1.0, 2.0, 20).unwrap()
     ).unwrap();
     pub static ref STORE_ENGINE_NUM_SNAPSHOTS_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_num_snapshots",
         "Number of unreleased snapshots",
-        &["db"]
+        &["db"],
+        exponential_buckets(1.0, 2.0, 20).unwrap()
     ).unwrap();
     pub static ref STORE_ENGINE_OLDEST_SNAPSHOT_DURATION_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_oldest_snapshot_duration",
         "Oldest unreleased snapshot duration in seconds",
-        &["db"]
+        &["db"],
+        exponential_buckets(0.1, 2.0, 20).unwrap()
     ).unwrap();
     pub static ref STORE_ENGINE_WRITE_STALL_REASON_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_write_stall_reason",
         "QPS of each reason which cause tikv write stall",
-        &["db", "type"]
+        &["db", "type"],
+        exponential_buckets(1.0, 2.0, 10).unwrap()
     ).unwrap();
     pub static ref STORE_ENGINE_TITANDB_NUM_BLOB_FILES_AT_LEVEL_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_titandb_num_blob_files_at_level",
         "Number of blob files at each level",
-        &["db", "cf", "level"]
+        &["db", "cf", "level"],
+        exponential_buckets(1.0, 2.0, 20).unwrap()
     ).unwrap();
     pub static ref STORE_ENGINE_TITANDB_LIVE_BLOB_SIZE_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_titandb_live_blob_size",
         "Total titan blob value size referenced by LSM tree",
-        &["db", "cf"]
+        &["db", "cf"],
+        exponential_buckets(1.0, 2.0, 20).unwrap()
     ).unwrap();
     pub static ref STORE_ENGINE_TITANDB_NUM_LIVE_BLOB_FILE_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_titandb_num_live_blob_file",
         "Number of live blob file",
-        &["db", "cf"]
+        &["db", "cf"],
+        exponential_buckets(1.0, 2.0, 20).unwrap()
     ).unwrap();
     pub static ref STORE_ENGINE_TITANDB_NUM_OBSOLETE_BLOB_FILE_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_titandb_num_obsolete_blob_file",
         "Number of obsolete blob file",
-        &["db", "cf"]
+        &["db", "cf"],
+        exponential_buckets(1.0, 2.0, 20).unwrap()
     ).unwrap();
     pub static ref STORE_ENGINE_TITANDB_LIVE_BLOB_FILE_SIZE_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_titandb_live_blob_file_size",
         "Size of live blob file",
-        &["db", "cf"]
+        &["db", "cf"],
+        exponential_buckets(1.0, 2.0, 20).unwrap()
     ).unwrap();
     pub static ref STORE_ENGINE_TITANDB_OBSOLETE_BLOB_FILE_SIZE_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_titandb_obsolete_blob_file_size",
         "Size of obsolete blob file",
-        &["db", "cf"]
+        &["db", "cf"],
+        exponential_buckets(1.0, 2.0, 20).unwrap()
     ).unwrap();
     pub static ref STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_titandb_blob_file_discardable_ratio",
         "Size of obsolete blob file",
-        &["db", "cf", "ratio"]
+        &["db", "cf", "ratio"],
+        exponential_buckets(1.0, 2.0, 20).unwrap()
     ).unwrap();
 }
 
@@ -1360,7 +1375,8 @@ lazy_static! {
     pub static ref STORE_ENGINE_NUM_IMMUTABLE_MEM_TABLE_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_engine_num_immutable_mem_table",
         "Number of immutable mem-table",
-        &["db", "cf"]
+        &["db", "cf"],
+        exponential_buckets(1.0, 1.6, 20).unwrap()
     ).unwrap();
     pub static ref STORE_ENGINE_BLOB_LOCATE_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_engine_blob_locate",
