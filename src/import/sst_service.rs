@@ -1017,7 +1017,7 @@ where
 {
     // use callback to collect kv data.
     Box::new(move |k: Vec<u8>, v: Vec<u8>| {
-        if k.len() == 0 || v.len() == 0 {
+        if k.is_empty() || v.is_empty() {
             return;
         }
 
@@ -1204,6 +1204,7 @@ mod test {
                     write(b"bar", Put, 38, 37),
                     write(b"baz", Put, 34, 31),
                     write(b"bar", Put, 28, 17),
+                    (Vec::default(), Vec::default()),
                 ],
                 expected_reqs: vec![
                     write_req(b"foo", Put, 40, 39),
@@ -1238,6 +1239,7 @@ mod test {
                     ),
                     default(b"beyond", b"Calling your name.", 278),
                     default(b"beyond", b"Calling your name.", 278),
+                    default(b"PingCap", b"", 300),
                 ],
                 expected_reqs: vec![
                     default_req(b"aria", b"The planet where flowers bloom.", 123),
