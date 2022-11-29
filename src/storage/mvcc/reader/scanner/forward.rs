@@ -472,11 +472,20 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
                 }
                 WriteType::Delete => break None,
                 WriteType::Lock | WriteType::Rollback => {
-                    // Continue iterate next `write`.
+                    if write.versions_to_last_change > 0 && write.last_change_ts.is_zero() {
+                        break None;
+                    }
+                    if write.versions_to_last_change < SEEK_BOUND {
+                        // Continue iterate next `write`.
+                        cursors.write.next(&mut statistics.write);
+                    } else {
+                        // Seek to the expected version directly.
+                        let commit_ts = write.last_change_ts;
+                        let key_with_ts = current_user_key.clone().append_ts(commit_ts);
+                        cursors.write.seek(&key_with_ts, &mut statistics.write)?;
+                    }
                 }
             }
-
-            cursors.write.next(&mut statistics.write);
 
             if !cursors.write.valid()? {
                 // Key space ended. Needn't move write cursor to next key.
@@ -1601,6 +1610,86 @@ mod latest_kv_tests {
         );
         scanner.next().unwrap_err();
     }
+
+    #[test]
+    fn test_skip_versions_by_seek() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+
+        must_prewrite_put(&mut engine, b"k1", b"v11", b"k1", 1);
+        must_commit(&mut engine, b"k1", 1, 5);
+        must_prewrite_put(&mut engine, b"k1", b"v12", b"k1", 6);
+        must_commit(&mut engine, b"k1", 6, 8);
+        must_prewrite_put(&mut engine, b"k2", b"v21", b"k2", 2);
+        must_commit(&mut engine, b"k2", 2, 6);
+        must_prewrite_put(&mut engine, b"k4", b"v41", b"k4", 3);
+        must_commit(&mut engine, b"k4", 3, 7);
+
+        for start_ts in (10..30).into_iter().step_by(2) {
+            must_prewrite_lock(&mut engine, b"k1", b"k1", start_ts);
+            must_commit(&mut engine, b"k1", start_ts, start_ts + 1);
+            must_prewrite_lock(&mut engine, b"k3", b"k1", start_ts);
+            must_commit(&mut engine, b"k3", start_ts, start_ts + 1);
+            must_prewrite_lock(&mut engine, b"k4", b"k1", start_ts);
+            must_commit(&mut engine, b"k4", start_ts, start_ts + 1);
+        }
+
+        must_prewrite_put(&mut engine, b"k1", b"v13", b"k1", 40);
+        must_commit(&mut engine, b"k1", 40, 45);
+        must_prewrite_put(&mut engine, b"k2", b"v22", b"k2", 41);
+        must_commit(&mut engine, b"k2", 41, 46);
+        must_prewrite_put(&mut engine, b"k3", b"v32", b"k3", 42);
+        must_commit(&mut engine, b"k3", 42, 47);
+
+        // KEY | COMMIT_TS |   TYPE   | VALUE
+        // ----|-----------|----------|-------
+        // k1  |     45    |   PUT    | v13
+        // k1  |     29    |   LOCK   |
+        // k1  |     27    |   LOCK   |
+        // k1  |    ...    |   LOCK   |
+        // k1  |     11    |   LOCK   |
+        // k1  |      8    |   PUT    | v12
+        // k1  |      5    |   PUT    | v1
+        // k2  |     46    |   PUT    | v22
+        // k2  |      6    |   PUT    | v21
+        // k3  |     47    |   PUT    | v32
+        // k3  |     29    |   LOCK   |
+        // k3  |     27    |   LOCK   |
+        // k3  |    ...    |   LOCK   |
+        // k3  |     11    |   LOCK   |
+        // k4  |     29    |   LOCK   |
+        // k4  |     27    |   LOCK   |
+        // k4  |    ...    |   LOCK   |
+        // k4  |     11    |   LOCK   |
+        // k4  |      7    |   PUT    | v41
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, 35.into())
+            .range(None, None)
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            scanner.next().unwrap(),
+            Some((Key::from_raw(b"k1"), b"v12".to_vec()))
+        );
+        let stats = scanner.take_statistics();
+        assert_eq!(stats.write.next, 3); // skip k1@45, k1@8, k1@5
+        assert_eq!(stats.write.seek, 2); // seek beginning and k1@8
+
+        assert_eq!(
+            scanner.next().unwrap(),
+            Some((Key::from_raw(b"k2"), b"v21".to_vec()))
+        );
+        scanner.take_statistics();
+
+        assert_eq!(
+            scanner.next().unwrap(),
+            Some((Key::from_raw(b"k4"), b"v41".to_vec()))
+        );
+        let stats = scanner.take_statistics();
+        assert_le!(stats.write.next, 1 + SEEK_BOUND as usize); // skip k2@6, near_seek to k4 (8 times next)
+        assert_eq!(stats.write.seek, 2); // seek k4, k4@7
+    }
 }
 
 #[cfg(test)]
@@ -2366,16 +2455,6 @@ mod delta_entry_tests {
 
     #[test]
     fn test_mess() {
-        use pd_client::FeatureGate;
-
-        use crate::storage::txn::sched_pool::set_tls_feature_gate;
-
-        // Set version to 6.5.0 to enable last_change_ts.
-        // TODO: Remove this after TiKV version reaches 6.5
-        let feature_gate = FeatureGate::default();
-        feature_gate.set_version("6.5.0").unwrap();
-        set_tls_feature_gate(feature_gate);
-
         // TODO: non-pessimistic lock should be returned enven if its ts < from_ts.
         // (key, lock, [commit1, commit2, ...])
         // Values ends with 'L' will be made larger than `SHORT_VALUE_MAX_LEN` so it

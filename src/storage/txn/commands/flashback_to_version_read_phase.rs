@@ -1,7 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use txn_types::{Key, Lock, TimeStamp, Write};
+use txn_types::{Key, Lock, TimeStamp};
 
 use crate::storage::{
     mvcc::MvccReader,
@@ -24,7 +24,7 @@ pub enum FlashbackToVersionState {
     },
     ScanWrite {
         next_write_key: Key,
-        key_old_writes: Vec<(Key, Option<Write>)>,
+        keys: Vec<Key>,
     },
 }
 
@@ -110,7 +110,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     read_again = true;
                     FlashbackToVersionState::ScanWrite {
                         next_write_key: self.start_key.clone(),
-                        key_old_writes: Vec::new(),
+                        keys: Vec::new(),
                     }
                 } else {
                     assert!(!key_locks.is_empty());
@@ -128,27 +128,26 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                 }
             }
             FlashbackToVersionState::ScanWrite { next_write_key, .. } => {
-                let mut key_old_writes = flashback_to_version_read_write(
+                let mut keys = flashback_to_version_read_write(
                     &mut reader,
                     next_write_key,
                     &self.end_key,
                     self.version,
-                    self.start_ts,
                     self.commit_ts,
                     statistics,
                 )?;
-                if key_old_writes.is_empty() {
+                if keys.is_empty() {
                     // No more writes to flashback, just return.
                     return Ok(ProcessResult::Res);
                 }
-                tls_collect_keyread_histogram_vec(tag, key_old_writes.len() as f64);
+                tls_collect_keyread_histogram_vec(tag, keys.len() as f64);
                 FlashbackToVersionState::ScanWrite {
-                    next_write_key: if key_old_writes.len() > 1 {
-                        key_old_writes.pop().map(|(key, _)| key).unwrap()
+                    next_write_key: if keys.len() > 1 {
+                        keys.pop().unwrap()
                     } else {
-                        key_old_writes.last().map(|(key, _)| key.clone()).unwrap()
+                        keys.last().unwrap().clone()
                     },
-                    key_old_writes,
+                    keys,
                 }
             }
         };

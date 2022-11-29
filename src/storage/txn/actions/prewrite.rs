@@ -172,6 +172,7 @@ pub struct TransactionProperties<'a> {
     pub need_old_value: bool,
     pub is_retry_request: bool,
     pub assertion_level: AssertionLevel,
+    pub txn_source: u64,
 }
 
 impl<'a> TransactionProperties<'a> {
@@ -438,6 +439,12 @@ impl<'a> PrewriteMutation<'a> {
 
             return Ok(Some((write, commit_ts)));
         }
+        // If seek_ts is max and it goes here, there is no write record for this key.
+        if seek_ts == TimeStamp::max() {
+            // last_change_ts == 0 && versions_to_last_change > 0 means the key actually
+            // does not exist.
+            (self.last_change_ts, self.versions_to_last_change) = (TimeStamp::zero(), 1);
+        }
         Ok(None)
     }
 
@@ -453,7 +460,8 @@ impl<'a> PrewriteMutation<'a> {
             self.txn_props.for_update_ts(),
             self.txn_props.txn_size,
             self.min_commit_ts,
-        );
+        )
+        .set_txn_source(self.txn_props.txn_source);
         // Only Lock needs to record `last_change_ts` in its write record, Put or Delete
         // records themselves are effective changes.
         if tls_can_enable(LAST_CHANGE_TS) && self.lock_type == Some(LockType::Lock) {
@@ -748,6 +756,10 @@ fn amend_pessimistic_lock<S: Snapshot>(
         }
         (mutation.last_change_ts, mutation.versions_to_last_change) =
             write.next_last_change_info(*commit_ts);
+    } else {
+        // last_change_ts == 0 && versions_to_last_change > 0 means the key actually
+        // does not exist.
+        (mutation.last_change_ts, mutation.versions_to_last_change) = (TimeStamp::zero(), 1);
     }
     // Used pipelined pessimistic lock acquiring in this txn but failed
     // Luckily no other txn modified this lock, amend it by treat it as optimistic
@@ -795,6 +807,7 @@ pub mod tests {
             need_old_value: false,
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
+            txn_source: 0,
         }
     }
 
@@ -821,6 +834,7 @@ pub mod tests {
             need_old_value: true,
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
+            txn_source: 0,
         }
     }
 
@@ -1133,6 +1147,7 @@ pub mod tests {
                 need_old_value: true,
                 is_retry_request: false,
                 assertion_level: AssertionLevel::Off,
+                txn_source: 0,
             },
             Mutation::make_check_not_exists(Key::from_raw(key)),
             &None,
@@ -1165,6 +1180,7 @@ pub mod tests {
             need_old_value: true,
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
+            txn_source: 0,
         };
         // calculated commit_ts = 43 ≤ 50, ok
         let (_, old_value) = prewrite(
@@ -1215,6 +1231,7 @@ pub mod tests {
             need_old_value: true,
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
+            txn_source: 0,
         };
         // calculated commit_ts = 43 ≤ 50, ok
         let (_, old_value) = prewrite(
@@ -1324,6 +1341,7 @@ pub mod tests {
             need_old_value: true,
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
+            txn_source: 0,
         };
 
         let cases = vec![
@@ -1384,6 +1402,7 @@ pub mod tests {
             need_old_value: true,
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
+            txn_source: 0,
         };
 
         let cases: Vec<_> = vec![
@@ -1655,6 +1674,7 @@ pub mod tests {
                 need_old_value: true,
                 is_retry_request: false,
                 assertion_level: AssertionLevel::Off,
+                txn_source: 0,
             };
             let snapshot = engine.snapshot(Default::default()).unwrap();
             let cm = ConcurrencyManager::new(start_ts);
@@ -1709,6 +1729,7 @@ pub mod tests {
             need_old_value: true,
             is_retry_request: false,
             assertion_level: AssertionLevel::Off,
+            txn_source: 0,
         };
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let cm = ConcurrencyManager::new(start_ts);
@@ -1850,6 +1871,7 @@ pub mod tests {
                     need_old_value: true,
                     is_retry_request: false,
                     assertion_level: AssertionLevel::Off,
+                    txn_source: 0,
                 };
                 let (_, old_value) = prewrite(
                     &mut txn,
@@ -1886,6 +1908,7 @@ pub mod tests {
                     need_old_value: true,
                     is_retry_request: false,
                     assertion_level: AssertionLevel::Off,
+                    txn_source: 0,
                 };
                 let (_, old_value) = prewrite(
                     &mut txn,
@@ -2228,6 +2251,13 @@ pub mod tests {
         let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
         let key = b"k";
 
+        // Latest version does not exist
+        prewrite_func(&mut engine, LockType::Lock, 2);
+        let lock = must_locked(&mut engine, key, 2);
+        assert!(lock.last_change_ts.is_zero());
+        assert_eq!(lock.versions_to_last_change, 1);
+        must_rollback(&mut engine, key, 2, false);
+
         // Latest change ts should not be enabled on TiKV 6.4
         let feature_gate = FeatureGate::default();
         feature_gate.set_version("6.4.0").unwrap();
@@ -2412,13 +2442,6 @@ pub mod tests {
     #[test]
     fn test_inherit_last_change_ts_from_pessimistic_lock() {
         use engine_traits::CF_LOCK;
-        use pd_client::FeatureGate;
-
-        use crate::storage::txn::sched_pool::set_tls_feature_gate;
-
-        let feature_gate = FeatureGate::default();
-        feature_gate.set_version("6.5.0").unwrap();
-        set_tls_feature_gate(feature_gate);
 
         let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
         let key = b"k";

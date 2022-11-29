@@ -253,6 +253,12 @@
 ## Set it to 0 will cause no space is reserved at all. It's generally used for tests.
 # reserve-space = "5GB"
 
+## Reserve some space for raft disk if raft disk is separated deployed with kv disk.
+## `max(reserve-raft-space, raft disk capacity * 5%)` will be reserved exactly.
+##
+## Set it to 0 will cause no space is reserved at all. It's generally used for tests.
+# reserve-raft-space = "1GB"
+
 ## The maximum recovery time after rocksdb detects restorable background errors. When the data belonging
 ## to the data range is damaged, it will be reported to PD through heartbeat, and PD will add `remove-peer`
 ## operator to remove this damaged peer. When the damaged peer still exists in the current store, the

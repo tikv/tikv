@@ -132,7 +132,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
             to_be_write: write_data,
             rows: 1,
             pr,
-            lock_info: None,
+            lock_info: vec![],
             released_locks,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
@@ -1162,5 +1162,28 @@ pub mod tests {
         );
         must_unlocked(&mut engine, k);
         must_get_rollback_ts(&mut engine, k, ts(50, 0));
+    }
+
+    #[test]
+    fn test_rollback_calculate_last_change_info() {
+        let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+        let k = b"k";
+
+        // Below is a case explaining why we don't calculate last_change_ts for
+        // rollback.
+
+        must_prewrite_put(&mut engine, k, b"v1", k, 5);
+        must_commit(&mut engine, k, 5, 6);
+
+        must_prewrite_put(&mut engine, k, b"v2", k, 7);
+        // When we calculate last_change_ts here, we will get 6.
+        must_rollback(&mut engine, k, 10, true);
+        // But we can still commit with ts 8, then the last_change_ts of the rollback
+        // will be incorrect.
+        must_commit(&mut engine, k, 7, 8);
+
+        let rollback = must_written(&mut engine, k, 10, 10, WriteType::Rollback);
+        assert!(rollback.last_change_ts.is_zero());
+        assert_eq!(rollback.versions_to_last_change, 0);
     }
 }

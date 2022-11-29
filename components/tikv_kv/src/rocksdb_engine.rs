@@ -18,6 +18,7 @@ use engine_traits::{
     CfName, Engines, IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions,
 };
 use file_system::IoRateLimiter;
+use futures::{channel::oneshot, Future};
 use kvproto::{kvrpcpb::Context, metapb, raft_cmdpb};
 use raftstore::coprocessor::CoprocessorHost;
 use tempfile::{Builder, TempDir};
@@ -34,7 +35,7 @@ const TEMP_DIR: &str = "";
 
 enum Task {
     Write(Vec<Modify>, Callback<()>),
-    Snapshot(Callback<Arc<RocksSnapshot>>),
+    Snapshot(oneshot::Sender<Arc<RocksSnapshot>>),
     Pause(Duration),
 }
 
@@ -56,7 +57,9 @@ impl Runnable for Runner {
     fn run(&mut self, t: Task) {
         match t {
             Task::Write(modifies, cb) => cb(write_modifies(&self.0.kv, modifies)),
-            Task::Snapshot(cb) => cb(Ok(Arc::new(self.0.kv.snapshot()))),
+            Task::Snapshot(sender) => {
+                let _ = sender.send(Arc::new(self.0.kv.snapshot()));
+            }
             Task::Pause(dur) => std::thread::sleep(dur),
         }
     }
@@ -253,18 +256,23 @@ impl Engine for RocksEngine {
         Ok(())
     }
 
-    fn async_snapshot(&mut self, _: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()> {
-        fail_point!("rockskv_async_snapshot", |_| Err(box_err!(
-            "snapshot failed"
-        )));
-        fail_point!("rockskv_async_snapshot_not_leader", |_| {
-            Err(self.not_leader_error())
-        });
-        if self.not_leader.load(Ordering::SeqCst) {
-            return Err(self.not_leader_error());
-        }
-        box_try!(self.sched.schedule(Task::Snapshot(cb)));
-        Ok(())
+    type SnapshotRes = impl Future<Output = Result<Self::Snap>> + Send;
+    fn async_snapshot(&mut self, _: SnapContext<'_>) -> Self::SnapshotRes {
+        let res = (|| {
+            fail_point!("rockskv_async_snapshot", |_| Err(box_err!(
+                "snapshot failed"
+            )));
+            if self.not_leader.load(Ordering::SeqCst) {
+                return Err(self.not_leader_error());
+            }
+            let (tx, rx) = oneshot::channel();
+            if self.sched.schedule(Task::Snapshot(tx)).is_err() {
+                return Err(box_err!("failed to schedule snapshot"));
+            }
+            Ok(rx)
+        })();
+
+        async move { Ok(res?.await.unwrap()) }
     }
 }
 

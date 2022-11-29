@@ -149,7 +149,7 @@ blob-run-mode = "normal"
     cfg_controller.update(change).unwrap();
     let res = {
         let mut buf = Vec::new();
-        let mut f = File::open(&cfg_controller.get_current().cfg_path).unwrap();
+        let mut f = File::open(cfg_controller.get_current().cfg_path).unwrap();
         f.read_to_end(&mut buf).unwrap();
         buf
     };
