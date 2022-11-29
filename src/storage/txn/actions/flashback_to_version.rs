@@ -161,7 +161,11 @@ pub fn prewrite_flashback_key(
     // Flashback the value in `CF_DEFAULT` as well if the old write is a
     // `WriteType::Put` without the short value.
     if let Some(old_write) = old_write.as_ref() {
-        if old_write.write_type == WriteType::Put && old_write.short_value.is_none() {
+        if old_write.write_type == WriteType::Put
+            && old_write.short_value.is_none()
+            // If the value with `flashback_start_ts` already exists, we don't need to write again.
+            && reader.get_value(key_to_lock, flashback_start_ts)?.is_none()
+        {
             txn.put_value(
                 key_to_lock.clone(),
                 flashback_start_ts,
@@ -226,7 +230,7 @@ pub mod tests {
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
     use tikv_kv::ScanMode;
-    use txn_types::TimeStamp;
+    use txn_types::{TimeStamp, SHORT_VALUE_MAX_LEN};
 
     use super::*;
     use crate::storage::{
@@ -241,6 +245,31 @@ pub mod tests {
         },
         Engine, TestEngineBuilder,
     };
+
+    fn must_prewrite_flashback_key<E: Engine>(
+        engine: &mut E,
+        key: &[u8],
+        version: impl Into<TimeStamp>,
+        start_ts: impl Into<TimeStamp>,
+    ) -> usize {
+        let (version, start_ts) = (version.into(), start_ts.into());
+        let cm = ConcurrencyManager::new(TimeStamp::zero());
+        let mut txn = MvccTxn::new(start_ts, cm);
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let ctx = Context::default();
+        let mut snap_reader = SnapshotReader::new_with_ctx(version, snapshot, &ctx);
+        prewrite_flashback_key(
+            &mut txn,
+            &mut snap_reader,
+            &Key::from_raw(key),
+            version,
+            start_ts,
+        )
+        .unwrap();
+        let rows = txn.modifies.len();
+        write(engine, &ctx, txn.into_modifies());
+        rows
+    }
 
     fn must_flashback_to_version<E: Engine>(
         engine: &mut E,
@@ -434,5 +463,19 @@ pub mod tests {
             must_flashback_to_version(&mut engine, k, 1, start_ts, commit_ts),
             0
         );
+    }
+
+    #[test]
+    fn test_duplicated_prewrite_flashback_key() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let mut ts = TimeStamp::zero();
+        let (k, v) = (b"k", [u8::MAX; SHORT_VALUE_MAX_LEN + 1]);
+        must_prewrite_put(&mut engine, k, &v, k, *ts.incr());
+        must_commit(&mut engine, k, ts, *ts.incr());
+        must_get(&mut engine, k, ts, &v);
+        let start_ts = *ts.incr();
+        assert_eq!(must_prewrite_flashback_key(&mut engine, k, 2, start_ts), 2);
+        assert_eq!(must_prewrite_flashback_key(&mut engine, k, 2, start_ts), 1);
+        must_rollback(&mut engine, k, start_ts, false);
     }
 }
