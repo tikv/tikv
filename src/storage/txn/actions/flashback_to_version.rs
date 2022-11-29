@@ -164,7 +164,7 @@ pub fn prewrite_flashback_key(
         if old_write.write_type == WriteType::Put
             && old_write.short_value.is_none()
             // If the value with `flashback_start_ts` already exists, we don't need to write again.
-            && reader.get_value(key_to_lock, flashback_start_ts)?.is_none()
+            && reader.reader.get_value(key_to_lock, flashback_start_ts)?.is_none()
         {
             txn.put_value(
                 key_to_lock.clone(),

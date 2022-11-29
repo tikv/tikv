@@ -96,11 +96,6 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
     }
 
     #[inline(always)]
-    pub fn get_value(&mut self, key: &Key, start_ts: TimeStamp) -> Result<Option<Value>> {
-        self.reader.get_value(key, start_ts)
-    }
-
-    #[inline(always)]
     pub fn load_data(&mut self, key: &Key, write: Write) -> Result<Value> {
         self.reader.load_data(key, write)
     }
@@ -191,7 +186,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
     }
 
     /// get the value of a user key with the given `start_ts`.
-    fn get_value(&mut self, key: &Key, start_ts: TimeStamp) -> Result<Option<Value>> {
+    pub fn get_value(&mut self, key: &Key, start_ts: TimeStamp) -> Result<Option<Value>> {
         if self.scan_mode.is_some() {
             self.create_data_cursor()?;
         }
