@@ -3,19 +3,25 @@
 // #[PerformanceCriticalPath]
 use std::{
     borrow::Cow,
+    cell::UnsafeCell,
     fmt::{self, Debug, Display, Formatter},
     io::Error as IoError,
     mem,
     num::NonZeroU64,
+    pin::Pin,
     result,
-    sync::{Arc, RwLock},
+    sync::{
+        atomic::{AtomicU8, Ordering},
+        Arc, RwLock,
+    },
+    task::Poll,
     time::Duration,
 };
 
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
-use futures::{future::BoxFuture, Future, Stream, StreamExt};
+use futures::{future::BoxFuture, task::AtomicWaker, Future, Stream, StreamExt};
 use kvproto::{
     errorpb,
     kvrpcpb::{Context, IsolationLevel},
@@ -193,6 +199,95 @@ pub fn drop_snapshot_callback<T>() -> kv::Result<T> {
     Err(kv::Error::from(kv::ErrorInner::Request(err)))
 }
 
+struct WriteResCore {
+    ev: AtomicU8,
+    result: UnsafeCell<Option<kv::Result<()>>>,
+    wake: AtomicWaker,
+}
+
+struct WriteResSub {
+    notified_ev: u8,
+    core: Arc<WriteResCore>,
+}
+
+unsafe impl Send for WriteResSub {}
+
+impl Stream for WriteResSub {
+    type Item = WriteEvent;
+
+    #[inline]
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        let mut s = self.as_mut();
+        let mut cur_ev = s.core.ev.load(Ordering::Acquire);
+        if cur_ev == s.notified_ev {
+            s.core.wake.register(cx.waker());
+            cur_ev = s.core.ev.load(Ordering::Acquire);
+            if cur_ev == s.notified_ev {
+                return Poll::Pending;
+            }
+        }
+        s.notified_ev = cur_ev;
+        match cur_ev {
+            WriteEvent::EVENT_PROPOSED => Poll::Ready(Some(WriteEvent::Proposed)),
+            WriteEvent::EVENT_COMMITTED => Poll::Ready(Some(WriteEvent::Committed)),
+            u8::MAX => {
+                let result = unsafe { (*s.core.result.get()).take().unwrap() };
+                return Poll::Ready(Some(WriteEvent::Finished(result)));
+            }
+            e => panic!("unexpected event {}", e),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct WriteResFeed {
+    core: Arc<WriteResCore>,
+}
+
+unsafe impl Send for WriteResFeed {}
+
+impl WriteResFeed {
+    fn pair() -> (Self, WriteResSub) {
+        let core = Arc::new(WriteResCore {
+            ev: AtomicU8::new(0),
+            result: UnsafeCell::new(None),
+            wake: AtomicWaker::new(),
+        });
+        (
+            Self { core: core.clone() },
+            WriteResSub {
+                notified_ev: 0,
+                core,
+            },
+        )
+    }
+
+    fn notify_proposed(&self) {
+        self.core
+            .ev
+            .store(WriteEvent::EVENT_PROPOSED, Ordering::Release);
+        self.core.wake.wake();
+    }
+
+    fn notify_committed(&self) {
+        self.core
+            .ev
+            .store(WriteEvent::EVENT_COMMITTED, Ordering::Release);
+        self.core.wake.wake();
+    }
+
+    fn notify(&self, result: kv::Result<()>) {
+        unsafe {
+            (*self.core.result.get()).insert(result);
+        }
+        self.core.ev.store(u8::MAX, Ordering::Release);
+        self.core.wake.wake();
+    }
+}
+
 /// `RaftKv` is a storage engine base on `RaftStore`.
 #[derive(Clone)]
 pub struct RaftKv<E, S>
@@ -361,25 +456,18 @@ where
 
         self.schedule_txn_extra(txn_extra);
 
-        let (tx, rx) = tikv_util::mpsc::future::bounded(
-            WriteEvent::event_capacity(subscribed),
-            WakePolicy::Immediately,
-        );
+        let (tx, rx) = WriteResFeed::pair();
         let proposed_cb = if !WriteEvent::subscribed_proposed(subscribed) {
             None
         } else {
             let tx = tx.clone();
-            Some(Box::new(move || {
-                let _ = tx.send(WriteEvent::Proposed);
-            }) as store::ExtCallback)
+            Some(Box::new(move || tx.notify_proposed()) as store::ExtCallback)
         };
         let committed_cb = if !WriteEvent::subscribed_committed(subscribed) {
             None
         } else {
             let tx = tx.clone();
-            Some(Box::new(move || {
-                let _ = tx.send(WriteEvent::Committed);
-            }) as store::ExtCallback)
+            Some(Box::new(move || tx.notify_committed()) as store::ExtCallback)
         };
         let applied_tx = tx.clone();
         let applied_cb = Box::new(move |resp: WriteResponse| {
@@ -394,7 +482,7 @@ where
             if let Some(cb) = on_applied {
                 cb(&mut res);
             }
-            let _ = applied_tx.send(WriteEvent::Finished(res));
+            applied_tx.notify(res);
         });
 
         let cb = StoreCallback::write_ext(applied_cb, proposed_cb, committed_cb);
@@ -409,7 +497,7 @@ where
                 .map_err(kv::Error::from);
         }
         if res.is_err() {
-            let _ = tx.send(WriteEvent::Finished(res));
+            tx.notify(res);
         }
         rx.inspect(move |ev| {
             let WriteEvent::Finished(res) = ev else { return };
