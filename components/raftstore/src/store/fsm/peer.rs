@@ -2526,12 +2526,6 @@ where
                     // missing snapshot files should not be noticed.
                     let s = self.ctx.snap_mgr.get_snapshot_for_applying(&key)?;
                     self.ctx.snap_mgr.delete_snapshot(&key, s.as_ref(), false);
-                } else if self.fsm.peer.wait_data {
-                    // If the key in none, it is because there is witness -> non-witness switch,
-                    // and the peer requests snapshot from leader but leader hasn't applied the
-                    // switch yet. In that case, the snapshot is a witness snapshot whereas
-                    // non-witness snapshot is expected. So request the snapshot again.
-                    self.on_request_snapshot_tick();
                 }
                 return Ok(());
             }
@@ -3027,7 +3021,7 @@ where
         if snap.get_metadata().get_index() < self.fsm.peer.get_store().applied_index()
             && snap_data.get_meta().get_for_witness() != self.fsm.peer.is_witness()
         {
-            info!(
+            error!(
                 "mismatch witness snapshot";
                 "region_id" => region_id,
                 "peer_id" => self.fsm.peer_id(),
@@ -5509,11 +5503,12 @@ where
         if !self.fsm.peer.wait_data {
             return;
         }
+        assert!(self.fsm.peer.request_index != 0);
         if let Err(e) = self
             .fsm
             .peer
             .raft_group
-            .request_snapshot(self.fsm.peer.get_store().first_index())
+            .request_snapshot(self.fsm.peer.request_index)
         {
             error!(
                 "failed to request snapshot";
@@ -6357,6 +6352,7 @@ where
                     let _ = self.fsm.peer.get_store().clear_data();
                 } else {
                     self.fsm.peer.wait_data = true;
+                    self.fsm.peer.request_index = sw.index;
                     self.on_request_snapshot_tick();
                 }
                 self.fsm.peer.peer.is_witness = is_witness;

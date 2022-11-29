@@ -894,6 +894,8 @@ where
     /// the same time period.
     pub wait_data: bool,
 
+    pub request_index: u64,
+
     /// Force leader state is only used in online recovery when the majority of
     /// peers are missing. In this state, it forces one peer to become leader
     /// out of accordance with Raft election rule, and forbids any
@@ -1107,6 +1109,7 @@ where
             leader_unreachable: false,
             pending_remove: false,
             wait_data,
+            request_index: applied_index,
             should_wake_up: false,
             force_leader: None,
             pending_merge_state: None,
@@ -2598,6 +2601,7 @@ where
                             .schedule_task(self.region_id, ApplyTask::Recover(self.region_id));
                     }
                     self.wait_data = false;
+                    self.request_index = 0;
                     return false;
                 }
             }

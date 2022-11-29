@@ -168,4 +168,61 @@ fn test_push_non_witness_availability() {
     test_non_witness_availability("ignore schedule check non-witness availability tick");
 }
 
-// TODO: The snapshot would be older than the current commit index
+// The snapshot would be older than the current commit index
+#[test]
+fn test_non_witness_apply_older_snapshot() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.check_peers_availability_interval = ReadableDuration::millis(20);
+    cluster.run();
+    let nodes = Vec::from_iter(cluster.get_node_ids());
+    assert_eq!(nodes.len(), 3);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+    let peer_on_store1 = find_peer(&region, nodes[1]).unwrap();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1.clone());
+
+    // non-witness -> witness
+    let peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
+    cluster.pd_client.must_switch_witnesses(
+        region.get_id(),
+        vec![peer_on_store3.get_id()],
+        vec![true],
+    );
+
+    cluster.must_put(b"k1", b"v1");
+
+    std::thread::sleep(Duration::from_millis(100));
+    must_get_none(&cluster.get_engine(3), b"k1");
+
+    fail::cfg("ignore request snapshot", "return").unwrap();
+    // witness -> non-witness
+    cluster
+        .pd_client
+        .switch_witnesses(region.get_id(), vec![peer_on_store3.get_id()], vec![false]);
+    std::thread::sleep(Duration::from_millis(10));
+
+    fail::cfg("on_handle_apply_2", "sleep(10)").unwrap();
+
+    for i in 2..100_usize {
+        if i == 50 {
+            fail::remove("ignore request snapshot");
+        }
+        cluster
+            .async_put(&i.to_ne_bytes(), &i.to_ne_bytes())
+            .unwrap();
+    }
+    // snapshot applied
+    std::thread::sleep(Duration::from_millis(500));
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    must_get_equal(
+        &cluster.get_engine(3),
+        &50_usize.to_ne_bytes(),
+        &50_usize.to_ne_bytes(),
+    );
+    assert_eq!(cluster.pd_client.get_pending_peers().len(), 0);
+    fail::remove("on_handle_apply_2");
+}

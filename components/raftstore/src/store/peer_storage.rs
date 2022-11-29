@@ -457,6 +457,13 @@ where
         }
 
         if find_peer_by_id(&self.region, to).map_or(false, |p| p.is_witness) {
+            if self.applied_index() < request_index {
+                // It may be a request from non-witness. In order to avoid generating mismatch
+                // snapshots, wait for apply non-witness to complete
+                return Err(raft::Error::Store(
+                    raft::StorageError::SnapshotTemporarilyUnavailable,
+                ));
+            }
             // generate an empty snapshot for witness directly
             return Ok(util::new_empty_snapshot(
                 self.region.clone(),
