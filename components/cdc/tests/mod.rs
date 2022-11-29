@@ -270,8 +270,21 @@ impl TestSuite {
         pk: Vec<u8>,
         ts: TimeStamp,
     ) {
+        self.must_kv_prewrite_with_source(region_id, muts, pk, ts, 0);
+    }
+
+    pub fn must_kv_prewrite_with_source(
+        &mut self,
+        region_id: u64,
+        muts: Vec<Mutation>,
+        pk: Vec<u8>,
+        ts: TimeStamp,
+        txn_source: u64,
+    ) {
         let mut prewrite_req = PrewriteRequest::default();
-        prewrite_req.set_context(self.get_context(region_id));
+        let mut context = self.get_context(region_id);
+        context.set_txn_source(txn_source);
+        prewrite_req.set_context(context);
         prewrite_req.set_mutations(muts.into_iter().collect());
         prewrite_req.primary_lock = pk;
         prewrite_req.start_version = ts.into_inner();
@@ -315,8 +328,21 @@ impl TestSuite {
         start_ts: TimeStamp,
         commit_ts: TimeStamp,
     ) {
+        self.must_kv_commit_with_source(region_id, keys, start_ts, commit_ts, 0);
+    }
+
+    pub fn must_kv_commit_with_source(
+        &mut self,
+        region_id: u64,
+        keys: Vec<Vec<u8>>,
+        start_ts: TimeStamp,
+        commit_ts: TimeStamp,
+        txn_source: u64,
+    ) {
         let mut commit_req = CommitRequest::default();
-        commit_req.set_context(self.get_context(region_id));
+        let mut context = self.get_context(region_id);
+        context.set_txn_source(txn_source);
+        commit_req.set_context(context);
         commit_req.start_version = start_ts.into_inner();
         commit_req.set_keys(keys.into_iter().collect());
         commit_req.commit_version = commit_ts.into_inner();

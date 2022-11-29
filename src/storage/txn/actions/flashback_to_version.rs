@@ -228,7 +228,7 @@ pub fn commit_flashback_key(
 #[cfg(test)]
 pub mod tests {
     use concurrency_manager::ConcurrencyManager;
-    use kvproto::kvrpcpb::Context;
+    use kvproto::kvrpcpb::{Context, PrewriteRequestPessimisticAction::DoPessimisticCheck};
     use tikv_kv::ScanMode;
     use txn_types::{TimeStamp, SHORT_VALUE_MAX_LEN};
 
@@ -245,6 +245,32 @@ pub mod tests {
         },
         Engine, TestEngineBuilder,
     };
+
+    fn must_rollback_lock<E: Engine>(
+        engine: &mut E,
+        key: &[u8],
+        version: impl Into<TimeStamp>,
+        start_ts: impl Into<TimeStamp>,
+    ) -> usize {
+        let next_key = Key::from_raw(keys::next_key(key).as_slice());
+        let key = Key::from_raw(key);
+        let (version, start_ts) = (version.into(), start_ts.into());
+        let ctx = Context::default();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &ctx);
+        let mut statistics = Statistics::default();
+        let key_locks =
+            flashback_to_version_read_lock(&mut reader, key.clone(), &next_key, &mut statistics)
+                .unwrap();
+        let cm = ConcurrencyManager::new(TimeStamp::zero());
+        let mut txn = MvccTxn::new(start_ts, cm.clone());
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut snap_reader = SnapshotReader::new_with_ctx(version, snapshot, &ctx);
+        rollback_locks(&mut txn, &mut snap_reader, key_locks).unwrap();
+        let rows = txn.modifies.len();
+        write(engine, &ctx, txn.into_modifies());
+        rows
+    }
 
     fn must_prewrite_flashback_key<E: Engine>(
         engine: &mut E,
@@ -285,17 +311,6 @@ pub mod tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &ctx);
         let mut statistics = Statistics::default();
-        // Flashback the locks.
-        let key_locks =
-            flashback_to_version_read_lock(&mut reader, key.clone(), &next_key, &mut statistics)
-                .unwrap();
-        let cm = ConcurrencyManager::new(TimeStamp::zero());
-        let mut txn = MvccTxn::new(start_ts, cm.clone());
-        let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut snap_reader = SnapshotReader::new_with_ctx(version, snapshot, &ctx);
-        rollback_locks(&mut txn, &mut snap_reader, key_locks).unwrap();
-        let mut rows = txn.modifies.len();
-        write(engine, &ctx, txn.into_modifies());
         // Flashback the writes.
         let keys = flashback_to_version_read_write(
             &mut reader,
@@ -307,6 +322,7 @@ pub mod tests {
             &mut statistics,
         )
         .unwrap();
+        let cm = ConcurrencyManager::new(TimeStamp::zero());
         let mut txn = MvccTxn::new(start_ts, cm);
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut snap_reader = SnapshotReader::new_with_ctx(version, snapshot, &ctx);
@@ -319,7 +335,7 @@ pub mod tests {
             commit_ts,
         )
         .unwrap();
-        rows += txn.modifies.len();
+        let rows = txn.modifies.len();
         write(engine, &ctx, txn.into_modifies());
         rows
     }
@@ -416,8 +432,6 @@ pub mod tests {
 
     #[test]
     fn test_flashback_to_version_pessimistic() {
-        use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
-
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let k = b"k";
         let (v1, v2, v3) = (b"v1", b"v2", b"v3");
@@ -434,7 +448,8 @@ pub mod tests {
         // Flashback to version 17 with start_ts = 35, commit_ts = 40.
         // Distinguish from pessimistic start_ts 30 to make sure rollback ts is by lock
         // ts.
-        assert_eq!(must_flashback_to_version(&mut engine, k, 17, 35, 40), 3);
+        assert_eq!(must_rollback_lock(&mut engine, k, 17, 35), 2);
+        assert_eq!(must_flashback_to_version(&mut engine, k, 17, 35, 40), 1);
 
         // Pessimistic Prewrite Put(k -> v3) with stat_ts = 30 will be error with
         // Rollback.
@@ -473,9 +488,37 @@ pub mod tests {
         must_prewrite_put(&mut engine, k, &v, k, *ts.incr());
         must_commit(&mut engine, k, ts, *ts.incr());
         must_get(&mut engine, k, ts, &v);
-        let start_ts = *ts.incr();
-        assert_eq!(must_prewrite_flashback_key(&mut engine, k, 2, start_ts), 2);
-        assert_eq!(must_prewrite_flashback_key(&mut engine, k, 2, start_ts), 1);
-        must_rollback(&mut engine, k, start_ts, false);
+
+        let flashback_start_ts = *ts.incr();
+        // Rollback nothing.
+        assert_eq!(
+            must_rollback_lock(&mut engine, k, ts, flashback_start_ts),
+            0
+        );
+        // Lock and write the value of `k`.
+        assert_eq!(
+            must_prewrite_flashback_key(&mut engine, k, 2, flashback_start_ts),
+            2
+        );
+        // Unlock `k`, put rollback record and delete the value of `k`.
+        assert_eq!(
+            must_rollback_lock(&mut engine, k, ts, flashback_start_ts),
+            3
+        );
+        // Lock and write the value of `k`.
+        assert_eq!(
+            must_prewrite_flashback_key(&mut engine, k, 2, flashback_start_ts),
+            2
+        );
+        // Only unlock `k` since there is an overlapped rollback record.
+        assert_eq!(
+            must_rollback_lock(&mut engine, k, ts, flashback_start_ts),
+            1
+        );
+        // Only lock `k` since the value of `k` has already existed.
+        assert_eq!(
+            must_prewrite_flashback_key(&mut engine, k, 2, flashback_start_ts),
+            1
+        );
     }
 }
