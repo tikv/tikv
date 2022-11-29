@@ -118,6 +118,7 @@ fn test_config_proxy_default_no_config_item() {
     );
 
     assert_eq!(config.import.num_threads, 4);
+    assert_eq!(config.server.status_thread_pool_size, 2);
 }
 
 /// We test if the engine-label is set properly.
