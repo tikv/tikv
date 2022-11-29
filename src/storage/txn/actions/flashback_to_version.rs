@@ -260,10 +260,9 @@ pub mod tests {
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &ctx);
         let mut statistics = Statistics::default();
         let key_locks =
-            flashback_to_version_read_lock(&mut reader, key.clone(), &next_key, &mut statistics)
-                .unwrap();
+            flashback_to_version_read_lock(&mut reader, key, &next_key, &mut statistics).unwrap();
         let cm = ConcurrencyManager::new(TimeStamp::zero());
-        let mut txn = MvccTxn::new(start_ts, cm.clone());
+        let mut txn = MvccTxn::new(start_ts, cm);
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut snap_reader = SnapshotReader::new_with_ctx(version, snapshot, &ctx);
         rollback_locks(&mut txn, &mut snap_reader, key_locks).unwrap();
