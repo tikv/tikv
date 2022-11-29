@@ -432,10 +432,10 @@ pub struct CursorBuilder<'a, S: Snapshot> {
     prefix_seek: bool,
     upper_bound: Option<Key>,
     lower_bound: Option<Key>,
-    // hint for we will only scan data with commit ts >= hint_min_ts
-    hint_min_ts: Option<TimeStamp>,
-    // hint for we will only scan data with commit ts <= hint_max_ts
-    hint_max_ts: Option<TimeStamp>,
+    // hint for we will only scan data with commit_ts >/>= hint_min_ts
+    hint_min_ts: Option<Bound<TimeStamp>>,
+    // hint for we will only scan data with commit_ts </<= hint_max_ts
+    hint_max_ts: Option<Bound<TimeStamp>>,
     key_only: bool,
     max_skippable_internal_keys: u64,
 }
@@ -506,8 +506,8 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
     /// Default is empty.
     #[inline]
     #[must_use]
-    pub fn hint_min_ts(mut self, min_ts: Option<TimeStamp>) -> Self {
-        self.hint_min_ts = min_ts;
+    pub fn hint_min_ts(mut self, ts_bound: Option<Bound<TimeStamp>>) -> Self {
+        self.hint_min_ts = ts_bound;
         self
     }
 
@@ -516,8 +516,8 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
     /// Default is empty.
     #[inline]
     #[must_use]
-    pub fn hint_max_ts(mut self, max_ts: Option<TimeStamp>) -> Self {
-        self.hint_max_ts = max_ts;
+    pub fn hint_max_ts(mut self, ts_bound: Option<Bound<TimeStamp>>) -> Self {
+        self.hint_max_ts = ts_bound;
         self
     }
 
@@ -550,11 +550,11 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
             None
         };
         let mut iter_opt = IterOptions::new(l_bound, u_bound, self.fill_cache);
-        if let Some(ts) = self.hint_min_ts {
-            iter_opt.set_hint_min_ts(Bound::Included(ts.into_inner()));
+        if let Some(ts_bound) = self.hint_min_ts {
+            iter_opt.set_hint_min_ts(ts_bound.map(TimeStamp::into_inner));
         }
-        if let Some(ts) = self.hint_max_ts {
-            iter_opt.set_hint_max_ts(Bound::Included(ts.into_inner()));
+        if let Some(ts_bound) = self.hint_max_ts {
+            iter_opt.set_hint_max_ts(ts_bound.map(TimeStamp::into_inner));
         }
         iter_opt.set_key_only(self.key_only);
         iter_opt.set_max_skippable_internal_keys(self.max_skippable_internal_keys);
