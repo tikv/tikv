@@ -15,7 +15,9 @@ use raft::{
     eraftpb::{ConfState, Entry, Snapshot},
     GetEntriesContext, RaftState, INVALID_ID,
 };
-use raftstore::store::{util, EntryStorage, ReadTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
+use raftstore::store::{
+    util, EntryStorage, ReadTask, WriteTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+};
 use slog::{info, o, Logger};
 use tikv_util::{box_err, store::find_peer, worker::Scheduler};
 
@@ -283,6 +285,11 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     }
 
     #[inline]
+    pub fn region_state_mut(&mut self) -> &mut RegionLocalState {
+        &mut self.region_state
+    }
+
+    #[inline]
     pub fn raft_state(&self) -> &RaftLocalState {
         self.entry_storage.raft_state()
     }
@@ -413,8 +420,8 @@ mod tests {
     };
     use raft::{eraftpb::Snapshot as RaftSnapshot, Error as RaftError, StorageError};
     use raftstore::store::{
-        AsyncReadNotifier, FetchedLogs, GenSnapRes, ReadRunner, ReadTask, TabletSnapKey,
-        TabletSnapManager, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+        util::new_empty_snapshot, AsyncReadNotifier, FetchedLogs, GenSnapRes, ReadRunner, ReadTask,
+        TabletSnapKey, TabletSnapManager, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
     };
     use slog::o;
     use tempfile::TempDir;
@@ -491,6 +498,57 @@ mod tests {
     }
 
     #[test]
+    fn test_apply_snapshot() {
+        let region = new_region();
+        let path = TempDir::new().unwrap();
+        let mgr = TabletSnapManager::new(path.path().join("snap_dir").to_str().unwrap());
+        mgr.init().unwrap();
+        let raft_engine =
+            engine_test::raft::new_engine(&format!("{}", path.path().join("raft").display()), None)
+                .unwrap();
+        let mut wb = raft_engine.log_batch(10);
+        write_initial_states(&mut wb, region.clone()).unwrap();
+        assert!(!wb.is_empty());
+        raft_engine.consume(&mut wb, true).unwrap();
+        // building a tablet factory
+        let ops = DbOptions::default();
+        let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
+        let factory = Arc::new(TestTabletFactoryV2::new(
+            path.path().join("tablet").as_path(),
+            ops,
+            cf_opts,
+        ));
+        let mut worker = Worker::new("test-read-worker").lazy_build("test-read-worker");
+        let sched = worker.scheduler();
+        let logger = slog_global::borrow_global().new(o!());
+        let mut s = Storage::new(4, 6, raft_engine.clone(), sched, &logger.clone())
+            .unwrap()
+            .unwrap();
+
+        let snapshot = new_empty_snapshot(region.clone(), 10, 1, false);
+        let mut task = WriteTask::new(region.get_id(), 5, 0);
+        s.apply_snapshot(&snapshot, &mut task, mgr, factory)
+            .unwrap();
+
+        // It can be set before load tablet.
+        assert_eq!(PeerState::Normal, s.region_state().get_state());
+        assert_eq!(10, s.entry_storage().truncated_index());
+        assert_eq!(1, s.entry_storage().truncated_term());
+        assert_eq!(1, s.entry_storage().last_term());
+        assert_eq!(10, s.entry_storage().raft_state().last_index);
+        // This index can't be set before load tablet.
+        assert_ne!(10, s.entry_storage().applied_index());
+        assert_ne!(1, s.entry_storage().applied_term());
+        assert_ne!(10, s.region_state().get_tablet_index());
+        assert!(task.persisted_cb.is_some());
+
+        s.on_applied_snapshot();
+        assert_eq!(10, s.entry_storage().applied_index());
+        assert_eq!(1, s.entry_storage().applied_term());
+        assert_eq!(10, s.region_state().get_tablet_index());
+    }
+
+    #[test]
     fn test_storage_create_snapshot() {
         let region = new_region();
         let path = TempDir::new().unwrap();
@@ -553,7 +611,7 @@ mod tests {
         assert_eq!(snap.get_metadata().get_term(), 0);
         assert_eq!(snap.get_data().is_empty(), false);
         let snap_key = TabletSnapKey::from_region_snap(4, 7, &snap);
-        let checkpointer_path = mgr.get_tablet_checkpointer_path(&snap_key);
+        let checkpointer_path = mgr.tablet_gen_path(&snap_key);
         assert!(checkpointer_path.exists());
 
         // Test cancel snapshot
