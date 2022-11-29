@@ -28,7 +28,7 @@ use raftstore::{
         SplitCheckRunner, SplitCheckTask, StoreWriters, TabletSnapManager, Transport, WriteSenders,
     },
 };
-use slog::Logger;
+use slog::{warn, Logger};
 use tikv_util::{
     box_err,
     config::{Tracker, VersionTrack},
@@ -376,17 +376,19 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     async_read: Worker,
     pd: LazyWorker<pd::Task>,
     async_write: StoreWriters<EK, ER>,
+    purge: Option<Worker>,
 
     // Following is not maintained by raftstore itself.
     background: Worker,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Workers<EK, ER> {
-    fn new(background: Worker, pd: LazyWorker<pd::Task>) -> Self {
+    fn new(background: Worker, pd: LazyWorker<pd::Task>, purge: Option<Worker>) -> Self {
         Self {
             async_read: Worker::new("async-read-worker"),
             pd,
             async_write: StoreWriters::default(),
+            purge,
             background,
         }
     }
@@ -430,7 +432,29 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
                 .broadcast_normal(|| PeerMsg::Tick(PeerTick::PdHeartbeat));
         });
 
-        let mut workers = Workers::new(background, pd_worker);
+        let purge_worker = if raft_engine.need_manual_purge() {
+            let worker = Worker::new("purge-worker");
+            let raft_clone = raft_engine.clone();
+            let logger = self.logger.clone();
+            let router = router.clone();
+            worker.spawn_interval_task(cfg.value().raft_engine_purge_interval.0, move || {
+                match raft_clone.manual_purge() {
+                    Ok(regions) => {
+                        for r in regions {
+                            let _ = router.send(r, PeerMsg::ForceCompactLog);
+                        }
+                    }
+                    Err(e) => {
+                        warn!(logger, "purge expired files"; "err" => %e);
+                    }
+                };
+            });
+            Some(worker)
+        } else {
+            None
+        };
+
+        let mut workers = Workers::new(background, pd_worker, purge_worker);
         workers
             .async_write
             .spawn(store_id, raft_engine.clone(), None, router, &trans, &cfg)?;
@@ -528,6 +552,9 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         workers.async_write.shutdown();
         workers.async_read.stop();
         workers.pd.stop();
+        if let Some(w) = workers.purge {
+            w.stop();
+        }
     }
 }
 
