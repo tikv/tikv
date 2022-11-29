@@ -543,8 +543,6 @@ impl<E: Engine> Endpoint<E> {
                 new_context.set_region_id(task.get_region_id());
                 new_context.set_region_epoch(task.take_region_epoch());
                 new_context.set_peer(task.take_peer());
-                let mut response = coppb::StoreBatchTaskResponse::new();
-                response.set_task_id(task.get_task_id());
                 (new_req, task.get_task_id())
             })
             .collect();
@@ -732,17 +730,26 @@ impl<E: Engine> Endpoint<E> {
 }
 
 fn make_error_batch_response(batch_resp: &mut coppb::StoreBatchTaskResponse, e: Error) {
+    warn!(
+        "batch cop task error-response";
+        "err" => %e
+    );
+    let tag;
     match e {
         Error::Region(e) => {
+            tag = storage::get_tag_from_header(&e);
             batch_resp.set_region_error(e);
         }
         Error::Locked(info) => {
+            tag = "meet_lock";
             batch_resp.set_locked(info);
         }
         Error::DeadlineExceeded => {
+            tag = "deadline_exceeded";
             batch_resp.set_other_error(e.to_string());
         }
         Error::MaxPendingTasksExceeded => {
+            tag = "max_pending_tasks_exceeded";
             let mut server_is_busy_err = errorpb::ServerIsBusy::default();
             server_is_busy_err.set_reason(e.to_string());
             let mut errorpb = errorpb::Error::default();
@@ -751,9 +758,11 @@ fn make_error_batch_response(batch_resp: &mut coppb::StoreBatchTaskResponse, e: 
             batch_resp.set_region_error(errorpb);
         }
         Error::Other(_) => {
+            tag = "other";
             batch_resp.set_other_error(e.to_string());
         }
     };
+    COPR_REQ_ERROR.with_label_values(&[tag]).inc();
 }
 
 fn make_error_response(e: Error) -> coppb::Response {
