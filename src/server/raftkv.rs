@@ -50,7 +50,6 @@ use tikv_kv::{write_modifies, OnAppliedCb, WriteEvent};
 use tikv_util::{
     codec::number::NumberEncoder,
     future::{paired_future_callback, paired_must_called_future_callback},
-    mpsc::future::WakePolicy,
     time::Instant,
 };
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
@@ -235,7 +234,7 @@ impl Stream for WriteResSub {
             WriteEvent::EVENT_COMMITTED => Poll::Ready(Some(WriteEvent::Committed)),
             u8::MAX => {
                 let result = unsafe { (*s.core.result.get()).take().unwrap() };
-                return Poll::Ready(Some(WriteEvent::Finished(result)));
+                Poll::Ready(Some(WriteEvent::Finished(result)))
             }
             e => panic!("unexpected event {}", e),
         }
@@ -281,7 +280,7 @@ impl WriteResFeed {
 
     fn notify(&self, result: kv::Result<()>) {
         unsafe {
-            (*self.core.result.get()).insert(result);
+            (*self.core.result.get()) = Some(result);
         }
         self.core.ev.store(u8::MAX, Ordering::Release);
         self.core.wake.wake();
