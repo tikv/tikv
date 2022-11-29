@@ -2251,9 +2251,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio"
-version = "0.10.3"
+version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9bcdd3694fa08158334501af37bdf5b4f00b1865b602d917e3cd74ecf80cd0a"
+checksum = "1f2506de56197d01821c2d1d21082d2dcfd6c82d7a1d6e04d33f37aab6130632"
 dependencies = [
  "futures-executor",
  "futures-util",
@@ -2694,7 +2694,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/JmPotato/kvproto?branch=move_flashback_start_ts#3e359045905c193ad1755c27c5e543039dbfbba7"
+source = "git+https://github.com/pingcap/kvproto.git#621ec37aac7abf1551ab2fc3b711de402559b2c5"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
