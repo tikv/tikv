@@ -851,8 +851,8 @@ pub fn check_resp_header(header: &ResponseHeader) -> Result<()> {
         ErrorType::GlobalConfigNotFound => {
             Err(Error::GlobalConfigNotFound(err.get_message().to_owned()))
         }
-        ErrorType::Ok => Ok(()),
         ErrorType::DuplicatedEntry | ErrorType::EntryNotFound => Err(box_err!(err.get_message())),
+        ErrorType::Ok => Ok(()),
         ErrorType::Unknown => Err(box_err!(err.get_message())),
         ErrorType::InvalidValue => Err(box_err!(err.get_message())),
     }
