@@ -3545,7 +3545,10 @@ mod tests {
     use super::{
         mvcc::tests::{must_unlocked, must_written},
         test_util::*,
-        txn::{commands::new_flashback_to_version_read_phase_cmd, FLASHBACK_BATCH_SIZE},
+        txn::{
+            commands::{new_flashback_rollback_lock_cmd, new_flashback_write_cmd},
+            FLASHBACK_BATCH_SIZE,
+        },
         *,
     };
     use crate::{
@@ -4816,20 +4819,14 @@ mod tests {
             let (key, value) = write.0.clone().into_key_value();
             // The version we want to flashback to.
             let version = write.2;
-            storage
-                .sched_txn_command(
-                    new_flashback_to_version_read_phase_cmd(
-                        start_ts,
-                        commit_ts,
-                        version,
-                        key.clone(),
-                        Key::from_raw(b"z"),
-                        Context::default(),
-                    ),
-                    expect_ok_callback(tx.clone(), 2),
-                )
-                .unwrap();
-            rx.recv().unwrap();
+            run_flashback_to_version(
+                &storage,
+                start_ts,
+                commit_ts,
+                version,
+                key.clone(),
+                Key::from_raw(b"z"),
+            );
             if let Mutation::Put(..) = write.0 {
                 expect_value(
                     value.unwrap(),
@@ -4845,6 +4842,44 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn run_flashback_to_version<F: KvFormat>(
+        storage: &Storage<RocksEngine, MockLockManager, F>,
+        start_ts: TimeStamp,
+        commit_ts: TimeStamp,
+        version: TimeStamp,
+        start_key: Key,
+        end_key: Key,
+    ) {
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                new_flashback_rollback_lock_cmd(
+                    start_ts,
+                    version,
+                    start_key.clone(),
+                    end_key.clone(),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .sched_txn_command(
+                new_flashback_write_cmd(
+                    start_ts,
+                    commit_ts,
+                    version,
+                    start_key,
+                    end_key,
+                    Context::default(),
+                ),
+                expect_ok_callback(tx, 1),
+            )
+            .unwrap();
+        rx.recv().unwrap();
     }
 
     #[test]
@@ -4890,7 +4925,7 @@ mod tests {
                     b"k".to_vec(),
                     *ts.incr(),
                 ),
-                expect_ok_callback(tx.clone(), 2),
+                expect_ok_callback(tx, 2),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -4906,20 +4941,14 @@ mod tests {
 
         let start_ts = *ts.incr();
         let commit_ts = *ts.incr();
-        storage
-            .sched_txn_command(
-                new_flashback_to_version_read_phase_cmd(
-                    start_ts,
-                    commit_ts,
-                    2.into(),
-                    Key::from_raw(b"k"),
-                    Key::from_raw(b"z"),
-                    Context::default(),
-                ),
-                expect_ok_callback(tx.clone(), 3),
-            )
-            .unwrap();
-        rx.recv().unwrap();
+        run_flashback_to_version(
+            &storage,
+            start_ts,
+            commit_ts,
+            2.into(),
+            Key::from_raw(b"k"),
+            Key::from_raw(b"z"),
+        );
         expect_value(
             b"v@1".to_vec(),
             block_on(storage.get(Context::default(), Key::from_raw(b"k"), commit_ts))
@@ -4928,20 +4957,14 @@ mod tests {
         );
         let start_ts = *ts.incr();
         let commit_ts = *ts.incr();
-        storage
-            .sched_txn_command(
-                new_flashback_to_version_read_phase_cmd(
-                    start_ts,
-                    commit_ts,
-                    1.into(),
-                    Key::from_raw(b"k"),
-                    Key::from_raw(b"z"),
-                    Context::default(),
-                ),
-                expect_ok_callback(tx, 4),
-            )
-            .unwrap();
-        rx.recv().unwrap();
+        run_flashback_to_version(
+            &storage,
+            start_ts,
+            commit_ts,
+            1.into(),
+            Key::from_raw(b"k"),
+            Key::from_raw(b"z"),
+        );
         expect_none(
             block_on(storage.get(Context::default(), Key::from_raw(b"k"), commit_ts))
                 .unwrap()
@@ -5025,20 +5048,14 @@ mod tests {
         let flashback_start_ts = *ts.incr();
         let flashback_commit_ts = *ts.incr();
         for _ in 0..10 {
-            storage
-                .sched_txn_command(
-                    new_flashback_to_version_read_phase_cmd(
-                        flashback_start_ts,
-                        flashback_commit_ts,
-                        TimeStamp::zero(),
-                        Key::from_raw(b"k"),
-                        Key::from_raw(b"z"),
-                        Context::default(),
-                    ),
-                    expect_ok_callback(tx.clone(), 2),
-                )
-                .unwrap();
-            rx.recv().unwrap();
+            run_flashback_to_version(
+                &storage,
+                flashback_start_ts,
+                flashback_commit_ts,
+                TimeStamp::zero(),
+                Key::from_raw(b"k"),
+                Key::from_raw(b"z"),
+            );
             for i in 1..=FLASHBACK_BATCH_SIZE * 4 {
                 let key = Key::from_raw(format!("k{}", i).as_bytes());
                 expect_none(
@@ -5098,7 +5115,7 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::Commit::new(vec![k.clone()], ts, *ts.incr(), Context::default()),
-                expect_value_callback(tx.clone(), 3, TxnStatus::committed(ts)),
+                expect_value_callback(tx, 3, TxnStatus::committed(ts)),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -5110,20 +5127,14 @@ mod tests {
         // Flashback the key.
         let flashback_start_ts = *ts.incr();
         let flashback_commit_ts = *ts.incr();
-        storage
-            .sched_txn_command(
-                new_flashback_to_version_read_phase_cmd(
-                    flashback_start_ts,
-                    flashback_commit_ts,
-                    1.into(),
-                    Key::from_raw(b"k"),
-                    Key::from_raw(b"z"),
-                    Context::default(),
-                ),
-                expect_ok_callback(tx, 4),
-            )
-            .unwrap();
-        rx.recv().unwrap();
+        run_flashback_to_version(
+            &storage,
+            flashback_start_ts,
+            flashback_commit_ts,
+            1.into(),
+            Key::from_raw(b"k"),
+            Key::from_raw(b"z"),
+        );
         expect_none(
             block_on(storage.get(Context::default(), k, flashback_commit_ts))
                 .unwrap()

@@ -12,7 +12,7 @@ use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use tikv::server::DEFAULT_CLUSTER_ID;
-use tikv_util::HandyRwLock;
+use tikv_util::{config::ReadableDuration, HandyRwLock};
 use txn_types::{Key, Lock, LockType};
 
 use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
@@ -2484,4 +2484,117 @@ fn test_filter_loop_impl<F: KvFormat>() {
 
     event_feed_wrap.replace(None);
     suite.stop();
+}
+
+#[test]
+fn test_flashback() {
+    let mut cluster = new_server_cluster(0, 1);
+    cluster.cfg.resolved_ts.advance_ts_interval = ReadableDuration::millis(50);
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
+
+    let key = Key::from_raw(b"a");
+    let region = suite.cluster.get_region(key.as_encoded());
+    let region_id = region.get_id();
+    let req = suite.new_changedata_request(region_id);
+    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(region_id));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let event = receive_event(false);
+    event.events.into_iter().for_each(|e| {
+        match e.event.unwrap() {
+            // Even if there is no write,
+            // it should always outputs an Initialized event.
+            Event_oneof_event::Entries(es) => {
+                assert!(es.entries.len() == 1, "{:?}", es);
+                let e = &es.entries[0];
+                assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+            }
+            other => panic!("unknown event {:?}", other),
+        }
+    });
+    // Sleep a while to make sure the stream is registered.
+    sleep_ms(1000);
+    let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    for i in 0..2 {
+        let (k, v) = (
+            format!("key{}", i).as_bytes().to_vec(),
+            format!("value{}", i).as_bytes().to_vec(),
+        );
+        // Prewrite
+        let start_ts1 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+        let mut mutation = Mutation::default();
+        mutation.set_op(Op::Put);
+        mutation.key = k.clone();
+        mutation.value = v;
+        suite.must_kv_prewrite(1, vec![mutation], k.clone(), start_ts1);
+        // Commit
+        let commit_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+        suite.must_kv_commit(1, vec![k.clone()], start_ts1, commit_ts);
+    }
+    let (start_key, end_key) = (b"key0".to_vec(), b"key2".to_vec());
+    // Prepare flashback.
+    let flashback_start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_prepare_flashback(region_id, &start_key, flashback_start_ts);
+    // resolved ts should not be advanced anymore.
+    let mut counter = 0;
+    let mut last_resolved_ts = 0;
+    loop {
+        let event = receive_event(true);
+        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+            if resolved_ts.ts == last_resolved_ts {
+                counter += 1;
+            }
+            last_resolved_ts = resolved_ts.ts;
+        }
+        if counter > 20 {
+            break;
+        }
+        sleep_ms(50);
+    }
+    // Flashback.
+    let flashback_commit_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_flashback(
+        region_id,
+        &start_key,
+        &end_key,
+        flashback_start_ts,
+        flashback_commit_ts,
+        start_ts,
+    );
+    // Check the flashback event.
+    let mut resolved_ts = 0;
+    let mut event_counter = 0;
+    loop {
+        let mut cde = receive_event(true);
+        if cde.get_resolved_ts().get_ts() > resolved_ts {
+            resolved_ts = cde.get_resolved_ts().get_ts();
+        }
+        let events = cde.mut_events();
+        if !events.is_empty() {
+            assert_eq!(events.len(), 1);
+            match events.pop().unwrap().event.unwrap() {
+                Event_oneof_event::Entries(entries) => {
+                    assert_eq!(entries.entries.len(), 1);
+                    event_counter += 1;
+                    let e = &entries.entries[0];
+                    assert!(e.commit_ts > resolved_ts);
+                    assert_eq!(e.get_op_type(), EventRowOpType::Delete);
+                    match e.get_type() {
+                        EventLogType::Committed => {
+                            // First entry should be a 1PC flashback.
+                            assert_eq!(e.get_key(), b"key1");
+                            assert_eq!(event_counter, 1);
+                        }
+                        EventLogType::Commit => {
+                            // Second entry should be a 2PC commit.
+                            assert_eq!(e.get_key(), b"key0");
+                            assert_eq!(event_counter, 2);
+                            break;
+                        }
+                        _ => panic!("unknown event type {:?}", e.get_type()),
+                    }
+                }
+                other => panic!("unknown event {:?}", other),
+            }
+        }
+    }
 }
