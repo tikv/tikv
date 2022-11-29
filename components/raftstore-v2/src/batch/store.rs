@@ -436,7 +436,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             ),
         );
 
-        let raft_log_gc_scheduler = workers.raft_log_gc_worker.start(
+        let raft_log_gc_scheduler = workers.raft_log_gc_worker.start_with_timer(
             "raft-log-gc",
             RaftLogGcRunner::new(raft_engine.clone(), self.logger.clone()),
         );

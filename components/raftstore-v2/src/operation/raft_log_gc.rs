@@ -12,7 +12,12 @@ use raftstore::store::{needs_evict_entry_cache, Transport};
 use slog::{debug, error, info};
 use tikv_util::sys::memory_usage_reaches_high_water;
 
-use crate::{batch::StoreContext, fsm::PeerFsmDelegate, raft::Peer, router::PeerTick};
+use crate::{
+    batch::StoreContext,
+    fsm::PeerFsmDelegate,
+    raft::Peer,
+    router::{PeerMsg, PeerTick},
+};
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
     pub fn on_raft_log_gc(&mut self) {
@@ -138,7 +143,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         admin.mut_compact_log().set_compact_term(term);
         req.set_admin_request(admin);
 
-        self.propose_command(store_ctx, req);
+        let (msg, _) = PeerMsg::raft_command(req);
+        if let Err(e) = store_ctx.router.send(self.region_id(), msg) {
+            error!(self.logger, "send compact log request failed");
+        }
+        // self.propose_command(store_ctx, req);
 
         self.skip_gc_raft_log_ticks = 0;
     }

@@ -69,9 +69,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         // TODO: check is_merging
         // compact failure is safe to be omitted, no need to assert.
-        let mut entry_storage = self.entry_storage_mut();
-        if res.compact_index <= entry_storage.truncated_index()
-            || res.compact_index > entry_storage.applied_index()
+        if res.compact_index <= self.entry_storage().truncated_index()
+            || res.compact_index > self.entry_storage().applied_index()
         {
             return;
         }

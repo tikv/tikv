@@ -40,7 +40,7 @@ use crate::{
     batch::StoreContext,
     fsm::{ApplyFsm, ApplyScheduler},
     operation::{AsyncWriter, DestroyProgress, ProposalControl, SimpleWriteEncoder},
-    router::{CmdResChannel, QueryResChannel},
+    router::{CmdResChannel, PeerTick, QueryResChannel},
     tablet::CachedTablet,
     worker::PdTask,
     Result,
@@ -93,6 +93,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// Transaction extensions related to this peer.
     txn_ext: Arc<TxnExt>,
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+    pending_ticks: Vec<PeerTick>,
 
     /// Check whether this proposal can be proposed based on its epoch.
     proposal_control: ProposalControl,
@@ -172,6 +173,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             txn_ext: Arc::default(),
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
             proposal_control: ProposalControl::new(0),
+            pending_ticks: Vec::new(),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -597,6 +599,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let term = self.term();
         self.proposal_control
             .advance_apply(apply_index, term, region);
+    }
+
+    #[inline]
+    pub fn add_pending_tick(&mut self, tick: PeerTick) {
+        self.pending_ticks.push(tick);
+    }
+
+    #[inline]
+    pub fn take_pending_ticks(&mut self) -> Vec<PeerTick> {
+        mem::take(&mut self.pending_ticks)
     }
 
     // TODO: find a better place to put all txn related stuff.

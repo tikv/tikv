@@ -127,6 +127,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         Self { fsm, store_ctx }
     }
 
+    #[inline]
+    fn schedule_pending_ticks(&mut self) {
+        let pending_ticks = self.fsm.peer.take_pending_ticks();
+        for tick in pending_ticks {
+            self.schedule_tick(tick);
+        }
+    }
+
     pub fn schedule_tick(&mut self, tick: PeerTick) {
         assert!(PeerTick::VARIANT_COUNT <= u16::BITS as usize);
         let idx = tick as usize;
@@ -211,7 +219,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
     pub fn on_msgs(&mut self, peer_msgs_buf: &mut Vec<PeerMsg>) {
         for msg in peer_msgs_buf.drain(..) {
             match msg {
-                PeerMsg::RaftMessage(msg) => self.fsm.peer.on_raft_message(self.store_ctx, msg),
+                PeerMsg::RaftMessage(msg) => {
+                    self.fsm.peer.on_raft_message(self.store_ctx, msg);
+                    self.schedule_pending_ticks();
+                }
                 PeerMsg::RaftQuery(cmd) => {
                     self.on_receive_command(cmd.send_time);
                     self.on_query(cmd.request, cmd.ch)

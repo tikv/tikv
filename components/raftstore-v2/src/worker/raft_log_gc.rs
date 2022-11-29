@@ -4,6 +4,7 @@ use std::{
     error::Error as StdError,
     fmt::{self, Display, Formatter},
     sync::mpsc::Sender,
+    time::Duration,
 };
 
 use engine_traits::{RaftEngine, RaftLogGcTask};
@@ -11,7 +12,10 @@ use file_system::{IoType, WithIoType};
 use raftstore::store::worker::metrics::*;
 use slog::{error, Logger};
 use thiserror::Error;
-use tikv_util::{box_try, worker::Runnable};
+use tikv_util::{
+    box_try,
+    worker::{Runnable, RunnableWithTimer},
+};
 
 const MAX_GC_REGION_BATCH: usize = 512;
 
@@ -112,9 +116,22 @@ where
     }
 }
 
+impl<ER> RunnableWithTimer for Runner<ER>
+where
+    ER: RaftEngine,
+{
+    fn on_timeout(&mut self) {
+        self.flush();
+    }
+
+    fn get_interval(&self) -> Duration {
+        Duration::from_secs(2)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::{sync::mpsc, time::Duration};
+    use std::sync::mpsc;
 
     use engine_traits::{RaftEngine, RaftLogBatch, ALL_CFS};
     use raft::eraftpb::Entry;
