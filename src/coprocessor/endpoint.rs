@@ -564,8 +564,12 @@ impl<E: Engine> Endpoint<E> {
                         match res {
                             Ok(mut resp) => {
                                 response.set_data(resp.take_data());
-                                response.set_region_error(resp.take_region_error());
-                                response.set_locked(resp.take_locked());
+                                resp.region_error
+                                    .take()
+                                    .map(|err| response.set_region_error(err));
+                                resp.locked
+                                    .take()
+                                    .map(|lock_info| response.set_locked(lock_info));
                                 response.set_other_error(resp.take_other_error());
                                 GLOBAL_TRACKERS.with_tracker(cur_tracker, |tracker| {
                                     tracker.write_scan_detail(

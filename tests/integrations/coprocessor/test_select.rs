@@ -2176,14 +2176,23 @@ fn test_batch_request() {
                     row_count += 1;
                 }
                 assert_eq!(row_count, expected_len);
+                assert!(region_err.is_none());
+                assert!(locked.is_none());
+                assert!(other_err.is_empty());
             }
             QueryResult::ErrRegion => {
                 assert!(region_err.is_some());
+                assert!(locked.is_none());
+                assert!(other_err.is_empty());
             }
             QueryResult::ErrLocked => {
+                assert!(region_err.is_none());
                 assert!(locked.is_some());
+                assert!(other_err.is_empty());
             }
             QueryResult::ErrOther => {
+                assert!(region_err.is_none());
+                assert!(locked.is_none());
                 assert!(!other_err.is_empty())
             }
         }
