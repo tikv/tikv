@@ -297,7 +297,7 @@ where
     E: KvEngine,
     S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
-    router: S,
+    router: RaftRouterWrap<S, E>,
     engine: E,
     txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
     region_leaders: Arc<RwLock<HashSet<u64>>>,
@@ -311,7 +311,7 @@ where
     /// Create a RaftKv using specified configuration.
     pub fn new(router: S, engine: E, region_leaders: Arc<RwLock<HashSet<u64>>>) -> RaftKv<E, S> {
         RaftKv {
-            router,
+            router: RaftRouterWrap::new(router),
             engine,
             txn_extra_scheduler: None,
             region_leaders,
@@ -360,6 +360,12 @@ where
 
     fn kv_engine(&self) -> Option<E> {
         Some(self.engine.clone())
+    }
+
+    type RaftExtension = RaftRouterWrap<S, E>;
+    #[inline]
+    fn raft_extension(&self) -> &Self::RaftExtension {
+        &self.router
     }
 
     fn modify_on_kv_engine(
@@ -638,7 +644,7 @@ where
         // and scheduling operations for this region when propose/apply before we
         // start the actual data flashback transaction command in the next phase.
         let req = new_flashback_req(ctx, AdminCmdType::PrepareFlashback);
-        exec_admin(&self.router, req)
+        exec_admin(&*self.router, req)
     }
 
     fn end_flashback(&self, ctx: &Context) -> BoxFuture<'static, kv::Result<()>> {
@@ -646,7 +652,7 @@ where
         // in `RegionLocalState` and region's meta, and when that admin cmd is applied,
         // will update the memory state of the flashback
         let req = new_flashback_req(ctx, AdminCmdType::FinishFlashback);
-        exec_admin(&self.router, req)
+        exec_admin(&*self.router, req)
     }
 
     fn hint_change_in_range(&self, start_key: Vec<u8>, end_key: Vec<u8>) {

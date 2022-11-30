@@ -1,6 +1,9 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::marker::PhantomData;
+use std::{
+    marker::PhantomData,
+    ops::{Deref, DerefMut},
+};
 
 use futures::future::BoxFuture;
 use kvproto::{
@@ -32,6 +35,22 @@ impl<S, E> RaftRouterWrap<S, E> {
             router,
             _phantom: PhantomData,
         }
+    }
+}
+
+impl<S, E> Deref for RaftRouterWrap<S, E> {
+    type Target = S;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.router
+    }
+}
+
+impl<S, E> DerefMut for RaftRouterWrap<S, E> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.router
     }
 }
 
