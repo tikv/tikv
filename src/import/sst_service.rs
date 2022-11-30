@@ -503,7 +503,6 @@ where
                         req.get_storage_backend(),
                         &limiter,
                     )?;
-                    defer!({ importer.dec_kvfile_refcnt(meta) });
                     let r: Option<Range> = importer.do_apply_kv_file(
                         meta.get_start_key(),
                         meta.get_end_key(),

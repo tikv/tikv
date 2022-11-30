@@ -47,6 +47,12 @@ use crate::{
     Config, Error, Result,
 };
 
+#[derive(Clone)]
+pub enum CacheKvFile {
+    Mem(Arc<Vec<u8>>),
+    Fs(Arc<PathBuf>),
+}
+
 /// SstImporter manages SST files that are waiting for ingesting.
 pub struct SstImporter {
     dir: ImportDir,
@@ -55,7 +61,7 @@ pub struct SstImporter {
     // TODO: lift api_version as a type parameter.
     api_version: ApiVersion,
     compression_types: HashMap<CfName, SstCompressionType>,
-    file_locks: Arc<DashMap<String, (Arc<Vec<u8>>, u64, Instant)>>,
+    file_locks: Arc<DashMap<String, (CacheKvFile, Instant)>>,
     mem_use: AtomicU64,
     mem_limit: ReadableSize,
 }
@@ -308,61 +314,58 @@ impl SstImporter {
         Ok(())
     }
 
-    pub fn shrink_by_tick(&self) {
-        if self.import_support_download() {
-            self.shrink_space_by_tick();
-        } else {
-            self.shrink_cache_by_tick();
-        }
-    }
+    pub fn shrink_by_tick(&self) -> usize {
+        let mut shrink_buff_size: usize = 0;
+        let mut retain_buff_size: usize = 0;
+        let mut shrink_files: Vec<PathBuf> = Vec::new();
+        let mut retain_file_count = 0_usize;
 
-    pub fn shrink_cache_by_tick(&self) -> u64 {
-        let mut shrink_size: usize = 0;
-        let mut retain_size: usize = 0;
-
-        self.file_locks.retain(|_, (buff, refcnt, start)| {
-            let need_retain =
-                *refcnt > 0_u64 || start.saturating_elapsed() < Duration::from_secs(60);
-            if need_retain {
-                retain_size += buff.len();
-            } else {
-                shrink_size += buff.len();
-            }
-            need_retain
-        });
-
-        info!("shrink cache by tick"; "shrink size" => shrink_size, "retain size" => retain_size);
-        self.dec_mem(shrink_size as _);
-        shrink_size as _
-    }
-
-    pub fn shrink_space_by_tick(&self) -> u64 {
-        let mut files: Vec<String> = Vec::new();
-        let mut retain_cnt = 0_u32;
-
-        self.file_locks.retain(|filename, (_, refcnt, start)| {
-            let need_retain =
-                *refcnt > 0_u64 || start.saturating_elapsed() < Duration::from_secs(600);
-            if !need_retain {
-                files.push(filename.clone());
-            } else {
-                retain_cnt += 1;
-            }
-            need_retain
-        });
-
-        let shrint_file_cnt = files.len();
-        info!("shrink space by tick"; "shrink files count" => shrint_file_cnt, "retain files count" => retain_cnt);
-
-        for f in files {
-            let path = self.dir.get_import_path(&f);
-            if let Ok(import_path) = path {
-                if let Err(e) = file_system::remove_file(import_path.save.clone()) {
-                    info!("failed to remove file"; "filename" => ?import_path.save, "error" => ?e);
+        self.file_locks.retain(|_, (buff, start)| {
+            let mut need_retain = true;
+            match buff {
+                CacheKvFile::Mem(buff) => {
+                    let buflen = buff.len();
+                    // The term of recycle memeory is 60s.
+                    if Arc::strong_count(&buff) == 1
+                        && start.saturating_elapsed() >= Duration::from_secs(60)
+                    {
+                        need_retain = false;
+                        shrink_buff_size += buflen;
+                    } else {
+                        retain_buff_size += buflen;
+                    }
+                }
+                CacheKvFile::Fs(path) => {
+                    // The term of recycle file is 10min.
+                    if Arc::strong_count(path) == 1
+                        && start.saturating_elapsed() >= Duration::from_secs(600)
+                    {
+                        need_retain = false;
+                        shrink_files.push(path.to_path_buf());
+                    } else {
+                        retain_file_count += 1;
+                    }
                 }
             }
+
+            need_retain
+        });
+
+        if self.import_support_download() {
+            let shrink_file_count = shrink_files.len();
+            info!("shrink space by tick"; "shrink files count" => shrink_file_count, "retain files count" => retain_file_count);
+
+            for f in shrink_files {
+                if let Err(e) = file_system::remove_file(&f) {
+                    info!("failed to remove file"; "filename" => ?f, "error" => ?e);
+                }
+            }
+            shrink_file_count
+        } else {
+            info!("shrink cache by tick"; "shrink size" => shrink_buff_size, "retain size" => retain_buff_size);
+            self.dec_mem(shrink_buff_size as _);
+            shrink_buff_size
         }
-        shrint_file_cnt as _
     }
 
     // If mem_limit is 0, which represent download kv-file when import.
@@ -388,31 +391,26 @@ impl SstImporter {
         self.mem_use.fetch_sub(size, Ordering::SeqCst);
     }
 
-    pub fn dec_kvfile_refcnt(&self, meta: &KvMeta) {
-        let dst_name = format!("{}_{}", meta.get_name(), meta.get_range_offset());
-        self.file_locks.entry(dst_name).and_modify(|v| {
-            v.1 -= 1;
-        });
-    }
-
     pub fn do_read_kv_file(
         &self,
         meta: &KvMeta,
         rewrite_rule: &RewriteRule,
         ext_storage: Arc<dyn external_storage_export::ExternalStorage>,
         speed_limiter: &Limiter,
-    ) -> Result<Arc<Vec<u8>>> {
+    ) -> Result<CacheKvFile> {
         let start = Instant::now();
         let dst_name = format!("{}_{}", meta.get_name(), meta.get_range_offset());
 
-        let mut lock =
-            self.file_locks
-                .entry(dst_name)
-                .or_insert((Arc::default(), 0, Instant::now()));
-        if lock.0.len() > 0 {
-            lock.1 += 1;
-            lock.2 = Instant::now();
-            return Ok(lock.0.clone());
+        let mut lock = self
+            .file_locks
+            .entry(dst_name)
+            .or_insert((CacheKvFile::Mem(Arc::default()), Instant::now()));
+
+        if let CacheKvFile::Mem(buff) = &lock.0 {
+            if !buff.is_empty() {
+                lock.1 = Instant::now();
+                return Ok(lock.0.clone());
+            }
         }
 
         if !self.inc_mem_and_check(meta) {
@@ -457,8 +455,8 @@ impl SstImporter {
             .observe(start.saturating_elapsed().as_secs_f64());
 
         let rewrite_buff = self.rewrite_kv_file(buff, rewrite_rule)?;
-        *lock = (Arc::new(rewrite_buff), 1, Instant::now());
-        Ok(lock.value().0.clone())
+        *lock = (CacheKvFile::Mem(Arc::new(rewrite_buff)), Instant::now());
+        Ok(lock.0.clone())
     }
 
     pub fn create_external_storage(
@@ -535,18 +533,24 @@ impl SstImporter {
         backend: &StorageBackend,
         speed_limiter: &Limiter,
     ) -> Result<Arc<Vec<u8>>> {
-        if self.import_support_download() {
-            let tmp_file = self.do_download_kv_file(meta, backend, speed_limiter)?;
-            let file = File::open(tmp_file)?;
-            let mut reader = BufReader::new(file);
-            let mut buffer = Vec::new();
-            reader.read_to_end(&mut buffer)?;
-
-            let rewrite_buff = self.rewrite_kv_file(buffer, rewrite_rule)?;
-            Ok(Arc::new(rewrite_buff))
+        let c = if self.import_support_download() {
+            self.do_download_kv_file(meta, backend, speed_limiter)?
         } else {
-            let buffer = self.do_read_kv_file(meta, rewrite_rule, ext_storage, speed_limiter)?;
-            Ok(buffer)
+            self.do_read_kv_file(meta, rewrite_rule, ext_storage, speed_limiter)?
+        };
+        match c {
+            // If cache memroy, it has been rewrite, return buffer directly.
+            CacheKvFile::Mem(buff) => Ok(buff),
+            // If cache file name, it need to read and rewrite.
+            CacheKvFile::Fs(path) => {
+                let file = File::open(path.as_ref())?;
+                let mut reader = BufReader::new(file);
+                let mut buffer = Vec::new();
+                reader.read_to_end(&mut buffer)?;
+
+                let rewrite_buff = self.rewrite_kv_file(buffer, rewrite_rule)?;
+                Ok(Arc::new(rewrite_buff))
+            }
         }
     }
 
@@ -555,7 +559,7 @@ impl SstImporter {
         meta: &KvMeta,
         backend: &StorageBackend,
         speed_limiter: &Limiter,
-    ) -> Result<PathBuf> {
+    ) -> Result<CacheKvFile> {
         let offset = meta.get_range_offset();
         let src_name = meta.get_name();
         let dst_name = format!("{}_{}", src_name, offset);
@@ -568,15 +572,14 @@ impl SstImporter {
             None
         };
 
-        let mut lock =
-            self.file_locks
-                .entry(dst_name)
-                .or_insert((Arc::default(), 0, Instant::now()));
+        let mut lock = self
+            .file_locks
+            .entry(dst_name)
+            .or_insert((CacheKvFile::Fs(Arc::new(path.save.clone())), Instant::now()));
 
         if path.save.exists() {
-            lock.1 += 1;
-            lock.2 = Instant::now();
-            return Ok(path.save);
+            lock.1 = Instant::now();
+            return Ok(lock.0.clone());
         }
 
         let range_length = meta.get_range_length();
@@ -601,7 +604,12 @@ impl SstImporter {
             speed_limiter,
             restore_config,
         )?;
-        info!("download file finished {}, offset {}", src_name, offset);
+        info!(
+            "download file finished {}, offset {}, length {}",
+            src_name,
+            offset,
+            meta.get_length()
+        );
 
         if let Some(p) = path.save.parent() {
             // we have v1 prefix in file name.
@@ -614,14 +622,13 @@ impl SstImporter {
             })?;
         }
 
-        file_system::rename(path.temp, path.save.clone())?;
-        *lock = (Arc::default(), 1, Instant::now());
-
+        file_system::rename(path.temp, path.save)?;
         IMPORTER_APPLY_DURATION
             .with_label_values(&["download"])
             .observe(start.saturating_elapsed().as_secs_f64());
 
-        Ok(path.save)
+        lock.1 = Instant::now();
+        Ok(lock.0.clone())
     }
 
     pub fn rewrite_kv_file(
