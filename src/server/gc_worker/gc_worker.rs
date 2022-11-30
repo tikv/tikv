@@ -1293,16 +1293,13 @@ pub mod test_gc_worker {
         metapb::{Peer, Region},
     };
     use raftstore::store::RegionSnapshot;
-    use tikv_kv::write_modifies;
+    use tikv_kv::{write_modifies, OnAppliedCb};
     use txn_types::{Key, TimeStamp};
 
     use crate::{
         server::gc_worker::{GcSafePointProvider, Result as GcWorkerResult},
         storage::{
-            kv::{
-                self, Callback as EngineCallback, Modify, Result as EngineResult, SnapContext,
-                WriteData,
-            },
+            kv::{self, Modify, Result as EngineResult, SnapContext, WriteData},
             Engine,
         },
     };
@@ -1355,12 +1352,14 @@ pub mod test_gc_worker {
             write_modifies(&self.kv_engine().unwrap(), modifies)
         }
 
+        type WriteRes = <kv::RocksEngine as Engine>::WriteRes;
         fn async_write(
             &self,
             ctx: &Context,
             mut batch: WriteData,
-            callback: EngineCallback<()>,
-        ) -> EngineResult<()> {
+            subscribed: u8,
+            on_applied: Option<OnAppliedCb>,
+        ) -> Self::WriteRes {
             batch.modifies.iter_mut().for_each(|modify| match modify {
                 Modify::Delete(_, ref mut key) => {
                     *key = Key::from_encoded(keys::data_key(key.as_encoded()));
@@ -1376,7 +1375,7 @@ pub mod test_gc_worker {
                     *end_key = Key::from_encoded(keys::data_end_key(end_key.as_encoded()));
                 }
             });
-            self.0.async_write(ctx, batch, callback)
+            self.0.async_write(ctx, batch, subscribed, on_applied)
         }
 
         type SnapshotRes = impl Future<Output = EngineResult<Self::Snap>> + Send;
@@ -1427,13 +1426,16 @@ pub mod test_gc_worker {
             Ok(())
         }
 
+        type WriteRes = <PrefixedEngine as Engine>::WriteRes;
         fn async_write(
             &self,
             ctx: &Context,
             batch: WriteData,
-            callback: EngineCallback<()>,
-        ) -> EngineResult<()> {
-            self.engines.lock().unwrap()[&ctx.region_id].async_write(ctx, batch, callback)
+            subscribed: u8,
+            on_applied: Option<OnAppliedCb>,
+        ) -> Self::WriteRes {
+            self.engines.lock().unwrap()[&ctx.region_id]
+                .async_write(ctx, batch, subscribed, on_applied)
         }
 
         type SnapshotRes = impl Future<Output = EngineResult<Self::Snap>> + Send;
