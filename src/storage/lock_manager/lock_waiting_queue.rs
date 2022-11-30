@@ -473,6 +473,8 @@ impl<L: LockManager> LockWaitQueues<L> {
             prev_delay_ms = current_delay_ms;
         }
 
+        fail_point!("lock_waiting_queue_before_delayed_notify_all");
+
         self.delayed_notify_all(&key, notify_id)
     }
 

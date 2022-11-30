@@ -65,7 +65,7 @@ use std::{
     iter,
     marker::PhantomData,
     sync::{
-        atomic::{self, AtomicBool, AtomicU64},
+        atomic::{self, AtomicBool, AtomicU64, Ordering},
         Arc,
     },
 };
@@ -3101,6 +3101,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
         self
     }
 
+    pub fn wake_up_delay_duration(self, duration_ms: u64) -> Self {
+        self.wake_up_delay_duration_ms
+            .store(duration_ms, Ordering::Relaxed);
+        self
+    }
+
     pub fn set_api_version(mut self, api_version: ApiVersion) -> Self {
         self.config.set_api_version(api_version);
         self
@@ -3194,6 +3200,9 @@ pub mod test_util {
             Mutex,
         },
     };
+
+    use futures_executor::block_on;
+    use kvproto::kvrpcpb::Op;
 
     use super::*;
     use crate::storage::{
@@ -3504,6 +3513,46 @@ pub mod test_util {
         let feature_gate = FeatureGate::default();
         feature_gate.set_version(env!("CARGO_PKG_VERSION")).unwrap();
         feature_gate
+    }
+
+    pub fn must_have_locks<E: Engine, L: LockManager, F: KvFormat>(
+        storage: &Storage<E, L, F>,
+        ts: u64,
+        start_key: &[u8],
+        end_key: &[u8],
+        expected_locks: &[(
+            // key
+            &[u8],
+            Op,
+            // start_ts
+            u64,
+            // for_update_ts
+            u64,
+        )],
+    ) {
+        let locks = block_on(storage.scan_lock(
+            Context::default(),
+            ts.into(),
+            Some(Key::from_raw(start_key)),
+            Some(Key::from_raw(end_key)),
+            100,
+        ))
+        .unwrap();
+        assert_eq!(
+            locks.len(),
+            expected_locks.len(),
+            "lock count not match, expected: {:?}; got: {:?}",
+            expected_locks,
+            locks
+        );
+        for (lock_info, (expected_key, expected_op, expected_start_ts, expected_for_update_ts)) in
+            locks.into_iter().zip(expected_locks.iter())
+        {
+            assert_eq!(lock_info.get_key(), *expected_key);
+            assert_eq!(lock_info.get_lock_type(), *expected_op);
+            assert_eq!(lock_info.get_lock_version(), *expected_start_ts);
+            assert_eq!(lock_info.get_lock_for_update_ts(), *expected_for_update_ts);
+        }
     }
 }
 
@@ -8150,46 +8199,6 @@ mod tests {
         test_pessimistic_lock_impl(true);
     }
 
-    fn must_have_locks<E: Engine, L: LockManager, F: KvFormat>(
-        storage: &Storage<E, L, F>,
-        ts: u64,
-        start_key: &[u8],
-        end_key: &[u8],
-        expected_locks: &[(
-            // key
-            &[u8],
-            Op,
-            // start_ts
-            u64,
-            // for_update_ts
-            u64,
-        )],
-    ) {
-        let locks = block_on(storage.scan_lock(
-            Context::default(),
-            ts.into(),
-            Some(Key::from_raw(start_key)),
-            Some(Key::from_raw(end_key)),
-            100,
-        ))
-        .unwrap();
-        assert_eq!(
-            locks.len(),
-            expected_locks.len(),
-            "lock count not match, expected: {:?}; got: {:?}",
-            expected_locks,
-            locks
-        );
-        for (lock_info, (expected_key, expected_op, expected_start_ts, expected_for_update_ts)) in
-            locks.into_iter().zip(expected_locks.iter())
-        {
-            assert_eq!(lock_info.get_key(), *expected_key);
-            assert_eq!(lock_info.get_lock_type(), *expected_op);
-            assert_eq!(lock_info.get_lock_version(), *expected_start_ts);
-            assert_eq!(lock_info.get_lock_for_update_ts(), *expected_for_update_ts);
-        }
-    }
-
     fn test_pessimistic_lock_resumable_impl(
         pipelined_pessimistic_lock: bool,
         in_memory_lock: bool,
@@ -8722,7 +8731,7 @@ mod tests {
             wait_info: KeyLockWaitInfo,
             is_first_lock: bool,
             timeout: Option<WaitTimeout>,
-            cancel_callback: Box<dyn FnOnce(Error) + Send>,
+            cancel_callback: CancellationCallback,
             diag_ctx: DiagnosticContext,
         },
         RemoveLockWait {

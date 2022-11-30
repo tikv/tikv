@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use collections::HashMap;
+use collections::{HashMap, HashSet};
 use kvproto::{kvrpcpb::LockInfo, metapb::RegionEpoch};
 use parking_lot::Mutex;
 use tracker::TrackerToken;
@@ -229,5 +229,20 @@ impl MockLockManager {
             let error = MvccError::from(MvccErrorInner::KeyIsLocked(wait_info.lock_info));
             cancel_callback(StorageError::from(TxnError::from(error)));
         }
+    }
+
+    pub fn simulate_timeout(&self, token: LockWaitToken) {
+        if let Some((wait_info, cancel_callback)) = self.waiters.lock().remove(&token) {
+            let error = MvccError::from(MvccErrorInner::KeyIsLocked(wait_info.lock_info));
+            cancel_callback(StorageError::from(TxnError::from(error)));
+        }
+    }
+
+    pub fn get_all_tokens(&self) -> HashSet<LockWaitToken> {
+        self.waiters
+            .lock()
+            .iter()
+            .map(|(&token, _)| token)
+            .collect()
     }
 }

@@ -80,6 +80,7 @@ impl CommandExt for AcquirePessimisticLockResumed {
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockResumed {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+        fail_point!("acquire_pessimistic_lock_resumed_before_process_write");
         let mut modifies = vec![];
         let mut txn = None;
         let mut reader: Option<SnapshotReader<S>> = None;
