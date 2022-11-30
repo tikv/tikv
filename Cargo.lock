@@ -6453,6 +6453,7 @@ dependencies = [
  "pd_client",
  "prometheus",
  "prometheus-static-metric",
+ "raft",
  "raftstore",
  "slog",
  "slog-global",

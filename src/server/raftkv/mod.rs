@@ -1,5 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod raft_extension;
+
 // #[PerformanceCriticalPath]
 use std::{
     borrow::Cow,
@@ -34,6 +36,7 @@ use raft::{
     eraftpb::{self, MessageType},
     StateRole,
 };
+pub use raft_extension::RaftRouterWrap;
 use raftstore::{
     coprocessor::{
         dispatcher::BoxReadIndexObserver, Coprocessor, CoprocessorHost, ReadIndexObserver,
@@ -42,7 +45,7 @@ use raftstore::{
     router::{LocalReadRouter, RaftStoreRouter},
     store::{
         self, Callback as StoreCallback, RaftCmdExtraOpts, ReadIndexContext, ReadResponse,
-        RegionSnapshot, WriteResponse,
+        RegionSnapshot, StoreMsg, WriteResponse,
     },
 };
 use thiserror::Error;
@@ -644,6 +647,15 @@ where
         // will update the memory state of the flashback
         let req = new_flashback_req(ctx, AdminCmdType::FinishFlashback);
         exec_admin(&self.router, req)
+    }
+
+    fn hint_change_in_range(&self, start_key: Vec<u8>, end_key: Vec<u8>) {
+        self.router
+            .send_store_msg(StoreMsg::ClearRegionSizeInRange { start_key, end_key })
+            .unwrap_or_else(|e| {
+                // Warn and ignore it.
+                warn!("unsafe destroy range: failed sending ClearRegionSizeInRange"; "err" => ?e);
+            });
     }
 }
 

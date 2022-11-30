@@ -153,6 +153,11 @@ impl Engine for MockEngine {
         self.base.kv_engine()
     }
 
+    type RaftExtension = <RocksEngine as Engine>::RaftExtension;
+    fn raft_extension(&self) -> &Self::RaftExtension {
+        self.base.raft_extension()
+    }
+
     fn modify_on_kv_engine(&self, region_modifies: HashMap<u64, Vec<Modify>>) -> Result<()> {
         self.base.modify_on_kv_engine(region_modifies)
     }
