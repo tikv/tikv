@@ -27,7 +27,6 @@ use tikv_util::{
 };
 use tokio::task::spawn_local;
 use tracker::GLOBAL_TRACKERS;
-use txn_types::Key;
 
 use super::{config::Config, deadlock::Scheduler as DetectorScheduler, metrics::*};
 use crate::storage::{

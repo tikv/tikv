@@ -40,7 +40,7 @@ use crate::{
             CancellationCallback, DiagnosticContext, KeyLockWaitInfo,
             LockManager as LockManagerTrait, LockWaitToken, UpdateWaitForEvent, WaitTimeout,
         },
-        DynamicConfigs as StorageDynamicConfigs, Error as StorageError,
+        DynamicConfigs as StorageDynamicConfigs,
     },
 };
 

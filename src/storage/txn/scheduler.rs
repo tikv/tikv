@@ -68,9 +68,7 @@ use crate::{
         },
         lock_manager::{
             self,
-            lock_wait_context::{
-                CallbackWithSharedError, LockWaitContext, PessimisticLockKeyCallback,
-            },
+            lock_wait_context::{LockWaitContext, PessimisticLockKeyCallback},
             lock_waiting_queue::{DelayedNotifyAllFuture, LockWaitEntry, LockWaitQueues},
             DiagnosticContext, LockManager, LockWaitToken,
         },
@@ -1010,7 +1008,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                             reason: kvrpcpb::WriteConflictReason::PessimisticRetry,
                         },
                     )));
-                    cb(Err(e.into()));
+                    cb(Err(e.into()), false);
                 }
 
                 for f in delayed_wake_up_futures {

@@ -30,8 +30,9 @@ use crate::storage::{
     Error as StorageError, PessimisticLockResults, ProcessResult, StorageCallback,
 };
 
+// The arguments are: (result, is_canceled_before_enqueueing).
 pub type PessimisticLockKeyCallback =
-    Box<dyn FnOnce(Result<PessimisticLockKeyResult, SharedError>, is_canceled) + Send + 'static>;
+    Box<dyn FnOnce(Result<PessimisticLockKeyResult, SharedError>, bool) + Send + 'static>;
 pub type CancellationCallback = Box<dyn FnOnce(StorageError) + Send + 'static>;
 
 pub struct LockWaitContextInner {
@@ -154,7 +155,7 @@ impl LockWaitContextSharedState {
 
     fn put_external_error(&self, error: StorageError) {
         if let Err(e) = self.external_error_tx.lock().send(error) {
-            debug!("failed to set")
+            debug!("failed to set external error"; "err" => ?e);
         }
     }
 }
@@ -214,7 +215,7 @@ impl<L: LockManager> LockWaitContext<L> {
             let kind = if is_canceled_before_enqueueing {
                 FinishRequestKind::CanceledBeforeEnqueueing
             } else {
-                FinishRequestKind::Canceled
+                FinishRequestKind::Executed
             };
             ctx.finish_request(res, kind);
         })
@@ -237,7 +238,7 @@ impl<L: LockManager> LockWaitContext<L> {
 
     fn finish_request(
         &self,
-        mut result: Result<PessimisticLockKeyResult, SharedError>,
+        result: Result<PessimisticLockKeyResult, SharedError>,
         finish_kind: FinishRequestKind,
     ) {
         match finish_kind {
@@ -268,8 +269,6 @@ impl<L: LockManager> LockWaitContext<L> {
             }
             FinishRequestKind::CanceledBeforeEnqueueing => {}
         }
-
-        let result = result.unwrap();
 
         // When this is executed, the waiter is either woken up from the queue or
         // canceled and removed from the queue. There should be no chance to try
@@ -369,7 +368,7 @@ mod tests {
         // Nothing happens currently.
         (ctx.get_callback_for_first_write_batch()).execute(ProcessResult::Res);
         rx.recv_timeout(Duration::from_millis(20)).unwrap_err();
-        (ctx.get_callback_for_blocked_key())(Err(SharedError::from(write_conflict())));
+        (ctx.get_callback_for_blocked_key())(Err(SharedError::from(write_conflict())), false);
         let res = rx.recv().unwrap().unwrap_err();
         assert!(matches!(
             &res,

@@ -1,6 +1,9 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::{
+    fmt::{Debug, Formatter},
+    sync::Arc,
+};
 
 // #[PerformanceCriticalPath]
 use kvproto::kvrpcpb::ExtraOp;
@@ -26,13 +29,23 @@ use crate::storage::{
     Snapshot,
 };
 
-#[derive(Debug)]
 pub struct ResumedPessimisticLockItem {
     pub key: Key,
     pub should_not_exist: bool,
     pub params: PessimisticLockParameters,
     pub lock_wait_token: LockWaitToken,
     pub req_states: Arc<LockWaitContextSharedState>,
+}
+
+impl Debug for ResumedPessimisticLockItem {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResumedPessimisticLockItem")
+            .field("key", &self.key)
+            .field("should_not_exist", &self.should_not_exist)
+            .field("params", &self.params)
+            .field("lock_wait_token", &self.lock_wait_token)
+            .finish()
+    }
 }
 
 command! {
@@ -193,7 +206,7 @@ impl AcquirePessimisticLockResumed {
                     should_not_exist: item.should_not_exist,
                     params: item.parameters,
                     lock_wait_token: item.lock_wait_token,
-                    req_states: item.req_states.unwrap(),
+                    req_states: item.req_states,
                 }
             })
             .collect();
@@ -216,7 +229,7 @@ mod tests {
 
     use super::*;
     use crate::storage::{
-        lock_manager::{lock_wait_context::LockWaitContext, MockLockManager, WaitTimeout},
+        lock_manager::{MockLockManager, WaitTimeout},
         mvcc::tests::{must_locked, write},
         txn::{
             commands::pessimistic_rollback::tests::must_success as must_pessimistic_rollback,
@@ -316,7 +329,7 @@ mod tests {
         let token = LockWaitToken(Some(random()));
         // The tests in this file doesn't need a valid req_state. Set a dummy value
         // here.
-        let req_state = Arc::new(LockWaitContextSharedState::new_dummy(token, key.clone()));
+        let req_states = Arc::new(LockWaitContextSharedState::new_dummy(token, key.clone()));
         let entry = LockWaitEntry {
             key,
             lock_hash,

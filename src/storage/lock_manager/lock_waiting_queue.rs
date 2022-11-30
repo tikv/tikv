@@ -56,9 +56,7 @@
 
 use std::{
     future::Future,
-    ops::DerefMut,
     pin::Pin,
-    result::Result,
     sync::{
         atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc,
@@ -66,7 +64,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use dashmap;
+use dashmap::{self, mapref::entry::Entry as DashMapEntry};
 use futures_util::compat::Future01CompatExt;
 use keyed_priority_queue::KeyedPriorityQueue;
 use kvproto::kvrpcpb;
@@ -76,7 +74,6 @@ use tikv_util::{time::InstantExt, timer::GLOBAL_TIMER_HANDLE};
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
-    errors::SharedError,
     lock_manager::{
         lock_wait_context::{LockWaitContextSharedState, PessimisticLockKeyCallback},
         LockManager, LockWaitToken,
@@ -84,7 +81,7 @@ use crate::storage::{
     metrics::*,
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
     txn::{Error as TxnError, ErrorInner as TxnErrorInner},
-    types::{PessimisticLockKeyResult, PessimisticLockParameters},
+    types::PessimisticLockParameters,
     Error as StorageError, ErrorInner as StorageErrorInner,
 };
 
@@ -293,11 +290,11 @@ impl<L: LockManager> LockWaitQueues<L> {
     fn on_push_canceled_entry(
         &self,
         lock_wait_entry: Box<LockWaitEntry>,
-        key_state: dashmap::Entry<'_, Key, KeyLockWaitState, impl std::hash::BuildHasher>,
+        key_state: DashMapEntry<'_, Key, KeyLockWaitState, impl std::hash::BuildHasher>,
     ) {
         let mut err = lock_wait_entry.req_states.get_external_error();
 
-        if let dashmap::Entry::Occupied(key_state_entry) = key_state {
+        if let DashMapEntry::Occupied(key_state_entry) = key_state {
             if let StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
                 MvccError(box MvccErrorInner::KeyIsLocked(lock_info)),
             )))) = &mut err
@@ -312,7 +309,8 @@ impl<L: LockManager> LockWaitQueues<L> {
 
         // `key_state` is dropped here, so the mutex in the queue map is released.
 
-        (lock_wait_entry.key_cb)(Err(err), true);
+        let cb = lock_wait_entry.key_cb.unwrap().into_inner();
+        cb(Err(err.into()), true);
     }
 
     /// Dequeues the head of the lock waiting queue of the specified key,
@@ -650,9 +648,10 @@ mod tests {
 
     use super::*;
     use crate::storage::{
+        errors::SharedError,
         lock_manager::{lock_wait_context::LockWaitContext, MockLockManager, WaitTimeout},
         txn::ErrorInner as TxnErrorInner,
-        ErrorInner as StorageErrorInner, StorageCallback,
+        ErrorInner as StorageErrorInner, PessimisticLockKeyResult, StorageCallback,
     };
 
     struct TestLockWaitEntryHandle {
@@ -743,7 +742,9 @@ mod tests {
                 lock_wait_token: token,
                 req_states: dummy_ctx.get_shared_states().clone(),
                 legacy_wake_up_index: None,
-                key_cb: Some(SyncWrapper::new(Box::new(move |res| tx.send(res).unwrap()))),
+                key_cb: Some(SyncWrapper::new(Box::new(move |res, _| {
+                    tx.send(res).unwrap()
+                }))),
             });
 
             let cancel_callback = dummy_ctx.get_callback_for_cancellation();
