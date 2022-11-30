@@ -1,4 +1,4 @@
-// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{sync::Arc, thread, time::Duration};
 
@@ -15,6 +15,7 @@ use txn_types::TimeStamp;
 
 fn setup_runtime() -> Runtime {
     Builder::new_multi_thread()
+        .thread_name("poller")
         .worker_threads(1)
         .enable_all()
         .build()
@@ -24,7 +25,7 @@ fn setup_runtime() -> Runtime {
 fn must_get_tso(client: &mut RpcClientV2, count: u32) -> TimeStamp {
     let (tx, mut responses) = client.create_tso_stream(WakePolicy::Immediately).unwrap();
     let mut req = pdpb::TsoRequest::default();
-    req.mut_header().cluster_id = client.get_cluster_id().unwrap();
+    req.mut_header().cluster_id = client.fetch_cluster_id().unwrap();
     req.count = count;
     tx.send(req).unwrap();
     let resp = block_on(responses.next()).unwrap().unwrap();
@@ -61,7 +62,7 @@ fn test_rpc_client() {
     let eps = server.bind_addrs();
 
     let mut client = new_client_v2(eps.clone(), None);
-    assert_ne!(client.get_cluster_id().unwrap(), 0);
+    assert_ne!(client.fetch_cluster_id().unwrap(), 0);
 
     let store_id = client.alloc_id().unwrap();
     let mut store = metapb::Store::default();
@@ -261,7 +262,7 @@ fn test_get_tombstone_store() {
     store99.set_state(metapb::StoreState::Tombstone);
     server.default_handler().add_store(store99.clone());
 
-    let r = block_on(client.get_store_async(99));
+    let r = client.get_store(99);
     assert_eq!(r.unwrap_err().error_code(), error_code::pd::STORE_TOMBSTONE);
 }
 

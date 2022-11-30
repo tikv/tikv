@@ -27,7 +27,7 @@ use fail::fail_point;
 use futures::{
     compat::{Compat, Future01CompatExt},
     executor::block_on,
-    future::{FutureExt, TryFutureExt},
+    future::FutureExt,
     select,
     sink::SinkExt,
     stream::{Stream, StreamExt},
@@ -303,6 +303,7 @@ impl CachedRawClient {
                 }
             }
         }
+        let _ = self.should_reconnect_tx.send(self.cache_version);
         Err(box_err!(
             "Connection unavailable {:?}",
             self.channel().check_connectivity_state(false)
@@ -319,8 +320,15 @@ impl CachedRawClient {
     /// Increases global version only when a new connection is established.
     /// Might panic if `wait_for_ready` isn't called up-front.
     async fn reconnect(&mut self) -> Result<bool> {
-        let force = self.channel().check_connectivity_state(true)
+        #[allow(unused_mut)]
+        let mut force = self.channel().check_connectivity_state(true)
             == ConnectivityState::GRPC_CHANNEL_SHUTDOWN;
+        #[cfg(feature = "failpoints")]
+        (|| {
+            fail_point!("pd_client_force_reconnect", |_| {
+                force = true;
+            });
+        })();
         if self
             .cache
             .maybe_reconnect(&self.core.context, force)
@@ -334,7 +342,10 @@ impl CachedRawClient {
 
     #[inline]
     fn check_resp<T>(&mut self, resp: GrpcResult<T>) -> GrpcResult<T> {
-        if matches!(resp, Err(GrpcError::RpcFailure(_))) {
+        if matches!(
+            resp,
+            Err(GrpcError::RpcFailure(_) | GrpcError::RemoteStopped)
+        ) {
             let _ = self.should_reconnect_tx.send(self.cache_version);
         }
         resp
@@ -377,6 +388,11 @@ impl CachedRawClient {
     #[inline]
     fn leader(&self) -> pdpb::Member {
         self.cache.members.get_leader().clone()
+    }
+
+    #[inline]
+    fn initialized(&self) -> bool {
+        self.cache_version != 0
     }
 }
 
@@ -467,6 +483,19 @@ impl RpcClient {
         block_on(self.raw_client.wait_for_ready())?;
         block_on(self.raw_client.reconnect())
     }
+
+    #[cfg(feature = "testexport")]
+    pub fn reset_to_lame_client(&mut self) {
+        let env = self.raw_client.core.context.connector.env.clone();
+        let lame = PdClientStub::new(Channel::lame(env, "0.0.0.0:0"));
+        self.raw_client.core.latest.lock().unwrap().stub = lame.clone();
+        self.raw_client.cache.stub = lame;
+    }
+
+    #[cfg(feature = "testexport")]
+    pub fn initialized(&self) -> bool {
+        self.raw_client.initialized()
+    }
 }
 
 pub trait PdClient {
@@ -490,13 +519,13 @@ pub trait PdClient {
         wake_policy: mpsc::WakePolicy,
     ) -> Result<(mpsc::Sender<TsoRequest>, Self::ResponseChannel<TsoResponse>)>;
 
+    fn fetch_cluster_id(&mut self) -> Result<u64>;
+
     fn load_global_config(&mut self, list: Vec<String>) -> PdFuture<HashMap<String, String>>;
 
     fn watch_global_config(
         &mut self,
     ) -> Result<grpcio::ClientSStreamReceiver<pdpb::WatchGlobalConfigResponse>>;
-
-    fn get_cluster_id(&mut self) -> Result<u64>;
 
     fn bootstrap_cluster(
         &mut self,
@@ -515,11 +544,9 @@ pub trait PdClient {
     fn get_store_and_stats(&mut self, store_id: u64)
     -> PdFuture<(metapb::Store, pdpb::StoreStats)>;
 
-    fn get_store(&mut self, store_id: u64) -> Result<metapb::Store>;
-
-    fn get_store_async(&mut self, store_id: u64) -> PdFuture<metapb::Store>;
-
-    fn get_store_stats_async(&mut self, store_id: u64) -> PdFuture<pdpb::StoreStats>;
+    fn get_store(&mut self, store_id: u64) -> Result<metapb::Store> {
+        block_on(self.get_store_and_stats(store_id)).map(|r| r.0)
+    }
 
     fn get_all_stores(&mut self, exclude_tombstone: bool) -> Result<Vec<metapb::Store>>;
 
@@ -530,13 +557,13 @@ pub trait PdClient {
         key: &[u8],
     ) -> PdFuture<(metapb::Region, Option<metapb::Peer>)>;
 
-    fn get_region(&mut self, key: &[u8]) -> Result<metapb::Region>;
+    fn get_region(&mut self, key: &[u8]) -> Result<metapb::Region> {
+        block_on(self.get_region_and_leader(key)).map(|r| r.0)
+    }
 
-    fn get_region_info(&mut self, key: &[u8]) -> Result<RegionInfo>;
-
-    fn get_region_async(&mut self, key: &[u8]) -> PdFuture<metapb::Region>;
-
-    fn get_region_info_async(&mut self, key: &[u8]) -> PdFuture<RegionInfo>;
+    fn get_region_info(&mut self, key: &[u8]) -> Result<RegionInfo> {
+        block_on(self.get_region_and_leader(key)).map(|r| RegionInfo::new(r.0, r.1))
+    }
 
     fn get_region_by_id(&mut self, region_id: u64) -> PdFuture<Option<metapb::Region>>;
 
@@ -770,15 +797,18 @@ impl PdClient for RpcClient {
     fn watch_global_config(
         &mut self,
     ) -> Result<grpcio::ClientSStreamReceiver<pdpb::WatchGlobalConfigResponse>> {
-        use kvproto::pdpb::WatchGlobalConfigRequest;
-        let req = WatchGlobalConfigRequest::default();
+        let req = pdpb::WatchGlobalConfigRequest::default();
         block_on(self.raw_client.wait_for_ready())?;
         Ok(self.raw_client.stub().watch_global_config(&req)?)
     }
 
-    fn get_cluster_id(&mut self) -> Result<u64> {
-        block_on(self.raw_client.wait_for_ready())?;
-        Ok(self.raw_client.cluster_id())
+    fn fetch_cluster_id(&mut self) -> Result<u64> {
+        if !self.raw_client.initialized() {
+            block_on(self.raw_client.wait_for_ready())?;
+        }
+        let id = self.raw_client.cluster_id();
+        assert!(id > 0);
+        Ok(id)
     }
 
     fn bootstrap_cluster(
@@ -927,19 +957,6 @@ impl PdClient for RpcClient {
         })
     }
 
-    fn get_store(&mut self, store_id: u64) -> Result<metapb::Store> {
-        let (store, _) = block_on(self.get_store_and_stats(store_id))?;
-        Ok(store)
-    }
-
-    fn get_store_async(&mut self, store_id: u64) -> PdFuture<metapb::Store> {
-        self.get_store_and_stats(store_id).map_ok(|x| x.0).boxed()
-    }
-
-    fn get_store_stats_async(&mut self, store_id: u64) -> PdFuture<pdpb::StoreStats> {
-        self.get_store_and_stats(store_id).map_ok(|x| x.1).boxed()
-    }
-
     fn get_all_stores(&mut self, exclude_tombstone: bool) -> Result<Vec<metapb::Store>> {
         let _timer = PD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["get_all_stores"])
@@ -1018,24 +1035,6 @@ impl PdClient for RpcClient {
             };
             Ok((region, leader))
         })
-    }
-
-    fn get_region(&mut self, key: &[u8]) -> Result<metapb::Region> {
-        block_on(self.get_region_and_leader(key)).map(|x| x.0)
-    }
-
-    fn get_region_info(&mut self, key: &[u8]) -> Result<RegionInfo> {
-        block_on(self.get_region_and_leader(key)).map(|x| RegionInfo::new(x.0, x.1))
-    }
-
-    fn get_region_async(&mut self, key: &[u8]) -> PdFuture<metapb::Region> {
-        self.get_region_and_leader(key).map_ok(|x| x.0).boxed()
-    }
-
-    fn get_region_info_async(&mut self, key: &[u8]) -> PdFuture<RegionInfo> {
-        self.get_region_and_leader(key)
-            .map_ok(|x| RegionInfo::new(x.0, x.1))
-            .boxed()
     }
 
     fn get_region_by_id(&mut self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
