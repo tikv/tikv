@@ -112,7 +112,7 @@ async fn send_snap_files(
     key: TabletSnapKey,
     limiter: Limiter,
 ) -> Result<u64> {
-    let path = mgr.get_final_path_for_gen(&key);
+    let path = mgr.tablet_gen_path(&key);
     info!("begin to send snapshot file";"snap_key" => %key);
     let files = fs::read_dir(&path)?
         .map(|f| Ok(f?.path()))
@@ -236,7 +236,7 @@ async fn recv_snap_files(
         .ok_or_else(|| Error::Other("empty gRPC stream".into()))?;
     let context = RecvTabletSnapContext::new(head)?;
     let chunk_size = context.chunk_size;
-    let path = snap_mgr.get_tmp_path_for_recv(&context.key);
+    let path = snap_mgr.tmp_recv_path(&context.key);
     info!("begin to receive tablet snapshot files"; "file" => %path.display());
     fs::create_dir_all(&path)?;
     let _with_io_type = WithIoType::new(context.io_type);
@@ -274,7 +274,7 @@ async fn recv_snap_files(
         f.sync_data()?;
     }
     info!("received all tablet snapshot file"; "snap_key" => %context.key);
-    let final_path = snap_mgr.get_final_path_for_recv(&context.key);
+    let final_path = snap_mgr.final_recv_path(&context.key);
     fs::rename(&path, final_path)?;
     Ok(context)
 }
@@ -514,7 +514,7 @@ mod tests {
         let send_path = TempDir::new().unwrap();
         let send_snap_mgr =
             TabletSnapManager::new(send_path.path().join("snap_dir").to_str().unwrap());
-        let snap_path = send_snap_mgr.get_final_path_for_gen(&snap_key);
+        let snap_path = send_snap_mgr.tablet_gen_path(&snap_key);
         create_dir_all(snap_path.as_path()).unwrap();
         // send file should skip directory
         create_dir_all(snap_path.join("dir")).unwrap();
@@ -545,7 +545,7 @@ mod tests {
         .unwrap();
 
         let stream = rx.map(|x: (SnapshotChunk, WriteFlags)| Ok(x.0));
-        let final_path = recv_snap_manager.get_final_path_for_recv(&snap_key);
+        let final_path = recv_snap_manager.final_recv_path(&snap_key);
         let r = block_on(recv_snap_files(recv_snap_manager, stream, limiter)).unwrap();
         assert_eq!(r.key, snap_key);
         std::thread::sleep(std::time::Duration::from_secs(1));

@@ -42,8 +42,9 @@ fn deadlock(client: &TikvClient, ctx: Context, key1: &[u8], ts: u64) -> bool {
     handle.join().unwrap();
 
     // Clean up
-    must_kv_pessimistic_rollback(client, ctx.clone(), key1.clone(), ts);
-    must_kv_pessimistic_rollback(client, ctx, key2.clone(), ts + 1);
+
+    must_kv_pessimistic_rollback(client, ctx.clone(), key1.clone(), ts, ts);
+    must_kv_pessimistic_rollback(client, ctx, key2.clone(), ts + 1, ts + 1);
 
     assert_eq!(resp.errors.len(), 1);
     if resp.errors[0].has_deadlock() {
