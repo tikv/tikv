@@ -24,7 +24,7 @@ impl Default for Config {
             num_threads: 8,
             stream_channel_window: 128,
             import_mode_timeout: ReadableDuration::minutes(10),
-            memory_use_ratio: 0.5,
+            memory_use_ratio: 0.3,
         }
     }
 }
@@ -46,9 +46,9 @@ impl Config {
             );
             self.stream_channel_window = default_cfg.stream_channel_window;
         }
-        if self.memory_use_ratio > 1.0 || self.memory_use_ratio < 0.0 {
+        if self.memory_use_ratio > 0.5 || self.memory_use_ratio < 0.0 {
             warn!(
-                "import.mem_ratio should belong to [0.0, 1.0], change it to {}",
+                "import.mem_ratio should belong to [0.0, 0.5], change it to {}",
                 default_cfg.memory_use_ratio,
             );
             self.memory_use_ratio = default_cfg.memory_use_ratio;

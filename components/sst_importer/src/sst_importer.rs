@@ -47,10 +47,30 @@ use crate::{
     Config, Error, Result,
 };
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum CacheKvFile {
     Mem(Arc<Vec<u8>>),
     Fs(Arc<PathBuf>),
+}
+
+impl CacheKvFile {
+    // get the ref count of item.
+    pub fn ref_count(&self) -> usize {
+        match self {
+            CacheKvFile::Mem(buff) => Arc::strong_count(buff),
+            CacheKvFile::Fs(path) => Arc::strong_count(path),
+        }
+    }
+
+    // check the item is expired.
+    pub fn is_expired(&self, start: &Instant) -> bool {
+        match self {
+            // The expired duration for memeory is 60s.
+            CacheKvFile::Mem(_) => start.saturating_elapsed() >= Duration::from_secs(60),
+            // The expired duration for local file is 10min.
+            CacheKvFile::Fs(_) => start.saturating_elapsed() >= Duration::from_secs(600),
+        }
+    }
 }
 
 /// SstImporter manages SST files that are waiting for ingesting.
@@ -317,18 +337,16 @@ impl SstImporter {
     pub fn shrink_by_tick(&self) -> usize {
         let mut shrink_buff_size: usize = 0;
         let mut retain_buff_size: usize = 0;
-        let mut shrink_files: Vec<PathBuf> = Vec::new();
+        let mut shrink_files: Vec<PathBuf> = Vec::default();
         let mut retain_file_count = 0_usize;
 
-        self.file_locks.retain(|_, (buff, start)| {
+        self.file_locks.retain(|_, (c, start)| {
             let mut need_retain = true;
-            match buff {
+            match c {
                 CacheKvFile::Mem(buff) => {
                     let buflen = buff.len();
                     // The term of recycle memeory is 60s.
-                    if Arc::strong_count(&buff) == 1
-                        && start.saturating_elapsed() >= Duration::from_secs(60)
-                    {
+                    if c.ref_count() == 1 && c.is_expired(start) {
                         need_retain = false;
                         shrink_buff_size += buflen;
                     } else {
@@ -336,12 +354,11 @@ impl SstImporter {
                     }
                 }
                 CacheKvFile::Fs(path) => {
+                    let p = path.to_path_buf();
                     // The term of recycle file is 10min.
-                    if Arc::strong_count(path) == 1
-                        && start.saturating_elapsed() >= Duration::from_secs(600)
-                    {
+                    if c.ref_count() == 1 && c.is_expired(start) {
                         need_retain = false;
-                        shrink_files.push(path.to_path_buf());
+                        shrink_files.push(p);
                     } else {
                         retain_file_count += 1;
                     }
@@ -1625,22 +1642,26 @@ mod tests {
                 &Limiter::new(f64::INFINITY),
             )
             .unwrap();
-        assert_eq!(buff, *output);
 
-        // test dec_kvfile_refcnt()
-        importer.dec_kvfile_refcnt(&kv_meta);
+        assert_eq!(CacheKvFile::Mem(Arc::new(buff.clone())), output);
 
-        // Do not shrint cache because the shrint interval does reach.
-        let shrink_size = importer.shrink_cache_by_tick();
+        // Do not shrint nothing.
+        let shrink_size = importer.shrink_by_tick();
+        assert_eq!(shrink_size, 0);
+        assert_eq!(importer.file_locks.len(), 1);
+
+        // drop the refcnt
+        drop(output);
+        let shrink_size = importer.shrink_by_tick();
         assert_eq!(shrink_size, 0);
         assert_eq!(importer.file_locks.len(), 1);
 
         // set expired instance in Dashmap
         for mut kv in importer.file_locks.iter_mut() {
-            kv.2 = Instant::now().sub(Duration::from_secs(61));
+            kv.1 = Instant::now().sub(Duration::from_secs(61));
         }
-        let shrink_size = importer.shrink_cache_by_tick();
-        assert_eq!(shrink_size, (buff.len() as u64));
+        let shrink_size = importer.shrink_by_tick();
+        assert_eq!(shrink_size, buff.len());
         assert!(importer.file_locks.is_empty());
     }
 
@@ -1747,19 +1768,14 @@ mod tests {
         check_file_exists(&path.save, None);
 
         // test shrink nothing.
-        let shrint_files_cnt = importer.shrink_space_by_tick();
+        let shrint_files_cnt = importer.shrink_by_tick();
         assert_eq!(shrint_files_cnt, 0);
 
         // set expired instance in Dashmap.
         for mut kv in importer.file_locks.iter_mut() {
-            kv.2 = Instant::now().sub(Duration::from_secs(601));
+            kv.1 = Instant::now().sub(Duration::from_secs(601));
         }
-        let shrint_files_cnt = importer.shrink_space_by_tick();
-        assert_eq!(shrint_files_cnt, 0);
-
-        // shrink file.
-        importer.dec_kvfile_refcnt(&kv_meta);
-        let shrint_files_cnt = importer.shrink_space_by_tick();
+        let shrint_files_cnt = importer.shrink_by_tick();
         assert_eq!(shrint_files_cnt, 1);
         check_file_not_exists(&path.save, None);
     }
@@ -2656,10 +2672,9 @@ mod tests {
         let import_dir = tempfile::tempdir().unwrap();
         let importer =
             SstImporter::new(&Config::default(), import_dir, None, ApiVersion::V1).unwrap();
-        assert_eq!(importer.mem_use.load(Ordering::SeqCst), 0);
 
         let key = "file1";
-        let value = (Arc::default(), 0, Instant::now());
+        let value = (CacheKvFile::Mem(Arc::default()), Instant::now());
         let lock = importer.file_locks.entry(key.to_string()).or_insert(value);
 
         // test locked by try_entry()
@@ -2670,11 +2685,10 @@ mod tests {
 
         // test unlocked by entry()
         drop(lock);
-        let _ = importer
-            .file_locks
-            .entry(key.to_string())
-            .and_modify(|v| v.1 += 1);
         let v = importer.file_locks.get(key).unwrap();
-        assert_eq!(v.1, 1)
+        assert_eq!(v.0.ref_count(), 1);
+
+        let _buff = v.0.clone();
+        assert_eq!(v.0.ref_count(), 2);
     }
 }
