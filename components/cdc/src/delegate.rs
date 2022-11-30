@@ -129,6 +129,7 @@ pub struct Downstream {
     sink: Option<Sink>,
     state: Arc<AtomicCell<DownstreamState>>,
     kv_api: ChangeDataRequestKvApi,
+    filter_loop: bool,
 }
 
 impl Downstream {
@@ -142,6 +143,7 @@ impl Downstream {
         req_id: u64,
         conn_id: ConnId,
         kv_api: ChangeDataRequestKvApi,
+        filter_loop: bool,
     ) -> Downstream {
         Downstream {
             id: DownstreamId::new(),
@@ -152,6 +154,7 @@ impl Downstream {
             sink: None,
             state: Arc::new(AtomicCell::new(DownstreamState::default())),
             kv_api,
+            filter_loop,
         }
     }
 
@@ -201,6 +204,10 @@ impl Downstream {
 
     pub fn get_id(&self) -> DownstreamId {
         self.id
+    }
+
+    pub fn get_filter_loop(&self) -> bool {
+        self.filter_loop
     }
 
     pub fn get_state(&self) -> Arc<AtomicCell<DownstreamState>> {
@@ -471,6 +478,7 @@ impl Delegate {
         region_id: u64,
         request_id: u64,
         entries: Vec<Option<KvEntry>>,
+        filter_loop: bool,
     ) -> Result<Vec<CdcEvent>> {
         let entries_len = entries.len();
         let mut rows = vec![Vec::with_capacity(entries_len)];
@@ -526,6 +534,10 @@ impl Delegate {
                     set_event_row_type(&mut row, EventLogType::Initialized);
                     row_size = 0;
                 }
+            }
+            // if the `txn_source` is not 0 and we should filter it out, skip this event.
+            if row.txn_source != 0 && filter_loop {
+                continue;
             }
             if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
                 rows.push(Vec::with_capacity(entries_len));
@@ -620,6 +632,48 @@ impl Delegate {
         if entries.is_empty() {
             return Ok(());
         }
+
+        let downstreams = self.downstreams();
+        assert!(
+            !downstreams.is_empty(),
+            "region {} miss downstream",
+            self.region_id
+        );
+
+        let mut need_filter = false;
+        for ds in downstreams {
+            if ds.filter_loop {
+                need_filter = true;
+                break;
+            }
+        }
+
+        // collect the change event cause by user write, which is `txn_source` = 0.
+        // for changefeed which only need the user write, send the `filtered`, or else,
+        // send them all.
+        let filtered = if need_filter {
+            let filtered = entries
+                .iter()
+                .filter(|x| x.txn_source == 0)
+                .cloned()
+                .collect::<Vec<EventRow>>();
+            if filtered.is_empty() {
+                None
+            } else {
+                Some(Event {
+                    region_id: self.region_id,
+                    index,
+                    event: Some(Event_oneof_event::Entries(EventEntries {
+                        entries: filtered.into(),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                })
+            }
+        } else {
+            None
+        };
+
         let event_entries = EventEntries {
             entries: entries.into(),
             ..Default::default()
@@ -630,6 +684,7 @@ impl Delegate {
             event: Some(Event_oneof_event::Entries(event_entries)),
             ..Default::default()
         };
+
         let send = move |downstream: &Downstream| {
             // No ready downstream or a downstream that does not match the kv_api type, will
             // be ignored. There will be one region that contains both Txn & Raw entries.
@@ -637,7 +692,15 @@ impl Delegate {
             if !downstream.state.load().ready_for_change_events() || downstream.kv_api != kv_api {
                 return Ok(());
             }
-            let event = change_data_event.clone();
+            if downstream.filter_loop && filtered.is_none() {
+                return Ok(());
+            }
+
+            let event = if downstream.filter_loop {
+                filtered.clone().unwrap()
+            } else {
+                change_data_event.clone()
+            };
             // Do not force send for real time change data events.
             let force_send = false;
             downstream.sink_event(event, force_send)
@@ -918,6 +981,7 @@ fn decode_write(
         }
     };
     let commit_ts = if write.write_type == WriteType::Rollback {
+        assert_eq!(write.txn_source, 0);
         0
     } else {
         key.decode_ts().unwrap().into_inner()
@@ -926,6 +990,8 @@ fn decode_write(
     row.commit_ts = commit_ts;
     row.key = key.truncate_ts().unwrap().into_raw().unwrap();
     row.op_type = op_type as _;
+    // used for filter out the event. see `txn_source` field for more detail.
+    row.txn_source = write.txn_source;
     set_event_row_type(row, r_type);
     if let Some(value) = write.short_value {
         row.value = value;
@@ -952,6 +1018,8 @@ fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow, has_value: &mut boo
     row.start_ts = lock.ts.into_inner();
     row.key = key.into_raw().unwrap();
     row.op_type = op_type as _;
+    // used for filter out the event. see `txn_source` field for more detail.
+    row.txn_source = lock.txn_source;
     set_event_row_type(row, EventLogType::Prewrite);
     if let Some(value) = lock.short_value {
         row.value = value;
@@ -1021,6 +1089,7 @@ mod tests {
             request_id,
             ConnId::new(),
             ChangeDataRequestKvApi::TiDb,
+            false,
         );
         downstream.set_sink(sink);
         let mut delegate = Delegate::new(region_id, Default::default());
@@ -1138,7 +1207,14 @@ mod tests {
             let mut epoch = RegionEpoch::default();
             epoch.set_conf_ver(region_version);
             epoch.set_version(region_version);
-            Downstream::new(peer, epoch, id, ConnId::new(), ChangeDataRequestKvApi::TiDb)
+            Downstream::new(
+                peer,
+                epoch,
+                id,
+                ConnId::new(),
+                ChangeDataRequestKvApi::TiDb,
+                false,
+            )
         };
 
         // Create a new delegate.
