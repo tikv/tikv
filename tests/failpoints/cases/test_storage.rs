@@ -4,7 +4,7 @@ use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{channel, RecvTimeoutError},
-        Arc,
+        Arc, Mutex,
     },
     thread,
     time::Duration,
@@ -515,7 +515,7 @@ fn test_pipelined_pessimistic_lock() {
 fn test_pessimistic_lock_resumable_blocked_twice_impl(canceled_when_resumed: bool) {
     let lock_mgr = MockLockManager::new();
     let storage = TestStorageBuilderApiV1::new(lock_mgr.clone())
-        .wake_up_delay_duration_ms(100)
+        .wake_up_delay_duration(100)
         .build()
         .unwrap();
     let (tx, rx) = channel();
@@ -525,13 +525,15 @@ fn test_pessimistic_lock_resumable_blocked_twice_impl(canceled_when_resumed: boo
     fail::cfg("lock_waiting_queue_before_delayed_notify_all", "pause").unwrap();
     let (first_resume_tx, first_resume_rx) = channel();
     let (first_resume_continue_tx, first_resume_continue_rx) = channel();
+    let first_resume_tx = Mutex::new(first_resume_tx);
+    let first_resume_continue_rx = Mutex::new(first_resume_continue_rx);
     fail::cfg_callback(
         "acquire_pessimistic_lock_resumed_before_process_write",
         move || {
             // Notify that the failpoint is reached, and block until it receives a continue
             // signal.
-            first_resume_tx.send(()).unwrap();
-            first_resume_continue_rx.recv().unwrap();
+            first_resume_tx.lock().unwrap().send(()).unwrap();
+            first_resume_continue_rx.lock().unwrap().recv().unwrap();
         },
     )
     .unwrap();
@@ -542,7 +544,7 @@ fn test_pessimistic_lock_resumable_blocked_twice_impl(canceled_when_resumed: boo
     storage
         .sched_txn_command(
             new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 10, 10, false, false),
-            expect_pessimistic_lock_res_callback(tx.clone(), empty.clone()),
+            expect_pessimistic_lock_res_callback(tx, empty.clone()),
         )
         .unwrap();
     rx.recv_timeout(Duration::from_secs(1)).unwrap();
@@ -552,7 +554,12 @@ fn test_pessimistic_lock_resumable_blocked_twice_impl(canceled_when_resumed: boo
     storage
         .sched_txn_command(
             new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 11, 11, false, false),
-            expect_pessimistic_lock_res_callback(tx_blocked_1, empty.clone()),
+            expect_fail_callback(tx_blocked_1, 0, |e| match e {
+                Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
+                    box mvcc::ErrorInner::WriteConflict { .. },
+                ))))) => (),
+                e => panic!("unexpected error chain: {:?}", e),
+            }),
         )
         .unwrap();
     rx_blocked_1
@@ -577,11 +584,9 @@ fn test_pessimistic_lock_resumable_blocked_twice_impl(canceled_when_resumed: boo
                         assert_eq!(res.len(), 1);
                         let e = res[0].unwrap_err();
                         match e.inner() {
-                            box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
-                                mvcc::Error(box mvcc::ErrorInner::KeyIsLocked(lock_info)),
-                            ))) => {
-                                assert_eq!(lock_info.get_lock_version(), 11);
-                            }
+                            ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
+                                box mvcc::ErrorInner::KeyIsLocked(_),
+                            )))) => (),
                             e => panic!("unexpected error chain: {:?}", e),
                         }
                     },
@@ -595,9 +600,10 @@ fn test_pessimistic_lock_resumable_blocked_twice_impl(canceled_when_resumed: boo
     // Find the lock wait token of the above request.
     let tokens_after = lock_mgr.get_all_tokens();
     let token_of_12 = {
-        let diff = tokens_after - tokens_before;
+        use std::ops::Sub;
+        let diff = tokens_after.sub(&tokens_before);
         assert_eq!(diff.len(), 1);
-        diff.into_iter().next()
+        diff.into_iter().next().unwrap()
     };
 
     // Release the lock, so that the former (non-resumable) request will be woken
@@ -615,7 +621,7 @@ fn test_pessimistic_lock_resumable_blocked_twice_impl(canceled_when_resumed: boo
     storage
         .sched_txn_command(
             new_acquire_pessimistic_lock_command(vec![(key.clone(), false)], 11, 11, false, false),
-            expect_pessimistic_lock_res_callback(tx, empty.clone()),
+            expect_pessimistic_lock_res_callback(tx, empty),
         )
         .unwrap();
     rx.recv_timeout(Duration::from_secs(1)).unwrap();
