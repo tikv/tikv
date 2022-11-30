@@ -70,7 +70,7 @@ impl SstImporter {
         let switcher = ImportModeSwitcher::new(cfg);
 
         let memory_limit = (SysQuota::memory_limit_in_bytes() as f64) * cfg.memory_use_ratio;
-        info!("memory limit when apply"; "size" => ?memory_limit);
+        info!("sst importer memory limit when apply"; "size" => ?memory_limit);
 
         Ok(SstImporter {
             dir: ImportDir::new(root)?,
