@@ -15,6 +15,7 @@ use parking_lot::Mutex;
 use tracker::TrackerToken;
 use txn_types::{Key, TimeStamp};
 
+pub use crate::storage::lock_manager::lock_wait_context::CancellationCallback;
 use crate::{
     server::lock_manager::{waiter_manager, waiter_manager::Callback},
     storage::{
@@ -147,7 +148,7 @@ pub trait LockManager: Clone + Send + Sync + 'static {
         wait_info: KeyLockWaitInfo,
         is_first_lock: bool,
         timeout: Option<WaitTimeout>,
-        cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
+        cancel_callback: CancellationCallback,
         diag_ctx: DiagnosticContext,
     );
 
@@ -170,8 +171,7 @@ pub trait LockManager: Clone + Send + Sync + 'static {
 #[derive(Clone)]
 pub struct MockLockManager {
     allocated_token: Arc<AtomicU64>,
-    waiters:
-        Arc<Mutex<HashMap<LockWaitToken, (KeyLockWaitInfo, Box<dyn FnOnce(StorageError) + Send>)>>>,
+    waiters: Arc<Mutex<HashMap<LockWaitToken, (KeyLockWaitInfo, CancellationCallback)>>>,
 }
 
 impl MockLockManager {
@@ -205,7 +205,7 @@ impl LockManager for MockLockManager {
         wait_info: KeyLockWaitInfo,
         _is_first_lock: bool,
         _timeout: Option<WaitTimeout>,
-        cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
+        cancel_callback: CancellationCallback,
         _diag_ctx: DiagnosticContext,
     ) {
         self.waiters

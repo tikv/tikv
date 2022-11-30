@@ -3560,8 +3560,8 @@ mod tests {
                 Error as KvError, ErrorInner as EngineErrorInner, ExpectedWrite, MockEngineBuilder,
             },
             lock_manager::{
-                DiagnosticContext, KeyLockWaitInfo, LockDigest, LockWaitToken, UpdateWaitForEvent,
-                WaitTimeout,
+                CancellationCallback, DiagnosticContext, KeyLockWaitInfo, LockDigest,
+                LockWaitToken, UpdateWaitForEvent, WaitTimeout,
             },
             mvcc::LockType,
             txn::{
@@ -8762,7 +8762,7 @@ mod tests {
             wait_info: KeyLockWaitInfo,
             is_first_lock: bool,
             timeout: Option<WaitTimeout>,
-            cancel_callback: Box<dyn FnOnce(Error) + Send>,
+            cancel_callback: CancellationCallback,
             diag_ctx: DiagnosticContext,
         ) {
             self.tx
