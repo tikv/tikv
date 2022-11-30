@@ -12,9 +12,10 @@ use causal_ts::CausalTsProviderImpl;
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, RaftEngine, TabletFactory};
+use file_system::DirSizeCalculator;
 use kvproto::{metapb, pdpb};
 use pd_client::PdClient;
-use raftstore::store::{util::KeysInfoFormatter, TxnExt};
+use raftstore::store::{util::KeysInfoFormatter, TabletSnapManager, TxnExt};
 use slog::{error, info, Logger};
 use tikv_util::{time::UnixSecs, worker::Runnable};
 use yatp::{task::future::TaskCell, Remote};
@@ -98,6 +99,7 @@ where
     pd_client: Arc<T>,
     raft_engine: ER,
     tablet_factory: Arc<dyn TabletFactory<EK>>,
+    snap_mgr: TabletSnapManager,
     router: StoreRouter<EK, ER>,
 
     remote: Remote<TaskCell>,
@@ -107,6 +109,7 @@ where
     // For store_heartbeat.
     start_ts: UnixSecs,
     store_stat: store_heartbeat::StoreStat,
+    size_calculator: DirSizeCalculator,
 
     // For region_heartbeat.
     region_cpu_records: HashMap<u64, u32>,
@@ -131,6 +134,7 @@ where
         pd_client: Arc<T>,
         raft_engine: ER,
         tablet_factory: Arc<dyn TabletFactory<EK>>,
+        snap_mgr: TabletSnapManager,
         router: StoreRouter<EK, ER>,
         remote: Remote<TaskCell>,
         concurrency_manager: ConcurrencyManager,
@@ -138,16 +142,19 @@ where
         logger: Logger,
         shutdown: Arc<AtomicBool>,
     ) -> Self {
+        let size_calculator = DirSizeCalculator::new(tablet_factory.tablets_path());
         Self {
             store_id,
             pd_client,
             raft_engine,
             tablet_factory,
+            snap_mgr,
             router,
             remote,
             region_peers: HashMap::default(),
             start_ts: UnixSecs::zero(),
             store_stat: store_heartbeat::StoreStat::default(),
+            size_calculator,
             region_cpu_records: HashMap::default(),
             is_hb_receiver_scheduled: false,
             concurrency_manager,

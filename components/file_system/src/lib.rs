@@ -18,6 +18,14 @@ mod metrics;
 mod metrics_manager;
 mod rate_limiter;
 
+use std::{
+    collections::HashSet,
+    fs,
+    io::{self, ErrorKind, Read, Write},
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::{Arc, Mutex},
+};
 pub use std::{
     convert::TryFrom,
     fs::{
@@ -25,12 +33,6 @@ pub use std::{
         remove_dir, remove_dir_all, remove_file, rename, set_permissions, symlink_metadata,
         DirBuilder, DirEntry, FileType, Metadata, Permissions, ReadDir,
     },
-};
-use std::{
-    io::{self, ErrorKind, Read, Write},
-    path::Path,
-    str::FromStr,
-    sync::{Arc, Mutex},
 };
 
 pub use file::{File, OpenOptions};
@@ -333,6 +335,75 @@ pub fn sync_dir<P: AsRef<Path>>(path: P) -> io::Result<()> {
     // File::open will not error when opening a directory
     // because it just call libc::open and do not do the file or dir check
     File::open(path)?.sync_all()
+}
+
+fn walk_dir<F>(mut dir: fs::ReadDir, op: &mut F) -> io::Result<()>
+where
+    F: FnMut(&Path) -> io::Result<()>,
+{
+    dir.try_for_each(|f| {
+        let f = f?;
+        if f.metadata()?.is_dir() {
+            walk_dir(f.path().read_dir()?, op)?;
+        } else {
+            op(&f.path())?;
+        }
+        Ok(())
+    })
+}
+
+pub fn naive_dir_size<P: AsRef<Path>>(path: P) -> io::Result<usize> {
+    let mut size = 0;
+    walk_dir(path.as_ref().read_dir()?, &mut |f| {
+        size += f.metadata()?.len() as usize;
+        Ok(())
+    })?;
+    Ok(size)
+}
+
+pub struct DirSizeCalculator {
+    path: PathBuf,
+    inodes: HashSet<u64>,
+}
+
+impl DirSizeCalculator {
+    pub fn new<P: AsRef<Path>>(path: P) -> Self {
+        Self {
+            path: path.as_ref().to_path_buf(),
+            inodes: HashSet::new(),
+        }
+    }
+
+    pub fn size(&mut self) -> io::Result<usize> {
+        if let Ok(size) = self.size_imp() {
+            return Ok(size);
+        }
+        naive_dir_size(&self.path)
+    }
+
+    fn size_imp(&mut self) -> io::Result<usize> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let mut size = 0;
+            let dev = self.path.metadata()?.dev();
+            walk_dir(self.path.read_dir()?, &mut |f| {
+                let meta = f.metadata()?;
+                if meta.is_symlink() && meta.dev() != dev {
+                    return Ok(());
+                }
+                if !self.inodes.insert(meta.ino()) {
+                    return Ok(());
+                }
+                size += meta.len() as usize;
+                Ok(())
+            })?;
+            self.inodes.clear();
+            Ok(size)
+        }
+        #[cfg(not(unix))]
+        Err(io::Error::new(ErrorKind::Other, ""))
+    }
 }
 
 const DIGEST_BUFFER_SIZE: usize = 1024 * 1024;

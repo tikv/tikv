@@ -5,6 +5,7 @@ use std::cmp;
 use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
+use file_system::naive_dir_size;
 use kvproto::pdpb;
 use pd_client::{
     metrics::{
@@ -259,7 +260,7 @@ where
     }
 
     /// Returns (capacity, used, available).
-    fn collect_engine_size(&self) -> Option<(u64, u64, u64)> {
+    fn collect_engine_size(&mut self) -> Option<(u64, u64, u64)> {
         let disk_stats = match fs2::statvfs(self.tablet_factory.tablets_path()) {
             Err(e) => {
                 error!(
@@ -275,11 +276,8 @@ where
         let disk_cap = disk_stats.total_space();
         // TODO: custom capacity.
         let capacity = disk_cap;
-        // TODO: accurate snapshot size and kv engines size.
-        let snap_size = 0;
-        let kv_size = 0;
-        let used_size = snap_size
-            + kv_size
+        let used_size = naive_dir_size(self.snap_mgr.root_path()).unwrap() as u64
+            + self.size_calculator.size().unwrap() as u64
             + self
                 .raft_engine
                 .get_engine_size()
