@@ -202,7 +202,7 @@ impl ArcWake for PollAtWake {
 #[inline]
 pub fn try_poll<T>(f: impl Future<Output = T>) -> Option<T> {
     futures::executor::block_on(async move {
-        futures::select! {
+        futures::select_biased! {
             res = f.fuse() => Some(res),
             _ = futures::future::ready(()).fuse() => None,
         }

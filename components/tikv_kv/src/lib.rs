@@ -312,7 +312,7 @@ pub trait Engine: Send + Clone + 'static {
     fn modify_on_kv_engine(&self, region_modifies: HashMap<u64, Vec<Modify>>) -> Result<()>;
 
     type SnapshotRes: Future<Output = Result<Self::Snap>> + Send + 'static;
-    /// Get a snapshot asynchrounously.
+    /// Get a snapshot asynchronously.
     ///
     /// Note the snapshot is queried immediately no matter whether the returned
     /// future is polled or not.
@@ -330,7 +330,7 @@ pub trait Engine: Send + Clone + 'static {
     /// `EVENT_COMMITTED`.
     ///
     /// `on_applied` is called right in the processing thread before being
-    /// feeded to the stream.
+    /// fed to the stream.
     ///
     /// Note the write is started no matter whether the returned stream is
     /// polled or not.
