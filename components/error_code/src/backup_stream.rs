@@ -47,8 +47,7 @@ define_error_codes! {
         "Error happened reported from raft store.",
         "This is an internal error, please ask the community for help."
     ),
-    GRPC => (
-        "gRPC",
+    GRPC => ("gRPC",
         "Error happened during executing gRPC",
         "This error is often relative to the network, please check the network connection and network config, say, TLS config."
     ),
