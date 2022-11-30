@@ -5,6 +5,7 @@ use std::{
     future::Future,
     path::PathBuf,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use collections::HashSet;
@@ -39,6 +40,7 @@ use tikv_util::{
     sys::thread::ThreadBuildWrapper,
     time::{Instant, Limiter},
 };
+use tokio::time::sleep;
 use txn_types::{Key, WriteRef, WriteType};
 
 use super::make_rpc_error;
@@ -82,7 +84,7 @@ where
     ) -> ImportSstService<E, Router> {
         let props = tikv_util::thread_group::current_properties();
         let threads = ThreadPoolBuilder::new()
-            .pool_size(cfg.num_threads)
+            .pool_size(cfg.num_threads + 1)
             .name_prefix("sst-importer")
             .after_start_wrapper(move || {
                 tikv_util::thread_group::set_properties(props.clone());
@@ -93,6 +95,8 @@ where
             .create()
             .unwrap();
         importer.start_switch_mode_check(&threads, engine.clone());
+        threads.spawn_ok(Self::tick(importer.clone()));
+
         ImportSstService {
             cfg,
             engine,
@@ -102,6 +106,13 @@ where
             limiter: Limiter::new(f64::INFINITY),
             task_slots: Arc::new(Mutex::new(HashSet::default())),
             raft_entry_max_size,
+        }
+    }
+
+    async fn tick(importer: Arc<SstImporter>) {
+        loop {
+            sleep(Duration::from_secs(10)).await;
+            importer.shrink_by_tick();
         }
     }
 
@@ -462,6 +473,11 @@ where
                 let mut req_default_size = 0_u64;
                 let mut req_write_size = 0_u64;
                 let mut range: Option<Range> = None;
+                let ext_storage = {
+                    let inner =
+                        importer.create_external_storage(req.get_storage_backend(), false)?;
+                    Arc::from(inner)
+                };
 
                 for (i, meta) in metas.iter().enumerate() {
                     let (reqs, req_size) = if meta.get_cf() == CF_DEFAULT {
@@ -480,14 +496,19 @@ where
                         context.clone(),
                     );
 
-                    let temp_file =
-                        importer.do_download_kv_file(meta, req.get_storage_backend(), &limiter)?;
+                    let buff = importer.read_from_kv_file(
+                        meta,
+                        &rules[i],
+                        Arc::clone(&ext_storage),
+                        req.get_storage_backend(),
+                        &limiter,
+                    )?;
                     let r: Option<Range> = importer.do_apply_kv_file(
                         meta.get_start_key(),
                         meta.get_end_key(),
+                        meta.get_start_ts(),
                         meta.get_restore_ts(),
-                        temp_file,
-                        &rules[i],
+                        buff,
                         &mut build_req_fn,
                     )?;
 
