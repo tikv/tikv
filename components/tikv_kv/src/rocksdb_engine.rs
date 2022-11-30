@@ -2,10 +2,12 @@
 
 use std::{
     fmt::{self, Debug, Display, Formatter},
+    pin::Pin,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
+    task::Poll,
     time::Duration,
 };
 
@@ -18,7 +20,10 @@ use engine_traits::{
     CfName, Engines, IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions,
 };
 use file_system::IoRateLimiter;
-use futures::{channel::oneshot, Future};
+use futures::{
+    channel::{mpsc, oneshot},
+    stream, Future, Stream,
+};
 use kvproto::{kvrpcpb::Context, metapb, raft_cmdpb};
 use raftstore::coprocessor::CoprocessorHost;
 use tempfile::{Builder, TempDir};
@@ -26,9 +31,10 @@ use tikv_util::worker::{Runnable, Scheduler, Worker};
 use txn_types::{Key, Value};
 
 use super::{
-    write_modifies, Callback, DummySnapshotExt, Engine, Error, ErrorInner, ExtCallback,
+    write_modifies, Callback, DummySnapshotExt, Engine, Error, ErrorInner,
     Iterator as EngineIterator, Modify, Result, SnapContext, Snapshot, WriteData,
 };
+use crate::{OnAppliedCb, WriteEvent};
 
 // Duplicated in test_engine_builder
 const TEMP_DIR: &str = "";
@@ -226,34 +232,48 @@ impl Engine for RocksEngine {
         Ok(())
     }
 
-    fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> Result<()> {
-        self.async_write_ext(ctx, batch, cb, None, None)
-    }
-
-    fn async_write_ext(
+    type WriteRes = impl Stream<Item = crate::WriteEvent> + Send + 'static;
+    fn async_write(
         &self,
-        _: &Context,
+        _ctx: &Context,
         batch: WriteData,
-        cb: Callback<()>,
-        proposed_cb: Option<ExtCallback>,
-        committed_cb: Option<ExtCallback>,
-    ) -> Result<()> {
-        fail_point!("rockskv_async_write", |_| Err(box_err!("write failed")));
+        subscribed: u8,
+        on_applied: Option<OnAppliedCb>,
+    ) -> Self::WriteRes {
+        let (mut tx, mut rx) = mpsc::channel::<WriteEvent>(WriteEvent::event_capacity(subscribed));
+        let res = (move || {
+            fail_point!("rockskv_async_write", |_| Err(box_err!("write failed")));
 
-        if batch.modifies.is_empty() {
-            return Err(Error::from(ErrorInner::EmptyRequest));
-        }
+            if batch.modifies.is_empty() {
+                return Err(Error::from(ErrorInner::EmptyRequest));
+            }
 
-        let batch = self.pre_propose(batch)?;
+            let batch = self.pre_propose(batch)?;
 
-        if let Some(cb) = proposed_cb {
-            cb();
-        }
-        if let Some(cb) = committed_cb {
-            cb();
-        }
-        box_try!(self.sched.schedule(Task::Write(batch.modifies, cb)));
-        Ok(())
+            if WriteEvent::subscribed_proposed(subscribed) {
+                let _ = tx.try_send(WriteEvent::Proposed);
+            }
+            if WriteEvent::subscribed_committed(subscribed) {
+                let _ = tx.try_send(WriteEvent::Committed);
+            }
+            let cb = Box::new(move |mut res| {
+                if let Some(cb) = on_applied {
+                    cb(&mut res);
+                }
+                let _ = tx.try_send(WriteEvent::Finished(res));
+            });
+            box_try!(self.sched.schedule(Task::Write(batch.modifies, cb)));
+            Ok(())
+        })();
+        let mut res = Some(res);
+        stream::poll_fn(move |cx| {
+            if res.as_ref().map_or(false, |r| r.is_err()) {
+                return Poll::Ready(res.take().map(WriteEvent::Finished));
+            }
+            // If it's none, it means an error is returned, it should not be polled again.
+            assert!(res.is_some());
+            Pin::new(&mut rx).poll_next(cx)
+        })
     }
 
     type SnapshotRes = impl Future<Output = Result<Self::Snap>> + Send;

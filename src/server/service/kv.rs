@@ -57,7 +57,7 @@ use crate::{
         self,
         errors::{
             extract_committed, extract_key_error, extract_key_errors, extract_kv_pairs,
-            extract_region_error, map_kv_pairs,
+            extract_region_error, extract_region_error_from_error, map_kv_pairs,
         },
         kv::Engine,
         lock_manager::LockManager,
@@ -1452,14 +1452,26 @@ fn future_delete_range<E: Engine, L: LockManager, F: KvFormat>(
 // Preparing the flashback for a region will "lock" the region so that
 // there is no any read, write or scheduling operation could be proposed before
 // the actual flashback operation.
+// NOTICE: the caller needs to make sure the version we want to flashback won't
+// be between any transactions that have not been fully committed.
 fn future_prepare_flashback_to_version<E: Engine, L: LockManager, F: KvFormat>(
     // Keep this param to hint the type of E for the compiler.
     storage: &Storage<E, L, F>,
     req: PrepareFlashbackToVersionRequest,
 ) -> impl Future<Output = ServerResult<PrepareFlashbackToVersionResponse>> {
-    let f = storage.get_engine().start_flashback(req.get_context());
+    let storage = storage.clone();
     async move {
-        let res = f.await.map_err(storage::Error::from);
+        let f = storage.get_engine().start_flashback(req.get_context());
+        let mut res = f.await.map_err(storage::Error::from);
+        if matches!(res, Ok(())) {
+            // After the region is put into the flashback state, we need to do a special
+            // prewrite to prevent `resolved_ts` from advancing.
+            let (cb, f) = paired_future_callback();
+            res = storage.sched_txn_command(req.clone().into(), cb);
+            if matches!(res, Ok(())) {
+                res = f.await.unwrap_or_else(|e| Err(box_err!(e)));
+            }
+        }
         let mut resp = PrepareFlashbackToVersionResponse::default();
         if let Some(e) = extract_region_error(&res) {
             resp.set_region_error(e);
@@ -1887,12 +1899,12 @@ fn future_raw_coprocessor<E: Engine, L: LockManager, F: KvFormat>(
 }
 
 macro_rules! txn_command_future {
-    ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($req: ident) $prelude: stmt; ($v: ident, $resp: ident, $tracker: ident) { $else_branch: expr }) => {
+    ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($req: ident) {$($prelude: stmt)*}; ($v: ident, $resp: ident, $tracker: ident) { $else_branch: expr }) => {
         fn $fn_name<E: Engine, L: LockManager, F: KvFormat>(
             storage: &Storage<E, L, F>,
             $req: $req_ty,
         ) -> impl Future<Output = ServerResult<$resp_ty>> {
-            $prelude
+            $($prelude)*
             let $tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
                 $req.get_context(),
                 RequestType::Unknown,
@@ -1939,22 +1951,42 @@ txn_command_future!(future_prewrite, PrewriteRequest, PrewriteResponse, (v, resp
     }
     resp.set_errors(extract_key_errors(v.map(|v| v.locks)).into());
 }});
-txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, PessimisticLockResponse, (v, resp, tracker) {{
-    match v {
-        Ok(Ok(res)) => {
-            let (values, not_founds) = res.into_legacy_values_and_not_founds();
-            resp.set_values(values.into());
-            resp.set_not_founds(not_founds);
-        },
-        Err(e) | Ok(Err(e)) =>  {
-            resp.set_errors(vec![extract_key_error(&e)].into())
-        },
-    }
-    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-        tracker.write_scan_detail(resp.mut_exec_details_v2().mut_scan_detail_v2());
-        tracker.write_write_detail(resp.mut_exec_details_v2().mut_write_detail());
-    });
-}});
+txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, PessimisticLockResponse,
+    (req) {
+        let mode = req.get_wake_up_mode()
+    };
+    (v, resp, tracker) {{
+        match v {
+            Ok(Ok(res)) => {
+                match mode {
+                    PessimisticLockWakeUpMode::WakeUpModeForceLock => {
+                        let (res, error) = res.into_pb();
+                        resp.set_results(res.into());
+                        if let Some(e) = error {
+                            if let Some(region_error) = extract_region_error_from_error(&e.0) {
+                                resp.set_region_error(region_error);
+                            } else {
+                                resp.set_errors(vec![extract_key_error(&e.0)].into());
+                            }
+                        }
+                    }
+                    PessimisticLockWakeUpMode::WakeUpModeNormal => {
+                        let (values, not_founds) = res.into_legacy_values_and_not_founds();
+                        resp.set_values(values.into());
+                        resp.set_not_founds(not_founds);
+                    }
+                }
+            },
+            Err(e) | Ok(Err(e)) => {
+                resp.set_errors(vec![extract_key_error(&e)].into())
+            },
+        }
+        GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+            tracker.write_scan_detail(resp.mut_exec_details_v2().mut_scan_detail_v2());
+            tracker.write_write_detail(resp.mut_exec_details_v2().mut_write_detail());
+        });
+    }}
+);
 txn_command_future!(future_pessimistic_rollback, PessimisticRollbackRequest, PessimisticRollbackResponse, (v, resp) {
     resp.set_errors(extract_key_errors(v).into())
 });
