@@ -155,15 +155,24 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     }));
                 }
                 if next_write_key == self.start_key {
-                    // Get real key first.
+                    // The start key from the client is actually a range which is used to limit the
+                    // upper bound of this flashback when scanning data, so it may not be a real
+                    // key. In the Prewrite Phase, we make sure that the start
+                    // key is a real key and take this key as a lock for the
+                    // 2pc. So When overwriting the write, we skip the immediate
+                    // write of this key and instead put it after the completion
+                    // of the 2pc.
                     next_write_key = if let Some(first_key) =
                         get_first_user_key(&mut reader, &self.start_key, &self.end_key)?
                     {
                         first_key
                     } else {
+                        // If the key is None return directly
                         statistics.add(&reader.statistics);
                         return Ok(ProcessResult::Res);
                     };
+                    // Commit key needs to match the Prewrite key, which is set as the first user
+                    // key.
                     start_key = next_write_key.clone();
                     // If the key is not locked, it means that the key has been committed before and
                     // we are in a retry.

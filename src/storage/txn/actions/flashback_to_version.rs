@@ -48,7 +48,7 @@ pub fn flashback_to_version_read_write(
         |key, latest_commit_ts| {
             // There is no any other write could happen after the flashback begins.
             assert!(latest_commit_ts <= flashback_commit_ts);
-            // - Skip the `start_key`.
+            // - Skip the `start_key` which as prewrite key.
             // - No need to find an old version for the key if its latest `commit_ts` is
             // smaller than or equal to the flashback version.
             // - No need to flashback a key twice if its latest `commit_ts` is equal to the
@@ -155,6 +155,9 @@ pub fn prewrite_flashback_key(
     flashback_version: TimeStamp,
     flashback_start_ts: TimeStamp,
 ) -> TxnResult<()> {
+    // The start key from the client is actually a range, which is used to limit the
+    // upper bound of this flashback when scanning data, so it may not be a real
+    // key. We need to get the key that the user has written to ensure reliability.
     let key_to_lock = if let Some(first_key) = get_first_user_key(reader, start_key, end_key)? {
         first_key
     } else {
@@ -233,9 +236,6 @@ pub fn get_first_user_key(
     start_key: &Key,
     end_key: &Key,
 ) -> TxnResult<Option<Key>> {
-    // The start key from the client is actually a range, which is used to limit the
-    // upper bound of this flashback when scanning data, so it may not be a real
-    // key.
     let (mut keys_result, _) =
         reader.scan_latest_user_keys(Some(start_key), Some(end_key), |_, _| true, 1)?;
     Ok(keys_result.pop())
@@ -612,7 +612,7 @@ pub mod tests {
             must_prewrite_flashback_key(&mut engine, start_key, 4, flashback_start_ts),
             0
         );
-        // case 3: start key is valid, end_key is invalid.
+        // case 3: start key is valid, end_key is invalid, prewrite key will be None.
         let first_key = get_first_user_key(&mut reader, &Key::from_raw(b"a"), &Key::from_raw(b""))
             .unwrap_or_else(|_| Some(Key::from_raw(b"")));
         assert_eq!(first_key, None);
