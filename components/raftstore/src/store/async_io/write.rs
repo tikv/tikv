@@ -14,7 +14,7 @@ use std::{
 };
 
 use collections::HashMap;
-use crossbeam::channel::{Receiver, Sender, TryRecvError};
+use crossbeam::channel::{Sender, TryRecvError};
 use engine_traits::{
     KvEngine, PerfContext, PerfContextKind, RaftEngine, RaftLogBatch, WriteBatch, WriteOptions,
 };

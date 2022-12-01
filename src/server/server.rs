@@ -17,7 +17,7 @@ use raftstore::{
     router::RaftStoreRouter,
     store::{CheckLeaderTask, SnapManager},
 };
-use resource_control::ResourceController;
+use resource_control::{ResourceGroupManager};
 use security::SecurityManager;
 use tikv_util::{
     config::VersionTrack,
@@ -78,7 +78,7 @@ pub struct Server<T: RaftStoreRouter<E::Local> + 'static, S: StoreAddrResolver +
     // Currently load statistics is done in the thread.
     stats_pool: Option<Runtime>,
     grpc_thread_load: Arc<ThreadLoadPool>,
-    resource_ctl: Arc<ResourceController>,
+    resource_manager: Arc<ResourceGroupManager>,
     yatp_read_pool: Option<ReadPool>,
     debug_thread_pool: Arc<Runtime>,
     health_service: HealthService,
@@ -103,7 +103,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
         check_leader_scheduler: Scheduler<CheckLeaderTask>,
         env: Arc<Environment>,
         yatp_read_pool: Option<ReadPool>,
-        resource_ctl: Arc<ResourceController>,
+        resource_manager: Arc<ResourceGroupManager>,
         debug_thread_pool: Arc<Runtime>,
         health_service: HealthService,
     ) -> Result<Self> {
@@ -194,7 +194,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
             stats_pool,
             grpc_thread_load,
             yatp_read_pool,
-            resource_ctl,
+            resource_manager,
             debug_thread_pool,
             health_service,
             timer: GLOBAL_TIMER_HANDLE.clone(),

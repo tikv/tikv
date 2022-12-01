@@ -35,30 +35,23 @@ lazy_static! {
     .unwrap();
 }
 
-pub struct ResourceController {
-    resource_groups: DashMap<String, Arc<ResourceGroup>>,
+pub struct ResourceGroupManager {
+    resource_groups: DashMap<String, ResourceGroupConfig>,
     total_cpu_quota: f64,
-    last_min_vt: AtomicU64,
-    start_ts: Instant,
-    // the value is the duration delta(in ms) from start_ts
-    last_vt_update_time: AtomicU64,
 }
 
-impl ResourceController {
+impl ResourceGroupManager {
     pub fn new() -> Self {
         let total_cpu_quota = SysQuota::cpu_cores_quota() * 1000.0;
         let r = Self {
             resource_groups: DashMap::new(),
             total_cpu_quota,
-            last_min_vt: AtomicU64::new(0),
-            start_ts: Instant::now_coarse(),
-            last_vt_update_time: AtomicU64::new(0),
         };
         r.init_default_group();
         r
     }
 
-    fn init_default_group(&self) -> Option<Arc<ResourceGroup>> {
+    fn init_default_group(&self) -> Option<ResourceGroupConfig> {
         // grant half of the resource to the default group.
         let cpu_quota = self.total_cpu_quota / 2.0;
         let default_group_cfg = ResourceGroupConfig {
@@ -71,50 +64,74 @@ impl ResourceController {
         self.add_resource_group(default_group_cfg)
     }
 
-    pub fn add_resource_group(&self, config: ResourceGroupConfig) -> Option<Arc<ResourceGroup>> {
-        let name = config.name.to_lowercase();
-        let priority_factor = (self.total_cpu_quota / config.cpu_quota * 100.0) as u64;
-        let group = Arc::new(ResourceGroup {
-            config,
-            priority_factor,
-            virtual_time: AtomicU64::new(self.last_min_vt.load(Ordering::Acquire)),
-        });
-        self.resource_groups.insert(name, group)
+    pub fn add_resource_group(&self, config: ResourceGroupConfig) -> Option<ResourceGroupConfig> {
+        self.resource_groups.insert(config.name.to_lowercase(), config)
     }
 
-    pub fn remove_resource_group(&self, name: &str) -> Option<Arc<ResourceGroup>> {
+    pub fn remove_resource_group(&self, name: &str) -> Option<ResourceGroupConfig> {
         if name == "default" {
             self.init_default_group()
         } else {
-            self.resource_groups.remove(name).map(|kv| kv.1)
+            self.resource_groups.remove(name).map(|(_, v)| v)
         }
+    }
+
+    pub fn total_cpu_quota(&self) -> f64 {
+        self.total_cpu_quota
+    }
+
+    pub fn get_resource_group(&self, name: &str) -> Option<Ref<String, ResourceGroupConfig>> {
+        self.resource_groups.get(name)
     }
 
     pub fn get_all_resource_groups(&self) -> Vec<ResourceGroupConfig> {
         self.resource_groups
             .iter()
-            .map(|g| g.config.clone())
+            .map(|g| g.clone())
             .collect()
+    }
+} 
+
+pub struct ResourceController {
+    manager: Arc<ResourceGroupManager>,
+    // record consumption of each resource group
+    resource_consumptions: DashMap<String, ResourceGroup>,
+    last_min_vt: AtomicU64,
+    start_ts: Instant,
+    // the value is the duration delta(in ms) from start_ts
+    last_vt_update_time: AtomicU64,
+}
+
+impl ResourceController {
+    pub fn new(manager: Arc<ResourceGroupManager>) -> Self {
+        Self {
+            manager,
+            resource_consumptions: DashMap::new(),
+            last_min_vt: AtomicU64::new(0),
+            start_ts: Instant::now_coarse(),
+            last_vt_update_time: AtomicU64::new(0),
+        }
     }
 
     #[inline]
-    fn resource_group(&self, name: &str) -> Ref<String, Arc<ResourceGroup>> {
-        self.resource_groups
-            .get(name)
-            .unwrap_or_else(|| self.resource_groups.get("default").unwrap())
-
-        // if let Some(group) = self.resource_groups.get(&group_id) {
-        //     return group;
-        // }
-
-        // self.add_resource_group(ResourceGroupConfig::new(
-        //     group_id,
-        //     "".into(),
-        //     self.total_cpu_quota,
-        //     0,
-        //     0,
-        // ));
-        // self.resource_groups.get(&group_id).unwrap()
+    fn resource_group(&self, name: &str) -> Ref<String, ResourceGroup> {
+        if let Some(g) = self.resource_consumptions.get(name) {
+            return g;
+        } else {
+            // get the resource group config from the manager
+            if let Some(g) = self.manager.get_resource_group(name) {
+                let config = g.value();
+                let priority_factor = (self.manager.total_cpu_quota() / config.cpu_quota * 100.0) as u64;
+                let group = ResourceGroup {
+                    priority_factor,
+                    virtual_time: AtomicU64::new(self.last_min_vt.load(Ordering::Acquire)),
+                };
+                self.resource_consumptions.insert(config.name.to_lowercase(), group);
+                return self.resource_consumptions.get(name).unwrap();
+            } else {
+                self.resource_consumptions.get("default").unwrap()
+            }
+        }
     }
 
     pub fn get_priority(&self, name: &str, priority: CommandPri) -> u64 {
@@ -152,10 +169,10 @@ impl ResourceController {
 
         let mut min_vt = u64::MAX;
         let mut max_vt = 0;
-        self.resource_groups.iter().for_each(|g| {
+        self.resource_consumptions.iter().for_each(|g| {
             let vt = g.current_vt();
             GROUP_PRIORITY
-                .with_label_values(&[&format!("{}", g.config.name)])
+                .with_label_values(&[&g.key()])
                 .set(vt as f64);
             if min_vt > vt {
                 min_vt = vt;
@@ -170,7 +187,7 @@ impl ResourceController {
             return;
         }
 
-        self.resource_groups.iter().for_each(|g| {
+        self.resource_consumptions.iter().for_each(|g| {
             let vt = g.current_vt();
             if vt < max_vt {
                 // TODO: is increase by half is a good choice.
@@ -212,7 +229,6 @@ impl ResourceGroupConfig {
 }
 
 pub struct ResourceGroup {
-    config: ResourceGroupConfig,
     virtual_time: AtomicU64,
     priority_factor: u64,
 }

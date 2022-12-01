@@ -15,7 +15,7 @@ use std::{
     time::Duration,
 };
 
-use crossbeam::channel::{self, SendError};
+use crossbeam::channel::{SendError};
 use fail::fail_point;
 use file_system::{set_io_type, IoType};
 use kvproto::kvrpcpb::CommandPri;

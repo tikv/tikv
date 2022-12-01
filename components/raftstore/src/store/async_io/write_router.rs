@@ -13,7 +13,7 @@ use std::{
     time::Duration,
 };
 
-use crossbeam::channel::{Sender, TrySendError};
+use crossbeam::channel::{Sender};
 use engine_traits::{KvEngine, RaftEngine};
 use tikv_util::{info, time::Instant, mpsc::priority_queue};
 

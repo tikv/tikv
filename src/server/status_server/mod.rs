@@ -47,7 +47,7 @@ pub use profile::{
 use prometheus::TEXT_FORMAT;
 use raftstore::store::{transport::CasualRouter, CasualMessage};
 use regex::Regex;
-use resource_control::ResourceController;
+use resource_control::ResourceGroupManager;
 use security::{self, SecurityConfig};
 use serde_json::Value;
 use tikv_util::{
@@ -89,7 +89,7 @@ pub struct StatusServer<E, R> {
     rx: Option<Receiver<()>>,
     addr: Option<SocketAddr>,
     cfg_controller: ConfigController,
-    resource_ctl: Arc<ResourceController>,
+    resource_manager: Arc<ResourceGroupManager>,
     router: R,
     security_config: Arc<SecurityConfig>,
     store_path: PathBuf,
@@ -104,7 +104,7 @@ where
     pub fn new(
         status_thread_pool_size: usize,
         cfg_controller: ConfigController,
-        resource_ctl: Arc<ResourceController>,
+        resource_manager: Arc<ResourceGroupManager>,
         security_config: Arc<SecurityConfig>,
         router: R,
         store_path: PathBuf,
@@ -124,7 +124,7 @@ where
             rx: Some(rx),
             addr: None,
             cfg_controller,
-            resource_ctl,
+            resource_manager,
             router,
             security_config,
             store_path,
@@ -416,7 +416,7 @@ where
 
     async fn update_resource_group(
         req: Request<Body>,
-        resource_ctl: &ResourceController,
+        resource_manager: &ResourceGroupManager,
     ) -> hyper::Result<Response<Body>> {
         let mut body = Vec::new();
         req.into_body()
@@ -427,7 +427,7 @@ where
             .await?;
         match serde_json::from_slice(&body) {
             Ok(rg) => {
-                resource_ctl.add_resource_group(rg);
+                resource_manager.add_resource_group(rg);
                 let mut resp = Response::default();
                 *resp.status_mut() = StatusCode::OK;
                 Ok(resp)
@@ -441,10 +441,10 @@ where
 
     async fn delete_resource_group(
         group_name: &str,
-        resource_ctl: &ResourceController,
+        resource_manager: &ResourceGroupManager,
     ) -> hyper::Result<Response<Body>> {
         let mut resp = Response::default();
-        if resource_ctl.remove_resource_group(group_name).is_some() {
+        if resource_manager.remove_resource_group(group_name).is_some() {
             *resp.status_mut() = StatusCode::OK;
         } else {
             *resp.status_mut() = StatusCode::NOT_FOUND;
@@ -453,9 +453,9 @@ where
     }
 
     async fn get_all_resource_groups(
-        resource_ctl: &ResourceController,
+        resource_manager: &ResourceGroupManager,
     ) -> hyper::Result<Response<Body>> {
-        let groups = resource_ctl.get_all_resource_groups();
+        let groups = resource_manager.get_all_resource_groups();
         let res = serde_json::to_string(&groups).unwrap();
         Ok(Response::builder()
             .header(header::CONTENT_TYPE, "application/json")
@@ -590,7 +590,7 @@ where
     {
         let security_config = self.security_config.clone();
         let cfg_controller = self.cfg_controller.clone();
-        let resource_ctl = self.resource_ctl.clone();
+        let resource_manager = self.resource_manager.clone();
         let router = self.router.clone();
         let store_path = self.store_path.clone();
         // Start to serve.
@@ -600,7 +600,7 @@ where
             let cfg_controller = cfg_controller.clone();
             let router = router.clone();
             let store_path = store_path.clone();
-            let resource_ctl = resource_ctl.clone();
+            let resource_manager = resource_manager.clone();
             async move {
                 // Create a status service.
                 Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
@@ -609,7 +609,7 @@ where
                     let cfg_controller = cfg_controller.clone();
                     let router = router.clone();
                     let store_path = store_path.clone();
-                    let resource_ctl = resource_ctl.clone();
+                    let resource_manager = resource_manager.clone();
                     async move {
                         let path = req.uri().path().to_owned();
                         let method = req.method().to_owned();
@@ -685,13 +685,13 @@ where
                                 Self::change_log_level(req).await
                             }
                             (Method::GET, "/resource_groups") => {
-                                Self::get_all_resource_groups(&*resource_ctl).await
+                                Self::get_all_resource_groups(&*resource_manager).await
                             }
                             (Method::POST, "/resource_group") => {
-                                Self::update_resource_group(req, &*resource_ctl).await
+                                Self::update_resource_group(req, &*resource_manager).await
                             }
                             (Method::DELETE, path) if path.starts_with("/resource_group/") => {
-                                Self::delete_resource_group(&path[16..], &*resource_ctl).await
+                                Self::delete_resource_group(&path[16..], &*resource_manager).await
                             }
 
                             _ => Ok(make_response(StatusCode::NOT_FOUND, "path not found")),
