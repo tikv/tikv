@@ -478,7 +478,7 @@ where
                             req.get_storage_cache_id(),
                         )?,
                         false,
-                    )?;
+                    );
                     inner
                 };
 
