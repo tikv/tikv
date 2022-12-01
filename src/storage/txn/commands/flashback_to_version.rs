@@ -3,12 +3,13 @@
 // #[PerformanceCriticalPath]
 use std::mem;
 
+use tikv_kv::ScanMode;
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
     kv::WriteData,
     lock_manager::LockManager,
-    mvcc::{MvccTxn, SnapshotReader},
+    mvcc::{MvccReader, MvccTxn},
     txn::{
         actions::flashback_to_version::{
             commit_flashback_key, flashback_to_version_write, prewrite_flashback_key,
@@ -16,8 +17,7 @@ use crate::storage::{
         },
         commands::{
             Command, CommandExt, FlashbackToVersionReadPhase, FlashbackToVersionState,
-            ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand,
-            WriteContext, WriteResult,
+            ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
         },
         latch, Result,
     },
@@ -71,10 +71,8 @@ impl CommandExt for FlashbackToVersion {
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
     fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
-        let mut reader = ReaderWithStats::new(
-            SnapshotReader::new_with_ctx(self.version, snapshot, &self.ctx),
-            context.statistics,
-        );
+        let mut reader =
+            MvccReader::new_with_ctx(snapshot.clone(), Some(ScanMode::Forward), &self.ctx);
         let mut txn = MvccTxn::new(TimeStamp::zero(), context.concurrency_manager);
         match self.state {
             FlashbackToVersionState::RollbackLock {
@@ -82,12 +80,11 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
                 ref mut key_locks,
             } => {
                 if let Some(new_next_lock_key) =
-                    rollback_locks(&mut txn, &mut reader, mem::take(key_locks))?
+                    rollback_locks(&mut txn, snapshot, mem::take(key_locks))?
                 {
                     *next_lock_key = new_next_lock_key;
                 }
             }
-            // TODO: add some test cases for the special prewrite key.
             FlashbackToVersionState::Prewrite { ref key_to_lock } => prewrite_flashback_key(
                 &mut txn,
                 &mut reader,
@@ -126,6 +123,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
         if matches!(self.state, FlashbackToVersionState::FlashbackWrite { .. }) {
             write_data.extra.one_pc = true;
         }
+        context.statistics.add(&reader.statistics);
         Ok(WriteResult {
             ctx: self.ctx.clone(),
             to_be_write: write_data,
