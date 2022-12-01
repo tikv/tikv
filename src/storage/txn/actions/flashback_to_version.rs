@@ -7,7 +7,7 @@ use txn_types::{Key, Lock, LockType, TimeStamp, Write, WriteType};
 use crate::storage::{
     mvcc::{MvccReader, MvccTxn, SnapshotReader, MAX_TXN_WRITE_SIZE},
     txn::{actions::check_txn_status::rollback_lock, Result as TxnResult},
-    Snapshot, Statistics,
+    Snapshot,
 };
 
 pub const FLASHBACK_BATCH_SIZE: usize = 256 + 1 /* To store the next key for multiple batches */;
@@ -16,7 +16,6 @@ pub fn flashback_to_version_read_lock(
     reader: &mut MvccReader<impl Snapshot>,
     next_lock_key: Key,
     end_key: &Key,
-    statistics: &mut Statistics,
 ) -> TxnResult<Vec<(Key, Lock)>> {
     let result = reader.scan_locks(
         Some(&next_lock_key),
@@ -24,7 +23,6 @@ pub fn flashback_to_version_read_lock(
         |_| true,
         FLASHBACK_BATCH_SIZE,
     );
-    statistics.add(&reader.statistics);
     let (key_locks, _) = result?;
     Ok(key_locks)
 }
@@ -36,7 +34,6 @@ pub fn flashback_to_version_read_write(
     end_key: &Key,
     flashback_version: TimeStamp,
     flashback_commit_ts: TimeStamp,
-    statistics: &mut Statistics,
 ) -> TxnResult<Vec<Key>> {
     // Filter out the SST that does not have a newer version than
     // `flashback_version` in `CF_WRITE`, i.e, whose latest `commit_ts` <=
@@ -62,7 +59,6 @@ pub fn flashback_to_version_read_write(
         },
         FLASHBACK_BATCH_SIZE,
     );
-    statistics.add(&reader.statistics);
     let (keys, _) = keys_result?;
     Ok(keys)
 }
@@ -74,14 +70,16 @@ pub fn rollback_locks(
     snapshot: impl Snapshot,
     key_locks: Vec<(Key, Lock)>,
 ) -> TxnResult<Option<Key>> {
+    let mut reader = SnapshotReader::new(txn.start_ts, snapshot, false);
     for (key, lock) in key_locks {
         if txn.write_size() >= MAX_TXN_WRITE_SIZE {
             return Ok(Some(key));
         }
         // To guarantee rollback with start ts of the locks
+        reader.start_ts = lock.ts;
         rollback_lock(
             txn,
-            &mut SnapshotReader::new(lock.ts, snapshot.clone(), false),
+            &mut reader,
             key.clone(),
             &lock,
             lock.is_pessimistic_txn(),
@@ -152,31 +150,29 @@ pub fn flashback_to_version_write(
 pub fn prewrite_flashback_key(
     txn: &mut MvccTxn,
     reader: &mut MvccReader<impl Snapshot>,
-    key_to_lock: &Key,
+    start_key: &Key,
     end_key: &Key,
     flashback_version: TimeStamp,
     flashback_start_ts: TimeStamp,
 ) -> TxnResult<()> {
-    let first_key = get_first_user_key(reader, key_to_lock, end_key);
-    let key_to_lock = if let Some(ref key_to_lock) = first_key {
-        key_to_lock
+    let key_to_lock = if let Some(first_key) = get_first_user_key(reader, start_key, end_key)? {
+        first_key
     } else {
         return Ok(());
     };
-
-    let old_write = reader.get_write(key_to_lock, flashback_version, None)?;
+    let old_write = reader.get_write(&key_to_lock, flashback_version, None)?;
     // Flashback the value in `CF_DEFAULT` as well if the old write is a
     // `WriteType::Put` without the short value.
     if let Some(old_write) = old_write.as_ref() {
         if old_write.write_type == WriteType::Put
             && old_write.short_value.is_none()
             // If the value with `flashback_start_ts` already exists, we don't need to write again.
-            && reader.get_value(key_to_lock, flashback_start_ts)?.is_none()
+            && reader.get_value(&key_to_lock, flashback_start_ts)?.is_none()
         {
             txn.put_value(
                 key_to_lock.clone(),
                 flashback_start_ts,
-                reader.load_data(key_to_lock, old_write.clone())?,
+                reader.load_data(&key_to_lock, old_write.clone())?,
             );
         }
     }
@@ -236,19 +232,12 @@ pub fn get_first_user_key(
     reader: &mut MvccReader<impl Snapshot>,
     start_key: &Key,
     end_key: &Key,
-) -> Option<Key> {
-    // The start key from TiDB is actually a range, which is used to limit the
-    // upper bound of this flashback when scanning data, so is not a real key.
-    let (keys, _) = reader
-        .scan_latest_user_keys(Some(start_key), Some(end_key), |_, _| true, 1)
-        .unwrap();
-    let key_to_lock = if !keys.is_empty() {
-        keys[0].clone()
-    } else {
-        // If there is no key in user keys, we should return directly.
-        return None;
-    };
-    Some(key_to_lock)
+) -> TxnResult<Option<Key>> {
+    // The start key from the client is actually a range, which is used to limit the
+    // upper bound of this flashback when scanning data, so it may not be a real key.
+    let (mut keys_result, _) =
+        reader.scan_latest_user_keys(Some(start_key), Some(end_key), |_, _| true, 1)?;
+    Ok(keys_result.pop())
 }
 
 #[cfg(test)]
@@ -282,9 +271,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new_with_ctx(snapshot.clone(), Some(ScanMode::Forward), &ctx);
-        let key_locks =
-            flashback_to_version_read_lock(&mut reader, key, &next_key, &mut Statistics::default())
-                .unwrap();
+        let key_locks = flashback_to_version_read_lock(&mut reader, key, &next_key).unwrap();
         let cm = ConcurrencyManager::new(TimeStamp::zero());
         let mut txn = MvccTxn::new(start_ts.into(), cm);
         rollback_locks(&mut txn, snapshot, key_locks).unwrap();
@@ -340,7 +327,6 @@ pub mod tests {
             &next_key,
             version,
             commit_ts,
-            &mut Statistics::default(),
         )
         .unwrap();
         let cm = ConcurrencyManager::new(TimeStamp::zero());
@@ -364,20 +350,11 @@ pub mod tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let ctx = Context::default();
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &ctx);
-        let first_key = get_first_user_key(&mut reader, &Key::from_raw(key), &Key::from_raw(b"z"));
-        let key_to_lock = if let Some(ref key_to_lock) = first_key {
-            key_to_lock
-        } else {
-            panic!("key not found");
-        };
-        commit_flashback_key(
-            &mut txn,
-            &mut reader,
-            key_to_lock,
-            start_ts,
-            commit_ts,
-        )
-        .unwrap();
+        let key_to_lock =
+            get_first_user_key(&mut reader, &Key::from_raw(key), &Key::from_raw(b"z"))
+                .unwrap()
+                .unwrap();
+        commit_flashback_key(&mut txn, &mut reader, &key_to_lock, start_ts, commit_ts).unwrap();
         let rows = txn.modifies.len();
         write(engine, &ctx, txn.into_modifies());
         rows

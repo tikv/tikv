@@ -24,7 +24,7 @@ pub enum FlashbackToVersionState {
         key_locks: Vec<(Key, Lock)>,
     },
     Prewrite {
-        key_to_lock: Key,
+        start_key: Key,
     },
     FlashbackWrite {
         next_write_key: Key,
@@ -123,19 +123,16 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
         let tag = self.tag().get_str();
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &self.ctx);
+        reader.statistics = statistics.clone();
         let mut start_key = self.start_key.clone();
         let next_state = match self.state {
             FlashbackToVersionState::RollbackLock { next_lock_key, .. } => {
-                let mut key_locks = flashback_to_version_read_lock(
-                    &mut reader,
-                    next_lock_key,
-                    &self.end_key,
-                    statistics,
-                )?;
+                let mut key_locks =
+                    flashback_to_version_read_lock(&mut reader, next_lock_key, &self.end_key)?;
                 if key_locks.is_empty() {
                     // No more locks to rollback, continue to the prewrite phase.
                     FlashbackToVersionState::Prewrite {
-                        key_to_lock: start_key.clone(),
+                        start_key: start_key.clone(),
                     }
                 } else {
                     tls_collect_keyread_histogram_vec(tag, key_locks.len() as f64);
@@ -159,18 +156,21 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     }));
                 }
                 if next_write_key == self.start_key {
-                    // first need to get first write key
-                    let first_key = get_first_user_key(&mut reader, &self.start_key, &self.end_key);
-                    if let Some(key_lock) = first_key {
-                        // modify self.start_key to key_lock
-                        next_write_key = key_lock.clone();
-                        start_key = key_lock;
+                    // Get real key first.
+                    let key_to_lock = if let Some(first_key) =
+                        get_first_user_key(&mut reader, &self.start_key, &self.end_key)?
+                    {
+                        first_key
                     } else {
+                        statistics.add(&reader.statistics);
                         return Ok(ProcessResult::Res);
                     };
+                    next_write_key = key_to_lock.clone();
+                    start_key = key_to_lock;
                     // If the key is not locked, it means that the key has been committed before and
                     // we are in a retry.
                     if reader.load_lock(&next_write_key)?.is_none() {
+                        statistics.add(&reader.statistics);
                         return Ok(ProcessResult::Res);
                     }
                 }
@@ -181,7 +181,6 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     &self.end_key,
                     self.version,
                     self.commit_ts,
-                    statistics,
                 )?;
                 if keys.is_empty() {
                     FlashbackToVersionState::Commit {
@@ -203,6 +202,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
             }
             _ => unreachable!(),
         };
+        statistics.add(&reader.statistics);
         Ok(ProcessResult::NextCommand {
             cmd: Command::FlashbackToVersion(FlashbackToVersion {
                 ctx: self.ctx,

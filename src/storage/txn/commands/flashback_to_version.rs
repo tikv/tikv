@@ -48,7 +48,7 @@ impl CommandExt for FlashbackToVersion {
             FlashbackToVersionState::RollbackLock { key_locks, .. } => {
                 latch::Lock::new(key_locks.iter().map(|(key, _)| key))
             }
-            FlashbackToVersionState::Prewrite { key_to_lock } => latch::Lock::new([key_to_lock]),
+            FlashbackToVersionState::Prewrite { start_key } => latch::Lock::new([start_key]),
             FlashbackToVersionState::FlashbackWrite { keys, .. } => latch::Lock::new(keys.iter()),
             FlashbackToVersionState::Commit { key_to_commit } => latch::Lock::new([key_to_commit]),
         }
@@ -60,7 +60,7 @@ impl CommandExt for FlashbackToVersion {
                 .iter()
                 .map(|(key, _)| key.as_encoded().len())
                 .sum(),
-            FlashbackToVersionState::Prewrite { key_to_lock } => key_to_lock.as_encoded().len(),
+            FlashbackToVersionState::Prewrite { start_key } => start_key.as_encoded().len(),
             FlashbackToVersionState::FlashbackWrite { keys, .. } => {
                 keys.iter().map(|key| key.as_encoded().len()).sum()
             }
@@ -85,10 +85,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
                     *next_lock_key = new_next_lock_key;
                 }
             }
-            FlashbackToVersionState::Prewrite { ref key_to_lock } => prewrite_flashback_key(
+            FlashbackToVersionState::Prewrite { ref start_key } => prewrite_flashback_key(
                 &mut txn,
                 &mut reader,
-                key_to_lock,
+                start_key,
                 &self.end_key,
                 self.version,
                 self.start_ts,
