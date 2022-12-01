@@ -123,7 +123,6 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
         let tag = self.tag().get_str();
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &self.ctx);
-        reader.statistics = statistics.clone();
         let mut start_key = self.start_key.clone();
         let next_state = match self.state {
             FlashbackToVersionState::RollbackLock { next_lock_key, .. } => {
@@ -157,7 +156,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                 }
                 if next_write_key == self.start_key {
                     // Get real key first.
-                    let key_to_lock = if let Some(first_key) =
+                    next_write_key = if let Some(first_key) =
                         get_first_user_key(&mut reader, &self.start_key, &self.end_key)?
                     {
                         first_key
@@ -165,8 +164,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                         statistics.add(&reader.statistics);
                         return Ok(ProcessResult::Res);
                     };
-                    next_write_key = key_to_lock.clone();
-                    start_key = key_to_lock;
+                    start_key = next_write_key.clone();
                     // If the key is not locked, it means that the key has been committed before and
                     // we are in a retry.
                     if reader.load_lock(&next_write_key)?.is_none() {

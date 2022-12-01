@@ -124,6 +124,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
         if matches!(self.state, FlashbackToVersionState::FlashbackWrite { .. }) {
             write_data.extra.one_pc = true;
         }
+        context.statistics.add(&reader.statistics);
         Ok(WriteResult {
             ctx: self.ctx.clone(),
             to_be_write: write_data,

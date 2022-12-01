@@ -234,7 +234,8 @@ pub fn get_first_user_key(
     end_key: &Key,
 ) -> TxnResult<Option<Key>> {
     // The start key from the client is actually a range, which is used to limit the
-    // upper bound of this flashback when scanning data, so it may not be a real key.
+    // upper bound of this flashback when scanning data, so it may not be a real
+    // key.
     let (mut keys_result, _) =
         reader.scan_latest_user_keys(Some(start_key), Some(end_key), |_, _| true, 1)?;
     Ok(keys_result.pop())
@@ -542,43 +543,73 @@ pub mod tests {
     fn test_prewrite_with_special_key() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let mut ts = TimeStamp::zero();
-        let (k, v1, v2) = (b"k", b"v1", b"v2");
+        let (prewrite_key, prewrite_val) = (b"b", b"val");
+        must_prewrite_put(
+            &mut engine,
+            prewrite_key,
+            prewrite_val,
+            prewrite_key,
+            *ts.incr(),
+        );
+        must_commit(&mut engine, prewrite_key, ts, *ts.incr());
+        must_get(&mut engine, prewrite_key, ts, prewrite_val);
+        let (k, v1, v2) = (b"c", b"v1", b"v2");
         must_prewrite_put(&mut engine, k, v1, k, *ts.incr());
         must_commit(&mut engine, k, ts, *ts.incr());
         must_prewrite_put(&mut engine, k, v2, k, *ts.incr());
         must_commit(&mut engine, k, ts, *ts.incr());
         must_get(&mut engine, k, ts, v2);
+        // Check for prewrite key b"b".
+        let ctx = Context::default();
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &ctx);
+        let first_key = get_first_user_key(&mut reader, &Key::from_raw(b""), &Key::from_raw(b"z"))
+            .unwrap_or_else(|_| Some(Key::from_raw(b"")))
+            .unwrap();
+        assert_eq!(first_key, Key::from_raw(prewrite_key));
 
-        let prewrite_key = b"flashback_2pc";
+        // case 1: start key is before all keys, flashback b"c".
+        let start_key = b"a";
         let (flashback_start_ts, flashback_commit_ts) = (*ts.incr(), *ts.incr());
         // Rollback nothing.
         assert_eq!(must_rollback_lock(&mut engine, k, flashback_start_ts), 0);
-        // Mock TiDB put a special key which is before b"k".
+        // Prewrite "prewrite_key" not "start_key".
         assert_eq!(
-            must_prewrite_flashback_key(&mut engine, prewrite_key, 2, flashback_start_ts),
+            must_prewrite_flashback_key(&mut engine, start_key, 4, flashback_start_ts),
             1
         );
-        // Flashback (k, v2) to (k, v1).
+        // Flashback (b"c", v2) to (b"c", v1).
         assert_eq!(
             must_flashback_write_to_version(
                 &mut engine,
                 k,
-                2,
+                4,
                 flashback_start_ts,
                 flashback_commit_ts
             ),
             1
         );
-        // Put prewrite record and Unlock.
+        // Put prewrite record and Unlock, will commit "prewrite_key" not "start_key".
         assert_eq!(
             must_commit_flashback_key(
                 &mut engine,
-                prewrite_key,
+                start_key,
                 flashback_start_ts,
                 flashback_commit_ts
             ),
             2
         );
         must_get(&mut engine, k, ts, v1);
+
+        // case 2: start key is after all keys, prewrite will return None.
+        let start_key = b"d";
+        let flashback_start_ts = *ts.incr();
+        // Rollback nothing.
+        assert_eq!(must_rollback_lock(&mut engine, k, flashback_start_ts), 0);
+        // Prewrite null.
+        assert_eq!(
+            must_prewrite_flashback_key(&mut engine, start_key, 4, flashback_start_ts),
+            0
+        );
     }
 }
