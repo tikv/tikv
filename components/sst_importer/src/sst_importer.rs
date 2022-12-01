@@ -359,7 +359,7 @@ impl SstImporter {
         }
 
         let ext_storage = self.external_storage_or_cache(backend, cache_key)?;
-        let ext_storage = self.wrap_kms(ext_storage, support_kms)?;
+        let ext_storage = self.wrap_kms(ext_storage, support_kms);
 
         let result = ext_storage
             .restore(
@@ -540,12 +540,12 @@ impl SstImporter {
         &self,
         ext_storage: Arc<dyn ExternalStorage>,
         support_kms: bool,
-    ) -> Result<Arc<dyn external_storage_export::ExternalStorage>> {
+    ) -> Arc<dyn external_storage_export::ExternalStorage> {
         // kv-files needn't are decrypted with KMS when download currently because these
         // files are not encrypted when log-backup. It is different from
         // sst-files because sst-files is encrypted when saved with rocksdb env
         // with KMS. to do: support KMS when log-backup and restore point.
-        let ext_storage = match (support_kms, self.key_manager.clone()) {
+        match (support_kms, self.key_manager.clone()) {
             (true, Some(key_manager)) => {
                 Arc::new(external_storage_export::EncryptedExternalStorage {
                     key_manager,
@@ -553,8 +553,7 @@ impl SstImporter {
                 })
             }
             _ => ext_storage,
-        };
-        Ok(ext_storage)
+        }
     }
 
     fn read_kv_files_from_external_storage(
@@ -1714,13 +1713,11 @@ mod tests {
         )
         .unwrap();
         let ext_storage = {
-            let inner = importer
-                .wrap_kms(
-                    importer.external_storage_or_cache(&backend, "").unwrap(),
-                    false,
-                )
-                .unwrap();
-            Arc::new(inner)
+            let inner = importer.wrap_kms(
+                importer.external_storage_or_cache(&backend, "").unwrap(),
+                false,
+            );
+            inner
         };
 
         // test do_read_kv_file()
@@ -1772,12 +1769,10 @@ mod tests {
         )
         .unwrap();
         let ext_storage = {
-            let inner = importer
-                .wrap_kms(
-                    importer.external_storage_or_cache(&backend, "").unwrap(),
-                    false,
-                )
-                .unwrap();
+            let inner = importer.wrap_kms(
+                importer.external_storage_or_cache(&backend, "").unwrap(),
+                false,
+            );
             Arc::new(inner)
         };
 
@@ -1839,13 +1834,10 @@ mod tests {
             SstImporter::new(&cfg, import_dir, Some(key_manager), ApiVersion::V1).unwrap();
         let rewrite_rule = &new_rewrite_rule(b"", b"", 12345);
         let ext_storage = {
-            let inner = importer
-                .wrap_kms(
-                    importer.external_storage_or_cache(&backend, "").unwrap(),
-                    false,
-                )
-                .unwrap();
-            Arc::new(inner)
+            importer.wrap_kms(
+                importer.external_storage_or_cache(&backend, "").unwrap(),
+                false,
+            )
         };
         let path = importer
             .dir

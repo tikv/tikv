@@ -138,7 +138,10 @@ impl<M: MakeCache> CacheMap<M> {
                 drop(s);
                 let e = self.0.cached.entry(cache_key.to_owned());
                 match e {
-                    Entry::Occupied(mut v) => Ok(v.get_mut().resource_owned(self.0.now())),
+                    Entry::Occupied(mut v) => {
+                        EXT_STORAGE_CACHE_COUNT.with_label_values(&["hit"]).inc();
+                        Ok(v.get_mut().resource_owned(self.0.now()))
+                    }
                     Entry::Vacant(v) => {
                         EXT_STORAGE_CACHE_COUNT.with_label_values(&["miss"]).inc();
                         let pool = backend.make_cache()?;

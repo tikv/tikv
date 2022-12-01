@@ -180,6 +180,25 @@ impl ExternalStorage for Arc<dyn ExternalStorage> {
     fn read_part(&self, name: &str, off: u64, len: u64) -> ExternalData<'_> {
         (**self).read_part(name, off, len)
     }
+
+    async fn restore(
+        &self,
+        storage_name: &str,
+        restore_name: std::path::PathBuf,
+        expected_length: u64,
+        speed_limiter: &Limiter,
+        restore_config: RestoreConfig,
+    ) -> io::Result<()> {
+        self.as_ref()
+            .restore(
+                storage_name,
+                restore_name,
+                expected_length,
+                speed_limiter,
+                restore_config,
+            )
+            .await
+    }
 }
 
 #[async_trait]
@@ -202,6 +221,25 @@ impl ExternalStorage for Box<dyn ExternalStorage> {
 
     fn read_part(&self, name: &str, off: u64, len: u64) -> ExternalData<'_> {
         self.as_ref().read_part(name, off, len)
+    }
+
+    async fn restore(
+        &self,
+        storage_name: &str,
+        restore_name: std::path::PathBuf,
+        expected_length: u64,
+        speed_limiter: &Limiter,
+        restore_config: RestoreConfig,
+    ) -> io::Result<()> {
+        self.as_ref()
+            .restore(
+                storage_name,
+                restore_name,
+                expected_length,
+                speed_limiter,
+                restore_config,
+            )
+            .await
     }
 }
 
