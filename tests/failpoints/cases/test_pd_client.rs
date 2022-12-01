@@ -199,48 +199,95 @@ fn test_slow_periodical_update() {
     handle.join().unwrap();
 }
 
+fn run_on_bad_connection<F>(client: &mut RpcClientV2, mut f: F)
+where
+    F: FnMut(&mut RpcClientV2),
+{
+    let pd_client_force_reconnect_fp = "pd_client_force_reconnect";
+    if !client.initialized() {
+        client.is_cluster_bootstrapped().unwrap();
+    }
+    client.reset_to_lame_client();
+    fail::cfg(pd_client_force_reconnect_fp, "return").unwrap();
+    f(client);
+    fail::remove(pd_client_force_reconnect_fp);
+}
+
 #[test]
-fn test_retry() {
+fn test_backoff() {
+    let pd_client_v2_timeout_fp = "pd_client_v2_request_timeout";
+    fail::cfg(pd_client_v2_timeout_fp, "return(5ms)").unwrap();
+    // Backoff larger than timeout, so that the second request following the failed
+    // one can hit backoff.
+    let pd_client_v2_backoff_fp = "pd_client_v2_backoff";
+    fail::cfg(pd_client_v2_backoff_fp, "return(100ms)").unwrap();
     let (_server, mut client) = new_test_server_and_client(ReadableDuration::secs(100));
 
-    fn test_imp<F, R>(client: &mut RpcClientV2, mut f: F)
+    run_on_bad_connection(&mut client, |c| {
+        c.is_cluster_bootstrapped().unwrap_err();
+        if c.is_cluster_bootstrapped().is_ok() {
+            // try again in case the first connect is too early.
+            run_on_bad_connection(c, |c2| {
+                c2.is_cluster_bootstrapped().unwrap_err();
+                c2.is_cluster_bootstrapped().unwrap_err();
+                std::thread::sleep(Duration::from_millis(100));
+                c2.is_cluster_bootstrapped().unwrap();
+            });
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        c.is_cluster_bootstrapped().unwrap();
+    });
+
+    fail::remove(pd_client_v2_timeout_fp);
+    fail::remove(pd_client_v2_backoff_fp);
+}
+
+#[test]
+fn test_retry() {
+    let pd_client_v2_timeout_fp = "pd_client_v2_request_timeout";
+    fail::cfg(pd_client_v2_timeout_fp, "return(10ms)").unwrap();
+    // Disable backoff.
+    let pd_client_v2_backoff_fp = "pd_client_v2_backoff";
+    fail::cfg(pd_client_v2_backoff_fp, "return(0s)").unwrap();
+    let (_server, mut client) = new_test_server_and_client(ReadableDuration::secs(100));
+
+    fn test_retry_success<F, R>(client: &mut RpcClientV2, mut f: F)
     where
         F: FnMut(&mut RpcClientV2) -> pd_client::Result<R>,
         R: std::fmt::Debug,
     {
-        let pd_client_force_reconnect_fp = "pd_client_force_reconnect";
-        if !client.initialized() {
-            client.is_cluster_bootstrapped().unwrap();
-        }
-        client.reset_to_lame_client();
-        fail::cfg(pd_client_force_reconnect_fp, "return").unwrap();
-        f(client).unwrap_err();
-        f(client).unwrap();
-        fail::remove(pd_client_force_reconnect_fp);
+        run_on_bad_connection(client, |c| {
+            f(c).unwrap_err();
+            f(c).unwrap();
+        });
     }
 
-    test_imp(&mut client, |c| {
+    test_retry_success(&mut client, |c| {
         c.bootstrap_cluster(Store::default(), Region::default())
     });
-    test_imp(&mut client, |c| c.is_cluster_bootstrapped());
-    test_imp(&mut client, |c| c.alloc_id());
-    test_imp(&mut client, |c| c.put_store(Store::default()));
-    test_imp(&mut client, |c| c.get_store(0));
-    test_imp(&mut client, |c| c.get_all_stores(false));
-    test_imp(&mut client, |c| c.get_cluster_config());
-    test_imp(&mut client, |c| c.get_region_info(b""));
-    test_imp(&mut client, |c| block_on(c.get_region_by_id(0)));
-    test_imp(&mut client, |c| {
+    test_retry_success(&mut client, |c| c.is_cluster_bootstrapped());
+    test_retry_success(&mut client, |c| c.alloc_id());
+    test_retry_success(&mut client, |c| c.put_store(Store::default()));
+    test_retry_success(&mut client, |c| c.get_store(0));
+    test_retry_success(&mut client, |c| c.get_all_stores(false));
+    test_retry_success(&mut client, |c| c.get_cluster_config());
+    test_retry_success(&mut client, |c| c.get_region_info(b""));
+    test_retry_success(&mut client, |c| block_on(c.get_region_by_id(0)));
+    test_retry_success(&mut client, |c| {
         block_on(c.ask_batch_split(Region::default(), 1))
     });
-    test_imp(&mut client, |c| {
+    test_retry_success(&mut client, |c| {
         block_on(c.store_heartbeat(Default::default(), None, None))
     });
-    test_imp(&mut client, |c| block_on(c.report_batch_split(vec![])));
-    test_imp(&mut client, |c| {
+    test_retry_success(&mut client, |c| block_on(c.report_batch_split(vec![])));
+    test_retry_success(&mut client, |c| {
         c.scatter_region(RegionInfo::new(Region::default(), None))
     });
-    test_imp(&mut client, |c| block_on(c.get_gc_safe_point()));
-    test_imp(&mut client, |c| c.get_operator(0));
-    test_imp(&mut client, |c| block_on(c.load_global_config(vec![])));
+    test_retry_success(&mut client, |c| block_on(c.get_gc_safe_point()));
+    test_retry_success(&mut client, |c| c.get_operator(0));
+    test_retry_success(&mut client, |c| block_on(c.load_global_config(vec![])));
+
+    fail::remove(pd_client_v2_timeout_fp);
+    fail::remove(pd_client_v2_backoff_fp);
 }

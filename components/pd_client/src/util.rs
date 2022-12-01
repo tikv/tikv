@@ -602,7 +602,9 @@ impl PdConnector {
                 .max_send_message_len(-1)
                 .max_receive_message_len(-1)
                 .keepalive_time(Duration::from_secs(10))
-                .keepalive_timeout(Duration::from_secs(3));
+                .keepalive_timeout(Duration::from_secs(3))
+                .max_reconnect_backoff(Duration::from_secs(5))
+                .initial_reconnect_backoff(Duration::from_secs(1));
             self.security_mgr.connect(cb, addr_trim)
         };
         fail_point!("cluster_id_is_not_ready", |_| {

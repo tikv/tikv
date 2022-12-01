@@ -9,13 +9,13 @@ use kvproto::{metapb, pdpb};
 use pd_client::{Error as PdError, Feature, PdClientV2, PdConnector, RpcClientV2};
 use security::{SecurityConfig, SecurityManager};
 use test_pd::{mocker::*, util::*, Server as MockServer};
-use tikv_util::{config::ReadableDuration, mpsc::future::WakePolicy};
+use tikv_util::{config::ReadableDuration, mpsc::future::WakePolicy, thd_name};
 use tokio::runtime::{Builder, Runtime};
 use txn_types::TimeStamp;
 
 fn setup_runtime() -> Runtime {
     Builder::new_multi_thread()
-        .thread_name("poller")
+        .thread_name(thd_name!("poller"))
         .worker_threads(1)
         .enable_all()
         .build()
