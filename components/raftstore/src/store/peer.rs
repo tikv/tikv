@@ -939,6 +939,10 @@ where
     /// The index of last compacted raft log. It is used for the next compact
     /// log task.
     pub last_compacted_idx: u64,
+    /// Record the time of the last compaction, the witness should query the
+    /// leader periodically whether `voter_replicated_index` is updated if
+    /// CompactLog admin command isn't triggered for a while.
+    pub last_compacted_time: Instant,
     /// The index of the latest urgent proposal index.
     last_urgent_proposal_idx: u64,
     /// The index of the latest committed split command.
@@ -1118,6 +1122,7 @@ where
             tag: tag.clone(),
             last_applying_idx: applied_index,
             last_compacted_idx: 0,
+            last_compacted_time: Instant::now(),
             last_urgent_proposal_idx: u64::MAX,
             last_committed_split_idx: 0,
             last_sent_snapshot_idx: 0,

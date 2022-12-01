@@ -111,12 +111,8 @@ pub struct PendingCmd<C> {
 }
 
 impl<C> PendingCmd<C> {
-    fn new(index: u64, term: u64, cb: C) -> PendingCmd<C> {
-        PendingCmd {
-            index,
-            term,
-            cb: Some(cb),
-        }
+    fn new(index: u64, term: u64, cb: Option<C>) -> PendingCmd<C> {
+        PendingCmd { index, term, cb }
     }
 }
 
@@ -151,6 +147,7 @@ impl<C> HeapSize for PendingCmd<C> {}
 pub struct PendingCmdQueue<C> {
     normals: VecDeque<PendingCmd<C>>,
     conf_change: Option<PendingCmd<C>>,
+    compacts: VecDeque<PendingCmd<C>>,
 }
 
 impl<C> PendingCmdQueue<C> {
@@ -158,6 +155,7 @@ impl<C> PendingCmdQueue<C> {
         PendingCmdQueue {
             normals: VecDeque::new(),
             conf_change: None,
+            compacts: VecDeque::new(),
         }
     }
 
@@ -189,6 +187,28 @@ impl<C> PendingCmdQueue<C> {
     // TODO: seems we don't need to separate conf change from normal entries.
     fn set_conf_change(&mut self, cmd: PendingCmd<C>) {
         self.conf_change = Some(cmd);
+    }
+
+    fn push_compact(&mut self, cmd: PendingCmd<C>) {
+        self.compacts.push_front(cmd);
+    }
+
+    fn pop_compact(&mut self, index: u64) -> Option<PendingCmd<C>> {
+        let mut pos: usize = 0;
+        let mut found = false;
+
+        for (i, c) in self.compacts.iter().enumerate() {
+            if c.index < index {
+                pos = i;
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            return None;
+        }
+        self.compacts.truncate(pos + 1);
+        self.compacts.pop_back()
     }
 }
 
@@ -2937,13 +2957,52 @@ where
         ))
     }
 
+    fn try_compact_log(
+        &mut self,
+        voter_replicated_index: u64,
+    ) -> Result<Option<(RaftTruncatedState, u64)>> {
+        PEER_ADMIN_CMD_COUNTER.compact.all.inc();
+        let first_index = entry_storage::first_index(&self.apply_state);
+
+        if self.is_merging {
+            info!(
+                "in merging mode, skip compact";
+                "region_id" => self.region_id(),
+                "peer_id" => self.id(),
+                "voter_replicated_index" => voter_replicated_index,
+            );
+            return Ok(None);
+        }
+
+        match self.pending_cmds.pop_compact(voter_replicated_index) {
+            Some(cmd) => {
+                // compact failure is safe to be omitted, no need to assert.
+                compact_raft_log(&self.tag, &mut self.apply_state, cmd.index, cmd.term)?;
+                PEER_ADMIN_CMD_COUNTER.compact.success.inc();
+                Ok(Some((
+                    self.apply_state.get_truncated_state().clone(),
+                    first_index,
+                )))
+            }
+            None => {
+                info!(
+                    "latest voter_replicated_index < compact_index, skip";
+                    "region_id" => self.region_id(),
+                    "peer_id" => self.id(),
+                    "voter_replicated_index" => voter_replicated_index,
+                );
+                Ok(None)
+            }
+        }
+    }
+
     fn exec_compact_log(
         &mut self,
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         PEER_ADMIN_CMD_COUNTER.compact.all.inc();
 
-        let compact_index = req.get_compact_log().get_compact_index();
+        let mut compact_index = req.get_compact_log().get_compact_index();
         let resp = AdminResponse::default();
         let first_index = entry_storage::first_index(&self.apply_state);
         if compact_index <= first_index {
@@ -2966,7 +3025,7 @@ where
             return Ok((resp, ApplyResult::None));
         }
 
-        let compact_term = req.get_compact_log().get_compact_term();
+        let mut compact_term = req.get_compact_log().get_compact_term();
         // TODO: add unit tests to cover all the message integrity checks.
         if compact_term == 0 {
             info!(
@@ -2979,6 +3038,30 @@ where
             return Err(box_err!(
                 "command format is outdated, please upgrade leader"
             ));
+        }
+
+        let voter_replicated_index = req.get_compact_log().get_voter_replicated_index();
+        if self.peer.is_witness && voter_replicated_index < compact_index {
+            match self.pending_cmds.pop_compact(voter_replicated_index) {
+                Some(cmd) => {
+                    compact_index = cmd.index;
+                    compact_term = cmd.term;
+                }
+                None => {
+                    info!(
+                        "voter_replicated_index < compact_index, skip";
+                        "region_id" => self.region_id(),
+                        "peer_id" => self.id(),
+                        "command" => ?req.get_compact_log()
+                    );
+                    self.pending_cmds.push_compact(PendingCmd::new(
+                        compact_index,
+                        compact_term,
+                        None,
+                    ));
+                    return Ok((resp, ApplyResult::None));
+                }
+            }
         }
 
         // compact failure is safe to be omitted, no need to assert.
@@ -3451,6 +3534,7 @@ where
     #[cfg(any(test, feature = "testexport"))]
     #[allow(clippy::type_complexity)]
     Validate(u64, Box<dyn FnOnce(*const u8) + Send>),
+    CheckCompact(u64, u64),
 }
 
 impl<EK> Msg<EK>
@@ -3498,6 +3582,13 @@ where
             } => write!(f, "[region {}] change cmd", region_id),
             #[cfg(any(test, feature = "testexport"))]
             Msg::Validate(region_id, _) => write!(f, "[region {}] validate", region_id),
+            Msg::CheckCompact(region_id, voter_replicated_index) => {
+                write!(
+                    f,
+                    "[region {}] check compact, voter_replicated_index: {}",
+                    region_id, voter_replicated_index
+                )
+            }
         }
     }
 }
@@ -3542,6 +3633,7 @@ where
         // Whether destroy request is from its target region's snapshot
         merge_from_snapshot: bool,
     },
+    Compact(RaftTruncatedState, u64),
 }
 
 pub struct ApplyFsm<EK>
@@ -3676,13 +3768,13 @@ where
         let propose_num = props_drainer.len();
         if self.delegate.stopped {
             for p in props_drainer {
-                let cmd = PendingCmd::new(p.index, p.term, p.cb);
+                let cmd = PendingCmd::new(p.index, p.term, Some(p.cb));
                 notify_stale_command(region_id, peer_id, self.delegate.term, cmd);
             }
             return;
         }
         for p in props_drainer {
-            let cmd = PendingCmd::new(p.index, p.term, p.cb);
+            let cmd = PendingCmd::new(p.index, p.term, Some(p.cb));
             if p.is_conf_change {
                 if let Some(cmd) = self.delegate.pending_cmds.take_conf_change() {
                     // if it loses leadership before conf change is replicated, there may be
@@ -3947,6 +4039,27 @@ where
         cb.invoke_read(resp);
     }
 
+    fn handle_compact_raft_log(&mut self, ctx: &mut ApplyContext<EK>, voter_replicated_index: u64) {
+        let res = self.delegate.try_compact_log(voter_replicated_index);
+        match res {
+            Ok(res) => {
+                if let Some(res) = res {
+                    ctx.notifier.notify_one(
+                        self.delegate.region_id(),
+                        PeerMsg::ApplyRes {
+                            res: TaskRes::Compact(res.0, res.1),
+                        },
+                    );
+                }
+            }
+            Err(e) => error!(?e;
+                "failed to compact log";
+                "region_id" => self.delegate.region.get_id(),
+                "peer_id" => self.delegate.id(),
+            ),
+        }
+    }
+
     fn handle_tasks(&mut self, apply_ctx: &mut ApplyContext<EK>, msgs: &mut Vec<Msg<EK>>) {
         let mut drainer = msgs.drain(..);
         let mut batch_apply = None;
@@ -4018,6 +4131,9 @@ where
                 Msg::Validate(_, f) => {
                     let delegate = &self.delegate as *const ApplyDelegate<EK> as *const u8;
                     f(delegate)
+                }
+                Msg::CheckCompact(_, voter_replicated_index) => {
+                    self.handle_compact_raft_log(apply_ctx, voter_replicated_index)
                 }
             }
         }
@@ -4384,7 +4500,7 @@ where
                     // So only shutdown needs to be checked here.
                     if !tikv_util::thread_group::is_shutdown(!cfg!(test)) {
                         for p in apply.cbs.drain(..) {
-                            let cmd = PendingCmd::new(p.index, p.term, p.cb);
+                            let cmd = PendingCmd::new(p.index, p.term, Some(p.cb));
                             notify_region_removed(apply.region_id, apply.peer_id, cmd);
                         }
                     }
@@ -4429,6 +4545,11 @@ where
                 }
                 #[cfg(any(test, feature = "testexport"))]
                 Msg::Validate(..) => return,
+                Msg::CheckCompact(region_id, ..) => {
+                    info!("target region is not found";
+                            "region_id" => region_id);
+                    return;
+                }
             },
             Either::Left(Err(TrySendError::Full(_))) => unreachable!(),
         };
@@ -4561,6 +4682,7 @@ mod memtrace {
                 | Msg::Change { .. } => 0,
                 #[cfg(any(test, feature = "testexport"))]
                 Msg::Validate(..) => 0,
+                Msg::CheckCompact { .. } => 0,
             }
         }
     }
@@ -6781,7 +6903,7 @@ mod tests {
     #[test]
     fn pending_cmd_leak() {
         let res = panic_hook::recover_safe(|| {
-            let _cmd = PendingCmd::new(1, 1, Callback::<KvTestSnapshot>::None);
+            let _cmd = PendingCmd::new(1, 1, Some(Callback::<KvTestSnapshot>::None));
         });
         res.unwrap_err();
     }
@@ -6789,7 +6911,7 @@ mod tests {
     #[test]
     fn pending_cmd_leak_dtor_not_abort() {
         let res = panic_hook::recover_safe(|| {
-            let _cmd = PendingCmd::new(1, 1, Callback::<KvTestSnapshot>::None);
+            let _cmd = PendingCmd::new(1, 1, Some(Callback::<KvTestSnapshot>::None));
             panic!("Don't abort");
             // It would abort and fail if there was a double-panic in PendingCmd
             // dtor.
