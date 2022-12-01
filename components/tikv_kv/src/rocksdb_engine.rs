@@ -34,7 +34,7 @@ use super::{
     write_modifies, Callback, DummySnapshotExt, Engine, Error, ErrorInner,
     Iterator as EngineIterator, Modify, Result, SnapContext, Snapshot, WriteData,
 };
-use crate::{OnAppliedCb, WriteEvent};
+use crate::{FakeExtension, OnAppliedCb, RaftExtension, WriteEvent};
 
 // Duplicated in test_engine_builder
 const TEMP_DIR: &str = "";
@@ -87,12 +87,26 @@ impl Drop for RocksEngineCore {
 ///
 /// This is intended for **testing use only**.
 #[derive(Clone)]
-pub struct RocksEngine {
+pub struct RocksEngine<RE = FakeExtension> {
     core: Arc<Mutex<RocksEngineCore>>,
     sched: Scheduler<Task>,
     engines: Engines<BaseRocksEngine, BaseRocksEngine>,
     not_leader: Arc<AtomicBool>,
     coprocessor: CoprocessorHost<BaseRocksEngine>,
+    ext: RE,
+}
+
+impl<RE> RocksEngine<RE> {
+    pub fn with_raft_extension<NRE>(self, ext: NRE) -> RocksEngine<NRE> {
+        RocksEngine {
+            core: self.core,
+            sched: self.sched,
+            engines: self.engines,
+            not_leader: self.not_leader,
+            coprocessor: self.coprocessor,
+            ext,
+        }
+    }
 }
 
 impl RocksEngine {
@@ -132,9 +146,12 @@ impl RocksEngine {
             not_leader: Arc::new(AtomicBool::new(false)),
             engines,
             coprocessor: CoprocessorHost::default(),
+            ext: FakeExtension,
         })
     }
+}
 
+impl<RE> RocksEngine<RE> {
     pub fn trigger_not_leader(&self) {
         self.not_leader.store(true, Ordering::SeqCst);
     }
@@ -196,13 +213,13 @@ impl RocksEngine {
     }
 }
 
-impl Display for RocksEngine {
+impl<RE> Display for RocksEngine<RE> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RocksDB")
     }
 }
 
-impl Debug for RocksEngine {
+impl<RE> Debug for RocksEngine<RE> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -212,12 +229,17 @@ impl Debug for RocksEngine {
     }
 }
 
-impl Engine for RocksEngine {
+impl<RE: RaftExtension + 'static> Engine for RocksEngine<RE> {
     type Snap = Arc<RocksSnapshot>;
     type Local = BaseRocksEngine;
 
     fn kv_engine(&self) -> Option<BaseRocksEngine> {
         Some(self.engines.kv.clone())
+    }
+
+    type RaftExtension = RE;
+    fn raft_extension(&self) -> &Self::RaftExtension {
+        &self.ext
     }
 
     fn modify_on_kv_engine(&self, region_modifies: HashMap<u64, Vec<Modify>>) -> Result<()> {
