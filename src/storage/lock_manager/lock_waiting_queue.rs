@@ -57,7 +57,6 @@
 use std::{
     future::Future,
     pin::Pin,
-    result::Result,
     sync::{
         atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc,
@@ -65,7 +64,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use dashmap;
+use dashmap::{self, mapref::entry::Entry as DashMapEntry};
 use futures_util::compat::Future01CompatExt;
 use keyed_priority_queue::KeyedPriorityQueue;
 use kvproto::kvrpcpb;
@@ -75,17 +74,16 @@ use tikv_util::{time::InstantExt, timer::GLOBAL_TIMER_HANDLE};
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
-    errors::SharedError,
-    lock_manager::{LockManager, LockWaitToken},
+    lock_manager::{
+        lock_wait_context::{LockWaitContextSharedState, PessimisticLockKeyCallback},
+        LockManager, LockWaitToken,
+    },
     metrics::*,
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
-    txn::Error as TxnError,
-    types::{PessimisticLockKeyResult, PessimisticLockParameters},
-    Error as StorageError,
+    txn::{Error as TxnError, ErrorInner as TxnErrorInner},
+    types::PessimisticLockParameters,
+    Error as StorageError, ErrorInner as StorageErrorInner,
 };
-
-pub type CallbackWithSharedError<T> = Box<dyn FnOnce(Result<T, SharedError>) + Send + 'static>;
-pub type PessimisticLockKeyCallback = CallbackWithSharedError<PessimisticLockKeyResult>;
 
 /// Represents an `AcquirePessimisticLock` request that's waiting for a lock,
 /// and contains the request's parameters.
@@ -97,6 +95,7 @@ pub struct LockWaitEntry {
     // Put it in a separated field.
     pub should_not_exist: bool,
     pub lock_wait_token: LockWaitToken,
+    pub req_states: Arc<LockWaitContextSharedState>,
     pub legacy_wake_up_index: Option<usize>,
     pub key_cb: Option<SyncWrapper<PessimisticLockKeyCallback>>,
 }
@@ -248,15 +247,26 @@ impl<L: LockManager> LockWaitQueues<L> {
         current_lock: kvrpcpb::LockInfo,
     ) {
         let mut new_key = false;
-        let mut key_state = self
-            .inner
-            .queue_map
-            .entry(lock_wait_entry.key.clone())
-            .or_insert_with(|| {
-                new_key = true;
-                KeyLockWaitState::new()
-            });
-        key_state.current_lock = current_lock;
+
+        let map_entry = self.inner.queue_map.entry(lock_wait_entry.key.clone());
+
+        // If it's not the first time the request is put into the queue, the request
+        // might be canceled from outside when the entry is temporarily absent
+        // in the queue. In this case, the cancellation operation is not done.
+        // Do it here. For details about this corner case, see document of
+        // `LockWaitContext::is_canceled` field.
+        if lock_wait_entry.req_states.is_canceled() {
+            self.on_push_canceled_entry(lock_wait_entry, map_entry);
+            return;
+        }
+
+        let mut key_state = map_entry.or_insert_with(|| {
+            new_key = true;
+            KeyLockWaitState::new()
+        });
+        if !current_lock.key.is_empty() {
+            key_state.current_lock = current_lock;
+        }
 
         if lock_wait_entry.legacy_wake_up_index.is_none() {
             lock_wait_entry.legacy_wake_up_index = Some(key_state.value().legacy_wake_up_index);
@@ -275,6 +285,32 @@ impl<L: LockManager> LockWaitQueues<L> {
         if new_key {
             LOCK_WAIT_QUEUE_ENTRIES_GAUGE_VEC.keys.inc()
         }
+    }
+
+    fn on_push_canceled_entry(
+        &self,
+        lock_wait_entry: Box<LockWaitEntry>,
+        key_state: DashMapEntry<'_, Key, KeyLockWaitState, impl std::hash::BuildHasher>,
+    ) {
+        let mut err = lock_wait_entry.req_states.get_external_error();
+
+        if let DashMapEntry::Occupied(key_state_entry) = key_state {
+            if let StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
+                MvccError(box MvccErrorInner::KeyIsLocked(lock_info)),
+            )))) = &mut err
+            {
+                // Update the lock info in the error to the latest if possible.
+                let latest_lock_info = &key_state_entry.get().current_lock;
+                if !latest_lock_info.key.is_empty() {
+                    *lock_info = latest_lock_info.clone();
+                }
+            }
+        }
+
+        // `key_state` is dropped here, so the mutex in the queue map is released.
+
+        let cb = lock_wait_entry.key_cb.unwrap().into_inner();
+        cb(Err(err.into()), true);
     }
 
     /// Dequeues the head of the lock waiting queue of the specified key,
@@ -437,6 +473,8 @@ impl<L: LockManager> LockWaitQueues<L> {
             prev_delay_ms = current_delay_ms;
         }
 
+        fail_point!("lock_waiting_queue_before_delayed_notify_all");
+
         self.delayed_notify_all(&key, notify_id)
     }
 
@@ -523,7 +561,7 @@ impl<L: LockManager> LockWaitQueues<L> {
                     reason: kvrpcpb::WriteConflictReason::PessimisticRetry,
                 },
             )));
-            cb(Err(e.into()));
+            cb(Err(e.into()), false);
         }
 
         // Return the item to be woken up in resumable way.
@@ -612,9 +650,10 @@ mod tests {
 
     use super::*;
     use crate::storage::{
+        errors::SharedError,
         lock_manager::{lock_wait_context::LockWaitContext, MockLockManager, WaitTimeout},
         txn::ErrorInner as TxnErrorInner,
-        ErrorInner as StorageErrorInner, StorageCallback,
+        ErrorInner as StorageErrorInner, PessimisticLockKeyResult, StorageCallback,
     };
 
     struct TestLockWaitEntryHandle {
@@ -703,8 +742,11 @@ mod tests {
                 parameters,
                 should_not_exist: false,
                 lock_wait_token: token,
+                req_states: dummy_ctx.get_shared_states().clone(),
                 legacy_wake_up_index: None,
-                key_cb: Some(SyncWrapper::new(Box::new(move |res| tx.send(res).unwrap()))),
+                key_cb: Some(SyncWrapper::new(Box::new(move |res, _| {
+                    tx.send(res).unwrap()
+                }))),
             });
 
             let cancel_callback = dummy_ctx.get_callback_for_cancellation();

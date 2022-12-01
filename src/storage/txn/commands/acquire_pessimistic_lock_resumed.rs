@@ -1,11 +1,19 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    fmt::{Debug, Formatter},
+    sync::Arc,
+};
+
 // #[PerformanceCriticalPath]
 use kvproto::kvrpcpb::ExtraOp;
 use txn_types::{insert_old_value_if_resolved, Key, OldValues};
 
 use crate::storage::{
-    lock_manager::{lock_waiting_queue::LockWaitEntry, LockManager, LockWaitToken},
+    lock_manager::{
+        lock_wait_context::LockWaitContextSharedState, lock_waiting_queue::LockWaitEntry,
+        LockManager, LockWaitToken,
+    },
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader},
     txn::{
         acquire_pessimistic_lock,
@@ -21,12 +29,23 @@ use crate::storage::{
     Snapshot,
 };
 
-#[derive(Debug)]
 pub struct ResumedPessimisticLockItem {
     pub key: Key,
     pub should_not_exist: bool,
     pub params: PessimisticLockParameters,
     pub lock_wait_token: LockWaitToken,
+    pub req_states: Arc<LockWaitContextSharedState>,
+}
+
+impl Debug for ResumedPessimisticLockItem {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResumedPessimisticLockItem")
+            .field("key", &self.key)
+            .field("should_not_exist", &self.should_not_exist)
+            .field("params", &self.params)
+            .field("lock_wait_token", &self.lock_wait_token)
+            .finish()
+    }
 }
 
 command! {
@@ -61,6 +80,7 @@ impl CommandExt for AcquirePessimisticLockResumed {
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockResumed {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+        fail_point!("acquire_pessimistic_lock_resumed_before_process_write");
         let mut modifies = vec![];
         let mut txn = None;
         let mut reader: Option<SnapshotReader<S>> = None;
@@ -79,6 +99,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
                 should_not_exist,
                 params,
                 lock_wait_token,
+                req_states,
             } = item;
 
             // TODO: Refine the code for rebuilding txn state.
@@ -136,6 +157,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLockR
                     let mut lock_info =
                         WriteResultLockInfo::new(lock_info, params, key, should_not_exist);
                     lock_info.lock_wait_token = lock_wait_token;
+                    lock_info.req_states = Some(req_states);
                     res.push(PessimisticLockKeyResult::Waiting);
                     encountered_locks.push(lock_info);
                 }
@@ -185,6 +207,7 @@ impl AcquirePessimisticLockResumed {
                     should_not_exist: item.should_not_exist,
                     params: item.parameters,
                     lock_wait_token: item.lock_wait_token,
+                    req_states: item.req_states,
                 }
             })
             .collect();
@@ -304,16 +327,20 @@ mod tests {
 
         let key = Key::from_raw(key);
         let lock_hash = key.gen_hash();
+        let token = LockWaitToken(Some(random()));
+        // The tests in this file doesn't need a valid req_state. Set a dummy value
+        // here.
+        let req_states = Arc::new(LockWaitContextSharedState::new_dummy(token, key.clone()));
         let entry = LockWaitEntry {
             key,
             lock_hash,
             parameters,
             should_not_exist: false,
-            lock_wait_token: LockWaitToken(Some(random())),
+            lock_wait_token: token,
             legacy_wake_up_index: Some(0),
+            req_states,
             key_cb: None,
         };
-
         Box::new(entry)
     }
 

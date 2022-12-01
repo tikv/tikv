@@ -27,13 +27,12 @@ use tikv_util::{
 };
 use tokio::task::spawn_local;
 use tracker::GLOBAL_TRACKERS;
-use txn_types::Key;
 
 use super::{config::Config, deadlock::Scheduler as DetectorScheduler, metrics::*};
 use crate::storage::{
     lock_manager::{
-        DiagnosticContext, KeyLockWaitInfo, LockDigest, LockWaitToken, UpdateWaitForEvent,
-        WaitTimeout,
+        CancellationCallback, DiagnosticContext, KeyLockWaitInfo, LockDigest, LockWaitToken,
+        UpdateWaitForEvent, WaitTimeout,
     },
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, TimeStamp},
     txn::Error as TxnError,
@@ -107,9 +106,6 @@ pub type Callback = Box<dyn FnOnce(Vec<WaitForEntry>) + Send>;
 
 #[allow(clippy::large_enum_variant)]
 pub enum Task {
-    SetKeyWakeUpDelayCallback {
-        cb: Box<dyn Fn(&Key, TimeStamp, TimeStamp, Instant) + Send>,
-    },
     WaitFor {
         token: LockWaitToken,
         region_id: u64,
@@ -119,7 +115,7 @@ pub enum Task {
         start_ts: TimeStamp,
         wait_info: KeyLockWaitInfo,
         timeout: WaitTimeout,
-        cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
+        cancel_callback: CancellationCallback,
         diag_ctx: DiagnosticContext,
         start_waiting_time: Instant,
     },
@@ -158,9 +154,6 @@ impl Debug for Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Task::SetKeyWakeUpDelayCallback { .. } => {
-                write!(f, "setting key wake up delay callback")
-            }
             Task::WaitFor {
                 token,
                 start_ts,
@@ -206,7 +199,7 @@ pub(crate) struct Waiter {
     // term: u64,
     pub(crate) start_ts: TimeStamp,
     pub(crate) wait_info: KeyLockWaitInfo,
-    pub(crate) cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
+    pub(crate) cancel_callback: CancellationCallback,
     pub diag_ctx: DiagnosticContext,
     delay: Delay,
     start_waiting_time: Instant,
@@ -219,7 +212,7 @@ impl Waiter {
         _term: u64,
         start_ts: TimeStamp,
         wait_info: KeyLockWaitInfo,
-        cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
+        cancel_callback: CancellationCallback,
         deadline: Instant,
         diag_ctx: DiagnosticContext,
         start_waiting_time: Instant,
@@ -280,7 +273,7 @@ impl Waiter {
 
     pub(super) fn cancel_no_timeout(
         wait_info: KeyLockWaitInfo,
-        cancel_callback: Box<dyn FnOnce(StorageError)>,
+        cancel_callback: CancellationCallback,
     ) {
         let lock_info = wait_info.lock_info;
         let error = MvccError::from(MvccErrorInner::KeyIsLocked(lock_info));
@@ -311,8 +304,6 @@ struct WaitTable {
     wait_table: HashMap<(u64, TimeStamp), LockWaitToken>,
     waiter_pool: HashMap<LockWaitToken, Waiter>,
     waiter_count: Arc<AtomicUsize>,
-
-    wake_up_key_delay_callback: Option<Box<dyn Fn(&Key, TimeStamp, TimeStamp, Instant) + Send>>,
 }
 
 impl WaitTable {
@@ -321,15 +312,7 @@ impl WaitTable {
             wait_table: HashMap::default(),
             waiter_pool: HashMap::default(),
             waiter_count,
-            wake_up_key_delay_callback: None,
         }
-    }
-
-    fn set_wake_up_key_delay_callback(
-        &mut self,
-        cb: Option<Box<dyn Fn(&Key, TimeStamp, TimeStamp, Instant) + Send>>,
-    ) {
-        self.wake_up_key_delay_callback = cb;
     }
 
     #[cfg(test)]
@@ -430,7 +413,7 @@ impl Scheduler {
         start_ts: TimeStamp,
         wait_info: KeyLockWaitInfo,
         timeout: WaitTimeout,
-        cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
+        cancel_callback: CancellationCallback,
         diag_ctx: DiagnosticContext,
     ) {
         self.notify_scheduler(Task::WaitFor {
@@ -445,13 +428,6 @@ impl Scheduler {
             diag_ctx,
             start_waiting_time: Instant::now(),
         });
-    }
-
-    pub fn set_key_wake_up_delay_callback(
-        &self,
-        cb: Box<dyn Fn(&Key, TimeStamp, TimeStamp, Instant) + Send>,
-    ) {
-        self.notify_scheduler(Task::SetKeyWakeUpDelayCallback { cb });
     }
 
     pub fn remove_lock_wait(&self, token: LockWaitToken) {
@@ -610,11 +586,6 @@ impl WaiterManager {
 impl FutureRunnable<Task> for WaiterManager {
     fn run(&mut self, task: Task) {
         match task {
-            Task::SetKeyWakeUpDelayCallback { cb } => {
-                self.wait_table
-                    .borrow_mut()
-                    .set_wake_up_key_delay_callback(Some(cb));
-            }
             Task::WaitFor {
                 token,
                 region_id,

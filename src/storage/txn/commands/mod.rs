@@ -30,6 +30,7 @@ use std::{
     iter,
     marker::PhantomData,
     ops::{Deref, DerefMut},
+    sync::Arc,
 };
 
 pub use acquire_pessimistic_lock::AcquirePessimisticLock;
@@ -63,7 +64,10 @@ use txn_types::{Key, TimeStamp, Value, Write};
 
 use crate::storage::{
     kv::WriteData,
-    lock_manager::{self, LockManager, LockWaitToken, WaitTimeout},
+    lock_manager::{
+        self, lock_wait_context::LockWaitContextSharedState, LockManager, LockWaitToken,
+        WaitTimeout,
+    },
     metrics,
     mvcc::{Lock as MvccLock, MvccReader, ReleasedLock, SnapshotReader},
     txn::{latch, ProcessResult, Result},
@@ -428,6 +432,9 @@ pub struct WriteResultLockInfo {
     /// another lock again after resuming, this field will carry the token
     /// that was already allocated before.
     pub lock_wait_token: LockWaitToken,
+    /// For resumed pessimistic lock requests, this is needed to check if it's
+    /// canceled outside.
+    pub req_states: Option<Arc<LockWaitContextSharedState>>,
 }
 
 impl WriteResultLockInfo {
@@ -450,6 +457,7 @@ impl WriteResultLockInfo {
             parameters,
             hash_for_latch,
             lock_wait_token: LockWaitToken(None),
+            req_states: None,
         }
     }
 }
