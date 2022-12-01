@@ -150,32 +150,23 @@ pub fn flashback_to_version_write(
 pub fn prewrite_flashback_key(
     txn: &mut MvccTxn,
     reader: &mut MvccReader<impl Snapshot>,
-    start_key: &Key,
-    end_key: &Key,
+    key_to_lock: &Key,
     flashback_version: TimeStamp,
     flashback_start_ts: TimeStamp,
 ) -> TxnResult<()> {
-    // The start key from the client is actually a range, which is used to limit the
-    // upper bound of this flashback when scanning data, so it may not be a real
-    // key. We need to get the key that the user has written to ensure reliability.
-    let key_to_lock = if let Some(first_key) = get_first_user_key(reader, start_key, end_key)? {
-        first_key
-    } else {
-        return Ok(());
-    };
-    let old_write = reader.get_write(&key_to_lock, flashback_version, None)?;
+    let old_write = reader.get_write(key_to_lock, flashback_version, None)?;
     // Flashback the value in `CF_DEFAULT` as well if the old write is a
     // `WriteType::Put` without the short value.
     if let Some(old_write) = old_write.as_ref() {
         if old_write.write_type == WriteType::Put
             && old_write.short_value.is_none()
             // If the value with `flashback_start_ts` already exists, we don't need to write again.
-            && reader.get_value(&key_to_lock, flashback_start_ts)?.is_none()
+            && reader.get_value(key_to_lock, flashback_start_ts)?.is_none()
         {
             txn.put_value(
                 key_to_lock.clone(),
                 flashback_start_ts,
-                reader.load_data(&key_to_lock, old_write.clone())?,
+                reader.load_data(key_to_lock, old_write.clone())?,
             );
         }
     }
@@ -293,15 +284,15 @@ pub mod tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let ctx = Context::default();
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &ctx);
-        prewrite_flashback_key(
-            &mut txn,
-            &mut reader,
-            &Key::from_raw(key),
-            &Key::from_raw(b"z"),
-            version,
-            start_ts,
-        )
-        .unwrap();
+        let prewrite_key = if let Some(first_key) =
+            get_first_user_key(&mut reader, &Key::from_raw(key), &Key::from_raw(b"z")).unwrap()
+        {
+            first_key
+        } else {
+            // If the key is None return directly
+            return 0;
+        };
+        prewrite_flashback_key(&mut txn, &mut reader, &prewrite_key, version, start_ts).unwrap();
         let rows = txn.modifies.len();
         write(engine, &ctx, txn.into_modifies());
         rows
