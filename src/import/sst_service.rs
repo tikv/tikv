@@ -93,7 +93,7 @@ where
             .build()
             .unwrap();
         importer.start_switch_mode_check(threads.handle(), engine.clone());
-        threads.spawn_ok(Self::tick(importer.clone()));
+        threads.spawn(Self::tick(importer.clone()));
 
         ImportSstService {
             cfg,
@@ -472,9 +472,14 @@ where
                 let mut req_write_size = 0_u64;
                 let mut range: Option<Range> = None;
                 let ext_storage = {
-                    let inner =
-                        importer.create_external_storage(req.get_storage_backend(), false)?;
-                    Arc::from(inner)
+                    let inner = importer.wrap_kms(
+                        importer.external_storage_or_cache(
+                            req.get_storage_backend(),
+                            req.get_storage_cache_id(),
+                        )?,
+                        false,
+                    )?;
+                    inner
                 };
 
                 for (i, meta) in metas.iter().enumerate() {

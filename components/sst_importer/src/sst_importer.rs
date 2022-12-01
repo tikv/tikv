@@ -23,7 +23,7 @@ use engine_traits::{
     SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
 use external_storage_export::{
-    compression_reader_dispatcher, encrypt_wrap_reader, ExternalData, RestoreConfig,
+    compression_reader_dispatcher, encrypt_wrap_reader, ExternalStorage, RestoreConfig,
 };
 use file_system::{get_io_rate_limiter, OpenOptions};
 use kvproto::{
@@ -37,7 +37,6 @@ use tikv_util::{
     stream::block_on_external_io,
     sys::SysQuota,
     time::{Instant, Limiter},
-    Either,
 };
 use tokio::runtime::{Handle, Runtime};
 use txn_types::{Key, TimeStamp, WriteRef};
@@ -48,7 +47,7 @@ use crate::{
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     metrics::*,
     sst_writer::{RawSstWriter, TxnSstWriter},
-    Config, Error, Result,
+    util, Config, Error, Result,
 };
 
 #[derive(Default, Debug, Clone)]
@@ -318,6 +317,25 @@ impl SstImporter {
             ))
     }
 
+    /// Create an external storage by the backend, and cache it with the key.
+    /// If the cache exists, return it directly.
+    pub fn external_storage_or_cache(
+        &self,
+        backend: &StorageBackend,
+        cache_id: &str,
+    ) -> Result<Arc<dyn ExternalStorage>> {
+        // prepare to download the file from the external_storage
+        // TODO: pass a config to support hdfs
+        let ext_storage = if cache_id.is_empty() {
+            EXT_STORAGE_CACHE_COUNT.with_label_values(&["skip"]).inc();
+            let s = external_storage_export::create_storage(backend, Default::default())?;
+            Arc::from(s)
+        } else {
+            self.cached_storage.cached_or_create(cache_id, backend)?
+        };
+        Ok(ext_storage)
+    }
+
     async fn async_download_file_from_external_storage(
         &self,
         file_length: u64,
@@ -339,28 +357,9 @@ impl SstImporter {
                 }
             })?;
         }
-        // prepare to download the file from the external_storage
-        // TODO: pass a config to support hdfs
-        let ext_storage = if cache_key.is_empty() {
-            EXT_STORAGE_CACHE_COUNT.with_label_values(&["skip"]).inc();
-            let s = external_storage_export::create_storage(backend, Default::default())?;
-            Arc::from(s)
-        } else {
-            self.cached_storage.cached_or_create(cache_key, backend)?
-        };
-        let url = ext_storage.url()?.to_string();
 
-        let ext_storage = match (support_kms, &self.key_manager) {
-            (true, Some(key_manager)) => Either::Left(EncryptedExternalStorage {
-                key_manager: (*key_manager).clone(),
-                storage: ext_storage,
-            }),
-            _ => Either::Right(ext_storage),
-        };
-        let ext_storage: &dyn ExternalStorage = match &ext_storage {
-            Either::Left(x) => x,
-            Either::Right(y) => y,
-        };
+        let ext_storage = self.external_storage_or_cache(backend, cache_key)?;
+        let ext_storage = self.wrap_kms(ext_storage, support_kms)?;
 
         let result = ext_storage
             .restore(
@@ -373,7 +372,7 @@ impl SstImporter {
             .await;
         IMPORTER_DOWNLOAD_BYTES.observe(file_length as _);
         result.map_err(|e| Error::CannotReadExternalStorage {
-            url: url.to_string(),
+            url: util::url_for(&ext_storage),
             name: src_file_name.to_owned(),
             local_path: dst_file.clone(),
             err: e,
@@ -390,7 +389,7 @@ impl SstImporter {
 
         debug!("downloaded file succeed";
             "name" => src_file_name,
-            "url"  => %url,
+            "url"  => %util::url_for(&ext_storage),
         );
         Ok(())
     }
@@ -537,19 +536,18 @@ impl SstImporter {
         Ok(lock.0.clone())
     }
 
-    pub fn create_external_storage(
+    pub fn wrap_kms(
         &self,
-        backend: &StorageBackend,
+        ext_storage: Arc<dyn ExternalStorage>,
         support_kms: bool,
-    ) -> Result<Box<dyn external_storage_export::ExternalStorage>> {
-        let ext_storage = external_storage_export::create_storage(backend, Default::default())?;
+    ) -> Result<Arc<dyn external_storage_export::ExternalStorage>> {
         // kv-files needn't are decrypted with KMS when download currently because these
         // files are not encrypted when log-backup. It is different from
         // sst-files because sst-files is encrypted when saved with rocksdb env
         // with KMS. to do: support KMS when log-backup and restore point.
         let ext_storage = match (support_kms, self.key_manager.clone()) {
             (true, Some(key_manager)) => {
-                Box::new(external_storage_export::EncryptedExternalStorage {
+                Arc::new(external_storage_export::EncryptedExternalStorage {
                     key_manager,
                     storage: ext_storage,
                 })
@@ -1716,7 +1714,12 @@ mod tests {
         )
         .unwrap();
         let ext_storage = {
-            let inner = importer.create_external_storage(&backend, false).unwrap();
+            let inner = importer
+                .wrap_kms(
+                    importer.external_storage_or_cache(&backend, "").unwrap(),
+                    false,
+                )
+                .unwrap();
             Arc::new(inner)
         };
 
@@ -1769,7 +1772,12 @@ mod tests {
         )
         .unwrap();
         let ext_storage = {
-            let inner = importer.create_external_storage(&backend, false).unwrap();
+            let inner = importer
+                .wrap_kms(
+                    importer.external_storage_or_cache(&backend, "").unwrap(),
+                    false,
+                )
+                .unwrap();
             Arc::new(inner)
         };
 
@@ -1831,7 +1839,12 @@ mod tests {
             SstImporter::new(&cfg, import_dir, Some(key_manager), ApiVersion::V1).unwrap();
         let rewrite_rule = &new_rewrite_rule(b"", b"", 12345);
         let ext_storage = {
-            let inner = importer.create_external_storage(&backend, false).unwrap();
+            let inner = importer
+                .wrap_kms(
+                    importer.external_storage_or_cache(&backend, "").unwrap(),
+                    false,
+                )
+                .unwrap();
             Arc::new(inner)
         };
         let path = importer
