@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::ops::Deref;
+use std::ops::{Bound, Deref};
 
 use engine_traits::{ReadOptions, CF_DEFAULT, CF_WRITE};
 use getset::CopyGetters;
@@ -261,7 +261,7 @@ fn new_write_cursor_on_key<S: EngineSnapshot>(snapshot: &S, key: &Key) -> Cursor
         .range(Some(key.clone()), upper)
         // Use bloom filter to speed up seeking on a given prefix.
         .prefix_seek(true)
-        .hint_max_ts(Some(ts))
+        .hint_max_ts(Some(Bound::Included(ts)))
         .build()
         .unwrap()
 }

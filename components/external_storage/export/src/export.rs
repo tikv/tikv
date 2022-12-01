@@ -19,9 +19,10 @@ use external_storage::dylib_client;
 #[cfg(feature = "cloud-storage-grpc")]
 use external_storage::grpc_client;
 pub use external_storage::{
-    compression_reader_dispatcher, encrypt_wrap_reader, read_external_storage_into_file,
-    record_storage_create, BackendConfig, ExternalData, ExternalStorage, HdfsStorage, LocalStorage,
-    NoopStorage, RestoreConfig, UnpinReader,
+    compression_reader_dispatcher, encrypt_wrap_reader, read_external_storage_info_buff,
+    read_external_storage_into_file, record_storage_create, BackendConfig, ExternalData,
+    ExternalStorage, HdfsStorage, LocalStorage, NoopStorage, RestoreConfig, UnpinReader,
+    MIN_READ_SPEED,
 };
 #[cfg(feature = "cloud-gcp")]
 pub use gcp::{Config as GcsConfig, GcsStorage};

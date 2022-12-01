@@ -28,9 +28,10 @@ use kvproto::{
     raft_serverpb::RaftMessage,
 };
 use pd_client::RpcClient;
+use raft::eraftpb::MessageType;
 use raftstore::store::{
     region_meta::{RegionLocalState, RegionMeta},
-    Config, TabletSnapManager, Transport, RAFT_INIT_LOG_INDEX,
+    Config, TabletSnapKey, TabletSnapManager, Transport, RAFT_INIT_LOG_INDEX,
 };
 use raftstore_v2::{
     create_store_batch_system,
@@ -198,7 +199,7 @@ impl RunningState {
         concurrency_manager: ConcurrencyManager,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
         logger: &Logger,
-    ) -> (TestRouter, Self) {
+    ) -> (TestRouter, TabletSnapManager, Self) {
         let cf_opts = ALL_CFS
             .iter()
             .copied()
@@ -240,6 +241,7 @@ impl RunningState {
         let router = RaftRouter::new(store_id, router);
         let store_meta = router.store_meta().clone();
         let snap_mgr = TabletSnapManager::new(path.join("tablets_snap").to_str().unwrap());
+        snap_mgr.init().unwrap();
         system
             .start(
                 store_id,
@@ -250,7 +252,7 @@ impl RunningState {
                 pd_client.clone(),
                 router.store_router(),
                 store_meta.clone(),
-                snap_mgr,
+                snap_mgr.clone(),
                 concurrency_manager,
                 causal_ts_provider,
             )
@@ -265,7 +267,7 @@ impl RunningState {
             transport,
             store_meta,
         };
-        (TestRouter(router), state)
+        (TestRouter(router), snap_mgr, state)
     }
 }
 
@@ -280,23 +282,24 @@ pub struct TestNode {
     path: TempDir,
     running_state: Option<RunningState>,
     logger: Logger,
+    snap_mgr: Option<TabletSnapManager>,
 }
 
 impl TestNode {
     fn with_pd(pd_server: &test_pd::Server<Service>, logger: Logger) -> TestNode {
         let pd_client = Arc::new(test_pd::util::new_client(pd_server.bind_addrs(), None));
         let path = TempDir::new().unwrap();
-
         TestNode {
             pd_client,
             path,
             running_state: None,
             logger,
+            snap_mgr: None,
         }
     }
 
     fn start(&mut self, cfg: Arc<VersionTrack<Config>>, trans: TestTransport) -> TestRouter {
-        let (router, state) = RunningState::new(
+        let (router, snap_mgr, state) = RunningState::new(
             &self.pd_client,
             self.path.path(),
             cfg,
@@ -306,6 +309,7 @@ impl TestNode {
             &self.logger,
         );
         self.running_state = Some(state);
+        self.snap_mgr = Some(snap_mgr);
         router
     }
 
@@ -334,6 +338,10 @@ impl TestNode {
 
     pub fn running_state(&self) -> Option<&RunningState> {
         self.running_state.as_ref()
+    }
+
+    pub fn snap_mgr(&self) -> Option<&TabletSnapManager> {
+        self.snap_mgr.as_ref()
     }
 
     pub fn id(&self) -> u64 {
@@ -485,6 +493,33 @@ impl Cluster {
                         continue;
                     }
                 };
+                // Simulate already received the snapshot.
+                if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {
+                    let from_offset = match self
+                        .nodes
+                        .iter()
+                        .position(|n| n.id() == msg.get_from_peer().get_store_id())
+                    {
+                        Some(offset) => offset,
+                        None => {
+                            debug!(self.logger, "failed to find snapshot source node"; "message" => ?msg);
+                            continue;
+                        }
+                    };
+                    let key = TabletSnapKey::new(
+                        region_id,
+                        msg.get_to_peer().get_id(),
+                        msg.get_message().get_snapshot().get_metadata().get_term(),
+                        msg.get_message().get_snapshot().get_metadata().get_index(),
+                    );
+                    let from_snap_mgr = self.node(from_offset).snap_mgr().unwrap();
+                    let to_snap_mgr = self.node(offset).snap_mgr().unwrap();
+                    let gen_path = from_snap_mgr.tablet_gen_path(&key);
+                    let recv_path = to_snap_mgr.final_recv_path(&key);
+                    assert!(gen_path.exists());
+                    std::fs::rename(gen_path, recv_path.clone()).unwrap();
+                    assert!(recv_path.exists());
+                }
                 regions.insert(msg.get_region_id());
                 if let Err(e) = self.routers[offset].send_raft_message(msg) {
                     debug!(self.logger, "failed to send raft message"; "err" => ?e);
