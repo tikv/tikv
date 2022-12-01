@@ -14,6 +14,8 @@ use std::{
     time::Duration,
 };
 
+use kvproto::kvrpcpb::CommandPri;
+use crate::store::ProposalContext;
 use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine, RAFT_LOG_MULTI_GET_CNT};
 use fail::fail_point;
@@ -1065,6 +1067,21 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
 
         self.cache.append(self.region_id, self.peer_id, &entries);
 
+        task.priority = {
+            let mut pri = CommandPri::Low;
+            for entry in &entries {
+                let ctx = ProposalContext::from_bytes(&entry.get_context());
+                if ctx.contains(ProposalContext::HIGH_PRIORITY) {
+                    pri = CommandPri::High;
+                    break;
+                } else if ctx.contains(ProposalContext::LOW_PRIORITY) {
+                    // do nothing
+                } else {
+                    pri = CommandPri::Normal;
+                }
+            }
+            pri
+        };
         task.entries = entries;
         // Delete any previously appended log entries which never committed.
         task.cut_logs = Some((last_index + 1, prev_last_index + 1));

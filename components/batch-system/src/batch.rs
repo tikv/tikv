@@ -18,9 +18,10 @@ use std::{
 use crossbeam::channel::{self, SendError};
 use fail::fail_point;
 use file_system::{set_io_type, IoType};
+use kvproto::kvrpcpb::CommandPri;
 use tikv_util::{
     debug, error, info, mpsc, safe_panic, sys::thread::StdThreadBuildWrapper, thd_name,
-    time::Instant, warn,
+    time::Instant, warn, mpsc::priority_queue,
 };
 
 use crate::{
@@ -41,12 +42,12 @@ pub enum FsmTypes<N, C> {
 // A macro to introduce common definition of scheduler.
 macro_rules! impl_sched {
     ($name:ident, $ty:path,Fsm = $fsm:tt) => {
-        pub struct $name<N, C> {
-            sender: channel::Sender<FsmTypes<N, C>>,
-            low_sender: channel::Sender<FsmTypes<N, C>>,
+        pub struct $name<N: Fsm, C: Fsm> {
+            sender: priority_queue::Sender<FsmTypes<N, C>>,
+            low_sender: priority_queue::Sender<FsmTypes<N, C>>,
         }
 
-        impl<N, C> Clone for $name<N, C> {
+        impl<N: Fsm, C: Fsm> Clone for $name<N, C> {
             #[inline]
             fn clone(&self) -> $name<N, C> {
                 $name {
@@ -58,7 +59,8 @@ macro_rules! impl_sched {
 
         impl<N, C> FsmScheduler for $name<N, C>
         where
-            $fsm: Fsm,
+            $fsm: Fsm, 
+            N: Fsm, C: Fsm,
         {
             type Fsm = $fsm;
 
@@ -68,7 +70,8 @@ macro_rules! impl_sched {
                     Priority::Normal => &self.sender,
                     Priority::Low => &self.low_sender,
                 };
-                match sender.send($ty(fsm)) {
+                // TODO: pass different priority.
+                match sender.send($ty(fsm), CommandPri::Normal) {
                     Ok(()) => {}
                     // TODO: use debug instead.
                     Err(SendError($ty(fsm))) => warn!("failed to schedule fsm {:p}", fsm),
@@ -80,8 +83,8 @@ macro_rules! impl_sched {
                 // TODO: close it explicitly once it's supported.
                 // Magic number, actually any number greater than poll pool size works.
                 for _ in 0..256 {
-                    let _ = self.sender.send(FsmTypes::Empty);
-                    let _ = self.low_sender.send(FsmTypes::Empty);
+                    let _ = self.sender.send(FsmTypes::Empty, CommandPri::Normal);
+                    let _ = self.low_sender.send(FsmTypes::Empty, CommandPri::Normal);
                 }
             }
         }
@@ -341,7 +344,7 @@ pub trait PollHandler<N, C>: Send + 'static {
 /// Internal poller that fetches batch and call handler hooks for readiness.
 pub struct Poller<N: Fsm, C: Fsm, Handler> {
     pub router: Router<N, C, NormalScheduler<N, C>, ControlScheduler<N, C>>,
-    pub fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
+    pub fsm_receiver: priority_queue::Receiver<FsmTypes<N, C>>,
     pub handler: Handler,
     pub max_batch_size: usize,
     pub reschedule_duration: Duration,
@@ -534,8 +537,8 @@ pub trait HandlerBuilder<N, C> {
 pub struct BatchSystem<N: Fsm, C: Fsm> {
     name_prefix: Option<String>,
     router: BatchRouter<N, C>,
-    receiver: channel::Receiver<FsmTypes<N, C>>,
-    low_receiver: channel::Receiver<FsmTypes<N, C>>,
+    receiver: priority_queue::Receiver<FsmTypes<N, C>>,
+    low_receiver: priority_queue::Receiver<FsmTypes<N, C>>,
     pool_size: usize,
     max_batch_size: usize,
     workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
@@ -649,15 +652,15 @@ where
     }
 }
 
-struct PoolStateBuilder<N, C> {
+struct PoolStateBuilder<N: Fsm, C:Fsm> {
     max_batch_size: usize,
     reschedule_duration: Duration,
-    fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
-    fsm_sender: channel::Sender<FsmTypes<N, C>>,
+    fsm_receiver: priority_queue::Receiver<FsmTypes<N, C>>,
+    fsm_sender: priority_queue::Sender<FsmTypes<N, C>>,
     pool_size: usize,
 }
 
-impl<N, C> PoolStateBuilder<N, C> {
+impl<N: Fsm, C: Fsm> PoolStateBuilder<N, C> {
     fn build<H: HandlerBuilder<N, C>>(
         self,
         name_prefix: String,
@@ -683,11 +686,11 @@ impl<N, C> PoolStateBuilder<N, C> {
     }
 }
 
-pub struct PoolState<N, C, H: HandlerBuilder<N, C>> {
+pub struct PoolState<N: Fsm, C: Fsm, H: HandlerBuilder<N, C>> {
     pub name_prefix: String,
     pub handler_builder: H,
-    pub fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
-    pub fsm_sender: channel::Sender<FsmTypes<N, C>>,
+    pub fsm_receiver: priority_queue::Receiver<FsmTypes<N, C>>,
+    pub fsm_sender: priority_queue::Sender<FsmTypes<N, C>>,
     pub low_priority_pool_size: usize,
     pub expected_pool_size: usize,
     pub workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
@@ -710,8 +713,8 @@ pub fn create_system<N: Fsm, C: Fsm>(
 ) -> (BatchRouter<N, C>, BatchSystem<N, C>) {
     let state_cnt = Arc::new(AtomicUsize::new(0));
     let control_box = BasicMailbox::new(sender, controller, state_cnt.clone());
-    let (tx, rx) = channel::unbounded();
-    let (tx2, rx2) = channel::unbounded();
+    let (tx, rx) = priority_queue::unbounded();
+    let (tx2, rx2) = priority_queue::unbounded();
     let normal_scheduler = NormalScheduler {
         sender: tx.clone(),
         low_sender: tx2.clone(),

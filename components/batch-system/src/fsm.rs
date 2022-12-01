@@ -31,7 +31,7 @@ pub trait FsmScheduler {
 
 /// A `Fsm` is a finite state machine. It should be able to be notified for
 /// updating internal state according to incoming messages.
-pub trait Fsm {
+pub trait Fsm: Send + 'static {
     type Message: Send;
 
     fn is_stopped(&self) -> bool;

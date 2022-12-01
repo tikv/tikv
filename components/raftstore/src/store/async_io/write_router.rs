@@ -15,14 +15,14 @@ use std::{
 
 use crossbeam::channel::{Sender, TrySendError};
 use engine_traits::{KvEngine, RaftEngine};
-use tikv_util::{info, time::Instant};
+use tikv_util::{info, time::Instant, mpsc::priority_queue};
 
 use crate::store::{
     async_io::write::WriteMsg, config::Config, fsm::store::PollContext, local_metrics::RaftMetrics,
     metrics::*,
 };
 
-const RETRY_SCHEDULE_MILLISECONS: u64 = 10;
+const RETRY_SCHEDULE_MILLISECONDS: u64 = 10;
 
 pub trait WriteRouterContext<EK, ER>
 where
@@ -217,29 +217,31 @@ where
         } else {
             // Rescheduling fails at this time. Retry 10ms later.
             // The task should be sent to the original write worker.
-            self.next_retry_time = now + Duration::from_millis(RETRY_SCHEDULE_MILLISECONS);
+            self.next_retry_time = now + Duration::from_millis(RETRY_SCHEDULE_MILLISECONDS);
             true
         }
     }
 
     fn send<C: WriteRouterContext<EK, ER>>(&self, ctx: &mut C, msg: WriteMsg<EK, ER>) {
-        match ctx.write_senders()[self.writer_id].try_send(msg) {
-            Ok(()) => (),
-            Err(TrySendError::Full(msg)) => {
-                let now = Instant::now();
-                if ctx.write_senders()[self.writer_id].send(msg).is_err() {
-                    // Write threads are destroyed after store threads during shutdown.
-                    panic!("{} failed to send write msg, err: disconnected", self.tag);
-                }
-                ctx.raft_metrics()
-                    .write_block_wait
-                    .observe(now.saturating_elapsed_secs());
-            }
-            Err(TrySendError::Disconnected(_)) => {
-                // Write threads are destroyed after store threads during shutdown.
-                panic!("{} failed to send write msg, err: disconnected", self.tag);
-            }
-        }
+        let pri = msg.priority(); 
+        ctx.write_senders().pri_write_sender.send(msg, pri).unwrap();
+        // match ctx.write_senders()[self.writer_id].try_send(msg) {
+        //     Ok(()) => (),
+        //     Err(TrySendError::Full(msg)) => {
+        //         let now = Instant::now();
+        //         if ctx.write_senders()[self.writer_id].send(msg).is_err() {
+        //             // Write threads are destroyed after store threads during
+        // shutdown.             panic!("{} failed to send write msg,
+        // err: disconnected", self.tag);         }
+        //         ctx.raft_metrics()
+        //             .write_block_wait
+        //             .observe(now.saturating_elapsed_secs());
+        //     }
+        //     Err(TrySendError::Disconnected(_)) => {
+        //         // Write threads are destroyed after store threads during
+        // shutdown.         panic!("{} failed to send write msg, err:
+        // disconnected", self.tag);     }
+        // }
     }
 }
 
@@ -247,13 +249,18 @@ where
 /// you should use `WriteRouter` to decide which sender to be used.
 #[derive(Clone)]
 pub struct WriteSenders<EK: KvEngine, ER: RaftEngine> {
+    pri_write_sender: priority_queue::Sender<WriteMsg<EK, ER>>,
     write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
     io_reschedule_concurrent_count: Arc<AtomicUsize>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
-    pub fn new(write_senders: Vec<Sender<WriteMsg<EK, ER>>>) -> Self {
+    pub fn new(
+        write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
+        pri_write_sender: priority_queue::Sender<WriteMsg<EK, ER>>,
+    ) -> Self {
         WriteSenders {
+            pri_write_sender,
             write_senders,
             io_reschedule_concurrent_count: Arc::default(),
         }

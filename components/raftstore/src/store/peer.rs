@@ -27,7 +27,7 @@ use fail::fail_point;
 use getset::{Getters, MutGetters};
 use kvproto::{
     errorpb,
-    kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp, LockInfo},
+    kvrpcpb::{DiskFullOpt, CommandPri, ExtraOp as TxnExtraOp, LockInfo},
     metapb::{self, PeerRole},
     pdpb::{self, PeerStats},
     raft_cmdpb::{
@@ -237,6 +237,8 @@ bitflags! {
         const SPLIT          = 0b0000_0010;
         const PREPARE_MERGE  = 0b0000_0100;
         const COMMIT_MERGE   = 0b0000_1000;
+        const HIGH_PRIORITY  = 0b0001_0000;
+        const LOW_PRIORITY   = 0b0010_0000;
     }
 }
 
@@ -4273,6 +4275,12 @@ where
             }
             AdminCmdType::CommitMerge => ctx.insert(ProposalContext::COMMIT_MERGE),
             _ => {}
+        }
+
+        if req.get_header().get_priority() == CommandPri::High {
+            ctx.insert(ProposalContext::HIGH_PRIORITY);
+        } else if req.get_header().get_priority() == CommandPri::Low {
+            ctx.insert(ProposalContext::LOW_PRIORITY);
         }
 
         Ok(ctx)

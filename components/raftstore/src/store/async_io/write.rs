@@ -14,7 +14,7 @@ use std::{
 };
 
 use collections::HashMap;
-use crossbeam::channel::{bounded, Receiver, Sender, TryRecvError};
+use crossbeam::channel::{Receiver, Sender, TryRecvError};
 use engine_traits::{
     KvEngine, PerfContext, PerfContextKind, RaftEngine, RaftLogBatch, WriteBatch, WriteOptions,
 };
@@ -23,6 +23,7 @@ use fail::fail_point;
 use kvproto::raft_serverpb::{
     PeerState, RaftApplyState, RaftLocalState, RaftMessage, RegionLocalState,
 };
+use kvproto::kvrpcpb::CommandPri;
 use protobuf::Message;
 use raft::eraftpb::Entry;
 use tikv_util::{
@@ -32,7 +33,7 @@ use tikv_util::{
     sys::thread::StdThreadBuildWrapper,
     thd_name,
     time::{duration_to_sec, Instant},
-    warn,
+    warn, mpsc::priority_queue,
 };
 
 use super::write_router::WriteSenders;
@@ -170,6 +171,7 @@ where
     pub send_time: Instant,
     pub raft_wb: Option<ER::LogBatch>,
     pub entries: Vec<Entry>,
+    pub priority: CommandPri,
     pub cut_logs: Option<(u64, u64)>,
     pub raft_state: Option<RaftLocalState>,
     pub extra_write: ExtraWrite<EK::WriteBatch>,
@@ -190,6 +192,7 @@ where
             send_time: Instant::now(),
             raft_wb: None,
             entries: vec![],
+            priority: CommandPri::Normal,
             cut_logs: None,
             raft_state: None,
             extra_write: ExtraWrite::None,
@@ -238,6 +241,20 @@ where
         inspector: Vec<LatencyInspector>,
     },
     Shutdown,
+}
+
+impl<EK, ER> WriteMsg<EK, ER> 
+where 
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    pub fn priority(&self) -> CommandPri {
+        match self {
+            WriteMsg::WriteTask(t) => t.priority,
+            WriteMsg::Shutdown => CommandPri::Normal,
+            WriteMsg::LatencyInspect { .. } => CommandPri::Normal,
+        }
+    }
 }
 
 impl<EK, ER> fmt::Debug for WriteMsg<EK, ER>
@@ -535,7 +552,7 @@ where
     tag: String,
     raft_engine: ER,
     kv_engine: Option<EK>,
-    receiver: Receiver<WriteMsg<EK, ER>>,
+    receiver: priority_queue::Receiver<WriteMsg<EK, ER>>,
     notifier: N,
     trans: T,
     batch: WriteTaskBatch<EK, ER>,
@@ -559,7 +576,7 @@ where
         tag: String,
         raft_engine: ER,
         kv_engine: Option<EK>,
-        receiver: Receiver<WriteMsg<EK, ER>>,
+        receiver: priority_queue::Receiver<WriteMsg<EK, ER>>,
         notifier: N,
         trans: T,
         cfg: &Arc<VersionTrack<Config>>,
@@ -854,6 +871,7 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
+    pri_writer: Option<priority_queue::Sender<WriteMsg<EK, ER>>>,
     writers: Vec<Sender<WriteMsg<EK, ER>>>,
     handlers: Vec<JoinHandle<()>>,
 }
@@ -861,6 +879,7 @@ where
 impl<EK: KvEngine, ER: RaftEngine> Default for StoreWriters<EK, ER> {
     fn default() -> Self {
         Self {
+            pri_writer: None,
             writers: vec![],
             handlers: vec![],
         }
@@ -873,7 +892,7 @@ where
     ER: RaftEngine,
 {
     pub fn senders(&self) -> WriteSenders<EK, ER> {
-        WriteSenders::new(self.writers.clone())
+        WriteSenders::new(self.writers.clone(), self.pri_writer.as_ref().unwrap().clone())
     }
 
     pub fn spawn<T: Transport + 'static, N: PersistedNotifier>(
@@ -888,7 +907,7 @@ where
         let pool_size = cfg.value().store_io_pool_size;
         for i in 0..pool_size {
             let tag = format!("store-writer-{}", i);
-            let (tx, rx) = bounded(cfg.value().store_io_notify_capacity);
+            let (tx, rx) = priority_queue::unbounded();
             let mut worker = Worker::new(
                 store_id,
                 tag.clone(),
@@ -905,7 +924,7 @@ where
                 .spawn_wrapper(move || {
                     worker.run();
                 })?;
-            self.writers.push(tx);
+            self.pri_writer = Some(tx);
             self.handlers.push(t);
         }
         Ok(())

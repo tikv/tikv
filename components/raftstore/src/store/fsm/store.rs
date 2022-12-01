@@ -22,7 +22,7 @@ use batch_system::{
 use causal_ts::CausalTsProviderImpl;
 use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
-use crossbeam::channel::{unbounded, TryRecvError, TrySendError};
+use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
     CompactedEvent, DeleteStrategy, Engines, KvEngine, Mutable, PerfContextKind, RaftEngine,
     RaftLogBatch, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
@@ -1296,7 +1296,7 @@ where
 
     fn build(&mut self, _: Priority) -> RaftPoller<EK, ER, T> {
         let sync_write_worker = if self.write_senders.is_empty() {
-            let (_, rx) = unbounded();
+            let (_, rx) = tikv_util::mpsc::priority_queue::unbounded();
             Some(WriteWorker::new(
                 self.store.get_id(),
                 "sync-writer".to_string(),
