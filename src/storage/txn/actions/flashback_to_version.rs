@@ -600,6 +600,7 @@ pub mod tests {
             2
         );
         must_get(&mut engine, k, ts, v1);
+        must_get(&mut engine, prewrite_key, ts, prewrite_val);
 
         // case 2: start key is after all keys, prewrite will return None.
         let start_key = b"d";
@@ -611,5 +612,9 @@ pub mod tests {
             must_prewrite_flashback_key(&mut engine, start_key, 4, flashback_start_ts),
             0
         );
+        // case 3: start key is valid, end_key is invalid.
+        let first_key = get_first_user_key(&mut reader, &Key::from_raw(b"a"), &Key::from_raw(b""))
+            .unwrap_or_else(|_| Some(Key::from_raw(b"")));
+        assert_eq!(first_key, None);
     }
 }
