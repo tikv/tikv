@@ -15,6 +15,7 @@ use tikv::{
     config::{ConfigController, TikvConfig},
     server::{
         config::{Config as ServerConfig, ServerConfigManager},
+        raftkv::RaftRouterWrap,
         snap::{Runner as SnapHandler, Task as SnapTask},
     },
 };
@@ -60,7 +61,7 @@ fn start_server(
     let snap_runner = SnapHandler::new(
         Arc::clone(&env),
         snap_mgr.clone(),
-        raft_router,
+        RaftRouterWrap::new(raft_router),
         security_mgr,
         Arc::clone(&server_config),
     );

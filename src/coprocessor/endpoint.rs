@@ -538,6 +538,9 @@ impl<E: Engine> Endpoint<E> {
             .iter_mut()
             .map(|task| {
                 let mut new_req = req.clone();
+                // Disable the coprocessor cache path for the batched tasks, the
+                // coprocessor cache related fields are not passed in the "task" by now.
+                new_req.is_cache_enabled = false;
                 new_req.ranges = task.take_ranges();
                 let new_context = new_req.mut_context();
                 new_context.set_region_id(task.get_region_id());

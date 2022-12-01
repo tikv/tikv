@@ -3,14 +3,12 @@
 use std::{
     fs::File as StdFile,
     io::{self, BufReader, Read, Seek},
-    marker::Unpin,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
 use async_trait::async_trait;
 use futures::io::AllowStdIo;
-use futures_io::AsyncRead;
 use futures_util::stream::TryStreamExt;
 use rand::Rng;
 use tikv_util::stream::error_stream;
@@ -119,7 +117,7 @@ impl ExternalStorage for LocalStorage {
         self.base_dir.sync_all().await
     }
 
-    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin> {
+    fn read(&self, name: &str) -> crate::ExternalData<'_> {
         debug!("read file from local storage";
             "name" => %name, "base" => %self.base.display());
         // We used std i/o here for removing the requirement of tokio reactor when
@@ -131,7 +129,7 @@ impl ExternalStorage for LocalStorage {
         }
     }
 
-    fn read_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin> {
+    fn read_part(&self, name: &str, off: u64, len: u64) -> crate::ExternalData<'_> {
         debug!("read part of file from local storage";
             "name" => %name, "off" => %off, "len" => %len, "base" => %self.base.display());
 

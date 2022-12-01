@@ -4,7 +4,6 @@ use std::{
     convert::{TryFrom, TryInto},
     fs::{self, File},
     io::{Read, Write},
-    marker::PhantomData,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -12,7 +11,6 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::KvEngine;
 use file_system::{IoType, WithIoType};
 use futures::{
     future::{Future, TryFutureExt},
@@ -28,11 +26,9 @@ use kvproto::{
     tikvpb::TikvClient,
 };
 use protobuf::Message;
-use raftstore::{
-    router::RaftStoreRouter,
-    store::snap::{TabletSnapKey, TabletSnapManager},
-};
+use raftstore::store::snap::{TabletSnapKey, TabletSnapManager};
 use security::SecurityManager;
+use tikv_kv::RaftExtension;
 use tikv_util::{
     config::{Tracker, VersionTrack},
     time::Instant,
@@ -82,11 +78,9 @@ impl RecvTabletSnapContext {
         })
     }
 
-    fn finish<R: RaftStoreRouter<impl KvEngine>>(self, raft_router: R) -> Result<()> {
+    fn finish<R: RaftExtension>(self, raft_router: R) -> Result<()> {
         let key = self.key;
-        if let Err(e) = raft_router.send_raft_msg(self.raft_msg) {
-            return Err(box_err!("{} failed to send snapshot to raft: {}", key, e));
-        }
+        raft_router.feed(self.raft_msg, true);
         info!("saving all snapshot files"; "snap_key" => %key, "takes" => ?self.start.saturating_elapsed());
         Ok(())
     }
@@ -279,7 +273,7 @@ async fn recv_snap_files(
     Ok(context)
 }
 
-fn recv_snap<R: RaftStoreRouter<impl KvEngine> + 'static>(
+fn recv_snap<R: RaftExtension + 'static>(
     stream: RequestStream<SnapshotChunk>,
     sink: ClientStreamingSink<Done>,
     snap_mgr: TabletSnapManager,
@@ -302,11 +296,7 @@ fn recv_snap<R: RaftStoreRouter<impl KvEngine> + 'static>(
     }
 }
 
-pub struct TabletRunner<E, R>
-where
-    E: KvEngine,
-    R: RaftStoreRouter<E> + 'static,
-{
+pub struct TabletRunner<R: RaftExtension + 'static> {
     env: Arc<Environment>,
     snap_mgr: TabletSnapManager,
     security_mgr: Arc<SecurityManager>,
@@ -316,22 +306,17 @@ where
     cfg: Config,
     sending_count: Arc<AtomicUsize>,
     recving_count: Arc<AtomicUsize>,
-    engine: PhantomData<E>,
     limiter: Limiter,
 }
 
-impl<E, R> TabletRunner<E, R>
-where
-    E: KvEngine,
-    R: RaftStoreRouter<E> + 'static,
-{
+impl<R: RaftExtension> TabletRunner<R> {
     pub fn new(
         env: Arc<Environment>,
         snap_mgr: TabletSnapManager,
         r: R,
         security_mgr: Arc<SecurityManager>,
         cfg: Arc<VersionTrack<Config>>,
-    ) -> TabletRunner<E, R> {
+    ) -> Self {
         let config = cfg.value().clone();
         let cfg_tracker = cfg.tracker("tablet-sender".to_owned());
         let limit = i64::try_from(config.snap_max_write_bytes_per_sec.0)
@@ -358,7 +343,6 @@ where
             cfg: config,
             sending_count: Arc::new(AtomicUsize::new(0)),
             recving_count: Arc::new(AtomicUsize::new(0)),
-            engine: PhantomData,
             limiter,
         };
         snap_worker
@@ -385,11 +369,7 @@ pub struct SendStat {
     elapsed: Duration,
 }
 
-impl<E, R> Runnable for TabletRunner<E, R>
-where
-    E: KvEngine,
-    R: RaftStoreRouter<E> + 'static,
-{
+impl<R: RaftExtension> Runnable for TabletRunner<R> {
     type Task = Task;
 
     fn run(&mut self, task: Task) {
