@@ -185,17 +185,12 @@ impl<S: EngineSnapshot> MvccReader<S> {
         }
     }
 
-    /// load the value associated with `key` and pointed by `write`
-    fn load_data(&mut self, key: &Key, write: Write) -> Result<Value> {
-        assert_eq!(write.write_type, WriteType::Put);
-        if let Some(val) = write.short_value {
-            return Ok(val);
-        }
+    /// get the value of a user key with the given `start_ts`.
+    pub fn get_value(&mut self, key: &Key, start_ts: TimeStamp) -> Result<Option<Value>> {
         if self.scan_mode.is_some() {
             self.create_data_cursor()?;
         }
-
-        let k = key.clone().append_ts(write.start_ts);
+        let k = key.clone().append_ts(start_ts);
         let val = if let Some(ref mut cursor) = self.data_cursor {
             cursor
                 .get(&k, &mut self.statistics.data)?
@@ -204,13 +199,25 @@ impl<S: EngineSnapshot> MvccReader<S> {
             self.statistics.data.get += 1;
             self.snapshot.get(&k)?
         };
+        if val.is_some() {
+            self.statistics.data.processed_keys += 1;
+        }
+        Ok(val)
+    }
 
-        match val {
-            Some(val) => {
-                self.statistics.data.processed_keys += 1;
-                Ok(val)
-            }
-            None => Err(default_not_found_error(k.into_encoded(), "get")),
+    /// load the value associated with `key` and pointed by `write`
+    fn load_data(&mut self, key: &Key, write: Write) -> Result<Value> {
+        assert_eq!(write.write_type, WriteType::Put);
+        if let Some(val) = write.short_value {
+            return Ok(val);
+        }
+        let start_ts = write.start_ts;
+        match self.get_value(key, start_ts)? {
+            Some(val) => Ok(val),
+            None => Err(default_not_found_error(
+                key.clone().append_ts(start_ts).into_encoded(),
+                "get",
+            )),
         }
     }
 
@@ -2011,8 +2018,17 @@ pub mod tests {
             engine.write(case.modifies);
             let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.clone(), region.clone());
             let mut reader = MvccReader::new(snap, case.scan_mode, false);
-            let result = reader.load_data(&case.key, case.write);
+            let result = reader.load_data(&case.key, case.write.clone());
             assert_eq!(format!("{:?}", result), format!("{:?}", case.expected));
+            if let Ok(expected) = case.expected {
+                if expected == long_value.to_vec() {
+                    let result = reader
+                        .get_value(&case.key, case.write.start_ts)
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(format!("{:?}", result), format!("{:?}", expected));
+                }
+            }
         }
     }
 

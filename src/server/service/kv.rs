@@ -15,26 +15,19 @@ use grpcio::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, Result as GrpcResult,
     RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
 };
-use kvproto::{
-    coprocessor::*,
-    errorpb::{Error as RegionError, *},
-    kvrpcpb::*,
-    mpp::*,
-    raft_serverpb::*,
-    tikvpb::*,
-};
+use kvproto::{coprocessor::*, kvrpcpb::*, mpp::*, raft_serverpb::*, tikvpb::*};
 use protobuf::RepeatedField;
 use raft::eraftpb::MessageType;
 use raftstore::{
-    router::RaftStoreRouter,
     store::{
         memory::{MEMTRACE_APPLYS, MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES},
         metrics::RAFT_ENTRIES_CACHES_GAUGE,
-        Callback, CasualMessage, CheckLeaderTask,
+        CheckLeaderTask,
     },
-    DiscardReason, Error as RaftStoreError, Result as RaftStoreResult,
+    Error as RaftStoreError, Result as RaftStoreResult,
 };
 use tikv_alloc::trace::MemoryTraceGuard;
+use tikv_kv::RaftExtension;
 use tikv_util::{
     future::{paired_future_callback, poll_future_notify},
     mpsc::future::{unbounded, BatchReceiver, Sender, WakePolicy},
@@ -69,18 +62,16 @@ const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
 /// Service handles the RPC messages for the `Tikv` service.
-pub struct Service<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFormat> {
+pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
     store_id: u64,
     /// Used to handle requests related to GC.
-    gc_worker: GcWorker<E, T>,
+    gc_worker: GcWorker<E>,
     // For handling KV requests.
     storage: Storage<E, L, F>,
     // For handling coprocessor requests.
     copr: Endpoint<E>,
     // For handling corprocessor v2 requests.
     copr_v2: coprocessor_v2::Endpoint,
-    // For handling raft messages.
-    ch: T,
     // For handling snapshot.
     snap_scheduler: Scheduler<SnapTask>,
     // For handling `CheckLeader` request.
@@ -96,13 +87,7 @@ pub struct Service<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockMan
     reject_messages_on_memory_ratio: f64,
 }
 
-impl<
-    T: RaftStoreRouter<E::Local> + Clone + 'static,
-    E: Engine + Clone,
-    L: LockManager + Clone,
-    F: KvFormat,
-> Clone for Service<T, E, L, F>
-{
+impl<E: Engine + Clone, L: LockManager + Clone, F: KvFormat> Clone for Service<E, L, F> {
     fn clone(&self) -> Self {
         Service {
             store_id: self.store_id,
@@ -110,7 +95,6 @@ impl<
             storage: self.storage.clone(),
             copr: self.copr.clone(),
             copr_v2: self.copr_v2.clone(),
-            ch: self.ch.clone(),
             snap_scheduler: self.snap_scheduler.clone(),
             check_leader_scheduler: self.check_leader_scheduler.clone(),
             enable_req_batch: self.enable_req_batch,
@@ -121,17 +105,14 @@ impl<
     }
 }
 
-impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFormat>
-    Service<T, E, L, F>
-{
+impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
     /// Constructs a new `Service` which provides the `Tikv` service.
     pub fn new(
         store_id: u64,
         storage: Storage<E, L, F>,
-        gc_worker: GcWorker<E, T>,
+        gc_worker: GcWorker<E>,
         copr: Endpoint<E>,
         copr_v2: coprocessor_v2::Endpoint,
-        ch: T,
         snap_scheduler: Scheduler<SnapTask>,
         check_leader_scheduler: Scheduler<CheckLeaderTask>,
         grpc_thread_load: Arc<ThreadLoadPool>,
@@ -145,7 +126,6 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
             storage,
             copr,
             copr_v2,
-            ch,
             snap_scheduler,
             check_leader_scheduler,
             enable_req_batch,
@@ -157,7 +137,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
 
     fn handle_raft_message(
         store_id: u64,
-        ch: &T,
+        ch: &E::RaftExtension,
         msg: RaftMessage,
         reject: bool,
     ) -> RaftStoreResult<()> {
@@ -172,13 +152,11 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
             RAFT_APPEND_REJECTS.inc();
             let id = msg.get_region_id();
             let peer_id = msg.get_message().get_from();
-            let m = CasualMessage::RejectRaftAppend { peer_id };
-            let _ = ch.send_casual_msg(id, m);
+            ch.report_reject_message(id, peer_id);
             return Ok(());
         }
-        // `send_raft_msg` may return `RaftStoreError::RegionNotFound` or
-        // `RaftStoreError::Transport(DiscardReason::Full)`
-        ch.send_raft_msg(msg)
+        ch.feed(msg, false);
+        Ok(())
     }
 }
 
@@ -228,9 +206,7 @@ macro_rules! set_total_time {
     };
 }
 
-impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFormat> Tikv
-    for Service<T, E, L, F>
-{
+impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     handle_request!(kv_get, future_get, GetRequest, GetResponse, has_time_detail);
     handle_request!(kv_scan, future_scan, ScanRequest, ScanResponse);
     handle_request!(
@@ -614,7 +590,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
         sink: ClientStreamingSink<Done>,
     ) {
         let store_id = self.store_id;
-        let ch = self.ch.clone();
+        let ch = self.storage.get_engine().raft_extension().clone();
         let reject_messages_on_memory_ratio = self.reject_messages_on_memory_ratio;
 
         let res = async move {
@@ -657,7 +633,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
     ) {
         info!("batch_raft RPC is called, new gRPC stream established");
         let store_id = self.store_id;
-        let ch = self.ch.clone();
+        let ch = self.storage.get_engine().raft_extension().clone();
         let reject_messages_on_memory_ratio = self.reject_messages_on_memory_ratio;
 
         let res = async move {
@@ -726,7 +702,6 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
         let begin_instant = Instant::now();
 
         let region_id = req.get_context().get_region_id();
-        let (cb, f) = paired_future_callback();
         let mut split_keys = if req.is_raw_kv {
             if !req.get_split_key().is_empty() {
                 vec![F::encode_raw_key_owned(req.take_split_key(), None).into_encoded()]
@@ -747,52 +722,45 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
             }
         };
         split_keys.sort();
-        let req = CasualMessage::SplitRegion {
-            region_epoch: req.take_context().take_region_epoch(),
+        let engine = self.storage.get_engine();
+        let f = engine.raft_extension().split(
+            region_id,
+            req.take_context().take_region_epoch(),
             split_keys,
-            callback: Callback::write(cb),
-            source: ctx.peer().into(),
-        };
-
-        if let Err(e) = self.ch.send_casual_msg(region_id, req) {
-            // Retrun region error instead a gRPC error.
-            let mut resp = SplitRegionResponse::default();
-            resp.set_region_error(raftstore_error_to_region_error(e, region_id));
-            ctx.spawn(
-                async move {
-                    sink.success(resp).await?;
-                    ServerResult::Ok(())
-                }
-                .map_err(|_| ())
-                .map(|_| ()),
-            );
-            return;
-        }
+            ctx.peer(),
+        );
 
         let task = async move {
-            let mut res = f.await?;
+            let res = f.await;
             let mut resp = SplitRegionResponse::default();
-            if res.response.get_header().has_error() {
-                resp.set_region_error(res.response.mut_header().take_error());
-            } else {
-                let admin_resp = res.response.mut_admin_response();
-                let regions: Vec<_> = admin_resp.mut_splits().take_regions().into();
-                if regions.len() < 2 {
-                    error!(
-                        "invalid split response";
-                        "region_id" => region_id,
-                        "resp" => ?admin_resp
-                    );
-                    resp.mut_region_error().set_message(format!(
-                        "Internal Error: invalid response: {:?}",
-                        admin_resp
-                    ));
-                } else {
-                    if regions.len() == 2 {
-                        resp.set_left(regions[0].clone());
-                        resp.set_right(regions[1].clone());
+            match res {
+                Ok(regions) => {
+                    if regions.len() < 2 {
+                        error!(
+                            "invalid split response";
+                            "region_id" => region_id,
+                            "resp" => ?regions
+                        );
+                        resp.mut_region_error().set_message(format!(
+                            "Internal Error: invalid response: {:?}",
+                            regions
+                        ));
+                    } else {
+                        if regions.len() == 2 {
+                            resp.set_left(regions[0].clone());
+                            resp.set_right(regions[1].clone());
+                        }
+                        resp.set_regions(regions.into());
                     }
-                    resp.set_regions(regions.into());
+                }
+                Err(e) => {
+                    let err: crate::storage::Result<()> = Err(e.into());
+                    if let Some(err) = extract_region_error(&err) {
+                        resp.set_region_error(err)
+                    } else {
+                        resp.mut_region_error()
+                            .set_message(format!("failed to split: {:?}", err));
+                    }
                 }
             }
             sink.success(resp).await?;
@@ -1452,14 +1420,26 @@ fn future_delete_range<E: Engine, L: LockManager, F: KvFormat>(
 // Preparing the flashback for a region will "lock" the region so that
 // there is no any read, write or scheduling operation could be proposed before
 // the actual flashback operation.
+// NOTICE: the caller needs to make sure the version we want to flashback won't
+// be between any transactions that have not been fully committed.
 fn future_prepare_flashback_to_version<E: Engine, L: LockManager, F: KvFormat>(
     // Keep this param to hint the type of E for the compiler.
     storage: &Storage<E, L, F>,
     req: PrepareFlashbackToVersionRequest,
 ) -> impl Future<Output = ServerResult<PrepareFlashbackToVersionResponse>> {
-    let f = storage.get_engine().start_flashback(req.get_context());
+    let storage = storage.clone();
     async move {
-        let res = f.await.map_err(storage::Error::from);
+        let f = storage.get_engine().start_flashback(req.get_context());
+        let mut res = f.await.map_err(storage::Error::from);
+        if matches!(res, Ok(())) {
+            // After the region is put into the flashback state, we need to do a special
+            // prewrite to prevent `resolved_ts` from advancing.
+            let (cb, f) = paired_future_callback();
+            res = storage.sched_txn_command(req.clone().into(), cb);
+            if matches!(res, Ok(())) {
+                res = f.await.unwrap_or_else(|e| Err(box_err!(e)));
+            }
+        }
         let mut resp = PrepareFlashbackToVersionResponse::default();
         if let Some(e) = extract_region_error(&res) {
             resp.set_region_error(e);
@@ -2145,20 +2125,6 @@ fn collect_batch_resp(v: &mut MeasuredBatchResponse, mut e: MeasuredSingleRespon
     v.batch_resp.mut_request_ids().push(e.id);
     v.batch_resp.mut_responses().push(e.resp.consume());
     v.measures.push(e.measure);
-}
-
-fn raftstore_error_to_region_error(e: RaftStoreError, region_id: u64) -> RegionError {
-    if let RaftStoreError::Transport(DiscardReason::Disconnected) = e {
-        // `From::from(RaftStoreError) -> RegionError` treats `Disconnected` as `Other`.
-        let mut region_error = RegionError::default();
-        let region_not_found = RegionNotFound {
-            region_id,
-            ..Default::default()
-        };
-        region_error.set_region_not_found(region_not_found);
-        return region_error;
-    }
-    e.into()
 }
 
 fn needs_reject_raft_append(reject_messages_on_memory_ratio: f64) -> bool {
