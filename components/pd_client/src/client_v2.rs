@@ -56,7 +56,7 @@ use tikv_util::{
     timer::GLOBAL_TIMER_HANDLE,
     warn,
 };
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc as tokio_mpsc};
 use txn_types::TimeStamp;
 
 use super::{
@@ -625,13 +625,13 @@ pub trait PdClient {
 }
 
 pub struct CachedDuplexResponse<T> {
-    latest: mpsc::Receiver<ClientDuplexReceiver<T>>,
+    latest: tokio_mpsc::Receiver<ClientDuplexReceiver<T>>,
     cache: Option<ClientDuplexReceiver<T>>,
 }
 
 impl<T> CachedDuplexResponse<T> {
-    fn new() -> (mpsc::Sender<ClientDuplexReceiver<T>>, Self) {
-        let (tx, rx) = mpsc::unbounded(mpsc::WakePolicy::Immediately);
+    fn new() -> (tokio_mpsc::Sender<ClientDuplexReceiver<T>>, Self) {
+        let (tx, rx) = tokio_mpsc::channel(1);
         (
             tx,
             Self {
@@ -656,7 +656,7 @@ impl<T: Debug> Stream for CachedDuplexResponse<T> {
                 }
             }
 
-            match Pin::new(&mut self.latest).poll_next(cx) {
+            match Pin::new(&mut self.latest).poll_recv(cx) {
                 Poll::Ready(Some(receiver)) => self.cache = Some(receiver),
                 Poll::Ready(None) => return Poll::Ready(None),
                 Poll::Pending => return Poll::Pending,
@@ -697,7 +697,7 @@ impl PdClient for RpcClient {
                     .unwrap_or_else(|e| {
                         panic!("fail to request PD {} err {:?}", "region_heartbeat", e)
                     });
-                if resp_tx.send(hb_rx).is_err() {
+                if resp_tx.send(hb_rx).await.is_err() {
                     break;
                 }
                 let res = hb_tx.send_all(&mut requests).await;
@@ -772,7 +772,7 @@ impl PdClient for RpcClient {
                     .stub()
                     .tso_opt(raw_client.call_option())
                     .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "tso", e));
-                if resp_tx.send(tso_rx).is_err() {
+                if resp_tx.send(tso_rx).await.is_err() {
                     break;
                 }
                 let res = tso_tx.send_all(&mut requests).await;
