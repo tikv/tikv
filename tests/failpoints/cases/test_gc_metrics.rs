@@ -19,7 +19,6 @@ use raftstore::{
     coprocessor::{
         region_info_accessor::MockRegionInfoProvider, CoprocessorHost, RegionChangeEvent,
     },
-    router::RaftStoreBlackHole,
     RegionInfoAccessor,
 };
 use tikv::{
@@ -142,7 +141,6 @@ fn test_txn_gc_keys_handled() {
     feature_gate.set_version("5.0.0").unwrap();
     let mut gc_worker = GcWorker::new(
         prefixed_engine.clone(),
-        RaftStoreBlackHole,
         tx,
         GcConfig::default(),
         feature_gate,
@@ -286,7 +284,6 @@ fn test_raw_gc_keys_handled() {
     let feature_gate = FeatureGate::default();
     let mut gc_worker = GcWorker::new(
         prefixed_engine,
-        RaftStoreBlackHole,
         tx,
         GcConfig::default(),
         feature_gate,
