@@ -131,7 +131,7 @@ impl LockWaitContextSharedState {
             lock_wait_token,
             is_canceled: AtomicBool::new(false),
             external_error_tx: Mutex::new(Some(tx)),
-            external_error_rx: Mutex::new(Soem(rx)),
+            external_error_rx: Mutex::new(Some(rx)),
         }
     }
 
