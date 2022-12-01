@@ -1373,9 +1373,9 @@ dependencies = [
 
 [[package]]
 name = "dashmap"
-version = "5.2.0"
+version = "5.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c8858831f7781322e539ea39e72449c46b059638250c14344fec8d0aa6e539c"
+checksum = "c0834a35a3fce649144119e18da2a4d8ed12ef3862f47183fd46f625d072d96c"
 dependencies = [
  "cfg-if 1.0.0",
  "num_cpus",
@@ -5368,9 +5368,9 @@ dependencies = [
 
 [[package]]
 name = "smallvec"
-version = "1.9.0"
+version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2fd0db749597d91ff862fd1d55ea87f7855a744a8425a64695b6fca237d1dad1"
+checksum = "f2dd574626839106c320a323308629dcb1acfc96e32a8cba364ddc61ac23ee83"
 
 [[package]]
 name = "smartstring"
@@ -5479,6 +5479,7 @@ dependencies = [
  "log_wrappers",
  "openssl",
  "prometheus",
+ "rand 0.8.3",
  "serde",
  "serde_derive",
  "slog",

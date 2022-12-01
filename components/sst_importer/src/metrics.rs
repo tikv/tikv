@@ -101,4 +101,9 @@ lazy_static! {
         "Bucketed histogram of importer apply count",
         &["type"]
     ).unwrap();
+    pub static ref EXT_STORAGE_CACHE_COUNT: IntCounterVec = register_int_counter_vec!(
+        "tikv_import_storage_cache",
+        "The operations over storage cache",
+        &["operation"]
+    ).unwrap();
 }
