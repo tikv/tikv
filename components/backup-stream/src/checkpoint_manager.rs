@@ -329,7 +329,7 @@ pub trait FlushObserver: Send + 'static {
     /// Note the new resolved ts cannot be greater than the old resolved ts.
     async fn rewrite_resolved_ts(
         &mut self,
-        #[allow(unused_variables)] task: &str,
+        #[allow(unused_variables)] _task: &str,
     ) -> Option<TimeStamp> {
         None
     }
