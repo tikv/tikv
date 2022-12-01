@@ -656,9 +656,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     fn schedule_awakened_pessimistic_locks(
         &self,
-        cid: u64,
+        specified_cid: Option<u64>,
+        prepared_latches: Option<Lock>,
         mut awakened_entries: SVec<Box<LockWaitEntry>>,
-        latches: Lock,
     ) {
         let key_callbacks: Vec<_> = awakened_entries
             .iter_mut()
@@ -669,10 +669,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         // TODO: Make flow control take effect on this thing.
         self.schedule_command(
-            Some(cid),
+            specified_cid,
             cmd.into(),
             SchedulerTaskCallback::LockKeyCallbacks(key_callbacks),
-            Some(latches),
+            prepared_latches,
         );
     }
 
@@ -865,9 +865,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
             next_latches.force_assume_acquired();
             self.schedule_awakened_pessimistic_locks(
-                next_cid,
+                Some(next_cid),
+                Some(next_latches),
                 woken_up_resumable_lock_requests,
-                next_latches,
             );
         } else {
             if !tctx.woken_up_resumable_lock_requests.is_empty() {
@@ -1012,15 +1012,19 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 }
 
                 for f in delayed_wake_up_futures {
+                    let self2 = self1.clone();
                     self1
                         .get_sched_pool(CommandPri::High)
                         .pool
                         .spawn(async move {
                             let res = f.await;
-                            // It returns only None currently.
-                            // TODO: Handle not-none case when supporting resumable pessimistic lock
-                            // requests.
-                            assert!(res.is_none());
+                            if let Some(resumable_lock_wait_entry) = res {
+                                self2.schedule_awakened_pessimistic_locks(
+                                    None,
+                                    None,
+                                    smallvec![resumable_lock_wait_entry],
+                                );
+                            }
                         })
                         .unwrap();
                 }
