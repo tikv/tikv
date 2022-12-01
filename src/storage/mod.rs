@@ -64,6 +64,7 @@ use std::{
     borrow::Cow,
     iter,
     marker::PhantomData,
+    mem,
     sync::{
         atomic::{self, AtomicBool, AtomicU64, Ordering},
         Arc,
@@ -87,9 +88,10 @@ use pd_client::FeatureGate;
 use raftstore::store::{util::build_key_range, ReadStats, TxnExt, WriteStats};
 use rand::prelude::*;
 use resource_metering::{FutureExt, ResourceTagFactory};
-use tikv_kv::SnapshotExt;
+use tikv_kv::{OnAppliedCb, SnapshotExt};
 use tikv_util::{
     deadline::Deadline,
+    future::try_poll,
     quota_limiter::QuotaLimiter,
     time::{duration_to_ms, Instant, ThreadReadId},
 };
@@ -1548,11 +1550,18 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
         let mut batch = WriteData::from_modifies(modifies);
         batch.set_allowed_on_disk_almost_full();
-        self.engine.async_write(
+        let res = kv::write(
+            &self.engine,
             &ctx,
             batch,
-            Box::new(|res| callback(res.map_err(Error::from))),
-        )?;
+            Some(Box::new(|res| {
+                callback(mem::replace(res, Ok(())).map_err(Error::from))
+            })),
+        );
+        // TODO: perhaps change delete_range API to return future.
+        if let Some(Some(Err(e))) = try_poll(res) {
+            return Err(Error::from(e));
+        }
         KV_COMMAND_COUNTER_VEC_STATIC.delete_range.inc();
         Ok(())
     }
@@ -1951,14 +1960,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
             let mut batch = WriteData::from_modifies(vec![m]);
             batch.set_allowed_on_disk_almost_full();
-            let (cb, f) = tikv_util::future::paired_future_callback();
-            let async_ret =
-                engine.async_write(&ctx, batch, Box::new(|res| cb(res.map_err(Error::from))));
-            let v: Result<()> = match async_ret {
-                Err(e) => Err(Error::from(e)),
-                Ok(_) => f.await.unwrap(),
-            };
-            callback(v);
+            let res = kv::write(&engine, &ctx, batch, None);
+            callback(
+                res.await
+                    .unwrap_or_else(|| Err(box_err!("stale command")))
+                    .map_err(Error::from),
+            );
             KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
             SCHED_STAGE_COUNTER_VEC.get(CMD).write_finish.inc();
             SCHED_HISTOGRAM_VEC_STATIC
@@ -2054,14 +2061,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls, ts.unwrap());
             let mut batch = WriteData::from_modifies(modifies);
             batch.set_allowed_on_disk_almost_full();
-            let (cb, f) = tikv_util::future::paired_future_callback();
-            let async_ret =
-                engine.async_write(&ctx, batch, Box::new(|res| cb(res.map_err(Error::from))));
-            let v: Result<()> = match async_ret {
-                Err(e) => Err(Error::from(e)),
-                Ok(_) => f.await.unwrap(),
-            };
-            callback(v);
+            let res = kv::write(&engine, &ctx, batch, None);
+            callback(
+                res.await
+                    .unwrap_or_else(|| Err(box_err!("stale command")))
+                    .map_err(Error::from),
+            );
             KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
             SCHED_STAGE_COUNTER_VEC.get(CMD).write_finish.inc();
             SCHED_HISTOGRAM_VEC_STATIC
@@ -2118,14 +2123,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             let m = Self::raw_delete_request_to_modify(cf, key, ts.unwrap());
             let mut batch = WriteData::from_modifies(vec![m]);
             batch.set_allowed_on_disk_almost_full();
-            let (cb, f) = tikv_util::future::paired_future_callback();
-            let async_ret =
-                engine.async_write(&ctx, batch, Box::new(|res| cb(res.map_err(Error::from))));
-            let v: Result<()> = match async_ret {
-                Err(e) => Err(Error::from(e)),
-                Ok(_) => f.await.unwrap(),
-            };
-            callback(v);
+            let res = kv::write(&engine, &ctx, batch, None);
+            callback(
+                res.await
+                    .unwrap_or_else(|| Err(box_err!("stale command")))
+                    .map_err(Error::from),
+            );
             KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
             SCHED_STAGE_COUNTER_VEC.get(CMD).write_finish.inc();
             SCHED_HISTOGRAM_VEC_STATIC
@@ -2171,14 +2174,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             batch.set_allowed_on_disk_almost_full();
 
             // TODO: special notification channel for API V2.
-            let (cb, f) = tikv_util::future::paired_future_callback();
-            let async_ret =
-                engine.async_write(&ctx, batch, Box::new(|res| cb(res.map_err(Error::from))));
-            let v: Result<()> = match async_ret {
-                Err(e) => Err(Error::from(e)),
-                Ok(_) => f.await.unwrap(),
-            };
-            callback(v);
+            let res = kv::write(&engine, &ctx, batch, None);
+            callback(
+                res.await
+                    .unwrap_or_else(|| Err(box_err!("stale command")))
+                    .map_err(Error::from),
+            );
             KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
             SCHED_STAGE_COUNTER_VEC.get(CMD).write_finish.inc();
             SCHED_HISTOGRAM_VEC_STATIC
@@ -2231,14 +2232,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 .collect();
             let mut batch = WriteData::from_modifies(modifies);
             batch.set_allowed_on_disk_almost_full();
-            let (cb, f) = tikv_util::future::paired_future_callback();
-            let async_ret =
-                engine.async_write(&ctx, batch, Box::new(|res| cb(res.map_err(Error::from))));
-            let v: Result<()> = match async_ret {
-                Err(e) => Err(Error::from(e)),
-                Ok(_) => f.await.unwrap(),
-            };
-            callback(v);
+            let res = kv::write(&engine, &ctx, batch, None);
+            callback(
+                res.await
+                    .unwrap_or_else(|| Err(box_err!("stale command")))
+                    .map_err(Error::from),
+            );
             KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
             SCHED_STAGE_COUNTER_VEC.get(CMD).write_finish.inc();
             SCHED_HISTOGRAM_VEC_STATIC
@@ -2993,13 +2992,15 @@ impl<E: Engine> Engine for TxnTestEngine<E> {
         }
     }
 
+    type WriteRes = E::WriteRes;
     fn async_write(
         &self,
         ctx: &Context,
         batch: WriteData,
-        write_cb: tikv_kv::Callback<()>,
-    ) -> tikv_kv::Result<()> {
-        self.engine.async_write(ctx, batch, write_cb)
+        subscribed: u8,
+        on_applied: Option<OnAppliedCb>,
+    ) -> Self::WriteRes {
+        self.engine.async_write(ctx, batch, subscribed, on_applied)
     }
 }
 

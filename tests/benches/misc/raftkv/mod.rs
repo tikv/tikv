@@ -226,17 +226,18 @@ fn bench_async_write(b: &mut test::Bencher) {
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(leader);
     b.iter(|| {
-        let on_finished: EngineCallback<()> = Box::new(|_| {
-            test::black_box(());
-        });
-        kv.async_write(
+        let f = tikv_kv::write(
+            &kv,
             &ctx,
             WriteData::from_modifies(vec![Modify::Delete(
                 CF_DEFAULT,
                 Key::from_encoded(b"fooo".to_vec()),
             )]),
-            on_finished,
-        )
-        .unwrap();
+            None,
+        );
+        let res = f.map(|res| {
+            let _ = test::black_box(res);
+        });
+        let _ = test::black_box(res);
     });
 }

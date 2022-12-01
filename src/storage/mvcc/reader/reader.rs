@@ -206,7 +206,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
     }
 
     /// load the value associated with `key` and pointed by `write`
-    fn load_data(&mut self, key: &Key, write: Write) -> Result<Value> {
+    pub fn load_data(&mut self, key: &Key, write: Write) -> Result<Value> {
         assert_eq!(write.write_type, WriteType::Put);
         if let Some(val) = write.short_value {
             return Ok(val);

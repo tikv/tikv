@@ -39,7 +39,7 @@ use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use crossbeam::utils::CachePadded;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use futures::compat::Future01CompatExt;
+use futures::{compat::Future01CompatExt, StreamExt};
 use kvproto::{
     kvrpcpb::{self, CommandPri, Context, DiskFullOpt, ExtraOp},
     pdpb::QueryKind,
@@ -49,7 +49,7 @@ use pd_client::{Feature, FeatureGate};
 use raftstore::store::TxnExt;
 use resource_metering::{FutureExt, ResourceTagFactory};
 use smallvec::{smallvec, SmallVec};
-use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData};
+use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData, WriteEvent};
 use tikv_util::{
     deadline::Deadline, quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE,
 };
@@ -63,8 +63,8 @@ use crate::{
         errors::SharedError,
         get_causal_ts, get_priority_tag, get_raw_key_guard,
         kv::{
-            self, with_tls_engine, Engine, ExtCallback, FlowStatsReporter, Result as EngineResult,
-            SnapContext, Statistics,
+            self, with_tls_engine, Engine, FlowStatsReporter, Result as EngineResult, SnapContext,
+            Statistics,
         },
         lock_manager::{
             self,
@@ -343,18 +343,11 @@ impl<L: LockManager> SchedulerInner<L> {
             .and_then(|tctx| if tctx.try_own() { tctx.cb.take() } else { None })
     }
 
-    fn take_task_cb_and_pr(
-        &self,
-        cid: u64,
-    ) -> (Option<SchedulerTaskCallback>, Option<ProcessResult>) {
+    fn take_task_cb(&self, cid: u64) -> Option<SchedulerTaskCallback> {
         self.get_task_slot(cid)
             .get_mut(&cid)
-            .map(|tctx| (tctx.cb.take(), tctx.pr.take()))
-            .unwrap_or((None, None))
-    }
-
-    fn store_pr(&self, cid: u64, pr: ProcessResult) {
-        self.get_task_slot(cid).get_mut(&cid).unwrap().pr = Some(pr);
+            .map(|tctx| tctx.cb.take())
+            .unwrap_or(None)
     }
 
     fn store_lock_changes(
@@ -1134,7 +1127,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let write_bytes = task.cmd.write_bytes();
         let tag = task.cmd.tag();
         let cid = task.cid;
-        let priority = task.cmd.priority();
         let tracker = task.tracker;
         let scheduler = self.clone();
         let quota_limiter = self.inner.quota_limiter.clone();
@@ -1314,65 +1306,16 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         to_be_write.deadline = Some(deadline);
 
         let sched = scheduler.clone();
-        let sched_pool = scheduler.get_sched_pool(priority).pool.clone();
 
-        let (proposed_cb, committed_cb): (Option<ExtCallback>, Option<ExtCallback>) =
-            match response_policy {
-                ResponsePolicy::OnApplied => (None, None),
-                ResponsePolicy::OnCommitted => {
-                    self.inner.store_pr(cid, pr.take().unwrap());
-                    let sched = scheduler.clone();
-                    // Currently, the only case that response is returned after finishing
-                    // commit is async applying prewrites for async commit transactions.
-                    // The committed callback is not guaranteed to be invoked. So store
-                    // the `pr` to the tctx instead of capturing it to the closure.
-                    let committed_cb = Box::new(move || {
-                        fail_point!("before_async_apply_prewrite_finish", |_| {});
-                        let (cb, pr) = sched.inner.take_task_cb_and_pr(cid);
-                        Self::early_response(
-                            cid,
-                            cb.unwrap(),
-                            pr.unwrap(),
-                            tag,
-                            CommandStageKind::async_apply_prewrite,
-                        );
-                    });
-                    is_async_apply_prewrite = true;
-                    (None, Some(committed_cb))
-                }
-                ResponsePolicy::OnProposed => {
-                    if pipelined {
-                        // The normal write process is respond to clients and release
-                        // latches after async write finished. If pipelined pessimistic
-                        // locking is enabled, the process becomes parallel and there are
-                        // two msgs for one command:
-                        //   1. Msg::PipelinedWrite: respond to clients
-                        //   2. Msg::WriteFinished: deque context and release latches
-                        // The proposed callback is not guaranteed to be invoked. So store
-                        // the `pr` to the tctx instead of capturing it to the closure.
-                        self.inner.store_pr(cid, pr.take().unwrap());
-                        let sched = scheduler.clone();
-                        // Currently, the only case that response is returned after finishing
-                        // proposed phase is pipelined pessimistic lock.
-                        // TODO: Unify the code structure of pipelined pessimistic lock and
-                        // async apply prewrite.
-                        let proposed_cb = Box::new(move || {
-                            fail_point!("before_pipelined_write_finish", |_| {});
-                            let (cb, pr) = sched.inner.take_task_cb_and_pr(cid);
-                            Self::early_response(
-                                cid,
-                                cb.unwrap(),
-                                pr.unwrap(),
-                                tag,
-                                CommandStageKind::pipelined_write,
-                            );
-                        });
-                        (Some(proposed_cb), None)
-                    } else {
-                        (None, None)
-                    }
-                }
-            };
+        let mut subscribed = WriteEvent::BASIC_EVENT;
+        match response_policy {
+            ResponsePolicy::OnCommitted => {
+                subscribed |= WriteEvent::EVENT_COMMITTED;
+                is_async_apply_prewrite = true;
+            }
+            ResponsePolicy::OnProposed if pipelined => subscribed |= WriteEvent::EVENT_PROPOSED,
+            _ => (),
+        }
 
         if self.inner.flow_controller.enabled() {
             if self.inner.flow_controller.is_unlimited(region_id) {
@@ -1448,15 +1391,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         // transfer leader command must be later than this write command because this
         // write command has been sent to the raftstore. Then, we don't need to worry
         // this request will fail due to the voluntary leader transfer.
-        let _downgraded_guard = pessimistic_locks_guard.and_then(|guard| {
+        let downgraded_guard = pessimistic_locks_guard.and_then(|guard| {
             (!removed_pessimistic_locks.is_empty()).then(|| RwLockWriteGuard::downgrade(guard))
         });
-
-        // The callback to receive async results of write prepare from the storage
-        // engine.
-        let engine_cb = Box::new(move |result: EngineResult<()>| {
-            let ok = result.is_ok();
-            if ok && !removed_pessimistic_locks.is_empty() {
+        let on_applied = Box::new(move |res: &mut kv::Result<()>| {
+            if res.is_ok() && !removed_pessimistic_locks.is_empty() {
                 // Removing pessimistic locks when it succeeds to apply. This should be done in
                 // the apply thread, to make sure it happens before other admin commands are
                 // executed.
@@ -1473,15 +1412,69 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     }
                 }
             }
+        });
 
-            sched_pool
-                .spawn(async move {
+        let mut res = unsafe {
+            with_tls_engine(|e: &mut E| {
+                e.async_write(&ctx, to_be_write, subscribed, Some(on_applied))
+            })
+        };
+        drop(downgraded_guard);
+
+        while let Some(ev) = res.next().await {
+            match ev {
+                WriteEvent::Committed => {
+                    let early_return = (|| {
+                        fail_point!("before_async_apply_prewrite_finish", |_| false);
+                        true
+                    })();
+                    if WriteEvent::subscribed_committed(subscribed) && early_return {
+                        // Currently, the only case that response is returned after finishing
+                        // commit is async applying prewrites for async commit transactions.
+                        let cb = scheduler.inner.take_task_cb(cid);
+                        Self::early_response(
+                            cid,
+                            cb.unwrap(),
+                            pr.take().unwrap(),
+                            tag,
+                            CommandStageKind::async_apply_prewrite,
+                        );
+                    }
+                }
+                WriteEvent::Proposed => {
+                    let early_return = (|| {
+                        fail_point!("before_pipelined_write_finish", |_| false);
+                        true
+                    })();
+                    if WriteEvent::subscribed_proposed(subscribed) && early_return {
+                        // The normal write process is respond to clients and release
+                        // latches after async write finished. If pipelined pessimistic
+                        // locking is enabled, the process becomes parallel and there are
+                        // two msgs for one command:
+                        //   1. Msg::PipelinedWrite: respond to clients
+                        //   2. Msg::WriteFinished: deque context and release latches
+                        // Currently, the only case that response is returned after finishing
+                        // proposed phase is pipelined pessimistic lock.
+                        // TODO: Unify the code structure of pipelined pessimistic lock and
+                        // async apply prewrite.
+                        let cb = scheduler.inner.take_task_cb(cid);
+                        Self::early_response(
+                            cid,
+                            cb.unwrap(),
+                            pr.take().unwrap(),
+                            tag,
+                            CommandStageKind::pipelined_write,
+                        );
+                    }
+                }
+                WriteEvent::Finished(res) => {
                     fail_point!("scheduler_async_write_finish");
+                    let ok = res.is_ok();
 
                     sched.on_write_finished(
                         cid,
                         pr,
-                        result,
+                        res,
                         lock_guards,
                         pipelined,
                         is_async_apply_prewrite,
@@ -1499,23 +1492,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                             sched.inner.flow_controller.unconsume(region_id, write_size);
                         }
                     }
-                })
-                .unwrap()
-        });
-
-        // Safety: `self.sched_pool` ensures a TLS engine exists.
-        unsafe {
-            with_tls_engine(|engine: &mut E| {
-                if let Err(e) =
-                    engine.async_write_ext(&ctx, to_be_write, engine_cb, proposed_cb, committed_cb)
-                {
-                    SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
-
-                    info!("engine async_write failed"; "cid" => cid, "err" => ?e);
-                    scheduler.finish_with_err(cid, e);
+                    return;
                 }
-            })
+            }
         }
+        // If it's not finished while the channel is closed, it means the write
+        // is undeterministic. in this case, we don't know whether the
+        // request is finished or not, so we should not release latch as
+        // it may break correctness.
     }
 
     /// Returns whether it succeeds to write pessimistic locks to the in-memory

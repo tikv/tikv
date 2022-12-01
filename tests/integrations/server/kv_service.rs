@@ -572,11 +572,11 @@ fn test_mvcc_flashback_failed_after_first_batch() {
     must_flashback_to_version(&client, ctx.clone(), check_ts, ts + 1, ts + 2);
     fail::remove("flashback_skip_1_key_in_write");
     fail::remove("flashback_failed_after_first_batch");
-    // skip for key@0
+    // skip for key@1
     must_kv_read_equal(
         &client,
         ctx.clone(),
-        format!("key@{}", from_u32(0_u32).unwrap())
+        format!("key@{}", from_u32(1_u32).unwrap())
             .as_bytes()
             .to_vec(),
         b"value@1".to_vec(),
@@ -586,7 +586,7 @@ fn test_mvcc_flashback_failed_after_first_batch() {
     must_kv_read_equal(
         &client,
         ctx.clone(),
-        format!("key@{}", from_u32(1_u32).unwrap())
+        format!("key@{}", from_u32(2_u32).unwrap())
             .as_bytes()
             .to_vec(),
         b"value@0".to_vec(),
@@ -596,7 +596,7 @@ fn test_mvcc_flashback_failed_after_first_batch() {
     must_kv_read_equal(
         &client,
         ctx.clone(),
-        format!("key@{}", from_u32(FLASHBACK_BATCH_SIZE as u32 - 1).unwrap())
+        format!("key@{}", from_u32(FLASHBACK_BATCH_SIZE as u32).unwrap())
             .as_bytes()
             .to_vec(),
         b"value@1".to_vec(),
@@ -606,11 +606,11 @@ fn test_mvcc_flashback_failed_after_first_batch() {
     fail::cfg("flashback_failed_after_first_batch", "return").unwrap();
     must_flashback_to_version(&client, ctx.clone(), check_ts, ts + 1, ts + 2);
     fail::remove("flashback_failed_after_first_batch");
-    // key@0 must be flahsbacked in the second batch firstly.
+    // key@1 must be flahsbacked in the second batch firstly.
     must_kv_read_equal(
         &client,
         ctx.clone(),
-        format!("key@{}", from_u32(0_u32).unwrap())
+        format!("key@{}", from_u32(1_u32).unwrap())
             .as_bytes()
             .to_vec(),
         b"value@0".to_vec(),
@@ -619,19 +619,19 @@ fn test_mvcc_flashback_failed_after_first_batch() {
     must_kv_read_equal(
         &client,
         ctx.clone(),
-        format!("key@{}", from_u32(FLASHBACK_BATCH_SIZE as u32 - 1).unwrap())
+        format!("key@{}", from_u32(FLASHBACK_BATCH_SIZE as u32).unwrap())
             .as_bytes()
             .to_vec(),
         b"value@0".to_vec(),
         ts + 2,
     );
-    // 2 * (FLASHBACK_BATCH_SIZE - 1) - 1 keys are flashbacked.
+    // 2 * (FLASHBACK_BATCH_SIZE - 1) keys are flashbacked.
     must_kv_read_equal(
         &client,
         ctx.clone(),
         format!(
             "key@{}",
-            from_u32(2 * FLASHBACK_BATCH_SIZE as u32 - 3).unwrap()
+            from_u32(2 * FLASHBACK_BATCH_SIZE as u32 - 2).unwrap()
         )
         .as_bytes()
         .to_vec(),
@@ -646,13 +646,23 @@ fn test_mvcc_flashback_failed_after_first_batch() {
     // Subsequent batches of writes are flashbacked.
     must_kv_read_equal(
         &client,
-        ctx,
+        ctx.clone(),
         format!(
             "key@{}",
-            from_u32(2 * FLASHBACK_BATCH_SIZE as u32 - 3).unwrap()
+            from_u32(2 * FLASHBACK_BATCH_SIZE as u32 - 2).unwrap()
         )
         .as_bytes()
         .to_vec(),
+        b"value@0".to_vec(),
+        ts,
+    );
+    // key@0 which used as prewrite lock also need to be flahsbacked.
+    must_kv_read_equal(
+        &client,
+        ctx,
+        format!("key@{}", from_u32(0_u32).unwrap())
+            .as_bytes()
+            .to_vec(),
         b"value@0".to_vec(),
         ts,
     );
