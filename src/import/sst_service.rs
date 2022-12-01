@@ -5,6 +5,7 @@ use std::{
     future::Future,
     path::PathBuf,
     sync::{Arc, Mutex},
+    thread::sleep,
     time::Duration,
 };
 
@@ -40,7 +41,6 @@ use tikv_util::{
     sys::thread::ThreadBuildWrapper,
     time::{Instant, Limiter},
 };
-use tokio::time::sleep;
 use txn_types::{Key, WriteRef, WriteType};
 
 use super::make_rpc_error;
@@ -95,7 +95,8 @@ where
             .create()
             .unwrap();
         importer.start_switch_mode_check(&threads, engine.clone());
-        threads.spawn_ok(Self::tick(importer.clone()));
+        let importer_clone = importer.clone();
+        threads.spawn_ok(async { Self::tick(importer_clone) });
 
         ImportSstService {
             cfg,
@@ -109,9 +110,9 @@ where
         }
     }
 
-    async fn tick(importer: Arc<SstImporter>) {
+    fn tick(importer: Arc<SstImporter>) {
         loop {
-            sleep(Duration::from_secs(10)).await;
+            sleep(Duration::from_secs(10));
             importer.shrink_by_tick();
         }
     }
