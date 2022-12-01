@@ -64,7 +64,6 @@ pub fn flashback_to_version_read_write(
     );
     statistics.add(&reader.statistics);
     let (keys, _) = keys_result?;
-    println!("----- flahsback keys: {:?}", keys);
     Ok(keys)
 }
 
@@ -154,9 +153,17 @@ pub fn prewrite_flashback_key(
     txn: &mut MvccTxn,
     reader: &mut MvccReader<impl Snapshot>,
     key_to_lock: &Key,
+    end_key: &Key,
     flashback_version: TimeStamp,
     flashback_start_ts: TimeStamp,
 ) -> TxnResult<()> {
+    let first_key = get_first_user_key(reader, key_to_lock, end_key);
+    let key_to_lock = if let Some(ref key_to_lock) = first_key {
+        key_to_lock
+    } else {
+        return Ok(());
+    };
+
     let old_write = reader.get_write(key_to_lock, flashback_version, None)?;
     // Flashback the value in `CF_DEFAULT` as well if the old write is a
     // `WriteType::Put` without the short value.
@@ -225,6 +232,25 @@ pub fn commit_flashback_key(
     Ok(())
 }
 
+pub fn get_first_user_key(
+    reader: &mut MvccReader<impl Snapshot>,
+    start_key: &Key,
+    end_key: &Key,
+) -> Option<Key> {
+    // The start key from TiDB is actually a range, which is used to limit the
+    // upper bound of this flashback when scanning data, so is not a real key.
+    let (keys, _) = reader
+        .scan_latest_user_keys(Some(start_key), Some(end_key), |_, _| true, 1)
+        .unwrap();
+    let key_to_lock = if !keys.is_empty() {
+        keys[0].clone()
+    } else {
+        // If there is no key in user keys, we should return directly.
+        return None;
+    };
+    Some(key_to_lock)
+}
+
 #[cfg(test)]
 pub mod tests {
     use concurrency_manager::ConcurrencyManager;
@@ -283,6 +309,7 @@ pub mod tests {
             &mut txn,
             &mut reader,
             &Key::from_raw(key),
+            &Key::from_raw(b"z"),
             version,
             start_ts,
         )
@@ -336,11 +363,17 @@ pub mod tests {
         let mut txn = MvccTxn::new(start_ts, cm);
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let ctx = Context::default();
-        let mut reader = MvccReader::new_with_ctx(snapshot.clone(), Some(ScanMode::Forward), &ctx);
+        let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &ctx);
+        let first_key = get_first_user_key(&mut reader, &Key::from_raw(key), &Key::from_raw(b"z"));
+        let key_to_lock = if let Some(ref key_to_lock) = first_key {
+            key_to_lock
+        } else {
+            panic!("key not found");
+        };
         commit_flashback_key(
             &mut txn,
             &mut reader,
-            &Key::from_raw(key),
+            key_to_lock,
             start_ts,
             commit_ts,
         )
@@ -539,12 +572,13 @@ pub mod tests {
         must_commit(&mut engine, k, ts, *ts.incr());
         must_get(&mut engine, k, ts, v2);
 
+        let prewrite_key = b"flashback_2pc";
         let (flashback_start_ts, flashback_commit_ts) = (*ts.incr(), *ts.incr());
         // Rollback nothing.
         assert_eq!(must_rollback_lock(&mut engine, k, flashback_start_ts), 0);
-        // Lock special key.
+        // Mock TiDB put a special key which is before b"k".
         assert_eq!(
-            must_prewrite_flashback_key(&mut engine, b"flashback_2pc", 2, flashback_start_ts),
+            must_prewrite_flashback_key(&mut engine, prewrite_key, 2, flashback_start_ts),
             1
         );
         // Flashback (k, v2) to (k, v1).
@@ -562,7 +596,7 @@ pub mod tests {
         assert_eq!(
             must_commit_flashback_key(
                 &mut engine,
-                b"flashback_2pc",
+                prewrite_key,
                 flashback_start_ts,
                 flashback_commit_ts
             ),

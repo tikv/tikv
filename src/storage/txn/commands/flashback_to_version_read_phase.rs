@@ -6,6 +6,7 @@ use txn_types::{Key, Lock, TimeStamp};
 use crate::storage::{
     mvcc::MvccReader,
     txn::{
+        actions::flashback_to_version::get_first_user_key,
         commands::{
             Command, CommandExt, FlashbackToVersion, ProcessResult, ReadCommand, TypedCommand,
         },
@@ -122,6 +123,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
         let tag = self.tag().get_str();
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &self.ctx);
+        let mut start_key = self.start_key.clone();
         let next_state = match self.state {
             FlashbackToVersionState::RollbackLock { next_lock_key, .. } => {
                 let mut key_locks = flashback_to_version_read_lock(
@@ -133,7 +135,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                 if key_locks.is_empty() {
                     // No more locks to rollback, continue to the prewrite phase.
                     FlashbackToVersionState::Prewrite {
-                        key_to_lock: self.start_key.clone(),
+                        key_to_lock: start_key.clone(),
                     }
                 } else {
                     tls_collect_keyread_histogram_vec(tag, key_locks.len() as f64);
@@ -147,23 +149,35 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     }
                 }
             }
-            FlashbackToVersionState::FlashbackWrite { next_write_key, .. } => {
+            FlashbackToVersionState::FlashbackWrite {
+                mut next_write_key, ..
+            } => {
                 if self.commit_ts <= self.start_ts {
                     return Err(Error::from(ErrorInner::InvalidTxnTso {
                         start_ts: self.start_ts,
                         commit_ts: self.commit_ts,
                     }));
                 }
-                // If the key is not locked, it means that the key has been committed before and
-                // we are in a retry.
-                if next_write_key == self.start_key && reader.load_lock(&next_write_key)?.is_none()
-                {
-                    return Ok(ProcessResult::Res);
+                if next_write_key == self.start_key {
+                    // first need to get first write key
+                    let first_key = get_first_user_key(&mut reader, &self.start_key, &self.end_key);
+                    if let Some(key_lock) = first_key {
+                        // modify self.start_key to key_lock
+                        next_write_key = key_lock.clone();
+                        start_key = key_lock;
+                    } else {
+                        return Ok(ProcessResult::Res);
+                    };
+                    // If the key is not locked, it means that the key has been committed before and
+                    // we are in a retry.
+                    if reader.load_lock(&next_write_key)?.is_none() {
+                        return Ok(ProcessResult::Res);
+                    }
                 }
                 let mut keys = flashback_to_version_read_write(
                     &mut reader,
                     next_write_key,
-                    &self.start_key,
+                    &start_key,
                     &self.end_key,
                     self.version,
                     self.commit_ts,
@@ -171,7 +185,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                 )?;
                 if keys.is_empty() {
                     FlashbackToVersionState::Commit {
-                        key_to_commit: self.start_key.clone(),
+                        key_to_commit: start_key.clone(),
                     }
                 } else {
                     tls_collect_keyread_histogram_vec(tag, keys.len() as f64);
@@ -196,7 +210,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                 start_ts: self.start_ts,
                 commit_ts: self.commit_ts,
                 version: self.version,
-                start_key: self.start_key,
+                start_key,
                 end_key: self.end_key,
                 state: next_state,
             }),

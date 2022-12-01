@@ -89,6 +89,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
                 &mut txn,
                 &mut reader,
                 key_to_lock,
+                &self.end_key,
                 self.version,
                 self.start_ts,
             )?,
