@@ -6,7 +6,7 @@ use txn_types::{Key, Lock, TimeStamp};
 use crate::storage::{
     mvcc::MvccReader,
     txn::{
-        actions::flashback_to_version::get_first_user_key,
+        actions::flashback_to_version::{check_flashback_commit, get_first_user_key},
         commands::{
             Command, CommandExt, FlashbackToVersion, ProcessResult, ReadCommand, TypedCommand,
         },
@@ -189,9 +189,14 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     // Commit key needs to match the Prewrite key, which is set as the first user
                     // key.
                     start_key = next_write_key.clone();
-                    // If the key is not locked, it means that the key has been committed before and
-                    // we are in a retry.
-                    if reader.load_lock(&next_write_key)?.is_none() {
+                    // If the key has already been committed by the flashback, it means that we are
+                    // in a retry. It's safe to just return directly.
+                    if check_flashback_commit(
+                        &mut reader,
+                        &start_key,
+                        self.start_ts,
+                        self.commit_ts,
+                    )? {
                         statistics.add(&reader.statistics);
                         return Ok(ProcessResult::Res);
                     }

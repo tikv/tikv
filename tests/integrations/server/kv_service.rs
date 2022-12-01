@@ -781,7 +781,7 @@ fn test_mvcc_flashback_unprepared() {
     req.start_key = b"a".to_vec();
     req.end_key = b"z".to_vec();
     let resp = client.kv_flashback_to_version(&req).unwrap();
-    assert!(resp.get_region_error().has_flashback_not_prepared());
+    assert!(resp.get_error().contains("txn lock not found"));
     must_kv_read_equal(&client, ctx, k, v, 6);
 }
 

@@ -5107,8 +5107,13 @@ where
             _ => {}
         };
         // Check whether the region is in the flashback state and the request could be
-        // proposed.
-        if let Err(e) = util::check_flashback_state(self.fsm.peer.is_in_flashback, msg, region_id) {
+        // proposed. Skip the not prepared error because the
+        // `self.fsm.peer.is_in_flashback` may not be the latest right after applying
+        // the `PrepareFlashback` admin command, we will let it pass here and check in
+        // the apply phase.
+        if let Err(e) =
+            util::check_flashback_state(self.fsm.peer.is_in_flashback, msg, region_id, true)
+        {
             match e {
                 Error::FlashbackInProgress(_) => self
                     .ctx
@@ -6278,7 +6283,10 @@ where
 
     fn on_set_flashback_state(&mut self, is_in_flashback: bool) {
         // Set flashback memory
-        self.fsm.peer.is_in_flashback = is_in_flashback;
+        self.fsm.peer.is_in_flashback = (|| {
+            fail_point!("keep_peer_fsm_flashback_state_false", |_| { false });
+            is_in_flashback
+        })();
         // Let the leader lease to None to ensure that local reads are not executed.
         self.fsm.peer.leader_lease_mut().expire_remote_lease();
     }
