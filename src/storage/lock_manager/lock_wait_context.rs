@@ -112,13 +112,13 @@ pub struct LockWaitContextSharedState {
     /// in [`is_canceled`](LockWaitContextSharedState::is_canceled) for details.
     /// It's only possible to be used in `LockManager`, so there's no contention
     /// on the mutex.
-    external_error_tx: Mutex<mpsc::Sender<StorageError>>,
+    external_error_tx: Mutex<Option<mpsc::Sender<StorageError>>>,
 
     /// The sender for passing errors in some cancellation cases. See comments
     /// in [`is_canceled`](LockWaitContextSharedState::is_canceled) for details.
     /// It's only possible to be used when scheduler tries to push to
     /// `LockWaitQueues`, so there's no contention on the mutex.
-    external_error_rx: Mutex<mpsc::Receiver<StorageError>>,
+    external_error_rx: Mutex<Option<mpsc::Receiver<StorageError>>>,
 }
 
 impl LockWaitContextSharedState {
@@ -130,8 +130,8 @@ impl LockWaitContextSharedState {
             key,
             lock_wait_token,
             is_canceled: AtomicBool::new(false),
-            external_error_tx: Mutex::new(tx),
-            external_error_rx: Mutex::new(rx),
+            external_error_tx: Mutex::new(Some(tx)),
+            external_error_rx: Mutex::new(Soem(rx)),
         }
     }
 
@@ -143,8 +143,8 @@ impl LockWaitContextSharedState {
             key,
             lock_wait_token,
             is_canceled: AtomicBool::new(false),
-            external_error_tx: Mutex::new(tx),
-            external_error_rx: Mutex::new(rx),
+            external_error_tx: Mutex::new(Some(tx)),
+            external_error_rx: Mutex::new(Some(rx)),
         }
     }
 
@@ -157,14 +157,19 @@ impl LockWaitContextSharedState {
     /// most only once. Only used to handle the case that cancelling and
     /// resuming happens concurrently.
     pub(in crate::storage) fn get_external_error(&self) -> StorageError {
-        self.external_error_rx.lock().recv().unwrap()
+        self.external_error_rx
+            .lock()
+            .take()
+            .unwrap()
+            .recv()
+            .unwrap()
     }
 
     /// Stores the external error. This function is expected to be called at
     /// most only once. Only used to handle the case that cancelling and
     /// resuming happens concurrently.
     fn put_external_error(&self, error: StorageError) {
-        if let Err(e) = self.external_error_tx.lock().send(error) {
+        if let Err(e) = self.external_error_tx.lock().take().unwrap().send(error) {
             debug!("failed to set external error"; "err" => ?e);
         }
     }
