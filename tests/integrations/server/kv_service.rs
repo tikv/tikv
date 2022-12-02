@@ -902,7 +902,7 @@ fn test_debug_raft_log() {
     entry.set_index(log_index);
     entry.set_entry_type(eraftpb::EntryType::EntryNormal);
     entry.set_data(vec![42].into());
-    engine.append(region_id, vec![entry.clone()]).unwrap();
+    engine.append(region_id, &[entry.clone()]).unwrap();
     assert_eq!(
         engine.get_entry(region_id, log_index).unwrap().unwrap(),
         entry

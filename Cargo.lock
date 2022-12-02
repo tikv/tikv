@@ -4200,7 +4200,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.3.0"
-source = "git+https://github.com/tabokie/raft-engine.git?branch=221202-savepoint#a10a91a862d0bb2a9eb0ad43fb9287d26fbbeb52"
+source = "git+https://github.com/tabokie/raft-engine.git?branch=221202-savepoint#a27c89582ec0911761fdbe71a07fdab5ec7126b1"
 dependencies = [
  "byteorder",
  "crc32fast",

@@ -350,9 +350,9 @@ const APPLY_STATE_KEY: &[u8] = &[0x04];
 const RECOVER_STATE_KEY: &[u8] = &[0x05];
 
 impl RaftLogBatchTrait for RaftLogBatch {
-    fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
+    fn append(&mut self, raft_group_id: u64, entries: &[Entry]) -> Result<()> {
         self.0
-            .add_entries::<MessageExtTyped>(raft_group_id, &entries)
+            .add_entries::<MessageExtTyped>(raft_group_id, entries)
             .map_err(transfer_error)
     }
 
@@ -375,7 +375,7 @@ impl RaftLogBatchTrait for RaftLogBatch {
         self.0.is_empty()
     }
 
-    fn merge(&mut self, mut src: Self) -> Result<()> {
+    fn merge(&mut self, src: &mut Self) -> Result<()> {
         self.0.merge(&mut src.0).map_err(transfer_error)
     }
 
@@ -550,7 +550,7 @@ impl RaftEngine for RaftLogEngine {
         Ok(())
     }
 
-    fn append(&self, raft_group_id: u64, entries: Vec<Entry>) -> Result<usize> {
+    fn append(&self, raft_group_id: u64, entries: &[Entry]) -> Result<usize> {
         let mut batch = Self::LogBatch::default();
         batch.append(raft_group_id, entries)?;
         self.consume(&mut batch, false)

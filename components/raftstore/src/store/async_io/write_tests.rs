@@ -167,7 +167,7 @@ fn delete_kv(wb: Option<&mut TestKvWriteBatch>, key: &[u8]) {
 
 /// Simulate kv puts on raft engine.
 fn put_raft_kv(wb: Option<&mut TestRaftLogBatch>, key: u64) {
-    wb.unwrap().append(key, vec![new_entry(key, key)]).unwrap();
+    wb.unwrap().append(key, &[new_entry(key, key)]).unwrap();
 }
 
 fn delete_raft_kv(engine: &RaftTestEngine, wb: Option<&mut TestRaftLogBatch>, key: u64) {
