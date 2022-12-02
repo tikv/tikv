@@ -273,7 +273,7 @@ fn test_worker() {
     task_1.raft_state = Some(new_raft_state(5, 123, 6, 8));
     task_1.messages.append(&mut vec![RaftMessage::default()]);
 
-    t.worker.batch.add_write_task(task_1);
+    t.worker.batch.add_write_task(&engines.raft, task_1);
 
     let mut task_2 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_2, 2, 15);
     init_write_batch(&engines, &mut task_2);
@@ -287,7 +287,7 @@ fn test_worker() {
         .messages
         .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
 
-    t.worker.batch.add_write_task(task_2);
+    t.worker.batch.add_write_task(&engines.raft, task_2);
 
     let mut task_3 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_1, 1, 11);
     init_write_batch(&engines, &mut task_3);
@@ -303,7 +303,7 @@ fn test_worker() {
         .messages
         .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
 
-    t.worker.batch.add_write_task(task_3);
+    t.worker.batch.add_write_task(&engines.raft, task_3);
 
     t.worker.write_to_db(true);
 
