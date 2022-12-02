@@ -412,18 +412,6 @@ impl RaftLogBatchTrait for RaftLogBatch {
             .put_message(raft_group_id, APPLY_STATE_KEY.to_vec(), state)
             .map_err(transfer_error)
     }
-
-    fn set_save_point(&mut self) {
-        self.0.set_save_point();
-    }
-
-    fn pop_save_point(&mut self) {
-        self.0.pop_save_point();
-    }
-
-    fn rollback_to_save_point(&mut self) {
-        self.0.rollback();
-    }
 }
 
 impl RaftEngineReadOnly for RaftLogEngine {
