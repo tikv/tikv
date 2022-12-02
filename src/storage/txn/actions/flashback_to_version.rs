@@ -235,12 +235,28 @@ pub fn check_flashback_commit(
     flashback_start_ts: TimeStamp,
     flashback_commit_ts: TimeStamp,
 ) -> TxnResult<bool> {
-    if let Some(write) = reader.get_write(key_to_commit, flashback_commit_ts, None)? {
-        if write.start_ts == flashback_start_ts {
-            return Ok(true);
+    match reader.load_lock(key_to_commit)? {
+        // If the lock exists, it means the flashback hasn't been finished.
+        Some(lock) => {
+            if lock.ts == flashback_start_ts {
+                return Ok(false);
+            }
+        }
+        // If the lock doesn't exist and the flashback commit record exists, it means the flashback
+        // has been finished.
+        None => {
+            if let Some(write) = reader.get_write(key_to_commit, flashback_commit_ts, None)? {
+                if write.start_ts == flashback_start_ts {
+                    return Ok(true);
+                }
+            }
         }
     }
-    Ok(false)
+    Err(txn::Error::from_mvcc(mvcc::ErrorInner::TxnLockNotFound {
+        start_ts: flashback_start_ts,
+        commit_ts: flashback_commit_ts,
+        key: key_to_commit.to_raw()?,
+    }))
 }
 
 pub fn get_first_user_key(
