@@ -1,5 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::ops::Bound;
+
 // #[PerformanceCriticalPath]
 use txn_types::{Key, Lock, TimeStamp};
 
@@ -109,16 +111,16 @@ impl CommandExt for FlashbackToVersionReadPhase {
 ///     - Scan all locks.
 ///     - Rollback all these locks.
 ///   2. [PrepareFlashback] Prewrite phase:
-///     - Prewrite the `self.start_key` specifically to prevent the
-///       `resolved_ts` from advancing.
+///     - Prewrite the first user key after `self.start_key` specifically to
+///       prevent the `resolved_ts` from advancing.
 ///   3. [FinishFlashback] FlashbackWrite phase:
 ///     - Scan all the latest writes and their corresponding values at
 ///       `self.version`.
 ///     - Write the old MVCC version writes again for all these keys with
-///       `self.commit_ts` excluding the `self.start_key`.
+///       `self.commit_ts` excluding the first user key after `self.start_key`.
 ///   4. [FinishFlashback] Commit phase:
-///     - Commit the `self.start_key` we write at the second phase to finish the
-///       flashback.
+///     - Commit the first user key after `self.start_key` we write at the
+///       second phase to finish the flashback.
 impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
         let tag = self.tag().get_str();
@@ -169,6 +171,11 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                         commit_ts: self.commit_ts,
                     }));
                 }
+                // Filter out the SST that does not have a newer version than `self.version` in
+                // `CF_WRITE`, i.e, whose latest `commit_ts` <= `self.version` in the later
+                // scan. By doing this, we can only flashback those keys that have version
+                // changed since `self.version` as much as possible.
+                reader.set_hint_min_ts(Some(Bound::Excluded(self.version)));
                 if next_write_key == self.start_key {
                     // The start key from the client is actually a range which is used to limit the
                     // upper bound of this flashback when scanning data, so it may not be a real

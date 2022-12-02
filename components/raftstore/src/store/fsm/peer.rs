@@ -4738,6 +4738,9 @@ where
             "region" => ?region,
         );
 
+        // Update the flashback flag according to the snapshot region meta.
+        self.fsm.peer.is_in_flashback = region.is_in_flashback;
+
         let mut state = self.ctx.global_replication_state.lock().unwrap();
         let gb = state
             .calculate_commit_group(self.fsm.peer.replication_mode_version, region.get_peers());

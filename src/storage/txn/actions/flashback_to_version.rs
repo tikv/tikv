@@ -1,7 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::ops::Bound;
-
 use txn_types::{Key, Lock, LockType, TimeStamp, Write, WriteType};
 
 use crate::storage::{
@@ -35,11 +33,6 @@ pub fn flashback_to_version_read_write(
     flashback_version: TimeStamp,
     flashback_commit_ts: TimeStamp,
 ) -> TxnResult<Vec<Key>> {
-    // Filter out the SST that does not have a newer version than
-    // `flashback_version` in `CF_WRITE`, i.e, whose latest `commit_ts` <=
-    // `flashback_version`. By doing this, we can only flashback those keys that
-    // have version changed since `flashback_version` as much as possible.
-    reader.set_hint_min_ts(Some(Bound::Excluded(flashback_version)));
     // To flashback the data, we need to get all the latest visible keys first by
     // scanning every unique key in `CF_WRITE`.
     let keys_result = reader.scan_latest_user_keys(
