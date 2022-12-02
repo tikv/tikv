@@ -19,6 +19,28 @@ const TEST_KEY: &[u8] = b"k1";
 const TEST_VALUE: &[u8] = b"v1";
 
 #[test]
+#[cfg(feature = "failpoints")]
+fn test_read_after_prepare_flashback() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    let region = cluster.get_region(TEST_KEY);
+    fail::cfg("keep_peer_fsm_flashback_state_false", "return").unwrap();
+    // Prepare flashback.
+    cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::PrepareFlashback);
+    // Read with flashback flag will succeed even the peer fsm does not updated its
+    // `is_in_flashback` flag.
+    must_request_with_flashback_flag(&mut cluster, &mut region.clone(), new_get_cmd(TEST_KEY));
+    // Writing with flashback flag will succeed since the ApplyFSM owns the
+    // latest `is_in_flashback` flag.
+    must_request_with_flashback_flag(&mut cluster, &mut region.clone(), new_get_cmd(TEST_KEY));
+    fail::remove("keep_peer_fsm_flashback_state_false");
+    // Finish flashback.
+    cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::FinishFlashback);
+}
+
+#[test]
 fn test_prepare_flashback_after_split() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.run();
@@ -281,8 +303,9 @@ fn test_flashback_for_local_read() {
     // Check the leader does a local read.
     let state = cluster.raft_local_state(region.get_id(), store_id);
     assert_eq!(state.get_last_index(), last_index);
-    // A local read with flashback flag will also be blocked.
-    must_get_flashback_not_prepared_error(&mut cluster, &mut region, new_get_cmd(TEST_KEY));
+    // A local read with flashback flag will not be blocked since it won't have any
+    // side effects.
+    must_request_with_flashback_flag(&mut cluster, &mut region, new_get_cmd(TEST_KEY));
 }
 
 #[test]
