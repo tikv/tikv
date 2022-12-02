@@ -5,8 +5,8 @@ use std::ops::Bound;
 use txn_types::{Key, Lock, LockType, TimeStamp, Write, WriteType};
 
 use crate::storage::{
-    mvcc::{MvccReader, MvccTxn, SnapshotReader, MAX_TXN_WRITE_SIZE},
-    txn::{actions::check_txn_status::rollback_lock, Result as TxnResult},
+    mvcc::{self, MvccReader, MvccTxn, SnapshotReader, MAX_TXN_WRITE_SIZE},
+    txn::{self, actions::check_txn_status::rollback_lock, Result as TxnResult},
     Snapshot,
 };
 
@@ -218,8 +218,45 @@ pub fn commit_flashback_key(
             lock.is_pessimistic_txn(),
             flashback_commit_ts,
         );
+    } else {
+        return Err(txn::Error::from_mvcc(mvcc::ErrorInner::TxnLockNotFound {
+            start_ts: flashback_start_ts,
+            commit_ts: flashback_commit_ts,
+            key: key_to_commit.to_raw()?,
+        }));
     }
     Ok(())
+}
+
+// Check if the flashback has been finished before.
+pub fn check_flashback_commit(
+    reader: &mut MvccReader<impl Snapshot>,
+    key_to_commit: &Key,
+    flashback_start_ts: TimeStamp,
+    flashback_commit_ts: TimeStamp,
+) -> TxnResult<bool> {
+    match reader.load_lock(key_to_commit)? {
+        // If the lock exists, it means the flashback hasn't been finished.
+        Some(lock) => {
+            if lock.ts == flashback_start_ts {
+                return Ok(false);
+            }
+        }
+        // If the lock doesn't exist and the flashback commit record exists, it means the flashback
+        // has been finished.
+        None => {
+            if let Some(write) = reader.get_write(key_to_commit, flashback_commit_ts, None)? {
+                if write.start_ts == flashback_start_ts {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Err(txn::Error::from_mvcc(mvcc::ErrorInner::TxnLockNotFound {
+        start_ts: flashback_start_ts,
+        commit_ts: flashback_commit_ts,
+        key: key_to_commit.to_raw()?,
+    }))
 }
 
 pub fn get_first_user_key(

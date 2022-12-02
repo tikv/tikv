@@ -5479,7 +5479,7 @@ dependencies = [
  "log_wrappers",
  "openssl",
  "prometheus",
- "rand 0.8.3",
+ "rand 0.8.5",
  "serde",
  "serde_derive",
  "slog",
