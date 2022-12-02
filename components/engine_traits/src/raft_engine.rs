@@ -183,10 +183,6 @@ pub trait RaftLogBatch: Send {
 
     /// Merge another RaftLogBatch to itself.
     fn merge(&mut self, _: Self) -> Result<()>;
-
-    fn set_save_point(&mut self);
-    fn pop_save_point(&mut self);
-    fn rollback_to_save_point(&mut self);
 }
 
 #[derive(Clone, Copy, Default)]

@@ -54,6 +54,7 @@ const KV_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const KV_WB_DEFAULT_SIZE: usize = 16 * 1024;
 const RAFT_WB_SHRINK_SIZE: usize = 10 * 1024 * 1024;
 const RAFT_WB_DEFAULT_SIZE: usize = 256 * 1024;
+const RAFT_WB_SPLIT_SIZE: usize = 1024 * 1024 * 1024;
 
 /// Notify the event to the specified region.
 pub trait PersistedNotifier: Clone + Send + 'static {
@@ -385,22 +386,6 @@ where
     }
 
     #[inline]
-    fn add_write_task_to_raft_wb(
-        wb: &mut ER::LogBatch,
-        task: &mut WriteTask<EK, ER>,
-    ) -> engine_traits::Result<()> {
-        if let Some(raft_wb) = task.raft_wb.take() {
-            wb.merge(raft_wb)?;
-        }
-        let entries = std::mem::take(&mut task.entries);
-        wb.append(task.region_id, entries)?;
-        if let Some((from, to)) = task.cut_logs {
-            wb.cut_logs(task.region_id, from, to);
-        }
-        Ok(())
-    }
-
-    #[inline]
     fn flush_states_to_raft_wb(&mut self, raft_engine: &ER) {
         for (region_id, state) in self.raft_states.drain() {
             self.raft_wbs
@@ -448,22 +433,27 @@ where
             panic!("task is not valid: {:?}", e);
         }
 
-        let raft_wb = self.raft_wbs.last_mut().unwrap();
-        raft_wb.set_save_point();
-        if Self::add_write_task_to_raft_wb(raft_wb, &mut task).is_ok() {
-            raft_wb.pop_save_point();
-            self.state_size += self
-                .extra_batch_write
-                .merge(task.region_id, &mut task.extra_write);
-            if let Some(raft_state) = task.raft_state.take()
-                && self.raft_states.insert(task.region_id, raft_state).is_none() {
-                self.state_size += std::mem::size_of::<RaftLocalState>();
-            }
-        } else {
-            raft_wb.rollback_to_save_point();
+        if self.raft_wbs.last().unwrap().persist_size() >= RAFT_WB_SPLIT_SIZE {
             self.flush_states_to_raft_wb(raft_engine);
             self.raft_wbs.push(raft_engine.log_batch(16));
-            Self::add_write_task_to_raft_wb(self.raft_wbs.last_mut().unwrap(), &mut task).unwrap();
+        }
+        let raft_wb = self.raft_wbs.last_mut().unwrap();
+        raft_wb
+            .append(task.region_id, std::mem::take(&mut task.entries))
+            .unwrap();
+        if let Some((from, to)) = task.cut_logs {
+            raft_wb.cut_logs(task.region_id, from, to);
+        }
+        if let Some(wb) = task.raft_wb.take() {
+            raft_wb.merge(wb).unwrap();
+        }
+
+        self.state_size += self
+            .extra_batch_write
+            .merge(task.region_id, &mut task.extra_write);
+        if let Some(raft_state) = task.raft_state.take()
+            && self.raft_states.insert(task.region_id, raft_state).is_none() {
+            self.state_size += std::mem::size_of::<RaftLocalState>();
         }
 
         if let Some(prev_readies) = self

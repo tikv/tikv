@@ -431,18 +431,6 @@ impl RaftLogBatch for RocksWriteBatchVec {
     fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()> {
         self.put_msg(&keys::apply_state_key(raft_group_id), state)
     }
-
-    fn set_save_point(&mut self) {
-        WriteBatch::set_save_point(self);
-    }
-
-    fn pop_save_point(&mut self) {
-        WriteBatch::pop_save_point(self).unwrap();
-    }
-
-    fn rollback_to_save_point(&mut self) {
-        WriteBatch::rollback_to_save_point(self).unwrap();
-    }
 }
 
 impl RocksWriteBatchVec {

@@ -209,16 +209,4 @@ impl RaftLogBatch for PanicWriteBatch {
     fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()> {
         panic!()
     }
-
-    fn set_save_point(&mut self) {
-        panic!()
-    }
-
-    fn pop_save_point(&mut self) {
-        panic!()
-    }
-
-    fn rollback_to_save_point(&mut self) {
-        panic!()
-    }
 }
