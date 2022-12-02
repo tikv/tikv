@@ -311,9 +311,9 @@ impl<W: WriteBatch> ExtraBatchWrite<W> {
         let mut inserted = false;
         match mem::replace(extra_write, ExtraWrite::None) {
             ExtraWrite::None => (),
-            ExtraWrite::V1(mut wb) => match self {
+            ExtraWrite::V1(wb) => match self {
                 ExtraBatchWrite::None => *self = ExtraBatchWrite::V1(wb),
-                ExtraBatchWrite::V1(kv_wb) => kv_wb.merge(&mut wb).unwrap(),
+                ExtraBatchWrite::V1(kv_wb) => kv_wb.merge(wb).unwrap(),
                 ExtraBatchWrite::V2(_) => unreachable!("v2 and v1 are mixed used"),
             },
             ExtraWrite::V2(extra_states) => match self {
@@ -384,18 +384,18 @@ where
         }
     }
 
-    /// If it fails, the task will stay unmodified.
     #[inline]
     fn add_write_task_to_raft_wb(
         wb: &mut ER::LogBatch,
         task: &mut WriteTask<EK, ER>,
     ) -> engine_traits::Result<()> {
-        wb.append(task.region_id, &task.entries)?;
+        if let Some(raft_wb) = task.raft_wb.take() {
+            wb.merge(raft_wb)?;
+        }
+        let entries = std::mem::take(&mut task.entries);
+        wb.append(task.region_id, entries)?;
         if let Some((from, to)) = task.cut_logs {
             wb.cut_logs(task.region_id, from, to);
-        }
-        if let Some(raft_wb) = task.raft_wb.as_mut() {
-            wb.merge(raft_wb)?;
         }
         Ok(())
     }

@@ -54,7 +54,7 @@ pub trait RaftEngineDebug: RaftEngine + Sync + Send + 'static {
             Ok(true)
         })
         .unwrap();
-        batch.append(region_id, &entries).unwrap();
+        batch.append(region_id, entries).unwrap();
         if let Some(state) = self.get_raft_state(region_id).unwrap() {
             batch.put_raft_state(region_id, &state).unwrap();
         }
@@ -101,7 +101,7 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
     /// Append some log entries and return written bytes.
     ///
     /// Note: `RaftLocalState` won't be updated in this call.
-    fn append(&self, raft_group_id: u64, entries: &[Entry]) -> Result<usize>;
+    fn append(&self, raft_group_id: u64, entries: Vec<Entry>) -> Result<usize>;
 
     fn put_store_ident(&self, ident: &StoreIdent) -> Result<()>;
 
@@ -161,7 +161,7 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
 
 pub trait RaftLogBatch: Send {
     /// Note: `RaftLocalState` won't be updated in this call.
-    fn append(&mut self, raft_group_id: u64, entries: &[Entry]) -> Result<()>;
+    fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()>;
 
     /// Remove Raft logs in [`from`, `to`) which will be overwritten later.
     fn cut_logs(&mut self, raft_group_id: u64, from: u64, to: u64);
@@ -181,9 +181,8 @@ pub trait RaftLogBatch: Send {
     /// Whether it is empty or not.
     fn is_empty(&self) -> bool;
 
-    /// Merge another RaftLogBatch to itself. If it fails, the other batch will
-    /// stay unmodified, otherwise it becomes empty.
-    fn merge(&mut self, _: &mut Self) -> Result<()>;
+    /// Merge another RaftLogBatch to itself.
+    fn merge(&mut self, _: Self) -> Result<()>;
 
     fn set_save_point(&mut self);
     fn pop_save_point(&mut self);
