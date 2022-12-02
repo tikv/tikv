@@ -6284,7 +6284,7 @@ where
     fn on_set_flashback_state(&mut self, is_in_flashback: bool) {
         // Set flashback memory
         self.fsm.peer.is_in_flashback = (|| {
-            fail_point!("keep_peer_fsm_flashback_state_false", |_| { false });
+            fail_point!("keep_peer_fsm_flashback_state_false", |_| false);
             is_in_flashback
         })();
         // Let the leader lease to None to ensure that local reads are not executed.
