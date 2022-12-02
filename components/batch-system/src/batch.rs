@@ -15,13 +15,13 @@ use std::{
     time::Duration,
 };
 
-use crossbeam::channel::{SendError};
+use crossbeam::channel::SendError;
 use fail::fail_point;
 use file_system::{set_io_type, IoType};
 use kvproto::kvrpcpb::CommandPri;
 use tikv_util::{
-    debug, error, info, mpsc, safe_panic, sys::thread::StdThreadBuildWrapper, thd_name,
-    time::Instant, warn, mpsc::priority_queue,
+    debug, error, info, mpsc, mpsc::priority_queue, safe_panic, sys::thread::StdThreadBuildWrapper,
+    thd_name, time::Instant, warn,
 };
 
 use crate::{
@@ -59,8 +59,9 @@ macro_rules! impl_sched {
 
         impl<N, C> FsmScheduler for $name<N, C>
         where
-            $fsm: Fsm, 
-            N: Fsm, C: Fsm,
+            $fsm: Fsm,
+            N: Fsm,
+            C: Fsm,
         {
             type Fsm = $fsm;
 
@@ -652,7 +653,7 @@ where
     }
 }
 
-struct PoolStateBuilder<N: Fsm, C:Fsm> {
+struct PoolStateBuilder<N: Fsm, C: Fsm> {
     max_batch_size: usize,
     reschedule_duration: Duration,
     fsm_receiver: priority_queue::Receiver<FsmTypes<N, C>>,

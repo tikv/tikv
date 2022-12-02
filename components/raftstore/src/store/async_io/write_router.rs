@@ -13,9 +13,9 @@ use std::{
     time::Duration,
 };
 
-use crossbeam::channel::{Sender};
+use crossbeam::channel::Sender;
 use engine_traits::{KvEngine, RaftEngine};
-use tikv_util::{info, time::Instant, mpsc::priority_queue};
+use tikv_util::{info, mpsc::priority_queue, time::Instant};
 
 use crate::store::{
     async_io::write::WriteMsg, config::Config, fsm::store::PollContext, local_metrics::RaftMetrics,
@@ -29,6 +29,7 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
+    fn resource_ctl(&self) -> &ResourceController<EK, ER>;
     fn write_senders(&self) -> &WriteSenders<EK, ER>;
     fn config(&self) -> &Config;
     fn raft_metrics(&self) -> &RaftMetrics;
@@ -39,6 +40,10 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
+    fn resource_ctl(&self) -> &ResourceController<EK, ER> {
+        &self.resource_ctl
+    }
+
     fn write_senders(&self) -> &WriteSenders<EK, ER> {
         &self.write_senders
     }
@@ -223,7 +228,7 @@ where
     }
 
     fn send<C: WriteRouterContext<EK, ER>>(&self, ctx: &mut C, msg: WriteMsg<EK, ER>) {
-        let pri = msg.priority(); 
+        let pri = ctx.resource_ctl().get_priority("default", msg.priority());
         ctx.write_senders().pri_write_sender.send(msg, pri).unwrap();
         // match ctx.write_senders()[self.writer_id].try_send(msg) {
         //     Ok(()) => (),

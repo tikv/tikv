@@ -17,7 +17,7 @@ use raftstore::{
     router::RaftStoreRouter,
     store::{CheckLeaderTask, SnapManager},
 };
-use resource_control::{ResourceGroupManager};
+use resource_control::ResourceGroupManager;
 use security::SecurityManager;
 use tikv_util::{
     config::VersionTrack,

@@ -14,12 +14,11 @@ use std::{
     time::Duration,
 };
 
-use kvproto::kvrpcpb::CommandPri;
-use crate::store::ProposalContext;
 use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine, RAFT_LOG_MULTI_GET_CNT};
 use fail::fail_point;
 use kvproto::{
+    kvrpcpb::CommandPri,
     metapb,
     raft_serverpb::{RaftApplyState, RaftLocalState},
 };
@@ -32,7 +31,11 @@ use super::{
     metrics::*, peer_storage::storage_error, WriteTask, MEMTRACE_ENTRY_CACHE, RAFT_INIT_LOG_INDEX,
     RAFT_INIT_LOG_TERM,
 };
-use crate::{bytes_capacity, store::ReadTask, Result};
+use crate::{
+    bytes_capacity,
+    store::{ProposalContext, ReadTask},
+    Result,
+};
 
 const MAX_ASYNC_FETCH_TRY_CNT: usize = 3;
 const SHRINK_CACHE_CAPACITY: usize = 64;

@@ -25,6 +25,7 @@ use raftstore::{
         RefreshConfigTask, SnapManager, SplitCheckTask, Transport,
     },
 };
+use resource_control::ResourceController;
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use tikv_util::{
     config::VersionTrack,
@@ -223,6 +224,7 @@ where
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        resource_ctl: Arc<ResourceController>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -260,6 +262,7 @@ where
             concurrency_manager,
             collector_reg_handle,
             causal_ts_provider,
+            resource_ctl,
         )?;
 
         Ok(())
@@ -507,6 +510,7 @@ where
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        resource_ctl: Arc<ResourceController>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -540,6 +544,7 @@ where
             collector_reg_handle,
             self.health_service.clone(),
             causal_ts_provider,
+            resource_ctl,
         )?;
         Ok(())
     }

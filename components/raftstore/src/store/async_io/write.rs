@@ -20,20 +20,22 @@ use engine_traits::{
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
-use kvproto::raft_serverpb::{
-    PeerState, RaftApplyState, RaftLocalState, RaftMessage, RegionLocalState,
+use kvproto::{
+    kvrpcpb::CommandPri,
+    raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RaftMessage, RegionLocalState},
 };
-use kvproto::kvrpcpb::CommandPri;
 use protobuf::Message;
 use raft::eraftpb::Entry;
 use tikv_util::{
     box_err,
     config::{Tracker, VersionTrack},
-    debug, info, slow_log,
+    debug, info,
+    mpsc::priority_queue,
+    slow_log,
     sys::thread::StdThreadBuildWrapper,
     thd_name,
     time::{duration_to_sec, Instant},
-    warn, mpsc::priority_queue,
+    warn,
 };
 
 use super::write_router::WriteSenders;
@@ -243,8 +245,8 @@ where
     Shutdown,
 }
 
-impl<EK, ER> WriteMsg<EK, ER> 
-where 
+impl<EK, ER> WriteMsg<EK, ER>
+where
     EK: KvEngine,
     ER: RaftEngine,
 {
@@ -892,7 +894,10 @@ where
     ER: RaftEngine,
 {
     pub fn senders(&self) -> WriteSenders<EK, ER> {
-        WriteSenders::new(self.writers.clone(), self.pri_writer.as_ref().unwrap().clone())
+        WriteSenders::new(
+            self.writers.clone(),
+            self.pri_writer.as_ref().unwrap().clone(),
+        )
     }
 
     pub fn spawn<T: Transport + 'static, N: PersistedNotifier>(

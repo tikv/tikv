@@ -65,7 +65,8 @@ impl ResourceGroupManager {
     }
 
     pub fn add_resource_group(&self, config: ResourceGroupConfig) -> Option<ResourceGroupConfig> {
-        self.resource_groups.insert(config.name.to_lowercase(), config)
+        self.resource_groups
+            .insert(config.name.to_lowercase(), config)
     }
 
     pub fn remove_resource_group(&self, name: &str) -> Option<ResourceGroupConfig> {
@@ -85,12 +86,9 @@ impl ResourceGroupManager {
     }
 
     pub fn get_all_resource_groups(&self) -> Vec<ResourceGroupConfig> {
-        self.resource_groups
-            .iter()
-            .map(|g| g.clone())
-            .collect()
+        self.resource_groups.iter().map(|g| g.clone()).collect()
     }
-} 
+}
 
 pub struct ResourceController {
     manager: Arc<ResourceGroupManager>,
@@ -121,12 +119,14 @@ impl ResourceController {
             // get the resource group config from the manager
             if let Some(g) = self.manager.get_resource_group(name) {
                 let config = g.value();
-                let priority_factor = (self.manager.total_cpu_quota() / config.cpu_quota * 100.0) as u64;
+                let priority_factor =
+                    (self.manager.total_cpu_quota() / config.cpu_quota * 100.0) as u64;
                 let group = ResourceGroup {
                     priority_factor,
                     virtual_time: AtomicU64::new(self.last_min_vt.load(Ordering::Acquire)),
                 };
-                self.resource_consumptions.insert(config.name.to_lowercase(), group);
+                self.resource_consumptions
+                    .insert(config.name.to_lowercase(), group);
                 return self.resource_consumptions.get(name).unwrap();
             } else {
                 self.resource_consumptions.get("default").unwrap()
@@ -171,9 +171,7 @@ impl ResourceController {
         let mut max_vt = 0;
         self.resource_consumptions.iter().for_each(|g| {
             let vt = g.current_vt();
-            GROUP_PRIORITY
-                .with_label_values(&[&g.key()])
-                .set(vt as f64);
+            GROUP_PRIORITY.with_label_values(&[&g.key()]).set(vt as f64);
             if min_vt > vt {
                 min_vt = vt;
             }

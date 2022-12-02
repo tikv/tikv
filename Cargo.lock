@@ -4287,6 +4287,7 @@ dependencies = [
  "raft",
  "raft-proto",
  "rand 0.8.3",
+ "resource_control",
  "resource_metering",
  "serde",
  "serde_derive",

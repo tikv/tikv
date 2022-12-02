@@ -1099,6 +1099,7 @@ where
             self.concurrency_manager.clone(),
             collector_reg_handle,
             self.causal_ts_provider.clone(),
+            Arc::new(ResourceController::new(self.resource_manager.clone())),
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 

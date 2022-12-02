@@ -27,7 +27,7 @@ use fail::fail_point;
 use getset::{Getters, MutGetters};
 use kvproto::{
     errorpb,
-    kvrpcpb::{DiskFullOpt, CommandPri, ExtraOp as TxnExtraOp, LockInfo},
+    kvrpcpb::{CommandPri, DiskFullOpt, ExtraOp as TxnExtraOp, LockInfo},
     metapb::{self, PeerRole},
     pdpb::{self, PeerStats},
     raft_cmdpb::{

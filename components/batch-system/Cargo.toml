@@ -13,6 +13,7 @@ crossbeam = "0.8"
 derive_more = { version = "0.99", optional = true }
 fail = "0.5"
 file_system = { workspace = true }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 lazy_static = "1.3"
 online_config = { workspace = true }
 prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
@@ -22,7 +23,6 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 
 [dev-dependencies]
 criterion = "0.3"

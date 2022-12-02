@@ -1,15 +1,17 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{
-    atomic::{AtomicU64, AtomicPtr, AtomicUsize, Ordering},
-    Arc,
+use std::{
+    cmp,
+    sync::{
+        atomic::{AtomicPtr, AtomicU64, AtomicUsize, Ordering},
+        Arc,
+    },
 };
-use std::cmp;
 
 use crossbeam::channel::{RecvError, SendError, TryRecvError, TrySendError};
 use crossbeam_skiplist::SkipMap;
 use kvproto::kvrpcpb::CommandPri;
-use parking_lot::{Mutex, Condvar};
+use parking_lot::{Condvar, Mutex};
 
 pub fn unbounded<T: Send>() -> (Sender<T>, Receiver<T>) {
     let queue = Arc::new(PriorityQueue::new());
@@ -52,7 +54,7 @@ impl<T> Drop for Cell<T> {
 
 #[derive(Default)]
 struct PriorityQueue<T> {
-    queue: SkipMap<MapKey, Cell<T>>,
+    queue: SkipMap<u64, Cell<T>>,
     disconnected: Mutex<bool>,
     available: Condvar,
 
@@ -75,7 +77,7 @@ impl<T> PriorityQueue<T> {
         }
     }
 
-    pub fn get_map_key(&self, pri: CommandPri) -> MapKey {
+    pub fn get_map_key(&self, pri: u64) -> MapKey {
         MapKey {
             priority: pri,
             sequence: self.sequencer.fetch_add(1, Ordering::Relaxed),
@@ -120,16 +122,16 @@ pub struct Sender<T: Send> {
 }
 
 impl<T: Send + 'static> Sender<T> {
-    pub fn try_send(&self, msg: T, pri: CommandPri) -> Result<(), TrySendError<T>> {
-        self.send(msg, pri).map_err(|SendError(msg)| TrySendError::Disconnected(msg))
+    pub fn try_send(&self, msg: T, pri: u64) -> Result<(), TrySendError<T>> {
+        self.send(msg, pri)
+            .map_err(|SendError(msg)| TrySendError::Disconnected(msg))
     }
 
-    pub fn send(&self, msg: T, pri: CommandPri) -> Result<(), SendError<T>> {
+    pub fn send(&self, msg: T, pri: u64) -> Result<(), SendError<T>> {
         if self.inner.receivers.load(Ordering::Acquire) == 0 {
             return Err(SendError(msg));
         }
-        let key = self.inner.get_map_key(pri);
-        self.inner.queue.insert(key, Cell::new(msg));
+        self.inner.queue.insert(pri, Cell::new(msg));
         self.inner.available.notify_one();
         Ok(())
     }
@@ -184,7 +186,7 @@ impl<T: Send + 'static> Receiver<T> {
                     let mut disconnected = self.inner.disconnected.lock();
                     if *disconnected {
                         return Err(RecvError);
-                    } 
+                    }
                     self.inner.available.wait(&mut disconnected);
                 }
             }
@@ -234,7 +236,10 @@ mod tests {
 
         drop(rx);
         assert_eq!(tx.send(2, CommandPri::Low), Err(SendError(2)));
-        assert_eq!(tx.try_send(2, CommandPri::Low), Err(TrySendError::Disconnected(2)));
+        assert_eq!(
+            tx.try_send(2, CommandPri::Low),
+            Err(TrySendError::Disconnected(2))
+        );
 
         let (tx, rx) = super::unbounded::<u64>();
         drop(tx);

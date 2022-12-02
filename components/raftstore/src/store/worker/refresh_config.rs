@@ -41,7 +41,11 @@ where
 {
     pub fn decrease_by(&mut self, size: usize) {
         for _ in 0..size {
-            if let Err(e) = self.state.fsm_sender.send(FsmTypes::Empty, kvproto::kvrpcpb::CommandPri::Normal) {
+            if let Err(e) = self
+                .state
+                .fsm_sender
+                .send(FsmTypes::Empty, kvproto::kvrpcpb::CommandPri::Normal)
+            {
                 error!(
                     "failed to decrese thread pool";
                     "decrease to" => size,
