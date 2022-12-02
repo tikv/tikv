@@ -2123,7 +2123,7 @@ pub mod tests {
             apply_entry.set_term(0);
             apply_state.mut_truncated_state().set_index(10);
             kv.put_msg_cf(CF_RAFT, &keys::apply_state_key(region_id), &apply_state)?;
-            raft.append(region_id, &[apply_entry])?;
+            raft.append(region_id, vec![apply_entry])?;
 
             // Put region info into kv engine.
             let region = gen_test_region(region_id, 1, 1);

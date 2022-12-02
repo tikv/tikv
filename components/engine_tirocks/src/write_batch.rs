@@ -169,13 +169,12 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
         ))
     }
 
-    fn merge(&mut self, mut other: &mut Self) -> Result<()> {
+    fn merge(&mut self, mut other: Self) -> Result<()> {
         if !self.engine.multi_batch_write() {
             let self_wb = &mut self.wbs[0];
             for wb in &other.wbs[..=other.index] {
                 self_wb.append(wb).map_err(r2e)?;
             }
-            other.clear();
             return Ok(());
         }
         let self_wb = &mut self.wbs[self.index];
@@ -197,7 +196,6 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
                 }
             }
         }
-        other.clear();
         Ok(())
     }
 }

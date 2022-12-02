@@ -160,14 +160,18 @@ fn run_dump_raftdb_worker(
                                     batch.put_raft_state(region_id, &state).unwrap();
                                     // Assume that we always scan entry first and raft state at the
                                     // end.
-                                    batch.append(region_id, &entries).unwrap();
+                                    batch
+                                        .append(region_id, std::mem::take(&mut entries))
+                                        .unwrap();
                                 }
                                 _ => unreachable!("There is only 2 types of keys in raft"),
                             }
                             // Avoid long log batch.
                             if local_size >= BATCH_THRESHOLD {
                                 local_size = 0;
-                                batch.append(region_id, &entries).unwrap();
+                                batch
+                                    .append(region_id, std::mem::take(&mut entries))
+                                    .unwrap();
 
                                 let size = new_engine.consume(&mut batch, false).unwrap();
                                 count_size.fetch_add(size, Ordering::Relaxed);
@@ -201,7 +205,7 @@ fn run_dump_raft_engine_worker(
                 begin += old_engine
                     .fetch_entries_to(id, begin, end, Some(BATCH_THRESHOLD), &mut entries)
                     .unwrap() as u64;
-                batch.append(id, &entries).unwrap();
+                batch.append(id, entries).unwrap();
                 let size = new_engine.consume(&mut batch, false).unwrap();
                 count_size.fetch_add(size, Ordering::Relaxed);
             }
@@ -295,7 +299,7 @@ mod tests {
             e.set_index(i);
             entries.push(e);
         }
-        batch.append(num, &entries).unwrap();
+        batch.append(num, entries).unwrap();
     }
 
     // Get data from raft engine and assert.
