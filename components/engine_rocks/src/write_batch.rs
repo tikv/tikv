@@ -172,11 +172,12 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
         Err(r2e("no save point"))
     }
 
-    fn merge(&mut self, other: Self) -> Result<()> {
+    fn merge(&mut self, other: &mut Self) -> Result<()> {
         for wb in other.as_inner() {
             self.check_switch_batch();
             self.wbs[self.index].append(wb.data());
         }
+        other.clear();
         Ok(())
     }
 }
