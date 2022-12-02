@@ -26,6 +26,7 @@
 #![feature(drain_filter)]
 #![feature(deadline_api)]
 #![feature(let_chains)]
+#![feature(type_alias_impl_trait)]
 
 #[macro_use(fail_point)]
 extern crate fail;

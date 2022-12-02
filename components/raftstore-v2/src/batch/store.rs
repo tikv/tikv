@@ -3,14 +3,19 @@
 use std::{
     ops::{Deref, DerefMut},
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 
 use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, HandleResult, HandlerBuilder, PollHandler,
 };
+use causal_ts::CausalTsProviderImpl;
 use collections::HashMap;
+use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{Sender, TrySendError};
 use engine_traits::{Engines, KvEngine, RaftEngine, TabletFactory};
 use file_system::{set_io_type, IoType};
@@ -19,6 +24,7 @@ use kvproto::{
     metapb::Store,
     raft_serverpb::{PeerState, RaftMessage},
 };
+use pd_client::PdClient;
 use raft::INVALID_ID;
 use raftstore::store::{
     fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, ReadRunner, ReadTask,
@@ -43,6 +49,7 @@ use crate::{
     fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate, StoreMeta},
     raft::Storage,
     router::{PeerMsg, PeerTick, StoreMsg},
+    worker::{PdRunner, PdTask},
     Error, Result,
 };
 
@@ -70,6 +77,8 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub tablet_factory: Arc<dyn TabletFactory<EK>>,
     pub apply_pool: FuturePool,
     pub read_scheduler: Scheduler<ReadTask<EK>>,
+    pub snap_mgr: TabletSnapManager,
+    pub pd_scheduler: Scheduler<PdTask>,
 }
 
 /// A [`PollHandler`] that handles updates of [`StoreFsm`]s and [`PeerFsm`]s.
@@ -217,10 +226,12 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     trans: T,
     router: StoreRouter<EK, ER>,
     read_scheduler: Scheduler<ReadTask<EK>>,
+    pd_scheduler: Scheduler<PdTask>,
     write_senders: WriteSenders<EK, ER>,
     apply_pool: FuturePool,
     logger: Logger,
     store_meta: Arc<Mutex<StoreMeta<EK>>>,
+    snap_mgr: TabletSnapManager,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
@@ -232,9 +243,11 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         trans: T,
         router: StoreRouter<EK, ER>,
         read_scheduler: Scheduler<ReadTask<EK>>,
+        pd_scheduler: Scheduler<PdTask>,
         store_writers: &mut StoreWriters<EK, ER>,
         logger: Logger,
         store_meta: Arc<Mutex<StoreMeta<EK>>>,
+        snap_mgr: TabletSnapManager,
     ) -> Self {
         let pool_size = cfg.value().apply_batch_system.pool_size;
         let max_pool_size = std::cmp::max(
@@ -254,10 +267,12 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             trans,
             router,
             read_scheduler,
+            pd_scheduler,
             apply_pool,
             logger,
             write_senders: store_writers.senders(),
             store_meta,
+            snap_mgr,
         }
     }
 
@@ -330,6 +345,8 @@ where
             tablet_factory: self.tablet_factory.clone(),
             apply_pool: self.apply_pool.clone(),
             read_scheduler: self.read_scheduler.clone(),
+            snap_mgr: self.snap_mgr.clone(),
+            pd_scheduler: self.pd_scheduler.clone(),
         };
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
         StorePoller::new(poll_ctx, cfg_tracker)
@@ -341,6 +358,7 @@ where
 struct Workers<EK: KvEngine, ER: RaftEngine> {
     /// Worker for fetching raft logs asynchronously
     async_read_worker: Worker,
+    pd_worker: Worker,
     store_writers: StoreWriters<EK, ER>,
 }
 
@@ -348,6 +366,7 @@ impl<EK: KvEngine, ER: RaftEngine> Default for Workers<EK, ER> {
     fn default() -> Self {
         Self {
             async_read_worker: Worker::new("async-read-worker"),
+            pd_worker: Worker::new("pd-worker"),
             store_writers: StoreWriters::default(),
         }
     }
@@ -358,33 +377,62 @@ pub struct StoreSystem<EK: KvEngine, ER: RaftEngine> {
     system: BatchSystem<PeerFsm<EK, ER>, StoreFsm>,
     workers: Option<Workers<EK, ER>>,
     logger: Logger,
+    shutdown: Arc<AtomicBool>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
-    pub fn start<T>(
+    pub fn start<T, C>(
         &mut self,
         store_id: u64,
         cfg: Arc<VersionTrack<Config>>,
         raft_engine: ER,
         tablet_factory: Arc<dyn TabletFactory<EK>>,
         trans: T,
+        pd_client: Arc<C>,
         router: &StoreRouter<EK, ER>,
         store_meta: Arc<Mutex<StoreMeta<EK>>>,
         snap_mgr: TabletSnapManager,
+        concurrency_manager: ConcurrencyManager,
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     ) -> Result<()>
     where
         T: Transport + 'static,
+        C: PdClient + 'static,
     {
+        let sync_router = Mutex::new(router.clone());
+        pd_client.handle_reconnect(move || {
+            sync_router
+                .lock()
+                .unwrap()
+                .broadcast_normal(|| PeerMsg::Tick(PeerTick::PdHeartbeat));
+        });
+
         let mut workers = Workers::default();
         workers
             .store_writers
             .spawn(store_id, raft_engine.clone(), None, router, &trans, &cfg)?;
 
         let mut read_runner = ReadRunner::new(router.clone(), raft_engine.clone());
-        read_runner.set_snap_mgr(snap_mgr);
+        read_runner.set_snap_mgr(snap_mgr.clone());
         let read_scheduler = workers
             .async_read_worker
             .start("async-read-worker", read_runner);
+
+        let pd_scheduler = workers.pd_worker.start(
+            "pd-worker",
+            PdRunner::new(
+                store_id,
+                pd_client,
+                raft_engine.clone(),
+                tablet_factory.clone(),
+                router.clone(),
+                workers.pd_worker.remote(),
+                concurrency_manager,
+                causal_ts_provider,
+                self.logger.clone(),
+                self.shutdown.clone(),
+            ),
+        );
 
         let mut builder = StorePollerBuilder::new(
             cfg.clone(),
@@ -394,9 +442,11 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             trans,
             router.clone(),
             read_scheduler,
+            pd_scheduler,
             &mut workers.store_writers,
             self.logger.clone(),
             store_meta.clone(),
+            snap_mgr,
         );
         self.workers = Some(workers);
         let peers = builder.init()?;
@@ -433,6 +483,8 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
     }
 
     pub fn shutdown(&mut self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+
         if self.workers.is_none() {
             return;
         }
@@ -444,6 +496,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
 
         workers.store_writers.shutdown();
         workers.async_read_worker.stop();
+        workers.pd_worker.stop();
     }
 }
 
@@ -465,7 +518,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreRouter<EK, ER> {
     ) -> std::result::Result<(), TrySendError<Box<RaftMessage>>> {
         let id = msg.get_region_id();
         let peer_msg = PeerMsg::RaftMessage(msg);
-        let store_msg = match self.try_send(id, peer_msg) {
+        let store_msg = match self.router.try_send(id, peer_msg) {
             Either::Left(Ok(())) => return Ok(()),
             Either::Left(Err(TrySendError::Full(PeerMsg::RaftMessage(m)))) => {
                 return Err(TrySendError::Full(m));
@@ -476,7 +529,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreRouter<EK, ER> {
             Either::Right(PeerMsg::RaftMessage(m)) => StoreMsg::RaftMessage(m),
             _ => unreachable!(),
         };
-        match self.send_control(store_msg) {
+        match self.router.send_control(store_msg) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(StoreMsg::RaftMessage(m))) => Err(TrySendError::Full(m)),
             Err(TrySendError::Disconnected(StoreMsg::RaftMessage(m))) => {
@@ -520,6 +573,7 @@ where
         system,
         workers: None,
         logger: logger.clone(),
+        shutdown: Arc::new(AtomicBool::new(false)),
     };
     (StoreRouter { router, logger }, system)
 }

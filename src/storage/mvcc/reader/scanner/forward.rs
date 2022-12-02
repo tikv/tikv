@@ -472,8 +472,10 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
                 }
                 WriteType::Delete => break None,
                 WriteType::Lock | WriteType::Rollback => {
-                    if write.versions_to_last_change < SEEK_BOUND || write.last_change_ts.is_zero()
-                    {
+                    if write.versions_to_last_change > 0 && write.last_change_ts.is_zero() {
+                        break None;
+                    }
+                    if write.versions_to_last_change < SEEK_BOUND {
                         // Continue iterate next `write`.
                         cursors.write.next(&mut statistics.write);
                     } else {
@@ -1619,13 +1621,16 @@ mod latest_kv_tests {
         must_commit(&mut engine, b"k1", 6, 8);
         must_prewrite_put(&mut engine, b"k2", b"v21", b"k2", 2);
         must_commit(&mut engine, b"k2", 2, 6);
-        must_prewrite_put(&mut engine, b"k3", b"v31", b"k3", 3);
-        must_commit(&mut engine, b"k3", 3, 7);
+        must_prewrite_put(&mut engine, b"k4", b"v41", b"k4", 3);
+        must_commit(&mut engine, b"k4", 3, 7);
 
         for start_ts in (10..30).into_iter().step_by(2) {
             must_prewrite_lock(&mut engine, b"k1", b"k1", start_ts);
             must_commit(&mut engine, b"k1", start_ts, start_ts + 1);
-            must_rollback(&mut engine, b"k3", start_ts + 1, true);
+            must_prewrite_lock(&mut engine, b"k3", b"k1", start_ts);
+            must_commit(&mut engine, b"k3", start_ts, start_ts + 1);
+            must_prewrite_lock(&mut engine, b"k4", b"k1", start_ts);
+            must_commit(&mut engine, b"k4", start_ts, start_ts + 1);
         }
 
         must_prewrite_put(&mut engine, b"k1", b"v13", b"k1", 40);
@@ -1647,11 +1652,15 @@ mod latest_kv_tests {
         // k2  |     46    |   PUT    | v22
         // k2  |      6    |   PUT    | v21
         // k3  |     47    |   PUT    | v32
-        // k3  |     29    | ROLLBACK |
-        // k3  |     27    | ROLLBACK |
-        // k3  |    ...    | ROLLBACK |
-        // k3  |     11    | ROLLBACK |
-        // k3  |      7    |   PUT    | v31
+        // k3  |     29    |   LOCK   |
+        // k3  |     27    |   LOCK   |
+        // k3  |    ...    |   LOCK   |
+        // k3  |     11    |   LOCK   |
+        // k4  |     29    |   LOCK   |
+        // k4  |     27    |   LOCK   |
+        // k4  |    ...    |   LOCK   |
+        // k4  |     11    |   LOCK   |
+        // k4  |      7    |   PUT    | v41
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, 35.into())
@@ -1675,11 +1684,11 @@ mod latest_kv_tests {
 
         assert_eq!(
             scanner.next().unwrap(),
-            Some((Key::from_raw(b"k3"), b"v31".to_vec()))
+            Some((Key::from_raw(b"k4"), b"v41".to_vec()))
         );
         let stats = scanner.take_statistics();
-        assert_le!(stats.write.next, 2); // skip k2@6, k3@47
-        assert_eq!(stats.write.seek, 1); // seek k3@7
+        assert_le!(stats.write.next, 1 + SEEK_BOUND as usize); // skip k2@6, near_seek to k4 (8 times next)
+        assert_eq!(stats.write.seek, 2); // seek k4, k4@7
     }
 }
 

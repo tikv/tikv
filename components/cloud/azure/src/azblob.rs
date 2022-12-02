@@ -558,7 +558,7 @@ impl AzureStorage {
         &self,
         name: &str,
         range: Option<std::ops::Range<u64>>,
-    ) -> Box<dyn AsyncRead + Unpin + '_> {
+    ) -> cloud::blob::BlobStream<'_> {
         let name = self.maybe_prefix_key(name);
         debug!("read file from Azure storage"; "key" => %name);
         let t = async move {
@@ -602,11 +602,11 @@ impl BlobStorage for AzureStorage {
         uploader.run(&mut reader, content_length).await
     }
 
-    fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn get(&self, name: &str) -> cloud::blob::BlobStream<'_> {
         self.get_range(name, None)
     }
 
-    fn get_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn get_part(&self, name: &str, off: u64, len: u64) -> cloud::blob::BlobStream<'_> {
         self.get_range(name, Some(off..off + len))
     }
 }

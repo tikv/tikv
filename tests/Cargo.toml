@@ -146,6 +146,7 @@ test_sst_importer = { workspace = true }
 test_storage = { workspace = true }
 test_util = { workspace = true }
 tidb_query_datatype = { workspace = true }
+tikv_kv = { workspace = true }
 tipb_helper = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
 

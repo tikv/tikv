@@ -20,13 +20,16 @@
 mod async_writer;
 mod snapshot;
 
-use std::cmp;
+use std::{cmp, time::Instant};
 
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::{KvEngine, MiscExt, OpenOptions, RaftEngine, TabletFactory};
 use error_code::ErrorCodeExt;
-use kvproto::{raft_cmdpb::AdminCmdType, raft_serverpb::RaftMessage};
+use kvproto::{
+    raft_cmdpb::AdminCmdType,
+    raft_serverpb::{PeerState, RaftMessage, RaftSnapshotData},
+};
 use protobuf::Message as _;
-use raft::{eraftpb, Ready, StateRole};
+use raft::{eraftpb, Ready, StateRole, INVALID_ID};
 use raftstore::store::{util, ExtraStates, FetchedLogs, ReadProgress, Transport, WriteTask};
 use slog::{debug, error, trace, warn};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
@@ -40,7 +43,9 @@ use crate::{
     fsm::PeerFsmDelegate,
     raft::{Peer, Storage},
     router::{ApplyTask, PeerTick},
+    Result,
 };
+
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
     /// Raft relies on periodic ticks to keep the state machine sync with other
     /// peers.
@@ -111,7 +116,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         // TODO: drop all msg append when the peer is uninitialized and has conflict
         // ranges with other peers.
-        self.insert_peer_cache(msg.take_from_peer());
+        let from_peer = msg.take_from_peer();
+        if self.is_leader() && from_peer.get_id() != INVALID_ID {
+            self.add_peer_heartbeat(from_peer.get_id(), Instant::now());
+        }
+        self.insert_peer_cache(from_peer);
         if let Err(e) = self.raft_group_mut().step(msg.take_message()) {
             error!(self.logger, "raft step error"; "err" => ?e);
         }
@@ -271,7 +280,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         ctx.has_ready = true;
 
-        if !self.raft_group().has_ready() && (self.serving() || self.postpond_destroy()) {
+        if !self.raft_group().has_ready() && (self.serving() || self.postponed_destroy()) {
             #[cfg(feature = "testexport")]
             self.async_writer.notify_flush();
             return;
@@ -329,7 +338,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let ready_number = ready.number();
         let mut write_task = WriteTask::new(self.region_id(), self.peer_id(), ready_number);
         self.storage_mut()
-            .handle_raft_ready(&mut ready, &mut write_task);
+            .handle_raft_ready(ctx, &mut ready, &mut write_task);
         if !ready.persisted_messages().is_empty() {
             write_task.messages = ready
                 .take_persisted_messages()
@@ -383,17 +392,27 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             error!(self.logger, "peer id not matched"; "persisted_peer_id" => peer_id, "persisted_number" => ready_number);
             return;
         }
-        let persisted_message = self
-            .async_writer
-            .on_persisted(ctx, ready_number, &self.logger);
+        let (persisted_message, has_snapshot) =
+            self.async_writer
+                .on_persisted(ctx, ready_number, &self.logger);
         for msgs in persisted_message {
             for msg in msgs {
                 self.send_raft_message(ctx, msg);
             }
         }
+
         let persisted_number = self.async_writer.persisted_number();
         self.raft_group_mut().on_persist_ready(persisted_number);
         let persisted_index = self.raft_group().raft.raft_log.persisted;
+        /// The apply snapshot process order would be:
+        /// - Get the snapshot from the ready
+        /// - Wait for async writer to load this tablet
+        /// In this step, the snapshot has loaded finish, but some apply state
+        /// need to update.
+        if has_snapshot {
+            self.on_applied_snapshot(ctx);
+        }
+
         self.storage_mut()
             .entry_storage_mut()
             .update_cache_persisted(persisted_index);
@@ -443,8 +462,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     // latency.
                     self.raft_group_mut().skip_bcast_commit(false);
 
+                    // A more recent read may happen on the old leader. So max ts should
+                    // be updated after a peer becomes leader.
+                    self.require_updating_max_ts(ctx);
                     // Exit entry cache warmup state when the peer becomes leader.
                     self.entry_storage_mut().clear_entry_cache_warmup_state();
+
+                    self.region_heartbeat_pd(ctx);
                 }
                 StateRole::Follower => {
                     self.leader_lease_mut().expire();
@@ -499,11 +523,25 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     /// Apply the ready to the storage. If there is any states need to be
     /// persisted, it will be written to `write_task`.
-    fn handle_raft_ready(&mut self, ready: &mut Ready, write_task: &mut WriteTask<EK, ER>) {
+    fn handle_raft_ready<T: Transport>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        ready: &mut Ready,
+        write_task: &mut WriteTask<EK, ER>,
+    ) {
         let prev_raft_state = self.entry_storage().raft_state().clone();
         let ever_persisted = self.ever_persisted();
 
-        // TODO: handle snapshot
+        if !ready.snapshot().is_empty() {
+            if let Err(e) = self.apply_snapshot(
+                ready.snapshot(),
+                write_task,
+                ctx.snap_mgr.clone(),
+                ctx.tablet_factory.clone(),
+            ) {
+                error!(self.logger(),"failed to apply snapshot";"error" => ?e)
+            }
+        }
 
         let entry_storage = self.entry_storage_mut();
         if !ready.entries().is_empty() {

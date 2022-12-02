@@ -2,13 +2,16 @@
 
 use std::{cmp, thread, time::Duration};
 
+use engine_traits::CF_LOCK;
 use kvproto::{
-    coprocessor::{Request, Response},
-    kvrpcpb::{Context, IsolationLevel},
+    coprocessor::{Request, Response, StoreBatchTask},
+    errorpb,
+    kvrpcpb::{Context, IsolationLevel, LockInfo},
 };
-use protobuf::Message;
+use protobuf::{Message, SingularPtrField};
 use raftstore::store::Bucket;
 use test_coprocessor::*;
+use test_raftstore::{Cluster, ServerCluster};
 use test_storage::*;
 use tidb_query_datatype::{
     codec::{datum, Datum},
@@ -24,7 +27,7 @@ use tipb::{
     AnalyzeColumnsReq, AnalyzeReq, AnalyzeType, ChecksumRequest, Chunk, Expr, ExprType,
     ScalarFuncSig, SelectResponse,
 };
-use txn_types::TimeStamp;
+use txn_types::{Key, Lock, LockType, TimeStamp};
 
 const FLAG_IGNORE_TRUNCATE: u64 = 1;
 const FLAG_TRUNCATE_AS_WARNING: u64 = 1 << 1;
@@ -2005,4 +2008,254 @@ fn test_buckets() {
     };
 
     wait_refresh_buckets(0);
+}
+
+#[test]
+fn test_batch_request() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+        (9, Some("name:8"), 7),
+        (10, Some("name:6"), 8),
+    ];
+
+    let product = ProductTable::new();
+    let (mut cluster, raft_engine, ctx) = new_raft_engine(1, "");
+    let (_, endpoint, _) =
+        init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &data, true);
+
+    // Split the region into [1, 2], [4, 5], [9, 10].
+    let region =
+        cluster.get_region(Key::from_raw(&product.get_record_range(1, 1).start).as_encoded());
+    let split_key = Key::from_raw(&product.get_record_range(3, 3).start);
+    cluster.must_split(&region, split_key.as_encoded());
+    let second_region =
+        cluster.get_region(Key::from_raw(&product.get_record_range(4, 4).start).as_encoded());
+    let second_split_key = Key::from_raw(&product.get_record_range(8, 8).start);
+    cluster.must_split(&second_region, second_split_key.as_encoded());
+
+    struct HandleRange {
+        start: i64,
+        end: i64,
+    }
+
+    enum QueryResult {
+        Valid(Vec<(i64, Option<&'static str>, i64)>),
+        ErrRegion,
+        ErrLocked,
+        ErrOther,
+    }
+
+    // Each case has four fields:
+    // 1. The input scan handle range.
+    // 2. The expected output results.
+    // 3. Should the coprocessor request contain invalid region epoch.
+    // 4. Should the scanned key be locked.
+    let cases = vec![
+        // Basic valid case.
+        (
+            vec![
+                HandleRange { start: 1, end: 2 },
+                HandleRange { start: 3, end: 5 },
+            ],
+            vec![
+                QueryResult::Valid(vec![(1_i64, Some("name:0"), 2_i64), (2, Some("name:4"), 3)]),
+                QueryResult::Valid(vec![(4, Some("name:3"), 1), (5, Some("name:1"), 4)]),
+            ],
+            false,
+            false,
+        ),
+        // Original task is valid, batch tasks are not all valid.
+        (
+            vec![
+                HandleRange { start: 1, end: 2 },
+                HandleRange { start: 4, end: 6 },
+                HandleRange { start: 9, end: 11 },
+                HandleRange { start: 1, end: 3 }, // Input range [1, 4) crosses two region ranges.
+                HandleRange { start: 4, end: 8 }, // Input range [4, 9] crosses two region ranges.
+            ],
+            vec![
+                QueryResult::Valid(vec![(1, Some("name:0"), 2), (2, Some("name:4"), 3)]),
+                QueryResult::Valid(vec![(4, Some("name:3"), 1), (5, Some("name:1"), 4)]),
+                QueryResult::Valid(vec![(9, Some("name:8"), 7), (10, Some("name:6"), 8)]),
+                QueryResult::ErrOther,
+                QueryResult::ErrOther,
+            ],
+            false,
+            false,
+        ),
+        // Original task is invalid, batch tasks are not all valid.
+        (
+            vec![HandleRange { start: 1, end: 3 }],
+            vec![QueryResult::ErrOther],
+            false,
+            false,
+        ),
+        // Invalid epoch case.
+        (
+            vec![
+                HandleRange { start: 1, end: 3 },
+                HandleRange { start: 4, end: 6 },
+            ],
+            vec![QueryResult::ErrRegion, QueryResult::ErrRegion],
+            true,
+            false,
+        ),
+        // Locked error case.
+        (
+            vec![
+                HandleRange { start: 1, end: 2 },
+                HandleRange { start: 4, end: 6 },
+            ],
+            vec![QueryResult::ErrLocked, QueryResult::ErrLocked],
+            false,
+            true,
+        ),
+    ];
+    let prepare_req =
+        |cluster: &mut Cluster<ServerCluster>, ranges: &Vec<HandleRange>| -> Request {
+            let original_range = ranges.get(0).unwrap();
+            let key_range = product.get_record_range(original_range.start, original_range.end);
+            let region_key = Key::from_raw(&key_range.start);
+            let mut req = DagSelect::from(&product)
+                .key_ranges(vec![key_range])
+                .build_with(ctx.clone(), &[0]);
+            let mut new_ctx = Context::default();
+            let new_region = cluster.get_region(region_key.as_encoded());
+            let leader = cluster.leader_of_region(new_region.get_id()).unwrap();
+            new_ctx.set_region_id(new_region.get_id());
+            new_ctx.set_region_epoch(new_region.get_region_epoch().clone());
+            new_ctx.set_peer(leader);
+            req.set_context(new_ctx);
+            req.set_start_ts(100);
+
+            let batch_handle_ranges = &ranges.as_slice()[1..];
+            for handle_range in batch_handle_ranges.iter() {
+                let range_start_key = Key::from_raw(
+                    &product
+                        .get_record_range(handle_range.start, handle_range.end)
+                        .start,
+                );
+                let batch_region = cluster.get_region(range_start_key.as_encoded());
+                let batch_leader = cluster.leader_of_region(batch_region.get_id()).unwrap();
+                let batch_key_ranges =
+                    vec![product.get_record_range(handle_range.start, handle_range.end)];
+                let mut store_batch_task = StoreBatchTask::new();
+                store_batch_task.set_region_id(batch_region.get_id());
+                store_batch_task.set_region_epoch(batch_region.get_region_epoch().clone());
+                store_batch_task.set_peer(batch_leader);
+                store_batch_task.set_ranges(batch_key_ranges.into());
+                req.tasks.push(store_batch_task);
+            }
+            req
+        };
+    let verify_response = |result: &QueryResult,
+                           data: &[u8],
+                           region_err: &SingularPtrField<errorpb::Error>,
+                           locked: &SingularPtrField<LockInfo>,
+                           other_err: &String| {
+        match result {
+            QueryResult::Valid(res) => {
+                let expected_len = res.len();
+                let mut sel_resp = SelectResponse::default();
+                sel_resp.merge_from_bytes(data).unwrap();
+                let mut row_count = 0;
+                let spliter = DagChunkSpliter::new(sel_resp.take_chunks().into(), 3);
+                for (row, (id, name, cnt)) in spliter.zip(res) {
+                    let name_datum = name.map(|s| s.as_bytes()).into();
+                    let expected_encoded = datum::encode_value(
+                        &mut EvalContext::default(),
+                        &[Datum::I64(*id), name_datum, Datum::I64(*cnt)],
+                    )
+                    .unwrap();
+                    let result_encoded =
+                        datum::encode_value(&mut EvalContext::default(), &row).unwrap();
+                    assert_eq!(result_encoded, &*expected_encoded);
+                    row_count += 1;
+                }
+                assert_eq!(row_count, expected_len);
+                assert!(region_err.is_none());
+                assert!(locked.is_none());
+                assert!(other_err.is_empty());
+            }
+            QueryResult::ErrRegion => {
+                assert!(region_err.is_some());
+                assert!(locked.is_none());
+                assert!(other_err.is_empty());
+            }
+            QueryResult::ErrLocked => {
+                assert!(region_err.is_none());
+                assert!(locked.is_some());
+                assert!(other_err.is_empty());
+            }
+            QueryResult::ErrOther => {
+                assert!(region_err.is_none());
+                assert!(locked.is_none());
+                assert!(!other_err.is_empty())
+            }
+        }
+    };
+
+    for (ranges, results, invalid_epoch, key_is_locked) in cases.iter() {
+        let mut req = prepare_req(&mut cluster, ranges);
+        if *invalid_epoch {
+            req.context
+                .as_mut()
+                .unwrap()
+                .region_epoch
+                .as_mut()
+                .unwrap()
+                .version -= 1;
+            for batch_task in req.tasks.iter_mut() {
+                batch_task.region_epoch.as_mut().unwrap().version -= 1;
+            }
+        } else if *key_is_locked {
+            for range in ranges.iter() {
+                let lock_key =
+                    Key::from_raw(&product.get_record_range(range.start, range.start).start);
+                let lock = Lock::new(
+                    LockType::Put,
+                    lock_key.as_encoded().clone(),
+                    10.into(),
+                    10,
+                    None,
+                    TimeStamp::zero(),
+                    1,
+                    TimeStamp::zero(),
+                );
+                cluster.must_put_cf(CF_LOCK, lock_key.as_encoded(), lock.to_bytes().as_slice());
+            }
+        }
+        let mut resp = handle_request(&endpoint, req);
+        let batch_results = resp.take_batch_responses().to_vec();
+        for (i, result) in results.iter().enumerate() {
+            if i == 0 {
+                verify_response(
+                    result,
+                    resp.get_data(),
+                    &resp.region_error,
+                    &resp.locked,
+                    &resp.other_error,
+                );
+            } else {
+                let batch_resp = batch_results.get(i - 1).unwrap();
+                verify_response(
+                    result,
+                    batch_resp.get_data(),
+                    &batch_resp.region_error,
+                    &batch_resp.locked,
+                    &batch_resp.other_error,
+                );
+            };
+        }
+        if *key_is_locked {
+            for range in ranges.iter() {
+                let lock_key =
+                    Key::from_raw(&product.get_record_range(range.start, range.start).start);
+                cluster.must_delete_cf(CF_LOCK, lock_key.as_encoded());
+            }
+        }
+    }
 }
