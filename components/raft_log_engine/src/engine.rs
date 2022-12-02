@@ -414,15 +414,15 @@ impl RaftLogBatchTrait for RaftLogBatch {
     }
 
     fn set_save_point(&mut self) {
-        unimplemented!()
+        self.0.set_save_point();
     }
 
     fn pop_save_point(&mut self) {
-        unimplemented!()
+        self.0.pop_save_point();
     }
 
     fn rollback_to_save_point(&mut self) {
-        unimplemented!()
+        self.0.rollback();
     }
 }
 
