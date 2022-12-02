@@ -39,13 +39,11 @@ fail = "0.5"
 file_system = { workspace = true }
 futures = "0.3"
 futures-io = "0.3"
-
 grpcio = { workspace = true }
 hex = "0.4"
-
 # Fixing ahash cyclic dep: https://github.com/tkaitchuck/ahash/issues/95
 indexmap = "=1.6.2"
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { workspace = true }
 lazy_static = "1.4"
 log_wrappers = { workspace = true }
 online_config = { workspace = true }
@@ -72,7 +70,7 @@ tokio-util = { version = "0.7", features = ["compat"] }
 tonic = "0.8"
 txn_types = { workspace = true }
 uuid = "0.8"
-yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+yatp = { workspace = true }
 
 [dev-dependencies]
 async-trait = "0.1"

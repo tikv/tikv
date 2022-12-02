@@ -11,7 +11,7 @@ testexport = []
 bitflags = "1.0.1"
 codec = { workspace = true }
 engine_traits = { workspace = true }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { workspace = true }
 match-template = "0.0.1"
 thiserror = "1.0"
 tikv_alloc = { workspace = true }

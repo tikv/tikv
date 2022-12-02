@@ -1,39 +1,25 @@
-// Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::Arc, thread, time::Duration};
+use std::{
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        mpsc, Arc,
+    },
+    thread,
+    time::Duration,
+};
 
 use error_code::ErrorCodeExt;
-use futures::{executor::block_on, StreamExt};
+use futures::executor::block_on;
 use grpcio::{EnvBuilder, Error as GrpcError, RpcStatus, RpcStatusCode};
 use kvproto::{metapb, pdpb};
-use pd_client::{Error as PdError, Feature, PdClientV2, PdConnector, RpcClientV2};
+use pd_client::{Error as PdError, Feature, PdClient, PdConnector, RegionStat, RpcClient};
+use raftstore::store;
 use security::{SecurityConfig, SecurityManager};
 use test_pd::{mocker::*, util::*, Server as MockServer};
-use tikv_util::{config::ReadableDuration, mpsc::future::WakePolicy, thd_name};
-use tokio::runtime::{Builder, Runtime};
+use tikv_util::config::ReadableDuration;
+use tokio::runtime::Builder;
 use txn_types::TimeStamp;
-
-fn setup_runtime() -> Runtime {
-    Builder::new_multi_thread()
-        .thread_name(thd_name!("poller"))
-        .worker_threads(1)
-        .enable_all()
-        .build()
-        .unwrap()
-}
-
-fn must_get_tso(client: &mut RpcClientV2, count: u32) -> TimeStamp {
-    let (tx, mut responses) = client.create_tso_stream(WakePolicy::Immediately).unwrap();
-    let mut req = pdpb::TsoRequest::default();
-    req.mut_header().cluster_id = client.fetch_cluster_id().unwrap();
-    req.count = count;
-    tx.send(req).unwrap();
-    let resp = block_on(responses.next()).unwrap().unwrap();
-    let ts = resp.timestamp.unwrap();
-    let physical = ts.physical as u64;
-    let logical = ts.logical as u64;
-    TimeStamp::compose(physical, logical)
-}
 
 #[test]
 fn test_retry_rpc_client() {
@@ -46,7 +32,7 @@ fn test_retry_rpc_client() {
     server.stop();
     let child = thread::spawn(move || {
         let cfg = new_config(m_eps);
-        RpcClientV2::new(&cfg, None, m_mgr).unwrap();
+        RpcClient::new(&cfg, None, m_mgr).unwrap();
     });
     thread::sleep(Duration::from_millis(500));
     server.start(&mgr, eps);
@@ -55,14 +41,12 @@ fn test_retry_rpc_client() {
 
 #[test]
 fn test_rpc_client() {
-    let rt = setup_runtime();
-    let _g = rt.enter();
     let eps_count = 1;
     let server = MockServer::new(eps_count);
     let eps = server.bind_addrs();
 
-    let mut client = new_client_v2(eps.clone(), None);
-    assert_ne!(client.fetch_cluster_id().unwrap(), 0);
+    let client = new_client(eps.clone(), None);
+    assert_ne!(client.get_cluster_id().unwrap(), 0);
 
     let store_id = client.alloc_id().unwrap();
     let mut store = metapb::Store::default();
@@ -105,32 +89,38 @@ fn test_rpc_client() {
         .unwrap();
     assert_eq!(tmp_region.get_id(), region.get_id());
 
-    let ts = must_get_tso(&mut client, 1);
+    let ts = block_on(client.get_tso()).unwrap();
     assert_ne!(ts, TimeStamp::zero());
 
-    let ts100 = must_get_tso(&mut client, 100);
+    let ts100 = block_on(client.batch_get_tso(100)).unwrap();
     assert_eq!(ts.logical() + 100, ts100.logical());
 
     let mut prev_id = 0;
     for _ in 0..100 {
-        let mut client = new_client_v2(eps.clone(), None);
+        let client = new_client(eps.clone(), None);
         let alloc_id = client.alloc_id().unwrap();
         assert!(alloc_id > prev_id);
         prev_id = alloc_id;
     }
 
-    let (tx, mut responses) = client
-        .create_region_heartbeat_stream(WakePolicy::Immediately)
+    let poller = Builder::new_multi_thread()
+        .thread_name(thd_name!("poller"))
+        .worker_threads(1)
+        .build()
         .unwrap();
-    let mut req = pdpb::RegionHeartbeatRequest::default();
-    req.set_region(region.clone());
-    req.set_leader(peer.clone());
-    tx.send(req).unwrap();
-    block_on(tokio::time::timeout(
-        Duration::from_secs(3),
-        responses.next(),
-    ))
-    .unwrap();
+    let (tx, rx) = mpsc::channel();
+    let f = client.handle_region_heartbeat_response(1, move |resp| {
+        let _ = tx.send(resp);
+    });
+    poller.spawn(f);
+    poller.spawn(client.region_heartbeat(
+        store::RAFT_INIT_LOG_TERM,
+        region.clone(),
+        peer.clone(),
+        RegionStat::default(),
+        None,
+    ));
+    rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
     let region_info = client.get_region_info(region_key).unwrap();
     assert_eq!(region_info.region, region);
@@ -160,14 +150,26 @@ fn test_connect_follower() {
     // test switch
     cfg.enable_forwarding = false;
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
-    let mut client1 = RpcClientV2::new(&cfg, None, mgr).unwrap();
+    let client1 = RpcClient::new(&cfg, None, mgr).unwrap();
     fail::cfg(connect_leader_fp, "return").unwrap();
-    client1.alloc_id().unwrap_err();
+    // RECONNECT_INTERVAL_SEC is 1s.
+    thread::sleep(Duration::from_secs(1));
+    let res = format!("{}", client1.alloc_id().unwrap_err());
+    let err = format!(
+        "{}",
+        PdError::Grpc(GrpcError::RpcFailure(RpcStatus::with_message(
+            RpcStatusCode::UNAVAILABLE,
+            "".to_string(),
+        )))
+    );
+    assert_eq!(res, err);
 
     cfg.enable_forwarding = true;
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
-    let mut client = RpcClientV2::new(&cfg, None, mgr).unwrap();
-    let leader_addr = client.get_leader().get_client_urls()[0].clone();
+    let client = RpcClient::new(&cfg, None, mgr).unwrap();
+    // RECONNECT_INTERVAL_SEC is 1s.
+    thread::sleep(Duration::from_secs(1));
+    let leader_addr = client1.get_leader().get_client_urls()[0].clone();
     let res = format!("{}", client.alloc_id().unwrap_err());
     let err = format!(
         "{}",
@@ -186,7 +188,7 @@ fn test_get_tombstone_stores() {
     let eps_count = 1;
     let server = MockServer::new(eps_count);
     let eps = server.bind_addrs();
-    let mut client = new_client_v2(eps, None);
+    let client = new_client(eps, None);
 
     let mut all_stores = vec![];
     let store_id = client.alloc_id().unwrap();
@@ -240,7 +242,7 @@ fn test_get_tombstone_store() {
     let eps_count = 1;
     let server = MockServer::new(eps_count);
     let eps = server.bind_addrs();
-    let mut client = new_client_v2(eps, None);
+    let client = new_client(eps, None);
 
     let mut all_stores = vec![];
     let store_id = client.alloc_id().unwrap();
@@ -262,7 +264,7 @@ fn test_get_tombstone_store() {
     store99.set_state(metapb::StoreState::Tombstone);
     server.default_handler().add_store(store99.clone());
 
-    let r = client.get_store(99);
+    let r = block_on(client.get_store_async(99));
     assert_eq!(r.unwrap_err().error_code(), error_code::pd::STORE_TOMBSTONE);
 }
 
@@ -271,7 +273,7 @@ fn test_reboot() {
     let eps_count = 1;
     let server = MockServer::with_case(eps_count, Arc::new(AlreadyBootstrapped));
     let eps = server.bind_addrs();
-    let mut client = new_client_v2(eps, None);
+    let client = new_client(eps, None);
 
     assert!(!client.is_cluster_bootstrapped().unwrap());
 
@@ -297,7 +299,7 @@ fn test_validate_endpoints() {
 
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let connector = PdConnector::new(env, mgr);
-    assert!(block_on(connector.validate_endpoints(&new_config(eps), true)).is_err());
+    assert!(block_on(connector.validate_endpoints(&new_config(eps), false)).is_err());
 }
 
 #[test]
@@ -316,7 +318,66 @@ fn test_validate_endpoints_retry() {
     eps.pop();
     let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let connector = PdConnector::new(env, mgr);
-    assert!(block_on(connector.validate_endpoints(&new_config(eps), true)).is_err());
+    assert!(block_on(connector.validate_endpoints(&new_config(eps), false)).is_err());
+}
+
+fn test_retry<F: Fn(&RpcClient)>(func: F) {
+    let eps_count = 1;
+    // Retry mocker returns `Err(_)` for most request, here two thirds are `Err(_)`.
+    let retry = Arc::new(Retry::new(3));
+    let server = MockServer::with_case(eps_count, retry);
+    let eps = server.bind_addrs();
+
+    let client = new_client(eps, None);
+
+    for _ in 0..3 {
+        func(&client);
+    }
+}
+
+#[test]
+fn test_retry_async() {
+    let r#async = |client: &RpcClient| {
+        block_on(client.get_region_by_id(1)).unwrap();
+    };
+    test_retry(r#async);
+}
+
+#[test]
+fn test_retry_sync() {
+    let sync = |client: &RpcClient| {
+        client.get_store(1).unwrap();
+    };
+    test_retry(sync)
+}
+
+fn test_not_retry<F: Fn(&RpcClient)>(func: F) {
+    let eps_count = 1;
+    // NotRetry mocker returns Ok() with error header first, and next returns Ok()
+    // without any error header.
+    let not_retry = Arc::new(NotRetry::new());
+    let server = MockServer::with_case(eps_count, not_retry);
+    let eps = server.bind_addrs();
+
+    let client = new_client(eps, None);
+
+    func(&client);
+}
+
+#[test]
+fn test_not_retry_async() {
+    let r#async = |client: &RpcClient| {
+        block_on(client.get_region_by_id(1)).unwrap_err();
+    };
+    test_not_retry(r#async);
+}
+
+#[test]
+fn test_not_retry_sync() {
+    let sync = |client: &RpcClient| {
+        client.get_store(1).unwrap_err();
+    };
+    test_not_retry(sync);
 }
 
 #[test]
@@ -325,7 +386,7 @@ fn test_incompatible_version() {
     let server = MockServer::with_case(1, incompatible);
     let eps = server.bind_addrs();
 
-    let mut client = new_client_v2(eps, None);
+    let client = new_client(eps, None);
 
     let resp = block_on(client.ask_batch_split(metapb::Region::default(), 2));
     assert_eq!(
@@ -341,7 +402,7 @@ fn restart_leader(mgr: SecurityManager) {
         MockServer::<Service>::with_configuration(&mgr, vec![("127.0.0.1".to_owned(), 0); 3], None);
     let eps = server.bind_addrs();
 
-    let mut client = new_client_v2(eps.clone(), Some(Arc::clone(&mgr)));
+    let client = new_client(eps.clone(), Some(Arc::clone(&mgr)));
     // Put a region.
     let store_id = client.alloc_id().unwrap();
     let mut store = metapb::Store::default();
@@ -392,8 +453,12 @@ fn test_change_leader_async() {
     let server = MockServer::with_case(eps_count, Arc::new(LeaderChange::new()));
     let eps = server.bind_addrs();
 
-    let mut client = new_client_v2(eps, None);
-    let mut reconnect_recv = client.subscribe_reconnect();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let client = new_client(eps, None);
+    let counter1 = Arc::clone(&counter);
+    client.handle_reconnect(move || {
+        counter1.fetch_add(1, Ordering::SeqCst);
+    });
     let leader = client.get_leader();
 
     for _ in 0..5 {
@@ -402,10 +467,7 @@ fn test_change_leader_async() {
 
         let new = client.get_leader();
         if new != leader {
-            assert!(matches!(
-                reconnect_recv.try_recv(),
-                Ok(_) | Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_))
-            ));
+            assert!(counter.load(Ordering::SeqCst) >= 1);
             return;
         }
         thread::sleep(LeaderChange::get_leader_interval());
@@ -420,7 +482,7 @@ fn test_pd_client_ok_when_cluster_not_ready() {
     let server = MockServer::with_case(3, Arc::new(AlreadyBootstrapped));
     let eps = server.bind_addrs();
 
-    let mut client = new_client_v2(eps, None);
+    let client = new_client(eps, None);
     fail::cfg(pd_client_cluster_id_zero, "return()").unwrap();
     // wait 100ms to let client load member.
     thread::sleep(Duration::from_millis(101));
@@ -430,33 +492,36 @@ fn test_pd_client_ok_when_cluster_not_ready() {
 
 #[test]
 fn test_pd_client_heartbeat_send_failed() {
-    let rt = setup_runtime();
-    let _g = rt.enter();
     let pd_client_send_fail_fp = "region_heartbeat_send_failed";
     fail::cfg(pd_client_send_fail_fp, "return()").unwrap();
     let server = MockServer::with_case(1, Arc::new(AlreadyBootstrapped));
     let eps = server.bind_addrs();
 
-    let mut client = new_client_v2(eps, None);
-
-    let (tx, mut responses) = client
-        .create_region_heartbeat_stream(WakePolicy::Immediately)
+    let client = new_client(eps, None);
+    let poller = Builder::new_multi_thread()
+        .thread_name(thd_name!("poller"))
+        .worker_threads(1)
+        .build()
         .unwrap();
+    let (tx, rx) = mpsc::channel();
+    let f =
+        client.handle_region_heartbeat_response(1, move |resp| tx.send(resp).unwrap_or_default());
+    poller.spawn(f);
 
-    let mut heartbeat_send_fail = |ok| {
+    let heartbeat_send_fail = |ok| {
         let mut region = metapb::Region::default();
         region.set_id(1);
-        let mut req = pdpb::RegionHeartbeatRequest::default();
-        req.set_region(region);
-        tx.send(req).unwrap();
-
-        let rsp = block_on(tokio::time::timeout(
-            Duration::from_millis(100),
-            responses.next(),
+        poller.spawn(client.region_heartbeat(
+            store::RAFT_INIT_LOG_TERM,
+            region,
+            metapb::Peer::default(),
+            RegionStat::default(),
+            None,
         ));
+        let rsp = rx.recv_timeout(Duration::from_millis(100));
         if ok {
             assert!(rsp.is_ok());
-            assert_eq!(rsp.unwrap().unwrap().unwrap().get_region_id(), 1);
+            assert_eq!(rsp.unwrap().get_region_id(), 1);
         } else {
             rsp.unwrap_err();
         }
@@ -480,28 +545,35 @@ fn test_pd_client_heartbeat_send_failed() {
 
 #[test]
 fn test_region_heartbeat_on_leader_change() {
-    let rt = setup_runtime();
-    let _g = rt.enter();
     let eps_count = 3;
     let server = MockServer::with_case(eps_count, Arc::new(LeaderChange::new()));
     let eps = server.bind_addrs();
 
-    let mut client = new_client_v2(eps, None);
-
-    let (tx, mut responses) = client
-        .create_region_heartbeat_stream(WakePolicy::Immediately)
+    let client = new_client(eps, None);
+    let poller = Builder::new_multi_thread()
+        .thread_name(thd_name!("poller"))
+        .worker_threads(1)
+        .build()
+        .unwrap();
+    let (tx, rx) = mpsc::channel();
+    let f = client.handle_region_heartbeat_response(1, move |resp| {
+        tx.send(resp).unwrap();
+    });
+    poller.spawn(f);
+    let region = metapb::Region::default();
+    let peer = metapb::Peer::default();
+    let stat = RegionStat::default();
+    poller.spawn(client.region_heartbeat(
+        store::RAFT_INIT_LOG_TERM,
+        region.clone(),
+        peer.clone(),
+        stat.clone(),
+        None,
+    ));
+    rx.recv_timeout(LeaderChange::get_leader_interval())
         .unwrap();
 
-    tx.send(pdpb::RegionHeartbeatRequest::default()).unwrap();
-    block_on(tokio::time::timeout(
-        LeaderChange::get_leader_interval(),
-        responses.next(),
-    ))
-    .unwrap()
-    .unwrap()
-    .unwrap();
-
-    let mut heartbeat_on_leader_change = |count| {
+    let heartbeat_on_leader_change = |count| {
         let mut leader = client.get_leader();
         for _ in 0..count {
             loop {
@@ -515,14 +587,15 @@ fn test_region_heartbeat_on_leader_change() {
                 thread::sleep(LeaderChange::get_leader_interval());
             }
         }
-        tx.send(pdpb::RegionHeartbeatRequest::default()).unwrap();
-        block_on(tokio::time::timeout(
-            LeaderChange::get_leader_interval(),
-            responses.next(),
-        ))
-        .unwrap()
-        .unwrap()
-        .unwrap();
+        poller.spawn(client.region_heartbeat(
+            store::RAFT_INIT_LOG_TERM,
+            region.clone(),
+            peer.clone(),
+            stat.clone(),
+            None,
+        ));
+        rx.recv_timeout(LeaderChange::get_leader_interval())
+            .unwrap();
     };
 
     // Change PD leader once then heartbeat PD.
@@ -539,17 +612,18 @@ fn test_periodical_update() {
     let server = MockServer::with_case(eps_count, Arc::new(LeaderChange::new()));
     let eps = server.bind_addrs();
 
-    let mut client = new_client_v2_with_update_interval(eps, None, ReadableDuration::secs(3));
-    let mut reconnect_recv = client.subscribe_reconnect();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let client = new_client_with_update_interval(eps, None, ReadableDuration::secs(3));
+    let counter1 = Arc::clone(&counter);
+    client.handle_reconnect(move || {
+        counter1.fetch_add(1, Ordering::SeqCst);
+    });
     let leader = client.get_leader();
 
     for _ in 0..5 {
         let new = client.get_leader();
         if new != leader {
-            assert!(matches!(
-                reconnect_recv.try_recv(),
-                Ok(_) | Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_))
-            ));
+            assert!(counter.load(Ordering::SeqCst) >= 1);
             return;
         }
         thread::sleep(LeaderChange::get_leader_interval());
@@ -567,14 +641,13 @@ fn test_cluster_version() {
     let feature_b = Feature::require(5, 0, 0);
     let feature_c = Feature::require(5, 0, 1);
 
-    let mut client = new_client_v2(eps, None);
-    let feature_gate = client.feature_gate().clone();
+    let client = new_client(eps, None);
+    let feature_gate = client.feature_gate();
     assert!(!feature_gate.can_enable(feature_a));
 
-    let mut client_clone = client.clone();
-    let mut emit_heartbeat = || {
+    let emit_heartbeat = || {
         let req = pdpb::StoreStats::default();
-        block_on(client_clone.store_heartbeat(req, /* store_report= */ None, None)).unwrap();
+        block_on(client.store_heartbeat(req, /* store_report= */ None, None)).unwrap();
     };
 
     let set_cluster_version = |version: &str| {

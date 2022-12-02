@@ -2317,18 +2317,18 @@ dependencies = [
 
 [[package]]
 name = "grpcio-compiler"
-version = "0.9.0"
+version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4caa0700833147dcfbe4f0758bd92545cc0f4506ee7fa154e499745a8b24e86c"
+checksum = "ed97a17310fd00ff4109357584a00244e2a785d05b7ee0ef4d1e8fb1d84266df"
 dependencies = [
  "protobuf",
 ]
 
 [[package]]
 name = "grpcio-health"
-version = "0.10.0"
+version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "641a95bace445aed36b31ae8731513c4c4d1d3dcdbc05aaeeefefe4fd673ada1"
+checksum = "a37eae605cd21f144b7c7fd0e64e57af9f73d132756fef5b706db110c3ec7ea0"
 dependencies = [
  "futures-executor",
  "futures-util",

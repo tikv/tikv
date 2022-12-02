@@ -9,7 +9,7 @@ collections = { workspace = true }
 fail = "0.5"
 futures = "0.3"
 grpcio = { workspace = true }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { workspace = true }
 pd_client = { workspace = true }
 security = { workspace = true }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
