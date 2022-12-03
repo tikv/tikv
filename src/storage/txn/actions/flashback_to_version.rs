@@ -238,8 +238,10 @@ pub fn check_flashback_commit(
         // If the lock doesn't exist and the flashback commit record exists, it means the flashback
         // has been finished.
         None => {
-            if let Some(write) = reader.get_write(key_to_commit, flashback_commit_ts, None)? {
-                if write.start_ts == flashback_start_ts {
+            if let Some((commit_ts, write)) =
+                reader.seek_write(key_to_commit, flashback_commit_ts)?
+            {
+                if commit_ts == flashback_commit_ts && write.start_ts == flashback_start_ts {
                     return Ok(true);
                 }
             }
