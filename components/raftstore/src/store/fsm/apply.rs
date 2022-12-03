@@ -3041,6 +3041,12 @@ where
         }
 
         let voter_replicated_index = req.get_compact_log().get_voter_replicated_index();
+        // If there is any voter lagging behind, the log truncation of the witness
+        // shouldn't be triggered even if it's force mode(raft log size/count exceeds
+        // the threshold or raft engine purge), otherwise the witness can't help the
+        // lagging voter catch up logs when leader is down. In this situation Compact
+        // index should be queued. If witness receives a voter_replicated_index
+        // that is larger than the pending compact index, logs can be deleted.
         if self.peer.is_witness && voter_replicated_index < compact_index {
             match self.pending_cmds.pop_compact(voter_replicated_index) {
                 Some(cmd) => {
@@ -4039,7 +4045,11 @@ where
         cb.invoke_read(resp);
     }
 
-    fn handle_compact_raft_log(&mut self, ctx: &mut ApplyContext<EK>, voter_replicated_index: u64) {
+    fn check_pending_compact_log(
+        &mut self,
+        ctx: &mut ApplyContext<EK>,
+        voter_replicated_index: u64,
+    ) {
         let res = self.delegate.try_compact_log(voter_replicated_index);
         match res {
             Ok(res) => {
@@ -4133,7 +4143,7 @@ where
                     f(delegate)
                 }
                 Msg::CheckCompact(_, voter_replicated_index) => {
-                    self.handle_compact_raft_log(apply_ctx, voter_replicated_index)
+                    self.check_pending_compact_log(apply_ctx, voter_replicated_index)
                 }
             }
         }
