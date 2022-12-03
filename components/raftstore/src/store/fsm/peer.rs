@@ -6279,13 +6279,17 @@ where
         self.fsm.has_ready = true;
     }
 
-    fn on_set_flashback_state(&mut self, mut region: metapb::Region) {
-        #[cfg(feature = "failpoints")]
-        fail_point!("keep_peer_fsm_flashback_state_false", |_| {
-            region.is_in_flashback = false;
-        });
+    fn on_set_flashback_state(&mut self, region: metapb::Region) {
         // Update the region meta.
-        self.update_region(region);
+        self.update_region((|| {
+            #[cfg(feature = "failpoints")]
+            fail_point!("keep_peer_fsm_flashback_state_false", |_| {
+                let mut region = region.clone();
+                region.is_in_flashback = false;
+                region
+            });
+            region
+        })());
         // Let the leader lease to None to ensure that local reads are not executed.
         self.fsm.peer.leader_lease_mut().expire_remote_lease();
     }
