@@ -48,7 +48,6 @@ use kvproto::{
 use security::SecurityManager;
 use tikv_util::{
     box_err,
-    config::ReadableDuration,
     error, info,
     mpsc::future as mpsc,
     slow_log, thd_name,
@@ -71,6 +70,7 @@ use crate::PdFuture;
 fn request_timeout() -> Duration {
     fail_point!("pd_client_v2_request_timeout", |s| {
         use std::str::FromStr;
+        use tikv_util::config::ReadableDuration;
         ReadableDuration::from_str(&s.unwrap()).unwrap().0
     });
     Duration::from_secs(REQUEST_TIMEOUT_SEC)
@@ -412,6 +412,7 @@ async fn reconnect_loop(
     let backoff = (|| {
         fail_point!("pd_client_v2_backoff", |s| {
             use std::str::FromStr;
+            use tikv_util::config::ReadableDuration;
             ReadableDuration::from_str(&s.unwrap()).unwrap().0
         });
         request_timeout()
