@@ -234,17 +234,30 @@ pub fn check_flashback_commit(
             if lock.ts == flashback_start_ts {
                 return Ok(false);
             }
+            error!(
+                "check flashback commit exception: lock not found";
+                "key_to_commit" => log_wrappers::Value::key(key_to_commit.as_encoded()),
+                "flashback_start_ts" => flashback_start_ts,
+                "flashback_commit_ts" => flashback_commit_ts,
+                "lock" => ?lock,
+            );
         }
         // If the lock doesn't exist and the flashback commit record exists, it means the flashback
         // has been finished.
         None => {
-            if let Some((commit_ts, write)) =
-                reader.seek_write(key_to_commit, flashback_commit_ts)?
-            {
+            let write_res = reader.seek_write(key_to_commit, flashback_commit_ts)?;
+            if let Some((commit_ts, ref write)) = write_res {
                 if commit_ts == flashback_commit_ts && write.start_ts == flashback_start_ts {
                     return Ok(true);
                 }
             }
+            error!(
+                "check flashback commit exception: write record mismatched";
+                "key_to_commit" => log_wrappers::Value::key(key_to_commit.as_encoded()),
+                "flashback_start_ts" => flashback_start_ts,
+                "flashback_commit_ts" => flashback_commit_ts,
+                "write" => ?write_res,
+            );
         }
     }
     Err(txn::Error::from_mvcc(mvcc::ErrorInner::TxnLockNotFound {
