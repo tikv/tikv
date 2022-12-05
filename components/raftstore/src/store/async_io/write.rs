@@ -397,12 +397,9 @@ where
 
     #[inline]
     fn flush_states_to_raft_wb(&mut self, raft_engine: &ER) {
+        let wb = self.raft_wbs.last_mut().unwrap();
         for (region_id, state) in self.raft_states.drain() {
-            self.raft_wbs
-                .last_mut()
-                .unwrap()
-                .put_raft_state(region_id, &state)
-                .unwrap();
+            wb.put_raft_state(region_id, &state).unwrap();
         }
         if let ExtraBatchWrite::V2(extra_states_map) = &mut self.extra_batch_write {
             for (region_id, state) in extra_states_map.drain() {
@@ -415,22 +412,14 @@ where
                                 region_id,
                                 first_index(&state.apply_state),
                                 state.raft_state.as_ref().unwrap(),
-                                self.raft_wbs.last_mut().unwrap(),
+                                wb,
                             )
                             .unwrap();
                     }
-                    self.raft_wbs
-                        .last_mut()
-                        .unwrap()
-                        .put_region_state(region_id, &region_state)
-                        .unwrap();
+                    wb.put_region_state(region_id, &region_state).unwrap();
                 }
                 if !tombstone {
-                    self.raft_wbs
-                        .last_mut()
-                        .unwrap()
-                        .put_apply_state(region_id, &state.apply_state)
-                        .unwrap();
+                    wb.put_apply_state(region_id, &state.apply_state).unwrap();
                 }
             }
         }
