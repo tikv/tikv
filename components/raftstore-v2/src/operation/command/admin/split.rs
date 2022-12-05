@@ -25,7 +25,7 @@
 //!   created by the store, and here init it using the data sent from the parent
 //!   peer.
 
-use std::collections::VecDeque;
+use std::{cmp, collections::VecDeque};
 
 use collections::HashSet;
 use crossbeam::channel::{SendError, TrySendError};
@@ -411,7 +411,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         msg.set_from(self.leader_id());
         msg.set_msg_type(raft::eraftpb::MessageType::MsgSnapshot);
         msg.set_snapshot(snap);
-        msg.set_term(self.term());
+        msg.set_term(cmp::max(self.term(), RAFT_INIT_LOG_TERM));
         let res = self.raft_group_mut().step(msg);
         let accept_snap = self.raft_group().snap().is_some();
         if res.is_err() || !accept_snap {
