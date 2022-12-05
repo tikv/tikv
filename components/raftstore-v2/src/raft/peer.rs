@@ -335,6 +335,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
+    pub fn persisted_index(&self) -> u64 {
+        self.raft_group.raft.raft_log.persisted
+    }
+
+    #[inline]
     pub fn self_stat(&self) -> &PeerStat {
         &self.self_stat
     }

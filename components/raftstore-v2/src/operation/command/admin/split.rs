@@ -77,6 +77,7 @@ pub struct SplitInit {
     /// Split region
     pub region: metapb::Region,
     pub check_split: bool,
+    pub scheduled: bool,
     pub source_leader: bool,
     pub source_id: u64,
 
@@ -357,6 +358,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 source_leader: self.is_leader(),
                 source_id: region_id,
                 check_split: last_region_id == new_region_id,
+                scheduled: false,
                 locks,
             }));
 
@@ -385,16 +387,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn on_split_init<T>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
-        split_init: Box<SplitInit>,
+        mut split_init: Box<SplitInit>,
     ) {
         let region_id = split_init.region.id;
-        if self.storage().is_initialized() || self.raft_group().snap().is_some() {
+        if self.storage().is_initialized() && self.persisted_index() >= RAFT_INIT_LOG_INDEX {
             let _ = store_ctx
                 .router
                 .force_send(split_init.source_id, PeerMsg::SplitInitFinish(region_id));
             return;
         }
 
+        if self.storage().is_initialized() || self.raft_group().snap().is_some() {
+            // It accepts a snapshot already but not finish applied yet.
+            let prev = self.storage_mut().split_init_mut().replace(split_init);
+            assert!(prev.is_none(), "{:?}", prev);
+            return;
+        }
+
+        split_init.scheduled = true;
         let snap = split_init.to_snapshot();
         let mut msg = raft::eraftpb::Message::default();
         msg.set_to(self.peer_id());
@@ -422,7 +432,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         split_init: Box<SplitInit>,
     ) {
-        if split_init.source_leader && self.leader_id() == INVALID_ID {
+        if split_init.source_leader
+            && self.leader_id() == INVALID_ID
+            && self.term() == RAFT_INIT_LOG_TERM
+        {
             let _ = self.raft_group_mut().campaign();
             self.set_has_ready();
 
@@ -432,14 +445,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.region_heartbeat_pd(store_ctx);
         }
         let region_id = self.region_id();
-        {
-            let mut meta = store_ctx.store_meta.lock().unwrap();
-            meta.tablet_caches.insert(region_id, self.tablet().clone());
-            meta.readers
-                .insert(region_id, self.generate_read_delegate());
-            meta.region_read_progress
-                .insert(region_id, self.read_progress().clone());
-        }
 
         if split_init.check_split {
             // TODO: check if the last region needs to split again

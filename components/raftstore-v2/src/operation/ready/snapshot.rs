@@ -120,7 +120,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     pub fn on_applied_snapshot<T: Transport>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
-        let persisted_index = self.raft_group().raft.raft_log.persisted;
+        let persisted_index = self.persisted_index();
         let first_index = self.storage().entry_storage().first_index();
         if first_index == persisted_index + 1 {
             let region_id = self.region_id();
@@ -132,6 +132,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.schedule_apply_fsm(ctx);
             self.storage_mut().on_applied_snapshot();
             self.raft_group_mut().advance_apply_to(persisted_index);
+            {
+                let mut meta = ctx.store_meta.lock().unwrap();
+                meta.tablet_caches.insert(region_id, self.tablet().clone());
+                meta.readers
+                    .insert(region_id, self.generate_read_delegate());
+                meta.region_read_progress
+                    .insert(region_id, self.read_progress().clone());
+            }
             self.read_progress_mut()
                 .update_applied_core(persisted_index);
             match self.storage_mut().split_init_mut().take() {
@@ -389,11 +397,11 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         self.entry_storage_mut().set_last_term(last_term);
 
         let path = match self.split_init_mut() {
-            Some(init) => {
+            Some(init) if init.scheduled => {
                 assert_eq!(last_index, RAFT_INIT_LOG_INDEX);
                 tablet_factory.tablet_path_with_prefix(SPLIT_PREFIX, region_id, last_index)
             }
-            None => {
+            _ => {
                 let key = TabletSnapKey::new(region_id, peer_id, last_term, last_index);
                 snap_mgr.final_recv_path(&key)
             }
