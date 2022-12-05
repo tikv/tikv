@@ -271,9 +271,15 @@ pub fn get_first_user_key(
     reader: &mut MvccReader<impl Snapshot>,
     start_key: &Key,
     end_key: &Key,
+    flashback_version: TimeStamp,
 ) -> TxnResult<Option<Key>> {
-    let (mut keys_result, _) =
-        reader.scan_latest_user_keys(Some(start_key), Some(end_key), |_, _| true, 1)?;
+    let (mut keys_result, _) = reader.scan_latest_user_keys(
+        Some(start_key),
+        Some(end_key),
+        // Make sure we will get the same first user key each time.
+        |_, latest_commit_ts| latest_commit_ts > flashback_version,
+        1,
+    )?;
     Ok(keys_result.pop())
 }
 
@@ -329,8 +335,13 @@ pub mod tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let ctx = Context::default();
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &ctx);
-        let prewrite_key = if let Some(first_key) =
-            get_first_user_key(&mut reader, &Key::from_raw(key), &Key::from_raw(b"z")).unwrap()
+        let prewrite_key = if let Some(first_key) = get_first_user_key(
+            &mut reader,
+            &Key::from_raw(key),
+            &Key::from_raw(b"z"),
+            version,
+        )
+        .unwrap()
         {
             first_key
         } else {
@@ -378,19 +389,24 @@ pub mod tests {
     fn must_commit_flashback_key<E: Engine>(
         engine: &mut E,
         key: &[u8],
+        version: impl Into<TimeStamp>,
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
     ) -> usize {
-        let (start_ts, commit_ts) = (start_ts.into(), commit_ts.into());
+        let (version, start_ts, commit_ts) = (version.into(), start_ts.into(), commit_ts.into());
         let cm = ConcurrencyManager::new(TimeStamp::zero());
         let mut txn = MvccTxn::new(start_ts, cm);
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let ctx = Context::default();
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &ctx);
-        let key_to_lock =
-            get_first_user_key(&mut reader, &Key::from_raw(key), &Key::from_raw(b"z"))
-                .unwrap()
-                .unwrap();
+        let key_to_lock = get_first_user_key(
+            &mut reader,
+            &Key::from_raw(key),
+            &Key::from_raw(b"z"),
+            version,
+        )
+        .unwrap()
+        .unwrap();
         commit_flashback_key(&mut txn, &mut reader, &key_to_lock, start_ts, commit_ts).unwrap();
         let rows = txn.modifies.len();
         write(engine, &ctx, txn.into_modifies());
@@ -599,9 +615,15 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &ctx);
-        let first_key = get_first_user_key(&mut reader, &Key::from_raw(b""), &Key::from_raw(b"z"))
-            .unwrap_or_else(|_| Some(Key::from_raw(b"")))
-            .unwrap();
+        let flashback_version = 4.into();
+        let first_key = get_first_user_key(
+            &mut reader,
+            &Key::from_raw(b""),
+            &Key::from_raw(b"z"),
+            flashback_version,
+        )
+        .unwrap_or_else(|_| Some(Key::from_raw(b"")))
+        .unwrap();
         assert_eq!(first_key, Key::from_raw(prewrite_key));
 
         // case 1: start key is before all keys, flashback b"c".
@@ -611,7 +633,12 @@ pub mod tests {
         assert_eq!(must_rollback_lock(&mut engine, k, flashback_start_ts), 0);
         // Prewrite "prewrite_key" not "start_key".
         assert_eq!(
-            must_prewrite_flashback_key(&mut engine, start_key, 4, flashback_start_ts),
+            must_prewrite_flashback_key(
+                &mut engine,
+                start_key,
+                flashback_version,
+                flashback_start_ts
+            ),
             1
         );
         // Flashback (b"c", v2) to (b"c", v1).
@@ -619,7 +646,7 @@ pub mod tests {
             must_flashback_write_to_version(
                 &mut engine,
                 k,
-                4,
+                flashback_version,
                 flashback_start_ts,
                 flashback_commit_ts
             ),
@@ -630,6 +657,7 @@ pub mod tests {
             must_commit_flashback_key(
                 &mut engine,
                 start_key,
+                flashback_version,
                 flashback_start_ts,
                 flashback_commit_ts
             ),
@@ -645,12 +673,22 @@ pub mod tests {
         assert_eq!(must_rollback_lock(&mut engine, k, flashback_start_ts), 0);
         // Prewrite null.
         assert_eq!(
-            must_prewrite_flashback_key(&mut engine, start_key, 4, flashback_start_ts),
+            must_prewrite_flashback_key(
+                &mut engine,
+                start_key,
+                flashback_version,
+                flashback_start_ts
+            ),
             0
         );
         // case 3: start key is valid, end_key is invalid, prewrite key will be None.
-        let first_key = get_first_user_key(&mut reader, &Key::from_raw(b"a"), &Key::from_raw(b""))
-            .unwrap_or_else(|_| Some(Key::from_raw(b"")));
+        let first_key = get_first_user_key(
+            &mut reader,
+            &Key::from_raw(b"a"),
+            &Key::from_raw(b""),
+            flashback_version,
+        )
+        .unwrap_or_else(|_| Some(Key::from_raw(b"")));
         assert_eq!(first_key, None);
     }
 }

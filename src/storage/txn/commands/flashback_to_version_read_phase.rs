@@ -145,9 +145,12 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     //   completion of the 2pc.
                     // - To make sure the key locked in the latch is the same as the actual key
                     //   written, we pass it to the key in `process_write' after getting it.
-                    let key_to_lock = if let Some(first_key) =
-                        get_first_user_key(&mut reader, &self.start_key, &self.end_key)?
-                    {
+                    let key_to_lock = if let Some(first_key) = get_first_user_key(
+                        &mut reader,
+                        &self.start_key,
+                        &self.end_key,
+                        self.version,
+                    )? {
                         first_key
                     } else {
                         // If the key is None return directly
@@ -184,9 +187,12 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     // 2pc. So When overwriting the write, we skip the immediate
                     // write of this key and instead put it after the completion
                     // of the 2pc.
-                    next_write_key = if let Some(first_key) =
-                        get_first_user_key(&mut reader, &self.start_key, &self.end_key)?
-                    {
+                    next_write_key = if let Some(first_key) = get_first_user_key(
+                        &mut reader,
+                        &self.start_key,
+                        &self.end_key,
+                        self.version,
+                    )? {
                         first_key
                     } else {
                         // If the key is None return directly
