@@ -365,10 +365,6 @@ fn test_worker_split_raft_wb() {
 
         let mut task_1 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_1, 1, 10);
         init_write_batch(&engines, &mut task_1);
-        task_1.extra_write = ExtraWrite::V2(ExtraStates::new(RaftApplyState {
-            applied_index: 10,
-            ..Default::default()
-        }));
         put_raft_kv(task_1.raft_wb.as_mut(), raft_key_1);
         task_1.entries.append(&mut vec![
             new_entry(5, 5),
@@ -381,10 +377,6 @@ fn test_worker_split_raft_wb() {
 
         let mut task_2 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_2, 2, 15);
         init_write_batch(&engines, &mut task_2);
-        task_2.extra_write = ExtraWrite::V2(ExtraStates::new(RaftApplyState {
-            applied_index: 16,
-            ..Default::default()
-        }));
         put_raft_kv(task_2.raft_wb.as_mut(), raft_key_2);
         task_2
             .entries
@@ -400,10 +392,6 @@ fn test_worker_split_raft_wb() {
 
         let mut task_3 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_1, 1, 11);
         init_write_batch(&engines, &mut task_3);
-        task_3.extra_write = ExtraWrite::V2(ExtraStates::new(RaftApplyState {
-            applied_index: 25,
-            ..Default::default()
-        }));
         put_raft_kv(task_3.raft_wb.as_mut(), raft_key_3);
         delete_raft_kv(&engines.raft, task_3.raft_wb.as_mut(), raft_key_1);
         task_3
@@ -443,20 +431,6 @@ fn test_worker_split_raft_wb() {
                     new_raft_state(15, 234, 20, 21),
                 ),
             ],
-        );
-        assert_eq!(
-            engines.raft.get_apply_state(region_1).unwrap(),
-            Some(RaftApplyState {
-                applied_index: 25,
-                ..Default::default()
-            })
-        );
-        assert_eq!(
-            engines.raft.get_apply_state(region_2).unwrap(),
-            Some(RaftApplyState {
-                applied_index: 16,
-                ..Default::default()
-            })
         );
     };
 
