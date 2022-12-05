@@ -1030,8 +1030,6 @@ where
     /// lead_transferee if this peer(leader) is in a leadership transferring.
     pub lead_transferee: u64,
     pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
-    // Used as the memory state for Flashback to reject RW/Schedule before proposing.
-    pub is_in_flashback: bool,
     pub snapshot_recovery_state: Option<SnapshotRecoveryState>,
 }
 
@@ -1167,7 +1165,6 @@ where
             last_region_buckets: None,
             lead_transferee: raft::INVALID_ID,
             unsafe_recovery_state: None,
-            is_in_flashback: region.get_is_in_flashback(),
             snapshot_recovery_state: None,
         };
 
@@ -3531,7 +3528,7 @@ where
             self.force_leader.is_some(),
         ) {
             None
-        } else if self.is_in_flashback {
+        } else if self.region().is_in_flashback {
             debug!(
                 "prevents renew lease while in flashback state";
                 "region_id" => self.region_id,

@@ -359,30 +359,62 @@ fn test_flashback_for_apply_snapshot() {
 
     must_check_flashback_state(&mut cluster, 1, 1, false);
     must_check_flashback_state(&mut cluster, 1, 3, false);
-
     // Make store 3 isolated.
     cluster.add_send_filter(IsolationFilterFactory::new(3));
-
     // Write some data to trigger snapshot.
-    for i in 100..110 {
-        let key = format!("k{}", i);
-        let value = format!("v{}", i);
-        cluster.must_put_cf("write", key.as_bytes(), value.as_bytes());
+    let mut region = cluster.get_region(TEST_KEY);
+    for _ in 0..10 {
+        must_request_without_flashback_flag(
+            &mut cluster,
+            &mut region.clone(),
+            new_put_cf_cmd("write", TEST_KEY, TEST_VALUE),
+        )
     }
-
     // Prepare for flashback
     cluster.must_send_wait_flashback_msg(1, AdminCmdType::PrepareFlashback);
     must_check_flashback_state(&mut cluster, 1, 1, true);
     must_check_flashback_state(&mut cluster, 1, 3, false);
-
     // Add store 3 back.
     cluster.clear_send_filters();
     must_check_flashback_state(&mut cluster, 1, 1, true);
     must_check_flashback_state(&mut cluster, 1, 3, true);
-
     cluster.must_send_wait_flashback_msg(1, AdminCmdType::FinishFlashback);
     must_check_flashback_state(&mut cluster, 1, 1, false);
     must_check_flashback_state(&mut cluster, 1, 3, false);
+
+    // Prepare for flashback
+    cluster.must_send_wait_flashback_msg(1, AdminCmdType::PrepareFlashback);
+    must_check_flashback_state(&mut cluster, 1, 1, true);
+    must_check_flashback_state(&mut cluster, 1, 3, true);
+    // Make store 3 isolated.
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    // Write some flashback data to trigger snapshot.
+    for _ in 0..10 {
+        must_request_with_flashback_flag(
+            &mut cluster,
+            &mut region.clone(),
+            new_put_cf_cmd("write", TEST_KEY, TEST_VALUE),
+        )
+    }
+    // Finish flashback.
+    cluster.must_send_wait_flashback_msg(1, AdminCmdType::FinishFlashback);
+    must_check_flashback_state(&mut cluster, 1, 1, false);
+    must_check_flashback_state(&mut cluster, 1, 3, true);
+    // Wait for a while before adding store 3 back to make sure only it does not
+    // receive the `FinishFlashback` message.
+    sleep(Duration::from_secs(1));
+    // Add store 3 back.
+    cluster.clear_send_filters();
+    must_check_flashback_state(&mut cluster, 1, 1, false);
+    must_check_flashback_state(&mut cluster, 1, 3, false);
+    // Make store 3 become leader.
+    cluster.must_transfer_leader(region.get_id(), new_peer(3, 3));
+    // Region should not in the flashback state.
+    must_request_without_flashback_flag(
+        &mut cluster,
+        &mut region,
+        new_put_cmd(TEST_KEY, TEST_VALUE),
+    );
 }
 
 fn must_check_flashback_state(
@@ -438,7 +470,7 @@ fn must_request_with_flashback_flag<T: Simulator>(
     req: Request,
 ) {
     let resp = request(cluster, region, req, true);
-    assert!(!resp.get_header().has_error());
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
 }
 
 fn must_get_flashback_not_prepared_error<T: Simulator>(
@@ -457,7 +489,7 @@ fn must_request_without_flashback_flag<T: Simulator>(
     req: Request,
 ) {
     let resp = request(cluster, region, req, false);
-    assert!(!resp.get_header().has_error());
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
 }
 
 fn must_get_flashback_in_progress_error<T: Simulator>(
