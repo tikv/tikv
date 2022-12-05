@@ -69,6 +69,7 @@ use crate::PdFuture;
 fn request_timeout() -> Duration {
     fail_point!("pd_client_v2_request_timeout", |s| {
         use std::str::FromStr;
+
         use tikv_util::config::ReadableDuration;
         ReadableDuration::from_str(&s.unwrap()).unwrap().0
     });
@@ -411,6 +412,7 @@ async fn reconnect_loop(
     let backoff = (|| {
         fail_point!("pd_client_v2_backoff", |s| {
             use std::str::FromStr;
+
             use tikv_util::config::ReadableDuration;
             ReadableDuration::from_str(&s.unwrap()).unwrap().0
         });
