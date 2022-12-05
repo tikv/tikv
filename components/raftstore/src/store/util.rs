@@ -318,6 +318,7 @@ pub fn check_flashback_state(
     is_in_flashback: bool,
     req: &RaftCmdRequest,
     region_id: u64,
+    skip_not_prepared: bool,
 ) -> Result<()> {
     // The admin flashback cmd could be proposed/applied under any state.
     if req.has_admin_request()
@@ -335,7 +336,7 @@ pub fn check_flashback_state(
     }
     // If the region is not in the flashback state, the flashback request itself
     // should be rejected.
-    if !is_in_flashback && is_flashback_request {
+    if !is_in_flashback && is_flashback_request && !skip_not_prepared {
         return Err(Error::FlashbackNotPrepared(region_id));
     }
     Ok(())
