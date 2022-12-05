@@ -595,27 +595,18 @@ pub mod tests {
     fn test_prewrite_with_special_key() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let mut ts = TimeStamp::zero();
-        let (prewrite_key, prewrite_val) = (b"b", b"val");
-        must_prewrite_put(
-            &mut engine,
-            prewrite_key,
-            prewrite_val,
-            prewrite_key,
-            *ts.incr(),
-        );
-        must_commit(&mut engine, prewrite_key, ts, *ts.incr());
-        must_get(&mut engine, prewrite_key, ts, prewrite_val);
-        let (k, v1, v2) = (b"c", b"v1", b"v2");
-        must_prewrite_put(&mut engine, k, v1, k, *ts.incr());
-        must_commit(&mut engine, k, ts, *ts.incr());
-        must_prewrite_put(&mut engine, k, v2, k, *ts.incr());
-        must_commit(&mut engine, k, ts, *ts.incr());
-        must_get(&mut engine, k, ts, v2);
+        let (prewrite_key, k, v) = (b"b", b"c", b"val");
+        for k in [prewrite_key, k] {
+            let (start_ts, commit_ts) = (*ts.incr(), *ts.incr());
+            must_prewrite_put(&mut engine, k, v, k, start_ts);
+            must_commit(&mut engine, k, start_ts, commit_ts);
+            must_get(&mut engine, k, commit_ts, v);
+        }
         // Check for prewrite key b"b".
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &ctx);
-        let flashback_version = 4.into();
+        let flashback_version = TimeStamp::zero();
         let first_key = get_first_user_key(
             &mut reader,
             &Key::from_raw(b""),
@@ -663,9 +654,8 @@ pub mod tests {
             ),
             2
         );
-        must_get(&mut engine, k, ts, v1);
-        must_get(&mut engine, prewrite_key, ts, prewrite_val);
-
+        must_get_none(&mut engine, prewrite_key, ts);
+        must_get_none(&mut engine, k, ts);
         // case 2: start key is after all keys, prewrite will return None.
         let start_key = b"d";
         let flashback_start_ts = *ts.incr();
@@ -681,14 +671,18 @@ pub mod tests {
             ),
             0
         );
+        must_get_none(&mut engine, prewrite_key, ts);
+        must_get_none(&mut engine, k, ts);
         // case 3: start key is valid, end_key is invalid, prewrite key will be None.
-        let first_key = get_first_user_key(
-            &mut reader,
-            &Key::from_raw(b"a"),
-            &Key::from_raw(b""),
-            flashback_version,
-        )
-        .unwrap_or_else(|_| Some(Key::from_raw(b"")));
-        assert_eq!(first_key, None);
+        assert_eq!(
+            get_first_user_key(
+                &mut reader,
+                &Key::from_raw(b"a"),
+                &Key::from_raw(b""),
+                flashback_version,
+            )
+            .unwrap(),
+            None
+        );
     }
 }
