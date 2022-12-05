@@ -32,7 +32,7 @@ engine_traits = { workspace = true }
 fail = "0.5"
 file_system = { workspace = true }
 keys = { workspace = true }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { workspace = true }
 lazy_static = "1.4.0"
 log_wrappers = { workspace = true }
 num_cpus = "1"

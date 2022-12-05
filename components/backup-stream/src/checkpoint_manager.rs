@@ -2,16 +2,25 @@
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
+use futures::{
+    channel::mpsc::{self as async_mpsc, Receiver, Sender},
+    SinkExt, StreamExt,
+};
+use grpcio::{RpcStatus, RpcStatusCode, ServerStreamingSink, WriteFlags};
 use kvproto::{
     errorpb::{Error as PbError, *},
+    logbackuppb::{FlushEvent, SubscribeFlushEventResponse},
     metapb::Region,
 };
 use pd_client::PdClient;
-use tikv_util::{info, worker::Scheduler};
+use tikv_util::{box_err, defer, info, warn, worker::Scheduler};
 use txn_types::TimeStamp;
+use uuid::Uuid;
 
 use crate::{
-    errors::{Error, Result},
+    annotate,
+    errors::{Error, ReportableResult, Result},
+    future,
     metadata::{store::MetaStore, Checkpoint, CheckpointProvider, MetadataClient},
     metrics, try_send, RegionCheckpointOperation, Task,
 };
@@ -20,10 +29,84 @@ use crate::{
 /// This information is provided for the `advancer` in checkpoint V3,
 /// which involved a central node (typically TiDB) for collecting all regions'
 /// checkpoint then advancing the global checkpoint.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct CheckpointManager {
     items: HashMap<u64, LastFlushTsOfRegion>,
+    manager_handle: Option<Sender<SubscriptionOp>>,
 }
+
+impl std::fmt::Debug for CheckpointManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CheckpointManager")
+            .field("items", &self.items)
+            .finish()
+    }
+}
+
+enum SubscriptionOp {
+    Add(Subscription),
+    Emit(Box<[FlushEvent]>),
+}
+
+struct SubscriptionManager {
+    subscribers: HashMap<Uuid, Subscription>,
+    input: Receiver<SubscriptionOp>,
+}
+
+impl SubscriptionManager {
+    pub async fn main_loop(mut self) {
+        info!("subscription manager started!");
+        defer! { info!("subscription manager exit.") }
+        while let Some(msg) = self.input.next().await {
+            match msg {
+                SubscriptionOp::Add(sub) => {
+                    self.subscribers.insert(Uuid::new_v4(), sub);
+                }
+                SubscriptionOp::Emit(events) => {
+                    let mut canceled = vec![];
+                    for (id, sub) in &mut self.subscribers {
+                        let send_all = async {
+                            for es in events.chunks(1024) {
+                                let mut resp = SubscribeFlushEventResponse::new();
+                                resp.set_events(es.to_vec().into());
+                                sub.feed((resp, WriteFlags::default())).await?;
+                            }
+                            sub.flush().await
+                        };
+
+                        match send_all.await {
+                            Err(grpcio::Error::RemoteStopped) => {
+                                canceled.push(*id);
+                            }
+                            Err(err) => {
+                                Error::from(err).report("sending subscription");
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    for c in canceled {
+                        match self.subscribers.remove(&c) {
+                            Some(mut sub) => {
+                                info!("client is gone, removing subscription"; "id" => %c);
+                                sub.close().await.report_if_err(format_args!(
+                                    "during removing subscription {}",
+                                    c
+                                ))
+                            }
+                            None => {
+                                warn!("BUG: the subscriber has been removed before we are going to remove it."; "id" => %c);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Note: can we make it more generic...?
+pub type Subscription = ServerStreamingSink<kvproto::logbackuppb::SubscribeFlushEventResponse>;
 
 /// The result of getting a checkpoint.
 /// The possibility of failed to getting checkpoint is pretty high:
@@ -76,8 +159,81 @@ impl CheckpointManager {
         self.items.clear();
     }
 
+    pub fn spawn_subscription_mgr(&mut self) -> future![()] {
+        let (tx, rx) = async_mpsc::channel(1024);
+        let sub = SubscriptionManager {
+            subscribers: Default::default(),
+            input: rx,
+        };
+        self.manager_handle = Some(tx);
+        sub.main_loop()
+    }
+
+    pub fn update_region_checkpoints(&mut self, region_and_checkpoint: Vec<(Region, TimeStamp)>) {
+        for (region, checkpoint) in &region_and_checkpoint {
+            self.do_update(region, *checkpoint);
+        }
+
+        self.notify(region_and_checkpoint.into_iter());
+    }
+
     /// update a region checkpoint in need.
+    #[cfg(test)]
     pub fn update_region_checkpoint(&mut self, region: &Region, checkpoint: TimeStamp) {
+        self.do_update(region, checkpoint);
+        self.notify(std::iter::once((region.clone(), checkpoint)));
+    }
+
+    pub fn add_subscriber(&mut self, sub: Subscription) -> future![Result<()>] {
+        let mgr = self.manager_handle.as_ref().cloned();
+
+        // NOTE: we cannot send the real error into the client directly because once
+        // we send the subscription into the sink, we cannot fetch it again :(
+        async move {
+            let mgr = mgr.ok_or(Error::Other(box_err!("subscription manager not get ready")));
+            let mut mgr = match mgr {
+                Ok(mgr) => mgr,
+                Err(err) => {
+                    sub.fail(RpcStatus::with_message(
+                        RpcStatusCode::UNAVAILABLE,
+                        "subscription manager not get ready.".to_owned(),
+                    ))
+                    .await
+                    .map_err(|err| {
+                        annotate!(err, "failed to send request to subscriber manager")
+                    })?;
+                    return Err(err);
+                }
+            };
+            mgr.send(SubscriptionOp::Add(sub))
+                .await
+                .map_err(|err| annotate!(err, "failed to send request to subscriber manager"))?;
+            Ok(())
+        }
+    }
+
+    fn notify(&mut self, items: impl Iterator<Item = (Region, TimeStamp)>) {
+        if let Some(mgr) = self.manager_handle.as_mut() {
+            let r = items
+                .map(|(r, ts)| {
+                    let mut f = FlushEvent::new();
+                    f.set_checkpoint(ts.into_inner());
+                    f.set_start_key(r.start_key);
+                    f.set_end_key(r.end_key);
+                    f
+                })
+                .collect::<Box<[_]>>();
+            let event_size = r.len();
+            let res = mgr.try_send(SubscriptionOp::Emit(r));
+            // Note: perhaps don't batch in the channel but batch in the receiver side?
+            // If so, we can control the memory usage better.
+            if let Err(err) = res {
+                warn!("the channel is full, dropping some events."; "length" => %event_size, "err" => %err);
+            }
+        }
+    }
+
+    fn do_update(&mut self, region: &Region, checkpoint: TimeStamp) {
         let e = self.items.entry(region.get_id());
         e.and_modify(|old_cp| {
             if old_cp.checkpoint < checkpoint
@@ -173,7 +329,7 @@ pub trait FlushObserver: Send + 'static {
     /// Note the new resolved ts cannot be greater than the old resolved ts.
     async fn rewrite_resolved_ts(
         &mut self,
-        #[allow(unused_variables)] task: &str,
+        #[allow(unused_variables)] _task: &str,
     ) -> Option<TimeStamp> {
         None
     }
@@ -199,7 +355,7 @@ impl<PD: PdClient + 'static> FlushObserver for BasicFlushObserver<PD> {
             .pd_cli
             .update_service_safe_point(
                 format!("backup-stream-{}-{}", task, self.store_id),
-                TimeStamp::new(rts - 1),
+                TimeStamp::new(rts.saturating_sub(1)),
                 // Add a service safe point for 30 mins (6x the default flush interval).
                 // It would probably be safe.
                 Duration::from_secs(1800),

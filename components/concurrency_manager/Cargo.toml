@@ -6,7 +6,7 @@ version = "0.0.1"
 
 [dependencies]
 fail = "0.5"
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { workspace = true }
 parking_lot = "0.12"
 tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["macros", "sync", "time"] }

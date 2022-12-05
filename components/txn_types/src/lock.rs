@@ -91,7 +91,9 @@ pub struct Lock {
     /// The commit TS of the latest PUT/DELETE record
     pub last_change_ts: TimeStamp,
     /// The number of versions that need skipping from the latest version to
-    /// find the latest PUT/DELETE record
+    /// find the latest PUT/DELETE record.
+    /// If versions_to_last_change > 0 but last_change_ts == 0, the key does not
+    /// have a PUT/DELETE record.
     pub versions_to_last_change: u64,
     /// The source of this txn. It is used by ticdc, if the value is 0 ticdc
     /// will sync the kv change event to downstream, if it is not 0, ticdc
@@ -228,7 +230,7 @@ impl Lock {
                 b.encode_u64(ts.into_inner()).unwrap();
             }
         }
-        if !self.last_change_ts.is_zero() {
+        if !self.last_change_ts.is_zero() || self.versions_to_last_change != 0 {
             b.push(LAST_CHANGE_PREFIX);
             b.encode_u64(self.last_change_ts.into_inner()).unwrap();
             b.encode_var_u64(self.versions_to_last_change).unwrap();
@@ -266,7 +268,7 @@ impl Lock {
         if !self.rollback_ts.is_empty() {
             size += 1 + MAX_VAR_U64_LEN + size_of::<u64>() * self.rollback_ts.len();
         }
-        if !self.last_change_ts.is_zero() {
+        if !self.last_change_ts.is_zero() || self.versions_to_last_change != 0 {
             size += 1 + size_of::<u64>() + MAX_VAR_U64_LEN;
         }
         if self.txn_source != 0 {
@@ -773,7 +775,7 @@ mod tests {
                 16,
                 8.into(),
             )
-            .set_last_change(4.into(), 2),
+            .set_last_change(0.into(), 2),
             Lock::new(
                 LockType::Lock,
                 b"pk".to_vec(),

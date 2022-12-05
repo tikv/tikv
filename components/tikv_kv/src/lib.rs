@@ -5,8 +5,10 @@
 //! [`Server`](crate::server::Server). The [`BTreeEngine`](kv::BTreeEngine) and
 //! [`RocksEngine`](RocksEngine) are used for testing only.
 
+#![feature(bound_map)]
 #![feature(min_specialization)]
 #![feature(type_alias_impl_trait)]
+#![feature(associated_type_defaults)]
 
 #[macro_use(fail_point)]
 extern crate fail;
@@ -17,6 +19,7 @@ mod btree_engine;
 mod cursor;
 pub mod metrics;
 mod mock_engine;
+mod raft_extension;
 mod raftstore_impls;
 mod rocksdb_engine;
 mod stats;
@@ -54,6 +57,7 @@ pub use self::{
     btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot},
     cursor::{Cursor, CursorBuilder},
     mock_engine::{ExpectedWrite, MockEngineBuilder},
+    raft_extension::{FakeExtension, RaftExtension},
     rocksdb_engine::{RocksEngine, RocksSnapshot},
     stats::{
         CfStatistics, FlowStatistics, FlowStatsReporter, StageLatencyStats, Statistics,
@@ -65,6 +69,7 @@ pub const SEEK_BOUND: u64 = 8;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
+pub type OnAppliedCb = Box<dyn FnOnce(&mut Result<()>) + Send>;
 pub type ExtCallback = Box<dyn FnOnce() + Send>;
 pub type Result<T> = result::Result<T, Error>;
 
@@ -153,7 +158,7 @@ impl From<Modify> for raft_cmdpb::Request {
 
 // For test purpose only.
 // It's used to simulate observer actions in `rocksdb_engine`. See
-// `RocksEngine::async_write_ext()`.
+// `RocksEngine::async_write()`.
 impl From<raft_cmdpb::Request> for Modify {
     fn from(mut req: raft_cmdpb::Request) -> Modify {
         let name_to_cf = |name: &str| -> Option<CfName> {
@@ -248,6 +253,37 @@ impl WriteData {
     }
 }
 
+/// Events that can subscribed from the `WriteSubscriber`.
+pub enum WriteEvent {
+    Proposed,
+    Committed,
+    /// The write is either aborted or applied.
+    Finished(Result<()>),
+}
+
+impl WriteEvent {
+    pub const EVENT_PROPOSED: u8 = 1;
+    pub const EVENT_COMMITTED: u8 = 1 << 1;
+    pub const ALL_EVENTS: u8 = Self::EVENT_PROPOSED | Self::EVENT_COMMITTED;
+    pub const BASIC_EVENT: u8 = 0;
+
+    #[inline]
+    pub fn event_capacity(subscribed: u8) -> usize {
+        1 + Self::subscribed_proposed(subscribed) as usize
+            + Self::subscribed_committed(subscribed) as usize
+    }
+
+    #[inline]
+    pub fn subscribed_proposed(ev: u8) -> bool {
+        ev & Self::EVENT_PROPOSED != 0
+    }
+
+    #[inline]
+    pub fn subscribed_committed(ev: u8) -> bool {
+        ev & Self::EVENT_COMMITTED != 0
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SnapContext<'a> {
     pub pb_ctx: &'a Context,
@@ -273,12 +309,22 @@ pub trait Engine: Send + Clone + 'static {
     /// Currently, only multi-rocksdb version will return `None`.
     fn kv_engine(&self) -> Option<Self::Local>;
 
+    type RaftExtension: raft_extension::RaftExtension = FakeExtension;
+    /// Get the underlying raft extension.
+    fn raft_extension(&self) -> &Self::RaftExtension {
+        unimplemented!()
+    }
+
     /// Write modifications into internal local engine directly.
     ///
     /// region_modifies records each region's modifications.
     fn modify_on_kv_engine(&self, region_modifies: HashMap<u64, Vec<Modify>>) -> Result<()>;
 
     type SnapshotRes: Future<Output = Result<Self::Snap>> + Send + 'static;
+    /// Get a snapshot asynchronously.
+    ///
+    /// Note the snapshot is queried immediately no matter whether the returned
+    /// future is polled or not.
     fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes;
 
     /// Precheck request which has write with it's context.
@@ -286,26 +332,42 @@ pub trait Engine: Send + Clone + 'static {
         Ok(())
     }
 
-    fn async_write(&self, ctx: &Context, batch: WriteData, write_cb: Callback<()>) -> Result<()>;
-
-    /// Writes data to the engine asynchronously with some extensions.
+    type WriteRes: Stream<Item = WriteEvent> + Unpin + Send + 'static;
+    /// Writes data to the engine asynchronously.
     ///
-    /// When the write request is proposed successfully, the `proposed_cb` is
-    /// invoked. When the write request is finished, the `write_cb` is invoked.
-    fn async_write_ext(
+    /// You can subscribe special events like `EVENT_PROPOSED` and
+    /// `EVENT_COMMITTED`.
+    ///
+    /// `on_applied` is called right in the processing thread before being
+    /// fed to the stream.
+    ///
+    /// Note the write is started no matter whether the returned stream is
+    /// polled or not.
+    fn async_write(
         &self,
         ctx: &Context,
         batch: WriteData,
-        write_cb: Callback<()>,
-        _proposed_cb: Option<ExtCallback>,
-        _committed_cb: Option<ExtCallback>,
-    ) -> Result<()> {
-        self.async_write(ctx, batch, write_cb)
-    }
+        subscribed: u8,
+        on_applied: Option<OnAppliedCb>,
+    ) -> Self::WriteRes;
 
     fn write(&self, ctx: &Context, batch: WriteData) -> Result<()> {
-        wait_op!(|cb| self.async_write(ctx, batch, cb), DEFAULT_TIMEOUT)
-            .unwrap_or_else(|| Err(Error::from(ErrorInner::Timeout(DEFAULT_TIMEOUT))))
+        let f = write(self, ctx, batch, None);
+        let timeout = GLOBAL_TIMER_HANDLE
+            .delay(Instant::now() + DEFAULT_TIMEOUT)
+            .compat();
+
+        futures::executor::block_on(async move {
+            futures::select! {
+                res = f.fuse() => {
+                    if let Some(res) = res {
+                        return res;
+                    }
+                },
+                _ = timeout.fuse() => (),
+            };
+            Err(Error::from(ErrorInner::Timeout(DEFAULT_TIMEOUT)))
+        })
     }
 
     fn release_snapshot(&mut self) {}
@@ -365,6 +427,11 @@ pub trait Engine: Send + Clone + 'static {
     fn end_flashback(&self, _ctx: &Context) -> BoxFuture<'static, Result<()>> {
         Box::pin(futures::future::ready(Ok(())))
     }
+
+    /// Application may operate on local engine directly, the method is to hint
+    /// the engine there is probably a notable difference in range, so
+    /// engine may update its statistics.
+    fn hint_change_in_range(&self, _start_key: Vec<u8>, _end_key: Vec<u8>) {}
 }
 
 /// A Snapshot is a consistent view of the underlying engine at a given point in
@@ -613,6 +680,24 @@ pub fn snapshot<E: Engine>(
         });
         fail_point!("after-snapshot");
         result
+    }
+}
+
+pub fn write<E: Engine>(
+    engine: &E,
+    ctx: &Context,
+    batch: WriteData,
+    on_applied: Option<OnAppliedCb>,
+) -> impl std::future::Future<Output = Option<Result<()>>> {
+    let mut res = engine.async_write(ctx, batch, WriteEvent::BASIC_EVENT, on_applied);
+    async move {
+        loop {
+            match res.next().await {
+                Some(WriteEvent::Finished(res)) => return Some(res),
+                Some(_) => (),
+                None => return None,
+            }
+        }
     }
 }
 

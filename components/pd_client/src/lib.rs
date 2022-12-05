@@ -1,8 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
+
+#![feature(let_chains)]
+
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
 mod client;
+mod client_v2;
 mod feature_gate;
 pub mod metrics;
 mod tso;
@@ -23,7 +27,8 @@ use tikv_util::time::{Instant, UnixSecs};
 use txn_types::TimeStamp;
 
 pub use self::{
-    client::{DummyPdClient, RpcClient},
+    client::RpcClient,
+    client_v2::{PdClient as PdClientV2, RpcClient as RpcClientV2},
     config::Config,
     errors::{Error, Result},
     feature_gate::{Feature, FeatureGate},

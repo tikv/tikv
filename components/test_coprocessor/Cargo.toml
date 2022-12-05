@@ -25,7 +25,7 @@ collections = { workspace = true }
 concurrency_manager = { workspace = true }
 engine_rocks = { workspace = true }
 futures = "0.3"
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { workspace = true }
 protobuf = "2"
 resource_metering = { workspace = true }
 test_storage = { workspace = true }
@@ -33,5 +33,5 @@ tidb_query_common = { workspace = true }
 tidb_query_datatype = { workspace = true }
 tikv = { workspace = true }
 tikv_util = { workspace = true }
-tipb = { git = "https://github.com/pingcap/tipb.git" }
+tipb = { workspace = true }
 txn_types = { workspace = true }
