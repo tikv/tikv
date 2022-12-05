@@ -606,7 +606,7 @@ fn test_mvcc_flashback_failed_after_first_batch() {
     fail::cfg("flashback_failed_after_first_batch", "return").unwrap();
     must_flashback_to_version(&client, ctx.clone(), check_ts, ts + 1, ts + 2);
     fail::remove("flashback_failed_after_first_batch");
-    // key@1 must be flahsbacked in the second batch firstly.
+    // key@1 must be flashbacked in the second batch firstly.
     must_kv_read_equal(
         &client,
         ctx.clone(),
@@ -804,6 +804,44 @@ fn test_mvcc_flashback_unprepared() {
     let resp = client.kv_flashback_to_version(&req).unwrap();
     assert!(!resp.has_region_error());
     assert!(resp.get_error().is_empty());
+    let get_resp = client.kv_get(&get_req).unwrap();
+    assert!(!get_resp.has_region_error());
+    assert!(!get_resp.has_error());
+    assert_eq!(get_resp.value, b"".to_vec());
+}
+
+#[test]
+fn test_mvcc_flashback_with_unlimit_range() {
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+    let mut ts = 0;
+    write_and_read_key(&client, &ctx, &mut ts, k.clone(), v.clone());
+    must_kv_read_equal(&client, ctx.clone(), k.clone(), v, 6);
+    // Flashback with preparing.
+    let mut prepare_req = PrepareFlashbackToVersionRequest::default();
+    prepare_req.set_context(ctx.clone());
+    prepare_req.set_start_ts(6);
+    prepare_req.set_version(0);
+    prepare_req.set_start_key(b"".to_vec());
+    prepare_req.set_end_key(b"".to_vec());
+    client
+        .kv_prepare_flashback_to_version(&prepare_req)
+        .unwrap();
+    let mut req = FlashbackToVersionRequest::default();
+    req.set_context(ctx.clone());
+    req.set_start_ts(6);
+    req.set_commit_ts(7);
+    req.set_version(0);
+    req.set_start_key(b"".to_vec());
+    req.set_end_key(b"".to_vec());
+    let resp = client.kv_flashback_to_version(&req).unwrap();
+    assert!(!resp.has_region_error());
+    assert!(resp.get_error().is_empty());
+
+    let mut get_req = GetRequest::default();
+    get_req.set_context(ctx);
+    get_req.key = k;
+    get_req.version = 7;
     let get_resp = client.kv_get(&get_req).unwrap();
     assert!(!get_resp.has_region_error());
     assert!(!get_resp.has_error());

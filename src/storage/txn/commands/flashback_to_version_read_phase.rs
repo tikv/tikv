@@ -41,7 +41,7 @@ pub fn new_flashback_rollback_lock_cmd(
     start_ts: TimeStamp,
     version: TimeStamp,
     start_key: Key,
-    end_key: Key,
+    end_key: Option<Key>,
     ctx: Context,
 ) -> TypedCommand<()> {
     FlashbackToVersionReadPhase::new(
@@ -63,7 +63,7 @@ pub fn new_flashback_write_cmd(
     commit_ts: TimeStamp,
     version: TimeStamp,
     start_key: Key,
-    end_key: Key,
+    end_key: Option<Key>,
     ctx: Context,
 ) -> TypedCommand<()> {
     FlashbackToVersionReadPhase::new(
@@ -89,7 +89,7 @@ command! {
             commit_ts: TimeStamp,
             version: TimeStamp,
             start_key: Key,
-            end_key: Key,
+            end_key: Option<Key>,
             state: FlashbackToVersionState,
         }
 }
@@ -133,8 +133,11 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
         let mut start_key = self.start_key.clone();
         let next_state = match self.state {
             FlashbackToVersionState::RollbackLock { next_lock_key, .. } => {
-                let mut key_locks =
-                    flashback_to_version_read_lock(&mut reader, next_lock_key, &self.end_key)?;
+                let mut key_locks = flashback_to_version_read_lock(
+                    &mut reader,
+                    next_lock_key,
+                    self.end_key.as_ref(),
+                )?;
                 if key_locks.is_empty() {
                     // - No more locks to rollback, continue to the Prewrite Phase.
                     // - The start key from the client is actually a range which is used to limit
@@ -146,7 +149,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     // - To make sure the key locked in the latch is the same as the actual key
                     //   written, we pass it to the key in `process_write' after getting it.
                     let key_to_lock = if let Some(first_key) =
-                        get_first_user_key(&mut reader, &self.start_key, &self.end_key)?
+                        get_first_user_key(&mut reader, &self.start_key, self.end_key.as_ref())?
                     {
                         first_key
                     } else {
@@ -185,7 +188,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     // write of this key and instead put it after the completion
                     // of the 2pc.
                     next_write_key = if let Some(first_key) =
-                        get_first_user_key(&mut reader, &self.start_key, &self.end_key)?
+                        get_first_user_key(&mut reader, &self.start_key, self.end_key.as_ref())?
                     {
                         first_key
                     } else {
@@ -212,7 +215,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     &mut reader,
                     next_write_key,
                     &start_key,
-                    &self.end_key,
+                    self.end_key.as_ref(),
                     self.version,
                     self.commit_ts,
                 )?;
