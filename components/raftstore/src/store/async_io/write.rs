@@ -563,23 +563,6 @@ where
 
             let now = Instant::now();
             self.perf_context.start_observe();
-<<<<<<< HEAD
-            self.engines
-                .raft
-                .consume_and_shrink(
-                    &mut self.batch.raft_wb,
-                    true,
-                    RAFT_WB_SHRINK_SIZE,
-                    RAFT_WB_DEFAULT_SIZE,
-                )
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "store {}: {} failed to write to raft engine: {:?}",
-                        self.store_id, self.tag, e
-                    );
-                });
-            self.perf_context.report_metrics();
-=======
             for i in 0..self.batch.raft_wbs.len() {
                 self.raft_engine
                     .consume_and_shrink(
@@ -596,14 +579,7 @@ where
                     });
             }
             self.batch.raft_wbs.truncate(1);
-            let trackers: Vec<_> = self
-                .batch
-                .tasks
-                .iter()
-                .flat_map(|task| task.trackers.iter().flat_map(|t| t.as_tracker_token()))
-                .collect();
-            self.perf_context.report_metrics(&trackers);
->>>>>>> c8250e58e7 (raftstore: split raft write batch on 1GiB limit (#13872))
+            self.perf_context.report_metrics();
             write_raft_time = duration_to_sec(now.saturating_elapsed());
             STORE_WRITE_RAFTDB_DURATION_HISTOGRAM.observe(write_raft_time);
         }
@@ -788,32 +764,18 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-<<<<<<< HEAD
     let mut batch = WriteTaskBatch::new(
         engines.kv.write_batch(),
         engines.raft.log_batch(RAFT_WB_DEFAULT_SIZE),
     );
     batch.add_write_task(task);
-    batch.before_write_to_db(&StoreWriteMetrics::new(false));
+    batch.before_write_to_db(&engines.raft, &StoreWriteMetrics::new(false));
     if !batch.kv_wb.is_empty() {
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
         batch.kv_wb.write_opt(&write_opts).unwrap_or_else(|e| {
             panic!("test failed to write to kv engine: {:?}", e);
         });
-=======
-    let mut batch = WriteTaskBatch::new(engines.raft.log_batch(RAFT_WB_DEFAULT_SIZE));
-    batch.add_write_task(&engines.raft, task);
-    batch.before_write_to_db(&engines.raft, &StoreWriteMetrics::new(false));
-    if let ExtraBatchWrite::V1(kv_wb) = &mut batch.extra_batch_write {
-        if !kv_wb.is_empty() {
-            let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(true);
-            kv_wb.write_opt(&write_opts).unwrap_or_else(|e| {
-                panic!("test failed to write to kv engine: {:?}", e);
-            });
-        }
->>>>>>> c8250e58e7 (raftstore: split raft write batch on 1GiB limit (#13872))
     }
     if !batch.raft_wbs[0].is_empty() {
         for wb in &mut batch.raft_wbs {
