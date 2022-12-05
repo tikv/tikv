@@ -26,15 +26,8 @@ use protobuf::Message;
 use raft::eraftpb::Entry;
 use tikv_util::{
     box_err,
-<<<<<<< HEAD
-    config::{Tracker, VersionTrack},
-    debug, info, slow_log, thd_name,
-=======
     config::{ReadableSize, Tracker, VersionTrack},
-    debug, info, slow_log,
-    sys::thread::StdThreadBuildWrapper,
-    thd_name,
->>>>>>> c8250e58e7 (raftstore: split raft write batch on 1GiB limit (#13872))
+    debug, info, slow_log, thd_name,
     time::{duration_to_sec, Instant},
     warn,
 };
@@ -200,18 +193,13 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-<<<<<<< HEAD
     pub kv_wb: EK::WriteBatch,
-    pub raft_wb: ER::LogBatch,
-    // Write raft state once for a region everytime writing to disk
-=======
     // When a single batch becomes too large, we uses multiple batches each containing atomic
     // writes.
     pub raft_wbs: Vec<ER::LogBatch>,
     // Write states once for a region everytime writing to disk.
     // These states only corresponds to entries inside `raft_wbs.last()`. States for other write
     // batches must be inlined early.
->>>>>>> c8250e58e7 (raftstore: split raft write batch on 1GiB limit (#13872))
     pub raft_states: HashMap<u64, RaftLocalState>,
     pub state_size: usize,
     pub tasks: Vec<WriteTask<EK, ER>>,
@@ -227,12 +215,8 @@ where
 {
     fn new(kv_wb: EK::WriteBatch, raft_wb: ER::LogBatch) -> Self {
         Self {
-<<<<<<< HEAD
             kv_wb,
-            raft_wb,
-=======
             raft_wbs: vec![raft_wb],
->>>>>>> c8250e58e7 (raftstore: split raft write batch on 1GiB limit (#13872))
             raft_states: HashMap::default(),
             state_size: 0,
             tasks: vec![],
@@ -277,13 +261,9 @@ where
         if let Err(e) = task.valid() {
             panic!("task is not valid: {:?}", e);
         }
-<<<<<<< HEAD
         if let Some(kv_wb) = task.kv_wb.take() {
             self.kv_wb.merge(kv_wb).unwrap();
         }
-        if let Some(raft_wb) = task.raft_wb.take() {
-            self.raft_wb.merge(raft_wb).unwrap();
-=======
 
         if self.raft_wb_split_size > 0
             && self.raft_wbs.last().unwrap().persist_size() >= self.raft_wb_split_size
@@ -291,7 +271,6 @@ where
             self.flush_states_to_raft_wb(raft_engine);
             self.raft_wbs
                 .push(raft_engine.log_batch(RAFT_WB_DEFAULT_SIZE));
->>>>>>> c8250e58e7 (raftstore: split raft write batch on 1GiB limit (#13872))
         }
 
         let raft_wb = self.raft_wbs.last_mut().unwrap();
@@ -309,12 +288,6 @@ where
             && self.raft_states.insert(task.region_id, raft_state).is_none() {
             self.state_size += std::mem::size_of::<RaftLocalState>();
         }
-<<<<<<< HEAD
-=======
-        self.state_size += self
-            .extra_batch_write
-            .merge(task.region_id, &mut task.extra_write);
->>>>>>> c8250e58e7 (raftstore: split raft write batch on 1GiB limit (#13872))
 
         if let Some(prev_readies) = self
             .readies
@@ -364,17 +337,8 @@ where
                 .sum::<usize>()
     }
 
-<<<<<<< HEAD
-    fn before_write_to_db(&mut self, metrics: &StoreWriteMetrics) {
-        // Put raft state to raft writebatch
-        for (region_id, state) in self.raft_states.drain() {
-            self.raft_wb.put_raft_state(region_id, &state).unwrap();
-        }
-        self.state_size = 0;
-=======
     fn before_write_to_db(&mut self, engine: &ER, metrics: &StoreWriteMetrics) {
         self.flush_states_to_raft_wb(engine);
->>>>>>> c8250e58e7 (raftstore: split raft write batch on 1GiB limit (#13872))
         if metrics.waterfall_metrics {
             let now = Instant::now();
             for task in &self.tasks {

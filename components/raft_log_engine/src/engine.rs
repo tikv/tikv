@@ -408,16 +408,6 @@ impl RaftEngine for RaftLogEngine {
         self.consume(&mut batch, false)
     }
 
-<<<<<<< HEAD
-=======
-    fn put_store_ident(&self, ident: &StoreIdent) -> Result<()> {
-        let mut batch = Self::LogBatch::default();
-        batch.put_store_ident(ident)?;
-        self.consume(&mut batch, true)?;
-        Ok(())
-    }
-
->>>>>>> c8250e58e7 (raftstore: split raft write batch on 1GiB limit (#13872))
     fn put_raft_state(&self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
         let mut batch = Self::LogBatch::default();
         batch.put_raft_state(raft_group_id, state)?;

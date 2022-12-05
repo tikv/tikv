@@ -96,13 +96,8 @@ fn test_rpc_client() {
     assert_eq!(ts.logical() + 100, ts100.logical());
 
     let mut prev_id = 0;
-<<<<<<< HEAD
     for _ in 0..100 {
         let client = new_client(eps.clone(), None);
-=======
-    for _ in 0..10 {
-        let mut client = new_client_v2(eps.clone(), None);
->>>>>>> c8250e58e7 (raftstore: split raft write batch on 1GiB limit (#13872))
         let alloc_id = client.alloc_id().unwrap();
         assert!(alloc_id > prev_id);
         prev_id = alloc_id;
