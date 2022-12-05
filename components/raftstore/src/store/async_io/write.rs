@@ -231,28 +231,6 @@ where
         for (region_id, state) in self.raft_states.drain() {
             wb.put_raft_state(region_id, &state).unwrap();
         }
-        if let ExtraBatchWrite::V2(extra_states_map) = &mut self.extra_batch_write {
-            for (region_id, state) in extra_states_map.drain() {
-                let mut tombstone = false;
-                if let Some(region_state) = state.region_state {
-                    if region_state.get_state() == PeerState::Tombstone {
-                        tombstone = true;
-                        raft_engine
-                            .clean(
-                                region_id,
-                                first_index(&state.apply_state),
-                                state.raft_state.as_ref().unwrap(),
-                                wb,
-                            )
-                            .unwrap();
-                    }
-                    wb.put_region_state(region_id, &region_state).unwrap();
-                }
-                if !tombstone {
-                    wb.put_apply_state(region_id, &state.apply_state).unwrap();
-                }
-            }
-        }
         self.state_size = 0;
     }
 
