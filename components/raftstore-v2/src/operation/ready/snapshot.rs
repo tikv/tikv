@@ -28,13 +28,13 @@ use std::{
     },
 };
 
-use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory};
+use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory, SPLIT_PREFIX};
 use kvproto::raft_serverpb::{PeerState, RaftSnapshotData, RegionLocalState};
 use protobuf::Message;
 use raft::eraftpb::Snapshot;
 use raftstore::store::{
     metrics::STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER, GenSnapRes, ReadTask, TabletSnapKey,
-    TabletSnapManager, Transport, WriteTask,
+    TabletSnapManager, Transport, WriteTask, RAFT_INIT_LOG_INDEX,
 };
 use slog::{error, info, warn};
 use tikv_util::{box_err, box_try, worker::Scheduler};
@@ -134,7 +134,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.raft_group_mut().advance_apply_to(persisted_index);
             self.read_progress_mut()
                 .update_applied_core(persisted_index);
-            info!(self.logger, "apply tablet snapshot completely");
+            match self.storage_mut().split_init_mut().take() {
+                Some(init) => {
+                    assert_eq!(persisted_index, RAFT_INIT_LOG_INDEX);
+                    info!(self.logger, "init with snapshot finished");
+                    self.post_split_init(ctx, init);
+                }
+                None => info!(self.logger, "apply tablet snapshot completely"),
+            }
         }
     }
 }
@@ -381,8 +388,17 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         self.entry_storage_mut().set_truncated_term(last_term);
         self.entry_storage_mut().set_last_term(last_term);
 
-        let key = TabletSnapKey::new(region_id, peer_id, last_term, last_index);
-        let mut path = snap_mgr.final_recv_path(&key);
+        let path = match self.split_init_mut() {
+            Some(init) => {
+                assert_eq!(last_index, RAFT_INIT_LOG_INDEX);
+                tablet_factory.tablet_path_with_prefix(SPLIT_PREFIX, region_id, last_index)
+            }
+            None => {
+                let key = TabletSnapKey::new(region_id, peer_id, last_term, last_index);
+                snap_mgr.final_recv_path(&key)
+            }
+        };
+
         let logger = self.logger().clone();
         // The snapshot require no additional processing such as ingest them to DB, but
         // it should load it into the factory after it persisted.
