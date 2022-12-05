@@ -356,9 +356,13 @@ impl<PD: PdClient + 'static> FlushObserver for BasicFlushObserver<PD> {
             .update_service_safe_point(
                 format!("backup-stream-{}-{}", task, self.store_id),
                 TimeStamp::new(rts.saturating_sub(1)),
-                // Add a service safe point for 30 mins (6x the default flush interval).
-                // It would probably be safe.
-                Duration::from_secs(1800),
+                // Add a service safe point for 2 hours (40x the default flush interval).
+                // In some extreme scenario (for example, the external storage is unavailable),
+                // we may keep fail for flushing, we should make sure the safepoint present before
+                // flush errors expires retry count.
+                // TODO: We'd better make the coordinator, who really calculates the checkpoint to
+                // register service safepoint.
+                Duration::from_secs(60 * 60 * 2),
             )
             .await
         {
