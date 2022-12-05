@@ -226,7 +226,7 @@ where
     }
 
     #[inline]
-    fn flush_states_to_raft_wb(&mut self, raft_engine: &ER) {
+    fn flush_states_to_raft_wb(&mut self) {
         let wb = self.raft_wbs.last_mut().unwrap();
         for (region_id, state) in self.raft_states.drain() {
             wb.put_raft_state(region_id, &state).unwrap();
@@ -246,7 +246,7 @@ where
         if self.raft_wb_split_size > 0
             && self.raft_wbs.last().unwrap().persist_size() >= self.raft_wb_split_size
         {
-            self.flush_states_to_raft_wb(raft_engine);
+            self.flush_states_to_raft_wb();
             self.raft_wbs
                 .push(raft_engine.log_batch(RAFT_WB_DEFAULT_SIZE));
         }
@@ -315,8 +315,8 @@ where
                 .sum::<usize>()
     }
 
-    fn before_write_to_db(&mut self, engine: &ER, metrics: &StoreWriteMetrics) {
-        self.flush_states_to_raft_wb(engine);
+    fn before_write_to_db(&mut self, metrics: &StoreWriteMetrics) {
+        self.flush_states_to_raft_wb();
         if metrics.waterfall_metrics {
             let now = Instant::now();
             for task in &self.tasks {
@@ -494,7 +494,7 @@ where
     }
 
     pub fn handle_write_task(&mut self, task: WriteTask<EK, ER>) {
-        self.batch.add_write_task(&self.raft_engine, task);
+        self.batch.add_write_task(&self.engines.raft, task);
     }
 
     pub fn write_to_db(&mut self, notify: bool) {
@@ -542,7 +542,8 @@ where
             let now = Instant::now();
             self.perf_context.start_observe();
             for i in 0..self.batch.raft_wbs.len() {
-                self.raft_engine
+                self.engines
+                    .raft
                     .consume_and_shrink(
                         &mut self.batch.raft_wbs[i],
                         true,
@@ -746,8 +747,8 @@ where
         engines.kv.write_batch(),
         engines.raft.log_batch(RAFT_WB_DEFAULT_SIZE),
     );
-    batch.add_write_task(task);
-    batch.before_write_to_db(&engines.raft, &StoreWriteMetrics::new(false));
+    batch.add_write_task(&engines.raft, task);
+    batch.before_write_to_db(&StoreWriteMetrics::new(false));
     if !batch.kv_wb.is_empty() {
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);

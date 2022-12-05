@@ -365,7 +365,7 @@ fn test_worker_split_raft_wb() {
 
         let mut task_1 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_1, 1, 10);
         init_write_batch(&engines, &mut task_1);
-        put_raft_kv(task_1.raft_wb.as_mut(), raft_key_1);
+        put_raft_kv(&mut task_1.raft_wb, raft_key_1);
         task_1.entries.append(&mut vec![
             new_entry(5, 5),
             new_entry(6, 5),
@@ -377,7 +377,7 @@ fn test_worker_split_raft_wb() {
 
         let mut task_2 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_2, 2, 15);
         init_write_batch(&engines, &mut task_2);
-        put_raft_kv(task_2.raft_wb.as_mut(), raft_key_2);
+        put_raft_kv(&mut task_2.raft_wb, raft_key_2);
         task_2
             .entries
             .append(&mut vec![new_entry(20, 15), new_entry(21, 15)]);
@@ -392,8 +392,8 @@ fn test_worker_split_raft_wb() {
 
         let mut task_3 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_1, 1, 11);
         init_write_batch(&engines, &mut task_3);
-        put_raft_kv(task_3.raft_wb.as_mut(), raft_key_3);
-        delete_raft_kv(&engines.raft, task_3.raft_wb.as_mut(), raft_key_1);
+        put_raft_kv(&mut task_3.raft_wb, raft_key_3);
+        delete_raft_kv(&engines.raft, &mut task_3.raft_wb, raft_key_1);
         task_3
             .entries
             .append(&mut vec![new_entry(6, 6), new_entry(7, 7)]);
