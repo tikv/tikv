@@ -4875,7 +4875,7 @@ mod tests {
                 commit_ts,
                 version,
                 key.clone(),
-                Key::from_raw_maybe_unbounded(b"z"),
+                Some(Key::from_raw(b"z")),
             );
             if let Mutation::Put(..) = write.0 {
                 expect_value(
@@ -4997,7 +4997,7 @@ mod tests {
             commit_ts,
             2.into(),
             Key::from_raw(b"k"),
-            Key::from_raw_maybe_unbounded(b"z"),
+            Some(Key::from_raw(b"z")),
         );
         expect_value(
             b"v@1".to_vec(),
@@ -5013,7 +5013,7 @@ mod tests {
             commit_ts,
             1.into(),
             Key::from_raw(b"k"),
-            Key::from_raw_maybe_unbounded(b"z"),
+            Some(Key::from_raw(b"z")),
         );
         expect_none(
             block_on(storage.get(Context::default(), Key::from_raw(b"k"), commit_ts))
@@ -5104,7 +5104,7 @@ mod tests {
                 flashback_commit_ts,
                 TimeStamp::zero(),
                 Key::from_raw(b"k"),
-                Key::from_raw_maybe_unbounded(b"z"),
+                Some(Key::from_raw(b"z")),
             );
             for i in 1..=FLASHBACK_BATCH_SIZE * 4 {
                 let key = Key::from_raw(format!("k{}", i).as_bytes());
@@ -5183,7 +5183,7 @@ mod tests {
             flashback_commit_ts,
             1.into(),
             Key::from_raw(b"k"),
-            Key::from_raw_maybe_unbounded(b"z"),
+            Some(Key::from_raw(b"z")),
         );
         expect_none(
             block_on(storage.get(Context::default(), k, flashback_commit_ts))

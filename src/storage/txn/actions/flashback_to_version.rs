@@ -295,13 +295,13 @@ pub mod tests {
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
     ) -> usize {
-        let next_key = Key::from_raw_maybe_unbounded(keys::next_key(key).as_slice());
+        let next_key = Key::from_raw(keys::next_key(key).as_slice());
         let key = Key::from_raw(key);
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new_with_ctx(snapshot.clone(), Some(ScanMode::Forward), &ctx);
         let key_locks =
-            flashback_to_version_read_lock(&mut reader, key, next_key.as_ref()).unwrap();
+            flashback_to_version_read_lock(&mut reader, key, Some(next_key).as_ref()).unwrap();
         let cm = ConcurrencyManager::new(TimeStamp::zero());
         let mut txn = MvccTxn::new(start_ts.into(), cm);
         rollback_locks(&mut txn, snapshot, key_locks).unwrap();
@@ -325,7 +325,7 @@ pub mod tests {
         let prewrite_key = if let Some(first_key) = get_first_user_key(
             &mut reader,
             &Key::from_raw(key),
-            Key::from_raw_maybe_unbounded(b"z").as_ref(),
+            Some(Key::from_raw(b"z")).as_ref(),
         )
         .unwrap()
         {
@@ -387,7 +387,7 @@ pub mod tests {
         let key_to_lock = get_first_user_key(
             &mut reader,
             &Key::from_raw(key),
-            Key::from_raw_maybe_unbounded(b"z").as_ref(),
+            Some(Key::from_raw(b"z")).as_ref(),
         )
         .unwrap()
         .unwrap();
@@ -602,7 +602,7 @@ pub mod tests {
         let first_key = get_first_user_key(
             &mut reader,
             &Key::from_raw(b""),
-            Key::from_raw_maybe_unbounded(b"z").as_ref(),
+            Some(Key::from_raw(b"z")).as_ref(),
         )
         .unwrap_or_else(|_| Some(Key::from_raw(b"")))
         .unwrap();
@@ -652,14 +652,9 @@ pub mod tests {
             must_prewrite_flashback_key(&mut engine, start_key, 4, flashback_start_ts),
             0
         );
-        // case 3: start key is valid, end_key is invalid, prewrite key will not be
-        // None.
-        let first_key = get_first_user_key(
-            &mut reader,
-            &Key::from_raw(b"a"),
-            Key::from_raw_maybe_unbounded(b"").as_ref(),
-        )
-        .unwrap_or_else(|_| Some(Key::from_raw(b"")));
+        // case 3: for last region, end_key will be None, prewrite key will valid.
+        let first_key = get_first_user_key(&mut reader, &Key::from_raw(b"a"), None)
+            .unwrap_or_else(|_| Some(Key::from_raw(b"")));
         assert_eq!(first_key, Some(Key::from_raw(prewrite_key)));
     }
 }
