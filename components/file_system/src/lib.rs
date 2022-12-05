@@ -2,6 +2,7 @@
 
 #![feature(test)]
 #![feature(duration_consts_float)]
+#![feature(let_chains)]
 
 #[macro_use]
 extern crate lazy_static;
@@ -22,7 +23,7 @@ use std::{
     collections::HashSet,
     fs,
     io::{self, ErrorKind, Read, Write},
-    path::{Path, PathBuf},
+    path::Path,
     str::FromStr,
     sync::{Arc, Mutex},
 };
@@ -342,11 +343,14 @@ where
     F: FnMut(&Path) -> io::Result<()>,
 {
     dir.try_for_each(|f| {
-        let f = f?;
-        if f.metadata()?.is_dir() {
-            walk_dir(f.path().read_dir()?, op)?;
-        } else {
-            op(&f.path())?;
+        if let Ok(f) = f && let Ok(meta) = f.metadata() {
+            if meta.is_dir() {
+                if let Ok(read) = f.path().read_dir() {
+                    walk_dir(read, op)?;
+                }
+            } else {
+                op(&f.path())?;
+            }
         }
         Ok(())
     })
@@ -355,47 +359,47 @@ where
 pub fn naive_dir_size<P: AsRef<Path>>(path: P) -> io::Result<usize> {
     let mut size = 0;
     walk_dir(path.as_ref().read_dir()?, &mut |f| {
-        size += f.metadata()?.len() as usize;
+        if let Ok(meta) = f.metadata() {
+            size += meta.len() as usize;
+        }
         Ok(())
     })?;
     Ok(size)
 }
 
-pub struct DirSizeCalculator {
-    path: PathBuf,
+#[derive(Default)]
+pub struct DedupDirSizeCalculator {
     inodes: HashSet<u64>,
 }
 
-impl DirSizeCalculator {
-    pub fn new<P: AsRef<Path>>(path: P) -> Self {
-        Self {
-            path: path.as_ref().to_path_buf(),
-            inodes: HashSet::new(),
-        }
-    }
-
-    pub fn size(&mut self) -> io::Result<usize> {
-        if let Ok(size) = self.size_imp() {
+impl DedupDirSizeCalculator {
+    pub fn size<P: AsRef<Path>>(&mut self, path: P) -> io::Result<usize> {
+        if let Ok(size) = self.size_imp(path.as_ref()) {
             return Ok(size);
         }
-        naive_dir_size(&self.path)
+        naive_dir_size(path)
     }
 
-    fn size_imp(&mut self) -> io::Result<usize> {
+    pub fn clear(&mut self) {
+        self.inodes.clear();
+    }
+
+    fn size_imp(&mut self, path: &Path) -> io::Result<usize> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
             let mut size = 0;
-            let dev = self.path.metadata()?.dev();
-            walk_dir(self.path.read_dir()?, &mut |f| {
-                let meta = f.metadata()?;
-                if meta.is_symlink() && meta.dev() != dev {
-                    return Ok(());
+            let dev = path.metadata()?.dev();
+            walk_dir(path.read_dir()?, &mut |f| {
+                if let Ok(meta) = f.metadata() {
+                    if meta.is_symlink() && meta.dev() != dev {
+                        return Ok(());
+                    }
+                    if !self.inodes.insert(meta.ino()) {
+                        return Ok(());
+                    }
+                    size += meta.len() as usize;
                 }
-                if !self.inodes.insert(meta.ino()) {
-                    return Ok(());
-                }
-                size += meta.len() as usize;
                 Ok(())
             })?;
             self.inodes.clear();

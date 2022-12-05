@@ -12,7 +12,7 @@ use causal_ts::CausalTsProviderImpl;
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, RaftEngine, TabletFactory};
-use file_system::DirSizeCalculator;
+use file_system::DedupDirSizeCalculator;
 use kvproto::{metapb, pdpb};
 use pd_client::PdClient;
 use raftstore::store::{util::KeysInfoFormatter, TabletSnapManager, TxnExt};
@@ -109,7 +109,7 @@ where
     // For store_heartbeat.
     start_ts: UnixSecs,
     store_stat: store_heartbeat::StoreStat,
-    size_calculator: DirSizeCalculator,
+    size_calculator: DedupDirSizeCalculator,
 
     // For region_heartbeat.
     region_cpu_records: HashMap<u64, u32>,
@@ -142,7 +142,6 @@ where
         logger: Logger,
         shutdown: Arc<AtomicBool>,
     ) -> Self {
-        let size_calculator = DirSizeCalculator::new(tablet_factory.tablets_path());
         Self {
             store_id,
             pd_client,
@@ -154,7 +153,7 @@ where
             region_peers: HashMap::default(),
             start_ts: UnixSecs::zero(),
             store_stat: store_heartbeat::StoreStat::default(),
-            size_calculator,
+            size_calculator: DedupDirSizeCalculator::default(),
             region_cpu_records: HashMap::default(),
             is_hb_receiver_scheduled: false,
             concurrency_manager,

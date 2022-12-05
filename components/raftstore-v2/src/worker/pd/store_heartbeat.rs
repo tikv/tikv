@@ -276,12 +276,13 @@ where
         let disk_cap = disk_stats.total_space();
         // TODO: custom capacity.
         let capacity = disk_cap;
-        let used_size = naive_dir_size(self.snap_mgr.root_path()).unwrap() as u64
-            + self.size_calculator.size().unwrap() as u64
+        let used_size = self.size_calculator.size(self.snap_mgr.root_path()).unwrap() as u64
+            + self.size_calculator.size(self.tablet_factory.tablets_path()).unwrap() as u64
             + self
                 .raft_engine
                 .get_engine_size()
                 .expect("raft engine used size");
+        self.size_calculator.clear();
         let mut available = capacity.checked_sub(used_size).unwrap_or_default();
         // We only care about rocksdb SST file size, so we should check disk available
         // here.
