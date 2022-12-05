@@ -356,13 +356,13 @@ impl<PD: PdClient + 'static> FlushObserver for BasicFlushObserver<PD> {
             .update_service_safe_point(
                 format!("backup-stream-{}-{}", task, self.store_id),
                 TimeStamp::new(rts.saturating_sub(1)),
-                // Add a service safe point for 2 hours (40x the default flush interval).
-                // In some extreme scenario (for example, the external storage is unavailable),
-                // we may keep fail for flushing, we should make sure the safepoint present before
-                // flush errors expires retry count.
-                // TODO: We'd better make the coordinator, who really calculates the checkpoint to
-                // register service safepoint.
-                Duration::from_secs(60 * 60 * 2),
+                // Add a service safe point for 24 hours. (the same as fatal error.)
+                // We make it the same duration as we meet fatal errors because TiKV may be
+                // SIGKILL'ed after it meets fatal error and before it successfully updated the
+                // fatal error safepoint.
+                // TODO: We'd better make the coordinator, who really
+                // calculates the checkpoint to register service safepoint.
+                Duration::from_secs(60 * 60 * 24),
             )
             .await
         {
