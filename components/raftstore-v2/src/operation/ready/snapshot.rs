@@ -21,7 +21,7 @@
 use std::{
     borrow::BorrowMut,
     fmt::{self, Debug},
-    mem,
+    fs, mem,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc, Arc,
@@ -396,14 +396,17 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         self.entry_storage_mut().set_truncated_term(last_term);
         self.entry_storage_mut().set_last_term(last_term);
 
-        let path = match self.split_init_mut() {
+        let (path, clean_split) = match self.split_init_mut() {
             Some(init) if init.scheduled => {
                 assert_eq!(last_index, RAFT_INIT_LOG_INDEX);
-                tablet_factory.tablet_path_with_prefix(SPLIT_PREFIX, region_id, last_index)
+                (
+                    tablet_factory.tablet_path_with_prefix(SPLIT_PREFIX, region_id, last_index),
+                    false,
+                )
             }
-            _ => {
+            si => {
                 let key = TabletSnapKey::new(region_id, peer_id, last_term, last_index);
-                snap_mgr.final_recv_path(&key)
+                (snap_mgr.final_recv_path(&key), si.is_some())
             }
         };
 
@@ -418,6 +421,14 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                     path.display(),
                     e
                 );
+            }
+            if clean_split {
+                let path = tablet_factory.tablet_path_with_prefix(
+                    SPLIT_PREFIX,
+                    region_id,
+                    RAFT_INIT_LOG_INDEX,
+                );
+                let _ = fs::remove_dir_all(path);
             }
         };
         task.persisted_cb = (Some(Box::new(hook)));
