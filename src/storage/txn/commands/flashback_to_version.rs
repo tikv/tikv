@@ -33,7 +33,7 @@ command! {
             commit_ts: TimeStamp,
             version: TimeStamp,
             start_key: Key,
-            end_key: Key,
+            end_key: Option<Key>,
             state: FlashbackToVersionState,
         }
 }
